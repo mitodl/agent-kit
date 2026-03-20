@@ -1,6 +1,6 @@
-# Team Agent Utilities
+# agent-kit
 
-A shared repository of AI agent utilities for the team, including reusable skills,
+A shared toolkit of AI agent utilities for the team, including reusable skills,
 custom agent definitions, MCP server install helpers, and sample configurations.
 
 ## Repository Structure
@@ -15,19 +15,33 @@ custom agent definitions, MCP server install helpers, and sample configurations.
 
 ## Quick Start
 
-### Installing a skill
+### Installing skills
 
-Skills in `skills/` are compatible with the [Vercel skills CLI](https://www.npmjs.com/package/skills):
-
-```bash
-npx skills install <skill-name>
-```
-
-Or install directly from this repo:
+Install all skills from this repo into your project:
 
 ```bash
-npx skills install --registry https://github.com/<org>/agents <skill-name>
+npx skills add mitodl/agent-kit
 ```
+
+Install a specific skill:
+
+```bash
+npx skills add mitodl/agent-kit --skill uv-python-workflow
+```
+
+Install globally (user-level, available in all projects):
+
+```bash
+npx skills add mitodl/agent-kit --global
+```
+
+Browse available skills without installing:
+
+```bash
+npx skills add mitodl/agent-kit --list
+```
+
+See [`skills/`](./skills/README.md) for the full skill catalog.
 
 ### Setting up an MCP server
 
@@ -40,7 +54,7 @@ instructions for GitHub Copilot and Claude Code.
 
 ## Contributing
 
-1. Add new skills under `skills/<skill-name>/` — follow the [skill authoring guide](./skills/README.md).
+1. Add new skills under `skills/<category>/<skill-name>/` — follow the [skill authoring guide](./skills/README.md) or use the [`creating-skills`](./skills/workflow/creating-skills/SKILL.md) skill.
 2. Add new custom agents under `custom-agents/<platform>/` — follow the [agent authoring guide](./custom-agents/README.md).
 3. Add MCP install helpers under `mcp/servers/<server-name>/` — follow the [MCP guide](./mcp/README.md).
 4. Open a PR with a brief description of what the addition does and why it's useful.
