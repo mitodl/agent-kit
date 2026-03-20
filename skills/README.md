@@ -2,28 +2,52 @@
 
 Reusable skills compatible with the [Vercel skills CLI](https://www.npmjs.com/package/skills) (`npx skills`).
 
-Each skill lives in its own subdirectory and contains a `skill.md` file with the
-skill's instructions, plus an optional `README.md` with human-readable documentation.
+Skills are organized by **category**. Each skill lives in
+`skills/<category>/<skill-name>/SKILL.md` and carries YAML frontmatter with
+`name`, `description`, `category`, and `tags` fields.
+
+## Categories
+
+| Category | Description |
+|----------|-------------|
+| [`python/`](./python/README.md) | Python tooling and dependency management |
+| [`dagster/`](./dagster/README.md) | Dagster pipeline development with `dg` |
+| [`infrastructure/`](./infrastructure/README.md) | Pulumi IaC and Vault secrets |
+| [`containers/`](./containers/README.md) | Docker image builds |
+| [`workflow/`](./workflow/README.md) | Cross-cutting process conventions |
+
+## All Skills
+
+| Category | Skill | Description |
+|----------|-------|-------------|
+| python | [`uv-python-workflow`](./python/uv-python-workflow/SKILL.md) | Use `uv` exclusively for all Python env & dependency management |
+| python | [`cyclopts-cli-scripts`](./python/cyclopts-cli-scripts/SKILL.md) | Use `cyclopts` for CLI scripts; place in `bin/` |
+| dagster | [`dagster-code-location-structure`](./dagster/dagster-code-location-structure/SKILL.md) | `dg_projects/` layout, asset/sensor placement, one-at-a-time migration |
+| infrastructure | [`pulumi-modify-existing`](./infrastructure/pulumi-modify-existing/SKILL.md) | Modify existing stack entrypoint; never create new files; preserve `assumeRole` |
+| infrastructure | [`vault-k8s-auth`](./infrastructure/vault-k8s-auth/SKILL.md) | Wire Vault K8s auth via `hvac`; never hardcode role or mount path |
+| containers | [`docker-uv-image-builds`](./containers/docker-uv-image-builds/SKILL.md) | `mitodl/<service>` naming, git short-ref tags, relocatable `uv` venvs |
+| workflow | [`validate-before-commit`](./workflow/validate-before-commit/SKILL.md) | Run `pre-commit` → `mypy` → `pulumi preview` proactively before declaring done |
+| workflow | [`creating-skills`](./workflow/creating-skills/SKILL.md) | Create a new skill: frontmatter, category placement, progressive disclosure, index updates |
 
 ## Authoring a Skill
 
-1. Create a new directory: `skills/<your-skill-name>/`
-2. Add a `skill.md` file with YAML frontmatter and the skill body:
+1. Pick or create a category directory: `skills/<category>/`
+2. Create `skills/<category>/<skill-name>/SKILL.md` with frontmatter and body:
 
 ```markdown
 ---
-name: your-skill-name
-description: One-sentence description of what this skill does.
+name: your-skill-name        # must match directory name exactly
+description: >               # what it does AND when to use it (max 1024 chars)
+  Use this skill when...
+license: BSD-3-Clause
+metadata:
+  category: <category>
 ---
 
-<full skill instructions here>
+# Skill Title
+
+...
 ```
 
-3. Add a `README.md` describing the skill, its inputs/outputs, and example usage.
+3. Add the skill to your category's `README.md` table and to the **All Skills** table above.
 4. Open a PR — see the repo-level [CONTRIBUTING](../README.md#contributing) guide.
-
-## Available Skills
-
-| Skill | Description |
-|-------|-------------|
-| *(none yet — add the first one!)* | |
