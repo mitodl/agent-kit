@@ -15,6 +15,7 @@ Skills are organized by **category**. Each skill lives in
 | [`infrastructure/`](./infrastructure/README.md) | Pulumi IaC and Vault secrets |
 | [`containers/`](./containers/README.md) | Docker image builds |
 | [`workflow/`](./workflow/README.md) | Cross-cutting process conventions |
+| [`process/`](./process/README.md) | GitHub and external service interactions |
 
 ## All Skills
 
@@ -28,6 +29,8 @@ Skills are organized by **category**. Each skill lives in
 | containers | [`docker-uv-image-builds`](./containers/docker-uv-image-builds/SKILL.md) | `mitodl/<service>` naming, git short-ref tags, relocatable `uv` venvs |
 | workflow | [`validate-before-commit`](./workflow/validate-before-commit/SKILL.md) | Run `pre-commit` → `mypy` → `pulumi preview` proactively before declaring done |
 | workflow | [`creating-skills`](./workflow/creating-skills/SKILL.md) | Create a new skill: frontmatter, category placement, progressive disclosure, index updates |
+| process | [`create-github-issue`](./process/create-github-issue/SKILL.md) | Create mitodl GitHub issues via `/olissue` using org standard templates |
+| process | [`create-pull-request`](./process/create-pull-request/SKILL.md) | Create mitodl pull requests via `/olpr` using the org's standard PR template |
 
 ## Authoring a Skill
 
