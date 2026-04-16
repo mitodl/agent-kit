@@ -31,6 +31,7 @@ Skills are organized by **category**. Each skill lives in
 | workflow | [`creating-skills`](./workflow/creating-skills/SKILL.md) | Create a new skill: frontmatter, category placement, progressive disclosure, index updates |
 | process | [`create-github-issue`](./process/create-github-issue/SKILL.md) | Create mitodl GitHub issues via `/olissue` using org standard templates |
 | process | [`create-pull-request`](./process/create-pull-request/SKILL.md) | Create mitodl pull requests via `/olpr` using the org's standard PR template |
+| process | [`generate-standup`](./process/generate-standup/SKILL.md) | Generate and post a daily standup from GitHub activity to the mitodl/hq Check-ins discussion |
 
 ## Authoring a Skill
 
