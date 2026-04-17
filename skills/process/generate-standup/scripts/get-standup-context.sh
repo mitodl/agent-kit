@@ -59,16 +59,21 @@ _search_prs() {
   done) | jq -s 'add | unique_by(.url)'
 }
 
-# Fetch issues across all orgs (authored or commented on), deduplicated by URL
+# Fetch issues across all orgs (authored or commented on), deduplicated by URL.
+# Filters out bot-generated noise (Renovate, Dependabot) by author login and
+# known title patterns as a fallback when author is unavailable.
 _search_issues() {
   local since="$1"
   (for org in "${ORG_LIST[@]}"; do
     gh search issues "involves:$USERNAME" \
       --owner "$org" \
       --updated ">=$since" \
-      --json number,title,state,url,updatedAt \
+      --json number,title,state,url,updatedAt,author \
       --limit 50 2>/dev/null || echo "[]"
-  done) | jq -s 'add | unique_by(.url)'
+  done) | jq -s 'add | unique_by(.url) | map(select(
+    (.author.login // "" | test("\\[bot\\]$|^renovate$|^dependabot$"; "i") | not) and
+    (.title | test("^Dependency Dashboard$|^Renovate Dashboard|^Action Required: Fix Renovate"; "") | not)
+  ))'
 }
 
 # Fetch RFC-category discussions from mitodl/hq created today by the user
