@@ -12,6 +12,12 @@
 #
 # Output: JSON — keys: meta, checkin_discussion, prs_authored, prs_reviewed,
 #                       issues, rfc_discussions
+#
+#   meta.today      — the date the script was run
+#   meta.yesterday  — previous weekday (Friday if today is Monday)
+#   meta.tomorrow   — next weekday (Monday if today is Friday)
+#   meta.since      — ISO timestamp: midnight UTC on meta.yesterday (fetch window start)
+#
 # Requires: gh (authenticated), jq
 
 set -euo pipefail
@@ -31,9 +37,46 @@ while getopts "t:o:" opt; do
   esac
 done
 
-# 48-hour lookback window (GNU date and BSD date compatible)
-SINCE="$(date -u -d "${TODAY} -48 hours" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
-       || date -u -v-48H -j -f "%Y-%m-%d" "$TODAY" +%Y-%m-%dT%H:%M:%SZ)"
+# ── Weekday helpers ───────────────────────────────────────────────────────────
+
+# Portable previous weekday (GNU date and BSD date compatible)
+# Returns the most recent weekday before $TODAY (skips Saturday/Sunday).
+_prev_weekday() {
+  local ref="$1"
+  local dow
+  # %u: 1=Mon … 7=Sun
+  dow="$(date -u -d "$ref" +%u 2>/dev/null || date -u -j -f "%Y-%m-%d" "$ref" +%u)"
+  local offset
+  case "$dow" in
+    1) offset=3 ;;  # Monday → Friday
+    *) offset=1 ;;
+  esac
+  date -u -d "$ref -${offset} days" +%Y-%m-%d 2>/dev/null \
+    || date -u -v-"${offset}"d -j -f "%Y-%m-%d" "$ref" +%Y-%m-%d
+}
+
+# Portable next weekday
+_next_weekday() {
+  local ref="$1"
+  local dow
+  dow="$(date -u -d "$ref" +%u 2>/dev/null || date -u -j -f "%Y-%m-%d" "$ref" +%u)"
+  local offset
+  case "$dow" in
+    5) offset=3 ;;  # Friday → Monday
+    6) offset=2 ;;  # Saturday → Monday (edge case)
+    7) offset=1 ;;  # Sunday → Monday (edge case)
+    *) offset=1 ;;
+  esac
+  date -u -d "$ref +${offset} days" +%Y-%m-%d 2>/dev/null \
+    || date -u -v+"${offset}"d -j -f "%Y-%m-%d" "$ref" +%Y-%m-%d
+}
+
+YESTERDAY="$(_prev_weekday "$TODAY")"
+TOMORROW="$(_next_weekday "$TODAY")"
+
+# Fetch window: midnight UTC on the previous weekday.
+# Wide enough to catch all activity from yesterday and today.
+SINCE="${YESTERDAY}T00:00:00Z"
 
 USERNAME="$(gh api user -q '.login' 2>/dev/null)" || true
 if [[ -z "$USERNAME" ]]; then
@@ -53,21 +96,20 @@ _search_prs() {
     gh search prs \
       "$flag" "$USERNAME" \
       --owner "$org" \
-      --updated ">=$since" \
-      --json number,title,state,url,updatedAt,isDraft \
+      --updated ">=${since%T*}" \
+      --json number,title,state,url,updatedAt,isDraft,mergedAt \
       --limit 50 2>/dev/null || echo "[]"
   done) | jq -s 'add | unique_by(.url)'
 }
 
-# Fetch issues across all orgs (authored or commented on), deduplicated by URL.
-# Filters out bot-generated noise (Renovate, Dependabot) by author login and
-# known title patterns as a fallback when author is unavailable.
+# Fetch issues across all orgs involving the user, deduplicated by URL.
+# Filters out bot-generated noise (Renovate, Dependabot).
 _search_issues() {
-  local since="$1"
+  local since_date="${1%T*}"
   (for org in "${ORG_LIST[@]}"; do
     gh search issues "involves:$USERNAME" \
       --owner "$org" \
-      --updated ">=$since" \
+      --updated ">=${since_date}" \
       --json number,title,state,url,updatedAt,author \
       --limit 50 2>/dev/null || echo "[]"
   done) | jq -s 'add | unique_by(.url) | map(select(
@@ -133,6 +175,8 @@ CHECKIN_DISCUSSION="$(_checkin_discussion)"
 jq -n \
   --arg  username          "$USERNAME" \
   --arg  today             "$TODAY" \
+  --arg  yesterday         "$YESTERDAY" \
+  --arg  tomorrow          "$TOMORROW" \
   --arg  since             "$SINCE" \
   --argjson prs_authored        "$PRS_AUTHORED" \
   --argjson prs_reviewed        "$PRS_REVIEWED" \
@@ -140,7 +184,13 @@ jq -n \
   --argjson rfc_discussions     "$RFC_DISCUSSIONS" \
   --argjson checkin_discussion  "$CHECKIN_DISCUSSION" \
   '{
-    meta: { username: $username, today: $today, since: $since },
+    meta: {
+      username:  $username,
+      today:     $today,
+      yesterday: $yesterday,
+      tomorrow:  $tomorrow,
+      since:     $since
+    },
     checkin_discussion:  $checkin_discussion,
     prs_authored:        $prs_authored,
     prs_reviewed:        $prs_reviewed,
