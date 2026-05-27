@@ -1,13 +1,10 @@
 ---
-name: create-github-issue
+name: create-ol-github-issue
 description: >
-  Create a GitHub issue in a mitodl repository using the organization's standard
-  issue templates. Triggered by /olissue — prompts for repo, issue type, and
-  fills in the appropriate template (Bug Report, Technical, Product, Design QA).
-  Defaults the organization to mitodl.
+  Create a GitHub issue in the mitodl organization using their standard issue templates.
+  Use this skill when asked to create a GitHub issue, open an issue, or file a bug
+  report. Guides user through repo selection, template choice, and gh issue create.
 license: BSD-3-Clause
-triggers:
-  - /olissue
 metadata:
   category: process
 ---
@@ -169,3 +166,22 @@ Labels: `design QA`
 - If the user provides a full `org/repo` slug, use it as-is instead of prepending `mitodl/`.
 - For Design QA issues, remind the user to follow the title convention:
   `Design QA: <Template/Section/Component>`.
+
+## Self-contained issues
+
+Issues must be **self-contained and self-documenting**. Do not reference local files,
+on-device content, or relative paths that would be inaccessible to others. Instead:
+
+- **Reference GitHub issues** by their full URL (e.g., `https://github.com/mitodl/ol-django/issues/123#issuecomment-456`)
+- **Reference code files** via GitHub URLs (e.g., `https://github.com/mitodl/ol-django/blob/main/apps/course_info/views.py#L45-L52`)
+- **Reference documentation** via its public URL (e.g., Django docs, library docs)
+- **Reference designs** via Figma URLs or other publicly accessible sources
+- **Include essential context inline** when no URL is available. If you need to reference
+  a local log, error message, or specific code snippet, copy and paste it directly into
+  the issue body.
+- **Include log output or error messages** directly in the issue rather than describing
+  them or referencing temporary files.
+- **Attach screenshots** to the issue after creation rather than referencing local image files.
+
+This ensures anyone can understand and act on the issue without needing access to the
+reporter's local environment or file system.

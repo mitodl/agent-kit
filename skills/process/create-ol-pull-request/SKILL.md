@@ -1,13 +1,10 @@
 ---
-name: create-pull-request
+name: create-ol-pull-request
 description: >
-  Create a pull request in a mitodl GitHub repository using the org's standard
-  PR template. Triggered by /olpr or whenever the user asks to open a pull
-  request in a repo whose remote is under the mitodl GitHub organization.
-  Guides branch inspection, title/body population, and gh pr create invocation.
+  Create a pull request in the mitodl organization using their standard PR template.
+  Use this skill when asked to create a PR, open a pull request, or submit changes
+  for review. Guides branch inspection, title/body population, and gh pr create.
 license: BSD-3-Clause
-triggers:
-  - /olpr
 metadata:
   category: process
 ---
@@ -166,3 +163,26 @@ assessing this change.  --->
   it out otherwise.
 - **Draft PRs**: suggest `--draft` if the branch is a work-in-progress or the
   user mentions it isn't ready for review.
+
+## Self-contained PRs
+
+Pull requests must be **self-contained and self-documenting**. Do not reference local
+files, on-device content, or relative paths that would be inaccessible to reviewers.
+Instead:
+
+- **Reference GitHub issues** by their full URL (e.g., `https://github.com/mitodl/ol-django/issues/123`)
+- **Reference code files** via GitHub URLs, including line numbers for specific
+  references (e.g., `https://github.com/mitodl/ol-django/blob/main/apps/course_info/views.py#L45-L52`)
+- **Reference documentation** via its public URL (e.g., Django docs, library API docs)
+- **Reference designs** via Figma URLs or other publicly accessible sources
+- **Include essential context inline** when no URL is available. If you need to
+  reference a specific code pattern, configuration, or decision, include the relevant
+  snippets or details directly in the PR body.
+- **Include test data or fixtures** inline when describing testing procedures rather
+  than referencing local files.
+- **Include error messages or log output** directly in the PR description rather
+  than describing them or referencing temporary files.
+- **Attach screenshots** to the PR after creation rather than referencing local image files.
+
+This ensures reviewers can understand and evaluate the changes without needing access
+to the author's local environment or file system.
