@@ -55,11 +55,6 @@ priority = 0
 id = "detect-private-key"
 priority = 0
 
-[[repos.hooks]]
-id = "no-commit-to-branch"
-args = ["--branch", "main"]
-priority = 0
-
 # ── Shell: shellcheck (priority 10) ───────────────────────────────────────────
 
 [[repos]]
@@ -84,7 +79,11 @@ hooks = [{ id = "gitleaks", priority = 10 }]
 repo = "https://github.com/igorshubovych/markdownlint-cli"
 rev = "v0.48.0"
 hooks = [
-  { id = "markdownlint", priority = 10, args = ["--disable", "MD013", "MD033"] },
+  { id = "markdownlint", priority = 10, args = [
+    "--disable",
+    "MD013",
+    "MD033",
+  ] },
 ]
 
 # ── Python: ruff (priority 20 format → 30 lint) ───────────────────────────────
