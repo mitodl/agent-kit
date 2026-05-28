@@ -1,0 +1,116 @@
+# prek.toml — pre-commit hook configuration
+# Docs: https://prek.j178.dev
+#
+# Install hooks:      prek install
+# Run on all files:   prek run --all-files
+# Update pinned revs: prek auto-update
+
+# ── Built-in: fast Rust-native checks (priority 0) ────────────────────────────
+# No network, no environment setup — run first to catch trivial issues cheaply.
+
+[[repos]]
+repo = "builtin"
+
+[[repos.hooks]]
+id = "trailing-whitespace"
+priority = 0
+
+[[repos.hooks]]
+id = "end-of-file-fixer"
+priority = 0
+
+[[repos.hooks]]
+id = "check-merge-conflict"
+priority = 0
+
+[[repos.hooks]]
+id = "check-case-conflict"
+priority = 0
+
+[[repos.hooks]]
+id = "check-added-large-files"
+priority = 0
+
+[[repos.hooks]]
+id = "check-toml"
+priority = 0
+
+[[repos.hooks]]
+id = "check-yaml"
+priority = 0
+
+[[repos.hooks]]
+id = "check-json"
+priority = 0
+
+[[repos.hooks]]
+id = "check-executables-have-shebangs"
+priority = 0
+
+[[repos.hooks]]
+id = "check-shebang-scripts-are-executable"
+priority = 0
+
+[[repos.hooks]]
+id = "detect-private-key"
+priority = 0
+
+[[repos.hooks]]
+id = "no-commit-to-branch"
+args = ["--branch", "main"]
+priority = 0
+
+# ── Shell: shellcheck (priority 10) ───────────────────────────────────────────
+
+[[repos]]
+repo = "https://github.com/shellcheck-py/shellcheck-py"
+rev = "v0.11.0.1"
+hooks = [{ id = "shellcheck", priority = 10 }]
+
+# ── Secrets: gitleaks (priority 10, parallel with shellcheck) ─────────────────
+# Comprehensive secret scanning; complements the builtin detect-private-key.
+# Checks staged changes only (gitleaks protect).
+
+[[repos]]
+repo = "https://github.com/gitleaks/gitleaks"
+rev = "v8.30.1"
+hooks = [{ id = "gitleaks", priority = 10 }]
+
+# ── Markdown: markdownlint (priority 10, parallel) ────────────────────────────
+# MD013 disabled — code blocks in skill files have long lines by necessity.
+# MD033 disabled — issue/PR template skills contain HTML comments as placeholders.
+
+[[repos]]
+repo = "https://github.com/igorshubovych/markdownlint-cli"
+rev = "v0.48.0"
+hooks = [
+  { id = "markdownlint", priority = 10, args = ["--disable", "MD013", "MD033"] },
+]
+
+# ── Python: ruff (priority 20 format → 30 lint) ───────────────────────────────
+# Format runs first (priority 20); lint runs after (priority 30) so ruff check
+# always sees already-formatted code and avoids spurious format-related findings.
+# Covers Python added for the planned omnigraph-memory MCP server.
+
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.15.15"
+
+[[repos.hooks]]
+id = "ruff-format"
+priority = 20
+
+[[repos.hooks]]
+id = "ruff"
+priority = 30
+
+# ── TypeScript / JS / JSON: biome (priority 20, parallel with ruff-format) ────
+# biome-check runs format + lint in one pass with --write (auto-fixes what it
+# can; unfixable issues fail the commit). Safe to run parallel with ruff-format
+# since the two tools operate on disjoint file types (.py vs .ts/.tsx/.json).
+# Covers TypeScript for planned pi extensions and JSON config snippets.
+
+[[repos]]
+repo = "https://github.com/biomejs/pre-commit"
+rev = "v2.4.16"
+hooks = [{ id = "biome-check", priority = 20 }]
