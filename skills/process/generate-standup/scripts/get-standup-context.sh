@@ -121,7 +121,7 @@ _search_issues() {
 			--json number,title,state,url,updatedAt,author \
 			--limit 50 2>/dev/null || echo "[]"
 	done) | jq -s 'add | unique_by(.url) | map(select(
-    (.author.login // "" | test("\\[bot\\]$|^renovate$|^dependabot$"; "i") | not) and
+    (.author.login? // "" | test("\\\\[bot\\\\]$|^renovate$|^dependabot$"; "i") | not) and
     (.title | test("^Dependency Dashboard$|^Renovate Dashboard|^Action Required: Fix Renovate"; "") | not)
   ))'
 }
