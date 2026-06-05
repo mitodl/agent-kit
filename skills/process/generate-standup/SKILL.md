@@ -40,12 +40,12 @@ The script outputs a JSON object:
 ```json
 {
   "meta": {
-    "username",
-    "display_name",
-    "today",
-    "yesterday",
-    "tomorrow",
-    "since"
+    "username": "string",
+    "display_name": "string",
+    "today": "string",
+    "yesterday": "string",
+    "tomorrow": "string",
+    "since": "string"
   },
   "checkin_discussion": { "id", "number", "title", "url", "createdAt" },
   "prs_authored":    [...],
