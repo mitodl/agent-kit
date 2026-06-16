@@ -1,0 +1,116 @@
+// Agent Memory — team-wide knowledge graph for coding agents.
+//
+// One node type with a kind discriminator keeps cross-kind search simple.
+// Optional fields are populated only for the relevant kind:
+//   pattern      → language
+//   project_fact → category
+//   lesson       → severity
+//   agent_context → (no additional fields)
+//
+// Slug convention:
+//   pat-   pattern          e.g. pat-always-use-uv
+//   pf-    project_fact     e.g. pf-ol-django-vault-secrets
+//   les-   lesson           e.g. les-no-raw-sql-in-views
+//   ctx-   agent_context    e.g. ctx-ticket-1234-approach
+
+node Memory {
+    slug: String @key
+    kind: enum(pattern, project_fact, lesson, agent_context) @index
+    title: String @index
+    content: String
+    repo: String? @index
+    language: String? @index
+    category: String? @index
+    severity: enum(info, warning, critical)? @index
+    author: String @index
+    createdAt: DateTime @index
+    updatedAt: DateTime
+    tags: [String]?
+}
+
+// Supersedes: a newer memory replaces an older one.
+// Link new → old when updating a pattern or lesson that has changed.
+edge Supersedes: Memory -> Memory
+
+// AppliesTo: links a pattern or lesson to a project fact that provides context.
+// e.g. a pattern "always use uv" AppliesTo project fact "ol-django uses uv".
+edge AppliesTo: Memory -> Memory
+
+// ── Workflow Tracking ─────────────────────────────────────────────
+//
+// WorkflowProject tracks an overarching engineering objective across
+// multiple sessions and phases. One project per logical unit of work,
+// regardless of how many Claude Code sessions contribute to it.
+//
+// Slug convention: wp-<sanitised-title>-<6hex>
+//   e.g. wp-add-vault-k8s-auth-a3f912
+
+node WorkflowProject {
+    slug:        String @key
+    title:       String @index
+    description: String
+    repo:        String? @index
+    status:      enum(active, completed, abandoned) @index
+    phase:       enum(discovery, spec, implementation, delivery) @index
+    author:      String @index
+    createdAt:   DateTime @index
+    updatedAt:   DateTime
+    completedAt: DateTime?
+    tags:        [String]?
+    githubIssue: String?
+    githubPR:    String?
+}
+
+// WorkflowSession tracks a single Claude Code session contributing to
+// a project. One project has many sessions; sessions may run in parallel.
+//
+// projectSlug is denormalized for fast indexed lookup without graph traversal.
+// Slug convention: ws-<project-slug-prefix>-<6hex>
+
+node WorkflowSession {
+    slug:         String @key
+    projectSlug:  String @index
+    sessionId:    String @index
+    repo:         String? @index
+    phase:        enum(discovery, spec, implementation, delivery) @index
+    summary:      String
+    toolsUsed:    [String]?
+    filesChanged: [String]?
+    author:       String @index
+    startedAt:    DateTime @index
+    endedAt:      DateTime?
+    tags:         [String]?
+}
+
+// WorkflowTrace is an assembled, corpus-ready record of a completed project.
+// Created by workflow_project_complete. Immutable after creation.
+// Used for downstream pattern mining to generate skills and hooks.
+//
+// Slug convention: wt-<project-slug>
+
+node WorkflowTrace {
+    slug:         String @key
+    projectSlug:  String @index
+    repo:         String? @index
+    title:        String @index
+    description:  String
+    sessionCount: I32
+    phases:       [String]
+    duration:     I32?
+    outcome:      String
+    lessonsSlug:  [String]?
+    patternsSlug: [String]?
+    author:       String @index
+    createdAt:    DateTime @index
+    tags:         [String]?
+}
+
+// BelongsTo: links each WorkflowSession to its WorkflowProject.
+edge BelongsTo: WorkflowSession -> WorkflowProject
+
+// Produced: links a completed WorkflowProject to its WorkflowTrace (one-to-one).
+edge Produced: WorkflowProject -> WorkflowTrace
+
+// Informed: links a WorkflowProject to Memory nodes consulted or created
+// during the project (patterns, lessons, agent_context, project_facts).
+edge Informed: WorkflowProject -> Memory

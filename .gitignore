@@ -28,3 +28,4 @@ build/
 # MCP server logs / caches
 .mcp-cache/
 mcp-server.log
+.ruff_cache/

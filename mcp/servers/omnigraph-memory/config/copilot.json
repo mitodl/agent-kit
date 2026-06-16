@@ -1,0 +1,16 @@
+{
+	"servers": {
+		"omnigraph-memory": {
+			"type": "stdio",
+			"command": "uvx",
+			"args": [
+				"--from",
+				"git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/omnigraph-memory",
+				"omnigraph-memory"
+			],
+			"env": {
+				"OMNIGRAPH_MEMORY_AUTHOR": "${env:USER}"
+			}
+		}
+	}
+}
