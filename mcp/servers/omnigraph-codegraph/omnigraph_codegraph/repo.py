@@ -1,6 +1,7 @@
 import configparser
 import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -11,9 +12,11 @@ def detect(override: str | None = None, start: Path | None = None) -> str | None
     Resolution order:
       1. ``override`` parameter (explicit caller value)
       2. ``OMNIGRAPH_CODEGRAPH_REPO`` environment variable
-      3. ``origin`` remote URL from the nearest ``.git/config``
-      4. directory name of the git root (fallback when no remote)
-      5. ``None`` — no repo context available
+      3. ``git remote get-url origin`` (handles worktrees and multi-valued
+         config keys that ``configparser`` rejects)
+      4. ``origin`` remote URL parsed from the nearest ``.git/config``
+      5. directory name of the git root (fallback when no remote)
+      6. ``None`` — no repo context available
     """
     if override:
         return override
@@ -22,6 +25,10 @@ def detect(override: str | None = None, start: Path | None = None) -> str | None
         return env_repo
 
     base = start or Path.cwd()
+
+    if url := _git_origin(base):
+        return _normalise(url)
+
     git_config_path = _find_git_config(base)
     if git_config_path is None:
         return None
@@ -31,6 +38,27 @@ def detect(override: str | None = None, start: Path | None = None) -> str | None
 
     # No origin remote — fall back to the repo root directory name.
     return git_config_path.parent.parent.name
+
+
+def _git_origin(start: Path) -> str | None:
+    """Resolve the ``origin`` remote URL via git itself.
+
+    git is the only correct parser of its own config: it resolves git worktrees
+    (where ``.git`` is a file) and tolerates multi-valued keys (e.g. several
+    ``fetch =`` lines) that Python's ``configparser`` rejects.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(start), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def _find_git_config(start: Path) -> Path | None:

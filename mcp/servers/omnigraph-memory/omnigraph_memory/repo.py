@@ -1,6 +1,7 @@
 import configparser
 import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -25,11 +26,36 @@ def detect(override: str | None = None) -> str | None:
     if env_repo := os.environ.get("OMNIGRAPH_MEMORY_REPO"):
         return env_repo
 
-    git_config_path = _find_git_config(Path.cwd())
+    cwd = Path.cwd()
+
+    # git is the only correct parser of its own config: it resolves worktrees
+    # (where .git is a file) and tolerates multi-valued keys (e.g. several
+    # `fetch =` lines) that configparser rejects. Fall back to parsing
+    # .git/config directly when the git binary is unavailable.
+    if url := _git_origin(cwd):
+        return _normalise(url)
+
+    git_config_path = _find_git_config(cwd)
     if git_config_path is None:
         return None
 
     return _parse_origin(git_config_path)
+
+
+def _git_origin(start: Path) -> str | None:
+    """Resolve the ``origin`` remote URL via git itself."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(start), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def _find_git_config(start: Path) -> Path | None:
