@@ -114,6 +114,17 @@ query get_file($id: String) {
     }
 }
 
+// All file hashes — read once per index run so the incremental skip check is
+// in-memory rather than a query per file.
+
+query all_file_hashes() {
+    match {
+        $f: CodeFile
+    }
+    return { $f.slug, $f.content_hash }
+    limit 1000000
+}
+
 // Symbol ids defined by a file — needed to delete their outgoing edges
 // before reindexing the file.
 

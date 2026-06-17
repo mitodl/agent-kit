@@ -173,15 +173,40 @@ def index_path(
     store = ensure_store(slug, cfg)
     client = OmnigraphClient(str(store), cfg.queries_dir)
 
-    files = _collect_files(target)
+    # One query for all existing file hashes → the incremental skip check is
+    # in-memory, not a query per file.
+    existing: dict[str, str] = {}
+    if not force:
+        for row in client.read("read.gq", "all_file_hashes", {}):
+            existing[row["slug"]] = row.get("content_hash")
+
     stats = IndexStats()
-    for path in files:
+    records: list[dict] = []
+    reindexed_file_ids: list[str] = []
+
+    for path in _collect_files(target):
         stats.scanned += 1
         try:
-            _index_file(path, base, slug, client, force=force, stats=stats)
+            result = _parse_for_index(path, base, slug, existing, force=force)
         except Exception as exc:  # noqa: BLE001 — one bad file must not abort
             stats.errors += 1
             print(f"codegraph: failed to index {path}: {exc}", file=sys.stderr)
+            continue
+        if result is None:
+            stats.skipped += 1
+            continue
+        parsed, was_existing = result
+        if was_existing:
+            reindexed_file_ids.append(parsed.file_id)
+        records.extend(_file_records(parsed, slug, stats))
+        stats.indexed += 1
+
+    # Drop stale data for changed files (new files have nothing to delete), then
+    # bulk-load every node and edge in a single omnigraph call.
+    for file_id in reindexed_file_ids:
+        _delete_file_data(file_id, client)
+    client.load(records, mode="merge")
+
     return stats
 
 
@@ -203,15 +228,15 @@ def _collect_files(target: Path) -> list[Path]:
 # ── Per-file indexing ─────────────────────────────────────────────
 
 
-def _index_file(
+def _parse_for_index(
     path: Path,
     base: Path,
     slug: str,
-    client: OmnigraphClient,
+    existing: dict[str, str],
     *,
     force: bool,
-    stats: IndexStats,
-) -> None:
+) -> tuple[ParsedFile, bool] | None:
+    """Parse ``path`` unless unchanged. Returns (parsed, file_already_indexed)."""
     spec = _EXT_TO_SPEC[path.suffix]
     raw = path.read_bytes()
     content_hash = hashlib.sha256(raw).hexdigest()
@@ -222,21 +247,13 @@ def _index_file(
         rel = path.name
     file_id = f"{slug}#{rel}"
 
-    if not force:
-        existing = client.read("read.gq", "get_file", {"id": file_id})
-        if existing and existing[0].get("content_hash") == content_hash:
-            stats.skipped += 1
-            return
+    if not force and existing.get(file_id) == content_hash and file_id in existing:
+        return None  # unchanged
 
     parsed = _parse_file(raw, path, spec, slug, file_id, rel, content_hash)
     if parsed is None:
-        return
-
-    # Reindex: delete prior data for this file before inserting (separate calls).
-    _delete_file_data(file_id, client)
-
-    _insert_file(parsed, slug, client, stats)
-    stats.indexed += 1
+        return None
+    return parsed, (file_id in existing)
 
 
 def _delete_file_data(file_id: str, client: OmnigraphClient) -> None:
@@ -245,50 +262,50 @@ def _delete_file_data(file_id: str, client: OmnigraphClient) -> None:
     client.change("delete.gq", "delete_file", {"id": file_id})
 
 
-def _insert_file(
-    parsed: ParsedFile,
-    slug: str,
-    client: OmnigraphClient,
-    stats: IndexStats,
-) -> None:
+def _edge(edge_type: str, from_id: str, to_id: str) -> dict:
+    return {"edge": edge_type, "from": from_id, "to": to_id}
+
+
+def _file_records(parsed: ParsedFile, slug: str, stats: IndexStats) -> list[dict]:
+    """Build the load() records (node + edge JSONL dicts) for one parsed file."""
     now = _now_iso()
-    client.change(
-        "mutations.gq",
-        "insert_file",
+    records: list[dict] = [
         {
-            "id": parsed.file_id,
-            "repo": slug,
-            "path": parsed.path,
-            "language": parsed.language,
-            "content_hash": parsed.content_hash,
-            "indexed_at": now,
-        },
-    )
+            "type": "CodeFile",
+            "data": {
+                "slug": parsed.file_id,
+                "repo": slug,
+                "path": parsed.path,
+                "language": parsed.language,
+                "content_hash": parsed.content_hash,
+                "indexed_at": now,
+            },
+        }
+    ]
 
     by_qualified: dict[str, ParsedSymbol] = {}
     by_name: dict[str, list[ParsedSymbol]] = {}
     for sym in parsed.symbols:
-        client.change(
-            "mutations.gq",
-            "insert_symbol",
+        records.append(
             {
-                "id": sym.id,
-                "repo": slug,
-                "file_id": parsed.file_id,
-                "name": sym.name,
-                "qualified_name": sym.qualified_name,
-                "kind": sym.kind,
-                "start_line": sym.start_line,
-                "end_line": sym.end_line,
-                "signature": sym.signature,
-                "docstring": sym.docstring,
-                "indexed_at": now,
-            },
+                "type": "Symbol",
+                "data": {
+                    "slug": sym.id,
+                    "repo": slug,
+                    "file_id": parsed.file_id,
+                    "name": sym.name,
+                    "qualified_name": sym.qualified_name,
+                    "kind": sym.kind,
+                    "start_line": sym.start_line,
+                    "end_line": sym.end_line,
+                    "signature": sym.signature,
+                    "docstring": sym.docstring,
+                    "indexed_at": now,
+                },
+            }
         )
         stats.symbols += 1
-        client.change(
-            "mutations.gq", "link_defines", {"from": parsed.file_id, "to": sym.id}
-        )
+        records.append(_edge("Defines", parsed.file_id, sym.id))
         stats.edges += 1
         by_qualified[sym.qualified_name] = sym
         by_name.setdefault(sym.name, []).append(sym)
@@ -296,13 +313,10 @@ def _insert_file(
     # Contains: lexical nesting within this file.
     for container_qn, child_qn in parsed.contains:
         if container_qn and container_qn in by_qualified and child_qn in by_qualified:
-            client.change(
-                "mutations.gq",
-                "link_contains",
-                {
-                    "from": by_qualified[container_qn].id,
-                    "to": by_qualified[child_qn].id,
-                },
+            records.append(
+                _edge(
+                    "Contains", by_qualified[container_qn].id, by_qualified[child_qn].id
+                )
             )
             stats.edges += 1
 
@@ -322,16 +336,8 @@ def _insert_file(
         if (origin.id, target.id) in seen_calls:
             continue
         seen_calls.add((origin.id, target.id))
-        client.change(
-            "mutations.gq",
-            "link_calls",
-            {"from": origin.id, "to": target.id},
-        )
-        client.change(
-            "mutations.gq",
-            "link_references",
-            {"from": origin.id, "to": target.id},
-        )
+        records.append(_edge("Calls", origin.id, target.id))
+        records.append(_edge("References", origin.id, target.id))
         stats.edges += 2
 
     # Heuristic Inherits: resolve base class names to same-file class symbols.
@@ -342,11 +348,7 @@ def _insert_file(
         for base_name in bases:
             target = _resolve_local(base_name, by_name)
             if target is not None and target.id != child.id:
-                client.change(
-                    "mutations.gq",
-                    "link_inherits",
-                    {"from": child.id, "to": target.id},
-                )
+                records.append(_edge("Inherits", child.id, target.id))
                 stats.edges += 1
 
     # Heuristic Imports: resolve imported names to same-file symbols (best-effort;
@@ -354,12 +356,10 @@ def _insert_file(
     for iname in parsed.imports:
         target = _resolve_local(iname, by_name)
         if target is not None:
-            client.change(
-                "mutations.gq",
-                "link_imports",
-                {"from": parsed.file_id, "to": target.id},
-            )
+            records.append(_edge("Imports", parsed.file_id, target.id))
             stats.edges += 1
+
+    return records
 
 
 def _reference_origin(parsed: ParsedFile) -> ParsedSymbol | None:

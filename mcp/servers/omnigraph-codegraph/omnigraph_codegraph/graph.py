@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -68,6 +69,26 @@ class OmnigraphClient:
             "--params",
             json.dumps(params),
         )
+
+    def load(self, records: list[dict], mode: str = "merge") -> None:
+        """Bulk-load node/edge records via one ``omnigraph load`` call.
+
+        Each record is a JSONL line: ``{"type": Node, "data": {...}}`` for a
+        node or ``{"edge": Edge, "from": key, "to": key}`` for an edge. This
+        replaces thousands of per-record ``mutate`` subprocesses with a single
+        invocation — essential for indexing large repositories.
+        """
+        if not records:
+            return
+        fd, tmp = tempfile.mkstemp(suffix=".jsonl", prefix="codegraph-load-")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                for record in records:
+                    fh.write(json.dumps(record))
+                    fh.write("\n")
+            self._run("load", "--data", tmp, "--mode", mode)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
 
     # ── Internals ─────────────────────────────────────────────────
 
