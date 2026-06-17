@@ -38,6 +38,17 @@ class LanguageSpec:
     kinds: dict[str, str]
 
 
+# All JS/TS variants use the `tsx` grammar (a superset of TS, JS, and JSX): the
+# plain `javascript` grammar rejects the TS node types in typescript.scm.
+_TS_KINDS = {
+    "function": "function",
+    "method": "method",
+    "class": "class",
+    "interface": "interface",
+    "type": "type",
+    "enum": "enum",
+}
+
 _LANGUAGES: tuple[LanguageSpec, ...] = (
     LanguageSpec(
         name="python",
@@ -48,36 +59,31 @@ _LANGUAGES: tuple[LanguageSpec, ...] = (
     ),
     LanguageSpec(
         name="typescript",
-        extensions=(".ts",),
-        grammar="typescript",
-        scm="typescript.scm",
-        kinds={
-            "function": "function",
-            "method": "method",
-            "class": "class",
-            "interface": "interface",
-            "type": "type",
-        },
-    ),
-    LanguageSpec(
-        name="tsx",
-        extensions=(".tsx",),
+        extensions=(".ts", ".mts", ".cts", ".tsx"),
         grammar="tsx",
         scm="typescript.scm",
-        kinds={
-            "function": "function",
-            "method": "method",
-            "class": "class",
-            "interface": "interface",
-            "type": "type",
-        },
+        kinds=_TS_KINDS,
     ),
     LanguageSpec(
         name="javascript",
         extensions=(".js", ".jsx", ".mjs", ".cjs"),
-        grammar="javascript",
+        grammar="tsx",
         scm="typescript.scm",
-        kinds={"function": "function", "method": "method", "class": "class"},
+        kinds=_TS_KINDS,
+    ),
+    LanguageSpec(
+        name="bash",
+        extensions=(".sh", ".bash", ".zsh"),
+        grammar="bash",
+        scm="bash.scm",
+        kinds={"function": "function"},
+    ),
+    LanguageSpec(
+        name="yaml",
+        extensions=(".yaml", ".yml"),
+        grammar="yaml",
+        scm="yaml.scm",
+        kinds={"key": "key"},
     ),
 )
 
@@ -472,14 +478,18 @@ def _parse_file(
 
 
 _DEF_NODE_TYPES = {
-    "function_definition",
+    "function_definition",  # python, bash
     "class_definition",
     "function_declaration",
+    "generator_function_declaration",
     "class_declaration",
     "method_definition",
+    "public_field_definition",  # class arrow methods
     "interface_declaration",
     "type_alias_declaration",
+    "enum_declaration",
     "variable_declarator",
+    "block_mapping_pair",  # yaml keys (dotted qualified paths)
 }
 
 

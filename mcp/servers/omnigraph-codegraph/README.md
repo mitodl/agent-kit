@@ -58,10 +58,22 @@ name when there is no remote.
 
 ## Supported languages
 
-Python first; TypeScript / TSX / JavaScript supported. Adding a language means
-adding one `LanguageSpec` in `indexer.py` (extensions + grammar name + a
-`queries_ts/<lang>.scm` capture file + a capture→kind map). Grammars are
-provided prebuilt by `tree-sitter-language-pack` (no compilation needed).
+| Language | Extensions | Symbols extracted |
+|---|---|---|
+| Python | `.py` `.pyi` | functions, classes, methods, module |
+| TypeScript / JS / JSX / TSX | `.ts` `.tsx` `.mts` `.cts` `.js` `.jsx` `.mjs` `.cjs` | functions, arrow consts, classes, methods (incl. arrow fields), interfaces, types, enums |
+| Bash / Zsh | `.sh` `.bash` `.zsh` | functions |
+| YAML | `.yaml` `.yml` | mapping keys as dotted paths (e.g. `jobs.build.steps`) |
+
+All JS/TS variants are parsed with the `tsx` grammar (a superset of TS, JS, and
+JSX) — the plain `javascript` grammar rejects the TS node types in the shared
+query. YAML indexes every mapping key as a navigable `key` symbol, so large
+config trees (CI, k8s, Pulumi) can be searched by path; expect many such symbols.
+
+Adding a language means adding one `LanguageSpec` in `indexer.py` (extensions +
+grammar name + a `queries_ts/<lang>.scm` capture file + a capture→kind map), and
+any new node types to `_DEF_NODE_TYPES`. Grammars are provided prebuilt by
+`tree-sitter-language-pack` (no compilation needed).
 
 ## Install
 
