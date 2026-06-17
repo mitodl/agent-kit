@@ -443,7 +443,11 @@ def load() -> Config:
 ### `omnigraph_memory/repo.py`
 
 Detects the current repository from the `.git/config` of the working directory.
-Normalises SSH and HTTPS remote URLs to a canonical `host/org/repo` slug.
+Normalises SSH and HTTPS remote URLs to a canonical HTTPS project URI
+(`https://github.com/mitodl/ol-django`). This URI is the shared join key across
+every layer — memory, workflow, tasks, and the code graph — so they all derive it
+identically. (The embedded snapshot below predates that change; see
+`omnigraph_memory/repo.py` for the current `_normalise`.)
 
 ```python
 from __future__ import annotations
@@ -1415,3 +1419,64 @@ Add to `~/.claude/settings.json`:
 ```
 
 See `configs/hooks/README.md` for full details.
+
+---
+
+## Task Tracking (Layer 1)
+
+A dependency-aware, hierarchical task tracker (beads-like) lives in the **same
+graph** as memory and workflow. Tasks belong here rather than in a separate
+system because they share the work-coordination lifecycle — low-churn,
+agent/human-authored, team-shared — and integrate via hard edges.
+
+### Node + edges
+
+`Task` (`tk-` slug) with `type` (bug/feature/task/chore/epic), `status`
+(open/in_progress/blocked/closed), `priority` (p0–p3), and:
+
+- **Hierarchy** — `parentSlug` (denormalized) + `ParentOf` edge let an `epic`
+  decompose into sub-issues.
+- **Dependencies** — `blockedBy` (denormalized list) + `Blocks` edge drive the
+  ready-work query without graph traversal.
+- **External links** — `externalUri` points a task at a GitHub issue/PR or any URI.
+- **Cross-layer** — `projectSlug`/`TaskBelongsTo` → WorkflowProject;
+  `Addresses` → Memory; `Closes` (WorkflowSession → Task); `symbolRefs` → code graph.
+
+### Tools
+
+`task_create`, `task_get`, `task_list`, `task_update`, `task_close`,
+`task_link`, and **`task_ready`** — open tasks whose blockers are all closed,
+ordered by priority. `task_ready` is the multi-agent coordination primitive: any
+session or the `UserPromptSubmit` hook can surface the next actionable item.
+
+The `/task` skill (`skills/workflow/task-tracker/SKILL.md`) is the interactive
+entry point; the `workflow-context-inject.sh` hook now also injects a **Ready
+Tasks** section. Multi-user rides the existing model (`author` = creator,
+`assignee` = owner, team-remote S3).
+
+---
+
+## Code Graph (Layer 2)
+
+A **separate** package, `mcp/servers/omnigraph-codegraph/`, maintains a
+tree-sitter symbol graph (`CodeFile`/`Symbol` + `Defines`/`Contains`/`Calls`/
+`References`/`Imports`/`Inherits`). It is deliberately **not** folded into the
+shared memory graph: it is machine-derived, high-churn, re-derivable, per-repo,
+and **local-only** (never synced to the team S3 remote).
+
+It composes with Layer 1 by **soft symbol-ID references** — strings of the form
+`https://github.com/org/repo#path/file.py::Qualified.Name` stored in the
+`symbolRefs` field on `Task` and `Memory` — exactly as memory already composes
+with workflow via the shared repo key. There is no hard cross-store edge.
+
+The reference resolves **both directions**: forward, an agent looks a symbol up
+with the codegraph `code_*` tools and stores its id in `symbolRefs`; reverse, the
+Layer-1 `context_for_symbol(symbol_id)` tool returns every memory and task whose
+`symbolRefs` include that id (scoped by the repo prefix of the id), answering
+"what lessons and open tasks concern this function?" before you edit it.
+
+`Calls`/`References`/`Imports`/`Inherits` are **heuristic** (syntactic,
+import-aware name resolution), suitable for agent navigation and impact hints,
+not a compiler-grade call graph. See that package's README for the indexer CLI,
+MCP tools (`code_find_definition`, `code_callers`, `code_impact`, …), and the
+`codegraph-reindex.sh` PostToolUse hook that keeps the graph fresh during a session.

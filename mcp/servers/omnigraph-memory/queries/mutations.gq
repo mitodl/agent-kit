@@ -13,8 +13,9 @@ query insert_memory(
     $severity: String?,
     $author: String,
     $tags: [String]?,
-    $createdAt: DateTime,
-    $updatedAt: DateTime
+    $symbol_refs: [String]?,
+    $created_at: DateTime,
+    $updated_at: DateTime
 ) {
     insert Memory {
         slug: $slug,
@@ -27,8 +28,9 @@ query insert_memory(
         severity: $severity,
         author: $author,
         tags: $tags,
-        createdAt: $createdAt,
-        updatedAt: $updatedAt
+        symbol_refs: $symbol_refs,
+        created_at: $created_at,
+        updated_at: $updated_at
     }
 }
 
@@ -46,7 +48,8 @@ query update_memory(
     $category: String?,
     $severity: String?,
     $tags: [String]?,
-    $updatedAt: DateTime
+    $symbol_refs: [String]?,
+    $updated_at: DateTime
 ) {
     update Memory
         set {
@@ -57,7 +60,8 @@ query update_memory(
             category: $category,
             severity: $severity,
             tags: $tags,
-            updatedAt: $updatedAt
+            symbol_refs: $symbol_refs,
+            updated_at: $updated_at
         }
         where slug = $slug
 }
@@ -83,10 +87,10 @@ query insert_workflow_project(
     $phase: String,
     $author: String,
     $tags: [String]?,
-    $githubIssue: String?,
-    $githubPR: String?,
-    $createdAt: DateTime,
-    $updatedAt: DateTime
+    $github_issue: String?,
+    $github_pr: String?,
+    $created_at: DateTime,
+    $updated_at: DateTime
 ) {
     insert WorkflowProject {
         slug: $slug,
@@ -97,37 +101,37 @@ query insert_workflow_project(
         phase: $phase,
         author: $author,
         tags: $tags,
-        githubIssue: $githubIssue,
-        githubPR: $githubPR,
-        createdAt: $createdAt,
-        updatedAt: $updatedAt
+        github_issue: $github_issue,
+        github_pr: $github_pr,
+        created_at: $created_at,
+        updated_at: $updated_at
     }
 }
 
 query update_workflow_project_phase(
     $slug: String,
     $phase: String,
-    $githubPR: String?,
-    $updatedAt: DateTime
+    $github_pr: String?,
+    $updated_at: DateTime
 ) {
     update WorkflowProject
-        set { phase: $phase, githubPR: $githubPR, updatedAt: $updatedAt }
+        set { phase: $phase, github_pr: $github_pr, updated_at: $updated_at }
         where slug = $slug
 }
 
 query update_workflow_project_complete(
     $slug: String,
     $status: String,
-    $githubPR: String?,
-    $completedAt: DateTime,
-    $updatedAt: DateTime
+    $github_pr: String?,
+    $completed_at: DateTime,
+    $updated_at: DateTime
 ) {
     update WorkflowProject
         set {
             status: $status,
-            githubPR: $githubPR,
-            completedAt: $completedAt,
-            updatedAt: $updatedAt
+            github_pr: $github_pr,
+            completed_at: $completed_at,
+            updated_at: $updated_at
         }
         where slug = $slug
 }
@@ -136,41 +140,41 @@ query update_workflow_project_complete(
 
 query insert_workflow_session(
     $slug: String,
-    $projectSlug: String,
-    $sessionId: String,
+    $project_slug: String,
+    $session_id: String,
     $repo: String?,
     $phase: String,
     $summary: String,
     $author: String,
     $tags: [String]?,
-    $startedAt: DateTime
+    $started_at: DateTime
 ) {
     insert WorkflowSession {
         slug: $slug,
-        projectSlug: $projectSlug,
-        sessionId: $sessionId,
+        project_slug: $project_slug,
+        session_id: $session_id,
         repo: $repo,
         phase: $phase,
         summary: $summary,
         author: $author,
         tags: $tags,
-        startedAt: $startedAt
+        started_at: $started_at
     }
 }
 
 query update_workflow_session_end(
     $slug: String,
     $summary: String,
-    $toolsUsed: [String]?,
-    $filesChanged: [String]?,
-    $endedAt: DateTime
+    $tools_used: [String]?,
+    $files_changed: [String]?,
+    $ended_at: DateTime
 ) {
     update WorkflowSession
         set {
             summary: $summary,
-            toolsUsed: $toolsUsed,
-            filesChanged: $filesChanged,
-            endedAt: $endedAt
+            tools_used: $tools_used,
+            files_changed: $files_changed,
+            ended_at: $ended_at
         }
         where slug = $slug
 }
@@ -179,35 +183,35 @@ query update_workflow_session_end(
 
 query insert_workflow_trace(
     $slug: String,
-    $projectSlug: String,
+    $project_slug: String,
     $repo: String?,
     $title: String,
     $description: String,
-    $sessionCount: I32,
+    $session_count: I32,
     $phases: [String],
     $duration: I32?,
     $outcome: String,
-    $lessonsSlug: [String]?,
-    $patternsSlug: [String]?,
+    $lessons_slug: [String]?,
+    $patterns_slug: [String]?,
     $author: String,
     $tags: [String]?,
-    $createdAt: DateTime
+    $created_at: DateTime
 ) {
     insert WorkflowTrace {
         slug: $slug,
-        projectSlug: $projectSlug,
+        project_slug: $project_slug,
         repo: $repo,
         title: $title,
         description: $description,
-        sessionCount: $sessionCount,
+        session_count: $session_count,
         phases: $phases,
         duration: $duration,
         outcome: $outcome,
-        lessonsSlug: $lessonsSlug,
-        patternsSlug: $patternsSlug,
+        lessons_slug: $lessons_slug,
+        patterns_slug: $patterns_slug,
         author: $author,
         tags: $tags,
-        createdAt: $createdAt
+        created_at: $created_at
     }
 }
 
@@ -223,4 +227,113 @@ query link_produced($from: String, $to: String) {
 
 query link_informed($from: String, $to: String) {
     insert Informed { from: $from, to: $to }
+}
+
+// ── Task mutations ─────────────────────────────────────────────────
+
+query insert_task(
+    $slug: String,
+    $title: String,
+    $description: String,
+    $repo: String?,
+    $type: String,
+    $status: String,
+    $priority: String,
+    $project_slug: String?,
+    $parent_slug: String?,
+    $blocked_by: [String]?,
+    $assignee: String?,
+    $external_uri: String?,
+    $author: String,
+    $symbol_refs: [String]?,
+    $tags: [String]?,
+    $created_at: DateTime,
+    $updated_at: DateTime
+) {
+    insert Task {
+        slug: $slug,
+        title: $title,
+        description: $description,
+        repo: $repo,
+        type: $type,
+        status: $status,
+        priority: $priority,
+        project_slug: $project_slug,
+        parent_slug: $parent_slug,
+        blocked_by: $blocked_by,
+        assignee: $assignee,
+        external_uri: $external_uri,
+        author: $author,
+        symbol_refs: $symbol_refs,
+        tags: $tags,
+        created_at: $created_at,
+        updated_at: $updated_at
+    }
+}
+
+// Updates ALL mutable fields. The MCP server reads the current node first,
+// merges caller-supplied changes, then calls this with the full set.
+query update_task(
+    $slug: String,
+    $title: String,
+    $description: String,
+    $type: String,
+    $status: String,
+    $priority: String,
+    $project_slug: String?,
+    $parent_slug: String?,
+    $blocked_by: [String]?,
+    $assignee: String?,
+    $external_uri: String?,
+    $resolution: String?,
+    $symbol_refs: [String]?,
+    $tags: [String]?,
+    $closed_at: DateTime?,
+    $updated_at: DateTime
+) {
+    update Task
+        set {
+            title: $title,
+            description: $description,
+            type: $type,
+            status: $status,
+            priority: $priority,
+            project_slug: $project_slug,
+            parent_slug: $parent_slug,
+            blocked_by: $blocked_by,
+            assignee: $assignee,
+            external_uri: $external_uri,
+            resolution: $resolution,
+            symbol_refs: $symbol_refs,
+            tags: $tags,
+            closed_at: $closed_at,
+            updated_at: $updated_at
+        }
+        where slug = $slug
+}
+
+// ── Task edge mutations ────────────────────────────────────────────
+
+query link_blocks($from: String, $to: String) {
+    insert Blocks { from: $from, to: $to }
+}
+
+query link_parent_of($from: String, $to: String) {
+    insert ParentOf { from: $from, to: $to }
+}
+
+query link_discovered_from($from: String, $to: String) {
+    insert DiscoveredFrom { from: $from, to: $to }
+}
+
+query link_task_belongs_to($from: String, $to: String) {
+    insert TaskBelongsTo { from: $from, to: $to }
+}
+
+query link_addresses($from: String, $to: String) {
+    insert Addresses { from: $from, to: $to }
+}
+
+query link_closes($from: String, $to: String) {
+    insert Closes { from: $from, to: $to }
 }

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # workflow-context-inject.sh
 #
-# UserPromptSubmit hook: inject active workflow project context into every
-# Claude Code prompt for the current repository.
+# UserPromptSubmit hook: inject active workflow projects AND ready tasks for the
+# current repository into every Claude Code prompt.
 #
-# Output is injected as <context> by the Claude Code harness. When there are
-# no active projects, this script emits nothing (exit 0 silently).
+# Output is injected as <context> by the Claude Code harness. When there are no
+# active projects and no ready tasks, this script emits nothing (exit 0 silently).
 #
 # Install: symlink to ~/.claude/hooks/workflow-context-inject.sh
 # Register in settings.json under hooks.UserPromptSubmit
@@ -20,19 +20,19 @@ QUERIES_DIR="${SCRIPT_DIR}/../../mcp/servers/omnigraph-memory/queries"
 OMNIGRAPH_URI="${OMNIGRAPH_MEMORY_URI:-${HOME}/.local/share/omnigraph-memory/graph.omni}"
 OMNIGRAPH_TOKEN="${OMNIGRAPH_MEMORY_TOKEN:-}"
 
-# Detect repo slug from git remote (mirrors repo.py logic)
+# Detect repo key from git remote (mirrors repo.py::_normalise — canonical HTTPS URI)
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 GIT_REMOTE=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null) || exit 0
 [[ -z "$GIT_REMOTE" ]] && exit 0
 
 REPO_SLUG=$(python3 - "$GIT_REMOTE" <<'PYEOF'
 import re, sys
-url = sys.argv[1].strip().rstrip('/')
-url = re.sub(r'\.git$', '', url)
-if m := re.match(r'git@([^:]+):(.+)', url):
-    print(f"{m.group(1)}/{m.group(2)}")
-elif m := re.match(r'https?://([^/]+)/(.+)', url):
-    print(f"{m.group(1)}/{m.group(2)}")
+# Canonical HTTPS project URI — must match omnigraph_memory/repo.py::_normalise.
+url = re.sub(r'\.git$', '', sys.argv[1].strip()).rstrip('/')
+if m := re.match(r'(?:ssh://)?[^@]+@([^:/]+)[:/](.+)', url):
+    print(f"https://{m.group(1)}/{m.group(2)}")
+elif m := re.match(r'https?://(?:[^@/]+@)?([^/]+)/(.+)', url):
+    print(f"https://{m.group(1)}/{m.group(2)}")
 else:
     print(url)
 PYEOF
@@ -40,56 +40,92 @@ PYEOF
 
 [[ -z "$REPO_SLUG" ]] && exit 0
 
-# Build omnigraph args
-OG_ARGS=(--store "$OMNIGRAPH_URI" --query "${QUERIES_DIR}/read.gq" list_projects_by_repo_status)
-if [[ -n "$OMNIGRAPH_TOKEN" ]]; then
-    OG_ARGS+=(--token "$OMNIGRAPH_TOKEN")
-fi
+# Helper to run a read query; prints "[]" on any failure so the formatter can
+# still produce the other section.
+run_query() {
+    local name="$1" params="$2"
+    local args=(--store "$OMNIGRAPH_URI" --query "${QUERIES_DIR}/read.gq" "$name")
+    [[ -n "$OMNIGRAPH_TOKEN" ]] && args+=(--token "$OMNIGRAPH_TOKEN")
+    omnigraph query "${args[@]}" --params "$params" --format json 2>/dev/null || echo "[]"
+}
 
-PROJECTS_RAW=$(omnigraph query "${OG_ARGS[@]}" \
-    --params "{\"repo\": \"${REPO_SLUG}\", \"status\": \"active\"}" \
-    --format json 2>/dev/null) || exit 0
+PROJECTS_RAW=$(run_query list_projects_by_repo_status \
+    "{\"repo\": \"${REPO_SLUG}\", \"status\": \"active\"}")
+TASKS_RAW=$(run_query list_tasks_by_repo "{\"repo\": \"${REPO_SLUG}\"}")
 
-# Emit nothing if no active projects
-COUNT=$(python3 -c "
-import json,sys
-d=json.loads(sys.argv[1])
-rows = d.get('rows', d) if isinstance(d, dict) else d
-print(len(rows))
-" "$PROJECTS_RAW" 2>/dev/null) || exit 0
-[[ "$COUNT" -eq 0 ]] && exit 0
-
-python3 - "$PROJECTS_RAW" <<'PYEOF'
+python3 - "$PROJECTS_RAW" "$TASKS_RAW" <<'PYEOF'
 import json, sys
 
-raw = json.loads(sys.argv[1])
-rows = raw.get('rows', raw) if isinstance(raw, dict) else raw
-# Strip alias prefix: "p.slug" -> "slug"
-projects = [{k.split('.', 1)[-1]: v for k, v in row.items()} for row in rows]
+_PRIORITY = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
 
-lines = [
-    "## Active Workflow Projects",
-    "",
-    f"This repository has {len(projects)} active tracked project(s):",
-    "",
+
+def rows(raw):
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    items = data.get("rows", data) if isinstance(data, dict) else data
+    # Strip alias prefix: "p.slug" -> "slug"
+    return [{k.split(".", 1)[-1]: v for k, v in row.items()} for row in items]
+
+
+projects = rows(sys.argv[1])
+tasks = rows(sys.argv[2])
+
+# Ready work: open tasks whose blockers are all closed.
+status_by_slug = {t["slug"]: t.get("status") for t in tasks}
+ready = [
+    t for t in tasks
+    if t.get("status") == "open"
+    and all(status_by_slug.get(b, "closed") == "closed" for b in (t.get("blocked_by") or []))
 ]
+ready.sort(key=lambda t: _PRIORITY.get(t.get("priority"), 9))
 
-for p in projects[:3]:
-    lines.append(f"- **{p['title']}** (slug: `{p['slug']}`)")
-    lines.append(f"  Phase: {p['phase']}")
-    if p.get("githubIssue"):
-        lines.append(f"  Issue: {p['githubIssue']}")
-    if p.get("tags"):
-        lines.append(f"  Tags: {', '.join(p['tags'])}")
+lines = []
 
-lines += [
-    "",
-    "If this session is contributing to one of the projects above, call",
-    "`workflow_session_start` with the matching slug and the current phase",
-    "before doing substantive work.",
-    "",
-    "If this is unrelated work, ignore the above.",
-]
+if projects:
+    lines += [
+        "## Active Workflow Projects",
+        "",
+        f"This repository has {len(projects)} active tracked project(s):",
+        "",
+    ]
+    for p in projects[:3]:
+        lines.append(f"- **{p['title']}** (slug: `{p['slug']}`)")
+        lines.append(f"  Phase: {p['phase']}")
+        if p.get("github_issue"):
+            lines.append(f"  Issue: {p['github_issue']}")
+        if p.get("tags"):
+            lines.append(f"  Tags: {', '.join(p['tags'])}")
+    lines += [
+        "",
+        "If this session is contributing to one of the projects above, call",
+        "`workflow_session_start` with the matching slug and the current phase",
+        "before doing substantive work.",
+        "",
+    ]
+
+if ready:
+    lines += [
+        "## Ready Tasks",
+        "",
+        f"{len(ready)} task(s) are ready to work (open, no open blockers):",
+        "",
+    ]
+    for t in ready[:5]:
+        ext = f" · {t['external_uri']}" if t.get("external_uri") else ""
+        lines.append(f"- `[{t.get('priority', 'p2')}]` **{t['title']}** (slug: `{t['slug']}`){ext}")
+    lines += [
+        "",
+        "Use `task_update`/`task_close` (or the `/task` skill) to claim and progress them.",
+        "",
+    ]
+
+if not lines:
+    sys.exit(0)
+
+if projects:
+    lines.append("If this is unrelated work, ignore the above.")
 
 print("\n".join(lines))
 PYEOF

@@ -1,0 +1,16 @@
+{
+	"servers": {
+		"omnigraph-codegraph": {
+			"type": "stdio",
+			"command": "uvx",
+			"args": [
+				"--from",
+				"git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/omnigraph-codegraph",
+				"omnigraph-codegraph"
+			],
+			"env": {
+				"OMNIGRAPH_CODEGRAPH_AUTHOR": "${env:USER}"
+			}
+		}
+	}
+}

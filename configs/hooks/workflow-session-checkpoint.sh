@@ -52,9 +52,9 @@ import json, sys
 print(json.dumps({
     'slug': sys.argv[1],
     'summary': 'Session ended (auto-closed by Stop hook — call workflow_session_end explicitly for a better summary)',
-    'toolsUsed': None,
-    'filesChanged': json.loads(sys.argv[2]),
-    'endedAt': sys.argv[3],
+    'tools_used': None,
+    'files_changed': json.loads(sys.argv[2]),
+    'ended_at': sys.argv[3],
 }))
 " "$SESSION_SLUG" "$FILES_JSON" "$NOW" 2>/dev/null) || { rm -f "$STATE_FILE"; exit 0; }
 

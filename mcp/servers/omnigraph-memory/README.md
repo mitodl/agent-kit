@@ -57,6 +57,38 @@ See [`skills/workflow/project-tracker/SKILL.md`](../../../skills/workflow/projec
 | `workflow_session_start` | Link the current Claude Code session to a project; writes a state file for the Stop hook |
 | `workflow_session_end` | Close the session with a summary, tools used, and files changed |
 
+### Task Tracking Tools
+
+A dependency-aware, hierarchical task tracker (beads-like) in the same graph, so
+tasks hard-link to projects, sessions, and memories. See
+[`skills/workflow/task-tracker/SKILL.md`](../../../skills/workflow/task-tracker/SKILL.md)
+(the `/task` skill) for usage.
+
+| Tool | Description |
+|---|---|
+| `task_create` | Create a task (`tk-` slug). Supports `parent` (epic → sub-issue), `blocked_by`, `project_slug`, `external_uri` (e.g. a GitHub issue), and `symbol_refs` |
+| `task_get` | Fetch a single task by slug |
+| `task_list` | List tasks filtered by repo, status, project, parent (epic children), or assignee |
+| `task_update` | Update mutable fields — claim (`assignee`), set `in_progress`, re-prioritise, re-parent, attach a URI |
+| `task_close` | Close a task with an optional resolution; unblocks its dependents |
+| `task_ready` | **Ready work**: open tasks whose blockers are all closed, ordered by priority — the core coordination primitive |
+| `task_link` | Link tasks: `blocks` / `parent` / `discovered_from`, or `addresses` a Memory node |
+| `context_for_symbol` | Reverse lookup: given a code-graph symbol id (`repo#path::Name`), return the memories and tasks whose `symbolRefs` include it |
+
+Tasks are **hierarchical** (an `epic` decomposes into sub-issues via `parent`, with
+`parentSlug` denormalized for fast child lookup) and **dependency-aware** (`blocked_by`
+maintains a denormalized `blockedBy` list that drives the `task_ready` query without
+graph traversal). `external_uri` links a task to a GitHub issue/PR or any reference.
+
+## Tests
+
+Integration tests spin up throwaway omnigraph graphs and exercise the real query
+files end-to-end (they skip automatically if the `omnigraph` binary is absent):
+
+```bash
+uv run --group test pytest
+```
+
 ## Operating Modes
 
 ### Local Disk (default)

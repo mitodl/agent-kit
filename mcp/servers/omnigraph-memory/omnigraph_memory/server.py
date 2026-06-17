@@ -38,6 +38,7 @@ _KIND_PREFIX = {
     "workflow_project": "wp",
     "workflow_session": "ws",
     "workflow_trace": "wt",
+    "task": "tk",
 }
 
 
@@ -74,7 +75,7 @@ def memory_search(
     query:
         Free-text search query. Searched against ``content``.
     repo:
-        Canonical repo slug (e.g. ``github.com/mitodl/ol-django``).
+        Canonical repo URI (e.g. ``https://github.com/mitodl/ol-django``).
         Auto-detected from ``.git/config`` if omitted.
     kind:
         Optional filter: ``pattern``, ``project_fact``, ``lesson``,
@@ -113,6 +114,7 @@ def memory_store(
     category: str | None = None,
     severity: Literal["info", "warning", "critical"] | None = None,
     tags: list[str] | None = None,
+    symbol_refs: list[str] | None = None,
 ) -> dict:
     """
     Store a new memory in the graph.
@@ -132,7 +134,7 @@ def memory_store(
         Full text of the memory. Be specific: include the what, why, and any
         examples. This is the primary search target.
     repo:
-        Canonical repo slug. Auto-detected from ``.git/config`` if omitted.
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
     language:
         Programming language (for ``pattern`` kind). e.g. ``python``, ``typescript``.
     category:
@@ -143,6 +145,10 @@ def memory_store(
         ``info`` | ``warning`` | ``critical``.
     tags:
         Optional list of free-form tags for grouping.
+    symbol_refs:
+        Optional code-graph symbol ids (``repo#path::Name``) this memory concerns,
+        e.g. the function a lesson is about. Resolved against the omnigraph-codegraph
+        store; stored as a soft reference (no hard cross-store edge).
     """
     now = _now_iso()
     slug = _make_slug(kind, title)
@@ -162,8 +168,9 @@ def memory_store(
             "severity": severity,
             "author": cfg.author,
             "tags": tags,
-            "createdAt": now,
-            "updatedAt": now,
+            "symbol_refs": symbol_refs,
+            "created_at": now,
+            "updated_at": now,
         },
     )
     return {"slug": slug, "kind": kind, "repo": detected_repo}
@@ -192,7 +199,7 @@ def memory_get_project_facts(repo: str | None = None) -> list[dict]:
     Parameters
     ----------
     repo:
-        Canonical repo slug. Auto-detected from ``.git/config`` if omitted.
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
     """
     detected = repo_module.detect(override=repo)
     if not detected:
@@ -216,7 +223,7 @@ def memory_list_patterns(
     Parameters
     ----------
     repo:
-        Canonical repo slug. Auto-detected from ``.git/config`` if omitted.
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
     language:
         Optional language filter applied after fetching. e.g. ``python``.
     """
@@ -272,7 +279,7 @@ def workflow_project_create(
         Starting phase. One of ``discovery``, ``spec``, ``implementation``,
         ``delivery``. Defaults to ``discovery``.
     repo:
-        Canonical repo slug. Auto-detected from ``.git/config`` if omitted.
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
     github_issue:
         URL of the GitHub issue tracking this work.
         e.g. ``github.com/mitodl/ol-django/issues/847``.
@@ -295,10 +302,10 @@ def workflow_project_create(
             "phase": phase,
             "author": cfg.author,
             "tags": tags,
-            "githubIssue": github_issue,
-            "githubPR": None,
-            "createdAt": now,
-            "updatedAt": now,
+            "github_issue": github_issue,
+            "github_pr": None,
+            "created_at": now,
+            "updated_at": now,
         },
     )
     return {"slug": slug, "repo": detected_repo, "phase": phase}
@@ -331,7 +338,7 @@ def workflow_project_list(
     Parameters
     ----------
     repo:
-        Canonical repo slug. Auto-detected from ``.git/config`` if omitted.
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
         Pass an empty string to list projects across all repos.
     status:
         ``active`` | ``completed`` | ``abandoned`` | ``None`` for all.
@@ -393,7 +400,7 @@ def workflow_project_advance(
     client.change(
         "mutations.gq",
         "update_workflow_project_phase",
-        {"slug": slug, "phase": phase, "githubPR": github_pr, "updatedAt": now},
+        {"slug": slug, "phase": phase, "github_pr": github_pr, "updated_at": now},
     )
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     return rows[0] if rows else {"slug": slug, "phase": phase}
@@ -437,9 +444,9 @@ def workflow_project_complete(
         {
             "slug": slug,
             "status": "completed",
-            "githubPR": github_pr,
-            "completedAt": now,
-            "updatedAt": now,
+            "github_pr": github_pr,
+            "completed_at": now,
+            "updated_at": now,
         },
     )
 
@@ -447,7 +454,9 @@ def workflow_project_complete(
     project_rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     project = project_rows[0] if project_rows else {}
 
-    sessions = client.read("read.gq", "list_sessions_by_project", {"projectSlug": slug})
+    sessions = client.read(
+        "read.gq", "list_sessions_by_project", {"project_slug": slug}
+    )
 
     # Compute trace fields
     session_count = len(sessions)
@@ -459,8 +468,8 @@ def workflow_project_complete(
 
     duration: int | None = None
     if sessions:
-        started_vals = [s.get("startedAt") for s in sessions if s.get("startedAt")]
-        ended_vals = [s.get("endedAt") for s in sessions if s.get("endedAt")]
+        started_vals = [s.get("started_at") for s in sessions if s.get("started_at")]
+        ended_vals = [s.get("ended_at") for s in sessions if s.get("ended_at")]
         if started_vals and ended_vals:
             try:
                 first = datetime.fromisoformat(min(started_vals))
@@ -474,19 +483,19 @@ def workflow_project_complete(
         "insert_workflow_trace",
         {
             "slug": trace_slug,
-            "projectSlug": slug,
+            "project_slug": slug,
             "repo": project.get("repo"),
             "title": project.get("title", slug),
             "description": project.get("description", ""),
-            "sessionCount": session_count,
+            "session_count": session_count,
             "phases": phases_seen,
             "duration": duration,
             "outcome": outcome,
-            "lessonsSlug": None,
-            "patternsSlug": None,
+            "lessons_slug": None,
+            "patterns_slug": None,
             "author": cfg.author,
             "tags": project.get("tags"),
-            "createdAt": now,
+            "created_at": now,
         },
     )
     client.change(
@@ -527,7 +536,7 @@ def workflow_session_start(
     phase:
         The phase this session is working in.
     repo:
-        Canonical repo slug. Auto-detected from ``.git/config`` if omitted.
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
     tags:
         Optional tags.
     """
@@ -540,14 +549,14 @@ def workflow_session_start(
         "insert_workflow_session",
         {
             "slug": slug,
-            "projectSlug": project_slug,
-            "sessionId": session_id,
+            "project_slug": project_slug,
+            "session_id": session_id,
             "repo": detected_repo,
             "phase": phase,
             "summary": "",
             "author": cfg.author,
             "tags": tags,
-            "startedAt": now,
+            "started_at": now,
         },
     )
     client.change(
@@ -604,9 +613,9 @@ def workflow_session_end(
         {
             "slug": session_slug,
             "summary": summary,
-            "toolsUsed": tools_used,
-            "filesChanged": files_changed,
-            "endedAt": now,
+            "tools_used": tools_used,
+            "files_changed": files_changed,
+            "ended_at": now,
         },
     )
 
@@ -623,3 +632,437 @@ def workflow_session_end(
             continue
 
     return {"session_slug": session_slug, "ended_at": now}
+
+
+# ── Task Tracking Tools ───────────────────────────────────────────
+#
+# A dependency-aware tracker living in the same graph as memory and workflow.
+# Tasks are hierarchical (epic → sub-issue via `parent`) and can block one
+# another; `task_ready` surfaces open tasks whose blockers are all closed.
+
+TaskType = Literal["bug", "feature", "task", "chore", "epic"]
+TaskStatus = Literal["open", "in_progress", "blocked", "closed"]
+TaskPriority = Literal["p0", "p1", "p2", "p3"]
+TaskLinkKind = Literal["blocks", "parent", "discovered_from", "addresses"]
+
+_PRIORITY_ORDER = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
+
+
+def _unblock_dependents(repo: str | None) -> None:
+    """Flip ``blocked`` tasks back to ``open`` once all their blockers are closed.
+
+    Called after a task closes so ``task_list`` status stays truthful. Scoped to the
+    closed task's repo (blockers and dependents share a repo in practice).
+    """
+    rows = (
+        client.read("read.gq", "list_tasks_by_repo", {"repo": repo})
+        if repo
+        else client.read("read.gq", "list_all_tasks", {})
+    )
+    status_by_slug = {r["slug"]: r.get("status") for r in rows}
+
+    def is_closed(blocker_slug: str) -> bool:
+        if blocker_slug in status_by_slug:
+            return status_by_slug[blocker_slug] == "closed"
+        fetched = client.read("read.gq", "get_task", {"slug": blocker_slug})
+        return fetched[0].get("status") == "closed" if fetched else True
+
+    for r in rows:
+        blockers = r.get("blocked_by") or []
+        if (
+            r.get("status") == "blocked"
+            and blockers
+            and all(is_closed(b) for b in blockers)
+        ):
+            _update_task(r["slug"], {"status": "open"})
+
+
+def _update_task(slug: str, changes: dict) -> dict | None:
+    """Read a task, merge ``changes`` over its mutable fields, write it back.
+
+    Mirrors the read-merge-write pattern documented for ``update_memory`` so we
+    avoid per-field update queries. Returns the updated node or ``None``.
+    """
+    rows = client.read("read.gq", "get_task", {"slug": slug})
+    if not rows:
+        return None
+    current = rows[0]
+    merged = {
+        "slug": slug,
+        "title": changes.get("title", current.get("title")),
+        "description": changes.get("description", current.get("description")),
+        "type": changes.get("type", current.get("type")),
+        "status": changes.get("status", current.get("status")),
+        "priority": changes.get("priority", current.get("priority")),
+        "project_slug": changes.get("project_slug", current.get("project_slug")),
+        "parent_slug": changes.get("parent_slug", current.get("parent_slug")),
+        "blocked_by": changes.get("blocked_by", current.get("blocked_by")),
+        "assignee": changes.get("assignee", current.get("assignee")),
+        "external_uri": changes.get("external_uri", current.get("external_uri")),
+        "resolution": changes.get("resolution", current.get("resolution")),
+        "symbol_refs": changes.get("symbol_refs", current.get("symbol_refs")),
+        "tags": changes.get("tags", current.get("tags")),
+        "closed_at": changes.get("closed_at", current.get("closed_at")),
+        "updated_at": _now_iso(),
+    }
+    client.change("mutations.gq", "update_task", merged)
+    return client.read("read.gq", "get_task", {"slug": slug})[0]
+
+
+@mcp.tool
+def task_create(
+    title: str,
+    description: str,
+    type: TaskType = "task",
+    priority: TaskPriority = "p2",
+    repo: str | None = None,
+    project_slug: str | None = None,
+    parent: str | None = None,
+    blocked_by: list[str] | None = None,
+    discovered_from: list[str] | None = None,
+    external_uri: str | None = None,
+    symbol_refs: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    """
+    Create a task in the work-coordination graph.
+
+    Tasks are dependency-aware and hierarchical. Use ``parent`` to attach a
+    sub-issue to an ``epic`` (or any parent task); use ``blocked_by`` to record
+    dependencies so ``task_ready`` can withhold the task until its blockers
+    close.
+
+    Parameters
+    ----------
+    title, description:
+        Short label and full text of the work.
+    type:
+        ``bug`` | ``feature`` | ``task`` | ``chore`` | ``epic``.
+    priority:
+        ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering.
+    repo:
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
+    project_slug:
+        ``wp-`` slug of the WorkflowProject this task rolls up to.
+    parent:
+        ``tk-`` slug of the parent task/epic. Sets the hierarchy edge.
+    blocked_by:
+        ``tk-`` slugs that must close before this task is ready.
+    discovered_from:
+        ``tk-`` slugs of tasks during which this work was discovered.
+    external_uri:
+        A reference URI — e.g. a GitHub issue or PR.
+    symbol_refs:
+        Code-graph symbol ids (``repo#path::Name``) this task concerns.
+    tags:
+        Optional free-form tags.
+    """
+    now = _now_iso()
+    slug = _make_slug("task", title)
+    detected_repo = repo_module.detect(override=repo)
+    status: TaskStatus = "blocked" if blocked_by else "open"
+
+    client.change(
+        "mutations.gq",
+        "insert_task",
+        {
+            "slug": slug,
+            "title": title,
+            "description": description,
+            "repo": detected_repo,
+            "type": type,
+            "status": status,
+            "priority": priority,
+            "project_slug": project_slug,
+            "parent_slug": parent,
+            "blocked_by": blocked_by,
+            "assignee": None,
+            "external_uri": external_uri,
+            "author": cfg.author,
+            "symbol_refs": symbol_refs,
+            "tags": tags,
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+
+    if project_slug:
+        client.change(
+            "mutations.gq", "link_task_belongs_to", {"from": slug, "to": project_slug}
+        )
+    if parent:
+        client.change("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
+    for blocker in blocked_by or []:
+        client.change("mutations.gq", "link_blocks", {"from": blocker, "to": slug})
+    for source in discovered_from or []:
+        client.change(
+            "mutations.gq", "link_discovered_from", {"from": slug, "to": source}
+        )
+
+    return {"slug": slug, "status": status, "repo": detected_repo}
+
+
+@mcp.tool
+def task_get(slug: str) -> dict | None:
+    """Retrieve a single task by slug. Returns the full node or ``null``."""
+    rows = client.read("read.gq", "get_task", {"slug": slug})
+    return rows[0] if rows else None
+
+
+@mcp.tool
+def task_list(
+    repo: str | None = None,
+    status: TaskStatus | None = None,
+    project_slug: str | None = None,
+    parent: str | None = None,
+    assignee: str | None = None,
+) -> list[dict]:
+    """
+    List tasks, filtered by repo, status, project, parent, and/or assignee.
+
+    ``project_slug`` and ``parent`` take precedence as the primary scope; other
+    filters are applied on top in Python. With no filters, lists recent tasks
+    across all repos.
+
+    Parameters
+    ----------
+    repo:
+        Canonical repo URI. Auto-detected if omitted.
+    status:
+        ``open`` | ``in_progress`` | ``blocked`` | ``closed``.
+    project_slug:
+        List the tasks of a WorkflowProject.
+    parent:
+        List the direct children of a parent task/epic.
+    assignee:
+        Filter to a single owner.
+    """
+    if project_slug:
+        rows = client.read(
+            "read.gq", "list_tasks_by_project", {"project_slug": project_slug}
+        )
+    elif parent:
+        rows = client.read("read.gq", "list_tasks_by_parent", {"parent_slug": parent})
+    else:
+        detected = repo_module.detect(override=repo)
+        if detected and status:
+            rows = client.read(
+                "read.gq",
+                "list_tasks_by_repo_status",
+                {"repo": detected, "status": status},
+            )
+        elif detected:
+            rows = client.read("read.gq", "list_tasks_by_repo", {"repo": detected})
+        elif status:
+            rows = client.read("read.gq", "list_tasks_by_status", {"status": status})
+        else:
+            rows = client.read("read.gq", "list_all_tasks", {})
+
+    if status:
+        rows = [r for r in rows if r.get("status") == status]
+    if assignee:
+        rows = [r for r in rows if r.get("assignee") == assignee]
+    return rows
+
+
+@mcp.tool
+def task_update(
+    slug: str,
+    title: str | None = None,
+    description: str | None = None,
+    type: TaskType | None = None,
+    status: TaskStatus | None = None,
+    priority: TaskPriority | None = None,
+    assignee: str | None = None,
+    project_slug: str | None = None,
+    parent: str | None = None,
+    external_uri: str | None = None,
+    symbol_refs: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> dict | None:
+    """
+    Update a task's mutable fields. Only non-null arguments are applied.
+
+    Use this to claim a task (``assignee``), move it to ``in_progress``, re-prioritise,
+    re-parent (``parent``), or attach an ``external_uri``. To close a task prefer
+    ``task_close``; to add dependencies use ``task_link``.
+    """
+    changes: dict = {}
+    if title is not None:
+        changes["title"] = title
+    if description is not None:
+        changes["description"] = description
+    if type is not None:
+        changes["type"] = type
+    if priority is not None:
+        changes["priority"] = priority
+    if assignee is not None:
+        changes["assignee"] = assignee
+    if project_slug is not None:
+        changes["project_slug"] = project_slug
+    if external_uri is not None:
+        changes["external_uri"] = external_uri
+    if symbol_refs is not None:
+        changes["symbol_refs"] = symbol_refs
+    if tags is not None:
+        changes["tags"] = tags
+    if status is not None:
+        changes["status"] = status
+        if status == "closed":
+            changes["closed_at"] = _now_iso()
+
+    updated = _update_task(slug, changes)
+
+    if parent is not None and updated is not None:
+        client.change("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
+        updated = _update_task(slug, {"parent_slug": parent})
+
+    return updated
+
+
+@mcp.tool
+def task_close(slug: str, resolution: str | None = None) -> dict | None:
+    """
+    Close a task: set status ``closed``, stamp ``closed_at``, record a resolution.
+
+    Closing a blocker is what unblocks its dependents — they become visible to
+    ``task_ready`` once every blocker is closed.
+    """
+    closed = _update_task(
+        slug,
+        {"status": "closed", "closed_at": _now_iso(), "resolution": resolution},
+    )
+    if closed:
+        _unblock_dependents(closed.get("repo"))
+    return closed
+
+
+@mcp.tool
+def task_ready(
+    repo: str | None = None,
+    project_slug: str | None = None,
+    assignee: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """
+    Return ready-to-work tasks: not-yet-started tasks whose blockers are all closed.
+
+    A task is ready when its status is ``open`` or ``blocked`` (i.e. nobody is on it
+    yet and it is not closed) AND every task in its ``blocked_by`` list is closed.
+    This is the core coordination primitive — call it to pick the next actionable
+    item without manual triage. Results are ordered by priority (``p0`` first).
+
+    Parameters
+    ----------
+    repo:
+        Canonical repo URI. Auto-detected if omitted.
+    project_slug:
+        Restrict to a single WorkflowProject.
+    assignee:
+        Restrict to a single owner (or pass to find your own ready work).
+    limit:
+        Maximum tasks to return. Defaults to 20.
+    """
+    if project_slug:
+        rows = client.read(
+            "read.gq", "list_tasks_by_project", {"project_slug": project_slug}
+        )
+    else:
+        detected = repo_module.detect(override=repo)
+        rows = (
+            client.read("read.gq", "list_tasks_by_repo", {"repo": detected})
+            if detected
+            else client.read("read.gq", "list_all_tasks", {})
+        )
+
+    status_by_slug = {r["slug"]: r.get("status") for r in rows}
+
+    def blocker_status(blocker_slug: str) -> str:
+        if blocker_slug in status_by_slug:
+            return status_by_slug[blocker_slug] or "open"
+        fetched = client.read("read.gq", "get_task", {"slug": blocker_slug})
+        # A blocker that no longer exists does not hold anything back.
+        return fetched[0].get("status", "closed") if fetched else "closed"
+
+    ready = [
+        r
+        for r in rows
+        if r.get("status") in ("open", "blocked")
+        and all(blocker_status(b) == "closed" for b in (r.get("blocked_by") or []))
+        and (assignee is None or r.get("assignee") == assignee)
+    ]
+    ready.sort(key=lambda r: _PRIORITY_ORDER.get(r.get("priority"), 9))
+    return ready[:limit]
+
+
+@mcp.tool
+def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
+    """
+    Link two tasks (or a task to a memory).
+
+    The meaning of ``from``/``to`` depends on ``kind``:
+    - ``blocks``          — ``from`` is the blocker, ``to`` is the blocked task.
+    - ``parent``          — ``from`` is the parent/epic, ``to`` is the child.
+    - ``discovered_from`` — ``from`` is the new task, ``to`` is the source it came from.
+    - ``addresses``       — ``from`` is the task, ``to`` is a Memory slug it addresses.
+
+    For ``blocks`` and ``parent`` the denormalized ``blocked_by`` / ``parent_slug``
+    fields on the affected task are kept in sync so ``task_ready`` stays correct.
+    """
+    if kind == "blocks":
+        client.change("mutations.gq", "link_blocks", {"from": from_slug, "to": to_slug})
+        blocked = client.read("read.gq", "get_task", {"slug": to_slug})
+        if blocked:
+            existing = blocked[0].get("blocked_by") or []
+            if from_slug not in existing:
+                changes = {"blocked_by": [*existing, from_slug]}
+                if blocked[0].get("status") == "open":
+                    changes["status"] = "blocked"
+                _update_task(to_slug, changes)
+    elif kind == "parent":
+        client.change(
+            "mutations.gq", "link_parent_of", {"from": from_slug, "to": to_slug}
+        )
+        _update_task(to_slug, {"parent_slug": from_slug})
+    elif kind == "discovered_from":
+        client.change(
+            "mutations.gq", "link_discovered_from", {"from": from_slug, "to": to_slug}
+        )
+    elif kind == "addresses":
+        client.change(
+            "mutations.gq", "link_addresses", {"from": from_slug, "to": to_slug}
+        )
+
+    return {"from": from_slug, "to": to_slug, "kind": kind}
+
+
+@mcp.tool
+def context_for_symbol(symbol_id: str) -> dict:
+    """
+    Find the work-coordination context attached to a code-graph symbol.
+
+    This is the reverse of the soft references stored by ``memory_store(symbol_refs=...)``
+    and ``task_create(symbol_refs=...)``: given a Layer-2 symbol id, it returns the
+    Layer-1 memories and tasks whose ``symbol_refs`` include it — e.g. "what lessons and
+    open tasks concern this function?". Use it after locating a symbol with the
+    omnigraph-codegraph ``code_*`` tools to pull the relevant knowledge before editing it.
+
+    Parameters
+    ----------
+    symbol_id:
+        A code-graph symbol id of the form ``repo#path/file.py::Qualified.Name``.
+        The ``repo`` prefix (everything before ``#``) scopes the lookup; if the id
+        carries no ``#`` the current repo is used.
+    """
+    repo = symbol_id.split("#", 1)[0] if "#" in symbol_id else repo_module.detect()
+
+    if repo:
+        mem_rows = client.read("read.gq", "memories_by_repo", {"repo": repo})
+        task_rows = client.read("read.gq", "tasks_by_repo_refs", {"repo": repo})
+    else:
+        mem_rows = client.read("read.gq", "memories_with_refs", {})
+        task_rows = client.read("read.gq", "tasks_with_refs", {})
+
+    memories = [m for m in mem_rows if symbol_id in (m.get("symbol_refs") or [])]
+    tasks = [t for t in task_rows if symbol_id in (t.get("symbol_refs") or [])]
+    return {"symbol_id": symbol_id, "memories": memories, "tasks": tasks}

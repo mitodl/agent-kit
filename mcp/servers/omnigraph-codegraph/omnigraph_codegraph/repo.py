@@ -4,32 +4,33 @@ import re
 from pathlib import Path
 
 
-def detect(override: str | None = None) -> str | None:
+def detect(override: str | None = None, start: Path | None = None) -> str | None:
     """
-    Return a canonical repo key for the current working directory.
-
-    The key is the project's canonical HTTPS remote URI when a git remote is
-    available (e.g. ``https://github.com/mitodl/ol-django``). This URI is the
-    shared join key across every layer — memory, workflow, tasks, and the
-    code graph — so they must all derive it the same way.
+    Return a canonical repo key (HTTPS URI) for ``start`` (or the cwd).
 
     Resolution order:
       1. ``override`` parameter (explicit caller value)
-      2. ``OMNIGRAPH_MEMORY_REPO`` environment variable
+      2. ``OMNIGRAPH_CODEGRAPH_REPO`` environment variable
       3. ``origin`` remote URL from the nearest ``.git/config``
-      4. ``None`` — no repo context available
+      4. directory name of the git root (fallback when no remote)
+      5. ``None`` — no repo context available
     """
     if override:
         return override
 
-    if env_repo := os.environ.get("OMNIGRAPH_MEMORY_REPO"):
+    if env_repo := os.environ.get("OMNIGRAPH_CODEGRAPH_REPO"):
         return env_repo
 
-    git_config_path = _find_git_config(Path.cwd())
+    base = start or Path.cwd()
+    git_config_path = _find_git_config(base)
     if git_config_path is None:
         return None
 
-    return _parse_origin(git_config_path)
+    if slug := _parse_origin(git_config_path):
+        return slug
+
+    # No origin remote — fall back to the repo root directory name.
+    return git_config_path.parent.parent.name
 
 
 def _find_git_config(start: Path) -> Path | None:
@@ -42,12 +43,7 @@ def _find_git_config(start: Path) -> Path | None:
 
 
 def _parse_origin(git_config: Path) -> str | None:
-    """
-    Parse .git/config and return the normalised ``origin`` remote URL.
-
-    Uses configparser; falls back to None if the file is malformed or
-    ``remote "origin"`` is absent.
-    """
+    """Parse .git/config and return the normalised ``origin`` remote URL."""
     parser = configparser.RawConfigParser()
     try:
         parser.read(git_config)
@@ -65,22 +61,30 @@ def _normalise(url: str) -> str:
     """
     Normalise a git remote URL to its canonical HTTPS project URI.
 
+    Must match ``omnigraph_memory/repo.py::_normalise`` so the repo key — used
+    in symbol ids (``repo#path::Name``) and the Layer-1 ``symbol_refs`` that point
+    at them — is identical across both stores.
+
     Examples
     --------
     git@github.com:mitodl/ol-django.git  →  https://github.com/mitodl/ol-django
     https://github.com/mitodl/ol-django  →  https://github.com/mitodl/ol-django
-    git@gitlab.com:grp/sub/repo.git      →  https://gitlab.com/grp/sub/repo
     """
-    # Strip trailing .git and any auth userinfo in https remotes.
     url = re.sub(r"\.git$", "", url.strip()).rstrip("/")
 
-    # SSH: git@host:org/repo  →  https://host/org/repo
     if m := re.match(r"(?:ssh://)?[^@]+@([^:/]+)[:/](.+)", url):
         return f"https://{m.group(1)}/{m.group(2)}"
 
-    # HTTP(S): normalise scheme to https, drop any userinfo.
     if m := re.match(r"https?://(?:[^@/]+@)?([^/]+)/(.+)", url):
         return f"https://{m.group(1)}/{m.group(2)}"
 
-    # Unknown format — return as-is.
     return url
+
+
+def root(start: Path | None = None) -> Path | None:
+    """Return the git repository root for ``start`` (or the cwd)."""
+    base = start or Path.cwd()
+    git_config = _find_git_config(base)
+    if git_config is None:
+        return None
+    return git_config.parent.parent

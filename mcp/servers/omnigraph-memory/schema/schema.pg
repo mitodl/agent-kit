@@ -23,9 +23,10 @@ node Memory {
     category: String? @index
     severity: enum(info, warning, critical)? @index
     author: String @index
-    createdAt: DateTime @index
-    updatedAt: DateTime
+    created_at: DateTime @index
+    updated_at: DateTime
     tags: [String]?
+    symbol_refs: [String]?   // soft refs into the code-graph store (repo#path::Name)
 }
 
 // Supersedes: a newer memory replaces an older one.
@@ -53,32 +54,32 @@ node WorkflowProject {
     status:      enum(active, completed, abandoned) @index
     phase:       enum(discovery, spec, implementation, delivery) @index
     author:      String @index
-    createdAt:   DateTime @index
-    updatedAt:   DateTime
-    completedAt: DateTime?
+    created_at:   DateTime @index
+    updated_at:   DateTime
+    completed_at: DateTime?
     tags:        [String]?
-    githubIssue: String?
-    githubPR:    String?
+    github_issue: String?
+    github_pr:    String?
 }
 
 // WorkflowSession tracks a single Claude Code session contributing to
 // a project. One project has many sessions; sessions may run in parallel.
 //
-// projectSlug is denormalized for fast indexed lookup without graph traversal.
+// project_slug is denormalized for fast indexed lookup without graph traversal.
 // Slug convention: ws-<project-slug-prefix>-<6hex>
 
 node WorkflowSession {
     slug:         String @key
-    projectSlug:  String @index
-    sessionId:    String @index
+    project_slug:  String @index
+    session_id:    String @index
     repo:         String? @index
     phase:        enum(discovery, spec, implementation, delivery) @index
     summary:      String
-    toolsUsed:    [String]?
-    filesChanged: [String]?
+    tools_used:    [String]?
+    files_changed: [String]?
     author:       String @index
-    startedAt:    DateTime @index
-    endedAt:      DateTime?
+    started_at:    DateTime @index
+    ended_at:      DateTime?
     tags:         [String]?
 }
 
@@ -90,18 +91,18 @@ node WorkflowSession {
 
 node WorkflowTrace {
     slug:         String @key
-    projectSlug:  String @index
+    project_slug:  String @index
     repo:         String? @index
     title:        String @index
     description:  String
-    sessionCount: I32
+    session_count: I32
     phases:       [String]
     duration:     I32?
     outcome:      String
-    lessonsSlug:  [String]?
-    patternsSlug: [String]?
+    lessons_slug:  [String]?
+    patterns_slug: [String]?
     author:       String @index
-    createdAt:    DateTime @index
+    created_at:    DateTime @index
     tags:         [String]?
 }
 
@@ -114,3 +115,56 @@ edge Produced: WorkflowProject -> WorkflowTrace
 // Informed: links a WorkflowProject to Memory nodes consulted or created
 // during the project (patterns, lessons, agent_context, project_facts).
 edge Informed: WorkflowProject -> Memory
+
+// ── Task Tracking ─────────────────────────────────────────────────
+//
+// A dependency-aware task tracker (beads-like) living in the same graph as
+// memory and workflow so tasks can hard-link to projects, sessions, and
+// memories. The "ready work" query (open tasks with no open blocker) is the
+// core multi-agent coordination primitive.
+//
+// Tasks are hierarchical: an `epic` decomposes into child tasks/sub-issues via
+// the ParentOf edge, with parent_slug denormalized for fast child lookup.
+//
+// Slug convention: tk-<sanitised-title>-<6hex>
+//   e.g. tk-wire-vault-sidecar-9c1d04
+
+node Task {
+    slug:        String @key
+    title:       String @index
+    description: String
+    repo:        String? @index
+    type:        enum(bug, feature, task, chore, epic) @index
+    status:      enum(open, in_progress, blocked, closed) @index
+    priority:    enum(p0, p1, p2, p3) @index
+    project_slug: String? @index         // denormalized link to WorkflowProject
+    parent_slug:  String? @index         // denormalized hierarchy (epic → sub-issue)
+    blocked_by:   [String]?              // denormalized blocker slugs (drives ready-work)
+    assignee:    String? @index         // who owns it (vs author = creator)
+    external_uri: String? @index         // GitHub issue/PR or any reference URI
+    resolution:  String?                // free-text note set when closed
+    author:      String @index
+    created_at:   DateTime @index
+    updated_at:   DateTime
+    closed_at:    DateTime?
+    symbol_refs:  [String]?              // soft refs into the code-graph store
+    tags:        [String]?
+}
+
+// Blocks: a blocker task must close before the blocked task is "ready".
+edge Blocks: Task -> Task
+
+// ParentOf: hierarchy — an epic (or parent task) contains child tasks.
+edge ParentOf: Task -> Task
+
+// DiscoveredFrom: provenance — a task surfaced while working another task.
+edge DiscoveredFrom: Task -> Task
+
+// TaskBelongsTo: a task rolls up to a WorkflowProject.
+edge TaskBelongsTo: Task -> WorkflowProject
+
+// Addresses: a task is motivated by a Memory node (lesson, project fact).
+edge Addresses: Task -> Memory
+
+// Closes: a WorkflowSession executed/closed a task.
+edge Closes: WorkflowSession -> Task

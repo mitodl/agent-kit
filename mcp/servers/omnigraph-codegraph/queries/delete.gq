@@ -1,0 +1,16 @@
+// Code Graph — delete queries (reindex path).
+//
+// Omnigraph cannot mix deletes with inserts/updates in one query, so these
+// run as their own change() calls BEFORE re-inserting a file's data.
+//
+// Edges are deleted by deleting their endpoint nodes: removing a Symbol or
+// CodeFile removes its incident edges. We delete all Symbols belonging to a
+// file (by file_id) and then the CodeFile itself.
+
+query delete_symbols_in_file($file_id: String) {
+    delete Symbol where file_id = $file_id
+}
+
+query delete_file($id: String) {
+    delete CodeFile where slug = $id
+}

@@ -1,0 +1,250 @@
+from pathlib import Path
+
+from fastmcp import FastMCP
+
+from . import config as cfg_module
+from . import indexer
+from . import repo as repo_module
+from . import store as store_module
+from .graph import OmnigraphClient
+
+# ── Startup ───────────────────────────────────────────────────────
+
+cfg = cfg_module.load()
+
+mcp = FastMCP(
+    "omnigraph-codegraph",
+    instructions=(
+        "Per-repo tree-sitter code graph (Layer 2). Resolve symbol definitions, "
+        "callers, references, and call-impact across the current repository. "
+        "Symbol ids are `repo#path::QualifiedName` and compose with "
+        "omnigraph-memory (Layer 1) via soft references. Calls/References edges "
+        "are heuristic (syntactic name resolution), not a precise call graph."
+    ),
+)
+
+# Per-store client cache (the store is resolved per repo from cwd).
+_clients: dict[str, OmnigraphClient] = {}
+
+_NO_STORE_HINT = (
+    "No code graph for this repo yet. "
+    "Run `omnigraph-codegraph-index index` to build it."
+)
+
+
+def _client() -> OmnigraphClient | None:
+    """Resolve the OmnigraphClient for the current repo, or None if no store."""
+    slug = repo_module.detect()
+    if slug is None:
+        return None
+    store = store_module.store_for_repo(slug, cfg)
+    if not store.exists():
+        return None
+    key = str(store)
+    if key not in _clients:
+        _clients[key] = OmnigraphClient(key, cfg.queries_dir)
+    return _clients[key]
+
+
+def _file_id(path: str) -> str | None:
+    """Build the CodeFile id (`repo#relpath`) for a repo-relative or abs path."""
+    slug = repo_module.detect()
+    if slug is None:
+        return None
+    base = repo_module.root() or Path.cwd()
+    p = Path(path)
+    try:
+        rel = (
+            p.resolve().relative_to(base.resolve()).as_posix()
+            if p.is_absolute() or p.exists()
+            else p.as_posix()
+        )
+    except ValueError:
+        rel = p.as_posix()
+    return f"{slug}#{rel}"
+
+
+# ── Tools ─────────────────────────────────────────────────────────
+
+
+@mcp.tool
+def code_find_definition(name: str) -> list[dict]:
+    """
+    Find symbol definitions whose name or qualified name matches ``name``.
+
+    Returns matching symbols (function, method, class, module, …) with their
+    file, line range, signature, and docstring. The store is the current repo's.
+
+    Parameters
+    ----------
+    name:
+        Bare name (``run``) or qualified name (``Service.run``).
+    """
+    client = _client()
+    if client is None:
+        return []
+    rows = client.read("read.gq", "find_by_qualified_name", {"qualified_name": name})
+    if rows:
+        return rows
+    return client.read("read.gq", "find_by_name", {"name": name})
+
+
+@mcp.tool
+def code_find_references(symbol_id: str) -> list[dict]:
+    """
+    Find symbols that reference or call ``symbol_id`` (incoming edges).
+
+    HEURISTIC: References/Calls are derived from syntactic name resolution and
+    may be incomplete or include false positives.
+
+    Parameters
+    ----------
+    symbol_id:
+        Full symbol id ``repo#path::QualifiedName``.
+    """
+    client = _client()
+    if client is None:
+        return []
+    refs = client.read("read.gq", "referencers", {"id": symbol_id})
+    callers = client.read("read.gq", "callers", {"id": symbol_id})
+    seen = {r["slug"] for r in refs}
+    return refs + [c for c in callers if c["slug"] not in seen]
+
+
+@mcp.tool
+def code_callers(symbol_id: str) -> list[dict]:
+    """
+    Find symbols that call ``symbol_id`` (incoming Calls edges).
+
+    HEURISTIC name-resolution based; not a precise call graph.
+
+    Parameters
+    ----------
+    symbol_id:
+        Full symbol id ``repo#path::QualifiedName``.
+    """
+    client = _client()
+    if client is None:
+        return []
+    return client.read("read.gq", "callers", {"id": symbol_id})
+
+
+@mcp.tool
+def code_impact(symbol_id: str, max_depth: int = 5, max_nodes: int = 200) -> dict:
+    """
+    Estimate change impact: the transitive set of callers of ``symbol_id``.
+
+    Performs a breadth-first traversal over Calls edges in Python, capping at
+    ``max_depth`` levels and ``max_nodes`` total. Returns the reached symbols
+    and whether the traversal was truncated. HEURISTIC — see code_callers.
+
+    Parameters
+    ----------
+    symbol_id:
+        Full symbol id ``repo#path::QualifiedName``.
+    max_depth:
+        Maximum BFS depth (default 5).
+    max_nodes:
+        Cap on total symbols returned (default 200).
+    """
+    client = _client()
+    if client is None:
+        return {"root": symbol_id, "impacted": [], "truncated": False}
+
+    visited: dict[str, dict] = {}
+    frontier = [symbol_id]
+    truncated = False
+    depth = 0
+
+    while frontier and depth < max_depth:
+        next_frontier: list[str] = []
+        for sid in frontier:
+            for caller in client.read("read.gq", "callers", {"id": sid}):
+                cid = caller["slug"]
+                if cid in visited or cid == symbol_id:
+                    continue
+                if len(visited) >= max_nodes:
+                    truncated = True
+                    break
+                caller["depth"] = depth + 1
+                visited[cid] = caller
+                next_frontier.append(cid)
+            if truncated:
+                break
+        if truncated:
+            break
+        frontier = next_frontier
+        depth += 1
+
+    if frontier and depth >= max_depth:
+        truncated = True
+
+    return {
+        "root": symbol_id,
+        "impacted": list(visited.values()),
+        "truncated": truncated,
+    }
+
+
+@mcp.tool
+def code_symbols_in_file(path: str) -> list[dict]:
+    """
+    List symbols defined in ``path`` (repo-relative or absolute).
+
+    Parameters
+    ----------
+    path:
+        Source file path within the current repo.
+    """
+    client = _client()
+    if client is None:
+        return []
+    file_id = _file_id(path)
+    if file_id is None:
+        return []
+    return client.read("read.gq", "symbols_in_file", {"file_id": file_id})
+
+
+@mcp.tool
+def code_search_symbol(query: str) -> list[dict]:
+    """
+    Full-text/substring search over symbol qualified names (BM25-ranked).
+
+    Use to locate a symbol when you only remember part of its name.
+
+    Parameters
+    ----------
+    query:
+        Search terms matched against ``qualified_name``.
+    """
+    client = _client()
+    if client is None:
+        return []
+    return client.read("read.gq", "search_symbols", {"query": query})
+
+
+@mcp.tool
+def code_reindex(path: str | None = None) -> dict:
+    """
+    Index (or re-index) the current repo, or a subpath of it.
+
+    Lazily creates the per-repo store on first run. Returns a summary of files
+    scanned/indexed/skipped and symbols/edges written.
+
+    Parameters
+    ----------
+    path:
+        Optional file or directory under the repo. Defaults to the repo root
+        (or cwd if not in a git repo).
+    """
+    target = Path(path) if path else (repo_module.root() or Path.cwd())
+    stats = indexer.index_path(target, force=bool(path), config=cfg)
+    return {
+        "path": str(target),
+        "scanned": stats.scanned,
+        "indexed": stats.indexed,
+        "skipped": stats.skipped,
+        "symbols": stats.symbols,
+        "edges": stats.edges,
+        "errors": stats.errors,
+    }
