@@ -101,12 +101,15 @@ location through the symlink (via `readlink -f`), so the symlink install just wo
 mkdir -p ~/.claude/hooks
 ln -sf "$REPO/configs/hooks/workflow-context-inject.sh"     ~/.claude/hooks/
 ln -sf "$REPO/configs/hooks/workflow-session-checkpoint.sh" ~/.claude/hooks/
+ln -sf "$REPO/configs/hooks/codegraph-session-init.sh"      ~/.claude/hooks/
 ln -sf "$REPO/configs/hooks/codegraph-reindex.sh"           ~/.claude/hooks/
 ```
 
 Register them in `~/.claude/settings.json` under `hooks` —
-`UserPromptSubmit` → context-inject, `Stop` → session-checkpoint, and
-`PostToolUse` (matcher `Edit|Write`) → codegraph-reindex. See
+`UserPromptSubmit` → context-inject, `Stop` → session-checkpoint,
+`SessionStart` → codegraph-session-init (seeds/refreshes the whole code graph in
+the background), and `PostToolUse` (matcher `Edit|Write`) → codegraph-reindex
+(keeps edited files fresh). See
 [`configs/hooks/README.md`](../configs/hooks/README.md) for the exact JSON.
 
 ### 3. Skills — both agents
@@ -131,11 +134,18 @@ can seed a repo manually. `--editable` keeps it pointed at the working tree:
 
 ```bash
 uv tool install --editable "$REPO/mcp/servers/omnigraph-codegraph"
-# then, inside any repo you want indexed:
-omnigraph-codegraph-index index .
 ```
 
-Without this, the hook falls back to `uvx --from <local pkg>` (correct, just slower).
+With the `SessionStart` hook wired (step 2), the whole-repo seed and refresh happen
+automatically in the background — you don't need to run `index` by hand. To seed a
+repo immediately (or under Pi, which has no hooks), run it manually:
+
+```bash
+omnigraph-codegraph-index index .   # inside the repo
+```
+
+Without the CLI on `PATH`, the hooks fall back to `uvx --from <local pkg>` (correct,
+just slower).
 
 ### 5. Graph schema upkeep
 

@@ -1,6 +1,6 @@
 # Workflow & Code-Graph Hooks
 
-Three Claude Code hooks that wire the trackers into every session.
+Four Claude Code hooks that wire the trackers into every session.
 
 ## Installation
 
@@ -8,6 +8,7 @@ Three Claude Code hooks that wire the trackers into every session.
 mkdir -p ~/.claude/hooks
 ln -sf "$(pwd)/workflow-context-inject.sh"     ~/.claude/hooks/
 ln -sf "$(pwd)/workflow-session-checkpoint.sh" ~/.claude/hooks/
+ln -sf "$(pwd)/codegraph-session-init.sh"      ~/.claude/hooks/
 ln -sf "$(pwd)/codegraph-reindex.sh"           ~/.claude/hooks/
 ```
 
@@ -55,6 +56,17 @@ Add a `hooks` key to your `~/.claude/settings.json`:
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/codegraph-session-init.sh"
+          }
+        ]
+      }
     ]
   }
 }
@@ -82,6 +94,20 @@ cleanly closed in the graph even if the agent forgot to call
 
 If `workflow_session_end` was already called, the state file is already gone
 and this hook exits without doing anything.
+
+### `codegraph-session-init.sh` (SessionStart)
+
+Runs once when a session starts. Seeds (first time) or refreshes the per-repo
+Layer-2 code graph for the whole repository, so the index covers files the agent
+never edits. It runs the indexer **detached in the background** and returns
+immediately, so it never delays session start; the first run does the full build,
+later runs re-hash and skip unchanged files. A per-repo lock prevents overlapping
+sessions from indexing at once. Skips non-git directories and injects no context.
+
+Together with `codegraph-reindex.sh` (below) this makes the code graph
+self-managing: SessionStart covers the whole repo, PostToolUse keeps live edits
+fresh. (Pi has no hook system, so under Pi the initial seed stays manual —
+`omnigraph-codegraph-index index .`.)
 
 ### `codegraph-reindex.sh` (PostToolUse, matcher `Edit|Write`)
 
