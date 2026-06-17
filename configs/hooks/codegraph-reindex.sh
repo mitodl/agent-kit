@@ -45,7 +45,7 @@ esac
 if command -v omnigraph-codegraph-index &>/dev/null; then
 	omnigraph-codegraph-index index "$FILE_PATH" >/dev/null 2>&1 || true
 elif command -v uvx &>/dev/null; then
-	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 	PKG_DIR="${SCRIPT_DIR}/../../mcp/servers/omnigraph-codegraph"
 	if [[ -d "$PKG_DIR" ]]; then
 		uvx --from "$PKG_DIR" omnigraph-codegraph-index index "$FILE_PATH" \
