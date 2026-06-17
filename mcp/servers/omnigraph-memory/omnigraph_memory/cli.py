@@ -389,9 +389,6 @@ _CODE_DIR = Path(
         str(Path.home() / ".local" / "share" / "omnigraph-memory" / "code"),
     )
 )
-_CODEGRAPH_READ = (
-    Path(__file__).resolve().parents[2] / "omnigraph-codegraph" / "queries" / "read.gq"
-)
 
 
 @app.command
@@ -420,20 +417,21 @@ def repos() -> None:
 
 
 def _code_store_stats(store: Path) -> tuple[str, str]:
-    """Return (repo_uri, file_count) by reading the store; fall back to the name."""
-    if _CODEGRAPH_READ.exists():
-        try:
-            from .graph import OmnigraphClient
+    """Return (repo_uri, file_count) by reading the store; fall back to the name.
 
-            client = OmnigraphClient(str(store), _CODEGRAPH_READ.parent)
-            rows = client.read("read.gq", "all_file_hashes", {})
-            if rows:
-                repo_uri = rows[0]["slug"].split("#", 1)[0]
-                return repo_uri, str(len(rows))
-            return store.stem, "0"
-        except Exception:  # noqa: BLE001 — degrade to the filename
-            pass
-    return store.stem, "?"
+    Uses the bundled ``code_stats.gq`` (queried against the code store's CodeFile
+    nodes) so this works whether the package is run from a checkout or installed.
+    """
+    try:
+        from .graph import OmnigraphClient
+
+        client = OmnigraphClient(str(store), cfg_module.load().queries_dir)
+        rows = client.read("code_stats.gq", "repo_files", {})
+        if rows:
+            return rows[0]["slug"].split("#", 1)[0], str(len(rows))
+        return store.stem, "0"
+    except Exception:  # noqa: BLE001 — degrade to the filename
+        return store.stem, "?"
 
 
 def _dir_size(path: Path) -> int:
