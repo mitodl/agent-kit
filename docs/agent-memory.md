@@ -112,6 +112,15 @@ the background), and `PostToolUse` (matcher `Edit|Write`) → codegraph-reindex
 (keeps edited files fresh). See
 [`configs/hooks/README.md`](../configs/hooks/README.md) for the exact JSON.
 
+**Pi** has no hooks but provides the equivalent via extension events. Symlink the
+mirror extensions into `~/.pi/agent/extensions/` (codegraph index/reindex and
+workflow context injection) — see [`configs/pi/README.md`](../configs/pi/README.md):
+
+```bash
+ln -sf "$REPO/configs/pi/extensions/codegraph.ts"        ~/.pi/agent/extensions/
+ln -sf "$REPO/configs/pi/extensions/workflow-context.ts" ~/.pi/agent/extensions/
+```
+
 ### 3. Skills — both agents
 
 Skills are discovered from a shared `~/.agents/skills/` that each agent symlinks
