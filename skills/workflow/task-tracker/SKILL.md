@@ -21,6 +21,14 @@ and reference code-graph symbols (`symbol_refs`).
 The repo key is auto-detected from `.git/config` (the canonical HTTPS URI) — you
 rarely pass `repo` explicitly.
 
+## When to use this vs. your built-in todo list
+
+Use `task_*` for **work that outlives the current session or is shared** — items
+others (or a future session) should see, things with dependencies/blockers, or an
+epic's sub-issues. For the step-by-step checklist of the task you're doing *right
+now*, use your built-in todo list; don't mirror those ephemeral steps into the
+graph.
+
 ## On invocation
 
 **Step 1 — Check args.**
@@ -79,7 +87,7 @@ create each child with `parent="<epic slug>"`. Report the new slug(s).
 Call `task_list()` (optionally `task_list(status="open")`,
 `task_list(project_slug="<wp->")`, or `task_list(parent="<epic>")` to see an
 epic's children). Print a table: slug, title, type, status, priority,
-assignee, blockedBy, externalUri. Group sub-issues under their parent when a
+assignee, blocked_by, external_uri. Group sub-issues under their parent when a
 `parent` filter is used.
 
 ## Close a task

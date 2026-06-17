@@ -508,6 +508,30 @@ def workflow_project_complete(
 
 
 @mcp.tool
+def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
+    """
+    Link a memory to a workflow project (the ``Informed`` edge).
+
+    Records that a project consulted or produced a memory — a ``pattern``,
+    ``lesson``, ``project_fact``, or ``agent_context``. The linked memories
+    surface when the project's corpus trace is mined for reusable patterns.
+
+    Parameters
+    ----------
+    project_slug:
+        The ``wp-`` slug of the project.
+    memory_slug:
+        The ``pat-`` / ``les-`` / ``pf-`` / ``ctx-`` slug returned by ``memory_store``.
+    """
+    client.change(
+        "mutations.gq",
+        "link_informed",
+        {"from": project_slug, "to": memory_slug},
+    )
+    return {"project_slug": project_slug, "memory_slug": memory_slug}
+
+
+@mcp.tool
 def workflow_session_start(
     project_slug: str,
     session_id: str,
@@ -516,13 +540,13 @@ def workflow_session_start(
     tags: list[str] | None = None,
 ) -> dict:
     """
-    Link the current Claude Code session to a workflow project.
+    Link the current agent session to a workflow project.
 
     Call this at the start of any session that is contributing to a tracked
-    project. The injected context from the ``UserPromptSubmit`` hook provides
-    the ``project_slug``; ``session_id`` should be the Claude Code session UUID
-    (available as the ``CLAUDE_SESSION_ID`` environment variable, or any stable
-    unique string for the session if that variable is not set).
+    project. The context injected by the context-injection hook (Claude Code) or
+    extension (Pi) provides the ``project_slug``; ``session_id`` should be the
+    session id — ``$CLAUDE_SESSION_ID`` on Claude Code, or any stable unique
+    string for the session otherwise.
 
     Also writes a state file to ``/tmp`` so the ``Stop`` hook can close the
     session automatically if ``workflow_session_end`` is not called explicitly.
@@ -532,7 +556,7 @@ def workflow_session_start(
     project_slug:
         The ``wp-`` slug of the project this session belongs to.
     session_id:
-        Unique identifier for this Claude Code session.
+        Unique identifier for this agent session.
     phase:
         The phase this session is working in.
     repo:
@@ -602,7 +626,7 @@ def workflow_session_end(
     summary:
         Description of what was accomplished and what remains.
     tools_used:
-        List of Claude Code tool names used. e.g. ``["Edit", "Bash", "Read"]``.
+        List of tool names used. e.g. ``["Edit", "Bash", "Read"]``.
     files_changed:
         List of file paths modified in this session.
     """

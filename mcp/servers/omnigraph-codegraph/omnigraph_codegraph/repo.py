@@ -18,8 +18,8 @@ def detect(override: str | None = None, start: Path | None = None) -> str | None
       5. directory name of the git root (fallback when no remote)
       6. ``None`` — no repo context available
     """
-    if override:
-        return override
+    if override is not None:
+        return override or None
 
     if env_repo := os.environ.get("OMNIGRAPH_CODEGRAPH_REPO"):
         return env_repo

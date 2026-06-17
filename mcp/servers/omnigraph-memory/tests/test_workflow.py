@@ -43,6 +43,27 @@ def test_project_lifecycle_and_trace(server):
 
 
 @requires_omnigraph
+def test_link_memory_to_project(server):
+    proj = server.workflow_project_create(title="linked", description="d")
+    mem = server.memory_store(kind="lesson", title="watch out", content="be careful")
+    res = server.workflow_project_link_memory(proj["slug"], mem["slug"])
+    assert res["project_slug"] == proj["slug"]
+    assert res["memory_slug"] == mem["slug"]
+
+
+@requires_omnigraph
+def test_list_across_all_repos_with_empty_repo(server):
+    p1 = server.workflow_project_create(
+        title="A", description="d", repo="https://github.com/x/one"
+    )
+    p2 = server.workflow_project_create(
+        title="B", description="d", repo="https://github.com/x/two"
+    )
+    all_active = {p["slug"] for p in server.workflow_project_list(repo="")}
+    assert {p1["slug"], p2["slug"]} <= all_active
+
+
+@requires_omnigraph
 def test_project_list_active_default(server):
     proj = server.workflow_project_create(title="active one", description="d")
     active = {p["slug"] for p in server.workflow_project_list()}

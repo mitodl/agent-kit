@@ -39,6 +39,12 @@ def test_detect_env_fallback(monkeypatch):
     assert repo.detect() == "https://env/repo"
 
 
+def test_detect_empty_override_means_no_scope(monkeypatch):
+    # An explicit empty string is "all repos" (None), overriding env/git.
+    monkeypatch.setenv("OMNIGRAPH_MEMORY_REPO", "https://env/repo")
+    assert repo.detect(override="") is None
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_detect_tolerates_multivalued_fetch(tmp_path, monkeypatch):
     # git allows several `fetch =` lines under a remote; configparser rejects

@@ -72,14 +72,14 @@ Call:
 ```
 workflow_session_start(
     project_slug="<chosen slug>",
-    session_id="<value of CLAUDE_SESSION_ID env var>",
+    session_id="<session id — see below>",
     phase="<chosen phase>",
 )
 ```
 
-To get `CLAUDE_SESSION_ID`: run `echo $CLAUDE_SESSION_ID` via Bash. If the
-variable is empty, use a short random hex string instead (read `/proc/sys/kernel/random/uuid`
-and take the first 8 chars).
+For the session id: on Claude Code, run `echo $CLAUDE_SESSION_ID` via Bash. If
+that variable is empty (e.g. under Pi), use a short random hex string instead
+(read `/proc/sys/kernel/random/uuid` and take the first 8 chars).
 
 Confirm to the user: "Session linked to **{title}** (`{session_slug}`). Call
 `/workflow end` before you stop, or the Stop hook will auto-close it with a
@@ -110,9 +110,11 @@ Return the new project slug and continue to Step 5 of the main flow.
 
 ## End session
 
-Call `workflow_project_list()` to find active projects in this repo, then
-check `/tmp/workflow-session-$CLAUDE_SESSION_ID.json` for the current session
-state file. If found, read the `session_slug`.
+Call `workflow_project_list()` to find active projects in this repo, then read
+the `session_slug` from this session's state file in `/tmp`: it is
+`workflow-session-<session id>.json`, where `<session id>` is the value passed
+to `workflow_session_start` (`$CLAUDE_SESSION_ID` on Claude Code). If you no
+longer have the id, pick the newest matching `/tmp/workflow-session-*.json`.
 
 Ask the user for a session summary: "Briefly describe what this session
 accomplished (will be saved to the workflow corpus)."

@@ -15,13 +15,14 @@ def detect(override: str | None = None) -> str | None:
     code graph — so they must all derive it the same way.
 
     Resolution order:
-      1. ``override`` parameter (explicit caller value)
+      1. ``override`` parameter — a non-empty value is used as-is; an explicit
+         empty string means "no repo scope" (callers use this for all-repos)
       2. ``OMNIGRAPH_MEMORY_REPO`` environment variable
       3. ``origin`` remote URL from the nearest ``.git/config``
       4. ``None`` — no repo context available
     """
-    if override:
-        return override
+    if override is not None:
+        return override or None
 
     if env_repo := os.environ.get("OMNIGRAPH_MEMORY_REPO"):
         return env_repo

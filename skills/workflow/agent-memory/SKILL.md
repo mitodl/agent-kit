@@ -16,6 +16,14 @@ backed by Omnigraph and accessible via the `omnigraph-memory` MCP server.
 The repo is auto-detected from `.git/config` — you rarely need to pass it
 explicitly.
 
+## This graph vs. `CLAUDE.md` / `AGENTS.md`
+
+`CLAUDE.md` / `AGENTS.md` hold **static, human-committed** project instructions
+that load into every session automatically. This graph holds **facts, patterns,
+and lessons you accrue and query on demand**, shared across agents and repos.
+Don't duplicate committed `CLAUDE.md` content into the graph; use the graph for
+what you learn while working that isn't already written down.
+
 ## When to Use Each Tool
 
 ### `memory_get_project_facts` — load context at session start
@@ -116,7 +124,6 @@ memory_store(
 ## Updating an Existing Memory
 
 Use `memory_get` to fetch the current content, decide what to change, then
-`memory_store` a corrected version. If the old memory is superseded rather
-than simply wrong, note the old slug and store both — the `Supersedes`
-relationship can be linked manually via the CLI if needed (v2 will expose
-this as a tool).
+`memory_store` a corrected version. There is no in-place update or `Supersedes`
+tool yet, so for a superseded (rather than simply wrong) memory, store the new
+version and reference the old slug in its content for now.
