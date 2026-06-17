@@ -3,10 +3,15 @@ name = "omnigraph-memory"
 version = "0.1.0"
 description = "Agent memory MCP server backed by Omnigraph"
 requires-python = ">=3.11"
-dependencies = ["fastmcp>=3.3.1,<4"]
+dependencies = [
+    "fastmcp>=3.3.1,<4",
+    "cyclopts>=4,<5",
+    "rich>=13",
+]
 
 [project.scripts]
 omnigraph-memory = "omnigraph_memory.__main__:main"
+omnigraph-explore = "omnigraph_memory.cli:main"
 
 [build-system]
 requires = ["hatchling"]

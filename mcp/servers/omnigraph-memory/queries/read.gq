@@ -133,7 +133,7 @@ query list_projects_by_repo_status($repo: String, $status: String) {
         $p: WorkflowProject { repo: $repo, status: $status }
     }
     return {
-        $p.slug, $p.title, $p.phase, $p.status,
+        $p.slug, $p.title, $p.phase, $p.status, $p.repo,
         $p.updated_at, $p.github_issue, $p.tags
     }
     order { $p.updated_at desc }
@@ -144,7 +144,7 @@ query list_projects_by_repo($repo: String) {
         $p: WorkflowProject { repo: $repo }
     }
     return {
-        $p.slug, $p.title, $p.phase, $p.status,
+        $p.slug, $p.title, $p.phase, $p.status, $p.repo,
         $p.updated_at, $p.github_issue, $p.tags
     }
     order { $p.updated_at desc }

@@ -93,6 +93,27 @@ files end-to-end (they skip automatically if the `omnigraph` binary is absent):
 uv run --group test pytest
 ```
 
+## Exploring the graph (`omnigraph-explore`)
+
+A cyclopts CLI for manual inspection of the work-coordination graph and the
+indexed code graphs. Installed alongside the server (`uv run omnigraph-explore …`,
+or `uv tool install` the package to get it on `PATH`):
+
+| Command | Shows |
+|---|---|
+| `tasks [--ready] [--status …] [--project wp-…] [--all-repos]` | Tasks for the current repo; `--ready` = open with no open blockers |
+| `task <tk-slug>` | One task's details, blockers, and sub-tasks |
+| `run <tk-slug> [--agent claude\|pi] [--dry-run]` | Claim a task and launch an agent to execute it |
+| `projects [--status …] [--all-repos]` | Workflow projects (default: active in this repo) |
+| `project <wp-slug>` | A project with its sessions, tasks, and corpus trace |
+| `memory [QUERY] [--kind …]` | BM25 memory search, or the repo's project facts |
+| `repos` | Repositories with a code graph indexed (files, size, freshness) |
+
+`run` claims the task (`in_progress` + your author), then hands the terminal to
+the agent seeded with the task description and a reminder to `task_close` when
+done — invoke it from the task's repo checkout. Use `--dry-run` to print the
+prompt without launching.
+
 ## Operating Modes
 
 ### Local Disk (default)

@@ -658,7 +658,9 @@ name = "omnigraph-memory"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cyclopts" },
     { name = "fastmcp" },
+    { name = "rich" },
 ]
 
 [package.dev-dependencies]
@@ -667,7 +669,11 @@ test = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastmcp", specifier = ">=3.3.1,<4" }]
+requires-dist = [
+    { name = "cyclopts", specifier = ">=4,<5" },
+    { name = "fastmcp", specifier = ">=3.3.1,<4" },
+    { name = "rich", specifier = ">=13" },
+]
 
 [package.metadata.requires-dev]
 test = [{ name = "pytest", specifier = ">=8" }]
