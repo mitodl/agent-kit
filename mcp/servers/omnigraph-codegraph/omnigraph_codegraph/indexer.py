@@ -205,9 +205,34 @@ def index_path(
     # bulk-load every node and edge in a single omnigraph call.
     for file_id in reindexed_file_ids:
         _delete_file_data(file_id, client)
-    client.load(records, mode="merge")
+    client.load(_dedupe(records), mode="merge")
 
     return stats
+
+
+def _dedupe(records: list[dict]) -> list[dict]:
+    """Drop duplicate node slugs / edges so one collision can't fail the load.
+
+    Real code yields occasional duplicate qualified names (overloads, a def named
+    after its file). Omnigraph's load rejects the whole batch on a single
+    ``@unique`` violation, so keep the first occurrence of each node slug and edge.
+    """
+    seen_nodes: set[str] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
+    out: list[dict] = []
+    for record in records:
+        if "type" in record:
+            slug = record["data"]["slug"]
+            if slug in seen_nodes:
+                continue
+            seen_nodes.add(slug)
+        else:
+            key = (record["edge"], record["from"], record["to"])
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
+        out.append(record)
+    return out
 
 
 def _collect_files(target: Path) -> list[Path]:
@@ -415,12 +440,14 @@ def _parse_file(
         content_hash=content_hash,
     )
 
-    # Module-level symbol (the file itself as a module).
+    # Module-level symbol (the file itself as a module). Its qualified_name uses
+    # a sentinel so a top-level def named after the file (e.g. `def foo` in
+    # foo.py) doesn't collide with the module on `slug`.
     module_name = Path(rel).stem
     module = ParsedSymbol(
-        id=f"{file_id}::{module_name}",
+        id=f"{file_id}::<module>",
         name=module_name,
-        qualified_name=module_name,
+        qualified_name="<module>",
         kind="module",
         start_line=1,
         end_line=_end_line(root),
