@@ -22,6 +22,19 @@ query delete_bindings_in_file($repo_file: String) {
     delete InterfaceBinding where repo_file = $repo_file
 }
 
+// All bindings — read once to build the cross-repo dependency visualization.
+
+query all_bindings() {
+    match {
+        $b: InterfaceBinding
+    }
+    return {
+        $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
+        $b.file, $b.symbol_id, $b.framework, $b.generic
+    }
+    limit 1000000
+}
+
 // ── Grouping reads ────────────────────────────────────────────────
 // All bindings for a contract key (the workhorse behind providers / consumers /
 // impact grouping).

@@ -667,6 +667,7 @@ dependencies = [
     { name = "cyclopts" },
     { name = "fastmcp" },
     { name = "pyyaml" },
+    { name = "rich" },
     { name = "tree-sitter" },
     { name = "tree-sitter-language-pack" },
 ]
@@ -681,6 +682,7 @@ requires-dist = [
     { name = "cyclopts", specifier = ">=4,<5" },
     { name = "fastmcp", specifier = ">=3.3.1,<4" },
     { name = "pyyaml", specifier = ">=6,<7" },
+    { name = "rich", specifier = ">=13" },
     { name = "tree-sitter", specifier = ">=0.25,<0.26" },
     { name = "tree-sitter-language-pack", specifier = ">=1.8,<2" },
 ]

@@ -189,6 +189,13 @@ an empty shape when it does not exist yet):
 
 - `index [PATH]` — incremental; skips files whose content hash is unchanged.
 - `reindex [PATH]` — force rebuild a path.
+- `deps [--kind K] [--repo SUBSTR] [--html PATH] [--open-browser]` —
+  visualize cross-repo dependencies from the bridge store. Prints a Rich
+  summary of "repo A depends on repo B" links (A consumes a contract B
+  provides; for `service`, the deploying repo depends on what it deploys) and,
+  with `--html`, writes a self-contained interactive force-directed graph.
+  Defaults to a repos-only view; `--kind` filters to one contract kind and
+  `--repo` keeps only links touching a matching repo.
 
 Both print a summary: files scanned/indexed/skipped, symbols, edges, errors. A
 parse failure on one file logs to stderr and continues.
