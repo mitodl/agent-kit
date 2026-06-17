@@ -25,6 +25,12 @@ class Edge:
     src: str  # depends on …
     dst: str  # … this repo
     kinds: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    # the individual cross-repo linkages backing this edge: {"kind", "key"}
+    contracts: list[dict] = field(default_factory=list)
+
+    def add(self, kind: str, key: str) -> None:
+        self.kinds[kind] += 1
+        self.contracts.append({"kind": kind, "key": key})
 
     @property
     def weight(self) -> int:
@@ -86,7 +92,7 @@ def build_graph(
             target = key_norm[len("repo:") :]
             for src in g["providers"]:
                 if src != target:
-                    graph.edge(src, target).kinds[b_kind] += 1
+                    graph.edge(src, target).add(b_kind, short_repo(target))
             continue
         if b_kind == "service":
             continue  # image:/name: anchors aren't repo-to-repo edges
@@ -94,7 +100,7 @@ def build_graph(
         for cons in g["consumers"]:
             for prov in g["providers"]:
                 if cons != prov:
-                    graph.edge(cons, prov).kinds[b_kind] += 1
+                    graph.edge(cons, prov).add(b_kind, key_norm)
 
     if repo:
         graph.edges = {
@@ -168,17 +174,20 @@ def render_html(graph: DepGraph, path: Path) -> Path:
         {"id": r, "label": short_repo(r), "shape": "box"} for r in sorted(graph.repos)
     ]
     edges = []
-    for e in graph.edges.values():
+    for i, e in enumerate(graph.edges.values()):
         dominant = max(e.kinds, key=e.kinds.get)
         title = ", ".join(f"{k}: {n}" for k, n in sorted(e.kinds.items()))
         edges.append(
             {
+                "id": i,
                 "from": e.src,
                 "to": e.dst,
                 "value": e.weight,
-                "title": f"{short_repo(e.src)} → {short_repo(e.dst)} ({title})",
+                "label": f"{short_repo(e.src)} → {short_repo(e.dst)}",
+                "title": f"{short_repo(e.src)} → {short_repo(e.dst)} ({title}) — click for details",
                 "color": {"color": KIND_COLORS.get(dominant, "#888")},
                 "arrows": "to",
+                "contracts": sorted(e.contracts, key=lambda c: (c["kind"], c["key"])),
             }
         )
     legend = "".join(
@@ -188,6 +197,7 @@ def render_html(graph: DepGraph, path: Path) -> Path:
     html = _HTML_TEMPLATE.format(
         nodes=json.dumps(nodes),
         edges=json.dumps(edges),
+        kind_colors=json.dumps(KIND_COLORS),
         legend=legend,
         n_repos=len(graph.repos),
         n_edges=len(graph.edges),
@@ -205,21 +215,49 @@ _HTML_TEMPLATE = """<!doctype html>
   #bar {{ padding: 10px 16px; border-bottom: 1px solid #333; }}
   #net {{ width: 100vw; height: calc(100vh - 50px); }}
   .chip {{ display:inline-block; width:11px; height:11px; border-radius:2px; margin:0 4px 0 12px; vertical-align:middle; }}
+  #detail {{ position: fixed; top: 60px; right: 16px; width: 420px; max-height: calc(100vh - 80px);
+            overflow: auto; background: #23262f; border: 1px solid #3a3f4b; border-radius: 8px;
+            padding: 12px 14px; display: none; box-shadow: 0 6px 24px rgba(0,0,0,.4); }}
+  #detail h3 {{ margin: 0 0 8px; font-size: 14px; }}
+  #detail .close {{ float: right; cursor: pointer; color: #888; }}
+  #detail table {{ border-collapse: collapse; width: 100%; }}
+  #detail th, #detail td {{ text-align: left; padding: 4px 8px; border-bottom: 1px solid #333;
+            font-size: 13px; word-break: break-all; }}
+  #detail .kind {{ white-space: nowrap; font-weight: 600; }}
 </style></head>
 <body>
   <div id="bar"><b>Cross-repo dependencies</b> — {n_repos} repos · {n_edges} links
-    &nbsp;&nbsp; "A → B" = A depends on B &nbsp;&nbsp; {legend}</div>
+    &nbsp;&nbsp; "A → B" = A depends on B &nbsp;&nbsp; {legend}
+    &nbsp;&nbsp; <span style="color:#888">click an edge for the linkage list</span></div>
   <div id="net"></div>
+  <div id="detail"></div>
   <script>
+    const KIND_COLORS = {kind_colors};
     const nodes = new vis.DataSet({nodes});
     const edges = new vis.DataSet({edges});
-    new vis.Network(document.getElementById("net"), {{nodes, edges}}, {{
+    const network = new vis.Network(document.getElementById("net"), {{nodes, edges}}, {{
       nodes: {{ color: {{ background: "#2b2f3a", border: "#5a6", highlight: {{ background: "#39415a" }} }},
                font: {{ color: "#eee" }}, borderWidth: 1 }},
-      edges: {{ scaling: {{ min: 1, max: 8 }}, smooth: {{ type: "dynamic" }} }},
+      edges: {{ scaling: {{ min: 1, max: 8 }}, smooth: {{ type: "dynamic" }},
+               font: {{ color: "#aaa", size: 11, strokeWidth: 0, align: "top" }} }},
       physics: {{ stabilization: true, barnesHut: {{ springLength: 160 }} }},
       interaction: {{ hover: true, tooltipDelay: 100 }}
     }});
+
+    const panel = document.getElementById("detail");
+    function esc(s) {{ return String(s).replace(/[&<>]/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c])); }}
+    function showEdge(id) {{
+      const e = edges.get(id);
+      if (!e) return;
+      const rows = e.contracts.map(c =>
+        `<tr><td class="kind" style="color:${{KIND_COLORS[c.kind] || '#ccc'}}">${{esc(c.kind)}}</td>`
+        + `<td>${{esc(c.key)}}</td></tr>`).join("");
+      panel.innerHTML = `<span class="close" onclick="document.getElementById('detail').style.display='none'">✕</span>`
+        + `<h3>${{esc(e.label)}}</h3>`
+        + `<table><thead><tr><th>kind</th><th>contract</th></tr></thead><tbody>${{rows}}</tbody></table>`;
+      panel.style.display = "block";
+    }}
+    network.on("click", p => p.edges.length ? showEdge(p.edges[0]) : (panel.style.display = "none"));
   </script>
 </body></html>
 """

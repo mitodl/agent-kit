@@ -46,6 +46,15 @@ def test_build_graph_edges_and_weights():
     ab = g.edges[(A, B)]
     assert ab.weight == 2
     assert dict(ab.kinds) == {"env_var": 1, "endpoint": 1}
+    # the edge carries the individual linkages for the HTML detail table.
+    assert {(c["kind"], c["key"]) for c in ab.contracts} == {
+        ("env_var", "MITOL_APP_BASE_URL"),
+        ("endpoint", "/api/v1/courses/{}"),
+    }
+    # service edge records the deployed repo as its contract.
+    assert g.edges[(INFRA, A)].contracts == [
+        {"kind": "service", "key": "mitodl/repo-a"}
+    ]
     # ol-infra depends on repo-a via the service anchor; name: anchor is ignored.
     assert g.edges[(INFRA, A)].weight == 1
     assert set(g.edges[(INFRA, A)].kinds) == {"service"}
@@ -76,6 +85,10 @@ def test_render_html_writes_self_contained_file(tmp_path):
     assert "mitodl/repo-a" in text
     # nodes + edges are embedded as JSON, not fetched.
     assert '"from"' in text and '"to"' in text
+    # per-edge linkage list + the click-to-show-table handler are present.
+    assert '"contracts"' in text
+    assert "MITOL_APP_BASE_URL" in text
+    assert "function showEdge" in text
 
 
 def test_render_rich_smoke():
