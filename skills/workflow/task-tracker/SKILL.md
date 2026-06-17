@@ -110,3 +110,21 @@ To add a dependency, hierarchy, or provenance link to existing tasks, use
 - `parent` — `from` (epic) is the parent of `to`
 - `discovered_from` — `to` is the source `from` was discovered from
 - `addresses` — `from` (task) addresses `to` (a Memory slug)
+
+## Linking tasks to code symbols
+
+For a task scoped to specific code, attach code-graph **symbol ids** via
+`symbol_refs` so the work is discoverable from the code. Get ids from the
+`omnigraph-codegraph` tools — `code_find_definition` / `code_search_symbol`
+return them in the `slug` field (`repo#path::Qualified.Name`):
+
+```
+task_create(
+    title="Refactor Service.run for lazy init",
+    description="...",
+    symbol_refs=["https://github.com/mitodl/ol-django#app/svc.py::Service.run"],
+)
+```
+
+`context_for_symbol(symbol_id)` lists the tasks and memories attached to a
+symbol — call it before editing that code to surface related open work.

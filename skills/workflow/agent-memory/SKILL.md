@@ -109,6 +109,27 @@ memory_store(
 )
 ```
 
+## Linking Memories to Code Symbols
+
+When a memory is about a specific function or class, attach the code-graph
+**symbol id** so it can be found from the code later. Get the id from the
+`omnigraph-codegraph` tools — `code_find_definition` / `code_search_symbol`
+return it in the `slug` field, of the form `repo#path::Qualified.Name`:
+
+```
+memory_store(
+    kind="lesson",
+    title="Service.run must not be called before init",
+    content="...",
+    symbol_refs=["https://github.com/mitodl/ol-django#app/svc.py::Service.run"],
+)
+```
+
+To go the other way — "what lessons or tasks concern this symbol?" — call
+`context_for_symbol(symbol_id)` before editing it. It returns the memories and
+tasks whose `symbol_refs` include that id. (Requires the omnigraph-codegraph
+server; symbol ids are soft references, so a stale one simply resolves to nothing.)
+
 ## Quality Guidelines
 
 - **Be specific.** Vague memories degrade search quality. Include the what,
