@@ -73,9 +73,11 @@ tasks hard-link to projects, sessions, and memories. See
 | `task_create` | Create a task (`tk-` slug). Supports `parent` (epic → sub-issue), `blocked_by`, `project_slug`, `external_uri` (e.g. a GitHub issue), and `symbol_refs` |
 | `task_get` | Fetch a single task by slug |
 | `task_list` | List tasks filtered by repo, status, project, parent (epic children), or assignee |
-| `task_update` | Update mutable fields — claim (`assignee`), set `in_progress`, re-prioritise, re-parent, attach a URI |
+| `task_update` | Update mutable fields — reassign, re-prioritise, re-parent, attach a URI (to *claim* for work, prefer `task_claim`) |
+| `task_claim` | **Advisory claim** for parallel/multi-user agents: set `in_progress` under an `assignee` with a lease; refuses if actively held (use `force` to steal). Read-check-write, not an atomic lock — see `claimed_at` lease + the CAS follow-up |
+| `task_release` | Drop a claim: clear assignee/lease, return the task to `open` |
 | `task_close` | Close a task with an optional resolution; unblocks its dependents |
-| `task_ready` | **Ready work**: open tasks whose blockers are all closed, ordered by priority — the core coordination primitive |
+| `task_ready` | **Ready work**: open/unblocked tasks (plus `in_progress` tasks whose lease has lapsed) ordered by priority — the core coordination primitive |
 | `task_link` | Link tasks: `blocks` / `parent` / `discovered_from`, or `addresses` a Memory node |
 | `context_for_symbol` | Reverse lookup: given a code-graph symbol id (`repo#path::Name`), return the memories and tasks whose `symbolRefs` include it |
 

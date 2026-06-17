@@ -46,6 +46,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Advisory-claim lease: a task left ``in_progress`` longer than this without being
+# re-claimed is treated as abandoned (the holder likely crashed) and becomes
+# reclaimable. Holders renew by calling ``task_claim`` again.
+_CLAIM_LEASE_SECONDS = 3600
+
+
+def _lease_expired(claimed_at: str | None) -> bool:
+    """True when an advisory claim's lease has elapsed (or there is no claim)."""
+    if not claimed_at:
+        return True
+    try:
+        started = datetime.fromisoformat(claimed_at)
+    except (ValueError, TypeError):
+        return True
+    return (datetime.now(timezone.utc) - started).total_seconds() > _CLAIM_LEASE_SECONDS
+
+
 def _project_repos(row: dict) -> list[str]:
     """The repo set of a project/trace row (empty list when floating)."""
     return list(row.get("repos") or [])
@@ -761,6 +778,7 @@ def _update_task(slug: str, changes: dict) -> dict | None:
         "symbol_refs": changes.get("symbol_refs", current.get("symbol_refs")),
         "tags": changes.get("tags", current.get("tags")),
         "closed_at": changes.get("closed_at", current.get("closed_at")),
+        "claimed_at": changes.get("claimed_at", current.get("claimed_at")),
         "updated_at": _now_iso(),
     }
     client.change("mutations.gq", "update_task", merged)
@@ -848,6 +866,7 @@ def task_create(
             "tags": tags,
             "created_at": now,
             "updated_at": now,
+            "claimed_at": None,
         },
     )
 
@@ -948,9 +967,10 @@ def task_update(
     """
     Update a task's mutable fields. Only non-null arguments are applied.
 
-    Use this to claim a task (``assignee``), move it to ``in_progress``, re-prioritise,
-    re-parent (``parent``), or attach an ``external_uri``. To close a task prefer
-    ``task_close``; to add dependencies use ``task_link``.
+    Use this to re-prioritise, re-parent (``parent``), reassign (``assignee``), or
+    attach an ``external_uri``. To *claim* a task for work prefer ``task_claim``
+    (it sets ``in_progress`` + a lease and refuses if someone else holds it); to
+    close a task prefer ``task_close``; to add dependencies use ``task_link``.
     """
     changes: dict = {}
     if title is not None:
@@ -1007,6 +1027,109 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
 
 
 @mcp.tool
+def task_claim(
+    slug: str, assignee: str | None = None, force: bool = False
+) -> dict | None:
+    """
+    Claim a task for work: set it ``in_progress`` under ``assignee`` with a lease.
+
+    This is the coordination primitive for parallel/multi-user agents — call it
+    before starting a ready task so others see it is taken. Returns
+    ``{"claimed": true, ...}`` on success, or ``{"claimed": false, "reason": ...}``
+    when the task is closed, still blocked, or actively held by someone else.
+
+    ADVISORY ONLY — this is a read-check-write, not an atomic lock. Two agents
+    racing the *exact same instant* can both succeed (last write wins); the lease
+    and held-by check make accidental double-work unlikely, not impossible. A true
+    atomic claim needs store-level compare-and-swap (tracked separately).
+
+    The claim carries a lease (``claimed_at``); if the holder goes ``in_progress``
+    and never closes/releases, the task becomes reclaimable after the lease lapses
+    (see ``task_ready``). Re-calling ``task_claim`` renews the lease.
+
+    Parameters
+    ----------
+    slug:
+        The ``tk-`` slug to claim.
+    assignee:
+        Holder identity. Defaults to the configured author; parallel agents under
+        one identity should pass a distinct id (e.g. a session id) so claims don't
+        collide.
+    force:
+        Steal the task even if another holder's lease is still valid.
+    """
+    holder = assignee or cfg.author
+    rows = client.read("read.gq", "get_task", {"slug": slug})
+    if not rows:
+        return None
+    task = rows[0]
+    status = task.get("status")
+    if status == "closed":
+        return {"slug": slug, "claimed": False, "reason": "closed"}
+    if status == "blocked":
+        return {"slug": slug, "claimed": False, "reason": "blocked"}
+
+    current_holder = task.get("assignee")
+    claimed_at = task.get("claimed_at")
+    held = status == "in_progress" and current_holder and not _lease_expired(claimed_at)
+    if held and current_holder != holder and not force:
+        return {
+            "slug": slug,
+            "claimed": False,
+            "reason": "held",
+            "held_by": current_holder,
+            "claimed_at": claimed_at,
+        }
+
+    now = _now_iso()
+    _update_task(slug, {"status": "in_progress", "assignee": holder, "claimed_at": now})
+    return {
+        "slug": slug,
+        "claimed": True,
+        "assignee": holder,
+        "claimed_at": now,
+        "stole": bool(held and current_holder != holder),
+    }
+
+
+@mcp.tool
+def task_release(
+    slug: str,
+    assignee: str | None = None,
+    status: TaskStatus = "open",
+    force: bool = False,
+) -> dict | None:
+    """
+    Release a claim: clear the assignee/lease and return the task to ``open``.
+
+    Call when stepping away from an unfinished task so others can pick it up
+    (closing a finished task — use ``task_close`` — also ends the claim). Refuses
+    if the task is held by a different ``assignee`` unless ``force`` is set.
+
+    Parameters
+    ----------
+    slug:
+        The ``tk-`` slug to release.
+    assignee:
+        Holder identity releasing the task. Defaults to the configured author.
+    status:
+        Status to return the task to (default ``open``).
+    force:
+        Release even if held by a different assignee.
+    """
+    holder = assignee or cfg.author
+    rows = client.read("read.gq", "get_task", {"slug": slug})
+    if not rows:
+        return None
+    current_holder = rows[0].get("assignee")
+    if current_holder and current_holder != holder and not force:
+        return {"slug": slug, "released": False, "held_by": current_holder}
+
+    _update_task(slug, {"status": status, "assignee": None, "claimed_at": None})
+    return {"slug": slug, "released": True, "status": status}
+
+
+@mcp.tool
 def task_ready(
     repo: str | None = None,
     project_slug: str | None = None,
@@ -1053,12 +1176,21 @@ def task_ready(
         # A blocker that no longer exists does not hold anything back.
         return fetched[0].get("status", "closed") if fetched else "closed"
 
+    def is_ready(r: dict) -> bool:
+        status = r.get("status")
+        # in_progress tasks are owned — only reclaimable once their lease lapses
+        # (the holder likely crashed). open/blocked are pickable when unblocked.
+        if status == "in_progress":
+            if not _lease_expired(r.get("claimed_at")):
+                return False
+        elif status not in ("open", "blocked"):
+            return False
+        return all(blocker_status(b) == "closed" for b in (r.get("blocked_by") or []))
+
     ready = [
         r
         for r in rows
-        if r.get("status") in ("open", "blocked")
-        and all(blocker_status(b) == "closed" for b in (r.get("blocked_by") or []))
-        and (assignee is None or r.get("assignee") == assignee)
+        if is_ready(r) and (assignee is None or r.get("assignee") == assignee)
     ]
     ready.sort(key=lambda r: _PRIORITY_ORDER.get(r.get("priority"), 9))
     return ready[:limit]

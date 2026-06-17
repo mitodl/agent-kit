@@ -50,9 +50,15 @@ MCP call fails, tell the user the omnigraph-memory server is not connected and s
   - Options: each ready task (label = title, description = "`[priority]` slug: `{slug}`"),
     plus "Create a task" and "None".
 - On a chosen task: ask whether to claim it. To claim, call
-  `task_update(slug="<slug>", status="in_progress", assignee="<author>")` where
-  `<author>` is `$OMNIGRAPH_MEMORY_AUTHOR` (or the git user name). Confirm:
-  "Claimed **{title}** (`{slug}`). Close it with `/task close` when done."
+  `task_claim(slug="<slug>", assignee="<holder>")` where `<holder>` identifies
+  this worker — use `$CLAUDE_SESSION_ID` (or another distinct id) so parallel
+  agents under one user don't collide; it defaults to the configured author.
+  `task_claim` sets `in_progress` with a lease and **refuses if someone else
+  holds it** (`{"claimed": false, "held_by": ...}`) — surface that and offer
+  another task instead of overwriting. On success confirm: "Claimed **{title}**
+  (`{slug}`). Close it with `/task close`, or `task_release` it if you step away."
+  Note: claims are advisory (a true atomic lock is a tracked follow-up), so a
+  dead worker's claim auto-frees after its lease lapses and reappears in ready work.
 
 ## Create a task
 

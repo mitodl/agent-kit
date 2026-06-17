@@ -228,7 +228,7 @@ query get_task($slug: String) {
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.resolution,
         $t.symbol_refs, $t.tags, $t.author,
-        $t.created_at, $t.updated_at, $t.closed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
     }
 }
 
@@ -239,7 +239,7 @@ query list_tasks_by_repo($repo: String) {
     return {
         $t.slug, $t.title, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }
     order { $t.updated_at desc }
 }
@@ -251,7 +251,7 @@ query list_tasks_by_repo_status($repo: String, $status: String) {
     return {
         $t.slug, $t.title, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }
     order { $t.updated_at desc }
 }
@@ -263,7 +263,7 @@ query list_tasks_by_status($status: String) {
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }
     order { $t.updated_at desc }
     limit 50
@@ -276,7 +276,7 @@ query list_all_tasks() {
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }
     order { $t.updated_at desc }
     limit 50
@@ -289,7 +289,7 @@ query list_tasks_by_project($project_slug: String) {
     return {
         $t.slug, $t.title, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }
     order { $t.updated_at desc }
 }
@@ -301,7 +301,7 @@ query list_tasks_by_parent($parent_slug: String) {
     return {
         $t.slug, $t.title, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }
     order { $t.priority, $t.updated_at desc }
 }

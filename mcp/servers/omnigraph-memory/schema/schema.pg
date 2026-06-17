@@ -150,6 +150,7 @@ node Task {
     created_at:   DateTime @index
     updated_at:   DateTime
     closed_at:    DateTime?
+    claimed_at:   DateTime?              // advisory-claim lease start (assignee holds it)
     symbol_refs:  [String]?              // soft refs into the code-graph store
     tags:        [String]?
 }
