@@ -75,6 +75,18 @@ grammar name + a `queries_ts/<lang>.scm` capture file + a capture→kind map), a
 any new node types to `_DEF_NODE_TYPES`. Grammars are provided prebuilt by
 `tree-sitter-language-pack` (no compilation needed).
 
+### Not indexed yet (from a file-type survey of ol-infrastructure + mit-learn)
+
+- **HCL / Terraform / Packer** (`.hcl`, `.tf`) — the strongest candidate to add
+  next (~50 files in ol-infrastructure); grammar is available and blocks map to
+  symbols (`variable.x`, `source.amazon-ebs.caddy`, `resource.<type>.<name>`).
+- **VCL** (Varnish/Fastly, `.vcl`) — `tree-sitter-language-pack` has no grammar,
+  so it can't be added without vendoring a `tree-sitter-vcl` build.
+- **Markdown** (`.md`/`.mdx`) — could index headings as a doc outline, but adds
+  low-signal symbols; left out for now.
+- Config/markup (`.json`, `.toml`, `.ini`, `.scss`, `.html`, `.j2`) is not
+  symbol-bearing enough to index. Go/Rust grammars exist but neither repo uses them.
+
 ## Install
 
 ```bash
