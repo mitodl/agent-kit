@@ -37,14 +37,22 @@ fi
 # Per-repo lock dir (atomic mkdir) so overlapping sessions don't index at once.
 LOCK="${TMPDIR:-/tmp}/codegraph-init-$(printf '%s' "$PROJECT_DIR" | cksum | cut -d' ' -f1).lock"
 
-# Detach into a new session: build/refresh in the background, return immediately.
+# Detach and build/refresh in the background, returning immediately. Prefer
+# setsid (Linux) for a clean new session; fall back to a plain background job +
+# disown on macOS/BSD where setsid isn't available.
 # The single-quoted script is deliberate — $lock/$@ are expanded by the inner shell.
 # shellcheck disable=SC2016
-setsid bash -c '
+_worker='
 	lock="$1"; shift
 	mkdir "$lock" 2>/dev/null || exit 0
 	trap "rmdir \"$lock\" 2>/dev/null" EXIT
 	"$@" >/dev/null 2>&1
-' _ "$LOCK" "${INDEX_CMD[@]}" >/dev/null 2>&1 </dev/null &
+'
+if command -v setsid >/dev/null 2>&1; then
+	setsid bash -c "$_worker" _ "$LOCK" "${INDEX_CMD[@]}" >/dev/null 2>&1 </dev/null &
+else
+	bash -c "$_worker" _ "$LOCK" "${INDEX_CMD[@]}" >/dev/null 2>&1 </dev/null &
+	disown "$!" 2>/dev/null || true
+fi
 
 exit 0

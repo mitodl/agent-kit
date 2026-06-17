@@ -619,19 +619,30 @@ def _class_bases(def_node, raw: bytes, captures) -> list[str]:
 
 
 def _query_captures(language, scm_file: str, root) -> list[tuple[str, object]]:
-    from tree_sitter import Query, QueryCursor
+    from tree_sitter import Query
 
     scm = (_QUERIES_TS_DIR / scm_file).read_text()
     try:
         query = Query(language, scm)
     except Exception:  # noqa: BLE001 — fall back to Language.query
         query = language.query(scm)
-    cursor = QueryCursor(query)
-    captures = cursor.captures(root)
+
+    # The capture API moved across py-tree-sitter versions: 0.23+ exposes
+    # QueryCursor whose captures() returns {name: [nodes]}; older versions had
+    # Query.captures() returning [(node, name)] tuples. Support both.
+    try:
+        from tree_sitter import QueryCursor
+
+        raw = QueryCursor(query).captures(root)
+    except ImportError:
+        raw = query.captures(root)
+
     out: list[tuple[str, object]] = []
-    # captures() returns {capture_name: [nodes]} in recent py-tree-sitter.
-    for cap_name, nodes in captures.items():
-        for node in nodes:
+    if isinstance(raw, dict):
+        for cap_name, nodes in raw.items():
+            out.extend((cap_name, node) for node in nodes)
+    else:
+        for node, cap_name in raw:
             out.append((cap_name, node))
     return out
 

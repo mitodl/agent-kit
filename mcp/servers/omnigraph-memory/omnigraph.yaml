@@ -50,5 +50,5 @@ aliases:
       command: mutate,
       query: queries/mutations.gq,
       name: insert_memory,
-      args: [slug, kind, title, content, author, createdAt, updatedAt],
+      args: [slug, kind, title, content, author, created_at, updated_at],
     }

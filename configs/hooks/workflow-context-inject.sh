@@ -45,9 +45,11 @@ PYEOF
 # still produce the other section.
 run_query() {
     local name="$1" params="$2"
-    local args=(--store "$OMNIGRAPH_URI" --query "${QUERIES_DIR}/read.gq" "$name")
-    [[ -n "$OMNIGRAPH_TOKEN" ]] && args+=(--token "$OMNIGRAPH_TOKEN")
-    omnigraph query "${args[@]}" --params "$params" --format json 2>/dev/null || echo "[]"
+    # omnigraph CLI auth is via the OMNIGRAPH_SERVER_BEARER_TOKEN env var, not a
+    # --token flag. Pass the token through when set.
+    OMNIGRAPH_SERVER_BEARER_TOKEN="${OMNIGRAPH_TOKEN:-${OMNIGRAPH_SERVER_BEARER_TOKEN:-}}" \
+        omnigraph query --store "$OMNIGRAPH_URI" --query "${QUERIES_DIR}/read.gq" "$name" \
+        --params "$params" --format json 2>/dev/null || echo "[]"
 }
 
 PROJECTS_RAW=$(run_query list_projects_by_repo_status \
@@ -65,7 +67,14 @@ def rows(raw):
         data = json.loads(raw)
     except (ValueError, TypeError):
         return []
-    items = data.get("rows", data) if isinstance(data, dict) else data
+    if isinstance(data, dict):
+        items = data.get("rows")
+        if not isinstance(items, list):
+            return []
+    elif isinstance(data, list):
+        items = data
+    else:
+        return []
     # Strip alias prefix: "p.slug" -> "slug"
     return [{k.split(".", 1)[-1]: v for k, v in row.items()} for row in items]
 
@@ -73,11 +82,12 @@ def rows(raw):
 projects = rows(sys.argv[1])
 tasks = rows(sys.argv[2])
 
-# Ready work: open tasks whose blockers are all closed.
+# Ready work: not-yet-started tasks whose blockers are all closed (matches the
+# server's task_ready: status open OR blocked, every blocker closed).
 status_by_slug = {t["slug"]: t.get("status") for t in tasks}
 ready = [
     t for t in tasks
-    if t.get("status") == "open"
+    if t.get("status") in ("open", "blocked")
     and all(status_by_slug.get(b, "closed") == "closed" for b in (t.get("blocked_by") or []))
 ]
 ready.sort(key=lambda t: _PRIORITY.get(t.get("priority"), 9))
@@ -110,7 +120,7 @@ if ready:
     lines += [
         "## Ready Tasks",
         "",
-        f"{len(ready)} task(s) are ready to work (open, no open blockers):",
+        f"{len(ready)} task(s) are ready to work (no open blockers):",
         "",
     ]
     for t in ready[:5]:

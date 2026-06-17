@@ -43,11 +43,6 @@ FILES_JSON=$(git -C "$PROJECT_DIR" diff --name-only HEAD 2>/dev/null \
 
 NOW=$(python3 -c "from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())")
 
-OG_ARGS=(--store "$OMNIGRAPH_URI" --query "${QUERIES_DIR}/mutations.gq" update_workflow_session_end)
-if [[ -n "$OMNIGRAPH_TOKEN" ]]; then
-    OG_ARGS+=(--token "$OMNIGRAPH_TOKEN")
-fi
-
 PARAMS=$(python3 -c "
 import json, sys
 print(json.dumps({
@@ -59,6 +54,10 @@ print(json.dumps({
 }))
 " "$SESSION_SLUG" "$FILES_JSON" "$NOW" 2>/dev/null) || { rm -f "$STATE_FILE"; exit 0; }
 
-omnigraph mutate "${OG_ARGS[@]}" --params "$PARAMS" 2>/dev/null || true
+# omnigraph CLI auth is via OMNIGRAPH_SERVER_BEARER_TOKEN, not a --token flag.
+OMNIGRAPH_SERVER_BEARER_TOKEN="${OMNIGRAPH_TOKEN:-${OMNIGRAPH_SERVER_BEARER_TOKEN:-}}" \
+    omnigraph mutate --store "$OMNIGRAPH_URI" \
+    --query "${QUERIES_DIR}/mutations.gq" update_workflow_session_end \
+    --params "$PARAMS" 2>/dev/null || true
 
 rm -f "$STATE_FILE"

@@ -247,21 +247,24 @@ def code_search_symbol(query: str, kind: SymbolKind | None = None) -> list[dict]
 
 
 @mcp.tool
-def code_reindex(path: str | None = None) -> dict:
+def code_reindex(path: str | None = None, force: bool = False) -> dict:
     """
     Index (or re-index) the current repo, or a subpath of it.
 
-    Lazily creates the per-repo store on first run. Returns a summary of files
-    scanned/indexed/skipped and symbols/edges written.
+    Incremental by default — unchanged files (matching content hash) are
+    skipped. Lazily creates the per-repo store on first run. Returns a summary of
+    files scanned/indexed/skipped and symbols/edges written.
 
     Parameters
     ----------
     path:
         Optional file or directory under the repo. Defaults to the repo root
         (or cwd if not in a git repo).
+    force:
+        Re-index every file regardless of content hash.
     """
     target = Path(path) if path else (repo_module.root() or Path.cwd())
-    stats = indexer.index_path(target, force=bool(path), config=cfg)
+    stats = indexer.index_path(target, force=force, config=cfg)
     return {
         "path": str(target),
         "scanned": stats.scanned,

@@ -67,19 +67,19 @@ export default function codegraphExtension(pi: ExtensionAPI): void {
 		if (inGitRepo(ctx.cwd)) indexInBackground(ctx.cwd);
 	});
 
+	// Push one entry per edit tool_call (path or "") so the FIFO stays paired
+	// 1:1 with tool_result, which always shifts exactly one.
 	pi.on("tool_call", (event: any, ctx) => {
 		if (!EDIT_TOOLS.has(event?.toolName)) return;
-		const p = editedPath(event, ctx.cwd);
-		if (p) pending.push(p);
+		pending.push(editedPath(event, ctx.cwd) ?? "");
 	});
 
 	// After a successful edit/write, re-index just that file.
 	pi.on("tool_result", (event: any, ctx) => {
-		if (!EDIT_TOOLS.has(event?.toolName) || event?.isError) {
-			if (EDIT_TOOLS.has(event?.toolName)) pending.shift();
-			return;
-		}
-		const p = editedPath(event, ctx.cwd) ?? pending.shift() ?? null;
+		if (!EDIT_TOOLS.has(event?.toolName)) return;
+		const queued = pending.shift() ?? "";
+		if (event?.isError) return;
+		const p = editedPath(event, ctx.cwd) ?? queued;
 		if (p && existsSync(p)) indexInBackground(p);
 	});
 }

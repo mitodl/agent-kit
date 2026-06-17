@@ -150,10 +150,11 @@ export default function workflowContextExtension(pi: ExtensionAPI): void {
 			const tasks = query("list_tasks_by_repo", { repo });
 
 			const statusBySlug = new Map(tasks.map((t) => [t.slug, t.status]));
+			// Matches the server's task_ready: status open OR blocked, all blockers closed.
 			const ready = tasks
 				.filter(
 					(t) =>
-						t.status === "open" &&
+						(t.status === "open" || t.status === "blocked") &&
 						(t.blocked_by ?? []).every(
 							(b: string) => (statusBySlug.get(b) ?? "closed") === "closed",
 						),

@@ -784,7 +784,14 @@ def task_create(
     now = _now_iso()
     slug = _make_slug("task", title)
     detected_repo = repo_module.detect(override=repo)
-    status: TaskStatus = "blocked" if blocked_by else "open"
+    # Only "blocked" if a blocker is not already closed — otherwise it's ready
+    # now and would never be auto-unblocked.
+    status: TaskStatus = "open"
+    for blocker_slug in blocked_by or []:
+        fetched = client.read("read.gq", "get_task", {"slug": blocker_slug})
+        if fetched and fetched[0].get("status") != "closed":
+            status = "blocked"
+            break
 
     client.change(
         "mutations.gq",
@@ -941,6 +948,10 @@ def task_update(
         client.change("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
         updated = _update_task(slug, {"parent_slug": parent})
 
+    # Closing here must unblock dependents too, matching task_close.
+    if status == "closed" and updated is not None:
+        _unblock_dependents(updated.get("repo"))
+
     return updated
 
 
@@ -1041,7 +1052,9 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
             if from_slug not in existing:
                 changes = {"blocked_by": [*existing, from_slug]}
                 if blocked[0].get("status") == "open":
-                    changes["status"] = "blocked"
+                    blocker = client.read("read.gq", "get_task", {"slug": from_slug})
+                    if blocker and blocker[0].get("status") != "closed":
+                        changes["status"] = "blocked"
                 _update_task(to_slug, changes)
     elif kind == "parent":
         client.change(

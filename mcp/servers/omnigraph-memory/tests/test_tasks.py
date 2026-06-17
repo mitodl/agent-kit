@@ -101,3 +101,36 @@ def test_update_claim_and_list_status(server):
     assert node["assignee"] == "alice"
     in_progress = {x["slug"] for x in server.task_list(status="in_progress")}
     assert t["slug"] in in_progress
+
+
+@requires_omnigraph
+def test_create_with_already_closed_blocker_is_open(server):
+    # If every blocker is already closed, a new task is ready now, not blocked.
+    a = server.task_create(title="done blocker", description="x")
+    server.task_close(a["slug"])
+    b = server.task_create(
+        title="depends on done", description="x", blocked_by=[a["slug"]]
+    )
+    assert b["status"] == "open"
+    assert b["slug"] in {t["slug"] for t in server.task_ready()}
+
+
+@requires_omnigraph
+def test_update_to_closed_unblocks_dependents(server):
+    a = server.task_create(title="blocker", description="x")
+    b = server.task_create(title="dependent", description="x", blocked_by=[a["slug"]])
+    assert b["status"] == "blocked"
+    # Closing via task_update (not task_close) must still auto-unblock dependents.
+    server.task_update(a["slug"], status="closed")
+    assert server.task_get(b["slug"])["status"] == "open"
+    assert b["slug"] in {t["slug"] for t in server.task_ready()}
+
+
+@requires_omnigraph
+def test_link_closed_blocker_does_not_block(server):
+    a = server.task_create(title="closed", description="x")
+    server.task_close(a["slug"])
+    b = server.task_create(title="open task", description="x")
+    server.task_link(a["slug"], b["slug"], kind="blocks")
+    # Linking an already-closed blocker must not flip the task to blocked.
+    assert server.task_get(b["slug"])["status"] == "open"

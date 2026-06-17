@@ -110,8 +110,25 @@ def _normalise(url: str) -> str:
 
 
 def root(start: Path | None = None) -> Path | None:
-    """Return the git repository root for ``start`` (or the cwd)."""
+    """Return the git repository root for ``start`` (or the cwd).
+
+    Prefers ``git rev-parse --show-toplevel`` so worktrees and submodules (where
+    ``.git`` is a file, not a directory) resolve correctly; falls back to walking
+    for ``.git/config`` when the git binary is unavailable.
+    """
     base = start or Path.cwd()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(base), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return Path(result.stdout.strip())
+    except OSError:
+        pass
+
     git_config = _find_git_config(base)
     if git_config is None:
         return None
