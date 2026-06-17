@@ -54,6 +54,115 @@ Desktop, GitHub Copilot) can read and write without platform-specific code.
 
 ---
 
+## Local Development Setup
+
+Wire both MCP servers, the hooks, and the skills into your local Claude Code and
+Pi agents, running the servers straight from your checkout so edits take effect
+without publishing. Requires [`uv`](https://docs.astral.sh/uv/) and the
+`omnigraph` binary — run `mcp/servers/omnigraph-memory/install.sh` once to install
+the binary and initialise the local graph.
+
+Set `REPO` to your checkout path for the snippets below:
+
+```bash
+REPO=/path/to/agent-kit
+```
+
+### 1. MCP servers — run from the local checkout
+
+Add both servers under `mcpServers` in `~/.claude/settings.json` (Claude Code)
+**and** `~/.pi/agent/mcp.json` (Pi). The local pattern uses `uv run --directory`
+(not the published `uvx --from git+…` snippet in each server's `config/`), so the
+server always runs your working tree:
+
+```json
+"omnigraph-memory": {
+  "command": "uv",
+  "args": ["run", "--directory", "REPO/mcp/servers/omnigraph-memory", "omnigraph-memory"],
+  "env": { "OMNIGRAPH_MEMORY_AUTHOR": "Your Name" }
+},
+"omnigraph-codegraph": {
+  "command": "uv",
+  "args": ["run", "--directory", "REPO/mcp/servers/omnigraph-codegraph", "omnigraph-codegraph"],
+  "env": { "OMNIGRAPH_CODEGRAPH_AUTHOR": "Your Name" }
+}
+```
+
+Replace `REPO` with the absolute path. **Restart the agent** after editing its
+config so it picks up the new servers (the first `omnigraph-codegraph` launch
+installs tree-sitter — one-time, slow).
+
+### 2. Hooks — Claude Code
+
+Symlink the three hooks and register them. The scripts resolve their real
+location through the symlink (via `readlink -f`), so the symlink install just works:
+
+```bash
+mkdir -p ~/.claude/hooks
+ln -sf "$REPO/configs/hooks/workflow-context-inject.sh"     ~/.claude/hooks/
+ln -sf "$REPO/configs/hooks/workflow-session-checkpoint.sh" ~/.claude/hooks/
+ln -sf "$REPO/configs/hooks/codegraph-reindex.sh"           ~/.claude/hooks/
+```
+
+Register them in `~/.claude/settings.json` under `hooks` —
+`UserPromptSubmit` → context-inject, `Stop` → session-checkpoint, and
+`PostToolUse` (matcher `Edit|Write`) → codegraph-reindex. See
+[`configs/hooks/README.md`](../configs/hooks/README.md) for the exact JSON.
+
+### 3. Skills — both agents
+
+Skills are discovered from a shared `~/.agents/skills/` that each agent symlinks
+into per-skill. Link the workflow skills there, then into each agent (the skill
+name differs from the repo directory for two of them):
+
+```bash
+for s in agent-memory:agent-memory workflow:session-start task:task-tracker project-tracker:project-tracker; do
+  name=${s%%:*}; dir=${s##*:}
+  ln -sfn "$REPO/skills/workflow/$dir" ~/.agents/skills/"$name"
+  ln -sfn "../../.agents/skills/$name"    ~/.claude/skills/"$name"
+  ln -sfn "../../../.agents/skills/$name" ~/.pi/agent/skills/"$name"
+done
+```
+
+### 4. Code-graph indexer CLI — optional, faster hook path
+
+Install the indexer on `PATH` so the `PostToolUse` hook uses its fast path and you
+can seed a repo manually. `--editable` keeps it pointed at the working tree:
+
+```bash
+uv tool install --editable "$REPO/mcp/servers/omnigraph-codegraph"
+# then, inside any repo you want indexed:
+omnigraph-codegraph-index index .
+```
+
+Without this, the hook falls back to `uvx --from <local pkg>` (correct, just slower).
+
+### 5. Graph schema upkeep
+
+The shared graph lives at `~/.local/share/omnigraph-memory/graph.omni`. After
+pulling schema changes, re-apply:
+
+```bash
+omnigraph schema apply \
+  --schema "$REPO/mcp/servers/omnigraph-memory/schema/schema.pg" \
+  ~/.local/share/omnigraph-memory/graph.omni
+```
+
+A field **rename** (the schema uses snake_case identifiers) can't be migrated in
+place — re-initialise a fresh graph instead (move the old one aside first):
+
+```bash
+mv ~/.local/share/omnigraph-memory/graph.omni{,.bak}
+omnigraph init \
+  --schema "$REPO/mcp/servers/omnigraph-memory/schema/schema.pg" \
+  ~/.local/share/omnigraph-memory/graph.omni
+```
+
+The per-repo code-graph stores under `~/.local/share/omnigraph-memory/code/` are
+disposable — delete and re-index freely.
+
+---
+
 ## Repository Structure
 
 Everything lives under `mcp/servers/omnigraph-memory/` in `agent-kit`:

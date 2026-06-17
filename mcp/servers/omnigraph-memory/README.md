@@ -21,6 +21,10 @@ platform-specific code.
 export OMNIGRAPH_MEMORY_AUTHOR="Your Name"
 ```
 
+> **Wiring it into your agents locally** (both this server and omnigraph-codegraph,
+> plus the hooks and skills, run straight from your checkout): see
+> [Local Development Setup](../../../docs/agent-memory.md#local-development-setup).
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |

@@ -10,6 +10,10 @@ It is a self-contained sibling of `omnigraph-memory` (Layer 1) and shares its
 subprocess/CLI conventions, but stores a **separate, per-repo, local-only**
 graph.
 
+> **Wiring it into your agents locally** (MCP server, the `PostToolUse` reindex
+> hook, and the indexer CLI, run straight from your checkout): see
+> [Local Development Setup](../../../docs/agent-memory.md#local-development-setup).
+
 ## Two-layer composition
 
 | Layer | Server | Stores | Scope | Synced |
