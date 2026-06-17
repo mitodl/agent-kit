@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from fastmcp import FastMCP
 
@@ -205,8 +206,21 @@ def code_symbols_in_file(path: str) -> list[dict]:
     return client.read("read.gq", "symbols_in_file", {"file_id": file_id})
 
 
+SymbolKind = Literal[
+    "function",
+    "method",
+    "class",
+    "module",
+    "variable",
+    "interface",
+    "type",
+    "enum",
+    "key",
+]
+
+
 @mcp.tool
-def code_search_symbol(query: str) -> list[dict]:
+def code_search_symbol(query: str, kind: SymbolKind | None = None) -> list[dict]:
     """
     Full-text/substring search over symbol qualified names (BM25-ranked).
 
@@ -216,10 +230,19 @@ def code_search_symbol(query: str) -> list[dict]:
     ----------
     query:
         Search terms matched against ``qualified_name``.
+    kind:
+        Optional filter to a single symbol kind: ``function``, ``method``,
+        ``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,
+        or ``key``. Pass e.g. ``kind="function"`` to exclude the many YAML
+        ``key`` symbols when searching for code.
     """
     client = _client()
     if client is None:
         return []
+    if kind:
+        return client.read(
+            "read.gq", "search_symbols_by_kind", {"query": query, "kind": kind}
+        )
     return client.read("read.gq", "search_symbols", {"query": query})
 
 

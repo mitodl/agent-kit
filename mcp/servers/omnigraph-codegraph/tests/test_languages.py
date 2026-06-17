@@ -72,3 +72,13 @@ def test_multilanguage_extraction(tmp_path, monkeypatch):
         "read.gq", "find_by_qualified_name", {"qualified_name": "jobs.build"}
     )
     assert any(r["kind"] == "key" for r in nested)
+
+    # kind filter: "build" is both a bash function and a yaml key
+    unfiltered = {
+        r["kind"] for r in client.read("read.gq", "search_symbols", {"query": "build"})
+    }
+    assert {"key", "function"} <= unfiltered
+    funcs = client.read(
+        "read.gq", "search_symbols_by_kind", {"query": "build", "kind": "function"}
+    )
+    assert funcs and all(r["kind"] == "function" for r in funcs)

@@ -54,6 +54,19 @@ query search_symbols($query: String) {
     limit 50
 }
 
+query search_symbols_by_kind($query: String, $kind: String) {
+    match {
+        $s: Symbol { kind: $kind }
+        search($s.qualified_name, $query)
+    }
+    return {
+        $s.slug, $s.repo, $s.file_id, $s.name, $s.qualified_name,
+        $s.kind, $s.start_line, $s.end_line, $s.signature
+    }
+    order { bm25($s.qualified_name, $query) desc }
+    limit 50
+}
+
 // ── File symbols ──────────────────────────────────────────────────
 
 query symbols_in_file($file_id: String) {
