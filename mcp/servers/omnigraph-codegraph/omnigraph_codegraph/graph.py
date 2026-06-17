@@ -1,9 +1,22 @@
+import fcntl
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
+
+# omnigraph local stores use optimistic concurrency (Lance manifest versions) and
+# are NOT safe for concurrent writers — a manual index racing the
+# PostToolUse/SessionStart reindex hooks can leave HEAD ahead of the manifest.
+# We serialize writes with a per-store advisory lock (prevention) and, as a
+# safety net, retry transient "stale view" conflicts and `omnigraph repair`
+# stores already in the drifted state.
+_WRITE_SUBCOMMANDS = {"mutate", "load"}
+_RETRYABLE = ("stale view", "manifest table version", "refresh and retry")
+_NEEDS_REPAIR = ("ahead of manifest", "omnigraph repair")
+_MAX_ATTEMPTS = 8
 
 
 class OmnigraphClient:
@@ -98,18 +111,50 @@ class OmnigraphClient:
         if self.token:
             env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = self.token
 
-        result = subprocess.run(
-            cmd,
+        lock_fh = self._acquire_write_lock(subcommand)
+        try:
+            for attempt in range(_MAX_ATTEMPTS):
+                result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+                if result.returncode == 0:
+                    return result.stdout
+                err = result.stderr
+                if attempt + 1 < _MAX_ATTEMPTS:
+                    if any(m in err for m in _NEEDS_REPAIR):
+                        self._repair(env)
+                        continue
+                    if any(m in err for m in _RETRYABLE):
+                        time.sleep(0.05 * (attempt + 1))
+                        continue
+                raise RuntimeError(
+                    f"omnigraph {subcommand} failed (exit {result.returncode}):\n"
+                    f"{err.strip()}"
+                )
+            raise AssertionError("unreachable")  # pragma: no cover
+        finally:
+            if lock_fh is not None:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+                lock_fh.close()
+
+    def _acquire_write_lock(self, subcommand: str):
+        """Hold a per-store exclusive lock for write subcommands (local stores)."""
+        if subcommand not in _WRITE_SUBCOMMANDS or self.graph_uri.startswith(
+            ("http://", "https://", "s3://")
+        ):
+            return None
+        lock_path = Path(f"{self.graph_uri}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_path, "w")  # noqa: SIM115 — released in _run's finally
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        return fh
+
+    def _repair(self, env: dict) -> None:
+        """Reconcile manifest/HEAD drift so the retried write can proceed."""
+        subprocess.run(
+            [self._binary, "repair", "--store", self.graph_uri, "--confirm", "--force"],
             capture_output=True,
             text=True,
             env=env,
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"omnigraph {subcommand} failed (exit {result.returncode}):\n"
-                f"{result.stderr.strip()}"
-            )
-        return result.stdout
 
     @staticmethod
     def _find_binary() -> str:
