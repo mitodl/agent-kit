@@ -54,13 +54,52 @@ def test_link_memory_to_project(server):
 @requires_omnigraph
 def test_list_across_all_repos_with_empty_repo(server):
     p1 = server.workflow_project_create(
-        title="A", description="d", repo="https://github.com/x/one"
+        title="A", description="d", repos=["https://github.com/x/one"]
     )
     p2 = server.workflow_project_create(
-        title="B", description="d", repo="https://github.com/x/two"
+        title="B", description="d", repos=["https://github.com/x/two"]
     )
     all_active = {p["slug"] for p in server.workflow_project_list(repo="")}
     assert {p1["slug"], p2["slug"]} <= all_active
+
+
+@requires_omnigraph
+def test_multi_repo_membership(server):
+    r1, r2 = "https://github.com/x/one", "https://github.com/x/two"
+    proj = server.workflow_project_create(
+        title="multi", description="d", repos=[r1, r2]
+    )
+    assert {r1, r2} <= set(proj["repos"])
+
+    # discoverable from either member repo, not from an unrelated one
+    assert proj["slug"] in {p["slug"] for p in server.workflow_project_list(repo=r1)}
+    assert proj["slug"] in {p["slug"] for p in server.workflow_project_list(repo=r2)}
+    others = {
+        p["slug"]
+        for p in server.workflow_project_list(repo="https://github.com/x/nope")
+    }
+    assert proj["slug"] not in others
+
+
+@requires_omnigraph
+def test_repo_set_accretes_from_session(server):
+    r1, r2 = "https://github.com/x/alpha", "https://github.com/x/beta"
+    proj = server.workflow_project_create(title="accrete", description="d", repos=[r1])
+    assert proj["slug"] not in {
+        p["slug"] for p in server.workflow_project_list(repo=r2)
+    }
+
+    server.workflow_session_start(
+        project_slug=proj["slug"],
+        session_id=uuid.uuid4().hex,
+        phase="discovery",
+        repo=r2,
+    )
+
+    # the session's repo is now part of the project's set
+    got = server.workflow_project_get(proj["slug"])
+    assert {r1, r2} <= set(got["repos"])
+    assert proj["slug"] in {p["slug"] for p in server.workflow_project_list(repo=r2)}
 
 
 @requires_omnigraph

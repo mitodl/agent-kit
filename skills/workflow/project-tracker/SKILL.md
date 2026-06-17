@@ -67,6 +67,28 @@ workflow_session_start(
 )
 ```
 
+### Multi-repo projects
+
+A project can span several repos (e.g. a Django service, its frontend, and the
+infra repo that deploys it) or none (a cross-cutting objective). Pass the set
+via `repos`; the repo you create from is added automatically:
+
+```
+workflow_project_create(
+    title="B2B self-serve analytics",
+    description="StarRocks MVs + FastAPI service surfaced in the MIT Learn site",
+    repos=[
+        "https://github.com/mitodl/mit-learn",
+        "https://github.com/mitodl/ol-infrastructure",
+    ],
+)
+```
+
+You don't have to list every repo upfront — the set **accretes**: whenever
+`workflow_session_start` runs in a repo not yet in the set, that repo is added.
+A project surfaces in the injected context of any repo in its set. Omit `repos`
+entirely (from outside any git repo) to create a "floating" project tied to none.
+
 ## Phase Transitions
 
 When the project moves between phases (e.g. spec is approved, implementation

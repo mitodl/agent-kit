@@ -50,7 +50,10 @@ node WorkflowProject {
     slug:        String @key
     title:       String @index
     description: String
-    repo:        String? @index
+    // Set of canonical repo URIs this project spans (may be many, or none —
+    // a "floating" cross-repo objective). Membership is filtered in Python;
+    // list fields aren't indexed/match-filterable in this engine.
+    repos:       [String]?
     status:      enum(active, completed, abandoned) @index
     phase:       enum(discovery, spec, implementation, delivery) @index
     author:      String @index
@@ -92,7 +95,7 @@ node WorkflowSession {
 node WorkflowTrace {
     slug:         String @key
     project_slug:  String @index
-    repo:         String? @index
+    repos:        [String]?
     title:        String @index
     description:  String
     session_count: I32

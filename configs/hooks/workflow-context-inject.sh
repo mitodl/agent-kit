@@ -52,11 +52,12 @@ run_query() {
         --params "$params" --format json 2>/dev/null || echo "[]"
 }
 
-PROJECTS_RAW=$(run_query list_projects_by_repo_status \
-    "{\"repo\": \"${REPO_SLUG}\", \"status\": \"active\"}")
+# Projects use a repo SET (`repos`), which can't be match-filtered in the query;
+# fetch all active and filter to those whose repo set contains this repo below.
+PROJECTS_RAW=$(run_query list_projects_by_status "{\"status\": \"active\"}")
 TASKS_RAW=$(run_query list_tasks_by_repo "{\"repo\": \"${REPO_SLUG}\"}")
 
-python3 - "$PROJECTS_RAW" "$TASKS_RAW" <<'PYEOF'
+python3 - "$PROJECTS_RAW" "$TASKS_RAW" "$REPO_SLUG" <<'PYEOF'
 import json, sys
 
 _PRIORITY = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
@@ -81,6 +82,10 @@ def rows(raw):
 
 projects = rows(sys.argv[1])
 tasks = rows(sys.argv[2])
+repo_slug = sys.argv[3]
+
+# Keep only projects whose repo set includes this repo.
+projects = [p for p in projects if repo_slug in (p.get("repos") or [])]
 
 # Ready work: not-yet-started tasks whose blockers are all closed (matches the
 # server's task_ready: status open OR blocked, every blocker closed).

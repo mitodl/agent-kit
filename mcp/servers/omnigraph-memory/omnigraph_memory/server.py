@@ -46,6 +46,24 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _project_repos(row: dict) -> list[str]:
+    """The repo set of a project/trace row (empty list when floating)."""
+    return list(row.get("repos") or [])
+
+
+def _merge_repos(*sources: list[str] | str | None) -> list[str]:
+    """Union repo URIs from any mix of lists/scalars, dropping blanks/dupes,
+    preserving first-seen order."""
+    out: list[str] = []
+    for src in sources:
+        if not src:
+            continue
+        for repo in [src] if isinstance(src, str) else src:
+            if repo and repo not in out:
+                out.append(repo)
+    return out
+
+
 def _make_slug(kind: str, title: str) -> str:
     """Generate a stable, human-readable slug from kind and title."""
     prefix = _KIND_PREFIX.get(kind, "mem")
@@ -259,7 +277,7 @@ def workflow_project_create(
     title: str,
     description: str,
     phase: WorkflowPhase = "discovery",
-    repo: str | None = None,
+    repos: list[str] | None = None,
     github_issue: str | None = None,
     tags: list[str] | None = None,
 ) -> dict:
@@ -268,6 +286,11 @@ def workflow_project_create(
 
     Call this at the start of a multi-session project before calling
     ``workflow_session_start``. The returned slug is used to link sessions.
+
+    A project may span several repos (a service that touches a Django app, its
+    frontend, and the infra repo that deploys it) or none (a cross-cutting
+    objective not yet tied to any repo). The repo set also grows automatically
+    as sessions run in new repos — see ``workflow_session_start``.
 
     Parameters
     ----------
@@ -278,8 +301,10 @@ def workflow_project_create(
     phase:
         Starting phase. One of ``discovery``, ``spec``, ``implementation``,
         ``delivery``. Defaults to ``discovery``.
-    repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
+    repos:
+        Canonical repo URIs this project spans. The current repo (detected from
+        ``.git/config``) is added automatically. Omit entirely when creating a
+        repo-less "floating" project from outside any git repo.
     github_issue:
         URL of the GitHub issue tracking this work.
         e.g. ``github.com/mitodl/ol-django/issues/847``.
@@ -288,7 +313,7 @@ def workflow_project_create(
     """
     now = _now_iso()
     slug = _make_slug("workflow_project", title)
-    detected_repo = repo_module.detect(override=repo)
+    repo_set = _merge_repos(repos, repo_module.detect())
 
     client.change(
         "mutations.gq",
@@ -297,7 +322,7 @@ def workflow_project_create(
             "slug": slug,
             "title": title,
             "description": description,
-            "repo": detected_repo,
+            "repos": repo_set or None,
             "status": "active",
             "phase": phase,
             "author": cfg.author,
@@ -308,7 +333,7 @@ def workflow_project_create(
             "updated_at": now,
         },
     )
-    return {"slug": slug, "repo": detected_repo, "phase": phase}
+    return {"slug": slug, "repos": repo_set, "phase": phase}
 
 
 @mcp.tool
@@ -338,7 +363,8 @@ def workflow_project_list(
     Parameters
     ----------
     repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
+        Canonical repo URI to filter to (membership test against each
+        project's repo set). Auto-detected from ``.git/config`` if omitted.
         Pass an empty string to list projects across all repos.
     status:
         ``active`` | ``completed`` | ``abandoned`` | ``None`` for all.
@@ -348,26 +374,15 @@ def workflow_project_list(
     """
     detected_repo = repo_module.detect(override=repo)
 
-    if detected_repo and status:
-        rows = client.read(
-            "read.gq",
-            "list_projects_by_repo_status",
-            {"repo": detected_repo, "status": status},
-        )
-    elif detected_repo:
-        rows = client.read(
-            "read.gq",
-            "list_projects_by_repo",
-            {"repo": detected_repo},
-        )
-    elif status:
-        rows = client.read(
-            "read.gq",
-            "list_projects_by_status",
-            {"status": status},
-        )
+    # `repos` is a list, so membership can't be a graph match-filter — fetch by
+    # status (or all) and filter on set membership in Python.
+    if status:
+        rows = client.read("read.gq", "list_projects_by_status", {"status": status})
     else:
         rows = client.read("read.gq", "list_all_projects", {})
+
+    if detected_repo:
+        rows = [r for r in rows if detected_repo in _project_repos(r)]
 
     if phase:
         rows = [r for r in rows if r.get("phase") == phase]
@@ -484,7 +499,7 @@ def workflow_project_complete(
         {
             "slug": trace_slug,
             "project_slug": slug,
-            "repo": project.get("repo"),
+            "repos": _project_repos(project) or None,
             "title": project.get("title", slug),
             "description": project.get("description", ""),
             "session_count": session_count,
@@ -588,6 +603,25 @@ def workflow_session_start(
         "link_belongs_to",
         {"from": slug, "to": project_slug},
     )
+
+    # Accrete this session's repo into the project's repo set, so a project's
+    # association grows as it's worked across repos without explicit declaration.
+    if detected_repo:
+        project_rows = client.read(
+            "read.gq", "get_workflow_project", {"slug": project_slug}
+        )
+        if project_rows:
+            current = _project_repos(project_rows[0])
+            if detected_repo not in current:
+                client.change(
+                    "mutations.gq",
+                    "update_workflow_project_repos",
+                    {
+                        "slug": project_slug,
+                        "repos": _merge_repos(current, detected_repo),
+                        "updated_at": now,
+                    },
+                )
 
     # Write state file so Stop hook can close this session
     state = {"session_slug": slug, "project_slug": project_slug, "started_at": now}

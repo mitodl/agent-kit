@@ -143,10 +143,11 @@ export default function workflowContextExtension(pi: ExtensionAPI): void {
 			const repo = repoKey(ctx.cwd);
 			if (!repo) return;
 
-			const projects = query("list_projects_by_repo_status", {
-				repo,
+			// Projects use a repo SET (`repos`) that can't be match-filtered in
+			// the query; fetch all active and keep those whose set contains repo.
+			const projects = query("list_projects_by_status", {
 				status: "active",
-			});
+			}).filter((p) => ((p.repos as string[] | null) ?? []).includes(repo));
 			const tasks = query("list_tasks_by_repo", { repo });
 
 			const statusBySlug = new Map(tasks.map((t) => [t.slug, t.status]));

@@ -121,45 +121,26 @@ query get_workflow_project($slug: String) {
         $p: WorkflowProject { slug: $slug }
     }
     return {
-        $p.slug, $p.title, $p.description, $p.repo,
+        $p.slug, $p.title, $p.description, $p.repos,
         $p.status, $p.phase, $p.author, $p.tags,
         $p.github_issue, $p.github_pr,
         $p.created_at, $p.updated_at, $p.completed_at
     }
 }
 
-query list_projects_by_repo_status($repo: String, $status: String) {
-    match {
-        $p: WorkflowProject { repo: $repo, status: $status }
-    }
-    return {
-        $p.slug, $p.title, $p.phase, $p.status, $p.repo,
-        $p.updated_at, $p.github_issue, $p.tags
-    }
-    order { $p.updated_at desc }
-}
-
-query list_projects_by_repo($repo: String) {
-    match {
-        $p: WorkflowProject { repo: $repo }
-    }
-    return {
-        $p.slug, $p.title, $p.phase, $p.status, $p.repo,
-        $p.updated_at, $p.github_issue, $p.tags
-    }
-    order { $p.updated_at desc }
-}
+// Repo membership can't be expressed as a match-shorthand on the `repos` list,
+// so callers fetch by status (or all) and Python-filter on list membership.
 
 query list_projects_by_status($status: String) {
     match {
         $p: WorkflowProject { status: $status }
     }
     return {
-        $p.slug, $p.title, $p.repo, $p.phase,
-        $p.status, $p.updated_at
+        $p.slug, $p.title, $p.repos, $p.phase,
+        $p.status, $p.updated_at, $p.github_issue, $p.tags
     }
     order { $p.updated_at desc }
-    limit 20
+    limit 50
 }
 
 query list_all_projects() {
@@ -167,11 +148,11 @@ query list_all_projects() {
         $p: WorkflowProject
     }
     return {
-        $p.slug, $p.title, $p.repo, $p.phase,
-        $p.status, $p.updated_at
+        $p.slug, $p.title, $p.repos, $p.phase,
+        $p.status, $p.updated_at, $p.github_issue, $p.tags
     }
     order { $p.updated_at desc }
-    limit 20
+    limit 50
 }
 
 // ── Workflow Sessions ─────────────────────────────────────────────
@@ -216,23 +197,10 @@ query get_trace($slug: String) {
     }
     return {
         $t.slug, $t.project_slug, $t.title, $t.description,
-        $t.repo, $t.phases, $t.session_count, $t.duration,
+        $t.repos, $t.phases, $t.session_count, $t.duration,
         $t.outcome, $t.lessons_slug, $t.patterns_slug,
         $t.author, $t.created_at, $t.tags
     }
-}
-
-query list_traces_by_repo($repo: String) {
-    match {
-        $t: WorkflowTrace { repo: $repo }
-    }
-    return {
-        $t.slug, $t.project_slug, $t.title, $t.repo,
-        $t.phases, $t.session_count, $t.duration,
-        $t.outcome, $t.created_at
-    }
-    order { $t.created_at desc }
-    limit 50
 }
 
 query list_all_traces() {
@@ -240,7 +208,7 @@ query list_all_traces() {
         $t: WorkflowTrace
     }
     return {
-        $t.slug, $t.project_slug, $t.title, $t.repo,
+        $t.slug, $t.project_slug, $t.title, $t.repos,
         $t.phases, $t.session_count, $t.duration,
         $t.outcome, $t.created_at
     }
