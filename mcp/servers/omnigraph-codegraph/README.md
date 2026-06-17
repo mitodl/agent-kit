@@ -34,6 +34,40 @@ just a string that resolves in the code graph via `code_find_definition` /
 `get_symbol`. This keeps the team-synced memory graph independent of any
 machine's local code index.
 
+## Cross-repo context bridge (Layer 2.5)
+
+The per-repo graph stops at a repo boundary, but service-oriented architectures
+couple repos through **shared contracts**: an env var that infra sets and an app
+reads, an HTTP endpoint one service serves and another calls, a package one repo
+publishes and others import. The bridge records these as **interface bindings**
+in a single shared, local-only store (`_bridge.omni`, a sibling of the per-repo
+stores) so linkages can be queried across every indexed repo.
+
+It is **zero-config**: every `index`/reindex of a repo also extracts that repo's
+bindings into the bridge store. Linkages are then computed by grouping bindings
+on `(kind, key_norm)` — no registry of repos to maintain, no link edges.
+
+Four binding kinds (all extraction is **heuristic/syntactic**, like the symbol
+edges):
+
+| Kind | Provider | Consumer | Join key |
+|---|---|---|---|
+| `env_var` | Pulumi `<app>:env_vars` keys in `Pulumi.*.yaml` | `get_string("NAME",…)` / `os.environ` / `process.env.X` / `env("NAME")` | the `UPPER_SNAKE` name |
+| `endpoint` | drf-spectacular OpenAPI spec (`paths.<path>.<method>`) | `/api/…` path literals in TS (generated client / fetch) | normalized path (params → `{}`) |
+| `package` | a repo whose `package.json` name is `@mitodl/*` | `from mitol.*` / `include("mitol.*")` / `@mitodl/*` imports | the package name |
+| `service` | `applications/<svc>/__main__.py` (repo / image / service name) | the deployed repo itself (key_norm = its canonical URI) | `repo:<uri>` / `image:…` / `name:…` |
+
+Generic env names (`DEBUG`, `PORT`, `SECRET_KEY`, …) are flagged `generic` and
+excluded from cross-repo impact fan-out so a trivial edit doesn't appear to touch
+every repo.
+
+The bridge is written in a **separate phase after the per-repo store write**, so
+the two stores' advisory write locks never nest (no deadlock) and a bridge
+failure never corrupts a per-repo store. A full-repo index purges bindings by
+repo and runs the repo-level provider extractors (OpenAPI / Pulumi / service /
+`package.json`); a narrow target (single file via the reindex hook) only
+refreshes the files it touched, leaving sibling bindings intact.
+
 ## Heuristic edges (important)
 
 `Defines` and `Contains` are exact (derived from the syntax tree). But:
@@ -119,7 +153,9 @@ Add the MCP server to your agent (snippets in `config/`):
 | `OMNIGRAPH_CODEGRAPH_REPO` | — | override the detected repo slug |
 
 The store URI for a repo is `<dir>/<sanitized-slug>.omni`, where the slug's `/`
-and `:` are replaced with `_`.
+and `:` are replaced with `_`. The shared cross-repo bridge lives alongside them
+at `<dir>/_bridge.omni` and is created lazily on the first index that yields any
+bindings.
 
 ## MCP tools
 
@@ -136,6 +172,16 @@ indexer first).
 | `code_symbols_in_file(path)` | symbols defined in a file |
 | `code_search_symbol(query)` | BM25 search over symbol qualified names |
 | `code_reindex(path=None)` | index/re-index the repo or a subpath |
+
+Cross-repo bridge tools (resolve the shared `_bridge.omni` store; return `[]` /
+an empty shape when it does not exist yet):
+
+| Tool | Returns |
+|------|---------|
+| `code_interface_providers(kind, key)` | repos that **provide** a contract (`env_var`/`endpoint`/`package`/`service`) |
+| `code_interface_consumers(kind, key)` | repos that **consume** it (`endpoint` keys are normalized from raw paths) |
+| `code_cross_repo_impact(symbol_id)` | the symbol's own bindings + every binding for those same contracts in **other** repos |
+| `code_interface_search(query, kind=None)` | BM25 search over interface bindings by normalized key |
 
 ## CLI
 

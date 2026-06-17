@@ -15,8 +15,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import bridge as bridge_module
+from . import bridge_extractors
 from . import config as cfg_module
 from . import repo as repo_module
+from .bridge_extractors import ParsedBinding
 from .graph import OmnigraphClient
 from .store import ensure_store
 
@@ -139,6 +142,8 @@ class ParsedFile:
     inherits: dict[str, list[str]] = field(default_factory=dict)
     # imported identifier names
     imports: set[str] = field(default_factory=set)
+    # cross-repo interface bindings (env vars, packages, endpoints) in this file
+    bindings: list[ParsedBinding] = field(default_factory=list)
 
 
 @dataclass
@@ -148,6 +153,7 @@ class IndexStats:
     skipped: int = 0
     symbols: int = 0
     edges: int = 0
+    bindings: int = 0
     errors: int = 0
 
 
@@ -189,6 +195,8 @@ def index_path(
     stats = IndexStats()
     records: list[dict] = []
     reindexed_file_ids: list[str] = []
+    bindings: list[ParsedBinding] = []
+    touched_files: list[str] = []
 
     for path in _collect_files(target):
         stats.scanned += 1
@@ -205,6 +213,8 @@ def index_path(
         if was_existing:
             reindexed_file_ids.append(parsed.file_id)
         records.extend(_file_records(parsed, slug, stats))
+        bindings.extend(parsed.bindings)
+        touched_files.append(parsed.path)
         stats.indexed += 1
 
     # Drop stale data for changed files (new files have nothing to delete), then
@@ -212,6 +222,24 @@ def index_path(
     for file_id in reindexed_file_ids:
         _delete_file_data(file_id, client)
     client.load(_dedupe(records), mode="merge")
+
+    # Cross-repo bridge — a SEPARATE phase after the per-repo store write, so the
+    # two stores' write locks never nest. A full-repo index (target is the repo
+    # root) also runs the repo-level provider extractors and purges by repo;
+    # narrower targets only refresh the files they touched.
+    full_repo = target.is_dir() and target.resolve() == base.resolve()
+    if full_repo:
+        bindings.extend(bridge_extractors.extract_repo_bindings(base, slug))
+    try:
+        stats.bindings = bridge_module.write_bindings(
+            bindings,
+            slug,
+            cfg,
+            full_repo=full_repo,
+            touched_files=tuple(touched_files),
+        )
+    except Exception as exc:  # noqa: BLE001 — bridge is best-effort, never fatal
+        print(f"codegraph: bridge update failed: {exc}", file=sys.stderr)
 
     return stats
 
@@ -474,7 +502,36 @@ def _parse_file(
         if cap_name.startswith("import."):
             parsed.imports.add(_node_text(node, raw))
 
+    # Cross-repo interface bindings (env vars, packages, endpoint consumers).
+    # Attribute each to its enclosing symbol by line containment.
+    parsed.bindings = bridge_extractors.extract_file_bindings(
+        raw.decode("utf-8", "replace"), spec.name, rel
+    )
+    for binding in parsed.bindings:
+        binding.symbol_id = _symbol_at_line(parsed, binding.line)
+
     return parsed
+
+
+def _symbol_at_line(parsed: ParsedFile, line: int | None) -> str | None:
+    """The smallest non-module symbol whose range contains ``line``.
+
+    Falls back to the module symbol so every binding has a stable owner.
+    """
+    if line is None:
+        return parsed.symbols[0].id if parsed.symbols else None
+    best: ParsedSymbol | None = None
+    for sym in parsed.symbols:
+        if sym.qualified_name == "<module>":
+            continue
+        if sym.start_line <= line <= sym.end_line:
+            if best is None or (sym.end_line - sym.start_line) < (
+                best.end_line - best.start_line
+            ):
+                best = sym
+    if best is not None:
+        return best.id
+    return parsed.symbols[0].id if parsed.symbols else None
 
 
 _DEF_NODE_TYPES = {

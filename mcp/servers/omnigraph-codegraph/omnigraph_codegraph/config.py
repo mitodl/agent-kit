@@ -6,7 +6,14 @@ from pathlib import Path
 # Bundled query files, resolved relative to this file.
 _QUERIES_DIR = Path(__file__).parent.parent / "queries"
 _SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "code-schema.pg"
+_BRIDGE_SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "bridge-schema.pg"
 _DEFAULT_CODE_DIR = Path.home() / ".local" / "share" / "omnigraph-memory" / "code"
+
+# Filename of the single shared cross-repo bridge store, a sibling of the
+# per-repo `<slug>.omni` stores in code_dir. Not routed through sanitize_slug
+# (whose .strip("_") would eat the leading underscore); no real repo slug
+# resolves to this name.
+BRIDGE_STORE_NAME = "_bridge.omni"
 
 
 @dataclass(frozen=True)
@@ -23,6 +30,9 @@ class Config:
     schema_file: Path
     """Path to code-schema.pg, used to lazily init a per-repo store."""
 
+    bridge_schema_file: Path
+    """Path to bridge-schema.pg, used to lazily init the shared bridge store."""
+
 
 def load() -> Config:
     """Load config from environment. All variables are optional with defaults."""
@@ -36,6 +46,7 @@ def load() -> Config:
         ),
         queries_dir=_QUERIES_DIR,
         schema_file=_SCHEMA_FILE,
+        bridge_schema_file=_BRIDGE_SCHEMA_FILE,
     )
 
 
@@ -48,3 +59,9 @@ def store_path(slug: str, code_dir: Path | None = None) -> Path:
     """Resolve the per-repo store path for ``slug``."""
     base = code_dir or load().code_dir
     return base / f"{sanitize_slug(slug)}.omni"
+
+
+def bridge_store_path(code_dir: Path | None = None) -> Path:
+    """Resolve the shared cross-repo bridge store path."""
+    base = code_dir or load().code_dir
+    return base / BRIDGE_STORE_NAME

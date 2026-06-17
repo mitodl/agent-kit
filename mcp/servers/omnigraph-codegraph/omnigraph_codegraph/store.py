@@ -51,6 +51,47 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> Path:
     return store
 
 
+def bridge_store(config: cfg_module.Config | None = None) -> Path:
+    """Return the shared bridge store path without creating it."""
+    cfg = config or cfg_module.load()
+    return cfg_module.bridge_store_path(cfg.code_dir)
+
+
+def ensure_bridge_store(config: cfg_module.Config | None = None) -> Path:
+    """Resolve the shared bridge store, initialising it from bridge-schema.pg.
+
+    Mirrors ``ensure_store`` but uses the bridge schema and the fixed
+    ``_bridge.omni`` filename. ``schema apply`` builds the FTS index on
+    ``key_norm`` that ``search_bindings`` needs.
+    """
+    cfg = config or cfg_module.load()
+    store = cfg_module.bridge_store_path(cfg.code_dir)
+    if store.exists():
+        return store
+
+    store.parent.mkdir(parents=True, exist_ok=True)
+    binary = _binary()
+    subprocess.run(
+        [binary, "init", "--schema", str(cfg.bridge_schema_file), str(store)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            binary,
+            "schema",
+            "apply",
+            "--schema",
+            str(cfg.bridge_schema_file),
+            str(store),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return store
+
+
 def _binary() -> str:
     binary = shutil.which("omnigraph")
     if binary is None:

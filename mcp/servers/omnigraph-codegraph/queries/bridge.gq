@@ -1,0 +1,94 @@
+// Cross-Repo Context Bridge — read / delete / search queries (_bridge.omni).
+//
+// Linkages are NOT edges: they are computed by grouping InterfaceBinding rows on
+// (kind, key_norm) in Python. These queries just filter + search the flat node.
+// Read filters use the match-shorthand `{ field: $param }` only (standalone
+// `where`/quoted-key parse-errors in reads); deletes use `where`.
+
+// ── Deletes (reindex cleanup) ─────────────────────────────────────
+// Full-repo purge: drop every binding for a repo before a full reload (also
+// clears bindings for files that were deleted from disk).
+
+query delete_bindings_for_repo($repo: String) {
+    delete InterfaceBinding where repo = $repo
+}
+
+// Incremental per-file purge: drop just one source file's bindings so a single
+// PostToolUse reindex doesn't wipe the repo's other bindings. Keyed on the
+// composite repo_file ("repo|file") because delete `where` takes a single
+// condition (no compound `and`).
+
+query delete_bindings_in_file($repo_file: String) {
+    delete InterfaceBinding where repo_file = $repo_file
+}
+
+// ── Grouping reads ────────────────────────────────────────────────
+// All bindings for a contract key (the workhorse behind providers / consumers /
+// impact grouping).
+
+query bindings_by_key($kind: String, $key_norm: String) {
+    match {
+        $b: InterfaceBinding { kind: $kind, key_norm: $key_norm }
+    }
+    return {
+        $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
+        $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic
+    }
+    order { $b.repo asc }
+    limit 500
+}
+
+// Same filtered to one role — backs code_interface_providers / _consumers.
+
+query bindings_by_key_role($kind: String, $key_norm: String, $role: String) {
+    match {
+        $b: InterfaceBinding { kind: $kind, key_norm: $key_norm, role: $role }
+    }
+    return {
+        $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
+        $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic
+    }
+    order { $b.repo asc }
+    limit 500
+}
+
+// Bindings attributed to a symbol — first half of code_cross_repo_impact.
+
+query bindings_for_symbol($symbol_id: String) {
+    match {
+        $b: InterfaceBinding { symbol_id: $symbol_id }
+    }
+    return {
+        $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
+        $b.file, $b.symbol_id, $b.generic
+    }
+    limit 500
+}
+
+// ── Full-text search (BM25 on key_norm) ───────────────────────────
+
+query search_bindings($query: String) {
+    match {
+        $b: InterfaceBinding
+        search($b.key_norm, $query)
+    }
+    return {
+        $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
+        $b.file, $b.symbol_id, $b.framework, $b.generic
+    }
+    order { bm25($b.key_norm, $query) desc }
+    limit 100
+}
+
+query search_bindings_by_kind($query: String, $kind: String) {
+    match {
+        $b: InterfaceBinding { kind: $kind }
+        search($b.key_norm, $query)
+    }
+    return {
+        $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
+        $b.file, $b.symbol_id, $b.framework, $b.generic
+    }
+    order { bm25($b.key_norm, $query) desc }
+    limit 100
+}

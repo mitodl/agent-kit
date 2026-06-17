@@ -3,6 +3,7 @@ from typing import Literal
 
 from fastmcp import FastMCP
 
+from . import bridge_extractors
 from . import config as cfg_module
 from . import indexer
 from . import repo as repo_module
@@ -39,6 +40,17 @@ def _client() -> OmnigraphClient | None:
     if slug is None:
         return None
     store = store_module.store_for_repo(slug, cfg)
+    if not store.exists():
+        return None
+    key = str(store)
+    if key not in _clients:
+        _clients[key] = OmnigraphClient(key, cfg.queries_dir)
+    return _clients[key]
+
+
+def _bridge_client() -> OmnigraphClient | None:
+    """Resolve the shared cross-repo bridge client, or None if not built yet."""
+    store = store_module.bridge_store(cfg)
     if not store.exists():
         return None
     key = str(store)
@@ -246,6 +258,131 @@ def code_search_symbol(query: str, kind: SymbolKind | None = None) -> list[dict]
     return client.read("read.gq", "search_symbols", {"query": query})
 
 
+BindingKind = Literal["env_var", "package", "service", "endpoint"]
+
+
+@mcp.tool
+def code_interface_providers(kind: BindingKind, key: str) -> list[dict]:
+    """
+    Find repos that PROVIDE a cross-repo contract ``key`` of ``kind``.
+
+    Spans every indexed repo via the shared bridge store. Examples:
+    ``code_interface_providers("env_var", "MITOL_APP_BASE_URL")`` returns the
+    ol-infrastructure binding that sets it; ``("endpoint", "/api/v1/courses/")``
+    returns the Django/OpenAPI route that serves it.
+
+    Parameters
+    ----------
+    kind:
+        ``env_var``, ``package``, ``service``, or ``endpoint``.
+    key:
+        The contract value. For ``endpoint`` a raw path is accepted and
+        normalized (path params collapse to ``{}``).
+    """
+    return _bindings_by_role(kind, key, "provider")
+
+
+@mcp.tool
+def code_interface_consumers(kind: BindingKind, key: str) -> list[dict]:
+    """
+    Find repos that CONSUME a cross-repo contract ``key`` of ``kind``.
+
+    The mirror of ``code_interface_providers`` — e.g. which repos read an env var
+    or call an API endpoint. Spans every indexed repo.
+
+    Parameters
+    ----------
+    kind:
+        ``env_var``, ``package``, ``service``, or ``endpoint``.
+    key:
+        The contract value (``endpoint`` paths are normalized).
+    """
+    return _bindings_by_role(kind, key, "consumer")
+
+
+def _bindings_by_role(kind: str, key: str, role: str) -> list[dict]:
+    client = _bridge_client()
+    if client is None:
+        return []
+    key_norm = bridge_extractors.normalize_key(kind, key)
+    return client.read(
+        "bridge.gq",
+        "bindings_by_key_role",
+        {"kind": kind, "key_norm": key_norm, "role": role},
+    )
+
+
+@mcp.tool
+def code_cross_repo_impact(symbol_id: str) -> dict:
+    """
+    Find the cross-repo surface of a symbol.
+
+    Looks up the interface bindings attributed to ``symbol_id`` (env vars it
+    reads, packages it imports, endpoints it serves/calls), then returns every
+    binding for those same contracts in OTHER repos — i.e. who else is coupled to
+    this symbol across the SOA. Returns a shaped empty result when the symbol has
+    no cross-repo surface or the bridge store does not exist yet.
+
+    Generic env vars (DEBUG, PORT, …) are flagged ``generic`` and excluded from
+    the cross-repo fan-out so a trivial edit doesn't appear to touch every repo.
+
+    Parameters
+    ----------
+    symbol_id:
+        Full symbol id ``repo#path::QualifiedName``.
+    """
+    empty = {"symbol_id": symbol_id, "bindings": [], "cross_repo": []}
+    client = _bridge_client()
+    if client is None:
+        return empty
+
+    own = client.read("bridge.gq", "bindings_for_symbol", {"symbol_id": symbol_id})
+    if not own:
+        return empty
+
+    own_repo = symbol_id.split("#", 1)[0]
+    seen: set[str] = set()
+    cross: list[dict] = []
+    for b in own:
+        if b.get("generic"):
+            continue
+        for other in client.read(
+            "bridge.gq",
+            "bindings_by_key",
+            {"kind": b["kind"], "key_norm": b["key_norm"]},
+        ):
+            if other["repo"] == own_repo or other["slug"] in seen:
+                continue
+            seen.add(other["slug"])
+            cross.append(other)
+    return {"symbol_id": symbol_id, "bindings": own, "cross_repo": cross}
+
+
+@mcp.tool
+def code_interface_search(query: str, kind: BindingKind | None = None) -> list[dict]:
+    """
+    BM25 search over cross-repo interface bindings (by normalized key).
+
+    Use to discover contract keys when you only remember part of a name —
+    e.g. ``code_interface_search("BASE_URL")`` or ``("courses", kind="endpoint")``.
+
+    Parameters
+    ----------
+    query:
+        Search terms matched against the normalized key.
+    kind:
+        Optional filter to one kind.
+    """
+    client = _bridge_client()
+    if client is None:
+        return []
+    if kind:
+        return client.read(
+            "bridge.gq", "search_bindings_by_kind", {"query": query, "kind": kind}
+        )
+    return client.read("bridge.gq", "search_bindings", {"query": query})
+
+
 @mcp.tool
 def code_reindex(path: str | None = None, force: bool = False) -> dict:
     """
@@ -272,5 +409,6 @@ def code_reindex(path: str | None = None, force: bool = False) -> dict:
         "skipped": stats.skipped,
         "symbols": stats.symbols,
         "edges": stats.edges,
+        "bindings": stats.bindings,
         "errors": stats.errors,
     }

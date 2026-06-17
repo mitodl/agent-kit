@@ -34,7 +34,7 @@ def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:
         f"{action} {path}: "
         f"scanned={stats.scanned} indexed={stats.indexed} "
         f"skipped={stats.skipped} symbols={stats.symbols} "
-        f"edges={stats.edges} errors={stats.errors}"
+        f"edges={stats.edges} bindings={stats.bindings} errors={stats.errors}"
     )
 
 
