@@ -1,0 +1,48 @@
+[project]
+name = "witan-code"
+version = "0.1.0"
+description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "fastmcp>=3.4.2,<4",
+    "cyclopts>=4,<5",
+    "tree-sitter>=0.25,<0.26",
+    # Individual grammar wheels (not tree-sitter-language-pack): each returns a
+    # standalone tree_sitter.Language usable with tree_sitter.Parser/Query. Pins
+    # are tight on purpose — a grammar major can bump the ABI / binding (see the
+    # language-pack 1.9 binding break). Adding a language = add its wheel here +
+    # an entry in indexer._GRAMMAR_MODULES.
+    "tree-sitter-python>=0.25,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+    "tree-sitter-bash>=0.25,<0.26",
+    "tree-sitter-yaml>=0.7,<0.8",
+    "pyyaml>=6,<7",
+    "rich>=13",
+]
+
+[project.scripts]
+witan-code = "witan_code.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+test = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["witan_code"]
+
+# The MCP server and indexer read these sibling dirs at runtime via
+# Path(__file__).parent.parent; force-include them in the wheel so uvx git
+# installs work.
+[tool.hatch.build.targets.wheel.force-include]
+"queries" = "queries"
+"schema" = "schema"

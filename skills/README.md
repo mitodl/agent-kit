@@ -29,6 +29,9 @@ Skills are organized by **category**. Each skill lives in
 | containers | [`docker-uv-image-builds`](./containers/docker-uv-image-builds/SKILL.md) | `mitodl/<service>` naming, git short-ref tags, relocatable `uv` venvs |
 | workflow | [`validate-before-commit`](./workflow/validate-before-commit/SKILL.md) | Run `pre-commit` → `mypy` → `pulumi preview` proactively before declaring done |
 | workflow | [`creating-skills`](./workflow/creating-skills/SKILL.md) | Create a new skill: frontmatter, category placement, progressive disclosure, index updates |
+| workflow | [`agent-memory`](./workflow/agent-memory/SKILL.md) | Read/write team shared knowledge graph; load project facts, store patterns and lessons |
+| workflow | [`project-tracker`](./workflow/project-tracker/SKILL.md) | Track multi-session engineering projects; link sessions without handoffs; build workflow corpus |
+| workflow | [`workflow`](./workflow/session-start/SKILL.md) | `/workflow` — interactive session linker: list active projects, pick one, call `workflow_session_start`; also `end` and `list` subcommands |
 | process | [`create-ol-github-issue`](./process/create-ol-github-issue/SKILL.md) | Create mitodl GitHub issues using org standard templates |
 | process | [`create-ol-pull-request`](./process/create-ol-pull-request/SKILL.md) | Create mitodl pull requests using the org's standard PR template |
 | process | [`generate-standup`](./process/generate-standup/SKILL.md) | Generate and post a daily standup from GitHub activity to the mitodl/hq Check-ins discussion |
