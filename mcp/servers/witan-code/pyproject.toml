@@ -10,7 +10,10 @@ dependencies = [
     "fastmcp>=3.4.2,<4",
     "cyclopts>=4,<5",
     "tree-sitter>=0.25,<0.26",
-    "tree-sitter-language-pack>=1.8,<2",
+    # 1.9+ returns a `builtins.Language` that `tree_sitter.Parser` rejects
+    # ("argument 1 must be tree_sitter.Language") — breaks indexing in any fresh
+    # resolve (uvx/uv tool). Pin to the 1.8 line, which returns tree_sitter.Language.
+    "tree-sitter-language-pack>=1.8,<1.9",
     "pyyaml>=6,<7",
     "rich>=13",
 ]
