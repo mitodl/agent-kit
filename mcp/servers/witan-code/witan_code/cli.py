@@ -145,9 +145,24 @@ def _code_store_stats(store: Path) -> tuple[str, str]:
         rows = client.read("read.gq", "all_file_hashes", {})
         if rows:
             return rows[0]["slug"].split("#", 1)[0], str(len(rows))
-        return store.stem, "0"
-    except Exception:  # noqa: BLE001 — degrade to the filename
-        return store.stem, "?"
+        return _repo_from_stem(store.stem), "0"
+    except Exception:  # noqa: BLE001 — degrade to the (best-effort) repo name
+        return _repo_from_stem(store.stem), "?"
+
+
+def _repo_from_stem(stem: str) -> str:
+    """Best-effort canonical repo URI from a sanitized store filename.
+
+    The store name is ``sanitize_slug(repo)`` (``[/:]+`` collapsed to ``_``), so
+    a 0-file store has no CodeFile to read the exact repo from. For the common
+    ``scheme://host/path`` slug, reconstruct it: ``https_github.com_org_repo`` →
+    ``https://github.com/org/repo``. A schemeless local slug is returned as-is.
+    """
+    for scheme in ("https", "http", "ssh"):
+        prefix = f"{scheme}_"
+        if stem.startswith(prefix):
+            return f"{scheme}://{stem[len(prefix) :].replace('_', '/')}"
+    return stem
 
 
 def _dir_size(path: Path) -> int:
