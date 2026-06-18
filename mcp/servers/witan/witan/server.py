@@ -145,6 +145,39 @@ def memory_search(
 
 
 @mcp.tool
+def memory_list(
+    kind: MemoryKind | None = None,
+    repo: str | None = None,
+) -> list[dict]:
+    """
+    List memories (no search), optionally filtered by kind and/or repo.
+
+    Use to browse stored memories of a given kind — e.g. all ``lesson`` or
+    ``pattern`` memories — without a search query. Ordered most-recent first.
+
+    Parameters
+    ----------
+    kind:
+        Optional filter: ``pattern``, ``project_fact``, ``lesson``, or
+        ``agent_context``. Omit to list all kinds.
+    repo:
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted; pass
+        an empty string to list across all repos.
+    """
+    detected = repo_module.detect(override=repo)
+
+    if detected and kind:
+        return client.read(
+            "read.gq", "list_memories_by_repo_kind", {"repo": detected, "kind": kind}
+        )
+    if detected:
+        return client.read("read.gq", "list_memories_by_repo", {"repo": detected})
+    if kind:
+        return client.read("read.gq", "list_memories_by_kind", {"kind": kind})
+    return client.read("read.gq", "list_memories", {})
+
+
+@mcp.tool
 def memory_store(
     kind: MemoryKind,
     title: str,

@@ -63,6 +63,60 @@ query search_by_repo_and_kind($query: String, $repo: String, $kind: String) {
     limit 20
 }
 
+// ── Listing (no search; filtered by repo and/or kind) ─────────────
+
+query list_memories() {
+    match {
+        $m: Memory
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+query list_memories_by_repo($repo: String) {
+    match {
+        $m: Memory { repo: $repo }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+query list_memories_by_kind($kind: String) {
+    match {
+        $m: Memory { kind: $kind }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+query list_memories_by_repo_kind($repo: String, $kind: String) {
+    match {
+        $m: Memory { repo: $repo, kind: $kind }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
 // ── Single node fetch ─────────────────────────────────────────────
 
 query get_memory($slug: String) {

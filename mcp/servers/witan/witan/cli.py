@@ -390,15 +390,15 @@ def memory(
     all_repos: bool = False,
     limit: int = 20,
 ) -> None:
-    """Search memory (BM25) or, with no query, list the repo's project facts."""
+    """Search memory (BM25), or with no query list memories (filtered by --kind)."""
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
     if query:
         rows = _fn(s.memory_search)(query, repo=repo_arg, kind=kind)[:limit]
         title = f"Memory search: {query!r}"
     else:
-        rows = _fn(s.memory_get_project_facts)(repo=repo_arg)[:limit]
-        title = "Project facts"
+        rows = _fn(s.memory_list)(kind=kind, repo=repo_arg)[:limit]
+        title = f"Memories ({kind})" if kind else "Memories"
     if not rows:
         console.print("[dim]No memories.[/dim]")
         return
