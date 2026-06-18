@@ -252,7 +252,11 @@ def run(
 
     if claim:
         author = cfg_module.load().author
-        _fn(s.task_update)(slug, status="in_progress", assignee=author)
+        res = _fn(s.task_claim)(slug, assignee=author) or {}
+        if not res.get("claimed"):
+            reason = res.get("held_by") or res.get("reason") or "unavailable"
+            console.print(f"[red]Could not claim {slug} ({reason}).[/red]")
+            raise SystemExit(1)
         console.print(f"[cyan]Claimed {slug} (assignee={author}).[/cyan]")
 
     console.print(f"[dim]Launching: {agent}[/dim]")
@@ -316,7 +320,7 @@ def projects(
         console.print("[dim]No projects.[/dim]")
         return
     table = Table(title="Workflow projects", header_style="bold")
-    for col in ("status", "phase", "slug", "title", "repo"):
+    for col in ("status", "phase", "slug", "title", "repos"):
         table.add_column(col)
     for r in rows:
         table.add_row(
@@ -324,7 +328,7 @@ def projects(
             r.get("phase", ""),
             r["slug"],
             r.get("title", ""),
-            r.get("repo", "") or "",
+            ", ".join(r.get("repos") or []),
         )
     console.print(table)
 
@@ -340,7 +344,7 @@ def project(slug: str) -> None:
     console.print(f"[bold]{p['slug']}[/bold]  {p.get('title', '')}")
     console.print(
         f"  status={_styled(p.get('status', ''), _STATUS_STYLE)}  "
-        f"phase={p.get('phase')}  repo={p.get('repo')}"
+        f"phase={p.get('phase')}  repos={', '.join(p.get('repos') or []) or '—'}"
     )
     if p.get("github_issue"):
         console.print(f"  issue: {p['github_issue']}")

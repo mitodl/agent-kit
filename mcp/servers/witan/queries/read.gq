@@ -205,7 +205,10 @@ query list_projects_by_status($status: String) {
         $p.status, $p.updated_at, $p.github_issue, $p.tags
     }
     order { $p.updated_at desc }
-    limit 50
+    // Unbounded: repo membership is filtered in Python (repos is a list), so the
+    // full active set must be fetched before filtering — a small cap would drop a
+    // repo's projects when many projects exist across repos. Callers slice for display.
+    limit 1000000
 }
 
 query list_all_projects() {
@@ -217,7 +220,10 @@ query list_all_projects() {
         $p.status, $p.updated_at, $p.github_issue, $p.tags
     }
     order { $p.updated_at desc }
-    limit 50
+    // Unbounded: repo membership is filtered in Python (repos is a list), so the
+    // full active set must be fetched before filtering — a small cap would drop a
+    // repo's projects when many projects exist across repos. Callers slice for display.
+    limit 1000000
 }
 
 // ── Workflow Sessions ─────────────────────────────────────────────

@@ -48,7 +48,16 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> Path:
         capture_output=True,
         text=True,
     )
+
+    # Record the canonical repo URI in a sidecar so listings can show it even for
+    # a 0-file store (sanitize_slug is lossy — its `_` collapse isn't reversible).
+    repo_sidecar(store).write_text(slug)
     return store
+
+
+def repo_sidecar(store: Path) -> Path:
+    """Sidecar file next to a store holding its canonical repo URI."""
+    return store.parent / f"{store.name}.repo"
 
 
 def bridge_store(config: cfg_module.Config | None = None) -> Path:

@@ -145,9 +145,20 @@ def _code_store_stats(store: Path) -> tuple[str, str]:
         rows = client.read("read.gq", "all_file_hashes", {})
         if rows:
             return rows[0]["slug"].split("#", 1)[0], str(len(rows))
-        return _repo_from_stem(store.stem), "0"
+        return _store_repo(store), "0"
     except Exception:  # noqa: BLE001 — degrade to the (best-effort) repo name
-        return _repo_from_stem(store.stem), "?"
+        return _store_repo(store), "?"
+
+
+def _store_repo(store: Path) -> str:
+    """Canonical repo URI for a store: the exact sidecar if present, else a
+    best-effort reconstruction from the (lossily) sanitized filename."""
+    from . import store as store_module
+
+    sidecar = store_module.repo_sidecar(store)
+    if sidecar.exists():
+        return sidecar.read_text().strip()
+    return _repo_from_stem(store.stem)
 
 
 def _repo_from_stem(stem: str) -> str:
