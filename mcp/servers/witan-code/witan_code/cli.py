@@ -98,6 +98,81 @@ def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:
     )
 
 
+# ── Indexed repositories ─────────────────────────────────────────────────────
+
+
+@app.command
+def repos() -> None:
+    """List the repositories that have a code graph indexed."""
+    from rich.console import Console
+    from rich.table import Table
+
+    from . import config as cfg_module
+
+    console = Console()
+    code_dir = cfg_module.load().code_dir
+    if not code_dir.is_dir():
+        console.print(f"[dim]No code stores at {code_dir}.[/dim]")
+        return
+    # Exclude the shared cross-repo bridge store — it isn't a repo.
+    stores = [
+        p
+        for p in sorted(code_dir.glob("*.omni"))
+        if p.name != cfg_module.BRIDGE_STORE_NAME
+    ]
+    if not stores:
+        console.print(f"[dim]No indexed repositories in {code_dir}.[/dim]")
+        return
+
+    table = Table(title="Indexed repositories", header_style="bold")
+    for col in ("repo", "files", "size", "last indexed"):
+        table.add_column(col)
+    for store in stores:
+        repo_uri, file_count = _code_store_stats(store)
+        table.add_row(
+            repo_uri, file_count, _human_size(_dir_size(store)), _mtime(store)
+        )
+    console.print(table)
+
+
+def _code_store_stats(store: Path) -> tuple[str, str]:
+    """Return (repo_uri, file_count) by reading the store; fall back to the name."""
+    try:
+        from . import config as cfg_module
+        from .graph import OmnigraphClient
+
+        client = OmnigraphClient(str(store), cfg_module.load().queries_dir)
+        rows = client.read("read.gq", "all_file_hashes", {})
+        if rows:
+            return rows[0]["slug"].split("#", 1)[0], str(len(rows))
+        return store.stem, "0"
+    except Exception:  # noqa: BLE001 — degrade to the filename
+        return store.stem, "?"
+
+
+def _dir_size(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _human_size(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}GB"
+
+
+def _mtime(path: Path) -> str:
+    import datetime
+
+    ts = max(
+        (f.stat().st_mtime for f in path.rglob("*") if f.is_file()),
+        default=path.stat().st_mtime,
+    )
+    return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
 def cli() -> None:
     app()
 

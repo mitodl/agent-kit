@@ -12,9 +12,7 @@ It is a thin presentation layer: every query goes through the same
 
 from __future__ import annotations
 
-import os
 import subprocess
-from pathlib import Path
 from typing import Literal
 
 import cyclopts
@@ -413,82 +411,6 @@ def memory(
             r.get("repo", "") or "",
         )
     console.print(table)
-
-
-# ── Indexed code repos ───────────────────────────────────────────────────────
-
-_CODE_DIR = Path(
-    os.environ.get(
-        "WITAN_CODE_DIR",
-        str(Path.home() / ".local" / "share" / "witan" / "code"),
-    )
-)
-
-
-@app.command
-def repos() -> None:
-    """List the repositories that have a code graph indexed."""
-    if not _CODE_DIR.is_dir():
-        console.print(f"[dim]No code stores at {_CODE_DIR}.[/dim]")
-        return
-    stores = sorted(_CODE_DIR.glob("*.omni"))
-    if not stores:
-        console.print(f"[dim]No code stores at {_CODE_DIR}.[/dim]")
-        return
-
-    table = Table(title="Indexed repositories", header_style="bold")
-    for col in ("repo", "files", "size", "last indexed"):
-        table.add_column(col)
-    for store in stores:
-        repo_uri, file_count = _code_store_stats(store)
-        table.add_row(
-            repo_uri,
-            str(file_count),
-            _human_size(_dir_size(store)),
-            _mtime(store),
-        )
-    console.print(table)
-
-
-def _code_store_stats(store: Path) -> tuple[str, str]:
-    """Return (repo_uri, file_count) by reading the store; fall back to the name.
-
-    Uses the bundled ``code_stats.gq`` (queried against the code store's CodeFile
-    nodes) so this works whether the package is run from a checkout or installed.
-    """
-    try:
-        from .graph import OmnigraphClient
-
-        client = OmnigraphClient(str(store), cfg_module.load().queries_dir)
-        rows = client.read("code_stats.gq", "repo_files", {})
-        if rows:
-            return rows[0]["slug"].split("#", 1)[0], str(len(rows))
-        return store.stem, "0"
-    except Exception:  # noqa: BLE001 — degrade to the filename
-        return store.stem, "?"
-
-
-def _dir_size(path: Path) -> int:
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
-
-
-def _human_size(n: int) -> str:
-    size = float(n)
-    for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
-        size /= 1024
-    return f"{size:.1f}GB"
-
-
-def _mtime(path: Path) -> str:
-    import datetime
-
-    ts = max(
-        (f.stat().st_mtime for f in path.rglob("*") if f.is_file()),
-        default=path.stat().st_mtime,
-    )
-    return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
 def main() -> None:
