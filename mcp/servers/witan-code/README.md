@@ -104,18 +104,22 @@ JSX) — the plain `javascript` grammar rejects the TS node types in the shared
 query. YAML indexes every mapping key as a navigable `key` symbol, so large
 config trees (CI, k8s, Pulumi) can be searched by path; expect many such symbols.
 
-Adding a language means adding one `LanguageSpec` in `indexer.py` (extensions +
-grammar name + a `queries_ts/<lang>.scm` capture file + a capture→kind map), and
-any new node types to `_DEF_NODE_TYPES`. Grammars are provided prebuilt by
-`tree-sitter-language-pack` (no compilation needed).
+Grammars come from **individual `tree-sitter-<lang>` wheels** (e.g.
+`tree-sitter-python`), loaded as standalone `tree_sitter.Language`s — not
+`tree-sitter-language-pack` (whose 1.9 line returns an incompatible binding and
+downloads grammars on demand). Adding a language means: add its
+`tree-sitter-<lang>` wheel to `pyproject.toml` (tight-pinned), add an entry to
+`indexer._GRAMMAR_MODULES` (grammar name → module + capsule factory), add one
+`LanguageSpec` (extensions + grammar name + a `queries_ts/<lang>.scm` capture
+file + a capture→kind map), and any new node types to `_DEF_NODE_TYPES`.
 
 ### Not indexed yet (from a file-type survey of ol-infrastructure + mit-learn)
 
 - **HCL / Terraform / Packer** (`.hcl`, `.tf`) — the strongest candidate to add
   next (~50 files in ol-infrastructure); grammar is available and blocks map to
   symbols (`variable.x`, `source.amazon-ebs.caddy`, `resource.<type>.<name>`).
-- **VCL** (Varnish/Fastly, `.vcl`) — `tree-sitter-language-pack` has no grammar,
-  so it can't be added without vendoring a `tree-sitter-vcl` build.
+- **VCL** (Varnish/Fastly, `.vcl`) — no published `tree-sitter-vcl` wheel, so it
+  can't be added without vendoring/building one.
 - **Markdown** (`.md`/`.mdx`) — could index headings as a doc outline, but adds
   low-signal symbols; left out for now.
 - Config/markup (`.json`, `.toml`, `.ini`, `.scss`, `.html`, `.j2`) is not

@@ -10,10 +10,15 @@ dependencies = [
     "fastmcp>=3.4.2,<4",
     "cyclopts>=4,<5",
     "tree-sitter>=0.25,<0.26",
-    # 1.9+ returns a `builtins.Language` that `tree_sitter.Parser` rejects
-    # ("argument 1 must be tree_sitter.Language") — breaks indexing in any fresh
-    # resolve (uvx/uv tool). Pin to the 1.8 line, which returns tree_sitter.Language.
-    "tree-sitter-language-pack>=1.8,<1.9",
+    # Individual grammar wheels (not tree-sitter-language-pack): each returns a
+    # standalone tree_sitter.Language usable with tree_sitter.Parser/Query. Pins
+    # are tight on purpose — a grammar major can bump the ABI / binding (see the
+    # language-pack 1.9 binding break). Adding a language = add its wheel here +
+    # an entry in indexer._GRAMMAR_MODULES.
+    "tree-sitter-python>=0.25,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+    "tree-sitter-bash>=0.25,<0.26",
+    "tree-sitter-yaml>=0.7,<0.8",
     "pyyaml>=6,<7",
     "rich>=13",
 ]

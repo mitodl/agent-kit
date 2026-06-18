@@ -9,7 +9,9 @@ then imported modules, then any repo-wide match. It is intentionally syntactic
 and will miss dynamic dispatch and produce occasional false links.
 """
 
+import functools
 import hashlib
+import importlib
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -93,6 +95,27 @@ _LANGUAGES: tuple[LanguageSpec, ...] = (
 _EXT_TO_SPEC: dict[str, LanguageSpec] = {
     ext: spec for spec in _LANGUAGES for ext in spec.extensions
 }
+
+# Standalone tree-sitter grammar wheels (no language-pack): grammar name → the
+# (module, factory) that yields the compiled grammar capsule. Adding a language =
+# add its `tree-sitter-<lang>` wheel to pyproject + an entry here.
+_GRAMMAR_MODULES: dict[str, tuple[str, str]] = {
+    "python": ("tree_sitter_python", "language"),
+    "tsx": ("tree_sitter_typescript", "language_tsx"),
+    "bash": ("tree_sitter_bash", "language"),
+    "yaml": ("tree_sitter_yaml", "language"),
+}
+
+
+@functools.lru_cache(maxsize=None)
+def _ts_language(grammar: str):
+    """Build (and cache) a ``tree_sitter.Language`` from its standalone wheel."""
+    from tree_sitter import Language
+
+    module_name, factory = _GRAMMAR_MODULES[grammar]
+    module = importlib.import_module(module_name)
+    return Language(getattr(module, factory)())
+
 
 _SKIP_DIRS = {
     ".git",
@@ -453,16 +476,12 @@ def _parse_file(
     rel: str,
     content_hash: str,
 ) -> ParsedFile | None:
-    from tree_sitter_language_pack import get_language
-
-    language = get_language(spec.grammar)
-    # Build the parser from the `tree_sitter` package bound to this Language so
-    # the produced Nodes are accepted by tree_sitter's Query/QueryCursor. (The
-    # language-pack's own get_parser() returns Nodes from a separate binding
-    # that QueryCursor.captures() rejects.) This parser wants bytes; _node_text
-    # slices into the same bytes.
     from tree_sitter import Parser
 
+    language = _ts_language(spec.grammar)
+    # The Parser/Query/QueryCursor all come from the standalone `tree_sitter`
+    # package bound to this Language. parse() wants bytes; _node_text slices into
+    # the same bytes.
     parser = Parser(language)
     tree = parser.parse(raw)
     root = _root(tree)
