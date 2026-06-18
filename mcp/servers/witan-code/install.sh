@@ -28,6 +28,8 @@ echo ""
 echo "==> Preparing code-store directory at ${CODE_DIR}..."
 mkdir -p "${CODE_DIR}"
 echo "    Ready. Per-repo stores (<slug>.omni) are created lazily on first index."
+echo "    The schema is (re)applied on every index run, so existing stores"
+echo "    migrate to new columns/indexes automatically — no manual step."
 echo "    Schema: ${SCHEMA_FILE}"
 
 echo ""

@@ -49,9 +49,8 @@ echo ""
 echo "==> Initialising local graph at ${GRAPH_PATH}..."
 
 if [[ -d "${GRAPH_PATH}" ]]; then
-	echo "    Graph already exists — checking schema..."
-	omnigraph schema plan --schema "${SCHEMA_FILE}" "${GRAPH_PATH}"
-	echo "    Run 'omnigraph schema apply --schema ${SCHEMA_FILE} ${GRAPH_PATH}' to apply any changes."
+	echo "    Graph already exists — planned schema changes (applied below):"
+	omnigraph schema plan --schema "${SCHEMA_FILE}" "${GRAPH_PATH}" || true
 else
 	mkdir -p "${GRAPH_DIR}"
 	omnigraph init --schema "${SCHEMA_FILE}" "${GRAPH_PATH}"
@@ -59,9 +58,10 @@ else
 fi
 
 echo ""
-echo "==> Building indexes..."
-# ensure_indices is safe to re-run; it builds FTS and BTREE indexes.
-omnigraph schema apply --schema "${SCHEMA_FILE}" "${GRAPH_PATH}" 2>/dev/null || true
+echo "==> Applying schema + building indexes..."
+# Idempotent + additive: migrates an existing graph to new columns/indexes and
+# builds the FTS/BTREE indexes the search queries need.
+omnigraph schema apply --schema "${SCHEMA_FILE}" "${GRAPH_PATH}"
 
 echo ""
 echo "Done."

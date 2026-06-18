@@ -26,23 +26,23 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> Path:
     """
     cfg = config or cfg_module.load()
     store = cfg_module.store_path(slug, cfg.code_dir)
-    if store.exists():
-        return store
-
-    store.parent.mkdir(parents=True, exist_ok=True)
     binary = _binary()
-    # ASSUMPTION: `omnigraph init --schema <file> <store>` is the per-store init
-    # form, matching witan/install.sh. Not independently verifiable
-    # here without the binary installed.
-    subprocess.run(
-        [binary, "init", "--schema", str(cfg.schema_file), str(store)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    # `schema apply` builds the FTS/BTREE indexes (the BM25 search_symbols query
-    # needs an FTS index on qualified_name). Mirrors witan/install.sh;
-    # best-effort so a CLI that folds this into `init` does not break init.
+
+    if not store.exists():
+        store.parent.mkdir(parents=True, exist_ok=True)
+        # ASSUMPTION: `omnigraph init --schema <file> <store>` is the per-store
+        # init form, matching witan/install.sh.
+        subprocess.run(
+            [binary, "init", "--schema", str(cfg.schema_file), str(store)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    # Apply the schema on EVERY run, not just on creation: it is idempotent
+    # ("no changes" when matched) and additive, so an existing store picks up new
+    # columns/indexes (e.g. Symbol.decorators) without a manual migration. Also
+    # builds the FTS/BTREE indexes the search queries need. Best-effort.
     subprocess.run(
         [binary, "schema", "apply", "--schema", str(cfg.schema_file), str(store)],
         capture_output=True,
