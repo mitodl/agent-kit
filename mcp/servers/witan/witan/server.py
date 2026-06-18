@@ -243,11 +243,12 @@ def memory_get_project_facts(repo: str | None = None) -> list[dict]:
     ----------
     repo:
         Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
+        Pass an empty string to list project facts across all repos.
     """
     detected = repo_module.detect(override=repo)
-    if not detected:
-        return []
-    return client.read("read.gq", "get_project_facts", {"repo": detected})
+    if detected:
+        return client.read("read.gq", "get_project_facts", {"repo": detected})
+    return client.read("read.gq", "project_facts_all", {})
 
 
 @mcp.tool

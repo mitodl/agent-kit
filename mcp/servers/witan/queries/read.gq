@@ -83,10 +83,21 @@ query get_project_facts($repo: String) {
         $m: Memory { kind: "project_fact", repo: $repo }
     }
     return {
-        $m.slug, $m.title, $m.content,
+        $m.slug, $m.title, $m.content, $m.repo,
         $m.category, $m.author, $m.tags, $m.created_at
     }
     order { $m.category, $m.created_at desc }
+}
+
+query project_facts_all() {
+    match {
+        $m: Memory { kind: "project_fact" }
+    }
+    return {
+        $m.slug, $m.title, $m.content, $m.repo,
+        $m.category, $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
 }
 
 // ── Patterns ──────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ node Memory {
     slug: String @key
     kind: enum(pattern, project_fact, lesson, agent_context) @index
     title: String @index
-    content: String
+    content: String @index    // @index enables the BM25 search($m.content, …) queries
     repo: String? @index
     language: String? @index
     category: String? @index
