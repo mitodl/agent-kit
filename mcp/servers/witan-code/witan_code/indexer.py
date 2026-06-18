@@ -146,6 +146,7 @@ class ParsedSymbol:
     end_line: int
     signature: str | None
     docstring: str | None
+    decorators: list[str] | None = None
 
 
 @dataclass
@@ -382,6 +383,7 @@ def _file_records(parsed: ParsedFile, slug: str, stats: IndexStats) -> list[dict
                     "end_line": sym.end_line,
                     "signature": sym.signature,
                     "docstring": sym.docstring,
+                    "decorators": sym.decorators,
                     "indexed_at": now,
                 },
             }
@@ -646,6 +648,7 @@ def _walk_defs(
             end_line=_end_line(def_node),
             signature=_signature(def_node, raw),
             docstring=_docstring(def_node, raw, spec),
+            decorators=_decorators(def_node, raw, spec),
         )
         parsed.symbols.append(sym)
 
@@ -748,6 +751,10 @@ def _parent(node):
     return _a(node, "parent")
 
 
+def _prev_sibling(node):
+    return _a(node, "prev_sibling")
+
+
 def _start_byte(node) -> int:
     return _a(node, "start_byte")
 
@@ -795,26 +802,95 @@ def _node_text(node, raw: bytes) -> str:
 
 
 def _signature(def_node, raw: bytes) -> str | None:
-    # First line of the definition, trimmed.
-    text = _node_text(def_node, raw).splitlines()
-    return text[0].strip() if text else None
+    """The definition header — name + full (multi-line) params + return type.
+
+    Everything from the def start up to its body, whitespace-collapsed, with the
+    trailing block opener (``:`` / ``{``) dropped. Falls back to the first line
+    when there's no body field (e.g. arrow consts, yaml keys).
+    """
+    body = _child_by_field_name(def_node, "body")
+    if body is not None:
+        header = raw[_start_byte(def_node) : _start_byte(body)].decode(
+            "utf-8", "replace"
+        )
+    else:
+        lines = _node_text(def_node, raw).splitlines()
+        header = lines[0] if lines else ""
+    sig = " ".join(header.split()).rstrip()
+    if sig.endswith(("{", ":")):
+        sig = sig[:-1].rstrip()
+    return sig[:300] or None
 
 
 def _docstring(def_node, raw: bytes, spec: LanguageSpec) -> str | None:
-    if spec.name != "python":
+    if spec.name == "python":
+        body = _child_by_field_name(def_node, "body")
+        if body is None:
+            return None
+        for child in _children(body):
+            if _kind(child) == "expression_statement":
+                grandchildren = _children(child)
+                inner = grandchildren[0] if grandchildren else None
+                if inner is not None and _kind(inner) == "string":
+                    doc = _node_text(inner, raw).strip().strip("'\"")
+                    return doc[:500] or None
+            break
         return None
-    body = _child_by_field_name(def_node, "body")
-    if body is None:
-        return None
-    for child in _children(body):
-        if _kind(child) == "expression_statement":
-            grandchildren = _children(child)
-            inner = grandchildren[0] if grandchildren else None
-            if inner is not None and _kind(inner) == "string":
-                doc = _node_text(inner, raw).strip().strip("'\"")
-                return doc[:500] or None
-        break
+    if spec.name in ("typescript", "javascript"):
+        return _jsdoc(def_node, raw)
     return None
+
+
+def _jsdoc(def_node, raw: bytes) -> str | None:
+    """The ``/** … */`` block immediately preceding a TS/JS def.
+
+    Walks preceding siblings (skipping decorators) of the def and, when the def
+    is wrapped (e.g. ``export_statement``), of its parent.
+    """
+    candidates = [def_node]
+    parent = _parent(def_node)
+    if parent is not None and _kind(parent) in ("export_statement",):
+        candidates.append(parent)
+    for node in candidates:
+        prev = _prev_sibling(node)
+        while prev is not None and _kind(prev) == "decorator":
+            prev = _prev_sibling(prev)
+        if prev is not None and _kind(prev) == "comment":
+            text = _node_text(prev, raw).strip()
+            if text.startswith("/**"):
+                inner = text.removeprefix("/**").removesuffix("*/")
+                lines = [ln.strip().lstrip("*").strip() for ln in inner.splitlines()]
+                cleaned = " ".join(ln for ln in lines if ln)
+                return cleaned[:500] or None
+    return None
+
+
+def _decorators(def_node, raw: bytes, spec: LanguageSpec) -> list[str] | None:
+    """Decorator strings on a def (``@app.route(...)``, ``@Input()``, …)."""
+    out: list[str] = []
+    if spec.name == "python":
+        parent = _parent(def_node)
+        if parent is not None and _kind(parent) == "decorated_definition":
+            out = [
+                _node_text(c, raw).strip()
+                for c in _children(parent)
+                if _kind(c) == "decorator"
+            ]
+    elif spec.name in ("typescript", "javascript"):
+        # class decorators are own children; method decorators are prev siblings
+        own = [
+            _node_text(c, raw).strip()
+            for c in _children(def_node)
+            if _kind(c) == "decorator"
+        ]
+        preceding: list[str] = []
+        prev = _prev_sibling(def_node)
+        while prev is not None and _kind(prev) == "decorator":
+            preceding.append(_node_text(prev, raw).strip())
+            prev = _prev_sibling(prev)
+        out = list(reversed(preceding)) + own
+    out = [d[:200] for d in out if d]
+    return out or None
 
 
 # ── Misc ──────────────────────────────────────────────────────────

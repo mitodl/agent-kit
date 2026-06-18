@@ -11,7 +11,8 @@ query find_by_name($name: String) {
     }
     return {
         $s.slug, $s.repo, $s.file_id, $s.name, $s.qualified_name,
-        $s.kind, $s.start_line, $s.end_line, $s.signature, $s.docstring
+        $s.kind, $s.start_line, $s.end_line, $s.signature, $s.docstring,
+        $s.decorators
     }
     order { $s.qualified_name asc }
     limit 50
@@ -23,7 +24,8 @@ query find_by_qualified_name($qualified_name: String) {
     }
     return {
         $s.slug, $s.repo, $s.file_id, $s.name, $s.qualified_name,
-        $s.kind, $s.start_line, $s.end_line, $s.signature, $s.docstring
+        $s.kind, $s.start_line, $s.end_line, $s.signature, $s.docstring,
+        $s.decorators
     }
     order { $s.qualified_name asc }
     limit 50
@@ -35,7 +37,8 @@ query get_symbol($id: String) {
     }
     return {
         $s.slug, $s.repo, $s.file_id, $s.name, $s.qualified_name,
-        $s.kind, $s.start_line, $s.end_line, $s.signature, $s.docstring
+        $s.kind, $s.start_line, $s.end_line, $s.signature, $s.docstring,
+        $s.decorators
     }
 }
 
@@ -75,7 +78,7 @@ query symbols_in_file($file_id: String) {
     }
     return {
         $s.slug, $s.name, $s.qualified_name, $s.kind,
-        $s.start_line, $s.end_line, $s.signature
+        $s.start_line, $s.end_line, $s.signature, $s.docstring, $s.decorators
     }
     order { $s.start_line asc }
 }

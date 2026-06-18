@@ -99,6 +99,13 @@ name when there is no remote.
 | Bash / Zsh | `.sh` `.bash` `.zsh` | functions |
 | YAML | `.yaml` `.yml` | mapping keys as dotted paths (e.g. `jobs.build.steps`) |
 
+Each symbol also carries **richer attributes** for agent context: the full
+`signature` (name + multi-line params + return/param types), a `docstring`
+(Python docstrings and TS/JS `/** … */` JSDoc), and `decorators`
+(`@app.route(...)`, `@task`, `@Input()`, … — framework semantics that also feed
+the cross-repo bridge). These are returned by `code_find_definition` /
+`code_search_symbol` / `code_symbols_in_file`.
+
 All JS/TS variants are parsed with the `tsx` grammar (a superset of TS, JS, and
 JSX) — the plain `javascript` grammar rejects the TS node types in the shared
 query. YAML indexes every mapping key as a navigable `key` symbol, so large

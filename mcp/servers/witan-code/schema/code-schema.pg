@@ -30,6 +30,7 @@ node Symbol {
     end_line: I32
     signature: String?
     docstring: String?
+    decorators: [String]?      // @decorators on the def (framework semantics: routes, tasks, fixtures, …)
     indexed_at: DateTime
 }
 
