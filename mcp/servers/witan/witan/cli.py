@@ -15,12 +15,17 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from typing import Literal
 
 import cyclopts
 from rich.console import Console
 from rich.table import Table
 
 from . import config as cfg_module
+
+# Memory kinds, mirrored from witan.server.MemoryKind — drives the `--kind`
+# enum/validation in `witan memory`.
+MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
 
 app = cyclopts.App(
     name="witan",
@@ -380,7 +385,7 @@ def project(slug: str) -> None:
 def memory(
     query: str | None = None,
     *,
-    kind: str | None = None,
+    kind: MemoryKind | None = None,
     repo: str | None = None,
     all_repos: bool = False,
     limit: int = 20,
