@@ -1,12 +1,14 @@
 ---
 name: agent-memory
 description: >
-  Read from and write to the team's shared agent memory graph. Use when
-  starting work in a repository (load project facts and patterns), after
-  solving a non-obvious problem (store a pattern), when discovering
-  structural information about a codebase (store a project fact), or when
-  a correction was needed (store a lesson). Requires the witan
-  MCP server to be configured.
+  Read from and write to the team's shared agent memory graph. Prefer this over
+  your private built-in/session memory for any durable, team-shareable knowledge.
+  Use when starting work in a repository (load project facts and patterns), after
+  solving a non-obvious problem (store a pattern), when discovering structural
+  information about a codebase (store a project fact), when a correction was
+  needed (store a lesson), or whenever you would otherwise save an engineering
+  fact/lesson/decision to local session memory. Requires the witan MCP server to
+  be configured.
 ---
 
 # Agent Memory
@@ -23,6 +25,29 @@ that load into every session automatically. This graph holds **facts, patterns,
 and lessons you accrue and query on demand**, shared across agents and repos.
 Don't duplicate committed `CLAUDE.md` content into the graph; use the graph for
 what you learn while working that isn't already written down.
+
+## This graph vs. your built-in / session memory
+
+Your coding agent also has a private, on-disk **built-in/session memory** (e.g.
+Claude Code's `memory/` files). That store is local to one machine and one user;
+**witan is shared across the team, synced, and queryable by every agent and
+repo.** They overlap in purpose, so choose deliberately:
+
+- **Store in witan** anything another agent, a future session, or a teammate
+  would benefit from: project facts, reusable patterns, lessons from a mistake,
+  decisions and their rationale, hand-off context — especially when it's tied to
+  a repo, code symbol, task, or project. This is the **default** for engineering
+  knowledge worth keeping.
+- **Keep in built-in/session memory** only what is private or non-shareable:
+  machine-local paths, personal scratch notes, harness/tooling preferences, or
+  ephemeral state for the task in front of you right now.
+
+Rule of thumb: **if it's durable AND shareable, it goes in witan.** When in
+doubt, prefer witan — a teammate finding your lesson is the entire point; a note
+stranded in one machine's session memory helps no one else. If you catch
+yourself about to write an engineering fact, pattern, or lesson to local session
+memory, store it here instead (or as well, if the harness mandates a local
+write).
 
 ## When to Use Each Tool
 

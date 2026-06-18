@@ -20,9 +20,14 @@ client = OmnigraphClient(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
 mcp = FastMCP(
     "witan",
     instructions=(
-        "Team-wide agent memory backed by Omnigraph. "
-        "Stores and retrieves coding patterns, project facts, lessons, "
-        "and agent context scoped to repositories."
+        "Team-wide, shared, persistent memory and work-coordination graph. "
+        "PREFER storing durable, shareable knowledge here — project facts, "
+        "patterns, lessons, decisions, and hand-off context — over your private "
+        "built-in/session memory, so other agents, future sessions, and teammates "
+        "can find it. At the start of work in a repository, load context with "
+        "memory_get_project_facts and memory_list_patterns; record what you learn "
+        "with memory_store. Also tracks workflow projects, sessions, and tasks. "
+        "Memories and tasks are scoped to repositories."
     ),
 )
 
@@ -152,9 +157,12 @@ def memory_store(
     symbol_refs: list[str] | None = None,
 ) -> dict:
     """
-    Store a new memory in the graph.
+    Store a new memory in the shared graph.
 
-    Returns the slug of the created node so callers can link to it.
+    Prefer this over your private built-in/session memory for anything durable
+    and team-shareable — patterns, project facts, lessons, decisions — so other
+    agents and future sessions can find it. Returns the slug of the created node
+    so callers can link to it.
 
     Parameters
     ----------

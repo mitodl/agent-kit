@@ -36,6 +36,14 @@ export WITAN_AUTHOR="Your Name"
 
 ## MCP Tools
 
+> **witan memory vs. your agent's built-in/session memory.** witan is the
+> **shared, synced, team-wide** store; a coding agent's built-in memory (e.g.
+> Claude Code's `memory/` files) is private to one machine and user. Durable,
+> shareable engineering knowledge — project facts, patterns, lessons, decisions
+> — belongs in witan so other agents and future sessions can find it; keep only
+> private/ephemeral notes in built-in memory. The `agent-memory` skill and the
+> MCP server instructions steer the agent accordingly.
+
 ### Memory Tools
 
 | Tool | Description |
