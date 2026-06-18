@@ -3,6 +3,9 @@ name = "witan"
 version = "0.1.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
 dependencies = [
     "fastmcp>=3.4.2,<4",
     "cyclopts>=4,<5",

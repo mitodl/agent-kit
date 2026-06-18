@@ -3,6 +3,9 @@ name = "witan-code"
 version = "0.1.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
 dependencies = [
     "fastmcp>=3.4.2,<4",
     "cyclopts>=4,<5",
