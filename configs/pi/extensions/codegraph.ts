@@ -1,5 +1,5 @@
 /**
- * omnigraph-codegraph — Pi extension
+ * witan-code — Pi extension
  *
  * Pi equivalent of the two Claude Code code-graph hooks:
  *  - session_start : seed/refresh the whole repo's Layer-2 code graph in the
@@ -8,8 +8,8 @@
  *  - edit / write  : incrementally re-index the edited file after the tool runs.
  *
  * Best-effort and non-blocking: a missing CLI, non-git dir, or parse failure
- * never disrupts the session. Requires `omnigraph-codegraph-index` on PATH
- * (`uv tool install --editable mcp/servers/omnigraph-codegraph`); otherwise it
+ * never disrupts the session. Requires `witan-code` on PATH
+ * (`uv tool install --editable mcp/servers/witan-code`); otherwise it
  * silently no-ops.
  *
  * Install: symlink into ~/.pi/agent/extensions/ (see configs/pi/README.md).
@@ -38,7 +38,7 @@ function inGitRepo(cwd: string): boolean {
 /** Run the indexer detached in the background; ignore all failures. */
 function indexInBackground(target: string): void {
 	try {
-		const child = spawn("omnigraph-codegraph-index", ["index", target], {
+		const child = spawn("witan-code", ["index", target], {
 			detached: true,
 			stdio: "ignore",
 		});

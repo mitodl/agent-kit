@@ -6,7 +6,7 @@ description: >
   repo, lets the user pick one (or create a new project), then calls
   workflow_session_start to register the session in the graph. Also supports
   ending a session (/workflow end) or listing all projects (/workflow list).
-  Requires the omnigraph-memory MCP server.
+  Requires the witan MCP server.
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -33,7 +33,7 @@ Otherwise (no args or unrecognized): proceed to Step 2.
 **Step 2 — List active projects.**
 
 Call `workflow_project_list()` (no args — defaults to active projects in the
-current repo). If the MCP call fails, tell the user the omnigraph-memory server
+current repo). If the MCP call fails, tell the user the witan server
 is not connected and stop.
 
 **Step 3 — Ask the user what to link to.**

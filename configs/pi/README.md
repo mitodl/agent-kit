@@ -11,11 +11,11 @@ so the omnigraph trackers work the same under Pi.
 
 - **codegraph.ts** — on session start, seeds/refreshes the whole repo's Layer-2
   code graph in the background; after each `edit`/`write`, re-indexes that file.
-  Requires `omnigraph-codegraph-index` on `PATH`
-  (`uv tool install --editable mcp/servers/omnigraph-codegraph`); otherwise no-ops.
+  Requires `witan-code` on `PATH`
+  (`uv tool install --editable mcp/servers/witan-code`); otherwise no-ops.
 - **workflow-context.ts** — before each turn, appends the repo's active
   WorkflowProjects and ready tasks to the system prompt. Requires the `omnigraph`
-  binary and the omnigraph-memory graph.
+  binary and the witan graph.
 
 Both are best-effort: any failure (missing binary, non-git dir, no data) is
 swallowed and never disrupts the session.

@@ -18,7 +18,7 @@ Desktop, GitHub Copilot) can read and write without platform-specific code.
                             │  MCP protocol
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              omnigraph-memory  (FastMCP server)                 │
+│              witan  (FastMCP server)                 │
 │                                                                 │
 │  ┌──────────────┐  ┌────────────────┐  ┌────────────────────┐  │
 │  │  repo detect │  │  config / env  │  │   5 MCP tools      │  │
@@ -38,7 +38,7 @@ Desktop, GitHub Copilot) can read and write without platform-specific code.
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Omnigraph Graph URI                        │
 │                                                                 │
-│  local disk     ~/.local/share/omnigraph-memory/graph.omni     │
+│  local disk     ~/.local/share/witan/graph.omni     │
 │  local S3       s3://omnigraph-local/agent-memory/             │
 │  team remote    http://omnigraph.internal:8080  (S3-backed)    │
 └─────────────────────────────────────────────────────────────────┘
@@ -59,7 +59,7 @@ Desktop, GitHub Copilot) can read and write without platform-specific code.
 Wire both MCP servers, the hooks, and the skills into your local Claude Code and
 Pi agents, running the servers straight from your checkout so edits take effect
 without publishing. Requires [`uv`](https://docs.astral.sh/uv/) and the
-`omnigraph` binary — run `mcp/servers/omnigraph-memory/install.sh` once to install
+`omnigraph` binary — run `mcp/servers/witan/install.sh` once to install
 the binary and initialise the local graph.
 
 Set `REPO` to your checkout path for the snippets below:
@@ -76,20 +76,20 @@ Add both servers under `mcpServers` in `~/.claude/settings.json` (Claude Code)
 server always runs your working tree:
 
 ```json
-"omnigraph-memory": {
+"witan": {
   "command": "uv",
-  "args": ["run", "--directory", "REPO/mcp/servers/omnigraph-memory", "omnigraph-memory"],
-  "env": { "OMNIGRAPH_MEMORY_AUTHOR": "Your Name" }
+  "args": ["run", "--directory", "REPO/mcp/servers/witan", "witan"],
+  "env": { "WITAN_AUTHOR": "Your Name" }
 },
-"omnigraph-codegraph": {
+"witan-code": {
   "command": "uv",
-  "args": ["run", "--directory", "REPO/mcp/servers/omnigraph-codegraph", "omnigraph-codegraph"],
-  "env": { "OMNIGRAPH_CODEGRAPH_AUTHOR": "Your Name" }
+  "args": ["run", "--directory", "REPO/mcp/servers/witan-code", "witan-code"],
+  "env": { "WITAN_AUTHOR": "Your Name" }
 }
 ```
 
 Replace `REPO` with the absolute path. **Restart the agent** after editing its
-config so it picks up the new servers (the first `omnigraph-codegraph` launch
+config so it picks up the new servers (the first `witan-code` launch
 installs tree-sitter — one-time, slow).
 
 ### 2. Hooks — Claude Code
@@ -142,7 +142,7 @@ Install the indexer on `PATH` so the `PostToolUse` hook uses its fast path and y
 can seed a repo manually. `--editable` keeps it pointed at the working tree:
 
 ```bash
-uv tool install --editable "$REPO/mcp/servers/omnigraph-codegraph"
+uv tool install --editable "$REPO/mcp/servers/witan-code"
 ```
 
 With the `SessionStart` hook wired (step 2), the whole-repo seed and refresh happen
@@ -150,7 +150,7 @@ automatically in the background — you don't need to run `index` by hand. To se
 repo immediately (or under Pi, which has no hooks), run it manually:
 
 ```bash
-omnigraph-codegraph-index index .   # inside the repo
+witan-code index .   # inside the repo
 ```
 
 Without the CLI on `PATH`, the hooks fall back to `uvx --from <local pkg>` (correct,
@@ -158,36 +158,36 @@ just slower).
 
 ### 5. Graph schema upkeep
 
-The shared graph lives at `~/.local/share/omnigraph-memory/graph.omni`. After
+The shared graph lives at `~/.local/share/witan/graph.omni`. After
 pulling schema changes, re-apply:
 
 ```bash
 omnigraph schema apply \
-  --schema "$REPO/mcp/servers/omnigraph-memory/schema/schema.pg" \
-  ~/.local/share/omnigraph-memory/graph.omni
+  --schema "$REPO/mcp/servers/witan/schema/schema.pg" \
+  ~/.local/share/witan/graph.omni
 ```
 
 A field **rename** (the schema uses snake_case identifiers) can't be migrated in
 place — re-initialise a fresh graph instead (move the old one aside first):
 
 ```bash
-mv ~/.local/share/omnigraph-memory/graph.omni{,.bak}
+mv ~/.local/share/witan/graph.omni{,.bak}
 omnigraph init \
-  --schema "$REPO/mcp/servers/omnigraph-memory/schema/schema.pg" \
-  ~/.local/share/omnigraph-memory/graph.omni
+  --schema "$REPO/mcp/servers/witan/schema/schema.pg" \
+  ~/.local/share/witan/graph.omni
 ```
 
-The per-repo code-graph stores under `~/.local/share/omnigraph-memory/code/` are
+The per-repo code-graph stores under `~/.local/share/witan/code/` are
 disposable — delete and re-index freely.
 
 ---
 
 ## Repository Structure
 
-Everything lives under `mcp/servers/omnigraph-memory/` in `agent-kit`:
+Everything lives under `mcp/servers/witan/` in `agent-kit`:
 
 ```
-mcp/servers/omnigraph-memory/
+mcp/servers/witan/
 ├── README.md                  # User-facing setup guide
 ├── install.sh                 # Install omnigraph binary + init local graph
 ├── omnigraph.yaml             # CLI project config (output format, aliases)
@@ -200,9 +200,9 @@ mcp/servers/omnigraph-memory/
 │   ├── read.gq                # All read queries
 │   └── mutations.gq           # All insert / update queries
 │
-├── omnigraph_memory/          # Python package
+├── witan/          # Python package
 │   ├── __init__.py
-│   ├── __main__.py            # Entry point: python -m omnigraph_memory
+│   ├── __main__.py            # Entry point: python -m witan
 │   ├── server.py              # FastMCP app + tool definitions
 │   ├── config.py              # Config loaded from env vars
 │   ├── repo.py                # Git remote → canonical repo slug
@@ -497,7 +497,7 @@ query link_applies_to($from: String, $to: String) {
 
 ```toml
 [project]
-name = "omnigraph-memory"
+name = "witan"
 version = "0.1.0"
 description = "Agent memory MCP server backed by Omnigraph"
 requires-python = ">=3.11"
@@ -506,14 +506,14 @@ dependencies = [
 ]
 
 [project.scripts]
-omnigraph-memory = "omnigraph_memory.__main__:main"
+witan = "witan.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 ```
 
-### `omnigraph_memory/config.py`
+### `witan/config.py`
 
 Reads all configuration from environment variables. No config file is required;
 the env vars are documented in `config/pi.json` and the README.
@@ -528,7 +528,7 @@ from pathlib import Path
 
 # Path to the bundled query files, resolved relative to this file.
 _QUERIES_DIR = Path(__file__).parent.parent / "queries"
-_DEFAULT_GRAPH_URI = Path.home() / ".local" / "share" / "omnigraph-memory" / "graph.omni"
+_DEFAULT_GRAPH_URI = Path.home() / ".local" / "share" / "witan" / "graph.omni"
 
 
 @dataclass(frozen=True)
@@ -549,10 +549,10 @@ class Config:
 def load() -> Config:
     """Load config from environment. All variables are optional with sensible defaults."""
     return Config(
-        graph_uri=os.environ.get("OMNIGRAPH_MEMORY_URI", str(_DEFAULT_GRAPH_URI)),
-        graph_token=os.environ.get("OMNIGRAPH_MEMORY_TOKEN"),
+        graph_uri=os.environ.get("WITAN_MEMORY_URI", str(_DEFAULT_GRAPH_URI)),
+        graph_token=os.environ.get("WITAN_MEMORY_TOKEN"),
         author=os.environ.get(
-            "OMNIGRAPH_MEMORY_AUTHOR",
+            "WITAN_AUTHOR",
             os.environ.get("USER", "unknown"),
         ),
         queries_dir=_QUERIES_DIR,
@@ -563,19 +563,19 @@ def load() -> Config:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `OMNIGRAPH_MEMORY_URI` | No | `~/.local/share/omnigraph-memory/graph.omni` | Graph URI — local path, `s3://`, or `http://` |
-| `OMNIGRAPH_MEMORY_TOKEN` | Only for `http://` | — | Bearer token for remote server auth |
-| `OMNIGRAPH_MEMORY_AUTHOR` | No | `$USER` | Attribution on every insert |
-| `OMNIGRAPH_MEMORY_REPO` | No | — | Repo slug override (bypasses git detection) |
+| `WITAN_MEMORY_URI` | No | `~/.local/share/witan/graph.omni` | Graph URI — local path, `s3://`, or `http://` |
+| `WITAN_MEMORY_TOKEN` | Only for `http://` | — | Bearer token for remote server auth |
+| `WITAN_AUTHOR` | No | `$USER` | Attribution on every insert |
+| `WITAN_REPO` | No | — | Repo slug override (bypasses git detection) |
 
-### `omnigraph_memory/repo.py`
+### `witan/repo.py`
 
 Detects the current repository from the `.git/config` of the working directory.
 Normalises SSH and HTTPS remote URLs to a canonical HTTPS project URI
 (`https://github.com/mitodl/ol-django`). This URI is the shared join key across
 every layer — memory, workflow, tasks, and the code graph — so they all derive it
 identically. (The embedded snapshot below predates that change; see
-`omnigraph_memory/repo.py` for the current `_normalise`.)
+`witan/repo.py` for the current `_normalise`.)
 
 ```python
 from __future__ import annotations
@@ -592,14 +592,14 @@ def detect(override: str | None = None) -> str | None:
 
     Resolution order:
       1. ``override`` parameter (explicit caller value)
-      2. ``OMNIGRAPH_MEMORY_REPO`` environment variable
+      2. ``WITAN_REPO`` environment variable
       3. ``origin`` remote URL from the nearest ``.git/config``
       4. ``None`` — no repo context available
     """
     if override:
         return override
 
-    if env_repo := os.environ.get("OMNIGRAPH_MEMORY_REPO"):
+    if env_repo := os.environ.get("WITAN_REPO"):
         return env_repo
 
     git_config_path = _find_git_config(Path.cwd())
@@ -663,7 +663,7 @@ def _normalise(url: str) -> str:
     return url
 ```
 
-### `omnigraph_memory/graph.py`
+### `witan/graph.py`
 
 Thin wrapper around the `omnigraph` CLI. Runs each operation as a subprocess
 and parses JSON output. Raises `RuntimeError` with the CLI's stderr on failure.
@@ -755,12 +755,12 @@ class OmnigraphClient:
         if binary is None:
             raise RuntimeError(
                 "omnigraph binary not found on PATH. "
-                "Run mcp/servers/omnigraph-memory/install.sh first."
+                "Run mcp/servers/witan/install.sh first."
             )
         return binary
 ```
 
-### `omnigraph_memory/server.py`
+### `witan/server.py`
 
 The FastMCP application. Each tool auto-detects the repo from the caller's CWD
 unless an explicit `repo` override is passed. All tools surface meaningful error
@@ -786,7 +786,7 @@ cfg = cfg_module.load()
 client = OmnigraphClient(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
 
 mcp = FastMCP(
-    "omnigraph-memory",
+    "witan",
     description=(
         "Team-wide agent memory backed by Omnigraph. "
         "Stores and retrieves coding patterns, project facts, lessons, "
@@ -832,7 +832,7 @@ def memory_search(
 
     Returns the top-20 matching memories ranked by BM25 relevance. The search
     is automatically scoped to the current git repository unless ``repo`` or
-    ``OMNIGRAPH_MEMORY_REPO`` overrides it.
+    ``WITAN_REPO`` overrides it.
 
     Parameters
     ----------
@@ -998,7 +998,7 @@ def memory_list_patterns(
     return rows
 ```
 
-### `omnigraph_memory/__main__.py`
+### `witan/__main__.py`
 
 ```python
 from .server import mcp
@@ -1026,11 +1026,11 @@ project:
   name: Agent Memory
 
 cli:
-  # Override graph target via OMNIGRAPH_MEMORY_URI or edit here.
-  # local disk:   ~/.local/share/omnigraph-memory/graph.omni
+  # Override graph target via WITAN_MEMORY_URI or edit here.
+  # local disk:   ~/.local/share/witan/graph.omni
   # local S3:     s3://omnigraph-local/agent-memory/
   # team remote:  http://omnigraph.internal:8080
-  graph: ~/.local/share/omnigraph-memory/graph.omni
+  graph: ~/.local/share/witan/graph.omni
   branch: main
   output_format: json
 
@@ -1061,11 +1061,11 @@ The install script is idempotent. Running it twice is safe.
 #   ./install.sh                  # local-disk mode (default)
 #   RUSTFS=1 ./install.sh         # local RustFS/S3 mode (requires Docker)
 #
-# After running, set OMNIGRAPH_MEMORY_URI if you want a non-default graph path:
-#   export OMNIGRAPH_MEMORY_URI=s3://omnigraph-local/agent-memory/
+# After running, set WITAN_MEMORY_URI if you want a non-default graph path:
+#   export WITAN_MEMORY_URI=s3://omnigraph-local/agent-memory/
 set -euo pipefail
 
-GRAPH_DIR="${OMNIGRAPH_MEMORY_DIR:-${HOME}/.local/share/omnigraph-memory}"
+GRAPH_DIR="${WITAN_DATA_DIR:-${HOME}/.local/share/witan}"
 GRAPH_PATH="${GRAPH_DIR}/graph.omni"
 SCHEMA_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/schema/schema.pg"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1090,7 +1090,7 @@ if [[ "${RUSTFS:-}" == "1" ]]; then
         curl -fsSL https://raw.githubusercontent.com/ModernRelay/omnigraph/main/scripts/local-rustfs-bootstrap.sh | bash
     echo ""
     echo "    RustFS running. Set:"
-    echo "    export OMNIGRAPH_MEMORY_URI=s3://omnigraph-local/agent-memory/"
+    echo "    export WITAN_MEMORY_URI=s3://omnigraph-local/agent-memory/"
     echo "    export AWS_ACCESS_KEY_ID=rustfsadmin"
     echo "    export AWS_SECRET_ACCESS_KEY=rustfsadmin"
     echo "    export AWS_REGION=us-east-1"
@@ -1130,8 +1130,8 @@ echo "     Claude:  copy config/claude.json into claude_desktop_config.json"
 echo "     Copilot: copy config/copilot.json into .vscode/mcp.json"
 echo ""
 echo "  2. Optional — override defaults in your shell profile:"
-echo "     export OMNIGRAPH_MEMORY_URI=${GRAPH_PATH}"
-echo "     export OMNIGRAPH_MEMORY_AUTHOR=\$(git config user.name)"
+echo "     export WITAN_MEMORY_URI=${GRAPH_PATH}"
+echo "     export WITAN_AUTHOR=\$(git config user.name)"
 ```
 
 ---
@@ -1141,11 +1141,11 @@ echo "     export OMNIGRAPH_MEMORY_AUTHOR=\$(git config user.name)"
 ### Local Disk (default)
 
 No extra infrastructure. The `omnigraph` CLI reads and writes a directory at
-`~/.local/share/omnigraph-memory/graph.omni`.
+`~/.local/share/witan/graph.omni`.
 
 ```bash
 # No env vars required. This is the default.
-export OMNIGRAPH_MEMORY_AUTHOR="Alice Smith"
+export WITAN_AUTHOR="Alice Smith"
 ```
 
 **Limitation:** not shared across machines. Use for personal-only mode or
@@ -1159,7 +1159,7 @@ without team infrastructure — useful for testing the team mode locally.
 ```bash
 RUSTFS=1 ./install.sh
 
-export OMNIGRAPH_MEMORY_URI=s3://omnigraph-local/agent-memory/
+export WITAN_MEMORY_URI=s3://omnigraph-local/agent-memory/
 export AWS_ACCESS_KEY_ID=rustfsadmin
 export AWS_SECRET_ACCESS_KEY=rustfsadmin
 export AWS_REGION=us-east-1
@@ -1175,9 +1175,9 @@ The shared mode. An `omnigraph-server` process runs in your infrastructure,
 pointed at an S3-backed graph. Each team member sets two env vars:
 
 ```bash
-export OMNIGRAPH_MEMORY_URI=http://omnigraph-memory.internal:8080
-export OMNIGRAPH_MEMORY_TOKEN=<bearer-token>
-export OMNIGRAPH_MEMORY_AUTHOR="Alice Smith"
+export WITAN_MEMORY_URI=http://witan.internal:8080
+export WITAN_MEMORY_TOKEN=<bearer-token>
+export WITAN_AUTHOR="Alice Smith"
 ```
 
 **Deploying the server:**
@@ -1197,7 +1197,7 @@ The graph must already exist. Bootstrap it once:
 ```bash
 # From any machine with AWS credentials and the omnigraph binary:
 omnigraph init \
-  --schema mcp/servers/omnigraph-memory/schema/schema.pg \
+  --schema mcp/servers/witan/schema/schema.pg \
   s3://mitodl-agent-memory/graph.omni
 ```
 
@@ -1206,7 +1206,7 @@ omnigraph init \
 ```bash
 # Export your local memories to JSONL
 omnigraph export \
-  ~/.local/share/omnigraph-memory/graph.omni \
+  ~/.local/share/witan/graph.omni \
   > memories.jsonl
 
 # Load them into the S3-backed graph
@@ -1225,22 +1225,22 @@ omnigraph load \
 ```json
 {
   "mcpServers": {
-    "omnigraph-memory": {
+    "witan": {
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/omnigraph-memory",
-        "omnigraph-memory"
+        "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
+        "witan"
       ],
       "env": {
         // Required for remote team server mode:
-        // "OMNIGRAPH_MEMORY_URI": "http://omnigraph-memory.internal:8080",
-        // "OMNIGRAPH_MEMORY_TOKEN": "<your-bearer-token>",
+        // "WITAN_MEMORY_URI": "http://witan.internal:8080",
+        // "WITAN_MEMORY_TOKEN": "<your-bearer-token>",
 
         // Optional — defaults to local disk if unset:
-        // "OMNIGRAPH_MEMORY_URI": "/home/you/.local/share/omnigraph-memory/graph.omni",
+        // "WITAN_MEMORY_URI": "/home/you/.local/share/witan/graph.omni",
 
-        "OMNIGRAPH_MEMORY_AUTHOR": "<your-name>"
+        "WITAN_AUTHOR": "<your-name>"
       }
     }
   }
@@ -1252,15 +1252,15 @@ omnigraph load \
 ```json
 {
   "mcpServers": {
-    "omnigraph-memory": {
+    "witan": {
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/omnigraph-memory",
-        "omnigraph-memory"
+        "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
+        "witan"
       ],
       "env": {
-        "OMNIGRAPH_MEMORY_AUTHOR": "<your-name>"
+        "WITAN_AUTHOR": "<your-name>"
       }
     }
   }
@@ -1272,16 +1272,16 @@ omnigraph load \
 ```json
 {
   "servers": {
-    "omnigraph-memory": {
+    "witan": {
       "type": "stdio",
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/omnigraph-memory",
-        "omnigraph-memory"
+        "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
+        "witan"
       ],
       "env": {
-        "OMNIGRAPH_MEMORY_AUTHOR": "${env:USER}"
+        "WITAN_AUTHOR": "${env:USER}"
       }
     }
   }
@@ -1305,14 +1305,14 @@ description: >
   starting work in a repository (load project facts and patterns), after
   solving a non-obvious problem (store a pattern), when discovering
   structural information about a codebase (store a project fact), or when
-  a correction was needed (store a lesson). Requires the omnigraph-memory
+  a correction was needed (store a lesson). Requires the witan
   MCP server to be configured.
 ---
 
 # Agent Memory
 
 The team's shared knowledge graph stores four kinds of memories, all
-backed by Omnigraph and accessible via the `omnigraph-memory` MCP server.
+backed by Omnigraph and accessible via the `witan` MCP server.
 The repo is auto-detected from `.git/config` — you rarely need to pass it
 explicitly.
 
@@ -1444,7 +1444,7 @@ not affect the v1 interface.
 
 ## Workflow Tracking
 
-The omnigraph-memory server also tracks end-to-end engineering projects across
+The witan server also tracks end-to-end engineering projects across
 multiple Claude Code sessions. This lets you trace a project from discovery
 through delivery without explicit handoffs between sessions, support parallel
 sessions, and build a corpus of completed workflow traces for pattern mining.
@@ -1586,7 +1586,7 @@ Tasks** section. Multi-user rides the existing model (`author` = creator,
 
 ## Code Graph (Layer 2)
 
-A **separate** package, `mcp/servers/omnigraph-codegraph/`, maintains a
+A **separate** package, `mcp/servers/witan-code/`, maintains a
 tree-sitter symbol graph (`CodeFile`/`Symbol` + `Defines`/`Contains`/`Calls`/
 `References`/`Imports`/`Inherits`). It is deliberately **not** folded into the
 shared memory graph: it is machine-derived, high-churn, re-derivable, per-repo,

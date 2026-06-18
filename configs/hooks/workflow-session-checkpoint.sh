@@ -15,10 +15,10 @@ set -euo pipefail
 
 # Resolve the real script location even when invoked via a symlink in ~/.claude/hooks.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-QUERIES_DIR="${SCRIPT_DIR}/../../mcp/servers/omnigraph-memory/queries"
+QUERIES_DIR="${SCRIPT_DIR}/../../mcp/servers/witan/queries"
 
-OMNIGRAPH_URI="${OMNIGRAPH_MEMORY_URI:-${HOME}/.local/share/omnigraph-memory/graph.omni}"
-OMNIGRAPH_TOKEN="${OMNIGRAPH_MEMORY_TOKEN:-}"
+WITAN_URI="${WITAN_MEMORY_URI:-${HOME}/.local/share/witan/graph.omni}"
+WITAN_TOKEN="${WITAN_MEMORY_TOKEN:-}"
 
 SESSION_ID="${CLAUDE_SESSION_ID:-}"
 [[ -z "$SESSION_ID" ]] && exit 0
@@ -55,8 +55,8 @@ print(json.dumps({
 " "$SESSION_SLUG" "$FILES_JSON" "$NOW" 2>/dev/null) || { rm -f "$STATE_FILE"; exit 0; }
 
 # omnigraph CLI auth is via OMNIGRAPH_SERVER_BEARER_TOKEN, not a --token flag.
-OMNIGRAPH_SERVER_BEARER_TOKEN="${OMNIGRAPH_TOKEN:-${OMNIGRAPH_SERVER_BEARER_TOKEN:-}}" \
-    omnigraph mutate --store "$OMNIGRAPH_URI" \
+OMNIGRAPH_SERVER_BEARER_TOKEN="${WITAN_TOKEN:-${OMNIGRAPH_SERVER_BEARER_TOKEN:-}}" \
+    omnigraph mutate --store "$WITAN_URI" \
     --query "${QUERIES_DIR}/mutations.gq" update_workflow_session_end \
     --params "$PARAMS" 2>/dev/null || true
 

@@ -5,14 +5,14 @@ description: >
   starting work in a repository (load project facts and patterns), after
   solving a non-obvious problem (store a pattern), when discovering
   structural information about a codebase (store a project fact), or when
-  a correction was needed (store a lesson). Requires the omnigraph-memory
+  a correction was needed (store a lesson). Requires the witan
   MCP server to be configured.
 ---
 
 # Agent Memory
 
 The team's shared knowledge graph stores four kinds of memories, all
-backed by Omnigraph and accessible via the `omnigraph-memory` MCP server.
+backed by Omnigraph and accessible via the `witan` MCP server.
 The repo is auto-detected from `.git/config` — you rarely need to pass it
 explicitly.
 
@@ -113,7 +113,7 @@ memory_store(
 
 When a memory is about a specific function or class, attach the code-graph
 **symbol id** so it can be found from the code later. Get the id from the
-`omnigraph-codegraph` tools — `code_find_definition` / `code_search_symbol`
+`witan-code` tools — `code_find_definition` / `code_search_symbol`
 return it in the `slug` field, of the form `repo#path::Qualified.Name`:
 
 ```
@@ -127,7 +127,7 @@ memory_store(
 
 To go the other way — "what lessons or tasks concern this symbol?" — call
 `context_for_symbol(symbol_id)` before editing it. It returns the memories and
-tasks whose `symbol_refs` include that id. (Requires the omnigraph-codegraph
+tasks whose `symbol_refs` include that id. (Requires the witan-code
 server; symbol ids are soft references, so a stale one simply resolves to nothing.)
 
 ## Quality Guidelines

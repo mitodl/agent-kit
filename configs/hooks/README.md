@@ -77,7 +77,7 @@ Add a `hooks` key to your `~/.claude/settings.json`:
 ### `workflow-context-inject.sh` (UserPromptSubmit)
 
 Runs before every prompt. Detects the current git repo, queries the
-omnigraph-memory server for active `WorkflowProject` nodes, and injects
+witan server for active `WorkflowProject` nodes, and injects
 a context block listing them. This lets any session automatically discover
 which project it should link to without the user providing that context.
 
@@ -107,7 +107,7 @@ sessions from indexing at once. Skips non-git directories and injects no context
 Together with `codegraph-reindex.sh` (below) this makes the code graph
 self-managing: SessionStart covers the whole repo, PostToolUse keeps live edits
 fresh. (Pi has no hook system, so under Pi the initial seed stays manual —
-`omnigraph-codegraph-index index .`.)
+`witan-code index .`.)
 
 ### `codegraph-reindex.sh` (PostToolUse, matcher `Edit|Write`)
 
@@ -117,19 +117,19 @@ re-indexes just that file into the per-repo Layer-2 code graph. Best-effort and
 non-blocking: it always exits 0 and silences all output, so a missing binary,
 missing package, or parse failure never interrupts the agent.
 
-Prefers the `omnigraph-codegraph-index` CLI on `PATH`
-(`uv tool install --editable mcp/servers/omnigraph-codegraph`); otherwise falls
+Prefers the `witan-code` CLI on `PATH`
+(`uv tool install --editable mcp/servers/witan-code`); otherwise falls
 back to `uvx --from <local package>`.
 
 ## Environment Variables
 
-The workflow hooks respect the same variables as the omnigraph-memory server;
-the codegraph hook uses the omnigraph-codegraph variables:
+The workflow hooks respect the same variables as the witan server;
+the codegraph hook uses the witan-code variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OMNIGRAPH_MEMORY_URI` | `~/.local/share/omnigraph-memory/graph.omni` | Graph location (workflow hooks) |
-| `OMNIGRAPH_MEMORY_TOKEN` | (empty) | Bearer token for http:// mode |
-| `OMNIGRAPH_CODEGRAPH_DIR` | `~/.local/share/omnigraph-memory/code` | Per-repo code-store directory (codegraph hook) |
+| `WITAN_MEMORY_URI` | `~/.local/share/witan/graph.omni` | Graph location (workflow hooks) |
+| `WITAN_MEMORY_TOKEN` | (empty) | Bearer token for http:// mode |
+| `WITAN_CODE_DIR` | `~/.local/share/witan/code` | Per-repo code-store directory (codegraph hook) |
 | `CLAUDE_SESSION_ID` | (set by Claude Code) | Session UUID for state file keying |
 | `CLAUDE_PROJECT_DIR` | `$(pwd)` | Project root for git remote detection |

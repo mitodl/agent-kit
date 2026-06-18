@@ -23,13 +23,13 @@ git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree &>/dev/null || exit 0
 
 # Resolve the real script location even when invoked via a symlink.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-PKG_DIR="${SCRIPT_DIR}/../../mcp/servers/omnigraph-codegraph"
+PKG_DIR="${SCRIPT_DIR}/../../mcp/servers/witan-code"
 
 # Prefer the installed indexer; fall back to uvx from the local package.
-if command -v omnigraph-codegraph-index &>/dev/null; then
-	INDEX_CMD=(omnigraph-codegraph-index index "$PROJECT_DIR")
+if command -v witan-code &>/dev/null; then
+	INDEX_CMD=(witan-code index "$PROJECT_DIR")
 elif command -v uvx &>/dev/null && [[ -d "$PKG_DIR" ]]; then
-	INDEX_CMD=(uvx --from "$PKG_DIR" omnigraph-codegraph-index index "$PROJECT_DIR")
+	INDEX_CMD=(uvx --from "$PKG_DIR" witan-code index "$PROJECT_DIR")
 else
 	exit 0
 fi

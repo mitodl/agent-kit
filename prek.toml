@@ -89,7 +89,7 @@ hooks = [
 # ── Python: ruff (priority 20 format → 30 lint) ───────────────────────────────
 # Format runs first (priority 20); lint runs after (priority 30) so ruff check
 # always sees already-formatted code and avoids spurious format-related findings.
-# Covers Python added for the planned omnigraph-memory MCP server.
+# Covers Python added for the planned witan MCP server.
 
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"

@@ -42,13 +42,13 @@ case "$FILE_PATH" in
 esac
 
 # Prefer an installed indexer; fall back to uvx from the package subdirectory.
-if command -v omnigraph-codegraph-index &>/dev/null; then
-	omnigraph-codegraph-index index "$FILE_PATH" >/dev/null 2>&1 || true
+if command -v witan-code &>/dev/null; then
+	witan-code index "$FILE_PATH" >/dev/null 2>&1 || true
 elif command -v uvx &>/dev/null; then
 	SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-	PKG_DIR="${SCRIPT_DIR}/../../mcp/servers/omnigraph-codegraph"
+	PKG_DIR="${SCRIPT_DIR}/../../mcp/servers/witan-code"
 	if [[ -d "$PKG_DIR" ]]; then
-		uvx --from "$PKG_DIR" omnigraph-codegraph-index index "$FILE_PATH" \
+		uvx --from "$PKG_DIR" witan-code index "$FILE_PATH" \
 			>/dev/null 2>&1 || true
 	fi
 fi

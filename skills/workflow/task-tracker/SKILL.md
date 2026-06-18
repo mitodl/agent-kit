@@ -5,7 +5,7 @@ description: >
   claim ready work, create tasks (including epics and sub-issues), link
   dependencies, and close finished tasks. `/task` shows ready work for the
   current repo; `/task new` creates a task; `/task list` lists tasks; `/task
-  close` closes one. Backed by the omnigraph-memory MCP server (task_* tools).
+  close` closes one. Backed by the witan MCP server (task_* tools).
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -41,7 +41,7 @@ graph.
 ## Triage ready work
 
 Call `task_ready()` (defaults to the current repo, ordered by priority). If the
-MCP call fails, tell the user the omnigraph-memory server is not connected and stop.
+MCP call fails, tell the user the witan server is not connected and stop.
 
 - If there are no ready tasks, say so and offer **Create a task**.
 - Otherwise present the ready tasks in an `AskUserQuestion`:
@@ -121,7 +121,7 @@ To add a dependency, hierarchy, or provenance link to existing tasks, use
 
 For a task scoped to specific code, attach code-graph **symbol ids** via
 `symbol_refs` so the work is discoverable from the code. Get ids from the
-`omnigraph-codegraph` tools — `code_find_definition` / `code_search_symbol`
+`witan-code` tools — `code_find_definition` / `code_search_symbol`
 return them in the `slug` field (`repo#path::Qualified.Name`):
 
 ```

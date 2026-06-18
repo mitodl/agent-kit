@@ -8,7 +8,7 @@ description: >
   with the slug injected by the context hook/extension), when advancing phases
   (workflow_project_advance), when closing a session (workflow_session_end),
   or when completing a project (workflow_project_complete to create a corpus
-  trace). Requires the omnigraph-memory MCP server. Covers project lifecycle,
+  trace). Requires the witan MCP server. Covers project lifecycle,
   cross-session linking, parallel sessions, phase transitions, and corpus trace
   creation for pattern mining.
 license: BSD-3-Clause
@@ -19,7 +19,7 @@ metadata:
 # Project Tracker
 
 Tracks engineering work across sessions from discovery through delivery. Each
-project is a `WorkflowProject` node in the omnigraph-memory graph. Each agent
+project is a `WorkflowProject` node in the witan graph. Each agent
 session contributes a `WorkflowSession`. When a project completes, a
 `WorkflowTrace` is assembled for the corpus.
 

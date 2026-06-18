@@ -12,14 +12,14 @@
 
 set -euo pipefail
 
-# Locate the omnigraph-memory queries dir relative to this script.
+# Locate the witan queries dir relative to this script.
 # Adjust if the agent-kit repo is installed elsewhere.
 # Resolve the real script location even when invoked via a symlink in ~/.claude/hooks.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-QUERIES_DIR="${SCRIPT_DIR}/../../mcp/servers/omnigraph-memory/queries"
+QUERIES_DIR="${SCRIPT_DIR}/../../mcp/servers/witan/queries"
 
-OMNIGRAPH_URI="${OMNIGRAPH_MEMORY_URI:-${HOME}/.local/share/omnigraph-memory/graph.omni}"
-OMNIGRAPH_TOKEN="${OMNIGRAPH_MEMORY_TOKEN:-}"
+WITAN_URI="${WITAN_MEMORY_URI:-${HOME}/.local/share/witan/graph.omni}"
+WITAN_TOKEN="${WITAN_MEMORY_TOKEN:-}"
 
 # Detect repo key from git remote (mirrors repo.py::_normalise — canonical HTTPS URI)
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
@@ -28,7 +28,7 @@ GIT_REMOTE=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null) || exit 0
 
 REPO_SLUG=$(python3 - "$GIT_REMOTE" <<'PYEOF'
 import re, sys
-# Canonical HTTPS project URI — must match omnigraph_memory/repo.py::_normalise.
+# Canonical HTTPS project URI — must match witan/repo.py::_normalise.
 url = re.sub(r'\.git$', '', sys.argv[1].strip()).rstrip('/')
 if m := re.match(r'(?:ssh://)?[^@]+@([^:/]+)[:/](.+)', url):
     print(f"https://{m.group(1)}/{m.group(2)}")
@@ -47,8 +47,8 @@ run_query() {
     local name="$1" params="$2"
     # omnigraph CLI auth is via the OMNIGRAPH_SERVER_BEARER_TOKEN env var, not a
     # --token flag. Pass the token through when set.
-    OMNIGRAPH_SERVER_BEARER_TOKEN="${OMNIGRAPH_TOKEN:-${OMNIGRAPH_SERVER_BEARER_TOKEN:-}}" \
-        omnigraph query --store "$OMNIGRAPH_URI" --query "${QUERIES_DIR}/read.gq" "$name" \
+    OMNIGRAPH_SERVER_BEARER_TOKEN="${WITAN_TOKEN:-${OMNIGRAPH_SERVER_BEARER_TOKEN:-}}" \
+        omnigraph query --store "$WITAN_URI" --query "${QUERIES_DIR}/read.gq" "$name" \
         --params "$params" --format json 2>/dev/null || echo "[]"
 }
 

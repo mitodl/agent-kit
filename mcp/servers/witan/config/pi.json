@@ -1,0 +1,18 @@
+{
+	"mcpServers": {
+		"witan": {
+			"command": "uvx",
+			"args": [
+				"--from",
+				"git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
+				"--with",
+				"git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code",
+				"witan",
+				"serve"
+			],
+			"env": {
+				"WITAN_AUTHOR": "<your-name>"
+			}
+		}
+	}
+}

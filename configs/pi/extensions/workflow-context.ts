@@ -1,5 +1,5 @@
 /**
- * omnigraph-memory workflow context — Pi extension
+ * witan workflow context — Pi extension
  *
  * Pi equivalent of the Claude Code `workflow-context-inject` (UserPromptSubmit)
  * hook: before each agent turn, look up the current repo's active
@@ -7,7 +7,7 @@
  * Pi session can discover what work it should link to.
  *
  * Best-effort: any failure (no repo, omnigraph unavailable, no data) injects
- * nothing. Requires the `omnigraph` binary on PATH and the omnigraph-memory
+ * nothing. Requires the `omnigraph` binary on PATH and the witan
  * graph initialised.
  *
  * Install: symlink into ~/.pi/agent/extensions/ (see configs/pi/README.md).
@@ -19,21 +19,18 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// read.gq lives in the omnigraph-memory package, three levels up from this
+// read.gq lives in the witan package, three levels up from this
 // extension (configs/pi/extensions → repo root). Resolve through the symlink.
 const HERE = dirname(realpathSync(fileURLToPath(import.meta.url)));
-const READ_GQ = resolve(
-	HERE,
-	"../../../mcp/servers/omnigraph-memory/queries/read.gq",
-);
+const READ_GQ = resolve(HERE, "../../../mcp/servers/witan/queries/read.gq");
 
 const GRAPH_URI =
-	process.env.OMNIGRAPH_MEMORY_URI ??
-	`${process.env.HOME}/.local/share/omnigraph-memory/graph.omni`;
+	process.env.WITAN_MEMORY_URI ??
+	`${process.env.HOME}/.local/share/witan/graph.omni`;
 
 const PRIORITY: Record<string, number> = { p0: 0, p1: 1, p2: 2, p3: 3 };
 
-/** Canonical HTTPS project URI — must match omnigraph_memory/repo.py::_normalise. */
+/** Canonical HTTPS project URI — must match witan/repo.py::_normalise. */
 function normalizeRemote(url: string): string {
 	url = url
 		.trim()
