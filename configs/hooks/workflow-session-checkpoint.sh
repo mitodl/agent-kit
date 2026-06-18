@@ -13,11 +13,12 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-QUERIES_DIR="${SCRIPT_DIR}/../../mcp/servers/omnigraph-memory/queries"
+# Resolve the real script location even when invoked via a symlink in ~/.claude/hooks.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+QUERIES_DIR="${SCRIPT_DIR}/../../mcp/servers/witan/queries"
 
-OMNIGRAPH_URI="${OMNIGRAPH_MEMORY_URI:-${HOME}/.local/share/omnigraph-memory/graph.omni}"
-OMNIGRAPH_TOKEN="${OMNIGRAPH_MEMORY_TOKEN:-}"
+WITAN_URI="${WITAN_MEMORY_URI:-${HOME}/.local/share/witan/graph.omni}"
+WITAN_TOKEN="${WITAN_MEMORY_TOKEN:-}"
 
 SESSION_ID="${CLAUDE_SESSION_ID:-}"
 [[ -z "$SESSION_ID" ]] && exit 0
@@ -42,22 +43,21 @@ FILES_JSON=$(git -C "$PROJECT_DIR" diff --name-only HEAD 2>/dev/null \
 
 NOW=$(python3 -c "from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat())")
 
-OG_ARGS=(--store "$OMNIGRAPH_URI" --query "${QUERIES_DIR}/mutations.gq" update_workflow_session_end)
-if [[ -n "$OMNIGRAPH_TOKEN" ]]; then
-    OG_ARGS+=(--token "$OMNIGRAPH_TOKEN")
-fi
-
 PARAMS=$(python3 -c "
 import json, sys
 print(json.dumps({
     'slug': sys.argv[1],
     'summary': 'Session ended (auto-closed by Stop hook — call workflow_session_end explicitly for a better summary)',
-    'toolsUsed': None,
-    'filesChanged': json.loads(sys.argv[2]),
-    'endedAt': sys.argv[3],
+    'tools_used': None,
+    'files_changed': json.loads(sys.argv[2]),
+    'ended_at': sys.argv[3],
 }))
 " "$SESSION_SLUG" "$FILES_JSON" "$NOW" 2>/dev/null) || { rm -f "$STATE_FILE"; exit 0; }
 
-omnigraph mutate "${OG_ARGS[@]}" --params "$PARAMS" 2>/dev/null || true
+# omnigraph CLI auth is via OMNIGRAPH_SERVER_BEARER_TOKEN, not a --token flag.
+OMNIGRAPH_SERVER_BEARER_TOKEN="${WITAN_TOKEN:-${OMNIGRAPH_SERVER_BEARER_TOKEN:-}}" \
+    omnigraph mutate --store "$WITAN_URI" \
+    --query "${QUERIES_DIR}/mutations.gq" update_workflow_session_end \
+    --params "$PARAMS" 2>/dev/null || true
 
 rm -f "$STATE_FILE"

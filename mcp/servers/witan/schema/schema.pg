@@ -1,0 +1,174 @@
+// Agent Memory — team-wide knowledge graph for coding agents.
+//
+// One node type with a kind discriminator keeps cross-kind search simple.
+// Optional fields are populated only for the relevant kind:
+//   pattern      → language
+//   project_fact → category
+//   lesson       → severity
+//   agent_context → (no additional fields)
+//
+// Slug convention:
+//   pat-   pattern          e.g. pat-always-use-uv
+//   pf-    project_fact     e.g. pf-ol-django-vault-secrets
+//   les-   lesson           e.g. les-no-raw-sql-in-views
+//   ctx-   agent_context    e.g. ctx-ticket-1234-approach
+
+node Memory {
+    slug: String @key
+    kind: enum(pattern, project_fact, lesson, agent_context) @index
+    title: String @index
+    content: String @index    // @index enables the BM25 search($m.content, …) queries
+    repo: String? @index
+    language: String? @index
+    category: String? @index
+    severity: enum(info, warning, critical)? @index
+    author: String @index
+    created_at: DateTime @index
+    updated_at: DateTime
+    tags: [String]?
+    symbol_refs: [String]?   // soft refs into the code-graph store (repo#path::Name)
+}
+
+// Supersedes: a newer memory replaces an older one.
+// Link new → old when updating a pattern or lesson that has changed.
+edge Supersedes: Memory -> Memory
+
+// AppliesTo: links a pattern or lesson to a project fact that provides context.
+// e.g. a pattern "always use uv" AppliesTo project fact "ol-django uses uv".
+edge AppliesTo: Memory -> Memory
+
+// ── Workflow Tracking ─────────────────────────────────────────────
+//
+// WorkflowProject tracks an overarching engineering objective across
+// multiple sessions and phases. One project per logical unit of work,
+// regardless of how many Claude Code sessions contribute to it.
+//
+// Slug convention: wp-<sanitised-title>-<6hex>
+//   e.g. wp-add-vault-k8s-auth-a3f912
+
+node WorkflowProject {
+    slug:        String @key
+    title:       String @index
+    description: String
+    // Set of canonical repo URIs this project spans (may be many, or none —
+    // a "floating" cross-repo objective). Membership is filtered in Python;
+    // list fields aren't indexed/match-filterable in this engine.
+    repos:       [String]?
+    status:      enum(active, completed, abandoned) @index
+    phase:       enum(discovery, spec, implementation, delivery) @index
+    author:      String @index
+    created_at:   DateTime @index
+    updated_at:   DateTime
+    completed_at: DateTime?
+    tags:        [String]?
+    github_issue: String?
+    github_pr:    String?
+}
+
+// WorkflowSession tracks a single Claude Code session contributing to
+// a project. One project has many sessions; sessions may run in parallel.
+//
+// project_slug is denormalized for fast indexed lookup without graph traversal.
+// Slug convention: ws-<project-slug-prefix>-<6hex>
+
+node WorkflowSession {
+    slug:         String @key
+    project_slug:  String @index
+    session_id:    String @index
+    repo:         String? @index
+    phase:        enum(discovery, spec, implementation, delivery) @index
+    summary:      String
+    tools_used:    [String]?
+    files_changed: [String]?
+    author:       String @index
+    started_at:    DateTime @index
+    ended_at:      DateTime?
+    tags:         [String]?
+}
+
+// WorkflowTrace is an assembled, corpus-ready record of a completed project.
+// Created by workflow_project_complete. Immutable after creation.
+// Used for downstream pattern mining to generate skills and hooks.
+//
+// Slug convention: wt-<project-slug>
+
+node WorkflowTrace {
+    slug:         String @key
+    project_slug:  String @index
+    repos:        [String]?
+    title:        String @index
+    description:  String
+    session_count: I32
+    phases:       [String]
+    duration:     I32?
+    outcome:      String
+    lessons_slug:  [String]?
+    patterns_slug: [String]?
+    author:       String @index
+    created_at:    DateTime @index
+    tags:         [String]?
+}
+
+// BelongsTo: links each WorkflowSession to its WorkflowProject.
+edge BelongsTo: WorkflowSession -> WorkflowProject
+
+// Produced: links a completed WorkflowProject to its WorkflowTrace (one-to-one).
+edge Produced: WorkflowProject -> WorkflowTrace
+
+// Informed: links a WorkflowProject to Memory nodes consulted or created
+// during the project (patterns, lessons, agent_context, project_facts).
+edge Informed: WorkflowProject -> Memory
+
+// ── Task Tracking ─────────────────────────────────────────────────
+//
+// A dependency-aware task tracker (beads-like) living in the same graph as
+// memory and workflow so tasks can hard-link to projects, sessions, and
+// memories. The "ready work" query (open tasks with no open blocker) is the
+// core multi-agent coordination primitive.
+//
+// Tasks are hierarchical: an `epic` decomposes into child tasks/sub-issues via
+// the ParentOf edge, with parent_slug denormalized for fast child lookup.
+//
+// Slug convention: tk-<sanitised-title>-<6hex>
+//   e.g. tk-wire-vault-sidecar-9c1d04
+
+node Task {
+    slug:        String @key
+    title:       String @index
+    description: String
+    repo:        String? @index
+    type:        enum(bug, feature, task, chore, epic) @index
+    status:      enum(open, in_progress, blocked, closed) @index
+    priority:    enum(p0, p1, p2, p3) @index
+    project_slug: String? @index         // denormalized link to WorkflowProject
+    parent_slug:  String? @index         // denormalized hierarchy (epic → sub-issue)
+    blocked_by:   [String]?              // denormalized blocker slugs (drives ready-work)
+    assignee:    String? @index         // who owns it (vs author = creator)
+    external_uri: String? @index         // GitHub issue/PR or any reference URI
+    resolution:  String?                // free-text note set when closed
+    author:      String @index
+    created_at:   DateTime @index
+    updated_at:   DateTime
+    closed_at:    DateTime?
+    claimed_at:   DateTime?              // advisory-claim lease start (assignee holds it)
+    symbol_refs:  [String]?              // soft refs into the code-graph store
+    tags:        [String]?
+}
+
+// Blocks: a blocker task must close before the blocked task is "ready".
+edge Blocks: Task -> Task
+
+// ParentOf: hierarchy — an epic (or parent task) contains child tasks.
+edge ParentOf: Task -> Task
+
+// DiscoveredFrom: provenance — a task surfaced while working another task.
+edge DiscoveredFrom: Task -> Task
+
+// TaskBelongsTo: a task rolls up to a WorkflowProject.
+edge TaskBelongsTo: Task -> WorkflowProject
+
+// Addresses: a task is motivated by a Memory node (lesson, project fact).
+edge Addresses: Task -> Memory
+
+// Closes: a WorkflowSession executed/closed a task.
+edge Closes: WorkflowSession -> Task

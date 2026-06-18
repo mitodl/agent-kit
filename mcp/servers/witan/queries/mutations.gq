@@ -1,0 +1,353 @@
+// Agent Memory — mutation queries
+
+// ── Insert ────────────────────────────────────────────────────────
+
+query insert_memory(
+    $slug: String,
+    $kind: String,
+    $title: String,
+    $content: String,
+    $repo: String?,
+    $language: String?,
+    $category: String?,
+    $severity: String?,
+    $author: String,
+    $tags: [String]?,
+    $symbol_refs: [String]?,
+    $created_at: DateTime,
+    $updated_at: DateTime
+) {
+    insert Memory {
+        slug: $slug,
+        kind: $kind,
+        title: $title,
+        content: $content,
+        repo: $repo,
+        language: $language,
+        category: $category,
+        severity: $severity,
+        author: $author,
+        tags: $tags,
+        symbol_refs: $symbol_refs,
+        created_at: $created_at,
+        updated_at: $updated_at
+    }
+}
+
+// ── Update ────────────────────────────────────────────────────────
+// Updates ALL mutable fields. The MCP server reads the current node first,
+// merges caller-supplied changes, then calls this query with the full set.
+// This avoids needing per-field update queries.
+
+query update_memory(
+    $slug: String,
+    $title: String,
+    $content: String,
+    $repo: String?,
+    $language: String?,
+    $category: String?,
+    $severity: String?,
+    $tags: [String]?,
+    $symbol_refs: [String]?,
+    $updated_at: DateTime
+) {
+    update Memory
+        set {
+            title: $title,
+            content: $content,
+            repo: $repo,
+            language: $language,
+            category: $category,
+            severity: $severity,
+            tags: $tags,
+            symbol_refs: $symbol_refs,
+            updated_at: $updated_at
+        }
+        where slug = $slug
+}
+
+// ── Edges ─────────────────────────────────────────────────────────
+
+query link_supersedes($from: String, $to: String) {
+    insert Supersedes { from: $from, to: $to }
+}
+
+query link_applies_to($from: String, $to: String) {
+    insert AppliesTo { from: $from, to: $to }
+}
+
+// ── Workflow Project mutations ─────────────────────────────────────
+
+query insert_workflow_project(
+    $slug: String,
+    $title: String,
+    $description: String,
+    $repos: [String]?,
+    $status: String,
+    $phase: String,
+    $author: String,
+    $tags: [String]?,
+    $github_issue: String?,
+    $github_pr: String?,
+    $created_at: DateTime,
+    $updated_at: DateTime
+) {
+    insert WorkflowProject {
+        slug: $slug,
+        title: $title,
+        description: $description,
+        repos: $repos,
+        status: $status,
+        phase: $phase,
+        author: $author,
+        tags: $tags,
+        github_issue: $github_issue,
+        github_pr: $github_pr,
+        created_at: $created_at,
+        updated_at: $updated_at
+    }
+}
+
+query update_workflow_project_repos(
+    $slug: String,
+    $repos: [String]?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set { repos: $repos, updated_at: $updated_at }
+        where slug = $slug
+}
+
+query update_workflow_project_phase(
+    $slug: String,
+    $phase: String,
+    $github_pr: String?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set { phase: $phase, github_pr: $github_pr, updated_at: $updated_at }
+        where slug = $slug
+}
+
+query update_workflow_project_complete(
+    $slug: String,
+    $status: String,
+    $github_pr: String?,
+    $completed_at: DateTime,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set {
+            status: $status,
+            github_pr: $github_pr,
+            completed_at: $completed_at,
+            updated_at: $updated_at
+        }
+        where slug = $slug
+}
+
+// ── Workflow Session mutations ─────────────────────────────────────
+
+query insert_workflow_session(
+    $slug: String,
+    $project_slug: String,
+    $session_id: String,
+    $repo: String?,
+    $phase: String,
+    $summary: String,
+    $author: String,
+    $tags: [String]?,
+    $started_at: DateTime
+) {
+    insert WorkflowSession {
+        slug: $slug,
+        project_slug: $project_slug,
+        session_id: $session_id,
+        repo: $repo,
+        phase: $phase,
+        summary: $summary,
+        author: $author,
+        tags: $tags,
+        started_at: $started_at
+    }
+}
+
+query update_workflow_session_end(
+    $slug: String,
+    $summary: String,
+    $tools_used: [String]?,
+    $files_changed: [String]?,
+    $ended_at: DateTime
+) {
+    update WorkflowSession
+        set {
+            summary: $summary,
+            tools_used: $tools_used,
+            files_changed: $files_changed,
+            ended_at: $ended_at
+        }
+        where slug = $slug
+}
+
+// ── Workflow Trace mutations ───────────────────────────────────────
+
+query insert_workflow_trace(
+    $slug: String,
+    $project_slug: String,
+    $repos: [String]?,
+    $title: String,
+    $description: String,
+    $session_count: I32,
+    $phases: [String],
+    $duration: I32?,
+    $outcome: String,
+    $lessons_slug: [String]?,
+    $patterns_slug: [String]?,
+    $author: String,
+    $tags: [String]?,
+    $created_at: DateTime
+) {
+    insert WorkflowTrace {
+        slug: $slug,
+        project_slug: $project_slug,
+        repos: $repos,
+        title: $title,
+        description: $description,
+        session_count: $session_count,
+        phases: $phases,
+        duration: $duration,
+        outcome: $outcome,
+        lessons_slug: $lessons_slug,
+        patterns_slug: $patterns_slug,
+        author: $author,
+        tags: $tags,
+        created_at: $created_at
+    }
+}
+
+// ── Workflow Edge mutations ────────────────────────────────────────
+
+query link_belongs_to($from: String, $to: String) {
+    insert BelongsTo { from: $from, to: $to }
+}
+
+query link_produced($from: String, $to: String) {
+    insert Produced { from: $from, to: $to }
+}
+
+query link_informed($from: String, $to: String) {
+    insert Informed { from: $from, to: $to }
+}
+
+// ── Task mutations ─────────────────────────────────────────────────
+
+query insert_task(
+    $slug: String,
+    $title: String,
+    $description: String,
+    $repo: String?,
+    $type: String,
+    $status: String,
+    $priority: String,
+    $project_slug: String?,
+    $parent_slug: String?,
+    $blocked_by: [String]?,
+    $assignee: String?,
+    $external_uri: String?,
+    $author: String,
+    $symbol_refs: [String]?,
+    $tags: [String]?,
+    $created_at: DateTime,
+    $updated_at: DateTime,
+    $claimed_at: DateTime?
+) {
+    insert Task {
+        slug: $slug,
+        title: $title,
+        description: $description,
+        repo: $repo,
+        type: $type,
+        status: $status,
+        priority: $priority,
+        project_slug: $project_slug,
+        parent_slug: $parent_slug,
+        blocked_by: $blocked_by,
+        assignee: $assignee,
+        external_uri: $external_uri,
+        author: $author,
+        symbol_refs: $symbol_refs,
+        tags: $tags,
+        created_at: $created_at,
+        updated_at: $updated_at,
+        claimed_at: $claimed_at
+    }
+}
+
+// Updates ALL mutable fields. The MCP server reads the current node first,
+// merges caller-supplied changes, then calls this with the full set.
+query update_task(
+    $slug: String,
+    $title: String,
+    $description: String,
+    $type: String,
+    $status: String,
+    $priority: String,
+    $project_slug: String?,
+    $parent_slug: String?,
+    $blocked_by: [String]?,
+    $assignee: String?,
+    $external_uri: String?,
+    $resolution: String?,
+    $symbol_refs: [String]?,
+    $tags: [String]?,
+    $closed_at: DateTime?,
+    $updated_at: DateTime,
+    $claimed_at: DateTime?
+) {
+    update Task
+        set {
+            title: $title,
+            description: $description,
+            type: $type,
+            status: $status,
+            priority: $priority,
+            project_slug: $project_slug,
+            parent_slug: $parent_slug,
+            blocked_by: $blocked_by,
+            assignee: $assignee,
+            external_uri: $external_uri,
+            resolution: $resolution,
+            symbol_refs: $symbol_refs,
+            tags: $tags,
+            closed_at: $closed_at,
+            updated_at: $updated_at,
+            claimed_at: $claimed_at
+        }
+        where slug = $slug
+}
+
+// ── Task edge mutations ────────────────────────────────────────────
+
+query link_blocks($from: String, $to: String) {
+    insert Blocks { from: $from, to: $to }
+}
+
+query link_parent_of($from: String, $to: String) {
+    insert ParentOf { from: $from, to: $to }
+}
+
+query link_discovered_from($from: String, $to: String) {
+    insert DiscoveredFrom { from: $from, to: $to }
+}
+
+query link_task_belongs_to($from: String, $to: String) {
+    insert TaskBelongsTo { from: $from, to: $to }
+}
+
+query link_addresses($from: String, $to: String) {
+    insert Addresses { from: $from, to: $to }
+}
+
+query link_closes($from: String, $to: String) {
+    insert Closes { from: $from, to: $to }
+}

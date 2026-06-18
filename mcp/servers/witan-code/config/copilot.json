@@ -1,0 +1,17 @@
+{
+	"servers": {
+		"witan-code": {
+			"type": "stdio",
+			"command": "uvx",
+			"args": [
+				"--from",
+				"git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code",
+				"witan-code",
+				"serve"
+			],
+			"env": {
+				"WITAN_AUTHOR": "${env:USER}"
+			}
+		}
+	}
+}

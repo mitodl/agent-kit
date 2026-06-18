@@ -1,20 +1,53 @@
 ---
 name: agent-memory
 description: >
-  Read from and write to the team's shared agent memory graph. Use when
-  starting work in a repository (load project facts and patterns), after
-  solving a non-obvious problem (store a pattern), when discovering
-  structural information about a codebase (store a project fact), or when
-  a correction was needed (store a lesson). Requires the omnigraph-memory
-  MCP server to be configured.
+  Read from and write to the team's shared agent memory graph. Prefer this over
+  your private built-in/session memory for any durable, team-shareable knowledge.
+  Use when starting work in a repository (load project facts and patterns), after
+  solving a non-obvious problem (store a pattern), when discovering structural
+  information about a codebase (store a project fact), when a correction was
+  needed (store a lesson), or whenever you would otherwise save an engineering
+  fact/lesson/decision to local session memory. Requires the witan MCP server to
+  be configured.
 ---
 
 # Agent Memory
 
 The team's shared knowledge graph stores four kinds of memories, all
-backed by Omnigraph and accessible via the `omnigraph-memory` MCP server.
+backed by Omnigraph and accessible via the `witan` MCP server.
 The repo is auto-detected from `.git/config` — you rarely need to pass it
 explicitly.
+
+## This graph vs. `CLAUDE.md` / `AGENTS.md`
+
+`CLAUDE.md` / `AGENTS.md` hold **static, human-committed** project instructions
+that load into every session automatically. This graph holds **facts, patterns,
+and lessons you accrue and query on demand**, shared across agents and repos.
+Don't duplicate committed `CLAUDE.md` content into the graph; use the graph for
+what you learn while working that isn't already written down.
+
+## This graph vs. your built-in / session memory
+
+Your coding agent also has a private, on-disk **built-in/session memory** (e.g.
+Claude Code's `memory/` files). That store is local to one machine and one user;
+**witan is shared across the team, synced, and queryable by every agent and
+repo.** They overlap in purpose, so choose deliberately:
+
+- **Store in witan** anything another agent, a future session, or a teammate
+  would benefit from: project facts, reusable patterns, lessons from a mistake,
+  decisions and their rationale, hand-off context — especially when it's tied to
+  a repo, code symbol, task, or project. This is the **default** for engineering
+  knowledge worth keeping.
+- **Keep in built-in/session memory** only what is private or non-shareable:
+  machine-local paths, personal scratch notes, harness/tooling preferences, or
+  ephemeral state for the task in front of you right now.
+
+Rule of thumb: **if it's durable AND shareable, it goes in witan.** When in
+doubt, prefer witan — a teammate finding your lesson is the entire point; a note
+stranded in one machine's session memory helps no one else. If you catch
+yourself about to write an engineering fact, pattern, or lesson to local session
+memory, store it here instead (or as well, if the harness mandates a local
+write).
 
 ## When to Use Each Tool
 
@@ -101,6 +134,27 @@ memory_store(
 )
 ```
 
+## Linking Memories to Code Symbols
+
+When a memory is about a specific function or class, attach the code-graph
+**symbol id** so it can be found from the code later. Get the id from the
+`witan-code` tools — `code_find_definition` / `code_search_symbol`
+return it in the `slug` field, of the form `repo#path::Qualified.Name`:
+
+```
+memory_store(
+    kind="lesson",
+    title="Service.run must not be called before init",
+    content="...",
+    symbol_refs=["https://github.com/mitodl/ol-django#app/svc.py::Service.run"],
+)
+```
+
+To go the other way — "what lessons or tasks concern this symbol?" — call
+`context_for_symbol(symbol_id)` before editing it. It returns the memories and
+tasks whose `symbol_refs` include that id. (Requires the witan-code
+server; symbol ids are soft references, so a stale one simply resolves to nothing.)
+
 ## Quality Guidelines
 
 - **Be specific.** Vague memories degrade search quality. Include the what,
@@ -116,7 +170,6 @@ memory_store(
 ## Updating an Existing Memory
 
 Use `memory_get` to fetch the current content, decide what to change, then
-`memory_store` a corrected version. If the old memory is superseded rather
-than simply wrong, note the old slug and store both — the `Supersedes`
-relationship can be linked manually via the CLI if needed (v2 will expose
-this as a tool).
+`memory_store` a corrected version. There is no in-place update or `Supersedes`
+tool yet, so for a superseded (rather than simply wrong) memory, store the new
+version and reference the old slug in its content for now.

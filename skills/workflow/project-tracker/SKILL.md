@@ -1,14 +1,14 @@
 ---
 name: project-tracker
 description: >
-  Track an end-to-end engineering project across multiple Claude Code sessions
+  Track an end-to-end engineering project across multiple agent sessions
   without explicit handoffs. Use this skill when starting a multi-session
   project (call workflow_project_create then workflow_session_start), when
   continuing an existing project in a new session (call workflow_session_start
-  with the slug injected by the UserPromptSubmit hook), when advancing phases
+  with the slug injected by the context hook/extension), when advancing phases
   (workflow_project_advance), when closing a session (workflow_session_end),
   or when completing a project (workflow_project_complete to create a corpus
-  trace). Requires the omnigraph-memory MCP server. Covers project lifecycle,
+  trace). Requires the witan MCP server. Covers project lifecycle,
   cross-session linking, parallel sessions, phase transitions, and corpus trace
   creation for pattern mining.
 license: BSD-3-Clause
@@ -19,12 +19,13 @@ metadata:
 # Project Tracker
 
 Tracks engineering work across sessions from discovery through delivery. Each
-project is a `WorkflowProject` node in the omnigraph-memory graph. Each Claude
-Code session contributes a `WorkflowSession`. When a project completes, a
+project is a `WorkflowProject` node in the witan graph. Each agent
+session contributes a `WorkflowSession`. When a project completes, a
 `WorkflowTrace` is assembled for the corpus.
 
-The `UserPromptSubmit` hook auto-injects active project context into every
-session in the repo, so you rarely need to find a project slug manually.
+The context-injection hook (Claude Code) / extension (Pi) auto-injects active
+project context into every session in the repo, so you rarely need to find a
+project slug manually.
 
 ## Starting a Session: Joining an Existing Project
 
@@ -33,7 +34,7 @@ When the hook injects context showing an active project that matches your work:
 ```
 workflow_session_start(
     project_slug="wp-add-vault-k8s-auth-a3f912",
-    session_id="<value of CLAUDE_SESSION_ID env var, or any stable UUID>",
+    session_id="<$CLAUDE_SESSION_ID on Claude Code, or any stable session UUID>",
     phase="implementation",
 )
 ```
@@ -65,6 +66,28 @@ workflow_session_start(
     phase="discovery",
 )
 ```
+
+### Multi-repo projects
+
+A project can span several repos (e.g. a Django service, its frontend, and the
+infra repo that deploys it) or none (a cross-cutting objective). Pass the set
+via `repos`; the repo you create from is added automatically:
+
+```
+workflow_project_create(
+    title="B2B self-serve analytics",
+    description="StarRocks MVs + FastAPI service surfaced in the MIT Learn site",
+    repos=[
+        "https://github.com/mitodl/mit-learn",
+        "https://github.com/mitodl/ol-infrastructure",
+    ],
+)
+```
+
+You don't have to list every repo upfront — the set **accretes**: whenever
+`workflow_session_start` runs in a repo not yet in the set, that repo is added.
+A project surfaces in the injected context of any repo in its set. Omit `repos`
+entirely (from outside any git repo) to create a "floating" project tied to none.
 
 ## Phase Transitions
 
@@ -125,10 +148,10 @@ workflow_project_list(repo="")                # active projects across all repos
 
 ## Parallel Sessions
 
-Two Claude instances working on the same project simultaneously: each calls
+Two agent sessions working on the same project simultaneously: each calls
 `workflow_session_start` independently with the same `project_slug`. Sessions
 are linked via separate `BelongsTo` edges — no coordination needed. Both sessions
-will see the same project in their hook-injected context.
+will see the same project in their injected context.
 
 When `workflow_project_complete` is called (by either session, after all sessions
 have called `workflow_session_end`), all sessions are included in the trace. The
@@ -163,9 +186,6 @@ memory_store(kind="lesson", title="...", content="...")
 # Then link it to the project so it shows up in the trace
 workflow_project_link_memory(project_slug="wp-...", memory_slug="les-...")
 ```
-
-> Note: `workflow_project_link_memory` is the `link_informed` edge; call it via
-> the omnigraph MCP server's graph mutation tools if not exposed directly.
 
 ## Slug Conventions
 

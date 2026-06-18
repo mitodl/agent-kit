@@ -1,0 +1,412 @@
+// Agent Memory — read queries
+//
+// Search dispatch strategy:
+//   The MCP server selects the query name based on which optional filters
+//   the caller provided. This avoids relying on undefined behavior for
+//   null param filtering in match bindings.
+
+// ── Search (BM25 on content) ─────────────────────────────────────
+
+query search_all($query: String) {
+    match {
+        $m: Memory
+        search($m.content, $query)
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { bm25($m.content, $query) desc }
+    limit 20
+}
+
+query search_by_repo($query: String, $repo: String) {
+    match {
+        $m: Memory { repo: $repo }
+        search($m.content, $query)
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { bm25($m.content, $query) desc }
+    limit 20
+}
+
+query search_by_kind($query: String, $kind: String) {
+    match {
+        $m: Memory { kind: $kind }
+        search($m.content, $query)
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { bm25($m.content, $query) desc }
+    limit 20
+}
+
+query search_by_repo_and_kind($query: String, $repo: String, $kind: String) {
+    match {
+        $m: Memory { repo: $repo, kind: $kind }
+        search($m.content, $query)
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { bm25($m.content, $query) desc }
+    limit 20
+}
+
+// ── Listing (no search; filtered by repo and/or kind) ─────────────
+
+query list_memories() {
+    match {
+        $m: Memory
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+query list_memories_by_repo($repo: String) {
+    match {
+        $m: Memory { repo: $repo }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+query list_memories_by_kind($kind: String) {
+    match {
+        $m: Memory { kind: $kind }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+query list_memories_by_repo_kind($repo: String, $kind: String) {
+    match {
+        $m: Memory { repo: $repo, kind: $kind }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+// ── Single node fetch ─────────────────────────────────────────────
+
+query get_memory($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.symbol_refs, $m.created_at, $m.updated_at
+    }
+}
+
+// ── Project facts ─────────────────────────────────────────────────
+
+query get_project_facts($repo: String) {
+    match {
+        $m: Memory { kind: "project_fact", repo: $repo }
+    }
+    return {
+        $m.slug, $m.title, $m.content, $m.repo,
+        $m.category, $m.author, $m.tags, $m.created_at
+    }
+    order { $m.category, $m.created_at desc }
+}
+
+query project_facts_all() {
+    match {
+        $m: Memory { kind: "project_fact" }
+    }
+    return {
+        $m.slug, $m.title, $m.content, $m.repo,
+        $m.category, $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+}
+
+// ── Patterns ──────────────────────────────────────────────────────
+
+query patterns_all() {
+    match {
+        $m: Memory { kind: "pattern" }
+    }
+    return {
+        $m.slug, $m.title, $m.content,
+        $m.repo, $m.language, $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 50
+}
+
+query patterns_by_repo($repo: String) {
+    match {
+        $m: Memory { kind: "pattern", repo: $repo }
+    }
+    return {
+        $m.slug, $m.title, $m.content,
+        $m.repo, $m.language, $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+}
+
+// ── Workflow Projects ─────────────────────────────────────────────
+
+query get_workflow_project($slug: String) {
+    match {
+        $p: WorkflowProject { slug: $slug }
+    }
+    return {
+        $p.slug, $p.title, $p.description, $p.repos,
+        $p.status, $p.phase, $p.author, $p.tags,
+        $p.github_issue, $p.github_pr,
+        $p.created_at, $p.updated_at, $p.completed_at
+    }
+}
+
+// Repo membership can't be expressed as a match-shorthand on the `repos` list,
+// so callers fetch by status (or all) and Python-filter on list membership.
+
+query list_projects_by_status($status: String) {
+    match {
+        $p: WorkflowProject { status: $status }
+    }
+    return {
+        $p.slug, $p.title, $p.repos, $p.phase,
+        $p.status, $p.updated_at, $p.github_issue, $p.tags
+    }
+    order { $p.updated_at desc }
+    // Unbounded: repo membership is filtered in Python (repos is a list), so the
+    // full active set must be fetched before filtering — a small cap would drop a
+    // repo's projects when many projects exist across repos. Callers slice for display.
+    limit 1000000
+}
+
+query list_all_projects() {
+    match {
+        $p: WorkflowProject
+    }
+    return {
+        $p.slug, $p.title, $p.repos, $p.phase,
+        $p.status, $p.updated_at, $p.github_issue, $p.tags
+    }
+    order { $p.updated_at desc }
+    // Unbounded: repo membership is filtered in Python (repos is a list), so the
+    // full active set must be fetched before filtering — a small cap would drop a
+    // repo's projects when many projects exist across repos. Callers slice for display.
+    limit 1000000
+}
+
+// ── Workflow Sessions ─────────────────────────────────────────────
+
+query get_workflow_session($slug: String) {
+    match {
+        $s: WorkflowSession { slug: $slug }
+    }
+    return {
+        $s.slug, $s.project_slug, $s.session_id, $s.repo,
+        $s.phase, $s.summary, $s.tools_used, $s.files_changed,
+        $s.author, $s.tags, $s.started_at, $s.ended_at
+    }
+}
+
+query get_session_by_session_id($session_id: String) {
+    match {
+        $s: WorkflowSession { session_id: $session_id }
+    }
+    return {
+        $s.slug, $s.project_slug, $s.phase, $s.started_at
+    }
+}
+
+query list_sessions_by_project($project_slug: String) {
+    match {
+        $s: WorkflowSession { project_slug: $project_slug }
+    }
+    return {
+        $s.slug, $s.session_id, $s.phase, $s.summary,
+        $s.tools_used, $s.files_changed,
+        $s.started_at, $s.ended_at
+    }
+    order { $s.started_at asc }
+}
+
+// ── Workflow Traces (corpus) ──────────────────────────────────────
+
+query get_trace($slug: String) {
+    match {
+        $t: WorkflowTrace { slug: $slug }
+    }
+    return {
+        $t.slug, $t.project_slug, $t.title, $t.description,
+        $t.repos, $t.phases, $t.session_count, $t.duration,
+        $t.outcome, $t.lessons_slug, $t.patterns_slug,
+        $t.author, $t.created_at, $t.tags
+    }
+}
+
+query list_all_traces() {
+    match {
+        $t: WorkflowTrace
+    }
+    return {
+        $t.slug, $t.project_slug, $t.title, $t.repos,
+        $t.phases, $t.session_count, $t.duration,
+        $t.outcome, $t.created_at
+    }
+    order { $t.created_at desc }
+    limit 50
+}
+
+// ── Tasks ─────────────────────────────────────────────────────────
+
+query get_task($slug: String) {
+    match {
+        $t: Task { slug: $slug }
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo,
+        $t.type, $t.status, $t.priority,
+        $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.resolution,
+        $t.symbol_refs, $t.tags, $t.author,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+    }
+}
+
+query list_tasks_by_repo($repo: String) {
+    match {
+        $t: Task { repo: $repo }
+    }
+    return {
+        $t.slug, $t.title, $t.type, $t.status, $t.priority,
+        $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+    }
+    order { $t.updated_at desc }
+}
+
+query list_tasks_by_repo_status($repo: String, $status: String) {
+    match {
+        $t: Task { repo: $repo, status: $status }
+    }
+    return {
+        $t.slug, $t.title, $t.type, $t.status, $t.priority,
+        $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+    }
+    order { $t.updated_at desc }
+}
+
+query list_tasks_by_status($status: String) {
+    match {
+        $t: Task { status: $status }
+    }
+    return {
+        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
+        $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+    }
+    order { $t.updated_at desc }
+    limit 50
+}
+
+query list_all_tasks() {
+    match {
+        $t: Task
+    }
+    return {
+        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
+        $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+    }
+    order { $t.updated_at desc }
+    limit 50
+}
+
+query list_tasks_by_project($project_slug: String) {
+    match {
+        $t: Task { project_slug: $project_slug }
+    }
+    return {
+        $t.slug, $t.title, $t.type, $t.status, $t.priority,
+        $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+    }
+    order { $t.updated_at desc }
+}
+
+query list_tasks_by_parent($parent_slug: String) {
+    match {
+        $t: Task { parent_slug: $parent_slug }
+    }
+    return {
+        $t.slug, $t.title, $t.type, $t.status, $t.priority,
+        $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+    }
+    order { $t.priority, $t.updated_at desc }
+}
+
+// ── Reverse symbol references (Layer 1 ← Layer 2 composition) ──────
+// Return nodes carrying symbol_refs so the server can filter for a specific
+// code-graph symbol id in Python (list-membership, scoped by repo).
+
+query memories_by_repo($repo: String) {
+    match {
+        $m: Memory { repo: $repo }
+    }
+    return { $m.slug, $m.kind, $m.title, $m.repo, $m.symbol_refs }
+}
+
+query tasks_by_repo_refs($repo: String) {
+    match {
+        $t: Task { repo: $repo }
+    }
+    return { $t.slug, $t.title, $t.type, $t.status, $t.repo, $t.symbol_refs }
+}
+
+query memories_with_refs() {
+    match {
+        $m: Memory
+    }
+    return { $m.slug, $m.kind, $m.title, $m.repo, $m.symbol_refs }
+    limit 200
+}
+
+query tasks_with_refs() {
+    match {
+        $t: Task
+    }
+    return { $t.slug, $t.title, $t.type, $t.status, $t.repo, $t.symbol_refs }
+    limit 200
+}
