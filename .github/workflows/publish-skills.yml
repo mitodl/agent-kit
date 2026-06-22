@@ -1,0 +1,62 @@
+name: Publish Skill ZIPs
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  package-skills:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build skill ZIPs
+        run: |
+          mkdir -p dist/skills
+
+          for skill_md in skills/*/*/SKILL.md; do
+            skill_dir=$(dirname "$skill_md")
+
+            # Extract name from YAML frontmatter (first name: line between --- delimiters)
+            skill_name=$(awk '/^---/{f++; next} f==1 && /^name:/{sub(/^name:[[:space:]]*/,""); print; exit}' "$skill_md")
+
+            if [ -z "$skill_name" ]; then
+              echo "Skipping $skill_dir: could not extract name from frontmatter"
+              continue
+            fi
+
+            echo "Packaging: $skill_name"
+
+            staging=$(mktemp -d)
+            mkdir "$staging/$skill_name"
+
+            # skill.md (lowercase) is what Claude Teams expects
+            cp "$skill_md" "$staging/$skill_name/skill.md"
+
+            # Copy any subdirectories (scripts/, resources/, etc.)
+            find "$skill_dir" -mindepth 1 -maxdepth 1 -type d | while read -r subdir; do
+              cp -r "$subdir" "$staging/$skill_name/"
+            done
+
+            # Copy any additional .md files (but not SKILL.md itself)
+            find "$skill_dir" -maxdepth 1 -name "*.md" ! -name "SKILL.md" | while read -r mdfile; do
+              cp "$mdfile" "$staging/$skill_name/"
+            done
+
+            (cd "$staging" && zip -r "$GITHUB_WORKSPACE/dist/skills/${skill_name}.zip" "$skill_name/")
+            rm -rf "$staging"
+          done
+
+          echo "--- packaged skills ---"
+          ls -1 dist/skills/
+
+      - name: Upload ZIPs to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/skills/*.zip
+          generate_release_notes: true
