@@ -12,7 +12,6 @@ It is a thin presentation layer: every query goes through the same
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -504,29 +503,42 @@ def session_checkpoint() -> None:
     ctx_module.session_checkpoint(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
 
 
+_AGENTS = ("claude", "pi", "copilot", "opencode", "kilo")
+_AGENT_NAMES = {
+    "claude": "Claude Code",
+    "pi": "Pi",
+    "copilot": "GitHub Copilot",
+    "opencode": "OpenCode",
+    "kilo": "Kilo Code",
+}
+AgentName = Literal["claude", "pi", "copilot", "opencode", "kilo", "all"]
+
+
 @app.command
 def setup(
     *,
+    agent: AgentName = "claude",
     author: str | None = None,
     dry_run: bool = False,
 ) -> None:
-    """Install witan skills, hooks, omnigraph, and MCP config for Claude Code.
+    """Install witan for one or all supported coding agents.
 
-    Copies bundled skills to ``~/.claude/skills/``, installs thin hook wrappers
-    to ``~/.claude/hooks/``, copies the omnigraph binary to ``~/.local/bin/``,
-    and merges the witan MCP server + hook registrations into
-    ``~/.claude/settings.json``.
+    Installs the omnigraph binary to ``~/.local/bin/``, copies bundled skills
+    and hooks/extensions to the agent's config directories, and merges the
+    witan MCP server entry into the agent's config file.
 
     Re-run after every upgrade to refresh installed files.
 
     Parameters
     ----------
-    author: Name written to memories (default: git config user.name or $USER).
-    dry_run: Show what would happen without writing anything.
+    agent: Target agent — claude | pi | copilot | opencode | kilo | all.
+    author: Name written to graph nodes (default: git config user.name or $USER).
+    dry_run: Print what would happen without writing anything.
     """
+    from . import setup as su
+
     pkg_dir = Path(__file__).parent
 
-    # ── 1. Resolve author ────────────────────────────────────────────────────
     if author is None:
         try:
             author = subprocess.check_output(
@@ -541,119 +553,46 @@ def setup(
     if not shutil.which("witan") and not dry_run:
         console.print(
             "[yellow]Warning:[/yellow] witan not on PATH. "
-            "Hooks registered as [bold]witan inject-context[/bold] will fail until you run:\n"
-            "  [bold]uv tool install git+https://github.com/mitodl/agent-kit"
+            "Hooks calling [bold]witan inject-context[/bold] will fail until:\n"
+            "  [bold]uv tool install "
+            "git+https://github.com/mitodl/agent-kit"
             "#subdirectory=mcp/servers/witan[/bold]"
         )
 
-    # ── 2. Install omnigraph to ~/.local/bin/ ────────────────────────────────
-    bundled_omnigraph = pkg_dir / "_bin" / "omnigraph"
-    local_bin = Path.home() / ".local" / "bin"
-    if bundled_omnigraph.exists():
-        dest = local_bin / "omnigraph"
-        if not dry_run:
-            local_bin.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(bundled_omnigraph, dest)
-            dest.chmod(0o755)
-        console.print(f"  [green]omnigraph[/green] → {dest}")
-    else:
-        console.print(
-            "  [yellow]omnigraph binary not bundled[/yellow] "
-            "(unsupported platform or dev install) — ensure it is on PATH"
-        )
-
-    # ── 3. Install skills ────────────────────────────────────────────────────
-    skills_src = pkg_dir / "skills"
-    skills_dest = Path.home() / ".claude" / "skills"
-    if skills_src.is_dir():
-        for skill_dir in sorted(skills_src.iterdir()):
-            skill_md = skill_dir / "SKILL.md"
-            if not skill_md.exists():
-                continue
-            dest = skills_dest / skill_dir.name / "SKILL.md"
-            if not dry_run:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(skill_md, dest)
-            console.print(f"  [green]skill[/green] /{skill_dir.name} → {dest}")
-    else:
-        console.print("  [yellow]skills directory not found in package[/yellow]")
-
-    # ── 4. Install hooks ─────────────────────────────────────────────────────
-    hooks_src = pkg_dir / "hooks"
-    hooks_dest = Path.home() / ".claude" / "hooks"
-    if hooks_src.is_dir():
-        for hook_file in sorted(hooks_src.iterdir()):
-            if hook_file.suffix != ".sh":
-                continue
-            dest = hooks_dest / hook_file.name
-            if not dry_run:
-                hooks_dest.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(hook_file, dest)
-                dest.chmod(0o755)
-            console.print(f"  [green]hook[/green] {hook_file.name} → {dest}")
-    else:
-        console.print("  [yellow]hooks directory not found in package[/yellow]")
-
-    # ── 5. Merge ~/.claude/settings.json ────────────────────────────────────
-    settings_path = Path.home() / ".claude" / "settings.json"
-    if settings_path.exists():
-        try:
-            settings = json.loads(settings_path.read_text())
-        except json.JSONDecodeError:
-            settings = {}
-    else:
-        settings = {}
-
-    settings.setdefault("mcpServers", {})["witan"] = {
-        "command": "uvx",
-        "args": [
-            "--from",
-            "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
-            "--with",
-            "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code",
-            "witan",
-            "serve",
-        ],
-        "env": {"WITAN_AUTHOR": author},
+    _installers = {
+        "claude": su.install_claude,
+        "pi": su.install_pi,
+        "copilot": su.install_copilot,
+        "opencode": su.install_opencode,
+        "kilo": su.install_kilo,
+    }
+    _detectors = {
+        "claude": lambda: True,
+        "pi": su.is_pi_installed,
+        "copilot": su.is_copilot_installed,
+        "opencode": su.is_opencode_installed,
+        "kilo": su.is_kilo_installed,
     }
 
-    _merge_hooks(
-        settings,
-        "UserPromptSubmit",
-        {
-            "matcher": "",
-            "hooks": [{"type": "command", "command": "witan inject-context"}],
-        },
-    )
-    _merge_hooks(
-        settings,
-        "Stop",
-        {
-            "matcher": "",
-            "hooks": [{"type": "command", "command": "witan session-checkpoint"}],
-        },
-    )
+    targets = list(_AGENTS) if agent == "all" else [agent]
 
-    if not dry_run:
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-    console.print(f"  [green]settings.json[/green] → {settings_path}")
+    console.print("[bold]omnigraph binary[/bold]")
+    su.install_omnigraph(pkg_dir, dry_run)
+
+    for ag in targets:
+        if agent == "all" and not _detectors[ag]():
+            console.print(f"\n[dim]{_AGENT_NAMES[ag]} — not detected, skipping[/dim]")
+            continue
+        console.print(f"\n[bold]{_AGENT_NAMES[ag]}[/bold]")
+        _installers[ag](pkg_dir, author, dry_run)
+
     if dry_run:
         console.print("\n[dim](dry-run — no files written)[/dim]")
     else:
         console.print(
-            "\n[bold green]Done.[/bold green] Restart Claude Code to pick up the new hooks and MCP server."
+            "\n[bold green]Done.[/bold green] "
+            "Restart your agent(s) to pick up the new MCP server and hooks."
         )
-
-
-def _merge_hooks(settings: dict, event: str, entry: dict) -> None:
-    """Add a hook entry if an identical command is not already registered."""
-    cmd = entry["hooks"][0]["command"]
-    existing = settings.setdefault("hooks", {}).setdefault(event, [])
-    if not any(
-        any(h.get("command") == cmd for h in e.get("hooks", [])) for e in existing
-    ):
-        existing.append(entry)
 
 
 def main() -> None:

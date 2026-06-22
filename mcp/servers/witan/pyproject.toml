@@ -35,6 +35,7 @@ packages = ["witan"]
 "witan/_bin" = "witan/_bin"
 "witan/skills" = "witan/skills"
 "witan/hooks" = "witan/hooks"
+"witan/extensions" = "witan/extensions"
 
 [dependency-groups]
 test = ["pytest>=8"]
