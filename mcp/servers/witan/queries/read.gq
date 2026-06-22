@@ -308,7 +308,7 @@ query list_tasks_by_repo($repo: String) {
         $t: Task { repo: $repo }
     }
     return {
-        $t.slug, $t.title, $t.type, $t.status, $t.priority,
+        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }
@@ -320,7 +320,7 @@ query list_tasks_by_repo_status($repo: String, $status: String) {
         $t: Task { repo: $repo, status: $status }
     }
     return {
-        $t.slug, $t.title, $t.type, $t.status, $t.priority,
+        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }
@@ -358,7 +358,7 @@ query list_tasks_by_project($project_slug: String) {
         $t: Task { project_slug: $project_slug }
     }
     return {
-        $t.slug, $t.title, $t.type, $t.status, $t.priority,
+        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }
@@ -370,7 +370,7 @@ query list_tasks_by_parent($parent_slug: String) {
         $t: Task { parent_slug: $parent_slug }
     }
     return {
-        $t.slug, $t.title, $t.type, $t.status, $t.priority,
+        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
     }

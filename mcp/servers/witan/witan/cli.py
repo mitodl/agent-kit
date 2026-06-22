@@ -12,6 +12,7 @@ It is a thin presentation layer: every query goes through the same
 
 from __future__ import annotations
 
+import re
 import subprocess
 from typing import Literal
 
@@ -20,6 +21,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import config as cfg_module
+from . import repo as repo_module
 
 # Memory kinds, mirrored from witan.server.MemoryKind — drives the `--kind`
 # enum/validation in `witan memory`.
@@ -106,6 +108,19 @@ def _styled(value: str, table: dict) -> str:
     return f"[{style}]{value}[/{style}]" if style else (value or "")
 
 
+def _short_repo(uri: str | None) -> str:
+    """Strip scheme+host from a repo URI for compact display."""
+    if not uri:
+        return ""
+    m = re.match(r"https?://[^/]+/(.+)", uri)
+    return m.group(1) if m else uri
+
+
+def _detect_repo_for_display() -> str | None:
+    """Detect current repo URI for CLI display/filtering."""
+    return repo_module.detect()
+
+
 # ── Tasks ──────────────────────────────────────────────────────────────────
 
 
@@ -134,6 +149,10 @@ def tasks(
     """
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
+    detected_repo = (
+        _detect_repo_for_display() if not all_repos and repo is None else repo
+    )
+
     if ready:
         rows = _fn(s.task_ready)(
             repo=repo_arg, project_slug=project, assignee=assignee, limit=limit
@@ -144,27 +163,44 @@ def tasks(
         )[:limit]
 
     if not rows:
-        console.print("[dim]No tasks.[/dim]")
+        if detected_repo and not all_repos:
+            console.print(
+                f"[dim]No tasks scoped to {_short_repo(detected_repo)}.[/dim] "
+                f"Tasks may have been created without repo context. "
+                f"Try [bold]--all-repos[/bold] to see all tasks."
+            )
+        else:
+            console.print("[dim]No tasks.[/dim]")
         return
 
-    table = Table(title="Ready tasks" if ready else "Tasks", header_style="bold")
+    if all_repos:
+        scope = "all repos"
+    elif detected_repo:
+        scope = _short_repo(detected_repo)
+    else:
+        scope = "all repos (no git context)"
+    base_title = "Ready tasks" if ready else "Tasks"
+    table = Table(title=f"{base_title} — {scope}", header_style="bold")
     for col in (
         "priority",
         "status",
         "type",
         "slug",
         "title",
+        "repo",
         "assignee",
         "blocked_by",
     ):
         table.add_column(col)
     for r in rows:
+        repo_display = _short_repo(r.get("repo")) or "[dim](unscoped)[/dim]"
         table.add_row(
             _styled(r.get("priority", ""), _PRIORITY_STYLE),
             _styled(r.get("status", ""), _STATUS_STYLE),
             r.get("type", ""),
             r["slug"],
             r.get("title", ""),
+            repo_display,
             r.get("assignee") or "",
             ", ".join(r.get("blocked_by") or []),
         )
@@ -319,7 +355,16 @@ def projects(
     if not rows:
         console.print("[dim]No projects.[/dim]")
         return
-    table = Table(title="Workflow projects", header_style="bold")
+    detected_repo = (
+        _detect_repo_for_display() if not all_repos and repo is None else repo
+    )
+    if all_repos:
+        scope = "all repos"
+    elif detected_repo:
+        scope = _short_repo(detected_repo)
+    else:
+        scope = "all repos (no git context)"
+    table = Table(title=f"Workflow projects — {scope}", header_style="bold")
     for col in ("status", "phase", "slug", "title", "repos"):
         table.add_column(col)
     for r in rows:
@@ -328,7 +373,7 @@ def projects(
             r.get("phase", ""),
             r["slug"],
             r.get("title", ""),
-            ", ".join(r.get("repos") or []),
+            ", ".join(_short_repo(u) for u in (r.get("repos") or [])),
         )
     console.print(table)
 
