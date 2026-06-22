@@ -12,8 +12,12 @@ It is a thin presentation layer: every query goes through the same
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import shutil
 import subprocess
+from pathlib import Path
 from typing import Literal
 
 import cyclopts
@@ -460,6 +464,196 @@ def memory(
             r.get("repo", "") or "",
         )
     console.print(table)
+
+
+@app.command(name="inject-context")
+def inject_context() -> None:
+    """Print workflow context for the UserPromptSubmit hook.
+
+    Emits active WorkflowProjects and ready Tasks for the current git repo to
+    stdout. Designed to be called by ``~/.claude/hooks/workflow-context-inject.sh``
+    — always exits 0 and never blocks even when the graph is missing or the repo
+    is not in git.
+    """
+    from . import context as ctx_module
+
+    cfg = cfg_module.load()
+    graph_path = (
+        Path(cfg.graph_uri)
+        if not cfg.graph_uri.startswith(("http://", "https://", "s3://"))
+        else None
+    )
+    if graph_path is not None and not graph_path.exists():
+        return
+    text = ctx_module.inject_context(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
+    if text:
+        print(text)
+
+
+@app.command(name="session-checkpoint")
+def session_checkpoint() -> None:
+    """Auto-close the active WorkflowSession on agent stop (Stop hook).
+
+    Reads the state file written by ``workflow_session_start`` and records an
+    end timestamp via ``update_workflow_session_end``. No-op when the file is
+    absent — always exits 0 and never blocks.
+    """
+    from . import context as ctx_module
+
+    cfg = cfg_module.load()
+    ctx_module.session_checkpoint(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
+
+
+@app.command
+def setup(
+    *,
+    author: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Install witan skills, hooks, omnigraph, and MCP config for Claude Code.
+
+    Copies bundled skills to ``~/.claude/skills/``, installs thin hook wrappers
+    to ``~/.claude/hooks/``, copies the omnigraph binary to ``~/.local/bin/``,
+    and merges the witan MCP server + hook registrations into
+    ``~/.claude/settings.json``.
+
+    Re-run after every upgrade to refresh installed files.
+
+    Parameters
+    ----------
+    author: Name written to memories (default: git config user.name or $USER).
+    dry_run: Show what would happen without writing anything.
+    """
+    pkg_dir = Path(__file__).parent
+
+    # ── 1. Resolve author ────────────────────────────────────────────────────
+    if author is None:
+        try:
+            author = subprocess.check_output(
+                ["git", "config", "user.name"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            author = ""
+        author = author or os.environ.get("USER", "unknown")
+
+    if not shutil.which("witan") and not dry_run:
+        console.print(
+            "[yellow]Warning:[/yellow] witan not on PATH. "
+            "Hooks registered as [bold]witan inject-context[/bold] will fail until you run:\n"
+            "  [bold]uv tool install git+https://github.com/mitodl/agent-kit"
+            "#subdirectory=mcp/servers/witan[/bold]"
+        )
+
+    # ── 2. Install omnigraph to ~/.local/bin/ ────────────────────────────────
+    bundled_omnigraph = pkg_dir / "_bin" / "omnigraph"
+    local_bin = Path.home() / ".local" / "bin"
+    if bundled_omnigraph.exists():
+        dest = local_bin / "omnigraph"
+        if not dry_run:
+            local_bin.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bundled_omnigraph, dest)
+            dest.chmod(0o755)
+        console.print(f"  [green]omnigraph[/green] → {dest}")
+    else:
+        console.print(
+            "  [yellow]omnigraph binary not bundled[/yellow] "
+            "(unsupported platform or dev install) — ensure it is on PATH"
+        )
+
+    # ── 3. Install skills ────────────────────────────────────────────────────
+    skills_src = pkg_dir / "skills"
+    skills_dest = Path.home() / ".claude" / "skills"
+    if skills_src.is_dir():
+        for skill_dir in sorted(skills_src.iterdir()):
+            skill_md = skill_dir / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            dest = skills_dest / skill_dir.name / "SKILL.md"
+            if not dry_run:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(skill_md, dest)
+            console.print(f"  [green]skill[/green] /{skill_dir.name} → {dest}")
+    else:
+        console.print("  [yellow]skills directory not found in package[/yellow]")
+
+    # ── 4. Install hooks ─────────────────────────────────────────────────────
+    hooks_src = pkg_dir / "hooks"
+    hooks_dest = Path.home() / ".claude" / "hooks"
+    if hooks_src.is_dir():
+        for hook_file in sorted(hooks_src.iterdir()):
+            if hook_file.suffix != ".sh":
+                continue
+            dest = hooks_dest / hook_file.name
+            if not dry_run:
+                hooks_dest.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(hook_file, dest)
+                dest.chmod(0o755)
+            console.print(f"  [green]hook[/green] {hook_file.name} → {dest}")
+    else:
+        console.print("  [yellow]hooks directory not found in package[/yellow]")
+
+    # ── 5. Merge ~/.claude/settings.json ────────────────────────────────────
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except json.JSONDecodeError:
+            settings = {}
+    else:
+        settings = {}
+
+    settings.setdefault("mcpServers", {})["witan"] = {
+        "command": "uvx",
+        "args": [
+            "--from",
+            "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
+            "--with",
+            "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code",
+            "witan",
+            "serve",
+        ],
+        "env": {"WITAN_AUTHOR": author},
+    }
+
+    _merge_hooks(
+        settings,
+        "UserPromptSubmit",
+        {
+            "matcher": "",
+            "hooks": [{"type": "command", "command": "witan inject-context"}],
+        },
+    )
+    _merge_hooks(
+        settings,
+        "Stop",
+        {
+            "matcher": "",
+            "hooks": [{"type": "command", "command": "witan session-checkpoint"}],
+        },
+    )
+
+    if not dry_run:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+    console.print(f"  [green]settings.json[/green] → {settings_path}")
+    if dry_run:
+        console.print("\n[dim](dry-run — no files written)[/dim]")
+    else:
+        console.print(
+            "\n[bold green]Done.[/bold green] Restart Claude Code to pick up the new hooks and MCP server."
+        )
+
+
+def _merge_hooks(settings: dict, event: str, entry: dict) -> None:
+    """Add a hook entry if an identical command is not already registered."""
+    cmd = entry["hooks"][0]["command"]
+    existing = settings.setdefault("hooks", {}).setdefault(event, [])
+    if not any(
+        any(h.get("command") == cmd for h in e.get("hooks", [])) for e in existing
+    ):
+        existing.append(entry)
 
 
 def main() -> None:
