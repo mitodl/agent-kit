@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import shutil
 from pathlib import Path
 
@@ -41,13 +42,29 @@ def _mcp_entry(author: str, **extra: object) -> dict:
 # ── Shared file-level helpers ─────────────────────────────────────────────────
 
 
-def _load_json(path: Path) -> dict:
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except json.JSONDecodeError:
-            return {}
-    return {}
+def _load_json(path: Path) -> dict | None:
+    """Return parsed JSON from path, or None if the file exists but can't be parsed.
+
+    Handles JSONC (VS Code settings.json allows // comments and trailing commas)
+    via a best-effort stripping pass before standard JSON parse.
+    Returns an empty dict for a missing file; None signals a parse failure so
+    callers can skip writing rather than silently overwriting the user's config.
+    """
+    if not path.exists():
+        return {}
+    text = path.read_text()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Best-effort JSONC → JSON stripping for VS Code settings files.
+    stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    stripped = re.sub(r"//[^\n]*", "", stripped)
+    stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
 
 
 def _write_json(path: Path, data: dict, dry_run: bool) -> None:
@@ -135,6 +152,11 @@ def install_claude(pkg_dir: Path, author: str, dry_run: bool) -> None:
     )
     settings_path = Path.home() / ".claude" / "settings.json"
     settings = _load_json(settings_path)
+    if settings is None:
+        console.print(
+            f"  [yellow]skip settings.json[/yellow] — could not parse {settings_path}; add witan manually"
+        )
+        return
     settings.setdefault("mcpServers", {})["witan"] = _mcp_entry(author)
     _merge_claude_hooks(settings)
     _write_json(settings_path, settings, dry_run)
@@ -172,6 +194,9 @@ def install_pi(pkg_dir: Path, author: str, dry_run: bool) -> None:
     # MCP config — Pi uses the same mcpServers shape as Claude Code.
     pi_mcp = Path.home() / ".pi" / "agent" / "mcp.json"
     cfg = _load_json(pi_mcp)
+    if cfg is None:
+        console.print(f"  [yellow]skip mcp.json[/yellow] — could not parse {pi_mcp}")
+        return
     cfg.setdefault("mcpServers", {})["witan"] = _mcp_entry(author)
     _write_json(pi_mcp, cfg, dry_run)
     console.print(f"  [green]mcp.json[/green] → {pi_mcp}")
@@ -186,6 +211,9 @@ def install_copilot(pkg_dir: Path, author: str, dry_run: bool) -> None:
     # are required by the Copilot MCP adapter.
     mcp_path = _vscode_user_dir() / "mcp.json"
     cfg = _load_json(mcp_path)
+    if cfg is None:
+        console.print(f"  [yellow]skip mcp.json[/yellow] — could not parse {mcp_path}")
+        return
     cfg.setdefault("servers", {})["witan"] = _mcp_entry(author, type="stdio")
     _write_json(mcp_path, cfg, dry_run)
     console.print(f"  [green]mcp.json[/green] → {mcp_path}")
@@ -203,6 +231,11 @@ def install_opencode(pkg_dir: Path, author: str, dry_run: bool) -> None:
     # MCP servers live under the top-level "mcp" key with no "type" field.
     cfg_path = Path.home() / ".config" / "opencode" / "config.json"
     cfg = _load_json(cfg_path)
+    if cfg is None:
+        console.print(
+            f"  [yellow]skip config.json[/yellow] — could not parse {cfg_path}"
+        )
+        return
     cfg.setdefault("mcp", {})["witan"] = _mcp_entry(author)
     _write_json(cfg_path, cfg, dry_run)
     console.print(f"  [green]config.json[/green] → {cfg_path}")
@@ -216,6 +249,11 @@ def install_kilo(pkg_dir: Path, author: str, dry_run: bool) -> None:
     # user settings.json under the "kilocode.mcpServers" key.
     settings_path = _vscode_user_dir() / "settings.json"
     settings = _load_json(settings_path)
+    if settings is None:
+        console.print(
+            f"  [yellow]skip settings.json[/yellow] — could not parse {settings_path}; add witan manually"
+        )
+        return
     settings.setdefault("kilocode.mcpServers", {})["witan"] = _mcp_entry(author)
     _write_json(settings_path, settings, dry_run)
     console.print(f"  [green]settings.json[/green] → {settings_path}")

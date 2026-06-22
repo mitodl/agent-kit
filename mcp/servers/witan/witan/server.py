@@ -28,7 +28,7 @@ def _ensure_graph(graph_uri: str) -> None:
     """
     if graph_uri.startswith(("http://", "https://", "s3://")):
         return
-    store = Path(graph_uri)
+    store = Path(graph_uri).expanduser()
     if store.exists():
         return
     binary = OmnigraphClient._find_binary()
@@ -41,6 +41,7 @@ def _ensure_graph(graph_uri: str) -> None:
     )
     subprocess.run(
         [binary, "schema", "apply", "--schema", str(_SCHEMA_FILE), str(store)],
+        check=True,
         capture_output=True,
         text=True,
     )
@@ -807,7 +808,7 @@ def _unblock_dependents(repo: str | None) -> None:
     rows = (
         client.read("read.gq", "list_tasks_by_repo", {"repo": repo})
         if repo
-        else client.read("read.gq", "list_all_tasks", {})
+        else client.read("read.gq", "list_unscoped_tasks", {})
     )
     status_by_slug = {r["slug"]: r.get("status") for r in rows}
 
@@ -1019,7 +1020,7 @@ def task_list(
                 repo_rows = client.read(
                     "read.gq", "list_tasks_by_repo", {"repo": detected}
                 )
-            all_rows = client.read("read.gq", "list_all_tasks", {})
+            all_rows = client.read("read.gq", "list_unscoped_tasks", {})
             seen = {r["slug"] for r in repo_rows}
             unscoped = [
                 r for r in all_rows if not r.get("repo") and r["slug"] not in seen
@@ -1261,14 +1262,14 @@ def task_ready(
         detected = repo_module.detect(override=repo)
         if detected:
             repo_rows = client.read("read.gq", "list_tasks_by_repo", {"repo": detected})
-            all_rows = client.read("read.gq", "list_all_tasks", {})
+            all_rows = client.read("read.gq", "list_unscoped_tasks", {})
             seen = {r["slug"] for r in repo_rows}
             unscoped = [
                 r for r in all_rows if not r.get("repo") and r["slug"] not in seen
             ]
             rows = repo_rows + unscoped
         else:
-            rows = client.read("read.gq", "list_all_tasks", {})
+            rows = client.read("read.gq", "list_unscoped_tasks", {})
 
     status_by_slug = {r["slug"]: r.get("status") for r in rows}
 

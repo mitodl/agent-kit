@@ -20,11 +20,12 @@ import { spawnSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function workflowContextExtension(pi: ExtensionAPI): void {
-	pi.on("before_agent_start", async (event: any) => {
+	pi.on("before_agent_start", async (event: any, ctx: any) => {
 		try {
 			const r = spawnSync("witan", ["inject-context"], {
 				encoding: "utf8",
 				timeout: 5000,
+				cwd: ctx?.cwd,
 			});
 			const text = (r.stdout ?? "").trim();
 			if (r.status !== 0 || !text) return;

@@ -32,18 +32,27 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
     try:
         client = OmnigraphClient(graph_uri, queries_dir, token)
         repo = _detect_repo()
-        if not repo:
-            return ""
-        projects = client.read(
-            "read.gq",
-            "list_projects_by_status",
-            {"status": "active"},
-        )
-        tasks = client.read("read.gq", "list_tasks_by_repo", {"repo": repo})
+
+        # Unscoped tasks (no repo) are always relevant regardless of cwd.
+        all_rows = client.read("read.gq", "list_unscoped_tasks", {})
+        unscoped = [r for r in all_rows if not r.get("repo")]
+
+        projects: list[dict] = []
+        repo_tasks: list[dict] = []
+        if repo:
+            projects = client.read(
+                "read.gq",
+                "list_projects_by_status",
+                {"status": "active"},
+            )
+            projects = [p for p in projects if repo in (p.get("repos") or [])]
+            repo_tasks = client.read("read.gq", "list_tasks_by_repo", {"repo": repo})
+
+        # Merge, deduplicating unscoped tasks already returned by repo query.
+        seen = {t["slug"] for t in repo_tasks}
+        tasks = repo_tasks + [t for t in unscoped if t["slug"] not in seen]
     except Exception:  # noqa: BLE001
         return ""
-
-    projects = [p for p in projects if repo in (p.get("repos") or [])]
 
     status_by_slug = {t["slug"]: t.get("status") for t in tasks}
     ready = [
@@ -106,8 +115,15 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
 
 
 def _detect_repo() -> str | None:
-    """Detect canonical repo URI from CLAUDE_PROJECT_DIR or cwd."""
+    """Detect canonical repo URI from WITAN_REPO, CLAUDE_PROJECT_DIR, or cwd.
+
+    WITAN_REPO="" (explicitly set to empty string) suppresses detection entirely.
+    """
     import re
+
+    witan_repo = os.environ.get("WITAN_REPO")
+    if witan_repo is not None:
+        return witan_repo or None  # "" → disabled; non-empty → use as-is
 
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
     try:

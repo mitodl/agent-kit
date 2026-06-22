@@ -56,7 +56,11 @@ class CustomBuildHook(BuildHookInterface):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 archive = Path(tmp) / asset
-                urllib.request.urlretrieve(url, archive)
+                with (
+                    urllib.request.urlopen(url, timeout=30) as resp,
+                    open(archive, "wb") as fh,
+                ):
+                    fh.write(resp.read())
                 with tarfile.open(archive) as tf:
                     for member in tf.getmembers():
                         name = member.name.split("/")[-1]
