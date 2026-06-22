@@ -1,5 +1,6 @@
 import json
 import re
+import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -14,7 +15,39 @@ from .graph import OmnigraphClient
 
 # ── Startup ───────────────────────────────────────────────────────
 
+_SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "schema.pg"
+
+
+def _ensure_graph(graph_uri: str) -> None:
+    """Initialise the local graph if it does not yet exist.
+
+    No-op for remote (http/s3) URIs — those are assumed to be managed
+    externally. Local stores are created and schema-applied automatically
+    so `witan serve` and `witan <cmd>` work on a fresh machine without a
+    separate install step.
+    """
+    if graph_uri.startswith(("http://", "https://", "s3://")):
+        return
+    store = Path(graph_uri)
+    if store.exists():
+        return
+    binary = OmnigraphClient._find_binary()
+    store.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [binary, "init", "--schema", str(_SCHEMA_FILE), str(store)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [binary, "schema", "apply", "--schema", str(_SCHEMA_FILE), str(store)],
+        capture_output=True,
+        text=True,
+    )
+
+
 cfg = cfg_module.load()
+_ensure_graph(cfg.graph_uri)
 client = OmnigraphClient(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
 
 mcp = FastMCP(
@@ -811,6 +844,7 @@ def _update_task(slug: str, changes: dict) -> dict | None:
         "type": changes.get("type", current.get("type")),
         "status": changes.get("status", current.get("status")),
         "priority": changes.get("priority", current.get("priority")),
+        "repo": changes.get("repo", current.get("repo")),
         "project_slug": changes.get("project_slug", current.get("project_slug")),
         "parent_slug": changes.get("parent_slug", current.get("parent_slug")),
         "blocked_by": changes.get("blocked_by", current.get("blocked_by")),
@@ -971,14 +1005,26 @@ def task_list(
         rows = client.read("read.gq", "list_tasks_by_parent", {"parent_slug": parent})
     else:
         detected = repo_module.detect(override=repo)
-        if detected and status:
-            rows = client.read(
-                "read.gq",
-                "list_tasks_by_repo_status",
-                {"repo": detected, "status": status},
-            )
-        elif detected:
-            rows = client.read("read.gq", "list_tasks_by_repo", {"repo": detected})
+        if detected:
+            # Include repo-scoped tasks and unscoped (repo=null) tasks. Unscoped
+            # tasks were created without git context (e.g. via MCP from a global
+            # server) and should be visible regardless of which repo you're in.
+            if status:
+                repo_rows = client.read(
+                    "read.gq",
+                    "list_tasks_by_repo_status",
+                    {"repo": detected, "status": status},
+                )
+            else:
+                repo_rows = client.read(
+                    "read.gq", "list_tasks_by_repo", {"repo": detected}
+                )
+            all_rows = client.read("read.gq", "list_all_tasks", {})
+            seen = {r["slug"] for r in repo_rows}
+            unscoped = [
+                r for r in all_rows if not r.get("repo") and r["slug"] not in seen
+            ]
+            rows = repo_rows + unscoped
         elif status:
             rows = client.read("read.gq", "list_tasks_by_status", {"status": status})
         else:
@@ -999,6 +1045,7 @@ def task_update(
     type: TaskType | None = None,
     status: TaskStatus | None = None,
     priority: TaskPriority | None = None,
+    repo: str | None = None,
     assignee: str | None = None,
     project_slug: str | None = None,
     parent: str | None = None,
@@ -1009,10 +1056,17 @@ def task_update(
     """
     Update a task's mutable fields. Only non-null arguments are applied.
 
-    Use this to re-prioritise, re-parent (``parent``), reassign (``assignee``), or
-    attach an ``external_uri``. To *claim* a task for work prefer ``task_claim``
-    (it sets ``in_progress`` + a lease and refuses if someone else holds it); to
-    close a task prefer ``task_close``; to add dependencies use ``task_link``.
+    Use this to re-prioritise, re-parent (``parent``), reassign (``assignee``),
+    correct the repo association (``repo``), or attach an ``external_uri``. To
+    *claim* a task for work prefer ``task_claim`` (it sets ``in_progress`` + a
+    lease and refuses if someone else holds it); to close a task prefer
+    ``task_close``; to add dependencies use ``task_link``.
+
+    Parameters
+    ----------
+    repo:
+        Canonical repo URI to (re)assign this task to. Pass an explicit value to
+        correct tasks that were created without proper repo context.
     """
     changes: dict = {}
     if title is not None:
@@ -1023,6 +1077,8 @@ def task_update(
         changes["type"] = type
     if priority is not None:
         changes["priority"] = priority
+    if repo is not None:
+        changes["repo"] = repo
     if assignee is not None:
         changes["assignee"] = assignee
     if project_slug is not None:
@@ -1203,11 +1259,16 @@ def task_ready(
         )
     else:
         detected = repo_module.detect(override=repo)
-        rows = (
-            client.read("read.gq", "list_tasks_by_repo", {"repo": detected})
-            if detected
-            else client.read("read.gq", "list_all_tasks", {})
-        )
+        if detected:
+            repo_rows = client.read("read.gq", "list_tasks_by_repo", {"repo": detected})
+            all_rows = client.read("read.gq", "list_all_tasks", {})
+            seen = {r["slug"] for r in repo_rows}
+            unscoped = [
+                r for r in all_rows if not r.get("repo") and r["slug"] not in seen
+            ]
+            rows = repo_rows + unscoped
+        else:
+            rows = client.read("read.gq", "list_all_tasks", {})
 
     status_by_slug = {r["slug"]: r.get("status") for r in rows}
 

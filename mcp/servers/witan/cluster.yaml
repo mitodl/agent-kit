@@ -1,0 +1,20 @@
+# cluster.yaml — omnigraph team config for witan (replaces deprecated omnigraph.yaml).
+#
+# Declares the agent-memory graph's schema and stored queries for:
+#   - validation: omnigraph cluster validate
+#   - CI lint:    omnigraph lint --query queries/read.gq --schema schema/schema.pg
+#
+# Operator-local settings (default store URI, output format) belong in
+# ~/.omnigraph/config.yaml — see config/operator-config.example.yaml.
+#
+# State directory (__cluster/) is git-ignored.
+
+version: 1
+
+metadata:
+  name: agent-memory
+
+graphs:
+  memory:
+    schema: schema/schema.pg
+    queries: queries/

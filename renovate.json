@@ -1,0 +1,14 @@
+{
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"extends": ["local>mitodl/.github:renovate-config"],
+	"customManagers": [
+		{
+			"customType": "regex",
+			"description": "omnigraph binary version pinned in hatch_build.py",
+			"fileMatch": ["^mcp/servers/witan.*/hatch_build\\.py$"],
+			"matchStrings": ["_OMNIGRAPH_VERSION = \"(?<currentValue>[^\"]+)\""],
+			"datasourceTemplate": "github-releases",
+			"depNameTemplate": "ModernRelay/omnigraph"
+		}
+	]
+}
