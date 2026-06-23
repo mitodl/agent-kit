@@ -55,11 +55,36 @@ def _load_toml() -> dict:
             return tomllib.load(f)
     except FileNotFoundError:
         return {}
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"Failed to parse config file {path}: {exc}") from exc
+    except OSError as exc:
+        raise ValueError(f"Failed to read config file {path}: {exc}") from exc
+
+
+def _to_list(val: object) -> list[str]:
+    """Normalise a TOML value to a list of strings.
+
+    Accepts a list (normal case), a bare string (convenience shorthand for a
+    single-element list), or None/missing (returns []). Raises ValueError for
+    anything else so config errors surface early with a clear message.
+    """
+    if val is None:
+        return []
+    if isinstance(val, str):
+        return [val]
+    if isinstance(val, list):
+        return [str(item) for item in val]
+    raise ValueError(f"Expected a list or string, got {type(val).__name__!r}")
 
 
 def _parse_targets(raw: dict) -> list[_Target]:
+    targets = raw.get("targets", {})
+    if not isinstance(targets, dict):
+        raise ValueError("The 'targets' section in config must be a table.")
     result = []
-    for name, cfg in raw.get("targets", {}).items():
+    for name, cfg in targets.items():
+        if not isinstance(cfg, dict):
+            raise ValueError(f"Target {name!r} in config must be a table.")
         result.append(
             _Target(
                 name=name,
@@ -68,9 +93,9 @@ def _parse_targets(raw: dict) -> list[_Target]:
                 author=cfg.get("author"),
                 agent=cfg.get("agent"),
                 model=cfg.get("model"),
-                match_orgs=[str(o) for o in cfg.get("match_orgs", [])],
-                match_repos=[str(r) for r in cfg.get("match_repos", [])],
-                match_hosts=[str(h) for h in cfg.get("match_hosts", [])],
+                match_orgs=_to_list(cfg.get("match_orgs")),
+                match_repos=_to_list(cfg.get("match_repos")),
+                match_hosts=_to_list(cfg.get("match_hosts")),
             )
         )
     return result
@@ -97,11 +122,11 @@ def _match_target(targets: list[_Target], repo_uri: str) -> _Target | None:
                 return t
 
     for t in targets:
-        if host in t.match_hosts:
+        if host and host in t.match_hosts:
             return t
 
     for t in targets:
-        if org in t.match_orgs:
+        if org and org in t.match_orgs:
             return t
 
     return None
