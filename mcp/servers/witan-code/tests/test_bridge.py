@@ -35,8 +35,10 @@ export async function listCourses(id) {
 
 CSRF_CLIENT = """\
 import { fetchJSONWithCSRF } from 'redux-hammock/django_csrf_fetch';
+import { someUtil } from '@mitodl/some-package';
 
 export function loadProfile(username) {
+  const base = process.env.NEXT_PUBLIC_APP_BASE_URL;
   return fetchJSONWithCSRF('/api/v0/profiles/' + username + '/');
 }
 
@@ -90,10 +92,17 @@ def test_csrf_client_still_extracts_package_import():
     """CSRF import itself is recorded as a package consumer (not silenced)."""
     bindings = extract_file_bindings(CSRF_CLIENT, "typescript", "src/actions.ts")
     pkg_bindings = [b for b in bindings if b.kind == "package"]
-    # redux-hammock is not an @mitodl/ package so it won't be extracted,
-    # but the test confirms that non-endpoint extractions are unaffected.
-    # (If there were @mitodl/ imports they would still be captured.)
-    _ = pkg_bindings  # no assertion needed; confirm no exception raised
+    env_bindings = [b for b in bindings if b.kind == "env_var"]
+    # @mitodl/some-package import and env var are still captured even though
+    # endpoint consumers are suppressed for CSRF files.
+    assert any(b.key == "@mitodl/some-package" for b in pkg_bindings), (
+        "expected @mitodl/some-package in pkg_bindings: "
+        + str([b.key for b in pkg_bindings])
+    )
+    assert any(b.key == "NEXT_PUBLIC_APP_BASE_URL" for b in env_bindings), (
+        "expected NEXT_PUBLIC_APP_BASE_URL in env_bindings: "
+        + str([b.key for b in env_bindings])
+    )
 
 
 # Repo A (mit-learn-like): a Django settings consumer + a NextJS endpoint/env

@@ -140,5 +140,6 @@ def test_self_provided_path_suppressed():
     g = visualize.build_graph(rows)
     # repo-a self-provides → must NOT generate a → b edge.
     assert (A, B) not in g.edges, "phantom edge: repo-a→repo-b should be suppressed"
-    # repo-c is a genuine consumer → must generate a c → b edge (and c → a edge).
-    assert (C, A) in g.edges or (C, B) in g.edges, "real consumer edge should exist"
+    # repo-c is a genuine external consumer → must generate edges to both a and b.
+    assert (C, A) in g.edges, "real consumer edge C→A should exist"
+    assert (C, B) in g.edges, "real consumer edge C→B should exist"
