@@ -254,7 +254,13 @@ def task(slug: str) -> None:
 
 @app.command
 def run(
-    slug: str, *, agent: str = "claude", claim: bool = True, dry_run: bool = False
+    slug: str,
+    *,
+    target: str | None = None,
+    agent: str | None = None,
+    model: str | None = None,
+    claim: bool = True,
+    dry_run: bool = False,
 ) -> None:
     """Claim a task and launch an agent to execute it.
 
@@ -264,10 +270,24 @@ def run(
 
     Parameters
     ----------
-    agent: Agent CLI to launch (e.g. ``claude`` or ``pi``).
+    target: Named config target to use (overrides auto-detection by repo org).
+        Also overridable via WITAN_TARGET env var.
+    agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo). Overrides
+        WITAN_AGENT env var and target/config-file default.
+    model: Model passed to the agent's --model flag. Overrides WITAN_MODEL env
+        var and target/config-file default.
     claim: Mark the task in_progress and assign it to you first.
     dry_run: Print the prompt and exit without launching or claiming.
     """
+    try:
+        cfg = cfg_module.load(target=target)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
+
+    resolved_agent = agent or cfg.agent
+    resolved_model = model or cfg.model
+
     s = _srv()
     t = _fn(s.task_get)(slug)
     if not t:
@@ -290,20 +310,26 @@ def run(
         return
 
     if claim:
-        author = cfg_module.load().author
-        res = _fn(s.task_claim)(slug, assignee=author) or {}
+        res = _fn(s.task_claim)(slug, assignee=cfg.author) or {}
         if not res.get("claimed"):
             reason = res.get("held_by") or res.get("reason") or "unavailable"
             console.print(f"[red]Could not claim {slug} ({reason}).[/red]")
             raise SystemExit(1)
-        console.print(f"[cyan]Claimed {slug} (assignee={author}).[/cyan]")
+        console.print(f"[cyan]Claimed {slug} (assignee={cfg.author}).[/cyan]")
 
-    console.print(f"[dim]Launching: {agent}[/dim]")
+    cmd = [resolved_agent]
+    if resolved_model:
+        cmd += ["--model", resolved_model]
+    cmd.append(prompt)
+
+    target_info = f" [{cfg.target_name}]" if cfg.target_name else ""
+    model_info = f" --model {resolved_model}" if resolved_model else ""
+    console.print(f"[dim]Launching: {resolved_agent}{model_info}{target_info}[/dim]")
     try:
-        subprocess.run([agent, prompt], check=False)
+        subprocess.run(cmd, check=False)
     except FileNotFoundError:
         console.print(
-            f"[red]Agent {agent!r} not found on PATH.[/red] "
+            f"[red]Agent {resolved_agent!r} not found on PATH.[/red] "
             f"Task is claimed; run your agent manually with --dry-run's prompt."
         )
         raise SystemExit(1) from None
