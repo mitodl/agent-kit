@@ -32,8 +32,10 @@ Skills are organized by **category**. Each skill lives in
 | workflow | [`agent-memory`](./workflow/agent-memory/SKILL.md) | Read/write team shared knowledge graph; load project facts, store patterns and lessons |
 | workflow | [`project-tracker`](./workflow/project-tracker/SKILL.md) | Track multi-session engineering projects; link sessions without handoffs; build workflow corpus |
 | workflow | [`workflow`](./workflow/session-start/SKILL.md) | `/workflow` — interactive session linker: list active projects, pick one, call `workflow_session_start`; also `end` and `list` subcommands |
+| workflow | [`task`](./workflow/task-tracker/SKILL.md) | `/task` — triage ready work, create tasks, claim tasks, and close completed graph tasks |
 | process | [`create-ol-github-issue`](./process/create-ol-github-issue/SKILL.md) | Create mitodl GitHub issues using org standard templates |
 | process | [`create-ol-pull-request`](./process/create-ol-pull-request/SKILL.md) | Create mitodl pull requests using the org's standard PR template |
+| process | [`create-ol-rfc-discussion`](./process/create-ol-rfc-discussion/SKILL.md) | Write and post a structured RFC as a GitHub Discussion in mitodl/hq under the RFC category |
 | process | [`generate-standup`](./process/generate-standup/SKILL.md) | Generate and post a daily standup from GitHub activity to the mitodl/hq Check-ins discussion |
 
 ## Authoring a Skill
@@ -41,20 +43,20 @@ Skills are organized by **category**. Each skill lives in
 1. Pick or create a category directory: `skills/<category>/`
 2. Create `skills/<category>/<skill-name>/SKILL.md` with frontmatter and body:
 
-```markdown
----
-name: your-skill-name        # must match directory name exactly
-description: >               # what it does AND when to use it (max 1024 chars)
-  Use this skill when...
-license: BSD-3-Clause
-metadata:
-  category: <category>
----
+   ```markdown
+   ---
+   name: your-skill-name        # must match directory name exactly
+   description: >               # what it does AND when to use it (max 1024 chars)
+     Use this skill when...
+   license: BSD-3-Clause
+   metadata:
+     category: <category>
+   ---
 
-# Skill Title
+   # Skill Title
 
-...
-```
+   ...
+   ```
 
 3. Add the skill to your category's `README.md` table and to the **All Skills** table above.
 4. Open a PR — see the repo-level [CONTRIBUTING](../README.md#contributing) guide.
