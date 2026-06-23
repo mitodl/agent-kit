@@ -206,6 +206,10 @@ def memory_list(
         )
     if detected:
         return client.read("read.gq", "list_memories_by_repo", {"repo": detected})
+    # Only fan out to all repos when the caller explicitly opted in with repo="".
+    # A None repo that failed auto-detection should not silently dump everything.
+    if repo != "":
+        return []
     if kind:
         return client.read("read.gq", "list_memories_by_kind", {"kind": kind})
     return client.read("read.gq", "list_memories", {})
@@ -315,7 +319,10 @@ def memory_get_project_facts(repo: str | None = None) -> list[dict]:
     detected = repo_module.detect(override=repo)
     if detected:
         return client.read("read.gq", "get_project_facts", {"repo": detected})
-    return client.read("read.gq", "project_facts_all", {})
+    # Only fan out to all repos when the caller explicitly opted in with repo="".
+    if repo == "":
+        return client.read("read.gq", "project_facts_all", {})
+    return []
 
 
 @mcp.tool
@@ -820,11 +827,7 @@ def _unblock_dependents(repo: str | None) -> None:
 
     for r in rows:
         blockers = r.get("blocked_by") or []
-        if (
-            r.get("status") == "blocked"
-            and blockers
-            and all(is_closed(b) for b in blockers)
-        ):
+        if r.get("status") == "blocked" and all(is_closed(b) for b in blockers):
             _update_task(r["slug"], {"status": "open"})
 
 
@@ -1166,7 +1169,15 @@ def task_claim(
     if status == "closed":
         return {"slug": slug, "claimed": False, "reason": "closed"}
     if status == "blocked":
-        return {"slug": slug, "claimed": False, "reason": "blocked"}
+        # A task can be stale-blocked (blocked_by is empty or all closed). Run the
+        # unblock sweep before rejecting so stale status doesn't permanently prevent
+        # claiming.
+        _unblock_dependents(task.get("repo"))
+        rows = client.read("read.gq", "get_task", {"slug": slug})
+        if not rows or rows[0].get("status") == "blocked":
+            return {"slug": slug, "claimed": False, "reason": "blocked"}
+        task = rows[0]
+        status = task.get("status")
 
     current_holder = task.get("assignee")
     claimed_at = task.get("claimed_at")
