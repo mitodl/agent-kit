@@ -472,10 +472,23 @@ def workflow_project_get(slug: str) -> dict | None:
     """
     Retrieve a single workflow project by slug.
 
-    Returns the full project node or ``null`` if not found.
+    Returns the full project node (including ``blocked_by`` and ``blocks``
+    lists) or ``null`` if not found.
+
+    ``blocked_by`` lists the ``wp-`` slugs of projects that must complete
+    before this one is ready. ``blocks`` lists projects this project is
+    currently blocking (derived by scanning all active projects).
     """
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    project = rows[0]
+
+    # Compute the `blocks` list: active projects whose blocked_by includes this slug.
+    all_rows = client.read("read.gq", "list_all_projects", {})
+    blocks = [r["slug"] for r in all_rows if slug in (r.get("blocked_by") or [])]
+    project["blocks"] = blocks
+    return project
 
 
 @mcp.tool
@@ -483,6 +496,7 @@ def workflow_project_list(
     repo: str | None = None,
     status: WorkflowStatus | None = "active",
     phase: WorkflowPhase | None = None,
+    ready: bool = False,
 ) -> list[dict]:
     """
     List workflow projects, optionally filtered by repo, status, and phase.
@@ -502,6 +516,9 @@ def workflow_project_list(
         Defaults to ``active``.
     phase:
         Optional phase filter applied after fetching.
+    ready:
+        When ``True``, only return active projects whose blockers are all
+        completed (i.e. projects that are unblocked and actionable).
     """
     detected_repo = repo_module.detect(override=repo)
 
@@ -517,6 +534,12 @@ def workflow_project_list(
 
     if phase:
         rows = [r for r in rows if r.get("phase") == phase]
+
+    if ready:
+        status_cache: dict[str, str] = {
+            r["slug"]: r.get("status", "active") for r in rows
+        }
+        rows = [r for r in rows if _project_is_ready(r, status_cache)]
 
     return rows
 
@@ -669,6 +692,124 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
         {"from": project_slug, "to": memory_slug},
     )
     return {"project_slug": project_slug, "memory_slug": memory_slug}
+
+
+@mcp.tool
+def workflow_project_block(slug: str, blocks_slug: str) -> dict:
+    """
+    Declare that one project must complete before another can begin.
+
+    Adds a ``ProjectBlocks`` graph edge (``slug`` → ``blocks_slug``) and
+    appends ``slug`` to ``blocks_slug.blocked_by`` so the ready-work check
+    in ``workflow_project_list`` can filter without traversing edges.
+
+    Parameters
+    ----------
+    slug:
+        The ``wp-`` slug of the *blocking* project (must finish first).
+    blocks_slug:
+        The ``wp-`` slug of the project being *blocked*.
+    """
+    now = _now_iso()
+    client.change(
+        "mutations.gq", "link_project_blocks", {"from": slug, "to": blocks_slug}
+    )
+    blocked = client.read("read.gq", "get_workflow_project", {"slug": blocks_slug})
+    if blocked:
+        existing = blocked[0].get("blocked_by") or []
+        if slug not in existing:
+            client.change(
+                "mutations.gq",
+                "update_workflow_project_blocked_by",
+                {
+                    "slug": blocks_slug,
+                    "blocked_by": [*existing, slug],
+                    "updated_at": now,
+                },
+            )
+    return {"blocker": slug, "blocked": blocks_slug}
+
+
+@mcp.tool
+def workflow_project_unblock(slug: str, blocks_slug: str) -> dict:
+    """
+    Remove a project dependency declared with ``workflow_project_block``.
+
+    Removes ``slug`` from ``blocks_slug.blocked_by``. The ``ProjectBlocks``
+    graph edge is not deleted (omnigraph edges are append-only), but the
+    denormalized field — which drives the ready-work check — is updated.
+
+    Parameters
+    ----------
+    slug:
+        The ``wp-`` slug of the *blocking* project to remove.
+    blocks_slug:
+        The ``wp-`` slug of the project to unblock.
+    """
+    now = _now_iso()
+    blocked = client.read("read.gq", "get_workflow_project", {"slug": blocks_slug})
+    if blocked:
+        existing = blocked[0].get("blocked_by") or []
+        updated = [s for s in existing if s != slug]
+        client.change(
+            "mutations.gq",
+            "update_workflow_project_blocked_by",
+            {
+                "slug": blocks_slug,
+                "blocked_by": updated or None,
+                "updated_at": now,
+            },
+        )
+    return {
+        "blocker": slug,
+        "blocked": blocks_slug,
+        "removed": slug in (blocked[0].get("blocked_by") or [] if blocked else []),
+    }
+
+
+@mcp.tool
+def workflow_project_get_blockers(slug: str) -> list[dict]:
+    """
+    Return all projects that are blocking the given project.
+
+    Resolves each slug in the project's ``blocked_by`` list and returns the
+    full node for each blocker, including its current status.
+
+    Parameters
+    ----------
+    slug:
+        The ``wp-`` slug of the project to check.
+    """
+    rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    if not rows:
+        return []
+    blocked_by = rows[0].get("blocked_by") or []
+    result = []
+    for blocker_slug in blocked_by:
+        blocker_rows = client.read(
+            "read.gq", "get_workflow_project", {"slug": blocker_slug}
+        )
+        if blocker_rows:
+            result.append(blocker_rows[0])
+    return result
+
+
+def _project_blocker_status(blocker_slug: str, status_cache: dict[str, str]) -> str:
+    """Return the status of a blocking project, using a cache to avoid repeated reads."""
+    if blocker_slug in status_cache:
+        return status_cache[blocker_slug]
+    fetched = client.read("read.gq", "get_workflow_project", {"slug": blocker_slug})
+    status = fetched[0].get("status", "completed") if fetched else "completed"
+    status_cache[blocker_slug] = status
+    return status
+
+
+def _project_is_ready(p: dict, status_cache: dict[str, str]) -> bool:
+    """True when a project has no incomplete upstream blockers."""
+    blocked_by = p.get("blocked_by") or []
+    return all(
+        _project_blocker_status(b, status_cache) == "completed" for b in blocked_by
+    )
 
 
 @mcp.tool

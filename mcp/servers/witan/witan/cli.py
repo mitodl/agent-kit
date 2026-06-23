@@ -424,6 +424,13 @@ def project(slug: str) -> None:
         console.print(f"  issue: {p['github_issue']}")
     if p.get("github_pr"):
         console.print(f"  pr: {p['github_pr']}")
+    if p.get("blocked_by"):
+        for blocker in p["blocked_by"]:
+            b = _fn(s.workflow_project_get)(blocker)
+            st = b.get("status") if b else "missing"
+            console.print(f"  blocked by {blocker} [{_styled(st, _STATUS_STYLE)}]")
+    if p.get("blocks"):
+        console.print(f"  blocks: {', '.join(p['blocks'])}")
     console.print(f"\n{p.get('description') or '(no description)'}\n")
 
     sessions = s.client.read(
