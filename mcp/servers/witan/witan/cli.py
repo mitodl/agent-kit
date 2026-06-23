@@ -30,6 +30,17 @@ from . import repo as repo_module
 # enum/validation in `witan memory`.
 MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
 
+TaskType = Literal["bug", "feature", "task", "chore", "epic"]
+TaskPriority = Literal["p0", "p1", "p2", "p3"]
+WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
+
+
+def _split_csv(items: list[str] | None) -> list[str] | None:
+    if items is None:
+        return None
+    return [x.strip() for item in items for x in item.split(",") if x.strip()] or None
+
+
 app = cyclopts.App(
     name="witan",
     help="witan — agent memory, planning, and collaboration graph.",
@@ -264,8 +275,8 @@ def task_create_cmd(
     title: str,
     *,
     description: str = "",
-    type: str = "task",
-    priority: str = "p2",
+    type: TaskType = "task",
+    priority: TaskPriority = "p2",
     repo: str | None = None,
     project: str | None = None,
     parent: str | None = None,
@@ -301,11 +312,11 @@ def task_create_cmd(
         repo=repo,
         project_slug=project,
         parent=parent,
-        blocked_by=blocked_by,
-        discovered_from=discovered_from,
+        blocked_by=_split_csv(blocked_by),
+        discovered_from=_split_csv(discovered_from),
         external_uri=external_uri,
-        symbol_refs=symbol_refs,
-        tags=tags,
+        symbol_refs=_split_csv(symbol_refs),
+        tags=_split_csv(tags),
     )
     console.print(f"[green]Created task:[/green] [bold]{result['slug']}[/bold]")
     console.print(f"  status: {_styled(result['status'], _STATUS_STYLE)}")
@@ -527,7 +538,7 @@ def project_create(
     title: str,
     *,
     description: str = "",
-    phase: str = "discovery",
+    phase: WorkflowPhase = "discovery",
     repo: str | None = None,
     github_issue: str | None = None,
     tags: list[str] | None = None,
@@ -551,7 +562,7 @@ def project_create(
         phase=phase,
         repos=repos,
         github_issue=github_issue,
-        tags=tags,
+        tags=_split_csv(tags),
     )
     console.print(f"[green]Created project:[/green] [bold]{result['slug']}[/bold]")
     if result.get("repos"):
