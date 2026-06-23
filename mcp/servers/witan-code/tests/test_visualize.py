@@ -96,3 +96,49 @@ def test_render_rich_smoke():
 
     g = visualize.build_graph(ROWS)
     visualize.render_rich(g, console=Console(file=open("/dev/null", "w")))
+
+
+def test_self_provided_path_suppressed():
+    """Fix 3: when a consumer repo also provides the same key_norm, no edge is emitted.
+
+    Scenario: both repo-a and repo-b serve ``/api/v0/profiles/{}`` (e.g. both
+    have a Django route for it).  Repo-a's TS code contains a path literal that
+    matches the same key_norm.  Without the fix this would produce a phantom
+    repo-a → repo-b edge.  With the fix, the edge must be absent because repo-a
+    is itself a provider of that contract.
+    """
+    C = "https://github.com/mitodl/repo-c"
+    rows = [
+        # repo-a both provides AND consumes /api/v0/profiles/{} (same-origin route).
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/profiles/{}",
+            "role": "provider",
+            "repo": A,
+        },
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/profiles/{}",
+            "role": "consumer",
+            "repo": A,
+        },
+        # repo-b also provides the route (shared path key collision).
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/profiles/{}",
+            "role": "provider",
+            "repo": B,
+        },
+        # repo-c is a genuine external consumer (does not provide the route).
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/profiles/{}",
+            "role": "consumer",
+            "repo": C,
+        },
+    ]
+    g = visualize.build_graph(rows)
+    # repo-a self-provides → must NOT generate a → b edge.
+    assert (A, B) not in g.edges, "phantom edge: repo-a→repo-b should be suppressed"
+    # repo-c is a genuine consumer → must generate a c → b edge (and c → a edge).
+    assert (C, A) in g.edges or (C, B) in g.edges, "real consumer edge should exist"

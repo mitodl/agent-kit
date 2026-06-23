@@ -96,8 +96,13 @@ def build_graph(
             continue
         if b_kind == "service":
             continue  # image:/name: anchors aren't repo-to-repo edges
-        # consumer depends on provider
+        # consumer depends on provider; skip when the consumer repo itself also
+        # provides this key_norm (the repo self-serves its own route, so the
+        # path-key collision with a foreign provider must not generate an edge).
+        self_providing = g["providers"]
         for cons in g["consumers"]:
+            if cons in self_providing:
+                continue
             for prov in g["providers"]:
                 if cons != prov:
                     graph.edge(cons, prov).add(b_kind, key_norm)
