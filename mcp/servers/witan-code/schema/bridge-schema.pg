@@ -25,6 +25,7 @@ node InterfaceBinding {
     file: String @index           // repo-relative source path of the binding
     repo_file: String @index      // "repo|file" — single-field key for per-file delete
                                   // (delete `where` takes one condition, no compound `and`)
+    sub_kind: String?             // service anchor variant: repo | image | name
     symbol_id: String?            // enclosing Symbol id (repo#path::Qn) when applicable
     line: I32?
     language: String?

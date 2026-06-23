@@ -129,25 +129,23 @@ def repos() -> None:
         table.add_column(col)
     for store in stores:
         repo_uri, file_count = _code_store_stats(store)
-        table.add_row(
-            repo_uri, file_count, _human_size(_dir_size(store)), _mtime(store)
-        )
+        size, mtime = _dir_stats(store)
+        table.add_row(repo_uri, file_count, _human_size(size), mtime)
     console.print(table)
 
 
 def _code_store_stats(store: Path) -> tuple[str, str]:
-    """Return (repo_uri, file_count) by reading the store; fall back to the name."""
+    """Return (repo_uri, file_count); repo URI comes from the sidecar."""
+    repo_uri = _store_repo(store)
     try:
         from . import config as cfg_module
         from .graph import OmnigraphClient
 
         client = OmnigraphClient(str(store), cfg_module.load().queries_dir)
         rows = client.read("read.gq", "all_file_hashes", {})
-        if rows:
-            return rows[0]["slug"].split("#", 1)[0], str(len(rows))
-        return _store_repo(store), "0"
-    except Exception:  # noqa: BLE001 — degrade to the (best-effort) repo name
-        return _store_repo(store), "?"
+        return repo_uri, str(len(rows))
+    except Exception:  # noqa: BLE001 — degrade gracefully
+        return repo_uri, "?"
 
 
 def _store_repo(store: Path) -> str:
@@ -176,8 +174,19 @@ def _repo_from_stem(stem: str) -> str:
     return stem
 
 
-def _dir_size(path: Path) -> int:
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+def _dir_stats(path: Path) -> tuple[int, str]:
+    """Return (total_bytes, last-modified string) in a single directory walk."""
+    import datetime
+
+    total = 0
+    latest = path.stat().st_mtime
+    for f in path.rglob("*"):
+        if f.is_file():
+            st = f.stat()
+            total += st.st_size
+            if st.st_mtime > latest:
+                latest = st.st_mtime
+    return total, datetime.datetime.fromtimestamp(latest).strftime("%Y-%m-%d %H:%M")
 
 
 def _human_size(n: int) -> str:
@@ -187,16 +196,6 @@ def _human_size(n: int) -> str:
             return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
         size /= 1024
     return f"{size:.1f}GB"
-
-
-def _mtime(path: Path) -> str:
-    import datetime
-
-    ts = max(
-        (f.stat().st_mtime for f in path.rglob("*") if f.is_file()),
-        default=path.stat().st_mtime,
-    )
-    return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
 def cli() -> None:

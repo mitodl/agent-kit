@@ -34,6 +34,7 @@ class ParsedBinding:
     key_norm: str  # normalized join key
     role: str  # provider | consumer | shared
     file: str  # repo-relative source path
+    sub_kind: str | None = None  # service anchor variant: repo | image | name
     symbol_id: str | None = None  # filled by the indexer (Tier A) via line lookup
     line: int | None = None
     language: str | None = None
@@ -95,7 +96,7 @@ def normalize_key(kind: str, key: str) -> str:
     return key.strip()
 
 
-def _binding(kind, key, role, file, **kw) -> ParsedBinding:
+def _binding(kind, key, role, file, *, sub_kind=None, **kw) -> ParsedBinding:
     key_norm = normalize_key(kind, key)
     generic = kind == "env_var" and key in GENERIC_ENV
     return ParsedBinding(
@@ -104,6 +105,7 @@ def _binding(kind, key, role, file, **kw) -> ParsedBinding:
         key_norm=key_norm,
         role=role,
         file=file,
+        sub_kind=sub_kind,
         generic=generic,
         **kw,
     )
@@ -329,21 +331,22 @@ def _service_anchors(path: Path, rel: str) -> list[ParsedBinding]:
 
     The repo full_name is normalized to its canonical HTTPS URI so it joins
     against the deployed repo's own slug (kind=service, key_norm=<that URI>).
+    sub_kind ("repo" | "image" | "name") distinguishes anchor types without
+    packing the variant into the key string — joining on (kind, key_norm) works
+    even when the consumer records only the bare URI/name.
     """
     text = path.read_text()
     out: list[ParsedBinding] = []
     for m in _SVC_REPO.finditer(text):
-        uri = (
-            f"https://github.com/{m.group(1)}"
-            if "/" in m.group(1) and "://" not in m.group(1)
-            else m.group(1)
-        )
+        raw = m.group(1)
+        uri = f"https://github.com/{raw}" if "/" in raw and "://" not in raw else raw
         out.append(
             _binding(
                 "service",
-                f"repo:{uri}",
+                uri,
                 "provider",
                 rel,
+                sub_kind="repo",
                 line=_line_of(text, m.start()),
                 framework="pulumi",
             )
@@ -352,9 +355,10 @@ def _service_anchors(path: Path, rel: str) -> list[ParsedBinding]:
         out.append(
             _binding(
                 "service",
-                f"image:{m.group(1)}",
+                m.group(1),
                 "provider",
                 rel,
+                sub_kind="image",
                 line=_line_of(text, m.start()),
                 framework="pulumi",
             )
@@ -363,9 +367,10 @@ def _service_anchors(path: Path, rel: str) -> list[ParsedBinding]:
         out.append(
             _binding(
                 "service",
-                f"name:{m.group(1)}",
+                m.group(1),
                 "provider",
                 rel,
+                sub_kind="name",
                 line=_line_of(text, m.start()),
                 framework="pulumi",
             )

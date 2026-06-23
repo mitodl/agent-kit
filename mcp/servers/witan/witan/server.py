@@ -569,13 +569,11 @@ def workflow_project_complete(
     """
     now = _now_iso()
 
-    # Idempotency: return existing trace if already completed
     trace_slug = f"wt-{slug}"
     existing = client.read("read.gq", "get_trace", {"slug": trace_slug})
     if existing:
         return {"project_slug": slug, "trace_slug": trace_slug, "existed": True}
 
-    # Mark project completed
     client.change(
         "mutations.gq",
         "update_workflow_project_complete",
@@ -588,7 +586,6 @@ def workflow_project_complete(
         },
     )
 
-    # Fetch project and all sessions to assemble trace
     project_rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     project = project_rows[0] if project_rows else {}
 
@@ -596,13 +593,10 @@ def workflow_project_complete(
         "read.gq", "list_sessions_by_project", {"project_slug": slug}
     )
 
-    # Compute trace fields
     session_count = len(sessions)
-    phases_seen: list[str] = []
-    for s in sessions:
-        p = s.get("phase")
-        if p and p not in phases_seen:
-            phases_seen.append(p)
+    phases_seen = list(
+        dict.fromkeys(s.get("phase") for s in sessions if s.get("phase"))
+    )
 
     duration: int | None = None
     if sessions:

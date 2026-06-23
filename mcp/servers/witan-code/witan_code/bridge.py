@@ -5,11 +5,10 @@ stores' advisory write locks are never held at once (no nesting → no deadlock)
 and a bridge failure can't corrupt a per-repo store that already succeeded.
 """
 
-from datetime import datetime, timezone
-
 from . import config as cfg_module
 from .bridge_extractors import ParsedBinding
 from .graph import OmnigraphClient
+from .indexer import _now_iso
 from .store import bridge_store, ensure_bridge_store
 
 
@@ -51,12 +50,14 @@ def write_bindings(
 
 def _record(b: ParsedBinding, repo: str) -> dict:
     symbol_id = b.symbol_id or ""
-    slug = f"{repo}|{b.file}|{b.kind}|{b.key_norm}|{b.role}|{symbol_id}"
+    sub_kind = b.sub_kind or ""
+    slug = f"{repo}|{b.file}|{b.kind}|{sub_kind}|{b.key_norm}|{b.role}|{symbol_id}"
     return {
         "type": "InterfaceBinding",
         "data": {
             "slug": slug,
             "kind": b.kind,
+            "sub_kind": b.sub_kind or None,
             "key": b.key,
             "key_norm": b.key_norm,
             "role": b.role,
@@ -84,7 +85,3 @@ def _dedupe(records: list[dict]) -> list[dict]:
         seen.add(slug)
         out.append(record)
     return out
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()

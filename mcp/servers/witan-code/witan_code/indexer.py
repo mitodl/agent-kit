@@ -330,7 +330,7 @@ def _parse_for_index(
         rel = path.name
     file_id = f"{slug}#{rel}"
 
-    if not force and existing.get(file_id) == content_hash and file_id in existing:
+    if not force and existing.get(file_id) == content_hash:
         return None  # unchanged
 
     parsed = _parse_file(raw, path, spec, slug, file_id, rel, content_hash)
