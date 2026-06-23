@@ -38,16 +38,13 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> Path:
             capture_output=True,
             text=True,
         )
-
-    # Apply the schema on EVERY run, not just on creation: it is idempotent
-    # ("no changes" when matched) and additive, so an existing store picks up new
-    # columns/indexes (e.g. Symbol.decorators) without a manual migration. Also
-    # builds the FTS/BTREE indexes the search queries need. Best-effort.
-    subprocess.run(
-        [binary, "schema", "apply", "--schema", str(cfg.schema_file), str(store)],
-        capture_output=True,
-        text=True,
-    )
+        # Force apply on first creation — stamp will be written below.
+        _schema_apply(binary, cfg.schema_file, store)
+    else:
+        # Only re-apply when the schema file has changed since the last apply.
+        # schema apply is additive/idempotent but spawns a subprocess on every
+        # PostToolUse reindex; the mtime sidecar avoids the cost on hot paths.
+        _schema_apply_if_changed(binary, cfg.schema_file, store)
 
     # Record the canonical repo URI in a sidecar so listings can show it even for
     # a 0-file store (sanitize_slug is lossy — its `_` collapse isn't reversible).
@@ -58,6 +55,28 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> Path:
 def repo_sidecar(store: Path) -> Path:
     """Sidecar file next to a store holding its canonical repo URI."""
     return store.parent / f"{store.name}.repo"
+
+
+def _schema_stamp(store: Path) -> Path:
+    return store.parent / f"{store.name}.schema_mtime"
+
+
+def _schema_apply(binary: str, schema_file: Path, store: Path) -> None:
+    res = subprocess.run(
+        [binary, "schema", "apply", "--schema", str(schema_file), str(store)],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode == 0:
+        _schema_stamp(store).write_text(str(schema_file.stat().st_mtime))
+
+
+def _schema_apply_if_changed(binary: str, schema_file: Path, store: Path) -> None:
+    stamp = _schema_stamp(store)
+    current_mtime = str(schema_file.stat().st_mtime)
+    if stamp.exists() and stamp.read_text().strip() == current_mtime:
+        return
+    _schema_apply(binary, schema_file, store)
 
 
 def bridge_store(config: cfg_module.Config | None = None) -> Path:

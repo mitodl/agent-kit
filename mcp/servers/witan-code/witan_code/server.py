@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
 
@@ -88,6 +89,28 @@ def _bridge_client() -> OmnigraphClient | None:
     return _client_for_path(store) if store.exists() else None
 
 
+def _fan_out(clients: list[OmnigraphClient], fn) -> list[dict]:
+    """Run ``fn(client) -> list[dict]`` across clients in parallel threads.
+
+    Falls back to a simple loop for 0–1 clients to avoid thread-pool overhead
+    on the common single-repo case.
+    """
+    if len(clients) <= 1:
+        return [row for c in clients for row in fn(c)]
+    out: list[dict] = []
+    errors: list[Exception] = []
+    with ThreadPoolExecutor(max_workers=min(len(clients), 8)) as pool:
+        futures = {pool.submit(fn, c): c for c in clients}
+        for f in as_completed(futures):
+            try:
+                out.extend(f.result())
+            except Exception as exc:
+                errors.append(exc)
+    if errors and not out:
+        raise errors[0]
+    return out
+
+
 def _file_id(path: str, repo: str) -> str:
     """Build the CodeFile id (`repo#relpath`) for a repo-relative or abs path."""
     base = repo_module.root() or Path.cwd()
@@ -122,15 +145,14 @@ def code_find_definition(name: str, repo: str | None = None) -> list[dict]:
         Canonical repo URI to scope to. Omit to use the current repo, or to
         search across every indexed repo when not inside one.
     """
-    out: list[dict] = []
-    for client in _resolve_clients(repo):
+
+    def _query(client: OmnigraphClient) -> list[dict]:
         rows = client.read(
             "read.gq", "find_by_qualified_name", {"qualified_name": name}
         )
-        if not rows:
-            rows = client.read("read.gq", "find_by_name", {"name": name})
-        out.extend(rows)
-    return out
+        return rows or client.read("read.gq", "find_by_name", {"name": name})
+
+    return _fan_out(_resolve_clients(repo), _query)
 
 
 @mcp.tool
@@ -294,17 +316,15 @@ def code_search_symbol(
         Canonical repo URI to scope to. Omit to use the current repo, or to
         search across every indexed repo when not inside one.
     """
-    out: list[dict] = []
-    for client in _resolve_clients(repo):
+
+    def _query(client: OmnigraphClient) -> list[dict]:
         if kind:
-            out.extend(
-                client.read(
-                    "read.gq", "search_symbols_by_kind", {"query": query, "kind": kind}
-                )
+            return client.read(
+                "read.gq", "search_symbols_by_kind", {"query": query, "kind": kind}
             )
-        else:
-            out.extend(client.read("read.gq", "search_symbols", {"query": query}))
-    return out
+        return client.read("read.gq", "search_symbols", {"query": query})
+
+    return _fan_out(_resolve_clients(repo), _query)
 
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]

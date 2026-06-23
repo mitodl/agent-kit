@@ -128,6 +128,19 @@ def _make_slug(kind: str, title: str) -> str:
     return f"{prefix}-{sanitised}-{short_id}"
 
 
+_SLIM_KEYS = ("slug", "kind", "title", "tags")
+
+
+def _slim_memory(m: dict) -> dict:
+    """Return slug/kind/title/tags — enough to decide whether to fetch.
+
+    Used when returning unscoped memories to an agent that hasn't opted into
+    a full listing: the agent can scan slugs and call memory_get on the ones
+    it actually needs rather than absorbing every word of every memory.
+    """
+    return {k: m[k] for k in _SLIM_KEYS if k in m}
+
+
 # ── Tools ─────────────────────────────────────────────────────────
 
 
@@ -195,8 +208,11 @@ def memory_list(
         Optional filter: ``pattern``, ``project_fact``, ``lesson``, or
         ``agent_context``. Omit to list all kinds.
     repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted; pass
-        an empty string to list across all repos.
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
+        Pass an empty string to list across all repos (full content included).
+        When no repo is detected and ``repo`` is omitted, returns slim records
+        (slug, kind, title, tags — no content) for unscoped memories so you
+        can scan and call ``memory_get`` on the ones you need.
     """
     detected = repo_module.detect(override=repo)
 
@@ -206,9 +222,23 @@ def memory_list(
         )
     if detected:
         return client.read("read.gq", "list_memories_by_repo", {"repo": detected})
+    if repo == "":
+        # Explicit all-repos opt-in — return full content.
+        if kind:
+            return client.read("read.gq", "list_memories_by_kind", {"kind": kind})
+        return client.read("read.gq", "list_memories", {})
+    # No repo detected and no explicit override: return slim records for
+    # unscoped memories (repo=null) only. Caller can memory_get any slug it needs.
+    # Use unbounded queries so repo-scoped memories don't push unscoped ones out
+    # of the top-100 window before the Python filter runs.
     if kind:
-        return client.read("read.gq", "list_memories_by_kind", {"kind": kind})
-    return client.read("read.gq", "list_memories", {})
+        all_rows = client.read(
+            "read.gq", "list_memories_by_kind_unbounded", {"kind": kind}
+        )
+    else:
+        all_rows = client.read("read.gq", "list_memories_unbounded", {})
+    unscoped = [r for r in all_rows if not r.get("repo")]
+    return [_slim_memory(r) for r in unscoped]
 
 
 @mcp.tool
@@ -310,12 +340,20 @@ def memory_get_project_facts(repo: str | None = None) -> list[dict]:
     ----------
     repo:
         Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
-        Pass an empty string to list project facts across all repos.
+        Pass an empty string to list project facts across all repos (full content).
+        When no repo is detected and ``repo`` is omitted, returns slim records
+        (slug, kind, title, tags — no content) for unscoped facts only.
     """
     detected = repo_module.detect(override=repo)
     if detected:
         return client.read("read.gq", "get_project_facts", {"repo": detected})
-    return client.read("read.gq", "project_facts_all", {})
+    if repo == "":
+        return client.read("read.gq", "project_facts_all", {})
+    # No repo detected: return slim unscoped project facts so the agent can
+    # select which to fetch in full via memory_get.
+    all_rows = client.read("read.gq", "project_facts_all", {})
+    unscoped = [r for r in all_rows if not r.get("repo")]
+    return [_slim_memory(r) for r in unscoped]
 
 
 @mcp.tool
@@ -539,13 +577,11 @@ def workflow_project_complete(
     """
     now = _now_iso()
 
-    # Idempotency: return existing trace if already completed
     trace_slug = f"wt-{slug}"
     existing = client.read("read.gq", "get_trace", {"slug": trace_slug})
     if existing:
         return {"project_slug": slug, "trace_slug": trace_slug, "existed": True}
 
-    # Mark project completed
     client.change(
         "mutations.gq",
         "update_workflow_project_complete",
@@ -558,7 +594,6 @@ def workflow_project_complete(
         },
     )
 
-    # Fetch project and all sessions to assemble trace
     project_rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     project = project_rows[0] if project_rows else {}
 
@@ -566,13 +601,10 @@ def workflow_project_complete(
         "read.gq", "list_sessions_by_project", {"project_slug": slug}
     )
 
-    # Compute trace fields
     session_count = len(sessions)
-    phases_seen: list[str] = []
-    for s in sessions:
-        p = s.get("phase")
-        if p and p not in phases_seen:
-            phases_seen.append(p)
+    phases_seen = list(
+        dict.fromkeys(s.get("phase") for s in sessions if s.get("phase"))
+    )
 
     duration: int | None = None
     if sessions:
@@ -820,11 +852,7 @@ def _unblock_dependents(repo: str | None) -> None:
 
     for r in rows:
         blockers = r.get("blocked_by") or []
-        if (
-            r.get("status") == "blocked"
-            and blockers
-            and all(is_closed(b) for b in blockers)
-        ):
+        if r.get("status") == "blocked" and all(is_closed(b) for b in blockers):
             _update_task(r["slug"], {"status": "open"})
 
 
@@ -1166,7 +1194,15 @@ def task_claim(
     if status == "closed":
         return {"slug": slug, "claimed": False, "reason": "closed"}
     if status == "blocked":
-        return {"slug": slug, "claimed": False, "reason": "blocked"}
+        # A task can be stale-blocked (blocked_by is empty or all closed). Run the
+        # unblock sweep before rejecting so stale status doesn't permanently prevent
+        # claiming.
+        _unblock_dependents(task.get("repo"))
+        rows = client.read("read.gq", "get_task", {"slug": slug})
+        if not rows or rows[0].get("status") == "blocked":
+            return {"slug": slug, "claimed": False, "reason": "blocked"}
+        task = rows[0]
+        status = task.get("status")
 
     current_holder = task.get("assignee")
     claimed_at = task.get("claimed_at")

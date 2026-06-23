@@ -117,7 +117,7 @@ def _match_target(targets: list[_Target], repo_uri: str) -> _Target | None:
 
     for t in targets:
         for pattern in t.match_repos:
-            p = pattern.rstrip("/")
+            p = re.sub(r"^https?://", "", pattern).rstrip("/")
             if bare == p or bare.endswith("/" + p):
                 return t
 

@@ -117,6 +117,36 @@ query list_memories_by_repo_kind($repo: String, $kind: String) {
     limit 100
 }
 
+// High-limit variants for the unscoped fallback path: the normal list_memories
+// cap (100) is applied before Python filtering by repo=null, so unscoped
+// memories can be pushed out when many repo-scoped ones are newer.
+
+query list_memories_unbounded() {
+    match {
+        $m: Memory
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 10000
+}
+
+query list_memories_by_kind_unbounded($kind: String) {
+    match {
+        $m: Memory { kind: $kind }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 10000
+}
+
 // ── Single node fetch ─────────────────────────────────────────────
 
 query get_memory($slug: String) {
@@ -228,26 +258,6 @@ query list_all_projects() {
 
 // ── Workflow Sessions ─────────────────────────────────────────────
 
-query get_workflow_session($slug: String) {
-    match {
-        $s: WorkflowSession { slug: $slug }
-    }
-    return {
-        $s.slug, $s.project_slug, $s.session_id, $s.repo,
-        $s.phase, $s.summary, $s.tools_used, $s.files_changed,
-        $s.author, $s.tags, $s.started_at, $s.ended_at
-    }
-}
-
-query get_session_by_session_id($session_id: String) {
-    match {
-        $s: WorkflowSession { session_id: $session_id }
-    }
-    return {
-        $s.slug, $s.project_slug, $s.phase, $s.started_at
-    }
-}
-
 query list_sessions_by_project($project_slug: String) {
     match {
         $s: WorkflowSession { project_slug: $project_slug }
@@ -272,19 +282,6 @@ query get_trace($slug: String) {
         $t.outcome, $t.lessons_slug, $t.patterns_slug,
         $t.author, $t.created_at, $t.tags
     }
-}
-
-query list_all_traces() {
-    match {
-        $t: WorkflowTrace
-    }
-    return {
-        $t.slug, $t.project_slug, $t.title, $t.repos,
-        $t.phases, $t.session_count, $t.duration,
-        $t.outcome, $t.created_at
-    }
-    order { $t.created_at desc }
-    limit 50
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────
