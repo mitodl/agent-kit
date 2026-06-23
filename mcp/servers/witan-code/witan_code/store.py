@@ -1,10 +1,10 @@
 """Per-repo store resolution and lazy initialisation."""
 
-import shutil
 import subprocess
 from pathlib import Path
 
 from . import config as cfg_module
+from .graph import OmnigraphClient
 
 
 def store_for_repo(slug: str, config: cfg_module.Config | None = None) -> Path:
@@ -102,10 +102,4 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> Path:
 
 
 def _binary() -> str:
-    binary = shutil.which("omnigraph")
-    if binary is None:
-        raise RuntimeError(
-            "omnigraph binary not found on PATH. "
-            "Run mcp/servers/witan-code/install.sh first."
-        )
-    return binary
+    return OmnigraphClient._find_binary()

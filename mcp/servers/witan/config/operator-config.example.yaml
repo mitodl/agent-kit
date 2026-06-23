@@ -1,0 +1,31 @@
+# ~/.omnigraph/config.yaml — personal operator config (RFC-008, not committed).
+#
+# Copy this file to ~/.omnigraph/config.yaml and adjust the store path if you
+# used a non-default WITAN_DATA_DIR when running install.sh.
+#
+# This replaces the deprecated cli:/aliases: sections of omnigraph.yaml.
+
+profiles:
+  witan:
+    store: ~/.local/share/witan/graph.omni
+    branch: main
+
+defaults:
+  output: json
+
+# With the profile set, common queries shorten to:
+#
+#   omnigraph --profile witan query --query queries/read.gq search_by_repo \
+#     --params '{"query":"uv","repo":"https://github.com/mitodl/ol-infrastructure"}'
+#
+#   omnigraph --profile witan query --query queries/read.gq get_memory \
+#     --params '{"slug":"pat-always-use-uv"}'
+#
+#   omnigraph --profile witan mutate --query queries/mutations.gq insert_memory \
+#     --params '{"slug":"pat-...","kind":"pattern","title":"...","content":"...",
+#               "author":"you","created_at":"2026-06-22T00:00:00Z",
+#               "updated_at":"2026-06-22T00:00:00Z"}'
+#
+# Note: the old omnigraph.yaml aliases (RFC-006) required a running omnigraph-server
+# to migrate to the new `aliases:` format (RFC-011). The --profile flag covers the
+# most common need (avoiding --store repetition) without a server dependency.

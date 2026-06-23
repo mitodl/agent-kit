@@ -12,7 +12,11 @@ It is a thin presentation layer: every query goes through the same
 
 from __future__ import annotations
 
+import os
+import re
+import shutil
 import subprocess
+from pathlib import Path
 from typing import Literal
 
 import cyclopts
@@ -20,6 +24,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import config as cfg_module
+from . import repo as repo_module
 
 # Memory kinds, mirrored from witan.server.MemoryKind — drives the `--kind`
 # enum/validation in `witan memory`.
@@ -106,6 +111,19 @@ def _styled(value: str, table: dict) -> str:
     return f"[{style}]{value}[/{style}]" if style else (value or "")
 
 
+def _short_repo(uri: str | None) -> str:
+    """Strip scheme+host from a repo URI for compact display."""
+    if not uri:
+        return ""
+    m = re.match(r"https?://[^/]+/(.+)", uri)
+    return m.group(1) if m else uri
+
+
+def _detect_repo_for_display() -> str | None:
+    """Detect current repo URI for CLI display/filtering."""
+    return repo_module.detect()
+
+
 # ── Tasks ──────────────────────────────────────────────────────────────────
 
 
@@ -134,6 +152,10 @@ def tasks(
     """
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
+    detected_repo = (
+        _detect_repo_for_display() if not all_repos and repo is None else repo
+    )
+
     if ready:
         rows = _fn(s.task_ready)(
             repo=repo_arg, project_slug=project, assignee=assignee, limit=limit
@@ -144,27 +166,44 @@ def tasks(
         )[:limit]
 
     if not rows:
-        console.print("[dim]No tasks.[/dim]")
+        if detected_repo and not all_repos:
+            console.print(
+                f"[dim]No tasks scoped to {_short_repo(detected_repo)}.[/dim] "
+                f"Tasks may have been created without repo context. "
+                f"Try [bold]--all-repos[/bold] to see all tasks."
+            )
+        else:
+            console.print("[dim]No tasks.[/dim]")
         return
 
-    table = Table(title="Ready tasks" if ready else "Tasks", header_style="bold")
+    if all_repos:
+        scope = "all repos"
+    elif detected_repo:
+        scope = _short_repo(detected_repo)
+    else:
+        scope = "all repos (no git context)"
+    base_title = "Ready tasks" if ready else "Tasks"
+    table = Table(title=f"{base_title} — {scope}", header_style="bold")
     for col in (
         "priority",
         "status",
         "type",
         "slug",
         "title",
+        "repo",
         "assignee",
         "blocked_by",
     ):
         table.add_column(col)
     for r in rows:
+        repo_display = _short_repo(r.get("repo")) or "[dim](unscoped)[/dim]"
         table.add_row(
             _styled(r.get("priority", ""), _PRIORITY_STYLE),
             _styled(r.get("status", ""), _STATUS_STYLE),
             r.get("type", ""),
             r["slug"],
             r.get("title", ""),
+            repo_display,
             r.get("assignee") or "",
             ", ".join(r.get("blocked_by") or []),
         )
@@ -319,7 +358,16 @@ def projects(
     if not rows:
         console.print("[dim]No projects.[/dim]")
         return
-    table = Table(title="Workflow projects", header_style="bold")
+    detected_repo = (
+        _detect_repo_for_display() if not all_repos and repo is None else repo
+    )
+    if all_repos:
+        scope = "all repos"
+    elif detected_repo:
+        scope = _short_repo(detected_repo)
+    else:
+        scope = "all repos (no git context)"
+    table = Table(title=f"Workflow projects — {scope}", header_style="bold")
     for col in ("status", "phase", "slug", "title", "repos"):
         table.add_column(col)
     for r in rows:
@@ -328,7 +376,7 @@ def projects(
             r.get("phase", ""),
             r["slug"],
             r.get("title", ""),
-            ", ".join(r.get("repos") or []),
+            ", ".join(_short_repo(u) for u in (r.get("repos") or [])),
         )
     console.print(table)
 
@@ -415,6 +463,136 @@ def memory(
             r.get("repo", "") or "",
         )
     console.print(table)
+
+
+@app.command(name="inject-context")
+def inject_context() -> None:
+    """Print workflow context for the UserPromptSubmit hook.
+
+    Emits active WorkflowProjects and ready Tasks for the current git repo to
+    stdout. Designed to be called by ``~/.claude/hooks/workflow-context-inject.sh``
+    — always exits 0 and never blocks even when the graph is missing or the repo
+    is not in git.
+    """
+    from . import context as ctx_module
+
+    cfg = cfg_module.load()
+    graph_path = (
+        Path(cfg.graph_uri)
+        if not cfg.graph_uri.startswith(("http://", "https://", "s3://"))
+        else None
+    )
+    if graph_path is not None and not graph_path.exists():
+        return
+    text = ctx_module.inject_context(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
+    if text:
+        print(text)
+
+
+@app.command(name="session-checkpoint")
+def session_checkpoint() -> None:
+    """Auto-close the active WorkflowSession on agent stop (Stop hook).
+
+    Reads the state file written by ``workflow_session_start`` and records an
+    end timestamp via ``update_workflow_session_end``. No-op when the file is
+    absent — always exits 0 and never blocks.
+    """
+    from . import context as ctx_module
+
+    cfg = cfg_module.load()
+    ctx_module.session_checkpoint(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
+
+
+_AGENTS = ("claude", "pi", "copilot", "opencode", "kilo")
+_AGENT_NAMES = {
+    "claude": "Claude Code",
+    "pi": "Pi",
+    "copilot": "GitHub Copilot",
+    "opencode": "OpenCode",
+    "kilo": "Kilo Code",
+}
+AgentName = Literal["claude", "pi", "copilot", "opencode", "kilo", "all"]
+
+
+@app.command
+def setup(
+    *,
+    agent: AgentName = "claude",
+    author: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Install witan for one or all supported coding agents.
+
+    Installs the omnigraph binary to ``~/.local/bin/``, copies bundled skills
+    and hooks/extensions to the agent's config directories, and merges the
+    witan MCP server entry into the agent's config file.
+
+    Re-run after every upgrade to refresh installed files.
+
+    Parameters
+    ----------
+    agent: Target agent — claude | pi | copilot | opencode | kilo | all.
+    author: Name written to graph nodes (default: git config user.name or $USER).
+    dry_run: Print what would happen without writing anything.
+    """
+    from . import setup as su
+
+    pkg_dir = Path(__file__).parent
+
+    if author is None:
+        try:
+            author = subprocess.check_output(
+                ["git", "config", "user.name"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            author = ""
+        author = author or os.environ.get("USER", "unknown")
+
+    if not shutil.which("witan") and not dry_run:
+        console.print(
+            "[yellow]Warning:[/yellow] witan not on PATH. "
+            "Hooks calling [bold]witan inject-context[/bold] will fail until:\n"
+            "  [bold]uv tool install "
+            "git+https://github.com/mitodl/agent-kit"
+            "#subdirectory=mcp/servers/witan[/bold]"
+        )
+
+    _installers = {
+        "claude": su.install_claude,
+        "pi": su.install_pi,
+        "copilot": su.install_copilot,
+        "opencode": su.install_opencode,
+        "kilo": su.install_kilo,
+    }
+    _detectors = {
+        "claude": lambda: True,
+        "pi": su.is_pi_installed,
+        "copilot": su.is_copilot_installed,
+        "opencode": su.is_opencode_installed,
+        "kilo": su.is_kilo_installed,
+    }
+
+    targets = list(_AGENTS) if agent == "all" else [agent]
+
+    console.print("[bold]omnigraph binary[/bold]")
+    su.install_omnigraph(pkg_dir, dry_run)
+
+    for ag in targets:
+        if agent == "all" and not _detectors[ag]():
+            console.print(f"\n[dim]{_AGENT_NAMES[ag]} — not detected, skipping[/dim]")
+            continue
+        console.print(f"\n[bold]{_AGENT_NAMES[ag]}[/bold]")
+        _installers[ag](pkg_dir, author, dry_run)
+
+    if dry_run:
+        console.print("\n[dim](dry-run — no files written)[/dim]")
+    else:
+        console.print(
+            "\n[bold green]Done.[/bold green] "
+            "Restart your agent(s) to pick up the new MCP server and hooks."
+        )
 
 
 def main() -> None:

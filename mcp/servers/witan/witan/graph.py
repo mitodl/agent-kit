@@ -81,7 +81,8 @@ class OmnigraphClient:
     # ── Internals ─────────────────────────────────────────────────
 
     def _run(self, subcommand: str, *args: str) -> str:
-        cmd = [self._binary, subcommand, "--store", self.graph_uri, *args]
+        quiet = ["--quiet"] if subcommand in _WRITE_SUBCOMMANDS else []
+        cmd = [self._binary, subcommand, "--store", self.graph_uri, *quiet, *args]
         env = dict(os.environ)
         if self.token:
             env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = self.token
@@ -125,7 +126,15 @@ class OmnigraphClient:
     def _repair(self, env: dict) -> None:
         """Reconcile manifest/HEAD drift so the retried write can proceed."""
         subprocess.run(
-            [self._binary, "repair", "--store", self.graph_uri, "--confirm", "--force"],
+            [
+                self._binary,
+                "repair",
+                "--store",
+                self.graph_uri,
+                "--confirm",
+                "--force",
+                "--quiet",
+            ],
             capture_output=True,
             text=True,
             env=env,
@@ -133,10 +142,15 @@ class OmnigraphClient:
 
     @staticmethod
     def _find_binary() -> str:
+        # Check for the binary bundled inside the package by the hatchling build hook.
+        bundled = Path(__file__).parent / "_bin" / "omnigraph"
+        if bundled.exists():
+            return str(bundled)
         binary = shutil.which("omnigraph")
         if binary is None:
             raise RuntimeError(
-                "omnigraph binary not found on PATH. "
-                "Run mcp/servers/witan/install.sh first."
+                "omnigraph binary not found. "
+                "Install via: curl -fsSL "
+                "https://raw.githubusercontent.com/ModernRelay/omnigraph/main/scripts/install.sh | bash"
             )
         return binary

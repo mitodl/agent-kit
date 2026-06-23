@@ -24,8 +24,11 @@ def detect(override: str | None = None) -> str | None:
     if override is not None:
         return override or None
 
-    if env_repo := os.environ.get("WITAN_REPO"):
-        return env_repo
+    env_repo = os.environ.get("WITAN_REPO")
+    if env_repo is not None:
+        # Empty string explicitly disables auto-detection (e.g. set in a global
+        # MCP server config where the server CWD is not the session's repo).
+        return env_repo or None
 
     cwd = Path.cwd()
 

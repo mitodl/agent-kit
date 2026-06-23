@@ -24,6 +24,10 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+# omnigraph binary downloaded by hatch_build.py — not committed
+*/_bin/
+# omnigraph cluster state (populated by `omnigraph cluster import`)
+__cluster/
 
 # MCP server logs / caches
 .mcp-cache/
