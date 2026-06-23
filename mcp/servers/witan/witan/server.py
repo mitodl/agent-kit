@@ -485,7 +485,7 @@ def workflow_project_get(slug: str) -> dict | None:
     project = rows[0]
 
     # Compute the `blocks` list: active projects whose blocked_by includes this slug.
-    all_rows = client.read("read.gq", "list_all_projects", {})
+    all_rows = client.read("read.gq", "list_projects_by_status", {"status": "active"})
     blocks = [r["slug"] for r in all_rows if slug in (r.get("blocked_by") or [])]
     project["blocks"] = blocks
     return project
@@ -536,6 +536,9 @@ def workflow_project_list(
         rows = [r for r in rows if r.get("phase") == phase]
 
     if ready:
+        # Ensure we only consider active projects — ready=True implies active scope.
+        if not status:
+            rows = [r for r in rows if r.get("status", "active") == "active"]
         status_cache: dict[str, str] = {
             r["slug"]: r.get("status", "active") for r in rows
         }
@@ -710,6 +713,8 @@ def workflow_project_block(slug: str, blocks_slug: str) -> dict:
     blocks_slug:
         The ``wp-`` slug of the project being *blocked*.
     """
+    if slug == blocks_slug:
+        raise ValueError("A project cannot block itself.")
     now = _now_iso()
     client.change(
         "mutations.gq", "link_project_blocks", {"from": slug, "to": blocks_slug}
@@ -787,7 +792,7 @@ def workflow_project_get_blockers(slug: str) -> list[dict]:
     result = []
     for blocker_slug in blocked_by:
         blocker_rows = client.read(
-            "read.gq", "get_workflow_project", {"slug": blocker_slug}
+            "read.gq", "get_workflow_project_by_slug", {"slug": blocker_slug}
         )
         if blocker_rows:
             result.append(blocker_rows[0])
@@ -798,7 +803,9 @@ def _project_blocker_status(blocker_slug: str, status_cache: dict[str, str]) -> 
     """Return the status of a blocking project, using a cache to avoid repeated reads."""
     if blocker_slug in status_cache:
         return status_cache[blocker_slug]
-    fetched = client.read("read.gq", "get_workflow_project", {"slug": blocker_slug})
+    fetched = client.read(
+        "read.gq", "get_workflow_project_by_slug", {"slug": blocker_slug}
+    )
     status = fetched[0].get("status", "completed") if fetched else "completed"
     status_cache[blocker_slug] = status
     return status

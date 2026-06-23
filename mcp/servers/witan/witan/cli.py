@@ -426,7 +426,10 @@ def project(slug: str) -> None:
         console.print(f"  pr: {p['github_pr']}")
     if p.get("blocked_by"):
         for blocker in p["blocked_by"]:
-            b = _fn(s.workflow_project_get)(blocker)
+            rows = s.client.read(
+                "read.gq", "get_workflow_project_by_slug", {"slug": blocker}
+            )
+            b = rows[0] if rows else None
             st = b.get("status") if b else "missing"
             console.print(f"  blocked by {blocker} [{_styled(st, _STATUS_STYLE)}]")
     if p.get("blocks"):
