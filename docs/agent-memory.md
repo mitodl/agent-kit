@@ -68,34 +68,106 @@ Set `REPO` to your checkout path for the snippets below:
 REPO=/path/to/agent-kit
 ```
 
-### 1. MCP servers — run from the local checkout
+### 1. Choose Witan destinations — keep work and personal separate
 
-Add both servers under `mcpServers` in `~/.claude/settings.json` (Claude Code)
-**and** `~/.pi/agent/mcp.json` (Pi). The local pattern uses `uv run --directory`
-(not the published `uvx --from git+…` snippet in each server's `config/`), so the
-server always runs your working tree:
+Before configuring any agent, decide where each class of memory should write.
+Do **not** point work and personal agents at the same graph: project facts,
+lessons, tasks, and workflow traces can contain customer names, internal URLs,
+private repo paths, ticket IDs, or personal notes.
+
+Create named Witan targets in `~/.config/witan/config.toml` so the CLI and MCP
+server can route work and personal repos to different Omnigraph destinations:
+
+```bash
+mkdir -p ~/.config/witan ~/.local/share/witan-personal
+cat > ~/.config/witan/config.toml <<'EOF'
+agent = "claude"
+author = "Your Name"
+
+[targets.work]
+# Use the team Witan server, or another work-only graph URI.
+server = "http://witan.internal:8080"
+token = "<work-token>"
+author = "Your Name <you@mit.edu>"
+match_orgs = ["mitodl"]
+
+[targets.personal]
+# Keep personal projects in a separate local graph by default.
+server = "~/.local/share/witan-personal/graph.omni"
+author = "Your Name"
+match_orgs = ["your-github-user"]
+match_repos = ["github.com/your-github-user/dotfiles"]
+EOF
+
+omnigraph init \
+  --schema "$REPO/mcp/servers/witan/schema/schema.pg" \
+  ~/.local/share/witan-personal/graph.omni
+```
+
+Target selection priority is: `witan run --target <name>`, then `WITAN_TARGET`,
+then repo auto-detection (`match_repos` → `match_hosts` → `match_orgs`), then
+global config defaults. For long-lived MCP servers, set `WITAN_TARGET` explicitly
+in the agent config; do not rely on repo auto-detection unless the server is
+started from the target repo.
+
+Use separate agent profiles/configs for work and personal if you regularly work
+on both. For example, set `WITAN_TARGET=work` in your work Pi/Claude config and
+`WITAN_TARGET=personal` in your personal Pi/Claude config.
+
+### 2. MCP servers — Claude Code, local checkout
+
+Add both servers under `mcpServers` in `~/.claude/settings.json`. The local
+pattern uses `uv run --directory` (not the published `uvx --from git+…` snippet
+in each server's `config/`), so the server always runs your working tree:
 
 ```json
 "witan": {
   "command": "uv",
-  "args": ["run", "--directory", "REPO/mcp/servers/witan", "witan"],
-  "env": { "WITAN_AUTHOR": "Your Name" }
+  "args": ["run", "--directory", "REPO/mcp/servers/witan", "witan", "serve"],
+  "env": { "WITAN_AUTHOR": "Your Name", "WITAN_TARGET": "work" }
 },
 "witan-code": {
   "command": "uv",
-  "args": ["run", "--directory", "REPO/mcp/servers/witan-code", "witan-code"],
+  "args": ["run", "--directory", "REPO/mcp/servers/witan-code", "witan-code", "serve"],
   "env": { "WITAN_AUTHOR": "Your Name" }
 }
 ```
 
-Replace `REPO` with the absolute path. **Restart the agent** after editing its
-config so it picks up the new servers (the first `witan-code` launch
-installs tree-sitter — one-time, slow).
+Replace `REPO` with the absolute path and choose the correct `WITAN_TARGET` for
+that Claude Code profile. **Restart Claude Code** after editing its config so it
+picks up the new servers. The first `witan-code` launch installs tree-sitter and
+can be slow once.
 
-### 2. Hooks — Claude Code
+### 3. MCP servers — Pi, local checkout
 
-Symlink the three hooks and register them. The scripts resolve their real
-location through the symlink (via `readlink -f`), so the symlink install just works:
+Add the same servers under `mcpServers` in `~/.pi/agent/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "witan": {
+      "command": "uv",
+      "args": ["run", "--directory", "REPO/mcp/servers/witan", "witan", "serve"],
+      "env": { "WITAN_AUTHOR": "Your Name", "WITAN_TARGET": "work" }
+    },
+    "witan-code": {
+      "command": "uv",
+      "args": ["run", "--directory", "REPO/mcp/servers/witan-code", "witan-code", "serve"],
+      "env": { "WITAN_AUTHOR": "Your Name" }
+    }
+  }
+}
+```
+
+Replace `REPO` and choose the correct `WITAN_TARGET` for this Pi profile. If you
+also use Pi for personal projects, create a separate Pi config/profile that sets
+`WITAN_TARGET=personal` so personal memories cannot land in the work graph.
+Restart Pi after editing `~/.pi/agent/mcp.json`.
+
+### 4. Hooks — Claude Code
+
+Symlink the hooks and register them. The scripts resolve their real location
+through the symlink (via `readlink -f`), so the symlink install just works:
 
 ```bash
 mkdir -p ~/.claude/hooks
@@ -112,16 +184,30 @@ the background), and `PostToolUse` (matcher `Edit|Write`) → codegraph-reindex
 (keeps edited files fresh). See
 [`configs/hooks/README.md`](../configs/hooks/README.md) for the exact JSON.
 
-**Pi** has no hooks but provides the equivalent via extension events. Symlink the
-mirror extensions into `~/.pi/agent/extensions/` (codegraph index/reindex and
-workflow context injection) — see [`configs/pi/README.md`](../configs/pi/README.md):
+### 5. Extensions — Pi
+
+Pi has no Claude-style hooks, but Pi extension events provide equivalent
+lifecycle triggers. Symlink the mirror extensions into `~/.pi/agent/extensions/`
+for codegraph index/reindex and workflow context injection:
 
 ```bash
-ln -sf "$REPO/configs/pi/extensions/codegraph.ts"        ~/.pi/agent/extensions/
-ln -sf "$REPO/configs/pi/extensions/workflow-context.ts" ~/.pi/agent/extensions/
+ln -sf \
+  "$REPO/configs/pi/extensions/codegraph.ts" \
+  ~/.pi/agent/extensions/
+ln -sf \
+  "$REPO/configs/pi/extensions/workflow-context.ts" \
+  ~/.pi/agent/extensions/
 ```
 
-### 3. Skills — both agents
+Run `/reload` in a running Pi session, or restart Pi. See
+[`configs/pi/README.md`](../configs/pi/README.md) for the event mapping and
+extension behavior. The extensions invoke the `witan` CLI from Pi itself, so they
+use repo auto-detection from Pi's current working directory or `WITAN_TARGET` from
+Pi's launch environment; `~/.pi/agent/mcp.json` env values only affect the MCP
+server. Pi does not currently mirror Claude Code's `Stop` hook; close tracked
+sessions explicitly with `/workflow end`.
+
+### 6. Skills — both agents
 
 Skills are discovered from a shared `~/.agents/skills/` that each agent symlinks
 into per-skill. Link the workflow skills there, then into each agent (the skill
@@ -136,35 +222,40 @@ for s in agent-memory:agent-memory workflow:session-start task:task-tracker proj
 done
 ```
 
-### 4. Code-graph indexer CLI — optional, faster hook path
+### 7. Code-graph indexer CLI — optional, faster hook path
 
-Install the indexer on `PATH` so the `PostToolUse` hook uses its fast path and you
+Install the indexer on `PATH` so hooks/extensions can use their fast path and you
 can seed a repo manually. `--editable` keeps it pointed at the working tree:
 
 ```bash
 uv tool install --editable "$REPO/mcp/servers/witan-code"
 ```
 
-With the `SessionStart` hook wired (step 2), the whole-repo seed and refresh happen
-automatically in the background — you don't need to run `index` by hand. To seed a
-repo immediately (or under Pi, which has no hooks), run it manually:
+With the Claude Code `SessionStart` hook (step 4) or Pi `codegraph.ts` extension
+(step 5) wired, the whole-repo seed and refresh happen automatically in the
+background. To seed a repo immediately, run:
 
 ```bash
 witan-code index .   # inside the repo
 ```
 
-Without the CLI on `PATH`, the hooks fall back to `uvx --from <local pkg>` (correct,
-just slower).
+Without the CLI on `PATH`, the Claude hooks fall back to `uvx --from <local pkg>`
+(correct, just slower). The Pi extensions no-op when the CLI is missing.
 
-### 5. Graph schema upkeep
+### 8. Graph schema upkeep
 
-The shared graph lives at `~/.local/share/witan/graph.omni`. After
-pulling schema changes, re-apply:
+The default graph lives at `~/.local/share/witan/graph.omni`; target-specific
+local graphs can live elsewhere, such as `~/.local/share/witan-personal/graph.omni`.
+After pulling schema changes, re-apply the schema to each local graph you use:
 
 ```bash
 omnigraph schema apply \
   --schema "$REPO/mcp/servers/witan/schema/schema.pg" \
   ~/.local/share/witan/graph.omni
+
+omnigraph schema apply \
+  --schema "$REPO/mcp/servers/witan/schema/schema.pg" \
+  ~/.local/share/witan-personal/graph.omni
 ```
 
 A field **rename** (the schema uses snake_case identifiers) can't be migrated in
@@ -1138,6 +1229,46 @@ echo "     export WITAN_AUTHOR=\$(git config user.name)"
 
 ## 6. Operating Modes
 
+### Named targets for destination isolation
+
+Use named targets when one machine or agent installation touches multiple trust
+zones. A target can point at a work team server, a work-only local graph, a
+personal local graph, or a personal S3 graph. The important rule is that **work
+and personal targets must use different `server` values**.
+
+```toml
+# ~/.config/witan/config.toml
+agent = "claude"
+author = "Alice"
+
+[targets.work]
+server = "http://witan.internal:8080"
+token = "<work-token>"
+author = "Alice <alice@mit.edu>"
+match_orgs = ["mitodl"]
+
+[targets.personal]
+server = "~/.local/share/witan-personal/graph.omni"
+author = "Alice"
+match_orgs = ["alice-personal"]
+match_repos = ["github.com/alice/dotfiles"]
+```
+
+CLI commands use repo auto-detection by default. Use `WITAN_TARGET` to force a
+specific graph for any command; `witan run` also accepts `--target`:
+
+```bash
+witan tasks                         # auto-detects from match_* rules
+WITAN_TARGET=work witan tasks       # force work graph
+WITAN_TARGET=personal witan tasks   # force personal graph
+witan run tk-some-task --target work
+```
+
+MCP servers are long-lived, so set `WITAN_TARGET` in each agent config. A work
+Claude Code or Pi profile should use `WITAN_TARGET=work`; a personal profile
+should use `WITAN_TARGET=personal`. Avoid putting both profiles in the same
+running agent process unless the harness provides isolated MCP environments.
+
 ### Local Disk (default)
 
 No extra infrastructure. The `omnigraph` CLI reads and writes a directory at
@@ -1222,7 +1353,10 @@ omnigraph load \
 
 ### `config/pi.json` — for `~/.pi/agent/mcp.json`
 
-```json
+Use `WITAN_TARGET` here to bind this Pi profile to either the work or personal
+Witan destination.
+
+```jsonc
 {
   "mcpServers": {
     "witan": {
@@ -1230,10 +1364,14 @@ omnigraph load \
       "args": [
         "--from",
         "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
-        "witan"
+        "witan",
+        "serve"
       ],
       "env": {
-        // Required for remote team server mode:
+        // Prefer named targets to prevent work/personal data mixing:
+        "WITAN_TARGET": "work",
+
+        // Required for remote team server mode without targets:
         // "WITAN_MEMORY_URI": "http://witan.internal:8080",
         // "WITAN_MEMORY_TOKEN": "<your-bearer-token>",
 
@@ -1257,10 +1395,12 @@ omnigraph load \
       "args": [
         "--from",
         "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
-        "witan"
+        "witan",
+        "serve"
       ],
       "env": {
-        "WITAN_AUTHOR": "<your-name>"
+        "WITAN_AUTHOR": "<your-name>",
+        "WITAN_TARGET": "work"
       }
     }
   }
@@ -1278,10 +1418,12 @@ omnigraph load \
       "args": [
         "--from",
         "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
-        "witan"
+        "witan",
+        "serve"
       ],
       "env": {
-        "WITAN_AUTHOR": "${env:USER}"
+        "WITAN_AUTHOR": "${env:USER}",
+        "WITAN_TARGET": "work"
       }
     }
   }
@@ -1297,7 +1439,7 @@ omnigraph load \
 
 ## 8. Agent Skill — `skills/workflow/agent-memory/SKILL.md`
 
-```markdown
+````markdown
 ---
 name: agent-memory
 description: >
@@ -1324,7 +1466,9 @@ Call this **first** whenever you start working in a repository you haven't
 used in this session:
 
 ```
+
 memory_get_project_facts()
+
 ```
 
 Returns all structural facts for the current repo: architecture, deployment
@@ -1337,8 +1481,10 @@ Before implementing something non-trivial, check what patterns the team has
 already documented:
 
 ```
+
 memory_list_patterns()                          # all patterns in this repo
 memory_list_patterns(language="python")         # filtered by language
+
 ```
 
 ### `memory_search` — find relevant context by topic
@@ -1346,9 +1492,11 @@ memory_list_patterns(language="python")         # filtered by language
 When you need to know if the team has encountered something similar before:
 
 ```
+
 memory_search("vault secrets injection")
 memory_search("database migration rollback strategy")
 memory_search("rate limiting approach", kind="pattern")
+
 ```
 
 ### `memory_store` — record something worth remembering
@@ -1357,6 +1505,7 @@ memory_search("rate limiting approach", kind="pattern")
 you apply a team convention that should be made explicit:
 
 ```
+
 memory_store(
     kind="pattern",
     title="Always use uv, never pip",
@@ -1364,41 +1513,48 @@ memory_store(
     language="python",
     tags=["tooling", "environment"]
 )
+
 ```
 
 **Store a `project_fact`** when you learn something structural about a
 codebase that a future agent would need to know:
 
 ```
+
 memory_store(
     kind="project_fact",
     title="Vault secrets injected via env at runtime",
     content="This service reads secrets from Vault at startup via the ...",
     category="deployment"
 )
+
 ```
 
 **Store a `lesson`** when a mistake was made or a correction was needed:
 
 ```
+
 memory_store(
     kind="lesson",
     title="Do not run migrations without a backup in staging",
     content="On 2025-05-10, a migration was run without a prior snapshot ...",
     severity="warning"
 )
+
 ```
 
 **Store `agent_context`** when handing off a task or leaving breadcrumbs
 for a future agent session:
 
 ```
+
 memory_store(
     kind="agent_context",
     title="Ticket 1234 — approach taken",
     content="Chose to use the existing TaskQueue infrastructure rather than ...",
     tags=["ticket-1234"]
 )
+
 ```
 
 ## Quality Guidelines
@@ -1420,7 +1576,7 @@ Use `memory_get` to fetch the current content, decide what to change, then
 than simply wrong, note the old slug and store both — the `Supersedes`
 relationship can be linked manually via the CLI if needed (v2 will expose
 this as a tool).
-```
+````
 
 ---
 
@@ -1438,6 +1594,7 @@ not affect the v1 interface.
 | **`memory_update` tool** | Expose `update_memory` query as a first-class tool. v1 workaround: `memory_get` + `memory_store`. |
 | **`link_supersedes` / `link_applies_to` tools** | Expose edge mutations so agents can express relationships between memories without the CLI. |
 | **`memory_delete` tool** | Requires a separate `delete.gq` file (D₂ constraint: cannot mix deletes with inserts/updates). Deliberately omitted to prevent accidental data loss in v1. |
+
 ```
 
 ---
@@ -1469,6 +1626,7 @@ runs before every prompt in a repo that has active projects. It injects
 context like:
 
 ```
+
 ## Active Workflow Projects
 
 This repository has 1 active tracked project:
@@ -1476,6 +1634,7 @@ This repository has 1 active tracked project:
 - **Add Vault K8s auth to ol-django** (slug: `wp-add-vault-k8s-auth-a3f912`)
   Phase: implementation
   Issue: github.com/mitodl/ol-django/issues/847
+
 ```
 
 The agent reads this and calls `workflow_session_start` with the slug — no
