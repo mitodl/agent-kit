@@ -5,11 +5,16 @@ stores' advisory write locks are never held at once (no nesting → no deadlock)
 and a bridge failure can't corrupt a per-repo store that already succeeded.
 """
 
+from datetime import datetime, timezone
+
 from . import config as cfg_module
 from .bridge_extractors import ParsedBinding
 from .graph import OmnigraphClient
-from .indexer import _now_iso
 from .store import bridge_store, ensure_bridge_store
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def write_bindings(

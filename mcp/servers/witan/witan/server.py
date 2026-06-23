@@ -226,10 +226,11 @@ def memory_list(
         return client.read("read.gq", "list_memories", {})
     # No repo detected and no explicit override: return slim records for
     # unscoped memories (repo=null) only. Caller can memory_get any slug it needs.
-    all_rows = client.read("read.gq", "list_memories", {})
-    unscoped = [r for r in all_rows if not r.get("repo")]
     if kind:
-        unscoped = [r for r in unscoped if r.get("kind") == kind]
+        all_rows = client.read("read.gq", "list_memories_by_kind", {"kind": kind})
+    else:
+        all_rows = client.read("read.gq", "list_memories", {})
+    unscoped = [r for r in all_rows if not r.get("repo")]
     return [_slim_memory(r) for r in unscoped]
 
 

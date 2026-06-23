@@ -62,12 +62,13 @@ def _schema_stamp(store: Path) -> Path:
 
 
 def _schema_apply(binary: str, schema_file: Path, store: Path) -> None:
-    subprocess.run(
+    res = subprocess.run(
         [binary, "schema", "apply", "--schema", str(schema_file), str(store)],
         capture_output=True,
         text=True,
     )
-    _schema_stamp(store).write_text(str(schema_file.stat().st_mtime))
+    if res.returncode == 0:
+        _schema_stamp(store).write_text(str(schema_file.stat().st_mtime))
 
 
 def _schema_apply_if_changed(binary: str, schema_file: Path, store: Path) -> None:
