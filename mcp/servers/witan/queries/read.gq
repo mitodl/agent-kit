@@ -117,6 +117,36 @@ query list_memories_by_repo_kind($repo: String, $kind: String) {
     limit 100
 }
 
+// High-limit variants for the unscoped fallback path: the normal list_memories
+// cap (100) is applied before Python filtering by repo=null, so unscoped
+// memories can be pushed out when many repo-scoped ones are newer.
+
+query list_memories_unbounded() {
+    match {
+        $m: Memory
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 10000
+}
+
+query list_memories_by_kind_unbounded($kind: String) {
+    match {
+        $m: Memory { kind: $kind }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at
+    }
+    order { $m.created_at desc }
+    limit 10000
+}
+
 // ── Single node fetch ─────────────────────────────────────────────
 
 query get_memory($slug: String) {

@@ -128,14 +128,17 @@ def _make_slug(kind: str, title: str) -> str:
     return f"{prefix}-{sanitised}-{short_id}"
 
 
+_SLIM_KEYS = ("slug", "kind", "title", "tags")
+
+
 def _slim_memory(m: dict) -> dict:
-    """Strip content from a memory record — slug/kind/title/tags only.
+    """Return slug/kind/title/tags — enough to decide whether to fetch.
 
     Used when returning unscoped memories to an agent that hasn't opted into
     a full listing: the agent can scan slugs and call memory_get on the ones
     it actually needs rather than absorbing every word of every memory.
     """
-    return {k: v for k, v in m.items() if k != "content"}
+    return {k: m[k] for k in _SLIM_KEYS if k in m}
 
 
 # ── Tools ─────────────────────────────────────────────────────────
@@ -226,10 +229,14 @@ def memory_list(
         return client.read("read.gq", "list_memories", {})
     # No repo detected and no explicit override: return slim records for
     # unscoped memories (repo=null) only. Caller can memory_get any slug it needs.
+    # Use unbounded queries so repo-scoped memories don't push unscoped ones out
+    # of the top-100 window before the Python filter runs.
     if kind:
-        all_rows = client.read("read.gq", "list_memories_by_kind", {"kind": kind})
+        all_rows = client.read(
+            "read.gq", "list_memories_by_kind_unbounded", {"kind": kind}
+        )
     else:
-        all_rows = client.read("read.gq", "list_memories", {})
+        all_rows = client.read("read.gq", "list_memories_unbounded", {})
     unscoped = [r for r in all_rows if not r.get("repo")]
     return [_slim_memory(r) for r in unscoped]
 

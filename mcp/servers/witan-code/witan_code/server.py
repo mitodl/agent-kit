@@ -98,13 +98,16 @@ def _fan_out(clients: list[OmnigraphClient], fn) -> list[dict]:
     if len(clients) <= 1:
         return [row for c in clients for row in fn(c)]
     out: list[dict] = []
+    errors: list[Exception] = []
     with ThreadPoolExecutor(max_workers=min(len(clients), 8)) as pool:
         futures = {pool.submit(fn, c): c for c in clients}
         for f in as_completed(futures):
             try:
                 out.extend(f.result())
-            except Exception:
-                pass
+            except Exception as exc:
+                errors.append(exc)
+    if errors and not out:
+        raise errors[0]
     return out
 
 
