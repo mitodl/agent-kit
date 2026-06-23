@@ -128,6 +128,16 @@ def _make_slug(kind: str, title: str) -> str:
     return f"{prefix}-{sanitised}-{short_id}"
 
 
+def _slim_memory(m: dict) -> dict:
+    """Strip content from a memory record — slug/kind/title/tags only.
+
+    Used when returning unscoped memories to an agent that hasn't opted into
+    a full listing: the agent can scan slugs and call memory_get on the ones
+    it actually needs rather than absorbing every word of every memory.
+    """
+    return {k: v for k, v in m.items() if k != "content"}
+
+
 # ── Tools ─────────────────────────────────────────────────────────
 
 
@@ -195,8 +205,11 @@ def memory_list(
         Optional filter: ``pattern``, ``project_fact``, ``lesson``, or
         ``agent_context``. Omit to list all kinds.
     repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted; pass
-        an empty string to list across all repos.
+        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
+        Pass an empty string to list across all repos (full content included).
+        When no repo is detected and ``repo`` is omitted, returns slim records
+        (slug, kind, title, tags — no content) for unscoped memories so you
+        can scan and call ``memory_get`` on the ones you need.
     """
     detected = repo_module.detect(override=repo)
 
@@ -206,13 +219,18 @@ def memory_list(
         )
     if detected:
         return client.read("read.gq", "list_memories_by_repo", {"repo": detected})
-    # Only fan out to all repos when the caller explicitly opted in with repo="".
-    # A None repo that failed auto-detection should not silently dump everything.
-    if repo != "":
-        return []
+    if repo == "":
+        # Explicit all-repos opt-in — return full content.
+        if kind:
+            return client.read("read.gq", "list_memories_by_kind", {"kind": kind})
+        return client.read("read.gq", "list_memories", {})
+    # No repo detected and no explicit override: return slim records for
+    # unscoped memories (repo=null) only. Caller can memory_get any slug it needs.
+    all_rows = client.read("read.gq", "list_memories", {})
+    unscoped = [r for r in all_rows if not r.get("repo")]
     if kind:
-        return client.read("read.gq", "list_memories_by_kind", {"kind": kind})
-    return client.read("read.gq", "list_memories", {})
+        unscoped = [r for r in unscoped if r.get("kind") == kind]
+    return [_slim_memory(r) for r in unscoped]
 
 
 @mcp.tool
@@ -314,15 +332,20 @@ def memory_get_project_facts(repo: str | None = None) -> list[dict]:
     ----------
     repo:
         Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
-        Pass an empty string to list project facts across all repos.
+        Pass an empty string to list project facts across all repos (full content).
+        When no repo is detected and ``repo`` is omitted, returns slim records
+        (slug, kind, title, tags — no content) for unscoped facts only.
     """
     detected = repo_module.detect(override=repo)
     if detected:
         return client.read("read.gq", "get_project_facts", {"repo": detected})
-    # Only fan out to all repos when the caller explicitly opted in with repo="".
     if repo == "":
         return client.read("read.gq", "project_facts_all", {})
-    return []
+    # No repo detected: return slim unscoped project facts so the agent can
+    # select which to fetch in full via memory_get.
+    all_rows = client.read("read.gq", "project_facts_all", {})
+    unscoped = [r for r in all_rows if not r.get("repo")]
+    return [_slim_memory(r) for r in unscoped]
 
 
 @mcp.tool
