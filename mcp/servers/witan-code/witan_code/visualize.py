@@ -28,9 +28,9 @@ class Edge:
     # the individual cross-repo linkages backing this edge: {"kind", "key"}
     contracts: list[dict] = field(default_factory=list)
 
-    def add(self, kind: str, key: str) -> None:
+    def add(self, kind: str, key: str, confidence: float = 1.0) -> None:
         self.kinds[kind] += 1
-        self.contracts.append({"kind": kind, "key": key})
+        self.contracts.append({"kind": kind, "key": key, "confidence": confidence})
 
     @property
     def weight(self) -> int:
@@ -59,28 +59,72 @@ def short_repo(repo: str) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else repo
 
 
+def cross_repo_edges(
+    rows: list[dict],
+    *,
+    kind: str | None = None,
+    min_confidence: float = 0.5,
+) -> list[dict]:
+    """Return the subset of binding rows that form genuine cross-repo edges.
+
+    Filters consumer bindings by ``min_confidence`` (default 0.5).  Provider
+    bindings and non-endpoint consumers are always included (their confidence
+    defaults to 1.0 in the store).  Each returned row includes a ``confidence``
+    key; rows without it (legacy store records) default to 1.0.
+
+    ``kind`` narrows to one contract kind if provided.
+    """
+    out: list[dict] = []
+    for row in rows:
+        if kind and row.get("kind") != kind:
+            continue
+        conf = float(row.get("confidence") or 1.0)
+        if row.get("role") == "consumer" and row.get("kind") == "endpoint":
+            if conf < min_confidence:
+                continue
+        out.append(row)
+    return out
+
+
 def build_graph(
     rows: list[dict],
     *,
     kind: str | None = None,
     repo: str | None = None,
+    min_confidence: float = 0.5,
 ) -> DepGraph:
     """Compute the cross-repo dependency graph from raw binding rows.
 
     ``kind`` filters to one contract kind; ``repo`` keeps only edges touching a
-    repo whose slug contains that substring.
+    repo whose slug contains that substring.  ``min_confidence`` (default 0.5)
+    suppresses low-confidence endpoint consumer rows before graph construction —
+    only endpoint consumers are filtered; all providers and non-endpoint consumers
+    pass through unconditionally.
     """
+    filtered = cross_repo_edges(rows, kind=kind, min_confidence=min_confidence)
+
     groups: dict[tuple[str, str], dict] = defaultdict(
-        lambda: {"providers": set(), "consumers": set()}
+        lambda: {"providers": set(), "consumers": {}}
     )
-    for b in rows:
-        if kind and b["kind"] != kind:
-            continue
-        role = "providers" if b["role"] == "provider" else "consumers"
-        groups[(b["kind"], b["key_norm"])][role].add(b["repo"])
+    # consumers maps repo -> confidence for the best (highest) confidence row
+    # for each (kind, key_norm, consumer_repo) triple.
+    consumer_conf: dict[tuple[str, str, str], float] = {}
+
+    for b in filtered:
+        b_kind = b["kind"]
+        key_norm = b["key_norm"]
+        b_repo = b["repo"]
+        if b["role"] == "provider":
+            groups[(b_kind, key_norm)]["providers"].add(b_repo)
+        else:
+            groups[(b_kind, key_norm)]["consumers"][b_repo] = None  # placeholder
+            ck = (b_kind, key_norm, b_repo)
+            conf = float(b.get("confidence") or 1.0)
+            if ck not in consumer_conf or conf > consumer_conf[ck]:
+                consumer_conf[ck] = conf
 
     graph = DepGraph()
-    graph.contracts = dict(groups)
+    graph.contracts = {k: dict(v) for k, v in groups.items()}
     for (b_kind, key_norm), g in groups.items():
         for cons in g["consumers"]:
             graph.repos.add(cons)
@@ -105,7 +149,8 @@ def build_graph(
                 continue
             for prov in g["providers"]:
                 if cons != prov:
-                    graph.edge(cons, prov).add(b_kind, key_norm)
+                    conf = consumer_conf.get((b_kind, key_norm, cons), 1.0)
+                    graph.edge(cons, prov).add(b_kind, key_norm, conf)
 
     if repo:
         graph.edges = {

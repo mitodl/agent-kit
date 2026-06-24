@@ -8,7 +8,7 @@ and a bridge failure can't corrupt a per-repo store that already succeeded.
 from datetime import datetime, timezone
 
 from . import config as cfg_module
-from .bridge_extractors import ParsedBinding
+from .bridge_extractors import ParsedBinding, adjust_confidence
 from .graph import OmnigraphClient
 from .store import bridge_store, ensure_bridge_store
 
@@ -31,6 +31,10 @@ def write_bindings(
     files deleted from disk), then reload. Incremental: delete only the touched
     source files' bindings so sibling files' bindings survive.
 
+    Store-level confidence adjustments (self_provided_key, known_provider_package)
+    are applied here before writing, using provider data already present in the
+    bridge store from previously-indexed repos.
+
     Returns the number of binding records written.
     """
     # Skip creating the store for a contract-less repo on its first index.
@@ -48,9 +52,67 @@ def write_bindings(
                 "bridge.gq", "delete_bindings_in_file", {"repo_file": f"{repo}|{rel}"}
             )
 
-    records = _dedupe([_record(b, repo) for b in bindings])
+    # Collect store-level context for confidence adjustments.
+    # provider_keys: (repo, key_norm) for all provider records from OTHER repos.
+    # provider_pkg_slugs: key_norm values for package providers from OTHER repos.
+    try:
+        all_rows = client.read("bridge.gq", "all_bindings", {})
+        provider_keys: frozenset[tuple[str, str]] = frozenset(
+            (r["repo"], r["key_norm"])
+            for r in all_rows
+            if r.get("role") == "provider" and r.get("repo") != repo
+        )
+        provider_pkg_slugs: frozenset[str] = frozenset(
+            r["key_norm"]
+            for r in all_rows
+            if r.get("role") == "provider"
+            and r.get("kind") == "package"
+            and r.get("repo") != repo
+        )
+    except Exception:  # noqa: BLE001 — store may be empty or query unavailable
+        provider_keys = frozenset()
+        provider_pkg_slugs = frozenset()
+
+    # Apply store-level confidence adjustments to endpoint consumer bindings.
+    adjusted: list[ParsedBinding] = []
+    for b in bindings:
+        if b.kind == "endpoint" and b.role == "consumer":
+            # known_provider_package: check if the binding's key_norm (the path
+            # it imports from as a package) matches a provider package slug.
+            # Since endpoint bindings don't carry import info, we use the broader
+            # signal: any provider package from another repo increases confidence
+            # for endpoint consumers in the same file context — but only when we
+            # can confirm via the file's package bindings.  Here we pass False and
+            # rely on the caller (write_bindings) to augment when needed.
+            # The has_known_provider_package flag is derived from co-located
+            # package consumer bindings in the same file sharing a provider slug.
+            has_known_pkg = _file_imports_known_provider(
+                b.file, bindings, provider_pkg_slugs
+            )
+            adjust_confidence(
+                b,
+                consumer_repo=repo,
+                provider_keys=provider_keys,
+                has_known_provider_package=has_known_pkg,
+            )
+        adjusted.append(b)
+
+    records = _dedupe([_record(b, repo) for b in adjusted])
     client.load(records, mode="merge")
     return len(records)
+
+
+def _file_imports_known_provider(
+    file: str,
+    bindings: list[ParsedBinding],
+    provider_pkg_slugs: frozenset[str],
+) -> bool:
+    """Return True if any package consumer binding in ``file`` matches a known provider package."""
+    for b in bindings:
+        if b.file == file and b.kind == "package" and b.role == "consumer":
+            if b.key_norm in provider_pkg_slugs:
+                return True
+    return False
 
 
 def _record(b: ParsedBinding, repo: str) -> dict:
@@ -74,6 +136,7 @@ def _record(b: ParsedBinding, repo: str) -> dict:
             "language": b.language,
             "framework": b.framework,
             "generic": "1" if b.generic else None,
+            "confidence": b.confidence,
             "indexed_at": _now_iso(),
         },
     }

@@ -13,12 +13,14 @@ ROWS = [
         "key_norm": "MITOL_APP_BASE_URL",
         "role": "consumer",
         "repo": A,
+        "confidence": 1.0,
     },
     {
         "kind": "env_var",
         "key_norm": "MITOL_APP_BASE_URL",
         "role": "provider",
         "repo": B,
+        "confidence": 1.0,
     },
     # repo-a calls an endpoint repo-b serves.
     {
@@ -26,16 +28,30 @@ ROWS = [
         "key_norm": "/api/v1/courses/{}",
         "role": "consumer",
         "repo": A,
+        "confidence": 0.8,
     },
     {
         "kind": "endpoint",
         "key_norm": "/api/v1/courses/{}",
         "role": "provider",
         "repo": B,
+        "confidence": 1.0,
     },
     # ol-infrastructure deploys repo-a (service anchor).
-    {"kind": "service", "key_norm": f"repo:{A}", "role": "provider", "repo": INFRA},
-    {"kind": "service", "key_norm": "name:repo-a", "role": "provider", "repo": INFRA},
+    {
+        "kind": "service",
+        "key_norm": f"repo:{A}",
+        "role": "provider",
+        "repo": INFRA,
+        "confidence": 1.0,
+    },
+    {
+        "kind": "service",
+        "key_norm": "name:repo-a",
+        "role": "provider",
+        "repo": INFRA,
+        "confidence": 1.0,
+    },
 ]
 
 
@@ -52,9 +68,8 @@ def test_build_graph_edges_and_weights():
         ("endpoint", "/api/v1/courses/{}"),
     }
     # service edge records the deployed repo as its contract.
-    assert g.edges[(INFRA, A)].contracts == [
-        {"kind": "service", "key": "mitodl/repo-a"}
-    ]
+    assert g.edges[(INFRA, A)].contracts[0]["kind"] == "service"
+    assert g.edges[(INFRA, A)].contracts[0]["key"] == "mitodl/repo-a"
     # ol-infra depends on repo-a via the service anchor; name: anchor is ignored.
     assert g.edges[(INFRA, A)].weight == 1
     assert set(g.edges[(INFRA, A)].kinds) == {"service"}
@@ -99,7 +114,7 @@ def test_render_rich_smoke():
 
 
 def test_self_provided_path_suppressed():
-    """Fix 3: when a consumer repo also provides the same key_norm, no edge is emitted.
+    """When a consumer repo also provides the same key_norm, no edge is emitted.
 
     Scenario: both repo-a and repo-b serve ``/api/v0/profiles/{}`` (e.g. both
     have a Django route for it).  Repo-a's TS code contains a path literal that
@@ -115,12 +130,14 @@ def test_self_provided_path_suppressed():
             "key_norm": "/api/v0/profiles/{}",
             "role": "provider",
             "repo": A,
+            "confidence": 1.0,
         },
         {
             "kind": "endpoint",
             "key_norm": "/api/v0/profiles/{}",
             "role": "consumer",
             "repo": A,
+            "confidence": 0.8,
         },
         # repo-b also provides the route (shared path key collision).
         {
@@ -128,6 +145,7 @@ def test_self_provided_path_suppressed():
             "key_norm": "/api/v0/profiles/{}",
             "role": "provider",
             "repo": B,
+            "confidence": 1.0,
         },
         # repo-c is a genuine external consumer (does not provide the route).
         {
@@ -135,6 +153,7 @@ def test_self_provided_path_suppressed():
             "key_norm": "/api/v0/profiles/{}",
             "role": "consumer",
             "repo": C,
+            "confidence": 0.8,
         },
     ]
     g = visualize.build_graph(rows)
@@ -143,3 +162,163 @@ def test_self_provided_path_suppressed():
     # repo-c is a genuine external consumer → must generate edges to both a and b.
     assert (C, A) in g.edges, "real consumer edge C→A should exist"
     assert (C, B) in g.edges, "real consumer edge C→B should exist"
+
+
+# ── cross_repo_edges and min_confidence tests ─────────────────────
+
+
+def test_cross_repo_edges_filters_low_confidence_endpoints():
+    """cross_repo_edges drops endpoint consumers below min_confidence."""
+    rows = [
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/x/",
+            "role": "consumer",
+            "repo": A,
+            "confidence": 0.2,
+        },
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/x/",
+            "role": "provider",
+            "repo": B,
+            "confidence": 1.0,
+        },
+        {
+            "kind": "env_var",
+            "key_norm": "FOO",
+            "role": "consumer",
+            "repo": A,
+            "confidence": 1.0,
+        },
+    ]
+    filtered = visualize.cross_repo_edges(rows, min_confidence=0.5)
+    kinds_roles = [(r["kind"], r["role"]) for r in filtered]
+    # low-confidence endpoint consumer is dropped
+    assert ("endpoint", "consumer") not in kinds_roles
+    # provider passes through
+    assert ("endpoint", "provider") in kinds_roles
+    # env_var consumer passes through (not an endpoint)
+    assert ("env_var", "consumer") in kinds_roles
+
+
+def test_cross_repo_edges_passes_high_confidence_endpoints():
+    """cross_repo_edges keeps endpoint consumers at or above min_confidence."""
+    rows = [
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/x/",
+            "role": "consumer",
+            "repo": A,
+            "confidence": 0.7,
+        },
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/x/",
+            "role": "provider",
+            "repo": B,
+            "confidence": 1.0,
+        },
+    ]
+    filtered = visualize.cross_repo_edges(rows, min_confidence=0.5)
+    assert len(filtered) == 2
+
+
+def test_cross_repo_edges_legacy_rows_without_confidence():
+    """Rows without a confidence key default to 1.0 and pass through."""
+    rows = [
+        {"kind": "endpoint", "key_norm": "/api/v0/x/", "role": "consumer", "repo": A},
+        {"kind": "endpoint", "key_norm": "/api/v0/x/", "role": "provider", "repo": B},
+    ]
+    filtered = visualize.cross_repo_edges(rows, min_confidence=0.5)
+    assert len(filtered) == 2
+
+
+def test_build_graph_min_confidence_filters_endpoint_consumers():
+    """build_graph with min_confidence=0.8 suppresses low-confidence endpoint consumers."""
+    rows = [
+        # High-confidence endpoint consumer — should produce an edge.
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v1/courses/{}",
+            "role": "consumer",
+            "repo": A,
+            "confidence": 0.9,
+        },
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v1/courses/{}",
+            "role": "provider",
+            "repo": B,
+            "confidence": 1.0,
+        },
+        # Low-confidence endpoint consumer — should be filtered out at min_confidence=0.8.
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/low/",
+            "role": "consumer",
+            "repo": A,
+            "confidence": 0.3,
+        },
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/low/",
+            "role": "provider",
+            "repo": B,
+            "confidence": 1.0,
+        },
+    ]
+    g = visualize.build_graph(rows, min_confidence=0.8)
+    # High-confidence edge exists.
+    assert (A, B) in g.edges
+    assert g.edges[(A, B)].weight == 1
+    # The low-confidence contract key should not appear in any contract.
+    all_keys = {c["key"] for e in g.edges.values() for c in e.contracts}
+    assert "/api/v0/low/" not in all_keys, "low-confidence consumer should be filtered"
+
+
+def test_build_graph_default_min_confidence_suppresses_very_low():
+    """build_graph default (min_confidence=0.5) suppresses sub-0.5 consumers."""
+    rows = [
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/test/",
+            "role": "consumer",
+            "repo": A,
+            "confidence": 0.1,
+        },
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v0/test/",
+            "role": "provider",
+            "repo": B,
+            "confidence": 1.0,
+        },
+    ]
+    g = visualize.build_graph(rows)
+    assert (A, B) not in g.edges, "sub-0.5 endpoint consumer should produce no edge"
+
+
+def test_build_graph_confidence_on_emitted_edge_contracts():
+    """Contracts emitted in edges carry the confidence value."""
+    rows = [
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v1/courses/{}",
+            "role": "consumer",
+            "repo": A,
+            "confidence": 0.75,
+        },
+        {
+            "kind": "endpoint",
+            "key_norm": "/api/v1/courses/{}",
+            "role": "provider",
+            "repo": B,
+            "confidence": 1.0,
+        },
+    ]
+    g = visualize.build_graph(rows)
+    assert (A, B) in g.edges
+    ep_contracts = [c for c in g.edges[(A, B)].contracts if c["kind"] == "endpoint"]
+    assert ep_contracts, "endpoint contract should be present in edge"
+    assert ep_contracts[0]["confidence"] == 0.75
