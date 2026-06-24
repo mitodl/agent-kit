@@ -30,7 +30,7 @@ query all_bindings() {
     }
     return {
         $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
-        $b.file, $b.symbol_id, $b.framework, $b.generic
+        $b.file, $b.symbol_id, $b.framework, $b.generic, $b.confidence
     }
     limit 1000000
 }

@@ -31,5 +31,7 @@ node InterfaceBinding {
     language: String?
     framework: String?            // django | drf | pulumi | npm | nextjs | …
     generic: String?              // "1" for stoplisted generic keys (DEBUG, PORT, …)
+    confidence: F32?              // 0.0–1.0 endpoint-consumer trust score (phantom
+                                  // suppression); null/absent treated as 1.0 by readers
     indexed_at: DateTime
 }
