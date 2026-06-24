@@ -30,6 +30,17 @@ from . import repo as repo_module
 # enum/validation in `witan memory`.
 MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
 
+TaskType = Literal["bug", "feature", "task", "chore", "epic"]
+TaskPriority = Literal["p0", "p1", "p2", "p3"]
+WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
+
+
+def _split_csv(items: list[str] | None) -> list[str] | None:
+    if items is None:
+        return None
+    return [x.strip() for item in items for x in item.split(",") if x.strip()] or None
+
+
 app = cyclopts.App(
     name="witan",
     help="witan — agent memory, planning, and collaboration graph.",
@@ -210,8 +221,7 @@ def tasks(
     console.print(table)
 
 
-@app.command
-def task(slug: str) -> None:
+def _task_show(slug: str) -> None:
     """Show one task's details, its sub-tasks, and blocker status."""
     s = _srv()
     t = _fn(s.task_get)(slug)
@@ -250,6 +260,68 @@ def task(slug: str) -> None:
         )
     if t.get("resolution"):
         console.print(f"\n  resolution: {t['resolution']}")
+
+
+task_app = cyclopts.App(
+    name="task",
+    help="Manage tasks.",
+    default_command=_task_show,
+)
+app.command(task_app)
+
+
+@task_app.command(name="create")
+def task_create_cmd(
+    title: str,
+    *,
+    description: str = "",
+    type: TaskType = "task",
+    priority: TaskPriority = "p2",
+    repo: str | None = None,
+    project: str | None = None,
+    parent: str | None = None,
+    blocked_by: list[str] | None = None,
+    discovered_from: list[str] | None = None,
+    external_uri: str | None = None,
+    symbol_refs: list[str] | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    """Create a task in the work-coordination graph.
+
+    Parameters
+    ----------
+    title: Short label for the work.
+    description: Full description of the task.
+    type: bug | feature | task | chore | epic.
+    priority: p0 (highest) … p3.
+    repo: Repo URI (default: auto-detected from git remote).
+    project: wp- slug of the WorkflowProject this task rolls up to.
+    parent: tk- slug of the parent task/epic.
+    blocked_by: tk- slugs that must close before this task is ready.
+    discovered_from: tk- slugs of tasks during which this work was discovered.
+    external_uri: Reference URI (e.g. a GitHub issue or PR).
+    symbol_refs: Code-graph symbol ids (repo#path::Name) this task concerns.
+    tags: Optional free-form tags.
+    """
+    s = _srv()
+    result = _fn(s.task_create)(
+        title=title,
+        description=description,
+        type=type,
+        priority=priority,
+        repo=repo,
+        project_slug=project,
+        parent=parent,
+        blocked_by=_split_csv(blocked_by),
+        discovered_from=_split_csv(discovered_from),
+        external_uri=external_uri,
+        symbol_refs=_split_csv(symbol_refs),
+        tags=_split_csv(tags),
+    )
+    console.print(f"[green]Created task:[/green] [bold]{result['slug']}[/bold]")
+    console.print(f"  status: {_styled(result['status'], _STATUS_STYLE)}")
+    if result.get("repo"):
+        console.print(f"  repo: {_short_repo(result['repo'])}")
 
 
 @app.command
@@ -407,8 +479,7 @@ def projects(
     console.print(table)
 
 
-@app.command
-def project(slug: str) -> None:
+def _project_show(slug: str) -> None:
     """Show a project, its sessions, and rolled-up tasks."""
     s = _srv()
     p = _fn(s.workflow_project_get)(slug)
@@ -452,6 +523,51 @@ def project(slug: str) -> None:
                 f"\n  [blue]trace[/blue]: {tr.get('session_count')} sessions, "
                 f"phases={tr.get('phases')}, duration={tr.get('duration')}h"
             )
+
+
+project_app = cyclopts.App(
+    name="project",
+    help="Manage workflow projects.",
+    default_command=_project_show,
+)
+app.command(project_app)
+
+
+@project_app.command(name="create")
+def project_create(
+    title: str,
+    *,
+    description: str = "",
+    phase: WorkflowPhase = "discovery",
+    repo: str | None = None,
+    github_issue: str | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    """Create a new workflow project.
+
+    Parameters
+    ----------
+    title: Short name for the project.
+    description: Full objective description — what will be built and why.
+    phase: Starting phase: discovery | spec | implementation | delivery.
+    repo: Repo URI to associate (default: auto-detected from git remote).
+    github_issue: URL of the tracking GitHub issue.
+    tags: Optional tags for grouping and search.
+    """
+    s = _srv()
+    repos = [repo] if repo else None
+    result = _fn(s.workflow_project_create)(
+        title=title,
+        description=description,
+        phase=phase,
+        repos=repos,
+        github_issue=github_issue,
+        tags=_split_csv(tags),
+    )
+    console.print(f"[green]Created project:[/green] [bold]{result['slug']}[/bold]")
+    if result.get("repos"):
+        console.print(f"  repos: {', '.join(_short_repo(r) for r in result['repos'])}")
+    console.print(f"  phase: {result['phase']}")
 
 
 # ── Memory ───────────────────────────────────────────────────────────────────
