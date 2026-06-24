@@ -113,3 +113,94 @@ def test_project_list_active_default(server):
     assert proj["slug"] not in active_after
     completed = {p["slug"] for p in server.workflow_project_list(status="completed")}
     assert proj["slug"] in completed
+
+
+# ── Project dependency / blocking tests ──────────────────────────────────────
+
+
+@requires_omnigraph
+def test_project_block_and_unblock(server):
+    """Blocking sets blocked_by on the downstream project; unblocking removes it."""
+    upstream = server.workflow_project_create(title="upstream", description="d")
+    downstream = server.workflow_project_create(title="downstream", description="d")
+
+    res = server.workflow_project_block(upstream["slug"], downstream["slug"])
+    assert res["blocker"] == upstream["slug"]
+    assert res["blocked"] == downstream["slug"]
+
+    got = server.workflow_project_get(downstream["slug"])
+    assert upstream["slug"] in (got.get("blocked_by") or [])
+
+    # blocker appears in the upstream project's `blocks` list
+    up_got = server.workflow_project_get(upstream["slug"])
+    assert downstream["slug"] in (up_got.get("blocks") or [])
+
+    # unblock removes the entry
+    server.workflow_project_unblock(upstream["slug"], downstream["slug"])
+    after = server.workflow_project_get(downstream["slug"])
+    assert upstream["slug"] not in (after.get("blocked_by") or [])
+
+
+@requires_omnigraph
+def test_get_project_blockers(server):
+    """workflow_project_get_blockers returns full blocker nodes."""
+    blocker1 = server.workflow_project_create(title="blocker one", description="d")
+    blocker2 = server.workflow_project_create(title="blocker two", description="d")
+    blocked = server.workflow_project_create(title="blocked project", description="d")
+
+    server.workflow_project_block(blocker1["slug"], blocked["slug"])
+    server.workflow_project_block(blocker2["slug"], blocked["slug"])
+
+    blockers = server.workflow_project_get_blockers(blocked["slug"])
+    blocker_slugs = {b["slug"] for b in blockers}
+    assert {blocker1["slug"], blocker2["slug"]} == blocker_slugs
+
+
+@requires_omnigraph
+def test_blocked_project_not_ready(server):
+    """A project whose blocker is still active does not appear in ready list."""
+    upstream = server.workflow_project_create(
+        title="must finish first", description="d"
+    )
+    downstream = server.workflow_project_create(
+        title="waits for upstream", description="d"
+    )
+
+    server.workflow_project_block(upstream["slug"], downstream["slug"])
+
+    ready = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
+    # upstream is ready (no blockers), downstream is not
+    assert upstream["slug"] in ready
+    assert downstream["slug"] not in ready
+
+    # complete the upstream; now downstream becomes ready
+    server.workflow_project_complete(upstream["slug"], outcome="shipped")
+    ready_after = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
+    assert downstream["slug"] in ready_after
+
+
+@requires_omnigraph
+def test_blocking_completed_project_does_not_block(server):
+    """If the blocker is already completed the downstream project is still ready."""
+    upstream = server.workflow_project_create(title="already done", description="d")
+    downstream = server.workflow_project_create(title="free to go", description="d")
+
+    server.workflow_project_complete(upstream["slug"], outcome="done")
+    server.workflow_project_block(upstream["slug"], downstream["slug"])
+
+    ready = {p["slug"] for p in server.workflow_project_list(ready=True, repo="")}
+    assert downstream["slug"] in ready
+
+
+@requires_omnigraph
+def test_list_blocked_projects_includes_blocked_by(server):
+    """list_projects_by_status returns blocked_by field."""
+    blocker = server.workflow_project_create(title="a blocker", description="d")
+    blocked = server.workflow_project_create(title="a blocked", description="d")
+
+    server.workflow_project_block(blocker["slug"], blocked["slug"])
+
+    rows = server.workflow_project_list(status="active", repo="")
+    blocked_row = next((r for r in rows if r["slug"] == blocked["slug"]), None)
+    assert blocked_row is not None
+    assert blocker["slug"] in (blocked_row.get("blocked_by") or [])

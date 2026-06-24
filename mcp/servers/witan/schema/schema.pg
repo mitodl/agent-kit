@@ -63,6 +63,7 @@ node WorkflowProject {
     tags:        [String]?
     github_issue: String?
     github_pr:    String?
+    blocked_by:  [String]?              // denormalized blocker project slugs (drives ready-work)
 }
 
 // WorkflowSession tracks a single Claude Code session contributing to
@@ -118,6 +119,9 @@ edge Produced: WorkflowProject -> WorkflowTrace
 // Informed: links a WorkflowProject to Memory nodes consulted or created
 // during the project (patterns, lessons, agent_context, project_facts).
 edge Informed: WorkflowProject -> Memory
+
+// ProjectBlocks: a blocking project must complete before the blocked project is "ready".
+edge ProjectBlocks: WorkflowProject -> WorkflowProject
 
 // ── Task Tracking ─────────────────────────────────────────────────
 //

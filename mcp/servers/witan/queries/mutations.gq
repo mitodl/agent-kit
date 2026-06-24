@@ -146,6 +146,22 @@ query update_workflow_project_complete(
         where slug = $slug
 }
 
+query update_workflow_project_blocked_by(
+    $slug: String,
+    $blocked_by: [String]?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set { blocked_by: $blocked_by, updated_at: $updated_at }
+        where slug = $slug
+}
+
+// ── Workflow Edge mutations ────────────────────────────────────────
+
+query link_project_blocks($from: String, $to: String) {
+    insert ProjectBlocks { from: $from, to: $to }
+}
+
 // ── Workflow Session mutations ─────────────────────────────────────
 
 query insert_workflow_session(

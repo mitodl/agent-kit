@@ -219,7 +219,8 @@ query get_workflow_project($slug: String) {
         $p.slug, $p.title, $p.description, $p.repos,
         $p.status, $p.phase, $p.author, $p.tags,
         $p.github_issue, $p.github_pr,
-        $p.created_at, $p.updated_at, $p.completed_at
+        $p.created_at, $p.updated_at, $p.completed_at,
+        $p.blocked_by
     }
 }
 
@@ -232,7 +233,8 @@ query list_projects_by_status($status: String) {
     }
     return {
         $p.slug, $p.title, $p.repos, $p.phase,
-        $p.status, $p.updated_at, $p.github_issue, $p.tags
+        $p.status, $p.updated_at, $p.github_issue, $p.tags,
+        $p.blocked_by
     }
     order { $p.updated_at desc }
     // Unbounded: repo membership is filtered in Python (repos is a list), so the
@@ -247,13 +249,30 @@ query list_all_projects() {
     }
     return {
         $p.slug, $p.title, $p.repos, $p.phase,
-        $p.status, $p.updated_at, $p.github_issue, $p.tags
+        $p.status, $p.updated_at, $p.github_issue, $p.tags,
+        $p.blocked_by
     }
     order { $p.updated_at desc }
     // Unbounded: repo membership is filtered in Python (repos is a list), so the
     // full active set must be fetched before filtering — a small cap would drop a
     // repo's projects when many projects exist across repos. Callers slice for display.
     limit 1000000
+}
+
+// get_project_blockers: returns all WorkflowProject nodes whose slug appears in
+// the blocked_by list of the project identified by $slug.
+// Since blocked_by is a list and list membership isn't a graph match-filter,
+// the server fetches the target project's blocked_by list then resolves each
+// blocker slug individually in Python (see workflow_project_get_blockers).
+// This query is the single-slug resolver used in that loop.
+query get_workflow_project_by_slug($slug: String) {
+    match {
+        $p: WorkflowProject { slug: $slug }
+    }
+    return {
+        $p.slug, $p.title, $p.status, $p.phase,
+        $p.repos, $p.updated_at, $p.blocked_by
+    }
 }
 
 // ── Workflow Sessions ─────────────────────────────────────────────
