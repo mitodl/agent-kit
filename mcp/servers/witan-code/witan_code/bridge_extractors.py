@@ -257,12 +257,16 @@ def adjust_confidence(
 
     Only adjusts endpoint consumer bindings; all others are returned untouched.
 
-    ``provider_keys``            — set of ``(repo, key_norm)`` pairs where
-                                   role=='provider' exists in the bridge store,
-                                   for repos *other* than consumer_repo.
+    ``provider_keys``            — set of ``(repo, key_norm)`` pairs for ALL
+                                   provider records, including rows where
+                                   repo==consumer_repo (so the self_provided_key
+                                   penalty fires when the consumer repo also
+                                   provides the same key_norm).
     ``has_known_provider_package``— True when the consumer file is known to import
                                    a package tracked as a provider in a different
-                                   repo in the bridge store.
+                                   repo in the bridge store (derived from
+                                   co-located package consumer bindings in the
+                                   same file).
     """
     if binding.kind != "endpoint" or binding.role != "consumer":
         return binding

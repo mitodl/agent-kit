@@ -53,15 +53,18 @@ def write_bindings(
             )
 
     # Collect store-level context for confidence adjustments.
-    # provider_keys: (repo, key_norm) for all provider records from OTHER repos.
+    # provider_keys: (repo, key_norm) for ALL provider records in the store
+    # (including the consumer repo's own rows) plus provider bindings from the
+    # current batch.  A full-repo reindex deletes the repo's rows before this
+    # query, so the current bindings must be included explicitly to allow the
+    # self_provided_key penalty to fire when the same repo both provides and
+    # consumes a key_norm.
     # provider_pkg_slugs: key_norm values for package providers from OTHER repos.
     try:
         all_rows = client.read("bridge.gq", "all_bindings", {})
         provider_keys: frozenset[tuple[str, str]] = frozenset(
-            (r["repo"], r["key_norm"])
-            for r in all_rows
-            if r.get("role") == "provider" and r.get("repo") != repo
-        )
+            (r["repo"], r["key_norm"]) for r in all_rows if r.get("role") == "provider"
+        ) | frozenset((repo, b.key_norm) for b in bindings if b.role == "provider")
         provider_pkg_slugs: frozenset[str] = frozenset(
             r["key_norm"]
             for r in all_rows
@@ -70,22 +73,21 @@ def write_bindings(
             and r.get("repo") != repo
         )
     except Exception:  # noqa: BLE001 — store may be empty or query unavailable
-        provider_keys = frozenset()
+        provider_keys = frozenset(
+            (repo, b.key_norm) for b in bindings if b.role == "provider"
+        )
         provider_pkg_slugs = frozenset()
 
     # Apply store-level confidence adjustments to endpoint consumer bindings.
     adjusted: list[ParsedBinding] = []
     for b in bindings:
         if b.kind == "endpoint" and b.role == "consumer":
-            # known_provider_package: check if the binding's key_norm (the path
-            # it imports from as a package) matches a provider package slug.
-            # Since endpoint bindings don't carry import info, we use the broader
-            # signal: any provider package from another repo increases confidence
-            # for endpoint consumers in the same file context — but only when we
-            # can confirm via the file's package bindings.  Here we pass False and
-            # rely on the caller (write_bindings) to augment when needed.
-            # The has_known_provider_package flag is derived from co-located
-            # package consumer bindings in the same file sharing a provider slug.
+            # known_provider_package: True when the same source file also
+            # contains a *package* consumer binding whose key_norm matches a
+            # provider package slug from another repo in the bridge store.
+            # Endpoint bindings don't carry package-import info themselves;
+            # _file_imports_known_provider checks co-located package consumers
+            # to supply this signal.
             has_known_pkg = _file_imports_known_provider(
                 b.file, bindings, provider_pkg_slugs
             )

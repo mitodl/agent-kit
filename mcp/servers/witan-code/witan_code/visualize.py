@@ -69,8 +69,10 @@ def cross_repo_edges(
 
     Filters consumer bindings by ``min_confidence`` (default 0.5).  Provider
     bindings and non-endpoint consumers are always included (their confidence
-    defaults to 1.0 in the store).  Each returned row includes a ``confidence``
-    key; rows without it (legacy store records) default to 1.0.
+    defaults to 1.0 in the store).  Original row dicts are returned unchanged;
+    the ``confidence`` key is already present on rows that have it (written by
+    the indexer).  Legacy store records without a ``confidence`` key are treated
+    as 1.0 during filtering but are not mutated.
 
     ``kind`` narrows to one contract kind if provided.
     """
@@ -78,7 +80,8 @@ def cross_repo_edges(
     for row in rows:
         if kind and row.get("kind") != kind:
             continue
-        conf = float(row.get("confidence") or 1.0)
+        raw_conf = row.get("confidence")
+        conf = float(raw_conf if raw_conf is not None else 1.0)
         if row.get("role") == "consumer" and row.get("kind") == "endpoint":
             if conf < min_confidence:
                 continue
@@ -119,7 +122,8 @@ def build_graph(
         else:
             groups[(b_kind, key_norm)]["consumers"][b_repo] = None  # placeholder
             ck = (b_kind, key_norm, b_repo)
-            conf = float(b.get("confidence") or 1.0)
+            raw_conf = b.get("confidence")
+            conf = float(raw_conf if raw_conf is not None else 1.0)
             if ck not in consumer_conf or conf > consumer_conf[ck]:
                 consumer_conf[ck] = conf
 
