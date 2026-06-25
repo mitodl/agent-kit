@@ -33,6 +33,7 @@ Skills are organized by **category**. Each skill lives in
 | process | [`create-ol-pull-request`](./process/create-ol-pull-request/SKILL.md) | Create mitodl pull requests using the org's standard PR template |
 | process | [`create-ol-rfc-discussion`](./process/create-ol-rfc-discussion/SKILL.md) | Write and post a structured RFC as a GitHub Discussion in mitodl/hq under the RFC category |
 | process | [`generate-standup`](./process/generate-standup/SKILL.md) | Generate and post a daily standup from GitHub activity to the mitodl/hq Check-ins discussion |
+| process | [`screenshot-pr`](./process/screenshot-pr/SKILL.md) | Capture UI changes for a PR with shot-scraper at desktop, tablet, and mobile viewports |
 
 ## Authoring a Skill
 
