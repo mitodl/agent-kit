@@ -25,7 +25,7 @@ class Config:
     """Attribution string (carried for parity with Layer 1; unused on inserts)."""
 
     queries_dir: Path
-    """Directory containing read.gq, mutations.gq, delete.gq."""
+    """Directory containing code_read.gq, code_mutations.gq, delete.gq."""
 
     schema_file: Path
     """Path to code-schema.pg, used to lazily init a per-repo store."""

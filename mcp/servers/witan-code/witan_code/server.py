@@ -148,9 +148,9 @@ def code_find_definition(name: str, repo: str | None = None) -> list[dict]:
 
     def _query(client: OmnigraphClient) -> list[dict]:
         rows = client.read(
-            "read.gq", "find_by_qualified_name", {"qualified_name": name}
+            "code_read.gq", "find_by_qualified_name", {"qualified_name": name}
         )
-        return rows or client.read("read.gq", "find_by_name", {"name": name})
+        return rows or client.read("code_read.gq", "find_by_name", {"name": name})
 
     return _fan_out(_resolve_clients(repo), _query)
 
@@ -171,8 +171,8 @@ def code_find_references(symbol_id: str) -> list[dict]:
     client = _client_for_symbol(symbol_id)
     if client is None:
         return []
-    refs = client.read("read.gq", "referencers", {"id": symbol_id})
-    callers = client.read("read.gq", "callers", {"id": symbol_id})
+    refs = client.read("code_read.gq", "referencers", {"id": symbol_id})
+    callers = client.read("code_read.gq", "callers", {"id": symbol_id})
     seen = {r["slug"] for r in refs}
     return refs + [c for c in callers if c["slug"] not in seen]
 
@@ -192,7 +192,7 @@ def code_callers(symbol_id: str) -> list[dict]:
     client = _client_for_symbol(symbol_id)
     if client is None:
         return []
-    return client.read("read.gq", "callers", {"id": symbol_id})
+    return client.read("code_read.gq", "callers", {"id": symbol_id})
 
 
 @mcp.tool
@@ -228,7 +228,7 @@ def code_impact(symbol_id: str, max_depth: int = 5, max_nodes: int = 200) -> dic
             client = _client_for_symbol(sid)
             if client is None:
                 continue
-            for caller in client.read("read.gq", "callers", {"id": sid}):
+            for caller in client.read("code_read.gq", "callers", {"id": sid}):
                 cid = caller["slug"]
                 if cid in visited or cid == symbol_id:
                     continue
@@ -276,7 +276,9 @@ def code_symbols_in_file(path: str, repo: str | None = None) -> list[dict]:
     client = _client_for_repo(slug)
     if client is None:
         return []
-    return client.read("read.gq", "symbols_in_file", {"file_id": _file_id(path, slug)})
+    return client.read(
+        "code_read.gq", "symbols_in_file", {"file_id": _file_id(path, slug)}
+    )
 
 
 SymbolKind = Literal[
@@ -320,9 +322,9 @@ def code_search_symbol(
     def _query(client: OmnigraphClient) -> list[dict]:
         if kind:
             return client.read(
-                "read.gq", "search_symbols_by_kind", {"query": query, "kind": kind}
+                "code_read.gq", "search_symbols_by_kind", {"query": query, "kind": kind}
             )
-        return client.read("read.gq", "search_symbols", {"query": query})
+        return client.read("code_read.gq", "search_symbols", {"query": query})
 
     return _fan_out(_resolve_clients(repo), _query)
 

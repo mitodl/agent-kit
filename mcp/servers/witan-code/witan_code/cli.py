@@ -142,7 +142,7 @@ def _code_store_stats(store: Path) -> tuple[str, str]:
         from .graph import OmnigraphClient
 
         client = OmnigraphClient(str(store), cfg_module.load().queries_dir)
-        rows = client.read("read.gq", "all_file_hashes", {})
+        rows = client.read("code_read.gq", "all_file_hashes", {})
         return repo_uri, str(len(rows))
     except Exception:  # noqa: BLE001 — degrade gracefully
         return repo_uri, "?"

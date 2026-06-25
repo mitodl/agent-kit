@@ -48,7 +48,8 @@ def test_multilanguage_extraction(tmp_path, monkeypatch):
 
     def kind_of(name: str) -> set[str]:
         return {
-            r["kind"] for r in client.read("read.gq", "find_by_name", {"name": name})
+            r["kind"]
+            for r in client.read("code_read.gq", "find_by_name", {"name": name})
         }
 
     # TypeScript: interface / type / enum / function / arrow-const / class / methods
@@ -69,16 +70,17 @@ def test_multilanguage_extraction(tmp_path, monkeypatch):
 
     # yaml nested key path
     nested = client.read(
-        "read.gq", "find_by_qualified_name", {"qualified_name": "jobs.build"}
+        "code_read.gq", "find_by_qualified_name", {"qualified_name": "jobs.build"}
     )
     assert any(r["kind"] == "key" for r in nested)
 
     # kind filter: "build" is both a bash function and a yaml key
     unfiltered = {
-        r["kind"] for r in client.read("read.gq", "search_symbols", {"query": "build"})
+        r["kind"]
+        for r in client.read("code_read.gq", "search_symbols", {"query": "build"})
     }
     assert {"key", "function"} <= unfiltered
     funcs = client.read(
-        "read.gq", "search_symbols_by_kind", {"query": "build", "kind": "function"}
+        "code_read.gq", "search_symbols_by_kind", {"query": "build", "kind": "function"}
     )
     assert funcs and all(r["kind"] == "function" for r in funcs)
