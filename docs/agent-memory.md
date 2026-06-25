@@ -123,16 +123,15 @@ ln -sf "$REPO/configs/pi/extensions/workflow-context.ts" ~/.pi/agent/extensions/
 
 ### 3. Skills — both agents
 
-Skills are discovered from a shared `~/.agents/skills/` that each agent symlinks
-into per-skill. Link the workflow skills there, then into each agent (the skill
-name differs from the repo directory for two of them):
+`witan setup` installs the bundled Witan skills automatically. For local
+development from a checkout, symlink the bundled skill directories into the
+shared `~/.agents/skills/` catalog, then into each agent:
 
 ```bash
-for s in agent-memory:agent-memory workflow:session-start task:task-tracker project-tracker:project-tracker; do
-  name=${s%%:*}; dir=${s##*:}
-  ln -sfn "$REPO/skills/workflow/$dir" ~/.agents/skills/"$name"
-  ln -sfn "../../.agents/skills/$name"    ~/.claude/skills/"$name"
-  ln -sfn "../../../.agents/skills/$name" ~/.pi/agent/skills/"$name"
+for skill in witan-memory witan-workflow witan-task witan-project-tracker; do
+  ln -sfn "$REPO/mcp/servers/witan/witan/skills/$skill" ~/.agents/skills/"$skill"
+  ln -sfn "../../.agents/skills/$skill"    ~/.claude/skills/"$skill"
+  ln -sfn "../../../.agents/skills/$skill" ~/.pi/agent/skills/"$skill"
 done
 ```
 
