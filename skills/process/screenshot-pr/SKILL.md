@@ -111,34 +111,31 @@ credentials rejected), use a **single `ask_user` call**:
 
 ```json
 {
-  "needs_auth": {
-    "type": "string",
-    "title": "Does this app require login?",
-    "enum": ["Yes — provide credentials", "Yes — I'll log in manually", "No — skip auth"]
-  },
   "username": {
     "type": "string",
     "title": "Username / email",
-    "description": "Leave blank if you chose manual or no auth."
+    "description": "Leave blank to skip authentication entirely."
   },
   "password": {
     "type": "string",
     "title": "Password",
-    "description": "Leave blank if you chose manual or no auth."
+    "description": "Leave blank to skip authentication entirely."
+  },
+  "auth_file": {
+    "type": "string",
+    "title": "Existing auth context file (optional)",
+    "description": "Path to an existing Playwright storage-state JSON if you have one. Leave blank to use credentials above or skip auth."
   }
 }
 ```
 
-**If "provide credentials":** re-run the helper script with the supplied values (using the same `dirname $(which shot-scraper)` invocation).
+**If credentials supplied:** re-run the helper script with those values. Report
+the error clearly if it fails again — do not retry indefinitely.
 
-**If "log in manually":** launch the interactive auth flow — the user will log
-in via a real browser window, then the context is saved automatically:
+**If an existing auth file path supplied:** use that file directly; skip the
+helper script.
 
-```bash
-shot-scraper auth "<login_url>" /tmp/screenshot-auth.json
-```
-
-**If "skip auth":** set `auth_file=""` and continue without an auth flag.
+**If all fields blank:** set `auth_file=""` and proceed without authentication.
 
 ---
 
