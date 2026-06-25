@@ -135,7 +135,7 @@ def test_build_graph_missing_project_omits_belongs_to():
 def test_render_html_writes_valid_structure(tmp_path):
     g = visualize.build_graph(PROJECTS, TASKS)
     out = visualize.render_html(g, tmp_path / "graph.html")
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert out.exists()
     assert "vis-network" in text
     assert P1_SLUG in text
@@ -149,13 +149,13 @@ def test_render_html_empty_graph(tmp_path):
     g = visualize.build_graph([], [])
     out = visualize.render_html(g, tmp_path / "empty.html")
     assert out.exists()
-    assert "vis-network" in out.read_text()
+    assert "vis-network" in out.read_text(encoding="utf-8")
 
 
 def test_render_dot_writes_dot_syntax(tmp_path):
     g = visualize.build_graph(PROJECTS, TASKS)
     out = visualize.render_dot(g, tmp_path / "graph.dot")
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert out.exists()
     assert "digraph witan_workflow" in text
     assert P1_SLUG in text

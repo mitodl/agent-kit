@@ -169,7 +169,7 @@ def test_graph_command_html_output(server, monkeypatch, tmp_path):
     out = tmp_path / "graph.html"
     graph(all_repos=True, status=None, html=out)
 
-    html = out.read_text()
+    html = out.read_text(encoding="utf-8")
     assert "vis-network" in html
     assert proj["slug"] in html
     assert blocker["slug"] in html

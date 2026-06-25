@@ -56,16 +56,12 @@ def graph(
     if not all_tasks:
         tasks_raw = [t for t in tasks_raw if t.get("status") != "closed"]
 
-    # Keep tasks belonging to fetched projects or tasks without a project (when
-    # filtering by repo). When all_repos is active, include all tasks.
-    if project_slugs:
-        tasks = [
-            t
-            for t in tasks_raw
-            if not t.get("project_slug") or t.get("project_slug") in project_slugs
-        ]
-    else:
-        tasks = tasks_raw
+    # Keep tasks with no project affiliation or those belonging to fetched projects.
+    tasks = [
+        t
+        for t in tasks_raw
+        if not t.get("project_slug") or t.get("project_slug") in project_slugs
+    ]
 
     g = visualize.build_graph(projects, tasks, show_belongs_to=not no_belongs_to)
     visualize.render_rich(g, console)

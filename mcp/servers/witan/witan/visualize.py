@@ -247,16 +247,22 @@ def render_html(graph: WorkflowGraph, path: Path) -> Path:
         '<span class="chip" style="background:#555"></span>closed'
     )
 
+    def _safe_json(obj: object) -> str:
+        # Escape < and > so the browser's HTML parser can't exit the <script>
+        # block early, even if a field contains "</script>" or similar.
+        return json.dumps(obj).replace("<", "\\u003c").replace(">", "\\u003e")
+
     html = _HTML_TEMPLATE.format(
-        nodes=json.dumps(vis_nodes),
-        edges=json.dumps(vis_edges),
+        nodes=_safe_json(vis_nodes),
+        edges=_safe_json(vis_edges),
         legend=legend,
         n_projects=n_projects,
         n_tasks=n_tasks,
         n_edges=len(graph.edges),
     )
     path = path.expanduser()
-    path.write_text(html)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(html, encoding="utf-8")
     return path
 
 
@@ -287,7 +293,8 @@ def render_dot(graph: WorkflowGraph, path: Path) -> Path:
         )
     lines.append("}")
     path = path.expanduser()
-    path.write_text("\n".join(lines) + "\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
 
