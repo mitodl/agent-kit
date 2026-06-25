@@ -1,11 +1,12 @@
 ---
-name: task
+name: witan-task
 description: >
   Interactive task manager for the work-coordination graph. Use to triage and
   claim ready work, create tasks (including epics and sub-issues), link
-  dependencies, and close finished tasks. `/task` shows ready work for the
-  current repo; `/task new` creates a task; `/task list` lists tasks; `/task
-  close` closes one. Backed by the witan MCP server (task_* tools).
+  dependencies, and close finished tasks. `/witan-task` shows ready work for
+  the current repo; `/witan-task new` creates a task; `/witan-task list` lists
+  tasks; `/witan-task close` closes one. Backed by the witan MCP server (task_*
+  tools).
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -56,7 +57,7 @@ MCP call fails, tell the user the witan server is not connected and stop.
   `task_claim` sets `in_progress` with a lease and **refuses if someone else
   holds it** (`{"claimed": false, "held_by": ...}`) — surface that and offer
   another task instead of overwriting. On success confirm: "Claimed **{title}**
-  (`{slug}`). Close it with `/task close`, or `task_release` it if you step away."
+  (`{slug}`). Close it with `/witan-task close`, or `task_release` it if you step away."
   Note: claims are advisory (a true atomic lock is a tracked follow-up), so a
   dead worker's claim auto-frees after its lease lapses and reappears in ready work.
 

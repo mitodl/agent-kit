@@ -1,5 +1,5 @@
 ---
-name: project-tracker
+name: witan-project-tracker
 description: >
   Track an end-to-end engineering project across multiple agent sessions
   without explicit handoffs. Use this skill when starting a multi-session
