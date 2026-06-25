@@ -1,0 +1,57 @@
+name: witan tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mcp/servers/witan/**"
+      - "mcp/servers/witan-code/**"
+      - ".github/workflows/witan-tests.yml"
+  pull_request:
+    paths:
+      - "mcp/servers/witan/**"
+      - "mcp/servers/witan-code/**"
+      - ".github/workflows/witan-tests.yml"
+
+jobs:
+  test-witan:
+    name: witan (memory + CLI)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp/servers/witan
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-caching: true
+          cache-dependency-glob: "mcp/servers/witan/uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      - name: Run tests
+        run: uv run pytest -v
+
+  test-witan-code:
+    name: witan-code (code graph)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp/servers/witan-code
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-caching: true
+          cache-dependency-glob: "mcp/servers/witan-code/uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --frozen --group test
+
+      - name: Run tests
+        run: uv run pytest -v
