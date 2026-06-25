@@ -324,6 +324,114 @@ def task_create_cmd(
         console.print(f"  repo: {_short_repo(result['repo'])}")
 
 
+@task_app.command(name="run")
+def task_run(
+    slug: str | None = None,
+    *,
+    target: str | None = None,
+    agent: str | None = None,
+    model: str | None = None,
+    claim: bool = True,
+    dry_run: bool = False,
+    repo: str | None = None,
+    all_repos: bool = False,
+    project: str | None = None,
+) -> None:
+    """Claim one or more tasks and launch an agent to execute them.
+
+    Without a slug, shows an interactive picker of ready tasks. Multiple
+    selections offer a choice between a consolidated single-session prompt or
+    running each task sequentially in separate agent invocations.
+
+    Parameters
+    ----------
+    slug: Task slug to run directly (skips the picker).
+    target: Named config target (overrides auto-detection).
+    agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
+    model: Model flag passed to the agent.
+    claim: Mark each task in_progress before launching.
+    dry_run: Print the prompt(s) without launching or claiming.
+    repo: Scope the picker to a specific repo URI.
+    all_repos: Span all repos in the picker.
+    project: Scope the picker to a specific wp- project slug.
+    """
+    try:
+        cfg = cfg_module.load(target=target)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
+
+    if slug:
+        _run_task_slug(
+            slug, cfg=cfg, agent=agent, model=model, claim=claim, dry_run=dry_run
+        )
+        return
+
+    s = _srv()
+    repo_arg = _repo_arg(repo, all_repos)
+    ready = _fn(s.task_ready)(repo=repo_arg, project_slug=project, limit=50)
+    if not ready:
+        console.print("[dim]No ready tasks.[/dim]")
+        return
+
+    console.print(f"[bold]Ready tasks[/bold] ({len(ready)} available):\n")
+
+    def _render_task(t: dict) -> str:
+        pri = _styled(t.get("priority", ""), _PRIORITY_STYLE)
+        repo_s = f"  [dim]{_short_repo(t.get('repo'))}[/dim]" if t.get("repo") else ""
+        return f"{t['slug']}  {pri}  {t.get('title', '')}{repo_s}"
+
+    selected = _pick_items(ready, _render_task)
+    if not selected:
+        console.print("[dim]Nothing selected.[/dim]")
+        return
+
+    resolved_agent = agent or cfg.agent
+    resolved_model = model or cfg.model
+
+    if len(selected) == 1:
+        _run_task_slug(
+            selected[0]["slug"],
+            cfg=cfg,
+            agent=agent,
+            model=model,
+            claim=claim,
+            dry_run=dry_run,
+        )
+        return
+
+    console.print(f"\n[bold]{len(selected)} tasks selected.[/bold]")
+    console.print("  [c] Consolidate into one agent session")
+    console.print("  [s] Run sequentially (one agent per task)")
+    mode = input("Choice [c/s]: ").strip().lower()
+
+    if mode == "c":
+        prompts = [_run_prompt(t) for t in selected]
+        merged = _merge_prompts(prompts, "task")
+        if claim:
+            for t in selected:
+                res = _fn(s.task_claim)(t["slug"], assignee=cfg.author) or {}
+                if res.get("claimed"):
+                    console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")
+                else:
+                    reason = res.get("held_by") or res.get("reason") or "unavailable"
+                    console.print(
+                        f"[yellow]Could not claim {t['slug']} ({reason}), skipping.[/yellow]"
+                    )
+        _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
+    else:
+        for t in selected:
+            console.print(f"\n[bold]── {t['slug']}: {t.get('title', '')} ──[/bold]")
+            _run_task_slug(
+                t["slug"],
+                cfg=cfg,
+                agent=agent,
+                model=model,
+                claim=claim,
+                dry_run=dry_run,
+            )
+
+
 @app.command
 def run(
     slug: str,
@@ -356,7 +464,76 @@ def run(
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(1) from None
+    _run_task_slug(
+        slug, cfg=cfg, agent=agent, model=model, claim=claim, dry_run=dry_run
+    )
 
+
+# ── Shared run helpers ────────────────────────────────────────────────────────
+
+
+def _parse_number_selection(raw: str, count: int) -> list[int]:
+    """Parse "1 3 5", "1-3", "2,4", or "all" into 0-based indices."""
+    raw = raw.strip()
+    if not raw or raw.lower() == "all":
+        return list(range(count))
+    indices: set[int] = set()
+    for part in raw.replace(",", " ").split():
+        if "-" in part:
+            lo, _, hi = part.partition("-")
+            try:
+                indices.update(range(int(lo) - 1, int(hi)))
+            except ValueError:
+                pass
+        else:
+            try:
+                indices.add(int(part) - 1)
+            except ValueError:
+                pass
+    return sorted(i for i in indices if 0 <= i < count)
+
+
+def _pick_items(items: list[dict], render_fn) -> list[dict]:
+    """Show a numbered list and return user-selected items."""
+    for i, item in enumerate(items, 1):
+        console.print(f"  [bold]{i:2d}.[/bold] {render_fn(item)}")
+    console.print()
+    raw = input('Select (e.g. "1 3", "1-3", "all", or Enter for none): ').strip()
+    if not raw:
+        return []
+    indices = _parse_number_selection(raw, len(items))
+    return [items[i] for i in indices]
+
+
+def _launch_agent(
+    cfg, resolved_agent: str, resolved_model: str | None, prompt: str, dry_run: bool
+) -> None:
+    if dry_run:
+        console.print(prompt)
+        return
+    cmd = [resolved_agent]
+    if resolved_model:
+        cmd += ["--model", resolved_model]
+    cmd.append(prompt)
+    target_info = f" [{cfg.target_name}]" if cfg.target_name else ""
+    model_info = f" --model {resolved_model}" if resolved_model else ""
+    console.print(f"[dim]Launching: {resolved_agent}{model_info}{target_info}[/dim]")
+    try:
+        subprocess.run(cmd, check=False)
+    except FileNotFoundError:
+        console.print(f"[red]Agent {resolved_agent!r} not found on PATH.[/red]")
+        raise SystemExit(1) from None
+
+
+def _run_task_slug(
+    slug: str,
+    *,
+    cfg,
+    agent: str | None,
+    model: str | None,
+    claim: bool,
+    dry_run: bool,
+) -> None:
     resolved_agent = agent or cfg.agent
     resolved_model = model or cfg.model
 
@@ -389,27 +566,12 @@ def run(
             raise SystemExit(1)
         console.print(f"[cyan]Claimed {slug} (assignee={cfg.author}).[/cyan]")
 
-    cmd = [resolved_agent]
-    if resolved_model:
-        cmd += ["--model", resolved_model]
-    cmd.append(prompt)
-
-    target_info = f" [{cfg.target_name}]" if cfg.target_name else ""
-    model_info = f" --model {resolved_model}" if resolved_model else ""
-    console.print(f"[dim]Launching: {resolved_agent}{model_info}{target_info}[/dim]")
-    try:
-        subprocess.run(cmd, check=False)
-    except FileNotFoundError:
-        console.print(
-            f"[red]Agent {resolved_agent!r} not found on PATH.[/red] "
-            f"Task is claimed; run your agent manually with --dry-run's prompt."
-        )
-        raise SystemExit(1) from None
+    _launch_agent(cfg, resolved_agent, resolved_model, prompt, dry_run=False)
 
 
 def _run_prompt(t: dict) -> str:
     lines = [
-        "Work on this task from the omnigraph task graph and see it through to completion.",
+        "Work on this task from the witan task graph and see it through to completion.",
         "",
         f"Task:     {t['slug']}",
         f"Title:    {t.get('title', '')}",
@@ -435,6 +597,54 @@ def _run_prompt(t: dict) -> str:
         f'File any follow-up work with task_create(discovered_from=["{t["slug"]}"], ...).',
     ]
     return "\n".join(lines)
+
+
+def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
+    lines = [
+        "Work on this workflow project and advance it through its current phase.",
+        "",
+        f"Project:  {p['slug']}",
+        f"Title:    {p.get('title', '')}",
+        f"Phase:    {p.get('phase')}    Status: {p.get('status')}",
+    ]
+    repos = p.get("repos") or []
+    if repos:
+        lines.append(f"Repos:    {', '.join(repos)}")
+    if p.get("github_issue"):
+        lines.append(f"Issue:    {p['github_issue']}")
+    lines += [
+        "",
+        "Description:",
+        p.get("description") or "(none)",
+    ]
+    if tasks:
+        lines += ["", "Ready tasks:"]
+        for t in tasks:
+            pri = t.get("priority", "")
+            lines.append(
+                f"  {t['slug']}  [{pri}] {t.get('title', '')}"
+                + (
+                    f"\n    {t.get('description', '')[:120]}"
+                    if t.get("description")
+                    else ""
+                )
+            )
+    lines += [
+        "",
+        'When a task is done: task_close(slug="tk-...", resolution="<what you did>").',
+        f'When the project phase is complete: workflow_project_advance(slug="{p["slug"]}", summary="<what was accomplished>").',
+    ]
+    return "\n".join(lines)
+
+
+def _merge_prompts(prompts: list[str], kind: str) -> str:
+    """Combine multiple task/project prompts into one consolidated session prompt."""
+    header = f"Work on these {len(prompts)} {kind}s in order. Complete each before moving to the next.\n"
+    separator = "\n" + "─" * 60 + "\n"
+    return header + separator.join(prompts)
+
+
+# ── Task run subcommand ───────────────────────────────────────────────────────
 
 
 # ── Workflow projects ────────────────────────────────────────────────────────
@@ -578,6 +788,116 @@ def project_create(
     if result.get("repos"):
         console.print(f"  repos: {', '.join(_short_repo(r) for r in result['repos'])}")
     console.print(f"  phase: {result['phase']}")
+
+
+@project_app.command(name="run")
+def project_run(
+    slug: str | None = None,
+    *,
+    target: str | None = None,
+    agent: str | None = None,
+    model: str | None = None,
+    dry_run: bool = False,
+    repo: str | None = None,
+    all_repos: bool = False,
+) -> None:
+    """Launch an agent session focused on a workflow project.
+
+    Without a slug, shows an interactive picker of active projects. Multiple
+    selections offer a choice between a consolidated single-session prompt or
+    running each project sequentially in separate agent invocations.
+
+    Parameters
+    ----------
+    slug: Project slug to run directly (skips the picker).
+    target: Named config target (overrides auto-detection).
+    agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
+    model: Model flag passed to the agent.
+    dry_run: Print the prompt(s) without launching.
+    repo: Scope the picker to a specific repo URI.
+    all_repos: Span all repos in the picker.
+    """
+    try:
+        cfg = cfg_module.load(target=target)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
+
+    resolved_agent = agent or cfg.agent
+    resolved_model = model or cfg.model
+
+    s = _srv()
+
+    if slug:
+        _run_project_slug(slug, cfg=cfg, agent=agent, model=model, dry_run=dry_run)
+        return
+
+    repo_arg = _repo_arg(repo, all_repos)
+    projects = _fn(s.workflow_project_list)(repo=repo_arg, status="active")[:50]
+    if not projects:
+        console.print("[dim]No active projects.[/dim]")
+        return
+
+    console.print(f"[bold]Active projects[/bold] ({len(projects)} available):\n")
+
+    def _render_project(p: dict) -> str:
+        phase = f"[dim]{p.get('phase')}[/dim]"
+        repos_s = (
+            f"  [dim]{', '.join(_short_repo(r) for r in (p.get('repos') or []))}[/dim]"
+        )
+        return f"{p['slug']}  {phase}  {p.get('title', '')}{repos_s}"
+
+    selected = _pick_items(projects, _render_project)
+    if not selected:
+        console.print("[dim]Nothing selected.[/dim]")
+        return
+
+    if len(selected) == 1:
+        _run_project_slug(
+            selected[0]["slug"], cfg=cfg, agent=agent, model=model, dry_run=dry_run
+        )
+        return
+
+    console.print(f"\n[bold]{len(selected)} projects selected.[/bold]")
+    console.print("  [c] Consolidate into one agent session")
+    console.print("  [s] Run sequentially (one agent per project)")
+    mode = input("Choice [c/s]: ").strip().lower()
+
+    if mode == "c":
+        prompts = []
+        for p in selected:
+            tasks = _fn(s.task_ready)(project_slug=p["slug"], limit=20)
+            prompts.append(_project_run_prompt(p, tasks))
+        merged = _merge_prompts(prompts, "project")
+        _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
+    else:
+        for p in selected:
+            console.print(f"\n[bold]── {p['slug']}: {p.get('title', '')} ──[/bold]")
+            _run_project_slug(
+                p["slug"], cfg=cfg, agent=agent, model=model, dry_run=dry_run
+            )
+
+
+def _run_project_slug(
+    slug: str,
+    *,
+    cfg,
+    agent: str | None,
+    model: str | None,
+    dry_run: bool,
+) -> None:
+    resolved_agent = agent or cfg.agent
+    resolved_model = model or cfg.model
+
+    s = _srv()
+    p = _fn(s.workflow_project_get)(slug)
+    if not p:
+        console.print(f"[red]No project {slug!r}.[/red]")
+        raise SystemExit(1)
+
+    tasks = _fn(s.task_ready)(project_slug=slug, limit=20)
+    prompt = _project_run_prompt(p, tasks)
+    _launch_agent(cfg, resolved_agent, resolved_model, prompt, dry_run)
 
 
 # ── Memory ───────────────────────────────────────────────────────────────────
