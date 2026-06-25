@@ -91,11 +91,16 @@ Use the helper script with the **default dev credentials** (`admin@odl.local` /
 `admin`):
 
 ```bash
-python skills/process/screenshot-pr/scripts/get-auth-context.py \
+"$(dirname $(which shot-scraper))/python3" \
+  skills/process/screenshot-pr/scripts/get-auth-context.py \
   "<login_url>" /tmp/screenshot-auth.json \
   --username admin@odl.local \
   --password admin
 ```
+
+Using `dirname $(which shot-scraper)` guarantees the script runs under the same
+Python — and therefore the same Playwright install — as shot-scraper itself,
+regardless of what `python3` resolves to on the host.
 
 If the script exits `0`, auth context is ready — proceed to Step 2.
 
@@ -124,7 +129,7 @@ credentials rejected), use a **single `ask_user` call**:
 }
 ```
 
-**If "provide credentials":** re-run the helper script with the supplied values.
+**If "provide credentials":** re-run the helper script with the supplied values (using the same `dirname $(which shot-scraper)` invocation).
 
 **If "log in manually":** launch the interactive auth flow — the user will log
 in via a real browser window, then the context is saved automatically:
