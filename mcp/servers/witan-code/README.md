@@ -196,10 +196,11 @@ an empty shape when it does not exist yet):
 
 ## CLI
 
-`witan-code` (cyclopts):
+`witan-code` (cyclopts); also available as `witan code …` when witan-code is installed alongside witan:
 
 - `index [PATH]` — incremental; skips files whose content hash is unchanged.
 - `reindex [PATH]` — force rebuild a path.
+- `repos` — list all indexed repos with file count, symbol count, and store size.
 - `deps [--kind K] [--repo SUBSTR] [--html PATH] [--open-browser]` —
   visualize cross-repo dependencies from the bridge store. Prints a Rich
   summary of "repo A depends on repo B" links (A consumes a contract B

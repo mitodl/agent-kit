@@ -9,17 +9,18 @@ platform-specific code.
 ## Quick Start
 
 ```bash
-# 1. Install the omnigraph binary and initialise the local graph
-./install.sh
+# Install witan (downloads the omnigraph binary, copies hooks/skills, and wires
+# the MCP server entry into your agent config in one step):
+uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan \
+    witan setup --agent claude   # or: pi | copilot | opencode | kilo | all
 
-# 2. Add the MCP server to your agent config (see config/ snippets)
-#    pi:      merge config/pi.json into ~/.pi/agent/mcp.json
-#    Claude:  merge config/claude.json into claude_desktop_config.json
-#    Copilot: merge config/copilot.json into .vscode/mcp.json
-
-# 3. Set your author name (optional — defaults to $USER)
+# Optional — set your author name (defaults to git config user.name or $USER):
 export WITAN_AUTHOR="Your Name"
 ```
+
+`witan setup` is the recommended install path. To wire it in manually instead
+(e.g. for local checkout development), run `./install.sh` to init the graph,
+then copy the appropriate snippet from `config/` into your agent's config file.
 
 > **Wiring it into your agents locally** (both this server and witan-code,
 > plus the hooks and skills, run straight from your checkout): see
@@ -49,6 +50,7 @@ export WITAN_AUTHOR="Your Name"
 | Tool | Description |
 |---|---|
 | `memory_search` | Full-text BM25 search across all memories, with optional `repo`/`kind` filters |
+| `memory_list` | List memories (no search), optionally filtered by `kind` and/or `repo`; ordered most-recent first |
 | `memory_store` | Insert a new memory (pattern, project_fact, lesson, or agent_context) |
 | `memory_get` | Fetch a single memory by slug |
 | `memory_get_project_facts` | Return all project facts for the current (or specified) repo |
@@ -66,7 +68,11 @@ See [`skills/workflow/project-tracker/SKILL.md`](../../../skills/workflow/projec
 | `workflow_project_list` | List projects filtered by repo, status, or phase; defaults to active |
 | `workflow_project_advance` | Advance a project to the next phase (discovery → spec → implementation → delivery) |
 | `workflow_project_complete` | Mark project done; assembles a `WorkflowTrace` corpus record from all sessions |
-| `workflow_session_start` | Link the current Claude Code session to a project; writes a state file for the Stop hook |
+| `workflow_project_link_memory` | Attach a memory (pattern/lesson/project_fact) to a project via an `Informed` edge |
+| `workflow_project_block` | Declare that one project must complete before another can begin |
+| `workflow_project_unblock` | Remove a project dependency declared with `workflow_project_block` |
+| `workflow_project_get_blockers` | Return all projects currently blocking the given project |
+| `workflow_session_start` | Link the current agent session to a project; writes a state file for the Stop hook |
 | `workflow_session_end` | Close the session with a summary, tools used, and files changed |
 
 ### Task Tracking Tools
@@ -109,15 +115,19 @@ A cyclopts CLI for manual inspection of the work-coordination graph and the
 indexed code graphs. Installed alongside the server (`uv run witan …`,
 or `uv tool install` the package to get it on `PATH`):
 
-| Command | Shows |
+| Command | Description |
 |---|---|
+| `setup [--agent claude\|pi\|…\|all]` | Install witan for one or all supported coding agents |
 | `tasks [--ready] [--status …] [--project wp-…] [--all-repos]` | Tasks for the current repo; `--ready` = open with no open blockers |
 | `task <tk-slug>` | One task's details, blockers, and sub-tasks |
+| `task create <title>` | Create a task from the CLI |
 | `run <tk-slug> [--agent claude\|pi] [--dry-run]` | Claim a task and launch an agent to execute it |
 | `projects [--status …] [--all-repos]` | Workflow projects (default: active in this repo) |
 | `project <wp-slug>` | A project with its sessions, tasks, and corpus trace |
-| `memory [QUERY] [--kind …]` | BM25 memory search, or the repo's project facts |
-| `repos` | Repositories with a code graph indexed (files, size, freshness) |
+| `project create <title>` | Create a workflow project from the CLI |
+| `memory [QUERY] [--kind …]` | BM25 memory search, or (with no query) list memories |
+| `code repos` | Repositories with a code graph indexed (requires witan-code) |
+| `serve` | Start the MCP server (memory + code tools when witan-code is installed) |
 
 `run` claims the task (`in_progress` + your author), then hands the terminal to
 the agent seeded with the task description and a reminder to `task_close` when
@@ -159,21 +169,29 @@ deployment instructions, the graph schema, and the v2 roadmap.
 ```
 witan/
 ├── README.md                  # This file
-├── install.sh                 # Install omnigraph + init local graph
-├── omnigraph.yaml             # CLI project config
+├── install.sh                 # Initialise local graph (manual alternative to `witan setup`)
+├── hatch_build.py             # Build hook: downloads omnigraph binary into wheel
 ├── pyproject.toml             # Python package metadata
 ├── schema/
 │   └── schema.pg              # Omnigraph graph schema
 ├── queries/
 │   ├── read.gq                # Read queries
 │   └── mutations.gq           # Insert/update queries
+├── tests/                     # Integration tests
 ├── witan/          # Python package
 │   ├── __init__.py
 │   ├── __main__.py            # Entry point
 │   ├── server.py              # FastMCP app + tool definitions
+│   ├── cli.py                 # `witan` umbrella CLI (cyclopts)
 │   ├── config.py              # Config loaded from env vars
+│   ├── context.py             # inject-context / session-checkpoint helpers
 │   ├── repo.py                # Git remote → canonical repo slug
-│   └── graph.py               # OmnigraphClient (CLI subprocess wrapper)
+│   ├── graph.py               # OmnigraphClient (CLI subprocess wrapper)
+│   ├── setup.py               # `witan setup` agent-installer logic
+│   ├── _bin/                  # Bundled omnigraph binary (populated by build hook)
+│   ├── extensions/            # Agent extension configs (bundled by setup)
+│   ├── hooks/                 # Shell hooks (bundled by setup)
+│   └── skills/                # Bundled agent skills
 └── config/
     ├── pi.json                # Snippet for ~/.pi/agent/mcp.json
     ├── claude.json            # Snippet for claude_desktop_config.json
