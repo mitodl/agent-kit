@@ -82,7 +82,7 @@ that variable is empty (e.g. under Pi), use a short random hex string instead
 (read `/proc/sys/kernel/random/uuid` and take the first 8 chars).
 
 Confirm to the user: "Session linked to **{title}** (`{session_slug}`). Call
-`/workflow end` before you stop, or the Stop hook will auto-close it with a
+`/witan-workflow end` before you stop, or the Stop hook will auto-close it with a
 placeholder summary."
 
 ---

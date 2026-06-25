@@ -217,7 +217,7 @@ mcp/servers/witan/
 The skill lives at:
 
 ```
-skills/workflow/agent-memory/
+mcp/servers/witan/witan/skills/witan-memory/
 └── SKILL.md
 ```
 
@@ -1295,11 +1295,11 @@ omnigraph load \
 
 ---
 
-## 8. Agent Skill — `skills/workflow/agent-memory/SKILL.md`
+## 8. Agent Skill — `mcp/servers/witan/witan/skills/witan-memory/SKILL.md`
 
 ```markdown
 ---
-name: agent-memory
+name: witan-memory
 description: >
   Read from and write to the team's shared agent memory graph. Use when
   starting work in a repository (load project facts and patterns), after
@@ -1486,7 +1486,7 @@ independently.
 
 See [MCP Tools](#mcp-tools) in the server README for signatures. Full usage
 documentation is in
-[`skills/workflow/project-tracker/SKILL.md`](../skills/workflow/project-tracker/SKILL.md).
+[`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](../mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md).
 
 ### Session State File
 
@@ -1577,7 +1577,7 @@ agent/human-authored, team-shared — and integrate via hard edges.
 ordered by priority. `task_ready` is the multi-agent coordination primitive: any
 session or the `UserPromptSubmit` hook can surface the next actionable item.
 
-The `/task` skill (`skills/workflow/task-tracker/SKILL.md`) is the interactive
+The `/witan-task` skill (`mcp/servers/witan/witan/skills/witan-task/SKILL.md`) is the interactive
 entry point; the `workflow-context-inject.sh` hook now also injects a **Ready
 Tasks** section. Multi-user rides the existing model (`author` = creator,
 `assignee` = owner, team-remote S3).

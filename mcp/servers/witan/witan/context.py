@@ -103,7 +103,7 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
             )
         lines += [
             "",
-            "Use `task_update`/`task_close` (or the `/task` skill) to claim and progress them.",
+            "Use `task_update`/`task_close` (or the `/witan-task` skill) to claim and progress them.",
             "",
         ]
 

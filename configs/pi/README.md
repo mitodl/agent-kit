@@ -38,4 +38,4 @@ The MCP servers themselves are configured separately in `~/.pi/agent/mcp.json`
 Closing a workflow session on exit (the Claude `Stop` hook) is not mirrored:
 under Pi the session id differs from Claude's, so the `/tmp` session-state file
 the checkpoint relies on isn't keyed the same way. Close sessions explicitly with
-the `/workflow end` skill, or rely on the next `workflow_session_start`.
+the `/witan-workflow end` skill, or rely on the next `workflow_session_start`.
