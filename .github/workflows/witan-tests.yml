@@ -13,6 +13,9 @@ on:
       - "mcp/servers/witan-code/**"
       - ".github/workflows/witan-tests.yml"
 
+permissions:
+  contents: read
+
 jobs:
   test-witan:
     name: witan (memory + CLI)
