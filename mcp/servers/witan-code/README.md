@@ -134,22 +134,42 @@ file + a capture→kind map), and any new node types to `_DEF_NODE_TYPES`.
 
 ## Install
 
+witan-code is usually installed as part of the `witan` umbrella — `witan setup`
+wires both servers together via `uvx --from … --with …`. See the
+[witan README](../witan/README.md) for the one-step setup.
+
+To use witan-code **standalone** (code graph only, no memory/task tools):
+
+**From the published git repo:**
+
 ```bash
-./install.sh                      # verify omnigraph binary, prep code-store dir
+# One-shot (uvx):
+uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code \
+    witan-code index
+
+# Persistent CLI install:
+uv tool install git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code
+witan-code index
+```
+
+**From a local checkout (inside `mcp/servers/witan-code/`):**
+
+```bash
+uvx --from . witan-code index          # incremental
+uvx --from . witan-code reindex        # force rebuild
+uvx --from . witan-code index path/to/file.py   # single file/subpath
+
+# Or via uv run:
+uv run witan-code index
 ```
 
 Per-repo stores are created **lazily** on the first index — the indexer runs
 `omnigraph init --schema code-schema.pg <store>` when the store is missing.
+The `./install.sh` script only verifies the omnigraph binary and prints a hint;
+it is not required when installing via uvx/uv.
 
-Build the graph for the current repo:
-
-```bash
-uvx --from . witan-code index        # incremental
-uvx --from . witan-code reindex       # force rebuild
-witan-code index path/to/file.py      # single file/subpath
-```
-
-Add the MCP server to your agent (snippets in `config/`):
+To add witan-code as a standalone MCP server (without the witan memory/task
+tools), copy the appropriate snippet from `config/` into your agent's config:
 
 - pi: `config/pi.json` → `~/.pi/agent/mcp.json`
 - Claude: `config/claude.json` → `claude_desktop_config.json`

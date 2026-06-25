@@ -8,22 +8,43 @@ platform-specific code.
 
 ## Quick Start
 
+`witan setup` installs the omnigraph binary, copies hooks/skills, and wires the
+MCP server entry into your agent config in one step. Run it once; re-run after
+upgrades to refresh installed files.
+
+**From the published git repo (recommended):**
+
 ```bash
-# Install witan (downloads the omnigraph binary, copies hooks/skills, and wires
-# the MCP server entry into your agent config in one step):
+# One-shot run (uvx — no persistent install needed):
 uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan \
     witan setup --agent claude   # or: pi | copilot | opencode | kilo | all
 
+# Or install the CLI persistently so `witan` is always on PATH:
+uv tool install git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan
+witan setup --agent claude
+```
+
+**From a local checkout:**
+
+```bash
+# From the repo root:
+uvx --from mcp/servers/witan witan setup --agent claude
+
+# Or with uv run (inside mcp/servers/witan/):
+uv run witan setup --agent claude
+```
+
+```bash
 # Optional — set your author name (defaults to git config user.name or $USER):
 export WITAN_AUTHOR="Your Name"
 ```
 
-`witan setup` is the recommended install path. To wire it in manually instead
-(e.g. for local checkout development), run `./install.sh` to init the graph,
-then copy the appropriate snippet from `config/` into your agent's config file.
+> **Manual wiring** (if you prefer to configure agents by hand): run
+> `./install.sh` to initialise the local graph, then copy the appropriate
+> config snippet from `config/` into your agent's MCP config file.
 
-> **Wiring it into your agents locally** (both this server and witan-code,
-> plus the hooks and skills, run straight from your checkout): see
+> **Local development setup** (both servers, hooks, and skills wired from your
+> checkout): see
 > [Local Development Setup](../../../docs/agent-memory.md#local-development-setup).
 
 ## Environment Variables
