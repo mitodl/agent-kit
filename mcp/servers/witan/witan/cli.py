@@ -403,23 +403,32 @@ def task_run(
     console.print(f"\n[bold]{len(selected)} tasks selected.[/bold]")
     console.print("  [c] Consolidate into one agent session")
     console.print("  [s] Run sequentially (one agent per task)")
-    mode = input("Choice [c/s]: ").strip().lower()
+    try:
+        mode = input("Choice [c/s]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[yellow]Cancelled.[/yellow]")
+        raise SystemExit(0)
 
     if mode == "c":
-        prompts = [_run_prompt(t) for t in selected]
-        merged = _merge_prompts(prompts, "task")
-        if claim:
+        claimable = list(selected)
+        if claim and not dry_run:
+            claimable = []
             for t in selected:
                 res = _fn(s.task_claim)(t["slug"], assignee=cfg.author) or {}
                 if res.get("claimed"):
                     console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")
+                    claimable.append(t)
                 else:
                     reason = res.get("held_by") or res.get("reason") or "unavailable"
                     console.print(
                         f"[yellow]Could not claim {t['slug']} ({reason}), skipping.[/yellow]"
                     )
+        if not claimable:
+            console.print("[red]No tasks could be claimed.[/red]")
+            raise SystemExit(1)
+        merged = _merge_prompts([_run_prompt(t) for t in claimable], "task")
         _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
-    else:
+    elif mode == "s":
         for t in selected:
             console.print(f"\n[bold]── {t['slug']}: {t.get('title', '')} ──[/bold]")
             _run_task_slug(
@@ -430,6 +439,9 @@ def task_run(
                 claim=claim,
                 dry_run=dry_run,
             )
+    else:
+        console.print("[red]Invalid choice. Aborting.[/red]")
+        raise SystemExit(1)
 
 
 @app.command
@@ -475,7 +487,9 @@ def run(
 def _parse_number_selection(raw: str, count: int) -> list[int]:
     """Parse "1 3 5", "1-3", "2,4", or "all" into 0-based indices."""
     raw = raw.strip()
-    if not raw or raw.lower() == "all":
+    if not raw:
+        return []
+    if raw.lower() == "all":
         return list(range(count))
     indices: set[int] = set()
     for part in raw.replace(",", " ").split():
@@ -498,7 +512,11 @@ def _pick_items(items: list[dict], render_fn) -> list[dict]:
     for i, item in enumerate(items, 1):
         console.print(f"  [bold]{i:2d}.[/bold] {render_fn(item)}")
     console.print()
-    raw = input('Select (e.g. "1 3", "1-3", "all", or Enter for none): ').strip()
+    try:
+        raw = input('Select (e.g. "1 3", "1-3", "all", or Enter for none): ').strip()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[yellow]Selection cancelled.[/yellow]")
+        raise SystemExit(0)
     if not raw:
         return []
     indices = _parse_number_selection(raw, len(items))
@@ -566,7 +584,7 @@ def _run_task_slug(
             raise SystemExit(1)
         console.print(f"[cyan]Claimed {slug} (assignee={cfg.author}).[/cyan]")
 
-    _launch_agent(cfg, resolved_agent, resolved_model, prompt, dry_run=False)
+    _launch_agent(cfg, resolved_agent, resolved_model, prompt, dry_run)
 
 
 def _run_prompt(t: dict) -> str:
@@ -861,7 +879,11 @@ def project_run(
     console.print(f"\n[bold]{len(selected)} projects selected.[/bold]")
     console.print("  [c] Consolidate into one agent session")
     console.print("  [s] Run sequentially (one agent per project)")
-    mode = input("Choice [c/s]: ").strip().lower()
+    try:
+        mode = input("Choice [c/s]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[yellow]Cancelled.[/yellow]")
+        raise SystemExit(0)
 
     if mode == "c":
         prompts = []
@@ -870,12 +892,15 @@ def project_run(
             prompts.append(_project_run_prompt(p, tasks))
         merged = _merge_prompts(prompts, "project")
         _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
-    else:
+    elif mode == "s":
         for p in selected:
             console.print(f"\n[bold]── {p['slug']}: {p.get('title', '')} ──[/bold]")
             _run_project_slug(
                 p["slug"], cfg=cfg, agent=agent, model=model, dry_run=dry_run
             )
+    else:
+        console.print("[red]Invalid choice. Aborting.[/red]")
+        raise SystemExit(1)
 
 
 def _run_project_slug(
