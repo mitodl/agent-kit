@@ -137,6 +137,29 @@ helper script.
 
 **If all fields blank:** set `auth_file=""` and proceed without authentication.
 
+### 1d — Last resort: manual interactive login
+
+If no credentials are available and no auth file exists, the user can log in
+via a real browser window:
+
+```bash
+shot-scraper auth "<login_url>" /tmp/screenshot-auth.json
+```
+
+> ⚠️ **User-Agent mismatch warning.** On stacks that bind the session to the
+> User-Agent (e.g. Keycloak/APISIX), this fallback can silently produce
+> logged-out screenshots. `shot-scraper auth` opens a headed browser whose UA
+> is `Chrome/<major>.0.0.0`; `shot-scraper multi` captures with a headless
+> browser whose UA is `HeadlessChrome/<full-build>`. The server rejects the
+> mismatched session and silently issues an anonymous one — no error, just
+> logged-out shots. Passing `--user-agent` to `shot-scraper auth` does not
+> help; the command ignores it. The `get-auth-context.py` path avoids this
+> because both ends run headless.
+
+After establishing any auth context (any path), confirm it is actually
+authenticated before proceeding: load a known login-required page and verify
+the response looks authenticated, not an anonymous or redirect response.
+
 ---
 
 ## Step 2 — Gather context
