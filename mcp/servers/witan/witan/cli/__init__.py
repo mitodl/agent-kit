@@ -17,6 +17,7 @@ from .. import config as cfg_module
 from .run_helpers import _run_task_slug
 
 # Import submodules to trigger @app.command / @*_app.command registrations.
+from . import graph  # noqa: F401
 from . import hooks  # noqa: F401
 from . import memory  # noqa: F401
 from . import projects  # noqa: F401
