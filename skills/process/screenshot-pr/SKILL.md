@@ -49,8 +49,8 @@ grep -E "(BASE_URL|APISIX_PORT|_PORT)" docker-compose.yml 2>/dev/null | head -20
 
 Pay attention to `APISIX_PORT` (default `9080`) — screenshots of authenticated
 pages must go through the APISIX port, **not** the raw app port, so session
-cookies work. If the app hostname is `mitxonline.odl.local` and APISIX is at
-`9080`, the base URL for screenshots is `http://mitxonline.odl.local:9080`.
+cookies work. If the app hostname is `api.open.odl.local` and APISIX is at
+`8065`, the base URL for screenshots is `http://api.open.odl.local:8065`.
 
 **c) Probe common ports for a live server:**
 

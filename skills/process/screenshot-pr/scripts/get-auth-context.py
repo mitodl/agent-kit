@@ -5,7 +5,7 @@ Usage:
     python get-auth-context.py <login_url> <output_path> [--username U] [--password P]
 
 Example:
-    python get-auth-context.py http://mitxonline.odl.local:9080/login auth.json
+    python get-auth-context.py http://api.open.odl.local:8065/login auth.json
 """
 
 import argparse
@@ -17,7 +17,7 @@ from playwright.sync_api import sync_playwright
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("login_url", help="Full /login URL behind APISIX, e.g. http://mitxonline.odl.local:9080/login")
+    parser.add_argument("login_url", help="Full /login URL behind APISIX, e.g. http://api.open.odl.local:8065/login")
     parser.add_argument("output", help="Path to write the auth context JSON, e.g. /tmp/auth.json")
     parser.add_argument("--username", default="admin@odl.local", help="Keycloak username (default: admin@odl.local)")
     parser.add_argument("--password", default="admin", help="Keycloak password (default: admin)")
