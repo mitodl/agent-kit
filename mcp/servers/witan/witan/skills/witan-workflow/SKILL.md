@@ -1,12 +1,12 @@
 ---
-name: workflow
+name: witan-workflow
 description: >
   Interactive workflow session manager. Call at the start of any session to
   link it to a tracked project. Lists active WorkflowProjects for the current
   repo, lets the user pick one (or create a new project), then calls
   workflow_session_start to register the session in the graph. Also supports
-  ending a session (/workflow end) or listing all projects (/workflow list).
-  Requires the witan MCP server.
+  ending a session (/witan-workflow end) or listing all projects
+  (/witan-workflow list). Requires the witan MCP server.
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -14,8 +14,8 @@ metadata:
 
 # Workflow Session Manager
 
-Interactive entry point for the workflow tracking system. Invoke with `/workflow`
-at the start of a session, or `/workflow end` before stopping.
+Interactive entry point for the workflow tracking system. Invoke with `/witan-workflow`
+at the start of a session, or `/witan-workflow end` before stopping.
 
 ## On invocation
 
@@ -82,7 +82,7 @@ that variable is empty (e.g. under Pi), use a short random hex string instead
 (read `/proc/sys/kernel/random/uuid` and take the first 8 chars).
 
 Confirm to the user: "Session linked to **{title}** (`{session_slug}`). Call
-`/workflow end` before you stop, or the Stop hook will auto-close it with a
+`/witan-workflow end` before you stop, or the Stop hook will auto-close it with a
 placeholder summary."
 
 ---

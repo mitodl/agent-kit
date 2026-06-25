@@ -123,16 +123,15 @@ ln -sf "$REPO/configs/pi/extensions/workflow-context.ts" ~/.pi/agent/extensions/
 
 ### 3. Skills — both agents
 
-Skills are discovered from a shared `~/.agents/skills/` that each agent symlinks
-into per-skill. Link the workflow skills there, then into each agent (the skill
-name differs from the repo directory for two of them):
+`witan setup` installs the bundled Witan skills automatically. For local
+development from a checkout, symlink the bundled skill directories into the
+shared `~/.agents/skills/` catalog, then into each agent:
 
 ```bash
-for s in agent-memory:agent-memory workflow:session-start task:task-tracker project-tracker:project-tracker; do
-  name=${s%%:*}; dir=${s##*:}
-  ln -sfn "$REPO/skills/workflow/$dir" ~/.agents/skills/"$name"
-  ln -sfn "../../.agents/skills/$name"    ~/.claude/skills/"$name"
-  ln -sfn "../../../.agents/skills/$name" ~/.pi/agent/skills/"$name"
+for skill in witan-memory witan-workflow witan-task witan-project-tracker; do
+  ln -sfn "$REPO/mcp/servers/witan/witan/skills/$skill" ~/.agents/skills/"$skill"
+  ln -sfn "../../.agents/skills/$skill"    ~/.claude/skills/"$skill"
+  ln -sfn "../../../.agents/skills/$skill" ~/.pi/agent/skills/"$skill"
 done
 ```
 
@@ -217,7 +216,7 @@ mcp/servers/witan/
 The skill lives at:
 
 ```
-skills/workflow/agent-memory/
+mcp/servers/witan/witan/skills/witan-memory/
 └── SKILL.md
 ```
 
@@ -1295,11 +1294,11 @@ omnigraph load \
 
 ---
 
-## 8. Agent Skill — `skills/workflow/agent-memory/SKILL.md`
+## 8. Agent Skill — `mcp/servers/witan/witan/skills/witan-memory/SKILL.md`
 
 ```markdown
 ---
-name: agent-memory
+name: witan-memory
 description: >
   Read from and write to the team's shared agent memory graph. Use when
   starting work in a repository (load project facts and patterns), after
@@ -1486,7 +1485,7 @@ independently.
 
 See [MCP Tools](#mcp-tools) in the server README for signatures. Full usage
 documentation is in
-[`skills/workflow/project-tracker/SKILL.md`](../skills/workflow/project-tracker/SKILL.md).
+[`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](../mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md).
 
 ### Session State File
 
@@ -1577,7 +1576,7 @@ agent/human-authored, team-shared — and integrate via hard edges.
 ordered by priority. `task_ready` is the multi-agent coordination primitive: any
 session or the `UserPromptSubmit` hook can surface the next actionable item.
 
-The `/task` skill (`skills/workflow/task-tracker/SKILL.md`) is the interactive
+The `/witan-task` skill (`mcp/servers/witan/witan/skills/witan-task/SKILL.md`) is the interactive
 entry point; the `workflow-context-inject.sh` hook now also injects a **Ready
 Tasks** section. Multi-user rides the existing model (`author` = creator,
 `assignee` = owner, team-remote S3).

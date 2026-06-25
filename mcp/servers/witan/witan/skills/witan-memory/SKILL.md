@@ -1,5 +1,5 @@
 ---
-name: agent-memory
+name: witan-memory
 description: >
   Read from and write to the team's shared agent memory graph. Prefer this over
   your private built-in/session memory for any durable, team-shareable knowledge.
@@ -9,6 +9,9 @@ description: >
   needed (store a lesson), or whenever you would otherwise save an engineering
   fact/lesson/decision to local session memory. Requires the witan MCP server to
   be configured.
+license: BSD-3-Clause
+metadata:
+  category: workflow
 ---
 
 # Agent Memory
@@ -56,7 +59,7 @@ write).
 Call this **first** whenever you start working in a repository you haven't
 used in this session:
 
-```
+```python
 memory_get_project_facts()
 ```
 
@@ -69,7 +72,7 @@ these before writing code, choosing a library, or making deployment decisions.
 Before implementing something non-trivial, check what patterns the team has
 already documented:
 
-```
+```python
 memory_list_patterns()                          # all patterns in this repo
 memory_list_patterns(language="python")         # filtered by language
 ```
@@ -78,7 +81,7 @@ memory_list_patterns(language="python")         # filtered by language
 
 When you need to know if the team has encountered something similar before:
 
-```
+```python
 memory_search("vault secrets injection")
 memory_search("database migration rollback strategy")
 memory_search("rate limiting approach", kind="pattern")
@@ -89,7 +92,7 @@ memory_search("rate limiting approach", kind="pattern")
 **Store a `pattern`** after solving a problem in a non-obvious way, or when
 you apply a team convention that should be made explicit:
 
-```
+```python
 memory_store(
     kind="pattern",
     title="Always use uv, never pip",
@@ -102,7 +105,7 @@ memory_store(
 **Store a `project_fact`** when you learn something structural about a
 codebase that a future agent would need to know:
 
-```
+```python
 memory_store(
     kind="project_fact",
     title="Vault secrets injected via env at runtime",
@@ -113,7 +116,7 @@ memory_store(
 
 **Store a `lesson`** when a mistake was made or a correction was needed:
 
-```
+```python
 memory_store(
     kind="lesson",
     title="Do not run migrations without a backup in staging",
@@ -125,7 +128,7 @@ memory_store(
 **Store `agent_context`** when handing off a task or leaving breadcrumbs
 for a future agent session:
 
-```
+```python
 memory_store(
     kind="agent_context",
     title="Ticket 1234 — approach taken",
@@ -141,7 +144,7 @@ When a memory is about a specific function or class, attach the code-graph
 `witan-code` tools — `code_find_definition` / `code_search_symbol`
 return it in the `slug` field, of the form `repo#path::Qualified.Name`:
 
-```
+```python
 memory_store(
     kind="lesson",
     title="Service.run must not be called before init",

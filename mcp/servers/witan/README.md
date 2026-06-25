@@ -63,7 +63,7 @@ export WITAN_AUTHOR="Your Name"
 > Claude Code's `memory/` files) is private to one machine and user. Durable,
 > shareable engineering knowledge — project facts, patterns, lessons, decisions
 > — belongs in witan so other agents and future sessions can find it; keep only
-> private/ephemeral notes in built-in memory. The `agent-memory` skill and the
+> private/ephemeral notes in built-in memory. The `witan-memory` skill and the
 > MCP server instructions steer the agent accordingly.
 
 ### Memory Tools
@@ -80,7 +80,7 @@ export WITAN_AUTHOR="Your Name"
 ### Workflow Tracking Tools
 
 Track engineering projects end-to-end across multiple Claude Code sessions.
-See [`skills/workflow/project-tracker/SKILL.md`](../../../skills/workflow/project-tracker/SKILL.md) for usage.
+See [`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](./witan/skills/witan-project-tracker/SKILL.md) for usage.
 
 | Tool | Description |
 |---|---|
@@ -100,8 +100,8 @@ See [`skills/workflow/project-tracker/SKILL.md`](../../../skills/workflow/projec
 
 A dependency-aware, hierarchical task tracker (beads-like) in the same graph, so
 tasks hard-link to projects, sessions, and memories. See
-[`skills/workflow/task-tracker/SKILL.md`](../../../skills/workflow/task-tracker/SKILL.md)
-(the `/task` skill) for usage.
+[`mcp/servers/witan/witan/skills/witan-task/SKILL.md`](./witan/skills/witan-task/SKILL.md)
+(the `/witan-task` skill) for usage.
 
 | Tool | Description |
 |---|---|
