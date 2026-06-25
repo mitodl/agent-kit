@@ -26,7 +26,8 @@ mcp/
 
 | Server | Description |
 |--------|-------------|
-| *(none yet — add the first one!)* | |
+| [`witan`](servers/witan/README.md) | Team-wide shared knowledge graph: memory, workflow projects, task tracking, and the umbrella CLI. Uses `witan serve` to mount both memory and code tools in one MCP entry. |
+| [`witan-code`](servers/witan-code/README.md) | Tree-sitter code graph (Layer 2): indexes repo symbols and their relationships. Can run standalone or be mounted automatically by `witan serve`. |
 
 ## Resources
 
