@@ -213,7 +213,7 @@ def index_path(
     # in-memory, not a query per file.
     existing: dict[str, str] = {}
     if not force:
-        for row in client.read("read.gq", "all_file_hashes", {}):
+        for row in client.read("code_read.gq", "all_file_hashes", {}):
             existing[row["slug"]] = row.get("content_hash")
 
     stats = IndexStats()

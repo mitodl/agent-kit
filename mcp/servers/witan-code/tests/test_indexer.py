@@ -21,16 +21,16 @@ def test_index_extracts_symbols_and_edges(sample_repo):
     store = store_mod.store_for_repo(slug, cfg)
     client = OmnigraphClient(str(store), cfg.queries_dir)
 
-    runs = client.read("read.gq", "find_by_name", {"name": "run"})
+    runs = client.read("code_read.gq", "find_by_name", {"name": "run"})
     assert any(r["qualified_name"] == "Service.run" for r in runs)
 
-    helpers = client.read("read.gq", "find_by_name", {"name": "helper"})
+    helpers = client.read("code_read.gq", "find_by_name", {"name": "helper"})
     assert helpers
     # heuristic Calls edge traversal: Service.run calls helper
-    callers = client.read("read.gq", "callers", {"id": helpers[0]["slug"]})
+    callers = client.read("code_read.gq", "callers", {"id": helpers[0]["slug"]})
     assert "Service.run" in {c["qualified_name"] for c in callers}
 
-    hits = client.read("read.gq", "search_symbols", {"query": "helper"})
+    hits = client.read("code_read.gq", "search_symbols", {"query": "helper"})
     assert any(h["name"] == "helper" for h in hits)
 
 

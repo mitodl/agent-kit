@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Bundled query files, resolved relative to this file.
-_QUERIES_DIR = Path(__file__).parent.parent / "queries"
-_SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "code-schema.pg"
-_BRIDGE_SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "bridge-schema.pg"
+_QUERIES_DIR = Path(__file__).parent / "queries"
+_SCHEMA_FILE = Path(__file__).parent / "schema" / "code-schema.pg"
+_BRIDGE_SCHEMA_FILE = Path(__file__).parent / "schema" / "bridge-schema.pg"
 _DEFAULT_CODE_DIR = Path.home() / ".local" / "share" / "witan" / "code"
 
 # Filename of the single shared cross-repo bridge store, a sibling of the
@@ -25,7 +25,7 @@ class Config:
     """Attribution string (carried for parity with Layer 1; unused on inserts)."""
 
     queries_dir: Path
-    """Directory containing read.gq, mutations.gq, delete.gq."""
+    """Directory containing code_read.gq, code_mutations.gq, delete.gq."""
 
     schema_file: Path
     """Path to code-schema.pg, used to lazily init a per-repo store."""

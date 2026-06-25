@@ -1,0 +1,37 @@
+// Cross-Repo Context Bridge (Layer 2.5) — shared LOCAL store (_bridge.omni).
+//
+// One flat node per interface binding. Cross-repo linkages are computed by
+// GROUPING bindings on (kind, key_norm) where roles/repos differ — there are
+// NO link edges. An anchor-node + edge model would force every repo touching a
+// shared contract (e.g. env_var DATABASE_URL) to upsert the same node, maxing
+// write contention on a store with many concurrent writers (every repo's index
+// run + every PostToolUse reindex hook). Flat bindings are each scoped to their
+// own repo+file, so concurrent writers never touch the same row.
+//
+// Local-only and re-derivable, like the per-repo Layer-2 stores; never synced.
+//
+// Id convention:
+//   InterfaceBinding.slug = repo|file|kind|key_norm|role|symbol_id
+//     e.g. https://github.com/mitodl/mit-learn|main/settings.py|env_var|
+//          MITOL_APP_BASE_URL|consumer|...settings.py::<module>
+
+node InterfaceBinding {
+    slug: String @key
+    kind: enum(env_var, package, service, endpoint) @index
+    key: String @index            // raw as written (METHOD path, pkg name, env NAME)
+    key_norm: String @index       // normalized join key (collapsed path params, …)
+    role: enum(provider, consumer, shared) @index
+    repo: String @index           // canonical HTTPS repo URI (join key to Layer 2)
+    file: String @index           // repo-relative source path of the binding
+    repo_file: String @index      // "repo|file" — single-field key for per-file delete
+                                  // (delete `where` takes one condition, no compound `and`)
+    sub_kind: String?             // service anchor variant: repo | image | name
+    symbol_id: String?            // enclosing Symbol id (repo#path::Qn) when applicable
+    line: I32?
+    language: String?
+    framework: String?            // django | drf | pulumi | npm | nextjs | …
+    generic: String?              // "1" for stoplisted generic keys (DEBUG, PORT, …)
+    confidence: F32?              // 0.0–1.0 endpoint-consumer trust score (phantom
+                                  // suppression); null/absent treated as 1.0 by readers
+    indexed_at: DateTime
+}

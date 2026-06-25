@@ -44,11 +44,9 @@ testpaths = ["tests"]
 [tool.hatch.build.targets.wheel]
 packages = ["witan_code"]
 
-# The MCP server and indexer read these sibling dirs at runtime via
-# Path(__file__).parent.parent; force-include them in the wheel so uvx git
-# installs work.
-# witan_code/_bin/ is populated by the build hook above and checked first by OmnigraphClient.
+# witan_code/queries/, witan_code/schema/, and witan_code/queries_ts/ are
+# discovered automatically via packages = ["witan_code"].
+# witan_code/_bin/ is populated by the build hook above and must be force-included
+# because hatchling excludes non-.py files inside package dirs by default.
 [tool.hatch.build.targets.wheel.force-include]
-"queries" = "queries"
-"schema" = "schema"
 "witan_code/_bin" = "witan_code/_bin"

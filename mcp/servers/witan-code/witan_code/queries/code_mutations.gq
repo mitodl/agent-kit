@@ -1,0 +1,81 @@
+// Code Graph — insert/update mutations.
+//
+// NOTE: Omnigraph cannot mix deletes with inserts/updates in one query.
+// Deletes for reindexing live in delete.gq and are run as separate change()
+// calls BEFORE these inserts.
+
+// ── CodeFile ──────────────────────────────────────────────────────
+
+query insert_file(
+    $id: String,
+    $repo: String,
+    $path: String,
+    $language: String,
+    $content_hash: String,
+    $indexed_at: DateTime
+) {
+    insert CodeFile {
+        slug: $id,
+        repo: $repo,
+        path: $path,
+        language: $language,
+        content_hash: $content_hash,
+        indexed_at: $indexed_at
+    }
+}
+
+// ── Symbol ────────────────────────────────────────────────────────
+
+query insert_symbol(
+    $id: String,
+    $repo: String,
+    $file_id: String,
+    $name: String,
+    $qualified_name: String,
+    $kind: String,
+    $start_line: I32,
+    $end_line: I32,
+    $signature: String?,
+    $docstring: String?,
+    $indexed_at: DateTime
+) {
+    insert Symbol {
+        slug: $id,
+        repo: $repo,
+        file_id: $file_id,
+        name: $name,
+        qualified_name: $qualified_name,
+        kind: $kind,
+        start_line: $start_line,
+        end_line: $end_line,
+        signature: $signature,
+        docstring: $docstring,
+        indexed_at: $indexed_at
+    }
+}
+
+// ── Edges ─────────────────────────────────────────────────────────
+
+query link_defines($from: String, $to: String) {
+    insert Defines { from: $from, to: $to }
+}
+
+query link_contains($from: String, $to: String) {
+    insert Contains { from: $from, to: $to }
+}
+
+query link_calls($from: String, $to: String) {
+    insert Calls { from: $from, to: $to }
+}
+
+query link_references($from: String, $to: String) {
+    insert References { from: $from, to: $to }
+}
+
+query link_imports($from: String, $to: String) {
+    insert Imports { from: $from, to: $to }
+}
+
+query link_inherits($from: String, $to: String) {
+    insert Inherits { from: $from, to: $to }
+}
