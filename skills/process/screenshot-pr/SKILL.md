@@ -271,7 +271,10 @@ document.querySelector('#my-learning')?.scrollIntoView({block: 'start'})
 ```
 
 When a click triggers a network request or animation, always use the IIFE and
-wait 500–1000ms before the screenshot resolves.
+wait before the screenshot resolves. Suggested minimums:
+- Simple scroll: 500ms
+- CSS expand/collapse animation (e.g. MUI Accordion): 2000ms
+- Click that triggers a network request: 2000ms+
 
 If the same interaction applies to all three viewport shots for a label, repeat
 the `javascript` value on all three entries.
@@ -307,14 +310,30 @@ mkdir -p <output_dir>/{desktop,tablet,mobile}
 
 ## Step 5 — Run shot-scraper
 
+**Prefer sequential `shot` calls over `multi` when any shot uses `wait: 5000`
+or a `javascript` interaction.** `shot-scraper multi` runs all entries in
+parallel; with heavy JS pages and long waits this will time out. Instead, run
+one `shot-scraper shot` per viewport:
+
 ```bash
-shot-scraper multi /tmp/screenshot-pr-<branch>.yml \
-  ${auth_file:+--auth "$auth_file"} \
-  --browser chromium
+SHOT_SCRAPER_AUTH="${auth_file:+--auth \"$auth_file\"}"
+JS="<javascript expression>"
+
+shot-scraper shot "<url>" $SHOT_SCRAPER_AUTH --browser chromium \
+  --width 2560 --height 1440 --wait 5000 --javascript "$JS" \
+  -o "<output_dir>/desktop/<label>.png"
+
+shot-scraper shot "<url>" $SHOT_SCRAPER_AUTH --browser chromium \
+  --width 768 --height 1024 --wait 5000 --javascript "$JS" \
+  -o "<output_dir>/tablet/<label>.png"
+
+shot-scraper shot "<url>" $SHOT_SCRAPER_AUTH --browser chromium \
+  --width 390 --height 844 --wait 5000 --javascript "$JS" \
+  -o "<output_dir>/mobile/<label>.png"
 ```
 
-Stream output to the user. If any shot fails, note which ones and continue —
-`shot-scraper multi` proceeds past HTTP errors by default.
+`shot-scraper multi` is fine for simple pages with no `javascript` and a short
+`wait` (≤1000ms). If any shot fails, note which ones and continue.
 
 ---
 
