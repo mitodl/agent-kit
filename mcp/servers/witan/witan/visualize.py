@@ -7,6 +7,7 @@ self-contained interactive HTML file or Graphviz DOT.
 
 from __future__ import annotations
 
+import html as _html
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,10 +72,10 @@ def build_graph(
         project_slugs.add(slug)
         status = p.get("status", "active")
         color = _PROJECT_COLORS.get(status, "#56b870")
-        desc = (p.get("description") or "")[:140]
+        desc = _html.escape((p.get("description") or "")[:140])
         tooltip = (
-            f"<b>{slug}</b><br>"
-            f"phase: {p.get('phase', '?')} · status: {status}<br>"
+            f"<b>{_html.escape(slug)}</b><br>"
+            f"phase: {_html.escape(p.get('phase') or '?')} · status: {_html.escape(status)}<br>"
             f"{desc}"
         )
         graph.nodes.append(
@@ -97,8 +98,12 @@ def build_graph(
         status = t.get("status", "open")
         priority = t.get("priority", "p2")
         color = _TASK_COLORS.get(status, "#e8a33d")
-        desc = (t.get("description") or "")[:140]
-        tooltip = f"<b>{slug}</b><br>status: {status} · priority: {priority}<br>{desc}"
+        desc = _html.escape((t.get("description") or "")[:140])
+        tooltip = (
+            f"<b>{_html.escape(slug)}</b><br>"
+            f"status: {_html.escape(status)} · priority: {_html.escape(priority)}<br>"
+            f"{desc}"
+        )
         base = (t.get("title") or slug)[:35]
         label = f"[{priority}] {base}" if priority in ("p0", "p1") else base
         graph.nodes.append(

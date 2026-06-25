@@ -56,7 +56,8 @@ def graph(
     if not all_tasks:
         tasks_raw = [t for t in tasks_raw if t.get("status") != "closed"]
 
-    # Keep tasks with no project affiliation or those belonging to fetched projects.
+    # Include tasks with no project or whose project appeared in the filtered
+    # project list. Tasks linked to projects excluded by --status are dropped.
     tasks = [
         t
         for t in tasks_raw
