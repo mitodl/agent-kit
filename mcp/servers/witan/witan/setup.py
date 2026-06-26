@@ -150,24 +150,34 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
         console.print(f"  [green]omnigraph[/green] → {dest} [dim](dry-run)[/dim]")
         return
 
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dest = dest.with_name(dest.name + ".tmp")
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        extracted = False
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / asset
-            with (
-                urllib.request.urlopen(url, timeout=60) as resp,
-                open(archive, "wb") as fh,
-            ):
-                fh.write(resp.read())
+            try:
+                with (
+                    urllib.request.urlopen(url, timeout=60) as resp,
+                    open(archive, "wb") as fh,
+                ):
+                    fh.write(resp.read())
+            except Exception as exc:  # noqa: BLE001
+                console.print(
+                    f"  [red]omnigraph download failed[/red] ({exc}); install manually"
+                )
+                return
             with tarfile.open(archive) as tf:
                 for member in tf.getmembers():
                     if member.name.split("/")[-1] == "omnigraph" and not member.isdir():
                         f = tf.extractfile(member)
                         if f:
-                            dest.write_bytes(f.read())
+                            tmp_dest.write_bytes(f.read())
+                            extracted = True
                         break
-        if dest.exists():
-            dest.chmod(0o755)
+        if extracted:
+            tmp_dest.chmod(0o755)
+            tmp_dest.replace(dest)
             console.print(f"  [green]omnigraph[/green] → {dest}")
         else:
             console.print(
@@ -177,6 +187,8 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
         console.print(
             f"  [red]omnigraph download failed[/red] ({exc}); install manually"
         )
+    finally:
+        tmp_dest.unlink(missing_ok=True)
 
 
 def install_omnigraph(pkg_dir: Path, dry_run: bool) -> None:
@@ -187,8 +199,13 @@ def install_omnigraph(pkg_dir: Path, dry_run: bool) -> None:
     if bundled.exists():
         if not dry_run:
             local_bin.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(bundled, dest)
-            dest.chmod(0o755)
+            tmp_dest = dest.with_name(dest.name + ".tmp")
+            try:
+                shutil.copy2(bundled, tmp_dest)
+                tmp_dest.chmod(0o755)
+                tmp_dest.replace(dest)
+            finally:
+                tmp_dest.unlink(missing_ok=True)
         console.print(f"  [green]omnigraph[/green] (bundled) → {dest}")
     else:
         # Not bundled — git/dev install or unsupported platform at build time.
