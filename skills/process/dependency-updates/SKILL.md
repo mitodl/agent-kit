@@ -48,7 +48,7 @@ When you don't have an automated tool handing you a list, generate it yourself. 
 ### Python
 
 ```bash
-uv lock --outdated          # uv projects
+uv pip list --outdated      # uv projects (installed packages vs latest)
 pip list --outdated         # pip-managed environments
 pip-audit                   # combined outdated + known vulnerabilities
 ```
@@ -57,7 +57,7 @@ pip-audit                   # combined outdated + known vulnerabilities
 
 ```bash
 npm outdated                # shows current / wanted / latest per package
-bun outdated                # bun equivalent
+bun outdated                # Bun 1.1.0+; use `bunx npm-check-updates` on older Bun
 yarn outdated               # yarn classic
 pnpm outdated               # pnpm
 npm audit                   # known vulnerabilities
@@ -89,18 +89,18 @@ cargo audit                 # known vulnerabilities
 ```bash
 helm repo update
 helm search repo <chart-name> --versions | head -20   # see all available versions
-# For each chart in Chart.yaml dependencies:
-helm dependency list        # shows current vs latest for each dependency
+# Check what versions are currently pinned in Chart.yaml:
+helm dependency list        # shows pinned versions; compare against helm search output for latest
 ```
 
 ### Docker base images
 
 There is no universal "outdated" command for base images. Check freshness by:
 ```bash
-# Pull the latest version of the pinned tag and compare digests
+# Pull the latest version of the pinned tag, then compare repo digests
 docker pull <image>:<tag> --quiet
-docker inspect <image>:<tag> --format '{{.Id}}'
-# Compare against the digest currently in your Dockerfile
+docker inspect <image>:<tag> --format '{{index .RepoDigests 0}}'
+# Compare against the digest pinned in your Dockerfile (FROM <image>@sha256:...)
 ```
 Or check the image's registry page / GitHub releases for the upstream project.
 
@@ -225,9 +225,11 @@ Cross-reference each usage site against the changelog flags from Phase 2.
 - Check `apt-get install` lines for packages that were renamed or removed in the new OS version
 - Run `docker build` locally — ABI and missing-library failures surface here, not at changelog review time
 - In multi-stage builds, confirm both `FROM` lines change to the same new base to avoid ABI mismatches when copying compiled artifacts between stages
-- **Python 3.12 specific removals** (commonly bite at build or import time): `distutils` (removed; use `setuptools`), `cgi` and `cgitb` (removed; no stdlib replacement), `imghdr`, `aifc`, `chunk`, `crypt`, `mailcap`, `msilib`, `nis`, `nntplib`, `ossaudiodev`, `pipes`, `sndhdr`, `spwd`, `sunau`, `telnetlib`, `uu`, `xdrlib` — search your source and dependencies for any of these:
+- **Python runtime stdlib removals** — two distinct waves (PEP numbers tell you the version):
+  - **Python 3.12** (PEP 632): `distutils` removed — use `setuptools` instead. This is the most common silent build-time kill for packages that call `setup.py` or import `distutils` directly.
+  - **Python 3.13** (PEP 594): `cgi`, `cgitb`, `imghdr`, `aifc`, `chunk`, `crypt`, `mailcap`, `msilib`, `nis`, `nntplib`, `ossaudiodev`, `pipes`, `sndhdr`, `spwd`, `sunau`, `telnetlib`, `uu`, `xdrlib` — all removed. If the target base image bundles Python 3.13, search for any of these:
   ```bash
-  rg "import (distutils|cgi|cgitb|imghdr|aifc|crypt|mailcap|pipes)" --type py
+  rg "import (cgi|cgitb|imghdr|aifc|crypt|mailcap|pipes|telnetlib)" --type py
   pip show setuptools   # must be present if any dep still calls distutils at install time
   ```
 
@@ -235,7 +237,7 @@ Cross-reference each usage site against the changelog flags from Phase 2.
 - Diff CRDs: fields may be promoted, removed, or have changed validation
 - Verify `apiVersion` in rendered manifests is supported by your target cluster version
 - Identify renamed or removed `values.yaml` keys against your override files
-- Run `helm template --dry-run` with your existing values file to surface missing keys
+- Run `helm template <release> <chart> --version <new> -f your-values.yaml | kubectl apply --dry-run=server -f -` to surface renamed or missing keys before upgrading
 
 **Database / operator major versions:**
 - Check for removed SQL functions, changed defaults, wire protocol changes
@@ -296,7 +298,7 @@ terraform plan
 
 ## Batch strategy — working through a backlog
 
-Whether you discovered the backlog via `uv lock --outdated`, `npm outdated`, `go list -m -u all`, or a pile of Renovate PRs, the same sequencing logic applies.
+Whether you discovered the backlog via `uv pip list --outdated`, `npm outdated`, `go list -m -u all`, or a pile of Renovate PRs, the same sequencing logic applies.
 
 ### Step 1: Build the full inventory
 
@@ -348,8 +350,8 @@ Run the full test suite after each wave. If a wave introduces failures, diagnose
 
 ```bash
 # Python — apply all patch-level updates
-uv lock --upgrade-package <pkg>    # upgrade a single package
-uv sync --upgrade                  # upgrade all to latest allowed by constraints
+uv lock --upgrade-package <pkg>    # upgrade a single package in the lockfile
+uv lock --upgrade && uv sync       # upgrade all to latest allowed by constraints
 
 # Go — apply patch updates only
 go get -u=patch ./...

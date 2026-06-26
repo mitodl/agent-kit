@@ -8,7 +8,7 @@
 			"files": [],
 			"expectations": [
 				"Identifies that the OS (Buster→Bookworm) and Python runtime (3.9→3.12) are changing simultaneously and treats them as two independent axes of risk requiring separate evaluation",
-				"Names at least two specific stdlib modules removed in Python 3.12 (e.g., distutils, cgi, cgitb, or imghdr) rather than just saying 'check for removed modules'",
+				"Names distutils as the primary Python 3.12 stdlib removal (PEP 632), or correctly identifies the Python 3.13 PEP 594 removals (cgi, cgitb, imghdr, crypt, etc.) as the next risk boundary if upgrading to 3.13+ — rather than just saying 'check for removed modules'",
 				"Recommends a local docker build as the primary way to surface ABI and apt-package failures before merging",
 				"Addresses multi-stage build artifact risk: explains that if both FROM lines use the same new base, compiled .so files in the build stage are ABI-compatible with the runtime stage — and what would break if they diverged",
 				"Recommends verifying by running the test suite inside the rebuilt image (not just running tests against the host environment)"
