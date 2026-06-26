@@ -71,6 +71,10 @@ class CustomBuildHook(BuildHookInterface):
                             break
             if dest.exists():
                 dest.chmod(0o755)
+                # Register as a build artifact so hatchling includes it in the
+                # wheel even though */_bin/ is gitignored and excluded from the
+                # VCS-based file scan.
+                build_data["artifacts"].append(str(dest.relative_to(Path(self.root))))
                 self.app.display_info(f"omnigraph: bundled to {dest}")
             else:
                 self.app.display_warning(
