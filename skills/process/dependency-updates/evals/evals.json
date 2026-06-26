@@ -1,0 +1,70 @@
+{
+	"skill_name": "dependency-updates",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "Our production Dockerfile uses `python:3.9-slim-buster` as a base image. Renovate opened a PR to move it to `python:3.12-slim-bookworm`. It's a multi-stage build — the same base is used for both the build stage and the final runtime stage. Walk me through how to evaluate this safely.",
+			"expected_output": "A structured evaluation covering: the two simultaneous axes of change (OS and Python runtime), naming specific Python 3.12 stdlib removals by name, addressing multi-stage ABI mismatch risk, running a local docker build, and verifying with the test suite inside the new image.",
+			"files": [],
+			"expectations": [
+				"Identifies that the OS (Buster→Bookworm) and Python runtime (3.9→3.12) are changing simultaneously and treats them as two independent axes of risk requiring separate evaluation",
+				"Names at least two specific stdlib modules removed in Python 3.12 (e.g., distutils, cgi, cgitb, or imghdr) rather than just saying 'check for removed modules'",
+				"Recommends a local docker build as the primary way to surface ABI and apt-package failures before merging",
+				"Addresses multi-stage build artifact risk: explains that if both FROM lines use the same new base, compiled .so files in the build stage are ABI-compatible with the runtime stage — and what would break if they diverged",
+				"Recommends verifying by running the test suite inside the rebuilt image (not just running tests against the host environment)"
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "Our repo hasn't had a dependency update pass in 14 months. Renovate now shows 52 open PRs. The stack is a Go service with a PostgreSQL database deployed via Helm on Kubernetes, plus a React frontend. How do I approach clearing this backlog without breaking things?",
+			"expected_output": "A sequenced batch upgrade strategy: triage by risk tier with security as global cross-ecosystem priority, group by ecosystem, identify ordering constraints (DB client before DB server), and describe a wave-by-wave merge plan with test checkpoints between waves.",
+			"files": [],
+			"expectations": [
+				"Establishes security CVEs as a global cross-ecosystem first priority — not just within one ecosystem — before patch/minor/major ordering",
+				"Recommends grouping updates by ecosystem (Go modules, Helm charts, npm/React) and processing each group together rather than merging PRs one by one",
+				"Explicitly identifies that the Go database client library (pgx, lib/pq) must be upgraded to support the new PostgreSQL version before the PostgreSQL server is upgraded",
+				"Recommends running the full test suite between each wave rather than accumulating all changes and testing at the end",
+				"Provides a concrete wave ordering with explicit rationale for why each tier comes before the next"
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "Renovate opened a PR bumping the `grpc` library in our Go service from v1.57.0 to v1.68.0. This is a minor bump but spans quite a few versions. We use it for both client and server code. How do I evaluate whether it's safe to merge?",
+			"expected_output": "Phase-by-phase evaluation: read the full changelog range, search for both client and server grpc usage patterns, identify at least one hard removed API vs. the grpc.Dial deprecation, classify grpc.Dial as a follow-up (not a blocker), and verify with go test.",
+			"files": [],
+			"expectations": [
+				"Recommends reading the gRPC-Go changelog for every version from v1.57.0 to v1.68.0, not just the final release notes",
+				"Provides rg commands covering both client-side grpc.Dial/DialContext/NewClient calls AND server-side grpc.NewServer calls as separate search patterns to find all grpc API usage",
+				"Identifies at least one hard breaking change (a removed API, not just a deprecation) in the v1.57→v1.68 range — such as resolver.AddressType, WithServiceConfig, or NewServiceConfig removal — as distinct from the grpc.Dial deprecation",
+				"Classifies grpc.Dial deprecation as a follow-up task rather than a merge blocker (the deprecated functions are still present in v1.68), not as something that must be fixed before merging",
+				"Recommends running go test ./... as the verification step before approving the PR"
+			]
+		},
+		{
+			"id": 4,
+			"prompt": "We're running the Bitnami PostgreSQL Helm chart at version 11.9.13 and Renovate is suggesting a bump to 14.3.2. That's a major chart version jump — I know Bitnami major chart versions often track PostgreSQL engine major versions too. How do I approach this?",
+			"expected_output": "Structured evaluation covering: verifying the engine version jump, naming at least one specific renamed values key, running helm template with existing values, establishing that a data migration is required, and staging validation.",
+			"files": [],
+			"expectations": [
+				"Identifies the PostgreSQL engine version at both chart endpoints — whether by stating the known appVersion mapping or by running helm show chart — and notes that the jump spans multiple PostgreSQL major versions",
+				"Names at least one specific values key that was renamed between chart 11.x and 14.x (e.g., postgresqlUsername → auth.username, postgresqlPassword → auth.password, postgresqlDatabase → auth.database)",
+				"Recommends running helm template with the existing values override file to surface missing or renamed keys before any cluster operation",
+				"Explicitly states that PostgreSQL major version upgrades require a data migration (pg_upgrade or dump/restore) because data directory formats are incompatible across major versions, and that this cannot be done with helm upgrade alone",
+				"Recommends validating the full migration procedure in a staging environment before applying to production"
+			]
+		},
+		{
+			"id": 5,
+			"prompt": "I'm doing a maintenance pass on a Python web service that hasn't had dependency updates in 8 months. I don't use Renovate — I need to discover what's outdated from scratch. The app uses uv for Python dependencies, npm for a small frontend component, and deploys via Docker. How do I find out what needs updating and where to start?",
+			"expected_output": "Discovery-first response: specific commands to inventory outdated deps per ecosystem (uv lock --outdated, npm outdated), how to check Docker base image freshness, how to classify findings by risk tier, what can be updated in parallel vs. what must be sequenced, and a recommended starting point.",
+			"files": [],
+			"expectations": [
+				"Provides specific commands to discover outdated Python dependencies without Renovate (uv lock --outdated or pip list --outdated) and outdated npm packages (npm outdated)",
+				"Addresses Docker base image discovery — explains how to check whether the base image is outdated when there is no automated tool (e.g., checking digest, pulling latest tag, checking upstream release page)",
+				"Explains how to classify the discovered updates into risk tiers (patch vs. minor vs. major) to determine processing order",
+				"Identifies what can be updated safely in parallel (e.g., patch bumps across both Python and npm ecosystems simultaneously) versus what must be sequenced (e.g., runtime version before dependent libraries)",
+				"Recommends checking for known security vulnerabilities in the discovered outdated packages (e.g., pip-audit, npm audit) before starting updates"
+			]
+		}
+	]
+}
