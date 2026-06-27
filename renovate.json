@@ -5,7 +5,9 @@
 		{
 			"customType": "regex",
 			"description": "omnigraph binary version pinned in hatch_build.py",
-			"fileMatch": ["^mcp/servers/witan.*/hatch_build\\.py$"],
+			"managerFilePatterns": [
+				"/^mcp/servers/witan.*/hatch_build\\.py$/"
+			],
 			"matchStrings": ["_OMNIGRAPH_VERSION = \"(?<currentValue>[^\"]+)\""],
 			"datasourceTemplate": "github-releases",
 			"depNameTemplate": "ModernRelay/omnigraph"
