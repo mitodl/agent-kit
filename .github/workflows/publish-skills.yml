@@ -13,7 +13,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Build skill ZIPs
         run: |
@@ -56,7 +56,7 @@ jobs:
           ls -1 dist/skills/
 
       - name: Upload ZIPs to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: dist/skills/*.zip
           generate_release_notes: true
