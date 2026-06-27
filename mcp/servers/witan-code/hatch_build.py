@@ -20,7 +20,7 @@ from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-_OMNIGRAPH_VERSION = "0.7.0"
+_OMNIGRAPH_VERSION = "0.7.2"
 _BASE_URL = (
     f"https://github.com/ModernRelay/omnigraph/releases/download/v{_OMNIGRAPH_VERSION}"
 )
