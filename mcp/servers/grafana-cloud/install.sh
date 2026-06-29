@@ -112,7 +112,7 @@ case "$AGENT" in
 		echo "    It already contains all three stacks (grafana-ci / -qa / -prod)."
 		;;
 	*)
-		echo "Unknown agent: ${AGENT} (expected: claude | copilot | pi)" >&2
+		echo "Unknown agent: ${AGENT} (expected: claude | copilot | vscode | pi)" >&2
 		exit 1
 		;;
 esac
