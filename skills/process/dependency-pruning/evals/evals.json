@@ -1,0 +1,44 @@
+{
+	"skill_name": "dependency-pruning",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "Can you audit the dependencies in this repo and tell me which ones we can drop? I have a feeling we're carrying some dead weight. The project is at /home/tmacey/code/mit/misc/agent-kit",
+			"expected_output": "A structured report listing unused dependencies that can be removed, underused ones that could be vendored (with symbol counts), and a brief summary. Should offer to apply changes.",
+			"files": [],
+			"expectations": [
+				"The report identifies which ecosystem(s) are present in the repo",
+				"Unused dependencies are listed separately from used ones",
+				"At least one vendoring candidate assessment is provided (or a clear statement that all deps are well-used)",
+				"The report includes a summary section with counts",
+				"The skill offers the user options to apply changes, not just silently proceed"
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "I'm looking at our package.json and I think we only use like 2 functions from lodash. Can you check what we actually use from it and whether it's worth just writing those ourselves instead of keeping the lodash dep?",
+			"expected_output": "An analysis of which lodash functions are imported/used in the codebase, the count of unique symbols, and a recommendation on whether to vendor vs keep, with a rough sketch of what the replacement would look like.",
+			"files": [],
+			"expectations": [
+				"The skill searches for lodash imports and member accesses in JS/TS files",
+				"The number of unique lodash symbols used is counted and reported",
+				"A recommendation is made (vendor vs keep) based on the count",
+				"If vendoring is recommended, a sketch of the replacement is provided",
+				"The lodash package size or LOC proxy is reported"
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "We just inherited this Django project and I want to understand the Python dependency situation. Some packages might be legacy leftovers from 2 years ago. Run a dependency audit with the default thresholds.",
+			"expected_output": "A full audit using deptry (or grep fallback) across the Python dependencies, categorized into unused/vendoring candidates/well-used. Should handle the Django plugin ecosystem caveat (framework plugins may be indirect).",
+			"files": [],
+			"expectations": [
+				"The skill attempts to run deptry or falls back gracefully",
+				"The report notes that Django plugins/apps may be loaded indirectly and flags these for manual verification",
+				"Unused deps are listed with evidence (no imports found)",
+				"The thresholds used are stated in the report",
+				"The user is offered options to apply removals"
+			]
+		}
+	]
+}
