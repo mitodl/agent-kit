@@ -38,10 +38,12 @@ INSTANCE_URLS=(
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--agent)
+			[[ $# -ge 2 ]] || { echo "Missing value for --agent" >&2; exit 1; }
 			AGENT="$2"
 			shift 2
 			;;
 		--instance)
+			[[ $# -ge 2 ]] || { echo "Missing value for --instance" >&2; exit 1; }
 			INSTANCE="$2"
 			shift 2
 			;;
