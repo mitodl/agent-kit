@@ -15,10 +15,16 @@
 #   qa    -> https://mitolqa.grafana.net
 #   prod  -> https://mitolproduction.grafana.net
 #
+# By default the server is registered at USER scope so it is available from any
+# repo / directory you work in (not just the current project). Pass
+# `--scope project` to share it via a project-local `.mcp.json`, or
+# `--scope local` for the old project-private behavior.
+#
 # Usage:
-#   ./install.sh                       # all three stacks, agent=claude
+#   ./install.sh                       # all three stacks, agent=claude, scope=user
 #   ./install.sh --agent claude        # explicit agent
 #   ./install.sh --instance prod       # just one stack (ci | qa | prod)
+#   ./install.sh --scope project       # share via project .mcp.json instead
 #
 # Docs: https://grafana.com/docs/grafana-cloud/machine-learning/assistant/configure/cloud-mcp/
 set -euo pipefail
@@ -26,6 +32,7 @@ set -euo pipefail
 ENDPOINT="https://mcp.grafana.com/mcp"
 AGENT="claude"
 INSTANCE="all"
+SCOPE="user"
 
 # Parallel arrays (macOS bash 3.2 has no associative arrays).
 INSTANCE_KEYS=(ci qa prod)
@@ -45,6 +52,11 @@ while [[ $# -gt 0 ]]; do
 		--instance)
 			[[ $# -ge 2 ]] || { echo "Missing value for --instance" >&2; exit 1; }
 			INSTANCE="$2"
+			shift 2
+			;;
+		--scope)
+			[[ $# -ge 2 ]] || { echo "Missing value for --scope" >&2; exit 1; }
+			SCOPE="$2"
 			shift 2
 			;;
 		*)
@@ -93,12 +105,13 @@ case "$AGENT" in
 			# precedes the URL the parser swallows the URL as another header value
 			# ("missing required argument 'commandOrUrl'").
 			claude mcp add "$name" "$ENDPOINT" \
+				--scope "$SCOPE" \
 				--transport http \
 				--header "X-Grafana-URL: ${gurl}"
 		done
 		echo ""
-		echo "Done. On first use of each server, Claude opens a browser for the"
-		echo "Grafana OAuth consent flow (once per stack)."
+		echo "Done (scope: ${SCOPE}). On first use of each server, Claude opens a"
+		echo "browser for the Grafana OAuth consent flow (once per stack)."
 		echo "Run '/mcp' inside Claude Code (or 'claude mcp list') to confirm and authenticate."
 		;;
 	copilot | vscode)

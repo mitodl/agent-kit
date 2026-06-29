@@ -31,16 +31,22 @@ its own OAuth consent):
 **Claude Code (automated):**
 
 ```bash
-# From this directory — registers all three stacks:
+# From this directory — registers all three stacks at USER scope, so they're
+# available from any repo / directory you work in (not just this project):
 ./install.sh --agent claude
 
 # Or just one stack:
 ./install.sh --agent claude --instance prod   # ci | qa | prod
 
-# Or directly with the Claude CLI (one per stack).
+# Share via a project-local .mcp.json instead of your user config:
+./install.sh --agent claude --scope project   # user (default) | project | local
+
+# Or directly with the Claude CLI (one per stack). `--scope user` makes it
+# global; omit it and the server is only registered for the current project.
 # Note: name + URL come before --header (--header is variadic and will
 # otherwise swallow the URL).
 claude mcp add grafana-prod https://mcp.grafana.com/mcp \
+    --scope user \
     --transport http \
     --header "X-Grafana-URL: https://mitolproduction.grafana.net"
 ```
@@ -75,4 +81,8 @@ into `.vscode/mcp.json` (or your user `mcp.json`). It already lists all three st
 - No secrets are stored in this repo or in your config — the snippets contain
   only the public endpoint and your (non-secret) stack URL. Authentication is
   handled entirely by the OAuth flow.
-- To remove from Claude Code: `claude mcp remove grafana-ci` (and `-qa` / `-prod`).
+- The installer registers at **user** scope by default (global to your account,
+  usable from any directory). Use `--scope project` to share via a project-local
+  `.mcp.json`, or `--scope local` for the old project-private behavior.
+- To remove from Claude Code, match the scope you installed at:
+  `claude mcp remove grafana-ci -s user` (and `-qa` / `-prod`).
