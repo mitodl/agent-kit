@@ -29,21 +29,35 @@ uvx deptry . --json-output /tmp/deptry-out.json && cat /tmp/deptry-out.json
 ```bash
 # Read all declared deps from pyproject.toml
 python -c "
-import tomllib, pathlib, subprocess, sys
+import pathlib, subprocess, sys, re
+try:
+    import tomllib
+except ImportError:
+    try:
+        import pip._vendor.tomli as tomllib
+    except ImportError:
+        print('Error: tomllib or tomli required'); sys.exit(1)
 
 with open('pyproject.toml', 'rb') as f:
     data = tomllib.load(f)
 
 deps = data.get('project', {}).get('dependencies', [])
-# Strip version specifiers
-pkgs = [d.split('[')[0].split('>=')[0].split('==')[0].split('<')[0].strip().lower().replace('-','_') for d in deps]
+pkgs = []
+for d in deps:
+    m = re.match(r'^([a-zA-Z0-9_.-]+)', d)
+    if m:
+        pkgs.append(m.group(1).lower().replace('-', '_'))
 
 for pkg in pkgs:
-    result = subprocess.run(['rg', '-l', pkg, '--include=*.py', '--glob=!tests/'], capture_output=True, text=True)
+    # Search including tests/ — test-only use is 'dev-only', not 'unused'
+    result = subprocess.run(['rg', '-l', pkg, '--include=*.py'], capture_output=True, text=True)
     if not result.stdout.strip():
         print(f'UNUSED: {pkg}')
     else:
-        print(f'used:   {pkg} ({len(result.stdout.strip().splitlines())} files)')
+        files = result.stdout.strip().splitlines()
+        test_only = all('test' in f for f in files)
+        label = 'test-only' if test_only else 'used'
+        print(f'{label}: {pkg} ({len(files)} files)')
 "
 ```
 
@@ -85,10 +99,15 @@ const pkg = require('./package.json');
 const { execSync } = require('child_process');
 const deps = Object.keys({...(pkg.dependencies||{}), ...(pkg.devDependencies||{})});
 for (const dep of deps) {
+  // Escape regex metacharacters (e.g. scoped packages like @org/name)
+  const escaped = dep.replace(/[.*+?^\${}()|[\]\\\\]/g, '\\\\$&');
   try {
-    const out = execSync(\`rg -l '\"'\${dep}'\"\\|'\${dep}' ' src/ --include='*.{ts,tsx,js,jsx}'\`, {stdio:['pipe','pipe','pipe']}).toString();
-    console.log(out.trim() ? 'used: '+dep : 'UNUSED: '+dep);
-  } catch { console.log('UNUSED: '+dep); }
+    const out = execSync(
+      'rg -l \"' + escaped + '\" src/ -g \"*.ts\" -g \"*.tsx\" -g \"*.js\" -g \"*.jsx\"',
+      {stdio:['pipe','pipe','pipe']}
+    ).toString();
+    console.log(out.trim() ? 'used:   ' + dep : 'UNUSED: ' + dep);
+  } catch { console.log('UNUSED: ' + dep); }
 }
 "
 ```
@@ -99,13 +118,11 @@ for (const dep of deps) {
 
 ### Check what go mod tidy would remove
 
-Run in a temp directory to avoid mutating the real go.mod:
+Back up go.mod/go.sum, run tidy, capture output, then restore — non-destructive:
 
 ```bash
-# Non-destructive: show what's unused
 cp go.mod /tmp/go.mod.bak && cp go.sum /tmp/go.sum.bak
 go mod tidy -v 2>&1 | grep "^removing"
-# Restore
 cp /tmp/go.mod.bak go.mod && cp /tmp/go.sum.bak go.sum
 ```
 
@@ -159,12 +176,21 @@ cargo +nightly udeps
 
 ```bash
 python3 -c "
-import re, subprocess, pathlib
+import pathlib, subprocess, sys
+try:
+    import tomllib
+except ImportError:
+    try:
+        import pip._vendor.tomli as tomllib
+    except ImportError:
+        print('Error: tomllib or tomli required'); sys.exit(1)
 
-cargo = pathlib.Path('Cargo.toml').read_text()
-deps = re.findall(r'^(\w[\w-]*)\s*=', cargo, re.MULTILINE)
+cargo_data = tomllib.loads(pathlib.Path('Cargo.toml').read_text())
+deps = []
+for section in ['dependencies', 'dev-dependencies', 'build-dependencies']:
+    deps.extend(cargo_data.get(section, {}).keys())
 
-for dep in deps:
+for dep in sorted(set(deps)):
     crate_name = dep.replace('-', '_')
     result = subprocess.run(['rg', '-l', crate_name, 'src/'], capture_output=True, text=True)
     if result.stdout.strip():

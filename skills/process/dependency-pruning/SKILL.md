@@ -87,8 +87,8 @@ list yourself and verify packages the tool didn't flag — especially:
 
 ### Known tool blind spots
 
-**Django / Python projects**: deptry's DEP002 false-positive rate can be very
-high (sometimes 30+ flags for a single project) because PyPI package names
+**Django / Python projects**: deptry's **DEP001** false-positive rate can be
+very high (sometimes 30+ flags for a single project) because PyPI package names
 rarely match their Python module names:
 - `djangorestframework` → `rest_framework`
 - `beautifulsoup4` → `bs4`
@@ -96,10 +96,14 @@ rarely match their Python module names:
 - `pygithub` → `github`
 - `psycopg2-binary` → `psycopg2`
 
-When you see many DEP002 warnings on a Django project, verify each one manually
-rather than reporting them all as unused. After the audit, suggest adding a
-`[tool.deptry.package_module_name_map]` section to `pyproject.toml` so future
-runs are accurate.
+When deptry can't find `import djangorestframework` anywhere, it raises DEP001
+("declared but never imported") — but the package IS in use, just as
+`from rest_framework import ...`. The paired DEP002 ("import found but not
+declared") may also fire for the Python module name that is imported, since the
+manifest lists the PyPI name. Both errors stem from the same root cause.
+Verify each DEP001 manually before treating any as a removal candidate. After
+the audit, suggest adding a `[tool.deptry.package_module_name_map]` section to
+`pyproject.toml` so future runs are accurate.
 
 **Django INSTALLED_APPS**: packages registered as Django apps (django-anymail,
 django-storages, django-guardian, etc.) are loaded by the framework from
@@ -149,8 +153,7 @@ For each dependency that IS used, check how much of it is actually called.
 ```bash
 # Python: unique symbols imported from a package
 PKG="humanize"
-rg "from ${PKG}(\.\w+)? import (\w+)" --no-filename -o --include="*.py" \
-  | grep -oP 'import \K\w+' | sort -u
+rg "from ${PKG}(?:\.\w+)? import (\w+)" -g "*.py" -o -r '$1' --no-filename | sort -u
 
 # JS/TS: named imports + member accesses
 PKG="lodash"
@@ -177,8 +180,12 @@ python -c "
 import importlib.util, pathlib
 spec = importlib.util.find_spec('${PKG}')
 if spec and spec.origin:
-    root = pathlib.Path(spec.origin).parent
-    lines = sum(len(f.read_text(errors='ignore').splitlines()) for f in root.rglob('*.py'))
+    origin = pathlib.Path(spec.origin)
+    if origin.name == '__init__.py':
+        root = origin.parent
+        lines = sum(len(f.read_text(errors='ignore').splitlines()) for f in root.rglob('*.py'))
+    else:
+        lines = len(origin.read_text(errors='ignore').splitlines())
     print(lines)
 "
 # JS/TS
@@ -253,22 +260,27 @@ Thresholds: API surface <= N symbols, package LOC proxy <= N
 
 ## Remove — Unused Dependencies
 | Package | Ecosystem | Evidence of non-use |
+|---------|-----------|---------------------|
 | ddt     | Python    | No `import ddt` or `from ddt` in any test file |
 
 ## Optimize Import Style (JS/TS)
 | Package | Current import | Issue | Fix |
+|---------|----------------|-------|-----|
 | lodash  | `import _ from 'lodash'` | Prevents tree-shaking; full ~72KB ships | Switch to `lodash-es` or per-function imports |
 
 ## Vendor/Rewrite Candidates
 | Package | Used symbols | Package LOC | Replacement sketch |
+|---------|-------------|-------------|-------------------|
 | waait   | default (1)  | 1 LOC       | `const wait = (ms=0) => new Promise(r => setTimeout(r, ms))` |
 
 ## Migrate Away From
 | Package | Status | Migration target |
+|---------|--------|-----------------|
 | react-ga | GA3 sunset Jul 2023 | PostHog (already wired), or GA4 via gtag |
 
 ## Dev-only Misclassifications
 | Package | Currently | Should be |
+|---------|-----------|-----------|
 | ipython | dependencies | dev dependencies |
 
 ## Well-used (checked, nothing to do)
