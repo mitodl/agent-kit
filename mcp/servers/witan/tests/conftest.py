@@ -51,6 +51,9 @@ def server(tmp_path, monkeypatch):
 
     monkeypatch.setenv("WITAN_REPO", "https://github.com/test/repo")
     monkeypatch.setenv("WITAN_AUTHOR", "pytest")
+    # Isolate from the real agent session: memory_store auto-wires a
+    # SessionProduced edge when CLAUDE_SESSION_ID resolves to a live session.
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
 
     from witan import config as cfg_mod
     from witan import graph as graph_mod

@@ -409,6 +409,27 @@ query list_sessions_by_project($project_slug: String) {
     order { $s.started_at asc }
 }
 
+// Memories produced during a session (provenance walk). Edge predicate is the
+// type name lowercased with underscores stripped: `sessionproduced`.
+query session_produced_memories($session_slug: String) {
+    match {
+        $s: WorkflowSession { slug: $session_slug }
+        $m: Memory
+        $s sessionproduced $m
+    }
+    return { $m.slug, $m.kind, $m.title, $m.created_at }
+}
+
+// Memories a project Informed (project-grain provenance).
+query informed_memories($project_slug: String) {
+    match {
+        $p: WorkflowProject { slug: $project_slug }
+        $m: Memory
+        $p informed $m
+    }
+    return { $m.slug, $m.kind, $m.title, $m.created_at }
+}
+
 // ── Workflow Traces (corpus) ──────────────────────────────────────
 
 query get_trace($slug: String) {

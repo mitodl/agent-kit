@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -459,6 +460,15 @@ def memory_store(
     for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
         _tag_memory(slug, tag, "topic")
 
+    # Provenance: record which session produced this memory (best-effort).
+    active = _active_session_slug()
+    if active:
+        client.change(
+            "mutations.gq",
+            "link_session_produced",
+            {"from": active, "to": slug},
+        )
+
     return {"slug": slug, "kind": kind, "repo": detected_repo}
 
 
@@ -698,6 +708,23 @@ _STATE_FILE_PREFIX = "workflow-session-"
 
 def _session_state_path(session_id: str) -> Path:
     return Path(tempfile.gettempdir()) / f"{_STATE_FILE_PREFIX}{session_id}.json"
+
+
+def _active_session_slug() -> str | None:
+    """The WorkflowSession slug for the current agent session, or None.
+
+    Reads the state file ``workflow_session_start`` wrote, keyed by
+    ``$CLAUDE_SESSION_ID``. Fails soft on any missing-env/read/parse error —
+    provenance is best-effort and must never block a memory write.
+    """
+    session_id = os.environ.get("CLAUDE_SESSION_ID")
+    if not session_id:
+        return None
+    try:
+        state = json.loads(_session_state_path(session_id).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return state.get("session_slug") or None
 
 
 @mcp.tool
@@ -992,6 +1019,44 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
         {"from": project_slug, "to": memory_slug},
     )
     return {"project_slug": project_slug, "memory_slug": memory_slug}
+
+
+@mcp.tool
+def project_memories(project_slug: str) -> dict:
+    """
+    "What did we learn during project X" — the provenance walk.
+
+    Assembles the memories connected to a project from two grains:
+    - **session-grain** (``SessionProduced``): memories each of the project's
+      sessions created, auto-recorded by ``memory_store`` when a session is active;
+    - **project-grain** (``Informed``): memories explicitly linked via
+      ``workflow_project_link_memory``.
+
+    De-duplicated by slug. Returns
+    ``{"project_slug": ..., "memories": [...], "by_session": {session_slug: [...]}}``.
+    """
+    sessions = client.read(
+        "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+    )
+    by_session: dict[str, list[dict]] = {}
+    merged: dict[str, dict] = {}
+    for session in sessions:
+        produced = client.read(
+            "read.gq", "session_produced_memories", {"session_slug": session["slug"]}
+        )
+        if produced:
+            by_session[session["slug"]] = produced
+        for row in produced:
+            merged[row["slug"]] = row
+    for row in client.read(
+        "read.gq", "informed_memories", {"project_slug": project_slug}
+    ):
+        merged[row["slug"]] = row
+    return {
+        "project_slug": project_slug,
+        "memories": list(merged.values()),
+        "by_session": by_session,
+    }
 
 
 @mcp.tool
