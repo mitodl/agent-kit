@@ -65,21 +65,12 @@ def apply_schema() -> dict:
     schema-applies when first *creating* a store, so additive changes (new
     nodes/edges/fields) never reach an already-created store without this.
 
-    Returns ``{"store", "output"}``; raises ``RuntimeError`` on a failed apply.
+    Routes through ``OmnigraphClient`` so it holds the same per-store write lock +
+    retry/repair as any other write. Returns ``{"store", "output"}``; raises
+    ``RuntimeError`` on a failed apply.
     """
-    uri = client.graph_uri
-    env = dict(os.environ)
-    if client.token:
-        env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = client.token
-    result = subprocess.run(
-        [client._binary, "schema", "apply", "--schema", str(_SCHEMA_FILE), uri],
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"schema apply failed: {result.stderr.strip()}")
-    return {"store": uri, "output": result.stdout.strip()}
+    output = client.apply_schema(_SCHEMA_FILE)
+    return {"store": client.graph_uri, "output": output.strip()}
 
 
 def _topic_schema_present() -> bool:
@@ -92,7 +83,10 @@ def _topic_schema_present() -> bool:
     try:
         client.read("read.gq", "get_topic", {"slug": "tp-__schema_probe__"})
     except RuntimeError as exc:
-        if "Topic" in str(exc) or "unknown" in str(exc).lower():
+        # The pre-graph schema raises exactly: "unknown node type `Topic`".
+        # Match that specifically so connection/other errors propagate.
+        msg = str(exc).lower()
+        if "unknown node type" in msg and "topic" in msg:
             return False
         raise
     return True
