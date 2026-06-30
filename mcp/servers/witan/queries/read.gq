@@ -230,6 +230,36 @@ query contradicts_in($slug: String) {
     return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
 }
 
+// Memories that AppliesTo $slug (in-direction; pairs with applies_to_targets).
+query applies_to_sources($slug: String) {
+    match {
+        $other: Memory
+        $m: Memory { slug: $slug }
+        $other appliesto $m
+    }
+    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+}
+
+// Sessions that produced $slug (for provenance-sibling expansion in recall).
+query producing_sessions($slug: String) {
+    match {
+        $s: WorkflowSession
+        $m: Memory { slug: $slug }
+        $s sessionproduced $m
+    }
+    return { $s.slug }
+}
+
+// Memories a task Addresses (recall task-seed).
+query addressed_memories($task_slug: String) {
+    match {
+        $t: Task { slug: $task_slug }
+        $m: Memory
+        $t addresses $m
+    }
+    return { $m.slug, $m.kind, $m.title, $m.repo, $m.created_at }
+}
+
 // All slugs that are the TARGET of any Supersedes edge — i.e. the superseded set.
 // Used to prune/deprioritise in the Python re-rank. Bounded; the superseded set
 // is small relative to total memories.
