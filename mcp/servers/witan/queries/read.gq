@@ -260,6 +260,33 @@ query addressed_memories($task_slug: String) {
     return { $m.slug, $m.kind, $m.title, $m.repo, $m.created_at }
 }
 
+// Recall expansion: all memories sharing any Topic with $slug, in one query
+// (memory → topic → memory) instead of a per-topic fan-out. Includes $slug; the
+// server discards self.
+query topic_siblings($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $tp: Topic
+        $m tagged $tp
+        $other: Memory
+        $other tagged $tp
+    }
+    return { $other.slug }
+}
+
+// Recall expansion: all memories produced by any session that produced $slug, in
+// one query (memory → session → memory). Includes $slug; the server discards self.
+query provenance_siblings($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $s: WorkflowSession
+        $s sessionproduced $m
+        $other: Memory
+        $s sessionproduced $other
+    }
+    return { $other.slug }
+}
+
 // All slugs that are the TARGET of any Supersedes edge — i.e. the superseded set.
 // Used to prune/deprioritise in the Python re-rank. Bounded; the superseded set
 // is small relative to total memories.

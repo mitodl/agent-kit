@@ -86,3 +86,23 @@ def test_recall_expands_related_neighbor(server):
     assert slugs.index(seed["slug"]) < slugs.index(
         neighbor["slug"]
     )  # seed outranks neighbor
+
+
+@requires_omnigraph
+def test_recall_expands_topic_sibling(server):
+    a = server.memory_store(
+        kind="pattern", title="seed", content="quokka anchor", tags=["shared"]
+    )
+    b = server.memory_store(
+        kind="pattern", title="sib", content="nothing matching here", tags=["shared"]
+    )
+    out = server.recall(query="quokka anchor", hops=1)
+    slugs = {m["slug"] for m in out["memories"]}
+    assert a["slug"] in slugs
+    assert b["slug"] in slugs  # pulled in via the shared-topic sibling expansion
+
+
+@requires_omnigraph
+def test_recall_empty_is_clean(server):
+    out = server.recall(query="zzzznomatchquux")
+    assert out == {"memories": [], "contradictions": [], "seeds": {}}

@@ -2121,31 +2121,21 @@ def _context_for_symbol(symbol_id: str) -> dict:
 
 def _expand_neighbors(slug: str) -> set[str]:
     """One-hop memory neighbours of ``slug``: along AppliesTo/RelatedTo, topic
-    siblings (Tagged), and provenance siblings (same producing session)."""
+    siblings (Tagged), and provenance siblings (same producing session).
+
+    Each relation is a single conjunctive query — topic_siblings and
+    provenance_siblings join memory→topic/session→memory in one roundtrip rather
+    than fanning out per topic/session."""
     out: set[str] = set()
     for query in (
         "applies_to_targets",
         "applies_to_sources",
         "related_out",
         "related_in",
+        "topic_siblings",
+        "provenance_siblings",
     ):
         out.update(r["slug"] for r in client.read("read.gq", query, {"slug": slug}))
-    for topic in client.read("read.gq", "topics_for_memory", {"slug": slug}):
-        out.update(
-            r["slug"]
-            for r in client.read(
-                "read.gq", "memories_for_topic", {"topic_slug": topic["slug"]}
-            )
-        )
-    for session in client.read("read.gq", "producing_sessions", {"slug": slug}):
-        out.update(
-            r["slug"]
-            for r in client.read(
-                "read.gq",
-                "session_produced_memories",
-                {"session_slug": session["slug"]},
-            )
-        )
     out.discard(slug)
     return out
 
@@ -2226,6 +2216,10 @@ def recall(
         if not frontier:
             break
 
+    # No seeds matched (and nothing to expand from) — skip the global edge scan.
+    if not candidates:
+        return {"memories": [], "contradictions": [], "seeds": {}}
+
     # ── Prune + score ─────────────────────────────────────────────
     edge_index = _edge_index()
     if not include_superseded:
@@ -2256,15 +2250,17 @@ def recall(
         )
         scored.append((base - rank_cfg.w_hop * hop, node))
     scored.sort(key=lambda t: -t[0])
-    ranked = [node for _, node in scored]
+    returned = [node for _, node in scored][:limit]
 
-    # ── Contradictions among the surviving candidates ─────────────
-    survivors = {n["slug"] for n in ranked}
+    # ── Contradictions among the RETURNED memories ────────────────
+    # Only over the limited result set, so every pair references a memory the
+    # caller actually receives.
+    returned_slugs = {n["slug"] for n in returned}
     contradictions: list[dict] = []
     seen_pairs: set[tuple[str, str]] = set()
-    for slug in survivors:
+    for slug in returned_slugs:
         for other in client.read("read.gq", "contradicts_out", {"slug": slug}):
-            if other["slug"] not in survivors:
+            if other["slug"] not in returned_slugs:
                 continue
             pair = tuple(sorted((slug, other["slug"])))
             if pair not in seen_pairs:
@@ -2272,7 +2268,7 @@ def recall(
                 contradictions.append({"a": pair[0], "b": pair[1]})
 
     return {
-        "memories": ranked[:limit],
+        "memories": returned,
         "contradictions": contradictions,
         "seeds": {k: v for k, v in seeds.items() if v},
     }
