@@ -366,3 +366,55 @@ def test_load_malformed_toml_raises(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError, match="Failed to parse config file"):
         load()
+
+
+# ── load_rank_config ──────────────────────────────────────────────────────────
+
+
+def test_rank_config_defaults(monkeypatch):
+    from witan.config import load_rank_config
+
+    for var in (
+        "WITAN_RANK_HALFLIFE_DAYS",
+        "WITAN_RANK_DEFAULT_CONF",
+        "WITAN_CONFIG",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    rc = load_rank_config()
+    assert rc.w_bm25 == 1.0
+    assert rc.half_life_days == 90.0
+
+
+def test_rank_config_env_override(monkeypatch):
+    from witan.config import load_rank_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_RANK_W_RECENCY", "0")
+    assert load_rank_config().w_recency == 0.0
+
+
+def test_rank_config_rejects_nonpositive_half_life(monkeypatch):
+    from witan.config import load_rank_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_RANK_HALFLIFE_DAYS", "0")
+    with pytest.raises(ValueError, match="half_life_days must be > 0"):
+        load_rank_config()
+
+
+def test_rank_config_rejects_out_of_range_confidence(monkeypatch):
+    from witan.config import load_rank_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_RANK_DEFAULT_CONF", "1.5")
+    with pytest.raises(ValueError, match="between 0.0 and 1.0"):
+        load_rank_config()
+
+
+def test_rank_config_non_numeric_names_source(monkeypatch):
+    from witan.config import load_rank_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_RANK_W_BM25", "notanumber")
+    with pytest.raises(ValueError, match="WITAN_RANK_W_BM25"):
+        load_rank_config()

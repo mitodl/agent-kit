@@ -67,23 +67,42 @@ _RANK_FIELDS = {
 
 
 def load_rank_config() -> RankConfig:
-    """Resolve RankConfig from env > config.toml [rank] > constant defaults."""
+    """Resolve RankConfig from env > config.toml [rank] > constant defaults.
+
+    Rejects values that would break ranking (non-positive half-life, confidence
+    outside 0–1) so a misconfiguration fails loudly at startup rather than
+    silently skewing or overflowing the score.
+    """
     file_rank = _load_toml().get("rank", {})
     if not isinstance(file_rank, dict):
         raise ValueError("The 'rank' section in config must be a table.")
     values: dict[str, float] = {}
     for field, env_var in _RANK_FIELDS.items():
         raw = os.environ.get(env_var)
+        source = env_var if raw is not None else None
         if raw is None and field in file_rank:
             raw = file_rank[field]
+            source = f"[rank].{field} in config.toml"
         if raw is None:
             continue
         try:
             values[field] = float(raw)
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                f"Invalid rank knob {env_var or field}={raw!r}: expected a number."
+                f"Invalid rank knob {source}={raw!r}: expected a number."
             ) from exc
+
+    if values.get("half_life_days", 1.0) <= 0:
+        raise ValueError(
+            f"Invalid rank knob {_RANK_FIELDS['half_life_days']}: "
+            "half_life_days must be > 0."
+        )
+    conf = values.get("default_confidence", 0.6)
+    if not 0.0 <= conf <= 1.0:
+        raise ValueError(
+            f"Invalid rank knob {_RANK_FIELDS['default_confidence']}: "
+            "default_confidence must be between 0.0 and 1.0."
+        )
     return RankConfig(**values)
 
 

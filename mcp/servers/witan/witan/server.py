@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -272,23 +273,53 @@ def migrate_topics() -> dict:
 # ── Composite re-rank (spec §7) ───────────────────────────────────
 
 
+# The edge index is a handful of global queries; cache it briefly so a burst of
+# searches doesn't re-scan the graph each time. Keyed by store URI (test stores
+# differ) and dropped on any local edge write, so it's never stale within a
+# process; the TTL bounds staleness from other processes writing the shared store.
+_EDGE_INDEX_TTL_SECONDS = 5.0
+_edge_index_cache: dict | None = None
+_edge_index_cache_key: tuple[str, float] | None = None
+
+
+def _invalidate_edge_index() -> None:
+    """Drop the cached edge index after a local edge write."""
+    global _edge_index_cache, _edge_index_cache_key
+    _edge_index_cache = None
+    _edge_index_cache_key = None
+
+
 def _edge_index() -> dict:
     """Tally support degrees and conflict/supersession sets across the graph.
 
     Runs a handful of global single-column edge queries and counts in Python:
     cheaper than per-candidate traversals and independent of result-set size.
-    Bounded by edge count, mirroring ``all_superseded_slugs``.
+    Bounded by edge count, mirroring ``all_superseded_slugs``. Cached (see above).
     """
+    global _edge_index_cache, _edge_index_cache_key
+    now = time.monotonic()
+    if (
+        _edge_index_cache is not None
+        and _edge_index_cache_key is not None
+        and _edge_index_cache_key[0] == client.graph_uri
+        and now - _edge_index_cache_key[1] < _EDGE_INDEX_TTL_SECONDS
+    ):
+        return _edge_index_cache
 
     def slugs(query: str) -> list[str]:
         return [r["slug"] for r in client.read("read.gq", query, {})]
 
+    # Corroboration counts supporting edges touching a memory: RelatedTo, AppliesTo,
+    # Refines (all directions), plus provenance (Informed, SessionProduced).
+    # Contradicts is NOT support — it drives the penalty instead.
     corroboration: Counter = Counter()
     for query in (
         "rel_edges_from",
         "rel_edges_to",
         "applies_edges_from",
         "applies_edges_to",
+        "refines_edges_from",
+        "refines_edges_to",
         "informed_edges_to",
         "produced_edges_to",
     ):
@@ -297,11 +328,14 @@ def _edge_index() -> dict:
         slugs("contradicts_edges_to")
     )
     superseded = set(slugs("all_superseded_slugs"))
-    return {
+    result = {
         "corroboration": corroboration,
         "contradicted": contradicted,
         "superseded": superseded,
     }
+    _edge_index_cache = result
+    _edge_index_cache_key = (client.graph_uri, now)
+    return result
 
 
 def _age_days(ts: str | None, now: datetime) -> float:
@@ -330,7 +364,7 @@ def _score(
     """The composite memory score (spec §7.2). Pure — no I/O."""
     recency = (
         math.exp(-age_days / rank_cfg.half_life_days)
-        if rank_cfg.half_life_days
+        if rank_cfg.half_life_days > 0
         else 0.0
     )
     conf = rank_cfg.default_confidence if confidence is None else confidence
@@ -434,6 +468,9 @@ def memory_search(
         )
     else:
         rows = client.read("read.gq", "search_all", {"query": query})
+
+    if not rows:  # nothing to prune or re-rank — skip the edge-index scan
+        return rows
 
     edge_index = _edge_index()
     if not include_superseded:
@@ -594,6 +631,7 @@ def memory_store(
                 "link_session_produced",
                 {"from": active, "to": slug},
             )
+            _invalidate_edge_index()  # SessionProduced feeds corroboration
         except RuntimeError:
             pass
 
@@ -761,6 +799,7 @@ def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
         _MEMORY_LINK_MUTATIONS[kind],
         {"from": from_slug, "to": to_slug},
     )
+    _invalidate_edge_index()  # supersede/contradict/support sets changed
     return {"from": from_slug, "to": to_slug, "kind": kind, "linked": True}
 
 
@@ -1152,6 +1191,7 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
         "link_informed",
         {"from": project_slug, "to": memory_slug},
     )
+    _invalidate_edge_index()  # Informed feeds corroboration
     return {"project_slug": project_slug, "memory_slug": memory_slug}
 
 

@@ -264,6 +264,14 @@ query applies_edges_to() {
     match { $a: Memory $b: Memory $a appliesto $b }
     return { $b.slug }
 }
+query refines_edges_from() {
+    match { $a: Memory $b: Memory $a refines $b }
+    return { $a.slug }
+}
+query refines_edges_to() {
+    match { $a: Memory $b: Memory $a refines $b }
+    return { $b.slug }
+}
 query contradicts_edges_from() {
     match { $a: Memory $b: Memory $a contradicts $b }
     return { $a.slug }

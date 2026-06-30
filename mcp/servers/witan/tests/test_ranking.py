@@ -86,3 +86,29 @@ def test_zero_weights_preserve_bm25_order(server, monkeypatch):
     raw = srv.client.read("read.gq", "search_all", {"query": "quux alpha"})
     ranked = server.memory_search("quux alpha")
     assert [r["slug"] for r in ranked] == [r["slug"] for r in raw]
+
+
+@requires_omnigraph
+def test_refines_counts_as_corroboration(server):
+    from witan import server as srv
+
+    a = server.memory_store(kind="pattern", title="a", content="alpha")
+    b = server.memory_store(kind="pattern", title="b", content="beta")
+    server.memory_link(a["slug"], b["slug"], "refines")  # a refines b
+
+    # memory_link invalidates the cache, so this rebuilds with the new edge.
+    idx = srv._edge_index()
+    assert idx["corroboration"][a["slug"]] >= 1
+    assert idx["corroboration"][b["slug"]] >= 1
+
+
+@requires_omnigraph
+def test_edge_index_cache_invalidated_on_link(server):
+    from witan import server as srv
+
+    a = server.memory_store(kind="pattern", title="a", content="alpha")
+    b = server.memory_store(kind="pattern", title="b", content="beta")
+    assert srv._edge_index()["superseded"] == set()  # warms the cache
+    server.memory_link(a["slug"], b["slug"], "supersedes")
+    # invalidation means the just-superseded slug shows up immediately
+    assert b["slug"] in srv._edge_index()["superseded"]
