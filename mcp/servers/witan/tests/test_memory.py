@@ -80,3 +80,59 @@ def test_memory_list_filters_by_kind(server):
     assert [m["kind"] for m in server.memory_list(kind="lesson")] == ["lesson"]
     assert [m["kind"] for m in server.memory_list(kind="pattern")] == ["pattern"]
     assert server.memory_list(kind="agent_context") == []
+
+
+@requires_omnigraph
+def test_supersedes_hides_old_from_search(server):
+    old = server.memory_store(
+        kind="pattern", title="old uv note", content="use uv for python venvs"
+    )
+    new = server.memory_store(
+        kind="pattern", title="new uv note", content="use uv for python venvs today"
+    )
+    server.memory_link(new["slug"], old["slug"], "supersedes")
+
+    slugs = {h["slug"] for h in server.memory_search("uv python venvs")}
+    assert old["slug"] not in slugs
+    assert new["slug"] in slugs
+
+    with_old = {
+        h["slug"]
+        for h in server.memory_search("uv python venvs", include_superseded=True)
+    }
+    assert old["slug"] in with_old
+
+
+@requires_omnigraph
+def test_related_to_is_symmetric(server):
+    a = server.memory_store(kind="pattern", title="a", content="alpha content")
+    b = server.memory_store(kind="pattern", title="b", content="beta content")
+    server.memory_link(a["slug"], b["slug"], "related_to")
+
+    # stored a -> b, but b's neighbours union both directions
+    nb = server.memory_neighbors(b["slug"])
+    related = {n["slug"] for n in nb["neighbors"]["related_to"]}
+    assert a["slug"] in related
+
+
+@requires_omnigraph
+def test_contradicts_not_hidden(server):
+    a = server.memory_store(kind="lesson", title="x", content="contradiction topic one")
+    b = server.memory_store(kind="lesson", title="y", content="contradiction topic two")
+    server.memory_link(a["slug"], b["slug"], "contradicts")
+
+    slugs = {h["slug"] for h in server.memory_search("contradiction topic")}
+    assert {a["slug"], b["slug"]} <= slugs
+
+    nb = server.memory_neighbors(a["slug"])
+    assert b["slug"] in {n["slug"] for n in nb["neighbors"]["contradicts"]}
+
+
+@requires_omnigraph
+def test_link_missing_slug_is_noop(server):
+    a = server.memory_store(kind="pattern", title="real", content="a real memory")
+    res = server.memory_link(a["slug"], "pat-does-not-exist", "related_to")
+    assert res["linked"] is False
+    assert "pat-does-not-exist" in res["missing"]
+    # no dead edge surfaces in a typed read
+    assert server.memory_neighbors(a["slug"])["neighbors"]["related_to"] == []

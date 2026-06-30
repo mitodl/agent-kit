@@ -37,6 +37,16 @@ edge Supersedes: Memory -> Memory
 // e.g. a pattern "always use uv" AppliesTo project fact "ol-django uses uv".
 edge AppliesTo: Memory -> Memory
 
+// Refines: a newer memory sharpens/extends an older one without replacing it.
+edge Refines: Memory -> Memory
+
+// Contradicts: two memories conflict. Symmetric in meaning; stored one
+// direction and traversed both ways. Never hidden — surfaced for review.
+edge Contradicts: Memory -> Memory
+
+// RelatedTo: soft associative link. Symmetric; stored one direction.
+edge RelatedTo: Memory -> Memory
+
 // ── Workflow Tracking ─────────────────────────────────────────────
 //
 // WorkflowProject tracks an overarching engineering objective across

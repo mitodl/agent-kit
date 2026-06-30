@@ -69,6 +69,30 @@ mcp = FastMCP(
 
 MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
 
+MemoryLinkKind = Literal[
+    "supersedes", "refines", "applies_to", "contradicts", "related_to"
+]
+
+# Edge kind → mutation query that writes it.
+_MEMORY_LINK_MUTATIONS = {
+    "supersedes": "link_supersedes",
+    "refines": "link_refines",
+    "applies_to": "link_applies_to",
+    "contradicts": "link_contradicts",
+    "related_to": "link_related_to",
+}
+
+# Edge kind → read queries whose union gives a memory's neighbours along it.
+# Symmetric kinds (contradicts, related_to) are stored one direction and unioned
+# from both at read time.
+_MEMORY_NEIGHBOR_QUERIES = {
+    "supersedes": ["supersedes_targets"],
+    "refines": ["refines_targets"],
+    "applies_to": ["applies_to_targets"],
+    "contradicts": ["contradicts_out", "contradicts_in"],
+    "related_to": ["related_out", "related_in"],
+}
+
 _KIND_PREFIX = {
     "pattern": "pat",
     "project_fact": "pf",
@@ -149,6 +173,7 @@ def memory_search(
     query: str,
     repo: str | None = None,
     kind: MemoryKind | None = None,
+    include_superseded: bool = False,
 ) -> list[dict]:
     """
     Search agent memories by text.
@@ -156,6 +181,10 @@ def memory_search(
     Returns the top-20 matching memories ranked by BM25 relevance. The search
     is automatically scoped to the current git repository unless ``repo`` or
     ``WITAN_REPO`` overrides it.
+
+    Memories that have been superseded by a newer one (via a ``Supersedes`` edge —
+    see ``memory_link``) are hidden by default. Pass ``include_superseded=True`` to
+    surface them.
 
     Parameters
     ----------
@@ -167,28 +196,37 @@ def memory_search(
     kind:
         Optional filter: ``pattern``, ``project_fact``, ``lesson``,
         or ``agent_context``.
+    include_superseded:
+        When ``True``, keep memories that a newer memory ``Supersedes``. Default
+        ``False`` drops them.
     """
     detected = repo_module.detect(override=repo)
 
     if detected and kind:
-        return client.read(
+        rows = client.read(
             "read.gq",
             "search_by_repo_and_kind",
             {"query": query, "repo": detected, "kind": kind},
         )
-    if detected:
-        return client.read(
+    elif detected:
+        rows = client.read(
             "read.gq",
             "search_by_repo",
             {"query": query, "repo": detected},
         )
-    if kind:
-        return client.read(
+    elif kind:
+        rows = client.read(
             "read.gq",
             "search_by_kind",
             {"query": query, "kind": kind},
         )
-    return client.read("read.gq", "search_all", {"query": query})
+    else:
+        rows = client.read("read.gq", "search_all", {"query": query})
+
+    if include_superseded:
+        return rows
+    superseded = {r["slug"] for r in client.read("read.gq", "all_superseded_slugs", {})}
+    return [r for r in rows if r["slug"] not in superseded]
 
 
 @mcp.tool
@@ -389,6 +427,75 @@ def memory_list_patterns(
         ]
 
     return rows
+
+
+@mcp.tool
+def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
+    """
+    Create a typed edge between two memories.
+
+    - ``supersedes``  — ``from`` (newer) replaces ``to`` (older). ``to`` is hidden
+                        from default ``memory_search`` results.
+    - ``refines``     — ``from`` sharpens/extends ``to`` without replacing it.
+    - ``applies_to``  — ``from`` (a pattern/lesson) applies in the context of ``to``
+                        (a project_fact).
+    - ``contradicts`` — ``from`` and ``to`` conflict. Symmetric; surfaced for
+                        review, never hidden.
+    - ``related_to``  — soft association. Symmetric.
+
+    Both endpoints must already exist as ``Memory`` nodes; the edge is not written
+    otherwise (avoids dead off-type edges). Returns ``linked: False`` in that case
+    rather than raising.
+    """
+    endpoints = {from_slug, to_slug}
+    present = {
+        slug
+        for slug in endpoints
+        if client.read("read.gq", "get_memory", {"slug": slug})
+    }
+    missing = sorted(endpoints - present)
+    if missing:
+        return {
+            "from": from_slug,
+            "to": to_slug,
+            "kind": kind,
+            "linked": False,
+            "missing": missing,
+        }
+
+    client.change(
+        "mutations.gq",
+        _MEMORY_LINK_MUTATIONS[kind],
+        {"from": from_slug, "to": to_slug},
+    )
+    return {"from": from_slug, "to": to_slug, "kind": kind, "linked": True}
+
+
+@mcp.tool
+def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> dict:
+    """
+    Return the memories directly linked to ``slug``, grouped by edge kind.
+
+    For symmetric kinds (``contradicts``, ``related_to``) both directions are
+    unioned and de-duplicated. Use after ``memory_get`` to see what a memory
+    connects to.
+
+    Parameters
+    ----------
+    slug:
+        The memory whose neighbours to fetch.
+    kinds:
+        Optional subset of edge kinds to include. Omit for all kinds.
+    """
+    wanted = kinds or list(_MEMORY_NEIGHBOR_QUERIES)
+    neighbors: dict[str, list[dict]] = {}
+    for kind in wanted:
+        merged: dict[str, dict] = {}
+        for query_name in _MEMORY_NEIGHBOR_QUERIES[kind]:
+            for row in client.read("read.gq", query_name, {"slug": slug}):
+                merged[row["slug"]] = row
+        neighbors[kind] = list(merged.values())
+    return {"slug": slug, "neighbors": neighbors}
 
 
 # ── Workflow Tracking Tools ───────────────────────────────────────
