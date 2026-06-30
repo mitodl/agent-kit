@@ -222,6 +222,19 @@ def _resolve_topic(ref: str) -> str | None:
     return None
 
 
+def _lookup_topic_slug(topic: str) -> str | None:
+    """Resolve a topic ref (slug or ``name:kind``) to a slug WITHOUT creating it."""
+    if client.read("read.gq", "get_topic", {"slug": topic}):
+        return topic
+    name, sep, kind = topic.rpartition(":")
+    if sep and kind in ("topic", "contract", "symbol", "entity") and name:
+        rows = client.read(
+            "read.gq", "topic_by_name_kind", {"name": name, "kind": kind}
+        )
+        return rows[0]["slug"] if rows else None
+    return None
+
+
 def _tag_memory(memory_slug: str, name: str, kind: str) -> str:
     """Upsert a Topic and link the memory to it. Returns the topic slug."""
     topic_slug, _ = _upsert_topic(name, kind)
@@ -271,6 +284,24 @@ def migrate_topics() -> dict:
 
 
 # ── Composite re-rank (spec §7) ───────────────────────────────────
+
+
+def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
+    """BM25 candidate rows in score-desc order (the seed step for §3.5 / §8)."""
+    detected = repo_module.detect(override=repo)
+    if detected and kind:
+        return client.read(
+            "read.gq",
+            "search_by_repo_and_kind",
+            {"query": query, "repo": detected, "kind": kind},
+        )
+    if detected:
+        return client.read(
+            "read.gq", "search_by_repo", {"query": query, "repo": detected}
+        )
+    if kind:
+        return client.read("read.gq", "search_by_kind", {"query": query, "kind": kind})
+    return client.read("read.gq", "search_all", {"query": query})
 
 
 # The edge index is a handful of global queries; cache it briefly so a burst of
@@ -446,28 +477,7 @@ def memory_search(
         When ``True``, keep memories that a newer memory ``Supersedes``. Default
         ``False`` drops them.
     """
-    detected = repo_module.detect(override=repo)
-
-    if detected and kind:
-        rows = client.read(
-            "read.gq",
-            "search_by_repo_and_kind",
-            {"query": query, "repo": detected, "kind": kind},
-        )
-    elif detected:
-        rows = client.read(
-            "read.gq",
-            "search_by_repo",
-            {"query": query, "repo": detected},
-        )
-    elif kind:
-        rows = client.read(
-            "read.gq",
-            "search_by_kind",
-            {"query": query, "kind": kind},
-        )
-    else:
-        rows = client.read("read.gq", "search_all", {"query": query})
+    rows = _search_rows(query, repo, kind)
 
     if not rows:  # nothing to prune or re-rank — skip the edge-index scan
         return rows
@@ -2088,6 +2098,10 @@ def context_for_symbol(symbol_id: str) -> dict:
         The ``repo`` prefix (everything before ``#``) scopes the lookup; if the id
         carries no ``#`` the current repo is used.
     """
+    return _context_for_symbol(symbol_id)
+
+
+def _context_for_symbol(symbol_id: str) -> dict:
     repo = symbol_id.split("#", 1)[0] if "#" in symbol_id else repo_module.detect()
 
     if repo:
@@ -2100,3 +2114,161 @@ def context_for_symbol(symbol_id: str) -> dict:
     memories = [m for m in mem_rows if symbol_id in (m.get("symbol_refs") or [])]
     tasks = [t for t in task_rows if symbol_id in (t.get("symbol_refs") or [])]
     return {"symbol_id": symbol_id, "memories": memories, "tasks": tasks}
+
+
+# ── Graph-aware recall (spec §8) ──────────────────────────────────
+
+
+def _expand_neighbors(slug: str) -> set[str]:
+    """One-hop memory neighbours of ``slug``: along AppliesTo/RelatedTo, topic
+    siblings (Tagged), and provenance siblings (same producing session).
+
+    Each relation is a single conjunctive query — topic_siblings and
+    provenance_siblings join memory→topic/session→memory in one roundtrip rather
+    than fanning out per topic/session."""
+    out: set[str] = set()
+    for query in (
+        "applies_to_targets",
+        "applies_to_sources",
+        "related_out",
+        "related_in",
+        "topic_siblings",
+        "provenance_siblings",
+    ):
+        out.update(r["slug"] for r in client.read("read.gq", query, {"slug": slug}))
+    out.discard(slug)
+    return out
+
+
+@mcp.tool
+def recall(
+    query: str | None = None,
+    symbol_id: str | None = None,
+    task: str | None = None,
+    topic: str | None = None,
+    repo: str | None = None,
+    kind: MemoryKind | None = None,
+    hops: int = 1,
+    limit: int = 20,
+    include_superseded: bool = False,
+) -> dict:
+    """
+    Graph-aware contextual recall — the composition of every other memory tool.
+
+    Seeds from any combination of ``query`` (BM25), ``symbol_id``
+    (``context_for_symbol``), ``task`` (memories it Addresses + memories sharing
+    its symbol_refs), and ``topic`` (memories tagged to it). Expands ``hops``
+    (default 1, capped at 2) along AppliesTo/RelatedTo edges, topic siblings, and
+    provenance siblings; prunes superseded memories (unless
+    ``include_superseded``); flags Contradicts pairs; and re-ranks with the
+    composite score minus a per-hop distance penalty so seeds outrank neighbours.
+
+    With no edges in the graph the result equals ``memory_search`` — expansion is
+    additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
+    (default off); ``recall`` works with BM25 only and needs no embedding provider.
+
+    Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
+    """
+    hops = max(0, min(hops, 2))
+    now = datetime.now(timezone.utc)
+
+    # ── Seed ──────────────────────────────────────────────────────
+    seed_rank: dict[str, int] = {}  # query-seed BM25 position (norm proxy)
+    seeds: dict[str, list[str]] = {"query": [], "symbol": [], "task": [], "topic": []}
+    candidates: dict[str, int] = {}  # slug → min hop distance
+
+    def add_seed(slug: str, bucket: str) -> None:
+        seeds[bucket].append(slug)
+        candidates.setdefault(slug, 0)
+
+    if query:
+        for i, r in enumerate(_search_rows(query, repo, kind)):
+            seed_rank.setdefault(r["slug"], i)
+            add_seed(r["slug"], "query")
+    if symbol_id:
+        for m in _context_for_symbol(symbol_id)["memories"]:
+            add_seed(m["slug"], "symbol")
+    if task:
+        for m in client.read("read.gq", "addressed_memories", {"task_slug": task}):
+            add_seed(m["slug"], "task")
+        task_rows = client.read("read.gq", "get_task", {"slug": task})
+        for sym in (task_rows[0].get("symbol_refs") if task_rows else None) or []:
+            for m in _context_for_symbol(sym)["memories"]:
+                add_seed(m["slug"], "task")
+    if topic:
+        topic_slug = _lookup_topic_slug(topic)
+        if topic_slug:
+            for m in client.read(
+                "read.gq", "memories_for_topic", {"topic_slug": topic_slug}
+            ):
+                add_seed(m["slug"], "topic")
+
+    # ── Expand ────────────────────────────────────────────────────
+    frontier = set(candidates)
+    for distance in range(1, hops + 1):
+        nxt: set[str] = set()
+        for slug in frontier:
+            for neighbor in _expand_neighbors(slug):
+                if neighbor not in candidates:
+                    candidates[neighbor] = distance
+                    nxt.add(neighbor)
+        frontier = nxt
+        if not frontier:
+            break
+
+    # No seeds matched (and nothing to expand from) — skip the global edge scan.
+    if not candidates:
+        return {"memories": [], "contradictions": [], "seeds": {}}
+
+    # ── Prune + score ─────────────────────────────────────────────
+    edge_index = _edge_index()
+    if not include_superseded:
+        candidates = {
+            s: h for s, h in candidates.items() if s not in edge_index["superseded"]
+        }
+
+    n_query = len(seed_rank)
+
+    def norm_bm25(slug: str) -> float:
+        if slug not in seed_rank:
+            return 0.0
+        return 1.0 if n_query <= 1 else (n_query - 1 - seed_rank[slug]) / (n_query - 1)
+
+    scored: list[tuple[float, dict]] = []
+    for slug, hop in candidates.items():
+        node = memory_get(slug)
+        if node is None:
+            continue
+        base = _score(
+            norm_bm25=norm_bm25(slug),
+            age_days=_age_days(node.get("updated_at") or node.get("created_at"), now),
+            corroboration=edge_index["corroboration"].get(slug, 0),
+            confidence=node.get("confidence"),
+            is_superseded=slug in edge_index["superseded"],
+            is_contradicted=slug in edge_index["contradicted"],
+            rank_cfg=rank_cfg,
+        )
+        scored.append((base - rank_cfg.w_hop * hop, node))
+    scored.sort(key=lambda t: -t[0])
+    returned = [node for _, node in scored][:limit]
+
+    # ── Contradictions among the RETURNED memories ────────────────
+    # Only over the limited result set, so every pair references a memory the
+    # caller actually receives.
+    returned_slugs = {n["slug"] for n in returned}
+    contradictions: list[dict] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for slug in returned_slugs:
+        for other in client.read("read.gq", "contradicts_out", {"slug": slug}):
+            if other["slug"] not in returned_slugs:
+                continue
+            pair = tuple(sorted((slug, other["slug"])))
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                contradictions.append({"a": pair[0], "b": pair[1]})
+
+    return {
+        "memories": returned,
+        "contradictions": contradictions,
+        "seeds": {k: v for k, v in seeds.items() if v},
+    }

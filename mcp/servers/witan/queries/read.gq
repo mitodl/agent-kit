@@ -230,6 +230,63 @@ query contradicts_in($slug: String) {
     return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
 }
 
+// Memories that AppliesTo $slug (in-direction; pairs with applies_to_targets).
+query applies_to_sources($slug: String) {
+    match {
+        $other: Memory
+        $m: Memory { slug: $slug }
+        $other appliesto $m
+    }
+    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+}
+
+// Sessions that produced $slug (for provenance-sibling expansion in recall).
+query producing_sessions($slug: String) {
+    match {
+        $s: WorkflowSession
+        $m: Memory { slug: $slug }
+        $s sessionproduced $m
+    }
+    return { $s.slug }
+}
+
+// Memories a task Addresses (recall task-seed).
+query addressed_memories($task_slug: String) {
+    match {
+        $t: Task { slug: $task_slug }
+        $m: Memory
+        $t addresses $m
+    }
+    return { $m.slug, $m.kind, $m.title, $m.repo, $m.created_at }
+}
+
+// Recall expansion: all memories sharing any Topic with $slug, in one query
+// (memory → topic → memory) instead of a per-topic fan-out. Includes $slug; the
+// server discards self.
+query topic_siblings($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $tp: Topic
+        $m tagged $tp
+        $other: Memory
+        $other tagged $tp
+    }
+    return { $other.slug }
+}
+
+// Recall expansion: all memories produced by any session that produced $slug, in
+// one query (memory → session → memory). Includes $slug; the server discards self.
+query provenance_siblings($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $s: WorkflowSession
+        $s sessionproduced $m
+        $other: Memory
+        $s sessionproduced $other
+    }
+    return { $other.slug }
+}
+
 // All slugs that are the TARGET of any Supersedes edge — i.e. the superseded set.
 // Used to prune/deprioritise in the Python re-rank. Bounded; the superseded set
 // is small relative to total memories.

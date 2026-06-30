@@ -52,6 +52,9 @@ class RankConfig:
     default_confidence: float = 0.6
     penalty_superseded: float = 1.0
     penalty_contradicted: float = 0.25
+    w_hop: float = 0.5
+    """Per-hop distance penalty in graph-aware recall — seeds (hop 0) outrank
+    expanded neighbours (hop ≥ 1)."""
 
 
 _RANK_FIELDS = {
@@ -63,6 +66,7 @@ _RANK_FIELDS = {
     "default_confidence": "WITAN_RANK_DEFAULT_CONF",
     "penalty_superseded": "WITAN_RANK_PEN_SUPERSEDED",
     "penalty_contradicted": "WITAN_RANK_PEN_CONTRADICTED",
+    "w_hop": "WITAN_RANK_W_HOP",
 }
 
 
