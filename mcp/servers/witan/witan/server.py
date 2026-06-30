@@ -178,16 +178,21 @@ def _topic_slug(kind: str, name: str) -> str:
     return f"tp-{kind}-{sanitised}"
 
 
-def _upsert_topic(name: str, kind: str) -> str:
-    """Return the slug of the Topic for (name, kind), creating it if absent."""
+def _upsert_topic(name: str, kind: str) -> tuple[str, bool]:
+    """Return the Topic slug for (name, kind), creating it if absent.
+
+    The second element is ``True`` when the node was newly inserted — lets callers
+    (e.g. ``migrate_topics``) count creations without a second ``get_topic`` read.
+    """
     slug = _topic_slug(kind, name)
-    if not client.read("read.gq", "get_topic", {"slug": slug}):
-        client.change(
-            "mutations.gq",
-            "insert_topic",
-            {"slug": slug, "name": name, "kind": kind, "created_at": _now_iso()},
-        )
-    return slug
+    if client.read("read.gq", "get_topic", {"slug": slug}):
+        return slug, False
+    client.change(
+        "mutations.gq",
+        "insert_topic",
+        {"slug": slug, "name": name, "kind": kind, "created_at": _now_iso()},
+    )
+    return slug, True
 
 
 def _resolve_topic(ref: str) -> str | None:
@@ -197,17 +202,18 @@ def _resolve_topic(ref: str) -> str | None:
     (e.g. ``cryptography:topic`` or ``GET /api/v1/courses/:contract``). Returns the
     slug, or ``None`` when ``ref`` is a slug that does not resolve to a Topic.
     """
-    if client.read("read.gq", "get_topic", {"slug": ref}):
+    # Only a tp- slug can resolve directly; skip the read for a name:kind spec.
+    if ref.startswith("tp-") and client.read("read.gq", "get_topic", {"slug": ref}):
         return ref
     name, sep, kind = ref.rpartition(":")
     if sep and kind in ("topic", "contract", "symbol", "entity") and name:
-        return _upsert_topic(name, kind)
+        return _upsert_topic(name, kind)[0]
     return None
 
 
 def _tag_memory(memory_slug: str, name: str, kind: str) -> str:
     """Upsert a Topic and link the memory to it. Returns the topic slug."""
-    topic_slug = _upsert_topic(name, kind)
+    topic_slug, _ = _upsert_topic(name, kind)
     client.change(
         "mutations.gq", "link_tagged", {"from": memory_slug, "to": topic_slug}
     )
@@ -231,11 +237,11 @@ def migrate_topics() -> dict:
             t["slug"]
             for t in client.read("read.gq", "topics_for_memory", {"slug": slug})
         }
-        for tag in row.get("tags") or []:
+        for tag in dict.fromkeys(row.get("tags") or []):
             topic_slug = _topic_slug("topic", tag)
             if topic_slug not in seen_topics:
-                if not client.read("read.gq", "get_topic", {"slug": topic_slug}):
-                    _upsert_topic(tag, "topic")
+                _, created = _upsert_topic(tag, "topic")
+                if created:
                     topics_created += 1
                 seen_topics.add(topic_slug)
             if topic_slug not in existing:
@@ -442,7 +448,8 @@ def memory_store(
     # Dual-write tags → Topic{kind:"topic"} + Tagged edge. The string list stays
     # the source of truth for old readers; the Topic graph is the new traversal
     # surface. Idempotent on the topic slug, so shared tags reuse one node.
-    for tag in tags or []:
+    # Dedup so a repeated tag doesn't drive redundant upsert/link calls.
+    for tag in dict.fromkeys(tags or []):
         _tag_memory(slug, tag, "topic")
 
     return {"slug": slug, "kind": kind, "repo": detected_repo}
@@ -657,8 +664,14 @@ def topic_get(topic: str) -> dict | None:
 
     Returns ``{"topic": {...}, "memories": [...]}`` or ``null`` if no such Topic.
     """
+    # Only a tp- slug can hit get_topic directly; a name:kind spec skips that read.
     slug = topic
-    if not client.read("read.gq", "get_topic", {"slug": slug}):
+    topic_rows = (
+        client.read("read.gq", "get_topic", {"slug": slug})
+        if slug.startswith("tp-")
+        else []
+    )
+    if not topic_rows:
         name, sep, kind = topic.rpartition(":")
         if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
             return None
@@ -668,9 +681,9 @@ def topic_get(topic: str) -> dict | None:
         if not rows:
             return None
         slug = rows[0]["slug"]
-    topic_rows = client.read("read.gq", "get_topic", {"slug": slug})
-    if not topic_rows:
-        return None
+        topic_rows = client.read("read.gq", "get_topic", {"slug": slug})
+        if not topic_rows:
+            return None
     memories = client.read("read.gq", "memories_for_topic", {"topic_slug": slug})
     return {"topic": topic_rows[0], "memories": memories}
 
