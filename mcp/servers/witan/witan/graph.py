@@ -78,19 +78,47 @@ class OmnigraphClient:
             json.dumps(params),
         )
 
+    def apply_schema(self, schema_path) -> str:
+        """Apply a schema file to the store (idempotent). Returns CLI stdout.
+
+        Runs through the same per-store write lock + retry/repair as a mutation,
+        so it can't race other writers and leave the store drifted.
+        """
+        cmd = [
+            self._binary,
+            "schema",
+            "apply",
+            "--schema",
+            str(schema_path),
+            self.graph_uri,
+        ]
+        return self._execute(cmd, "schema apply", is_write=True)
+
     # ── Internals ─────────────────────────────────────────────────
 
     def _run(self, subcommand: str, *args: str) -> str:
         quiet = ["--quiet"] if subcommand in _WRITE_SUBCOMMANDS else []
         cmd = [self._binary, subcommand, "--store", self.graph_uri, *quiet, *args]
+        return self._execute(cmd, subcommand, is_write=subcommand in _WRITE_SUBCOMMANDS)
+
+    def _execute(self, cmd: list[str], label: str, *, is_write: bool) -> str:
+        """Run an omnigraph CLI command under the write lock (for writes) with the
+        retry/repair loop for optimistic-concurrency conflicts."""
         env = dict(os.environ)
         if self.token:
             env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = self.token
 
-        lock_fh = self._acquire_write_lock(subcommand)
+        lock_fh = self._acquire_write_lock(is_write)
         try:
             for attempt in range(_MAX_ATTEMPTS):
-                result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+                try:
+                    result = subprocess.run(
+                        cmd, capture_output=True, text=True, env=env
+                    )
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"omnigraph {label} could not run: {exc}"
+                    ) from exc
                 if result.returncode == 0:
                     return result.stdout
                 err = result.stderr
@@ -102,7 +130,7 @@ class OmnigraphClient:
                         time.sleep(0.05 * (attempt + 1))
                         continue
                 raise RuntimeError(
-                    f"omnigraph {subcommand} failed (exit {result.returncode}):\n"
+                    f"omnigraph {label} failed (exit {result.returncode}):\n"
                     f"{err.strip()}"
                 )
             raise AssertionError("unreachable")  # pragma: no cover
@@ -111,15 +139,13 @@ class OmnigraphClient:
                 fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
                 lock_fh.close()
 
-    def _acquire_write_lock(self, subcommand: str):
-        """Hold a per-store exclusive lock for write subcommands (local stores)."""
-        if subcommand not in _WRITE_SUBCOMMANDS or self.graph_uri.startswith(
-            ("http://", "https://", "s3://")
-        ):
+    def _acquire_write_lock(self, is_write: bool):
+        """Hold a per-store exclusive lock for writes (local stores)."""
+        if not is_write or self.graph_uri.startswith(("http://", "https://", "s3://")):
             return None
         lock_path = Path(f"{self.graph_uri}.lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = open(lock_path, "w")  # noqa: SIM115 — released in _run's finally
+        fh = open(lock_path, "w")  # noqa: SIM115 — released in _execute's finally
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         return fh
 

@@ -57,6 +57,41 @@ rank_cfg = cfg_module.load_rank_config()
 _ensure_graph(cfg.graph_uri)
 client = OmnigraphClient(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
 
+
+def apply_schema() -> dict:
+    """Apply the bundled ``schema.pg`` to the configured store (idempotent).
+
+    Reconciles an EXISTING store with the current schema — ``_ensure_graph`` only
+    schema-applies when first *creating* a store, so additive changes (new
+    nodes/edges/fields) never reach an already-created store without this.
+
+    Routes through ``OmnigraphClient`` so it holds the same per-store write lock +
+    retry/repair as any other write. Returns ``{"store", "output"}``; raises
+    ``RuntimeError`` on a failed apply.
+    """
+    output = client.apply_schema(_SCHEMA_FILE)
+    return {"store": client.graph_uri, "output": output.strip()}
+
+
+def _topic_schema_present() -> bool:
+    """True if the store knows the ``Topic`` type (i.e. schema has been applied).
+
+    Probes with a harmless lookup; a store on the pre-graph schema raises an
+    ``unknown type`` error, which lets ``migrate topics`` fail fast with guidance
+    instead of an opaque engine error mid-backfill.
+    """
+    try:
+        client.read("read.gq", "get_topic", {"slug": "tp-__schema_probe__"})
+    except RuntimeError as exc:
+        # The pre-graph schema raises exactly: "unknown node type `Topic`".
+        # Match that specifically so connection/other errors propagate.
+        msg = str(exc).lower()
+        if "unknown node type" in msg and "topic" in msg:
+            return False
+        raise
+    return True
+
+
 mcp = FastMCP(
     "witan",
     instructions=(
