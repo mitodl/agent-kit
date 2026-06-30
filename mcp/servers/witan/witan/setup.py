@@ -226,17 +226,33 @@ def install_claude(pkg_dir: Path, author: str, dry_run: bool) -> None:
         dry_run=dry_run,
         executable=True,
     )
+    # Hooks live in ~/.claude/settings.json — Claude Code reads hook config there.
     settings_path = Path.home() / ".claude" / "settings.json"
     settings = _load_json(settings_path)
     if settings is None:
         console.print(
-            f"  [yellow]skip settings.json[/yellow] — could not parse {settings_path}; add witan manually"
+            f"  [yellow]skip settings.json[/yellow] — could not parse {settings_path}; add witan hooks manually"
+        )
+    else:
+        _merge_claude_hooks(settings)
+        _write_json(settings_path, settings, dry_run)
+        console.print(f"  [green]settings.json[/green] (hooks) → {settings_path}")
+
+    # MCP servers live in ~/.claude.json under the top-level "mcpServers" key
+    # (user scope) — this is what `claude mcp add -s user` writes, including the
+    # "type": "stdio" field. Claude Code does NOT read MCP servers from
+    # settings.json; that "mcpServers" key is the Claude *Desktop* convention,
+    # so an entry written there is silently ignored by Claude Code.
+    claude_json = Path.home() / ".claude.json"
+    cfg = _load_json(claude_json)
+    if cfg is None:
+        console.print(
+            f"  [yellow]skip .claude.json[/yellow] — could not parse {claude_json}; add witan manually"
         )
         return
-    settings.setdefault("mcpServers", {})["witan"] = _mcp_entry(author)
-    _merge_claude_hooks(settings)
-    _write_json(settings_path, settings, dry_run)
-    console.print(f"  [green]settings.json[/green] → {settings_path}")
+    cfg.setdefault("mcpServers", {})["witan"] = _mcp_entry(author, type="stdio")
+    _write_json(claude_json, cfg, dry_run)
+    console.print(f"  [green].claude.json[/green] (mcp server) → {claude_json}")
 
 
 def _merge_claude_hooks(settings: dict) -> None:
