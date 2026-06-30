@@ -169,3 +169,66 @@ def test_neighbors_kinds_subset_and_empty(server):
         "contradicts",
         "related_to",
     }
+
+
+@requires_omnigraph
+def test_tags_create_and_reuse_topics(server):
+    a = server.memory_store(kind="pattern", title="a", content="content a", tags=["uv"])
+    b = server.memory_store(kind="pattern", title="b", content="content b", tags=["uv"])
+
+    got = server.topic_get("tp-topic-uv")
+    assert got["topic"]["name"] == "uv"
+    assert got["topic"]["kind"] == "topic"
+    slugs = {m["slug"] for m in got["memories"]}
+    assert {a["slug"], b["slug"]} <= slugs
+
+    # the second store re-used the node — no duplicate
+    by_name = server.topic_get("uv:topic")
+    assert by_name["topic"]["slug"] == "tp-topic-uv"
+
+
+@requires_omnigraph
+def test_memories_for_topic_cross_repo(server):
+    a = server.memory_store(
+        kind="project_fact",
+        title="repo one fact",
+        content="alpha",
+        repo="https://github.com/test/one",
+        tags=["cryptography"],
+    )
+    b = server.memory_store(
+        kind="project_fact",
+        title="repo two fact",
+        content="beta",
+        repo="https://github.com/test/two",
+        tags=["cryptography"],
+    )
+    got = server.topic_get("tp-topic-cryptography")
+    slugs = {m["slug"] for m in got["memories"]}
+    assert {a["slug"], b["slug"]} <= slugs
+
+
+@requires_omnigraph
+def test_memory_link_tagged_autocreates_topic(server):
+    a = server.memory_store(
+        kind="lesson", title="x", content="lesson x", severity="info"
+    )
+    res = server.memory_link(a["slug"], "DATABASE_URL:contract", "tagged")
+    assert res["linked"] is True
+    assert res["to"] == "tp-contract-database-url"
+
+    node = server.memory_get(a["slug"], include_topics=True)
+    assert any(t["kind"] == "contract" for t in node["topics"])
+
+
+@requires_omnigraph
+def test_migrate_topics_backfills_and_is_idempotent(server):
+    # Simulate a memory whose tag predates the dual-write by linking nothing.
+    server.memory_store(kind="pattern", title="legacy", content="old", tags=["ruff"])
+    server.migrate_topics()
+    # tag already dual-written at store time → migration creates no new edges
+    second = server.migrate_topics()
+    assert second["edges_created"] == 0
+    assert second["topics_created"] == 0
+    got = server.topic_get("tp-topic-ruff")
+    assert got is not None and got["memories"]
