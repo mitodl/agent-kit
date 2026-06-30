@@ -1435,7 +1435,7 @@ not affect the v1 interface.
 | **Personal preference namespace** | Personal branches are permanent for preferences that should not be team-promoted. The `memory_search` tool gains a `branch` parameter to scope reads. |
 | **Vector / hybrid search** | Add `Vector(1536)` field to `Memory` with `@embed("content")`, configure an embedding provider, run `omnigraph embed`, and switch search queries to use `rrf(bm25(...), nearest(...))` for hybrid ranking. BM25-only v1 is a clean upgrade path. |
 | **`memory_update` tool** | Expose `update_memory` query as a first-class tool. v1 workaround: `memory_get` + `memory_store`. |
-| **`link_supersedes` / `link_applies_to` tools** | Expose edge mutations so agents can express relationships between memories without the CLI. |
+| ~~**`link_supersedes` / `link_applies_to` tools**~~ | **Delivered** as `memory_link(from, to, kind)` (kinds: `supersedes`, `refines`, `applies_to`, `contradicts`, `related_to`) + `memory_neighbors(slug)`. `memory_search` hides superseded memories by default (`include_superseded=True` to surface). See `docs/design/graph-structured-memory-spec.md` §3. |
 | **`memory_delete` tool** | Requires a separate `delete.gq` file (D₂ constraint: cannot mix deletes with inserts/updates). Deliberately omitted to prevent accidental data loss in v1. |
 ```
 

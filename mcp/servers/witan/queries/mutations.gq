@@ -76,6 +76,18 @@ query link_applies_to($from: String, $to: String) {
     insert AppliesTo { from: $from, to: $to }
 }
 
+query link_refines($from: String, $to: String) {
+    insert Refines { from: $from, to: $to }
+}
+
+query link_contradicts($from: String, $to: String) {
+    insert Contradicts { from: $from, to: $to }
+}
+
+query link_related_to($from: String, $to: String) {
+    insert RelatedTo { from: $from, to: $to }
+}
+
 // ── Workflow Project mutations ─────────────────────────────────────
 
 query insert_workflow_project(

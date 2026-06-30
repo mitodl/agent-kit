@@ -160,6 +160,87 @@ query get_memory($slug: String) {
     }
 }
 
+// ── Inter-memory edge traversal ───────────────────────────────────
+// Both endpoints are bound as typed Memory nodes (the engine requires the far
+// side of a traversal to be a bound node, see code_read.gq). Directional edges
+// expose one query; symmetric edges (contradicts, related_to) expose an out- and
+// an in-direction query that the server unions.
+
+query supersedes_targets($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $other: Memory
+        $m supersedes $other
+    }
+    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+}
+
+query refines_targets($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $other: Memory
+        $m refines $other
+    }
+    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+}
+
+query applies_to_targets($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $other: Memory
+        $m appliesto $other
+    }
+    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+}
+
+query related_out($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $other: Memory
+        $m relatedto $other
+    }
+    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+}
+
+query related_in($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $other: Memory
+        $other relatedto $m
+    }
+    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+}
+
+query contradicts_out($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $other: Memory
+        $m contradicts $other
+    }
+    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+}
+
+query contradicts_in($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $other: Memory
+        $other contradicts $m
+    }
+    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+}
+
+// All slugs that are the TARGET of any Supersedes edge — i.e. the superseded set.
+// Used to prune/deprioritise in the Python re-rank. Bounded; the superseded set
+// is small relative to total memories.
+query all_superseded_slugs() {
+    match {
+        $m: Memory
+        $old: Memory
+        $m supersedes $old
+    }
+    return { $old.slug }
+}
+
 // ── Project facts ─────────────────────────────────────────────────
 
 query get_project_facts($repo: String) {
