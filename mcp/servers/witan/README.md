@@ -12,26 +12,28 @@ platform-specific code.
 MCP server entry into your agent config in one step. Run it once; re-run after
 upgrades to refresh installed files.
 
-**From the published git repo (recommended):**
+**With persistent CLI** — required for **Claude Code** and **Pi** (and `--agent all`),
+whose hooks/extensions call the `witan` command directly, so it must stay on your `PATH`:
 
 ```bash
-# One-shot run (uvx — no persistent install needed):
-uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan \
-    witan setup --agent claude   # or: pi | copilot | opencode | kilo | all
-
-# Or install the CLI persistently so `witan` is always on PATH:
+# Install the CLI from the published git repo …
 uv tool install git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan
-witan setup --agent claude
+# … or editable from a local checkout, at the repo root:
+uv tool install --editable mcp/servers/witan
+
+# then run setup:
+witan setup --agent claude   # or: pi | all
 ```
 
-**From a local checkout:**
+**Without persistent CLI** — enough for the **MCP-only agents** (Copilot, OpenCode,
+Kilo), whose server runs via `uvx`, so no install is needed:
 
 ```bash
-# From the repo root:
-uvx --from mcp/servers/witan witan setup --agent claude
-
-# Or with uv run (inside mcp/servers/witan/):
-uv run witan setup --agent claude
+# From the published git repo …
+uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan \
+    witan setup --agent copilot   # or: opencode | kilo
+# … or from a local checkout, at the repo root:
+uvx --from mcp/servers/witan witan setup --agent copilot
 ```
 
 ```bash
