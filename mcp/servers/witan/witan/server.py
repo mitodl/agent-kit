@@ -444,9 +444,18 @@ def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
     - ``related_to``  — soft association. Symmetric.
 
     Both endpoints must already exist as ``Memory`` nodes; the edge is not written
-    otherwise (avoids dead off-type edges). Returns ``linked: False`` in that case
-    rather than raising.
+    otherwise (avoids dead off-type edges). A memory cannot link to itself. Returns
+    ``linked: False`` in those cases rather than raising.
     """
+    if from_slug == to_slug:
+        return {
+            "from": from_slug,
+            "to": to_slug,
+            "kind": kind,
+            "linked": False,
+            "reason": "cannot link a memory to itself",
+        }
+
     endpoints = {from_slug, to_slug}
     present = {
         slug
@@ -485,9 +494,10 @@ def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> di
     slug:
         The memory whose neighbours to fetch.
     kinds:
-        Optional subset of edge kinds to include. Omit for all kinds.
+        Optional subset of edge kinds to include. Omit (``None``) for all kinds;
+        an explicit empty list returns no kinds.
     """
-    wanted = kinds or list(_MEMORY_NEIGHBOR_QUERIES)
+    wanted = list(_MEMORY_NEIGHBOR_QUERIES) if kinds is None else kinds
     neighbors: dict[str, list[dict]] = {}
     for kind in wanted:
         merged: dict[str, dict] = {}

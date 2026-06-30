@@ -136,3 +136,36 @@ def test_link_missing_slug_is_noop(server):
     assert "pat-does-not-exist" in res["missing"]
     # no dead edge surfaces in a typed read
     assert server.memory_neighbors(a["slug"])["neighbors"]["related_to"] == []
+
+
+@requires_omnigraph
+def test_link_self_is_rejected(server):
+    a = server.memory_store(kind="pattern", title="solo", content="a lone memory")
+    res = server.memory_link(a["slug"], a["slug"], "supersedes")
+    assert res["linked"] is False
+    assert res["reason"] == "cannot link a memory to itself"
+    # no self-loop written
+    assert server.memory_neighbors(a["slug"])["neighbors"]["supersedes"] == []
+
+
+@requires_omnigraph
+def test_neighbors_kinds_subset_and_empty(server):
+    a = server.memory_store(kind="pattern", title="a", content="alpha")
+    b = server.memory_store(kind="pattern", title="b", content="beta")
+    server.memory_link(a["slug"], b["slug"], "related_to")
+
+    # explicit subset returns only the requested kind
+    only_related = server.memory_neighbors(a["slug"], kinds=["related_to"])
+    assert list(only_related["neighbors"]) == ["related_to"]
+
+    # explicit empty list returns no kinds (not "all kinds")
+    assert server.memory_neighbors(a["slug"], kinds=[])["neighbors"] == {}
+
+    # omitting kinds (None) returns all kinds
+    assert set(server.memory_neighbors(a["slug"])["neighbors"]) == {
+        "supersedes",
+        "refines",
+        "applies_to",
+        "contradicts",
+        "related_to",
+    }
