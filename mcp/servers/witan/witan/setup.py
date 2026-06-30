@@ -42,29 +42,30 @@ def _mcp_entry(author: str, **extra: object) -> dict:
 # ── Shared file-level helpers ─────────────────────────────────────────────────
 
 
-def _load_json(path: Path) -> dict | None:
-    """Return parsed JSON from path, or None if the file exists but can't be parsed.
+def _load_json_object(path: Path) -> dict | None:
+    """Return a JSON object from path, or None if it can't be loaded as one.
 
+    A missing file yields an empty dict — a fresh config to populate. A file that
+    fails to parse, or parses to a non-object (list/string/number/null), yields
+    None so callers skip writing rather than clobbering or crashing on it.
     Handles JSONC (VS Code settings.json allows // comments and trailing commas)
     via a best-effort stripping pass before standard JSON parse.
-    Returns an empty dict for a missing file; None signals a parse failure so
-    callers can skip writing rather than silently overwriting the user's config.
     """
     if not path.exists():
         return {}
     text = path.read_text()
     try:
-        return json.loads(text)
+        data = json.loads(text)
     except json.JSONDecodeError:
-        pass
-    # Best-effort JSONC → JSON stripping for VS Code settings files.
-    stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-    stripped = re.sub(r"//[^\n]*", "", stripped)
-    stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        return None
+        # Best-effort JSONC → JSON stripping for VS Code settings files.
+        stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+        stripped = re.sub(r"//[^\n]*", "", stripped)
+        stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
+        try:
+            data = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+    return data if isinstance(data, dict) else None
 
 
 def _write_json(path: Path, data: dict, dry_run: bool) -> None:
@@ -228,7 +229,7 @@ def install_claude(pkg_dir: Path, author: str, dry_run: bool) -> None:
     )
     # Hooks live in ~/.claude/settings.json — Claude Code reads hook config there.
     settings_path = Path.home() / ".claude" / "settings.json"
-    settings = _load_json(settings_path)
+    settings = _load_json_object(settings_path)
     if settings is None:
         console.print(
             f"  [yellow]skip settings.json[/yellow] — could not parse {settings_path}; add witan hooks manually"
@@ -238,13 +239,14 @@ def install_claude(pkg_dir: Path, author: str, dry_run: bool) -> None:
         _write_json(settings_path, settings, dry_run)
         console.print(f"  [green]settings.json[/green] (hooks) → {settings_path}")
 
-    # MCP servers live in ~/.claude.json under the top-level "mcpServers" key
-    # (user scope) — this is what `claude mcp add -s user` writes, including the
-    # "type": "stdio" field. Claude Code does NOT read MCP servers from
-    # settings.json; that "mcpServers" key is the Claude *Desktop* convention,
-    # so an entry written there is silently ignored by Claude Code.
+    # MCP servers (user scope) live in ~/.claude.json under the top-level
+    # "mcpServers" key — the same shape `claude mcp add -s user` writes,
+    # including the "type": "stdio" field. Claude Code reads MCP servers only
+    # from ~/.claude.json and project .mcp.json files, never from settings.json,
+    # so the entry witan setup previously wrote to ~/.claude/settings.json was
+    # silently ignored. Ref: https://code.claude.com/docs/en/mcp#mcp-installation-scopes
     claude_json = Path.home() / ".claude.json"
-    cfg = _load_json(claude_json)
+    cfg = _load_json_object(claude_json)
     if cfg is None:
         console.print(
             f"  [yellow]skip .claude.json[/yellow] — could not parse {claude_json}; add witan manually"
@@ -285,7 +287,7 @@ def install_pi(pkg_dir: Path, author: str, dry_run: bool) -> None:
     )
     # MCP config — Pi uses the same mcpServers shape as Claude Code.
     pi_mcp = Path.home() / ".pi" / "agent" / "mcp.json"
-    cfg = _load_json(pi_mcp)
+    cfg = _load_json_object(pi_mcp)
     if cfg is None:
         console.print(f"  [yellow]skip mcp.json[/yellow] — could not parse {pi_mcp}")
         return
@@ -302,7 +304,7 @@ def install_copilot(pkg_dir: Path, author: str, dry_run: bool) -> None:
     # <vscode-user-dir>/mcp.json.  The "servers" key and "type":"stdio" field
     # are required by the Copilot MCP adapter.
     mcp_path = _vscode_user_dir() / "mcp.json"
-    cfg = _load_json(mcp_path)
+    cfg = _load_json_object(mcp_path)
     if cfg is None:
         console.print(f"  [yellow]skip mcp.json[/yellow] — could not parse {mcp_path}")
         return
@@ -322,7 +324,7 @@ def install_opencode(pkg_dir: Path, author: str, dry_run: bool) -> None:
     # OpenCode (SST) stores its config at ~/.config/opencode/config.json.
     # MCP servers live under the top-level "mcp" key with no "type" field.
     cfg_path = Path.home() / ".config" / "opencode" / "config.json"
-    cfg = _load_json(cfg_path)
+    cfg = _load_json_object(cfg_path)
     if cfg is None:
         console.print(
             f"  [yellow]skip config.json[/yellow] — could not parse {cfg_path}"
@@ -340,7 +342,7 @@ def install_kilo(pkg_dir: Path, author: str, dry_run: bool) -> None:
     # Kilo Code is a VS Code extension; MCP servers are stored in VS Code's
     # user settings.json under the "kilocode.mcpServers" key.
     settings_path = _vscode_user_dir() / "settings.json"
-    settings = _load_json(settings_path)
+    settings = _load_json_object(settings_path)
     if settings is None:
         console.print(
             f"  [yellow]skip settings.json[/yellow] — could not parse {settings_path}; add witan manually"

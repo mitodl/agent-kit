@@ -65,3 +65,19 @@ def test_install_claude_dry_run_writes_nothing(tmp_path, monkeypatch):
 
     assert not (tmp_path / ".claude.json").exists()
     assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_load_json_object_rejects_non_object_json(tmp_path):
+    """Valid-but-non-object JSON loads as None so callers skip it instead of crashing."""
+    f = tmp_path / "config.json"
+    f.write_text("[1, 2, 3]")
+    assert setup._load_json_object(f) is None
+
+
+def test_install_claude_leaves_non_object_claude_json_untouched(tmp_path, monkeypatch):
+    """A ~/.claude.json holding non-object JSON is skipped, not clobbered or crashed on."""
+    claude_json = tmp_path / ".claude.json"
+    claude_json.write_text("[1, 2, 3]")
+    _run_install_claude(monkeypatch, tmp_path)
+
+    assert json.loads(claude_json.read_text()) == [1, 2, 3]
