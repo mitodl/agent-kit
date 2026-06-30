@@ -418,6 +418,20 @@ query session_produced_memories($session_slug: String) {
         $s sessionproduced $m
     }
     return { $m.slug, $m.kind, $m.title, $m.created_at }
+    order { $m.created_at asc }
+}
+
+// All memories produced by any session of a project, in one query — the default
+// (flat) path for project_memories, avoiding a per-session N+1. Sessions carry a
+// denormalized project_slug, so this needs no project→session traversal.
+query project_produced_memories($project_slug: String) {
+    match {
+        $s: WorkflowSession { project_slug: $project_slug }
+        $m: Memory
+        $s sessionproduced $m
+    }
+    return { $m.slug, $m.kind, $m.title, $m.created_at }
+    order { $m.created_at asc }
 }
 
 // Memories a project Informed (project-grain provenance).
@@ -428,6 +442,7 @@ query informed_memories($project_slug: String) {
         $p informed $m
     }
     return { $m.slug, $m.kind, $m.title, $m.created_at }
+    order { $m.created_at asc }
 }
 
 // ── Workflow Traces (corpus) ──────────────────────────────────────

@@ -21,10 +21,17 @@ def test_session_produced_memory(server, tmp_path, monkeypatch):
         kind="lesson", title="learned", content="a finding", severity="info"
     )
 
+    # Default flat list (no per-session breakdown).
     prov = server.project_memories(proj["slug"])
     assert mem["slug"] in {m["slug"] for m in prov["memories"]}
-    assert sess["session_slug"] in prov["by_session"]
-    assert mem["slug"] in {m["slug"] for m in prov["by_session"][sess["session_slug"]]}
+    assert prov["by_session"] == {}
+
+    # Opt-in grouping adds the per-session breakdown.
+    grouped = server.project_memories(proj["slug"], group_by_session=True)
+    assert sess["session_slug"] in grouped["by_session"]
+    assert mem["slug"] in {
+        m["slug"] for m in grouped["by_session"][sess["session_slug"]]
+    }
 
 
 @requires_omnigraph
@@ -43,3 +50,41 @@ def test_informed_memory_in_project_walk(server):
     server.workflow_project_link_memory(proj["slug"], mem["slug"])
     prov = server.project_memories(proj["slug"])
     assert mem["slug"] in {m["slug"] for m in prov["memories"]}
+
+
+@requires_omnigraph
+def test_stale_session_state_does_not_block_store(server, tmp_path, monkeypatch):
+    # State file points at a session that doesn't exist in the store. The engine
+    # rejects the SessionProduced edge, but the memory write must still succeed.
+    from witan import server as srv
+
+    state = tmp_path / "state-stale.json"
+    state.write_text('{"session_slug": "ws-does-not-exist"}')
+    monkeypatch.setattr(srv, "_session_state_path", lambda sid: state)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "stale")
+
+    mem = server.memory_store(kind="lesson", title="x", content="y", severity="info")
+    assert mem["slug"].startswith("les-")
+
+
+@requires_omnigraph
+def test_non_dict_state_file_is_ignored(server, tmp_path, monkeypatch):
+    from witan import server as srv
+
+    state = tmp_path / "state-bad.json"
+    state.write_text("[]")  # valid JSON, not an object
+    monkeypatch.setattr(srv, "_session_state_path", lambda sid: state)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "weird")
+
+    # Must not raise AttributeError; just no active session.
+    assert srv._active_session_slug() is None
+    mem = server.memory_store(kind="pattern", title="p", content="z")
+    assert mem["slug"].startswith("pat-")
+
+
+@requires_omnigraph
+def test_malformed_session_id_is_rejected(server, monkeypatch):
+    from witan import server as srv
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "../../etc/passwd")
+    assert srv._active_session_slug() is None
