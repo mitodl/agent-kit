@@ -285,7 +285,7 @@ def install_pi(pkg_dir: Path, author: str, dry_run: bool) -> None:
         label="extension",
         dry_run=dry_run,
     )
-    # MCP config — Pi uses the same mcpServers shape as Claude Code.
+    # MCP config — Pi uses the same mcpServers key as Claude Code.
     pi_mcp = Path.home() / ".pi" / "agent" / "mcp.json"
     cfg = _load_json_object(pi_mcp)
     if cfg is None:
