@@ -146,6 +146,11 @@ edge Produced: WorkflowProject -> WorkflowTrace
 // during the project (patterns, lessons, agent_context, project_facts).
 edge Informed: WorkflowProject -> Memory
 
+// SessionProduced: a WorkflowSession created or substantively updated a Memory.
+// Session-grain provenance (Informed is project-grain). The bare name `Produced`
+// is taken (WorkflowProject -> WorkflowTrace), hence the qualified name.
+edge SessionProduced: WorkflowSession -> Memory
+
 // ProjectBlocks: a blocking project must complete before the blocked project is "ready".
 edge ProjectBlocks: WorkflowProject -> WorkflowProject
 

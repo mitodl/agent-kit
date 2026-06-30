@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -459,6 +460,21 @@ def memory_store(
     for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
         _tag_memory(slug, tag, "topic")
 
+    # Provenance: record which session produced this memory (best-effort). The
+    # engine validates edge endpoints, so a stale /tmp state file pointing at a
+    # session that no longer exists in the store would raise — swallow it so a
+    # provenance failure never blocks the memory write.
+    active = _active_session_slug()
+    if active:
+        try:
+            client.change(
+                "mutations.gq",
+                "link_session_produced",
+                {"from": active, "to": slug},
+            )
+        except RuntimeError:
+            pass
+
     return {"slug": slug, "kind": kind, "repo": detected_repo}
 
 
@@ -698,6 +714,29 @@ _STATE_FILE_PREFIX = "workflow-session-"
 
 def _session_state_path(session_id: str) -> Path:
     return Path(tempfile.gettempdir()) / f"{_STATE_FILE_PREFIX}{session_id}.json"
+
+
+def _active_session_slug() -> str | None:
+    """The WorkflowSession slug for the current agent session, or None.
+
+    Reads the state file ``workflow_session_start`` wrote, keyed by
+    ``$CLAUDE_SESSION_ID``. Fails soft on any missing-env/read/parse error —
+    provenance is best-effort and must never block a memory write.
+    """
+    session_id = os.environ.get("CLAUDE_SESSION_ID")
+    # Validate before building a path with it: reject anything that isn't a plain
+    # session id so a crafted value can't redirect the read outside the temp dir.
+    if not session_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", session_id):
+        return None
+    try:
+        state = json.loads(_session_state_path(session_id).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    # A corrupt file can be valid JSON but not an object (e.g. `[]`/`null`);
+    # guard so .get() can't raise AttributeError and break the write.
+    if not isinstance(state, dict):
+        return None
+    return state.get("session_slug") or None
 
 
 @mcp.tool
@@ -992,6 +1031,51 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
         {"from": project_slug, "to": memory_slug},
     )
     return {"project_slug": project_slug, "memory_slug": memory_slug}
+
+
+@mcp.tool
+def project_memories(project_slug: str, group_by_session: bool = False) -> dict:
+    """
+    "What did we learn during project X" — the provenance walk.
+
+    Assembles the memories connected to a project from two grains:
+    - **session-grain** (``SessionProduced``): memories the project's sessions
+      created, auto-recorded by ``memory_store`` when a session is active;
+    - **project-grain** (``Informed``): memories explicitly linked via
+      ``workflow_project_link_memory``.
+
+    De-duplicated by slug. The flat ``memories`` list is assembled with two
+    queries regardless of session count. Pass ``group_by_session=True`` to also
+    get a ``by_session`` breakdown — that costs one extra query per session, so
+    it is opt-in.
+
+    Returns ``{"project_slug": ..., "memories": [...], "by_session": {...}}``
+    (``by_session`` is empty unless ``group_by_session`` is set).
+    """
+    merged: dict[str, dict] = {}
+    for query in ("project_produced_memories", "informed_memories"):
+        for row in client.read("read.gq", query, {"project_slug": project_slug}):
+            merged[row["slug"]] = row
+
+    by_session: dict[str, list[dict]] = {}
+    if group_by_session:
+        sessions = client.read(
+            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+        )
+        for session in sessions:
+            produced = client.read(
+                "read.gq",
+                "session_produced_memories",
+                {"session_slug": session["slug"]},
+            )
+            if produced:
+                by_session[session["slug"]] = produced
+
+    return {
+        "project_slug": project_slug,
+        "memories": list(merged.values()),
+        "by_session": by_session,
+    }
 
 
 @mcp.tool

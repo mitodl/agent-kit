@@ -289,6 +289,10 @@ query link_informed($from: String, $to: String) {
     insert Informed { from: $from, to: $to }
 }
 
+query link_session_produced($from: String, $to: String) {
+    insert SessionProduced { from: $from, to: $to }
+}
+
 // ── Task mutations ─────────────────────────────────────────────────
 
 query insert_task(
