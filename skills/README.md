@@ -35,6 +35,7 @@ Skills are organized by **category**. Each skill lives in
 | process | [`generate-standup`](./process/generate-standup/SKILL.md) | Generate and post a daily standup from GitHub activity to the mitodl/hq Check-ins discussion |
 | process | [`screenshot-pr`](./process/screenshot-pr/SKILL.md) | Capture UI changes for a PR with shot-scraper at desktop, tablet, and mobile viewports |
 | process | [`dependency-updates`](./process/dependency-updates/SKILL.md) | Triage and apply Renovate dependency updates safely across Python, JS/TS, Helm, Apt, and database ecosystems |
+| process | [`dependency-pruning`](./process/dependency-pruning/SKILL.md) | Audit dependencies to find unused ones to remove and underused ones to vendor or rewrite |
 | process | [`github-issue-triage`](./process/github-issue-triage/SKILL.md) | Audit open GitHub issues to identify stale, completed, or superseded items using parallel codebase cross-referencing |
 
 ## Authoring a Skill

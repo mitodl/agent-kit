@@ -29,15 +29,20 @@ FALLBACK_PATH="${2:?Usage: $0 <issue-number> <repo-path> <issues-json> [label-ma
 ISSUES_JSON="${3:?Usage: $0 <issue-number> <repo-path> <issues-json> [label-map-json]}"
 LABEL_MAP="${4:-}"
 
-# Pull title, creation date, and labels from the JSON
+# Pull title, creation date, and labels from the JSON; truncate body in jq to avoid SIGPIPE
 TITLE=$(jq -r --argjson n "${ISSUE_NUM}" \
-  '.[] | select(.number == $n) | .title' "${ISSUES_JSON}")
+  '.[] | select(.number == $n) | .title // ""' "${ISSUES_JSON}")
 CREATED=$(jq -r --argjson n "${ISSUE_NUM}" \
-  '.[] | select(.number == $n) | .createdAt' "${ISSUES_JSON}")
+  '.[] | select(.number == $n) | .createdAt // ""' "${ISSUES_JSON}")
 BODY=$(jq -r --argjson n "${ISSUE_NUM}" \
-  '.[] | select(.number == $n) | .body' "${ISSUES_JSON}" | head -c 600)
+  '.[] | select(.number == $n) | (.body // "") | .[0:600]' "${ISSUES_JSON}")
 LABELS=$(jq -r --argjson n "${ISSUE_NUM}" \
   '[.[] | select(.number == $n) | .labels[]] | join(", ")' "${ISSUES_JSON}")
+
+if [[ -z "${TITLE}" ]]; then
+  echo "ERROR: issue #${ISSUE_NUM} not found in ${ISSUES_JSON}" >&2
+  exit 1
+fi
 
 # Resolve the target repo path from the label map, if provided
 REPO_PATH="${FALLBACK_PATH}"
@@ -70,31 +75,47 @@ echo "--- Body (excerpt) ---"
 echo "${BODY}"
 echo
 
-# Derive search keywords from the title (lower-case words >= 5 chars)
+# Derive search keywords from the title (lower-case alphanumeric words >= 4 chars)
 KEYWORDS=$(echo "${TITLE}" | tr '[:upper:]' '[:lower:]' \
-  | grep -oE '[a-z]{5,}' | sort -u | head -6 | tr '\n' '|' | sed 's/|$//')
+  | grep -oE '[a-z0-9]{4,}' | sort -u | head -6 | tr '\n' '|' | sed 's/|$//')
 
-echo "--- Keywords extracted: ${KEYWORDS} ---"
+echo "--- Keywords extracted: ${KEYWORDS:-None} ---"
 echo
 
 echo "--- Recent commits mentioning these keywords ---"
-git -C "${REPO_PATH}" log --oneline --since="${CREATED}" \
-  --grep="${KEYWORDS}" --regexp-ignore-case 2>/dev/null | head -15 || true
+if [[ -n "${KEYWORDS}" ]]; then
+  git -C "${REPO_PATH}" log --oneline --since="${CREATED}" \
+    --grep="${KEYWORDS}" -E --regexp-ignore-case 2>/dev/null | head -15 || true
+else
+  echo "  (no keywords — skipping commit search)"
+fi
 echo
 
 echo "--- Code references (rg, src/ only) ---"
 SRC_DIR="${REPO_PATH}/src"
 [[ -d "${SRC_DIR}" ]] || SRC_DIR="${REPO_PATH}"
-for kw in $(echo "${KEYWORDS}" | tr '|' '\n'); do
-  echo "  [${kw}]:"
-  rg -r --include="*.py" --include="*.yaml" --include="*.yml" \
-    -l "${kw}" "${SRC_DIR}" 2>/dev/null | head -5 || true
-done
+if [[ -n "${KEYWORDS}" ]]; then
+  for kw in $(echo "${KEYWORDS}" | tr '|' '\n'); do
+    echo "  [${kw}]:"
+    rg -l -g "*.py" -g "*.yaml" -g "*.yml" \
+      "${kw}" "${SRC_DIR}" 2>/dev/null | head -5 || true
+  done
+else
+  echo "  (no keywords — skipping code search)"
+fi
 echo
 
 echo "--- Remote branches mentioning keywords ---"
-git -C "${REPO_PATH}" branch -r 2>/dev/null \
-  | grep -iE "${KEYWORDS}" | head -10 || echo "  (none)"
+if [[ -n "${KEYWORDS}" ]]; then
+  BRANCHES=$(git -C "${REPO_PATH}" branch -r 2>/dev/null | grep -iE "${KEYWORDS}" | head -10 || true)
+  if [[ -n "${BRANCHES}" ]]; then
+    echo "${BRANCHES}"
+  else
+    echo "  (none)"
+  fi
+else
+  echo "  (no keywords — skipping branch search)"
+fi
 echo
 
 echo "--- Closed PRs referencing this issue ---"

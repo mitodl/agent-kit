@@ -219,18 +219,18 @@ Specific searches to run per issue (adapt the path from resolved_path):
 ```bash
 # Did the expected artifact get created?
 ls <resolved_path>/src/<expected-path>/ 2>/dev/null
-rg -r "<keyword>" <resolved_path>/src --include="*.py" -l
+rg -l -g "*.py" "<keyword>" <resolved_path>/src
 
 # Any commits related to this issue since it was opened?
 git -C <resolved_path> log --oneline --since="<issue-created-date>" \
-  --grep="<keyword>" --regexp-ignore-case | head -15
+  --grep="<keyword>" -E --regexp-ignore-case | head -15
 
 # Is a referenced line still in its original state?
 grep -n "<specific-string>" <resolved_path>/<file> | head -5
 
 # Was the old technology replaced?
-rg -r "<old-tool>" <resolved_path>/src -l | head  # expect empty
-rg -r "<new-tool>" <resolved_path>/src -l | head  # expect populated
+rg -l "<old-tool>" <resolved_path>/src | head  # expect empty
+rg -l "<new-tool>" <resolved_path>/src | head  # expect populated
 
 # Is there an active feature branch?
 git -C <resolved_path> branch -r | grep -i "<keyword>" | head

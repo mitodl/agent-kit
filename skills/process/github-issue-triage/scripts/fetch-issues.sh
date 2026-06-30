@@ -7,6 +7,10 @@
 # Defaults:
 #   outfile  ./issues_full.json
 #
+# Environment:
+#   ISSUE_FETCH_LIMIT  Maximum number of issues to fetch (default: 500).
+#                      Set to a higher value for large repos.
+#
 # Output: JSON array of issues, each with:
 #   number, title, body, labels (name list), createdAt, updatedAt
 #
@@ -16,13 +20,14 @@ set -euo pipefail
 
 REPO="${1:?Usage: $0 <owner/repo> [outfile]}"
 OUTFILE="${2:-./issues_full.json}"
+LIMIT="${ISSUE_FETCH_LIMIT:-500}"
 
-echo "Fetching open issues from ${REPO}..." >&2
+echo "Fetching open issues from ${REPO} (limit: ${LIMIT})..." >&2
 
 gh issue list \
   --repo "${REPO}" \
   --state open \
-  --limit 500 \
+  --limit "${LIMIT}" \
   --json number,title,body,labels,createdAt,updatedAt \
 | jq '[.[] | {
     number,
