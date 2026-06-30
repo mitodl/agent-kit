@@ -222,13 +222,44 @@ def test_memory_link_tagged_autocreates_topic(server):
 
 
 @requires_omnigraph
-def test_migrate_topics_backfills_and_is_idempotent(server):
-    # Simulate a memory whose tag predates the dual-write by linking nothing.
+def test_migrate_topics_is_idempotent_after_dual_write(server):
+    # memory_store already dual-writes tags → topics, so a migration over the same
+    # data is a no-op: it must not create duplicate topics or Tagged edges.
     server.memory_store(kind="pattern", title="legacy", content="old", tags=["ruff"])
     server.migrate_topics()
-    # tag already dual-written at store time → migration creates no new edges
     second = server.migrate_topics()
     assert second["edges_created"] == 0
     assert second["topics_created"] == 0
     got = server.topic_get("tp-topic-ruff")
     assert got is not None and got["memories"]
+
+
+@requires_omnigraph
+def test_topic_get_resolves_name_kind_case_insensitively(server):
+    # Stored tag keeps its casing in the node name, but the slug is normalised.
+    m = server.memory_store(kind="pattern", title="cased", content="x", tags=["UV"])
+    # Querying with different casing still resolves to tp-topic-uv.
+    got = server.topic_get("uv:topic")
+    assert got is not None
+    assert got["topic"]["slug"] == "tp-topic-uv"
+    assert m["slug"] in {x["slug"] for x in got["memories"]}
+
+
+@requires_omnigraph
+def test_blank_tags_are_skipped(server):
+    m = server.memory_store(
+        kind="pattern", title="blanky", content="x", tags=["uv", "   ", ""]
+    )
+    topics = server.memory_get(m["slug"], include_topics=True)["topics"]
+    assert {t["name"] for t in topics} == {"uv"}
+
+
+@requires_omnigraph
+def test_non_latin_tag_gets_distinct_slug(server):
+    # Names with no [a-z0-9] must not all collapse to tp-topic-.
+    a = server.memory_store(kind="pattern", title="ja", content="x", tags=["日本語"])
+    b = server.memory_store(kind="pattern", title="ko", content="y", tags=["한국어"])
+    ta = server.memory_get(a["slug"], include_topics=True)["topics"][0]["slug"]
+    tb = server.memory_get(b["slug"], include_topics=True)["topics"][0]["slug"]
+    assert ta != tb
+    assert ta != "tp-topic-" and tb != "tp-topic-"

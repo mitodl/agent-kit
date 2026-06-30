@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import subprocess
@@ -172,9 +173,14 @@ def _topic_slug(kind: str, name: str) -> str:
     """Deterministic, idempotent slug for a Topic: ``tp-<kind>-<slug(name)>``.
 
     No random suffix — two stores of the same (kind, name) collide on the ``@key``
-    and the second is a no-op, so a topic is created at most once.
+    and the second is a no-op, so a topic is created at most once. When the name
+    has no ``[a-z0-9]`` characters to slugify (e.g. punctuation-only, or a
+    non-Latin script like ``日本語``), fall back to a short content hash so
+    distinct names don't all collapse to ``tp-<kind>-``.
     """
     sanitised = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:64]
+    if not sanitised:
+        sanitised = hashlib.sha1(name.encode("utf-8")).hexdigest()[:12]
     return f"tp-{kind}-{sanitised}"
 
 
@@ -227,7 +233,8 @@ def migrate_topics() -> dict:
     Safe to re-run — topic upsert is keyed on slug and the existing-edge check
     skips already-linked (memory, topic) pairs. Returns counts for reporting.
     """
-    rows = client.read("read.gq", "list_memories_unbounded", {})
+    # Slim read: only slug + tags, not full memory content.
+    rows = client.read("read.gq", "list_memory_tags", {})
     topics_created = 0
     edges_created = 0
     seen_topics: set[str] = set()
@@ -237,7 +244,7 @@ def migrate_topics() -> dict:
             t["slug"]
             for t in client.read("read.gq", "topics_for_memory", {"slug": slug})
         }
-        for tag in dict.fromkeys(row.get("tags") or []):
+        for tag in dict.fromkeys(t for t in (row.get("tags") or []) if t.strip()):
             topic_slug = _topic_slug("topic", tag)
             if topic_slug not in seen_topics:
                 _, created = _upsert_topic(tag, "topic")
@@ -447,9 +454,9 @@ def memory_store(
 
     # Dual-write tags → Topic{kind:"topic"} + Tagged edge. The string list stays
     # the source of truth for old readers; the Topic graph is the new traversal
-    # surface. Idempotent on the topic slug, so shared tags reuse one node.
-    # Dedup so a repeated tag doesn't drive redundant upsert/link calls.
-    for tag in dict.fromkeys(tags or []):
+    # surface. Idempotent on the topic slug, so shared tags reuse one node. Skip
+    # blank tags and dedup so neither drives redundant upsert/link calls.
+    for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
         _tag_memory(slug, tag, "topic")
 
     return {"slug": slug, "kind": kind, "repo": detected_repo}
@@ -664,26 +671,19 @@ def topic_get(topic: str) -> dict | None:
 
     Returns ``{"topic": {...}, "memories": [...]}`` or ``null`` if no such Topic.
     """
-    # Only a tp- slug can hit get_topic directly; a name:kind spec skips that read.
-    slug = topic
-    topic_rows = (
-        client.read("read.gq", "get_topic", {"slug": slug})
-        if slug.startswith("tp-")
-        else []
-    )
-    if not topic_rows:
+    # A tp- slug hits get_topic directly. A name:kind spec resolves through the
+    # deterministic _topic_slug (NOT an exact name match) so that casing/whitespace
+    # differences — stored tag "UV" queried as "uv:topic" — still find tp-topic-uv.
+    if topic.startswith("tp-"):
+        slug = topic
+    else:
         name, sep, kind = topic.rpartition(":")
         if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
             return None
-        rows = client.read(
-            "read.gq", "topic_by_name_kind", {"name": name, "kind": kind}
-        )
-        if not rows:
-            return None
-        slug = rows[0]["slug"]
-        topic_rows = client.read("read.gq", "get_topic", {"slug": slug})
-        if not topic_rows:
-            return None
+        slug = _topic_slug(kind, name)
+    topic_rows = client.read("read.gq", "get_topic", {"slug": slug})
+    if not topic_rows:
+        return None
     memories = client.read("read.gq", "memories_for_topic", {"topic_slug": slug})
     return {"topic": topic_rows[0], "memories": memories}
 

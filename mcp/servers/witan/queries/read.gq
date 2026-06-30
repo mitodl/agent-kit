@@ -243,6 +243,13 @@ query all_superseded_slugs() {
 
 // ── Topics ────────────────────────────────────────────────────────
 
+// Slim projection for the topic backfill — slug + tags only, no content.
+query list_memory_tags() {
+    match { $m: Memory }
+    return { $m.slug, $m.tags }
+    limit 10000
+}
+
 query get_topic($slug: String) {
     match { $tp: Topic { slug: $slug } }
     return { $tp.slug, $tp.name, $tp.kind, $tp.created_at }
