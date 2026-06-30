@@ -2116,6 +2116,112 @@ def _context_for_symbol(symbol_id: str) -> dict:
     return {"symbol_id": symbol_id, "memories": memories, "tasks": tasks}
 
 
+# ── Hard memory↔symbol / memory↔contract links (spec §4) ──────────
+
+ContractKind = Literal["env_var", "endpoint", "package", "service"]
+
+
+def _code_server():
+    """The witan-code server module if installed/reachable, else None.
+
+    Cross-store resolution (symbol definitions, bridge bindings) is best-effort:
+    witan-code is an optional sibling package, so callers degrade to raw refs
+    and empty bindings when it is absent — never an edge into another store.
+    """
+    try:
+        from witan_code import server as code_server  # noqa: PLC0415
+    except ImportError:
+        return None
+    return code_server
+
+
+@mcp.tool
+def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict:
+    """
+    What do we know about a contract (env_var / endpoint / package / service)?
+
+    Resolves the ``Topic{kind:"contract", name:key_norm}`` anchor and walks
+    ``Tagged`` to the memories about it (a single Layer-1 traversal, cross-repo by
+    nature), then — best-effort — asks witan-code for the bridge bindings that
+    share the same ``key_norm`` so callers can pivot to the code that produces or
+    consumes it. The two halves are joined in Python on the shared key, never an
+    edge across stores.
+
+    Tag a memory to a contract first with
+    ``memory_link(mem, "<key_norm>:contract", "tagged")``.
+
+    Parameters
+    ----------
+    key_norm:
+        The normalised contract key (e.g. ``DATABASE_URL`` or
+        ``GET /api/v1/courses/``).
+    kind:
+        The bridge binding kind (``env_var`` / ``endpoint`` / ``package`` /
+        ``service``) used to look up bindings. Omit to skip the bridge lookup.
+
+    Returns ``{"key_norm", "kind", "memories": [...], "bindings": {...}}``.
+    """
+    rows = client.read(
+        "read.gq", "topic_by_name_kind", {"name": key_norm, "kind": "contract"}
+    )
+    memories = (
+        client.read("read.gq", "memories_for_topic", {"topic_slug": rows[0]["slug"]})
+        if rows
+        else []
+    )
+
+    bindings: dict = {"providers": [], "consumers": []}
+    code = _code_server()
+    if code is not None and kind is not None:
+        try:
+            bindings = {
+                "providers": code.code_interface_providers(kind, key_norm),
+                "consumers": code.code_interface_consumers(kind, key_norm),
+            }
+        except Exception:  # noqa: BLE001 — cross-store lookup is best-effort
+            pass
+
+    return {
+        "key_norm": key_norm,
+        "kind": kind,
+        "memories": memories,
+        "bindings": bindings,
+    }
+
+
+@mcp.tool
+def memory_symbol_context(slug: str) -> dict:
+    """
+    The forward direction of ``symbol_refs``: given a memory, what code does it
+    concern?
+
+    Returns each of the memory's ``symbol_refs`` and — when witan-code is
+    reachable — enriches it with the live definition. Degrades to the raw ref
+    strings when witan-code is not installed (read-time cross-store fan-out in
+    Python, never a hard edge). The reverse direction ("which memories concern
+    this symbol") stays ``context_for_symbol``.
+    """
+    node = memory_get(slug)
+    if node is None:
+        return {"slug": slug, "symbols": []}
+
+    code = _code_server()
+    symbols: list[dict] = []
+    for ref in node.get("symbol_refs") or []:
+        entry = {"symbol_ref": ref}
+        if code is not None:
+            try:
+                name = ref.split("::")[-1]
+                repo = ref.split("#", 1)[0] if "#" in ref else None
+                defs = code.code_find_definition(name, repo)
+                if defs:
+                    entry["definition"] = defs
+            except Exception:  # noqa: BLE001 — best-effort enrichment
+                pass
+        symbols.append(entry)
+    return {"slug": slug, "symbols": symbols}
+
+
 # ── Graph-aware recall (spec §8) ──────────────────────────────────
 
 
