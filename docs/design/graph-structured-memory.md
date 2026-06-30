@@ -74,7 +74,10 @@ contention among many concurrent indexers (`bridge-schema.pg:1-16`).
 - Traversal syntax is confirmed available — `witan-code` already does
   `$caller calls $target` predicate joins (`code_read.gq:93`), so
   `$new supersedes $old` queries are supported.
-- **Superseded handling.** A `search()` query orders by `bm25` only, so the clean
+- **Superseded handling.** The v1 `search()` queries are defined to order by
+  `bm25` only (the engine's `order` clause can sort by node fields — the listing
+  queries use `order { $m.created_at desc }` — but the BM25 search path doesn't),
+  so the clean
   approach is: run the BM25 search, separately fetch the set of slugs that are the
   *target* of a `Supersedes` edge, then drop/deprioritise them in Python before
   returning. Contradictions are *not* hidden — they are surfaced ("memory X
@@ -192,7 +195,10 @@ add-on.
 
 1. **No cross-store edges.** Anything linking memory to code/bridge is soft refs
    or Layer-1 proxy (Topic) nodes — never an omnigraph edge into Layer 2/2.5.
-2. **`order` takes bm25 only** in search queries → composite ranking and
+2. **Composite ranking lives in Python, not `order`.** The v1 search queries are
+   defined to order by `bm25` only (the engine's `order` clause *can* sort by node
+   fields — listing queries use `order { $m.created_at desc }`), and the composite
+   score can't be expressed as one `order` clause → composite ranking and
    superseded-pruning happen as a Python re-rank over the candidate set.
 3. **Write contention is real.** The store uses optimistic concurrency with a
    per-store advisory lock + repair retries (`graph.py:9-18`). Favour low-fanout

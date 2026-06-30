@@ -17,17 +17,22 @@ today so the implementer can diff against it.
 |---|---|---|
 | Q1 | `RelatedTo` symmetry & storage direction | **Store one direction; traverse both at read.** `memory_link(kind="related_to", a, b)` writes a single `RelatedTo: a -> b`. Reads union the in- and out-neighbours. Avoids double-write contention and a reconciliation job. `Contradicts` is treated the same way (symmetric, stored once). `Supersedes`/`Refines`/`AppliesTo` stay directional. |
 | Q2 | `contract_refs` soft list vs. Topic-anchor-only | **Topic-anchor-only.** Contracts are modelled as `Topic{kind:"contract"}` nodes with a real Layer-1 `Tagged` edge (traversable). No second soft-ref list on `Memory`. `symbol_refs` stays as-is (the code symbol space is high-cardinality and per-repo; promoting it to Topic nodes would explode node count and re-introduce indexer write contention — see §2 rationale). |
-| Q3 | Ranking weights / half-life: config vs constants | **Config knobs with constant defaults.** Add a frozen `RankConfig` to `config.py`, sourced from `WITAN_RANK_*` env vars / TOML, defaulting to the constants in §5.3. Ranking is always on; weights are tunable, not feature-flagged. |
-| Q4 | Embeddings: `rrf` hybrid in first cut or deferred | **Deferred behind a config gate.** First cut is BM25 + graph re-rank only. `recall()` is designed so the seed step can later swap `search()` for `rrf(bm25, nearest)` with no change to the expand/prune/re-rank stages. Gated on `WITAN_EMBED_ENABLED` (default off) — see §6.4. |
-| Q5 | Migration for promoting free-string `tags` → `Topic` | **Additive backfill, dual-write, no removal.** `tags: [String]?` stays on every node. A one-shot `witan migrate topics` backfills a `Topic{kind:"topic"}` + `Tagged` edge per distinct tag; `memory_store`/`memory_update` dual-write tags → Topic nodes going forward. See §7. |
+| Q3 | Ranking weights / half-life: config vs constants | **Config knobs with constant defaults.** Add a frozen `RankConfig` to `config.py`, sourced from `WITAN_RANK_*` env vars / TOML, defaulting to the constants in §7.3. Ranking is always on; weights are tunable, not feature-flagged. |
+| Q4 | Embeddings: `rrf` hybrid in first cut or deferred | **Deferred behind a config gate.** First cut is BM25 + graph re-rank only. `recall()` is designed so the seed step can later swap `search()` for `rrf(bm25, nearest)` with no change to the expand/prune/re-rank stages. Gated on `WITAN_EMBED_ENABLED` (default off) — see §8.3. |
+| Q5 | Migration for promoting free-string `tags` → `Topic` | **Additive backfill, dual-write, no removal.** `tags: [String]?` stays on every node. A one-shot `witan migrate topics` backfills a `Topic{kind:"topic"}` + `Tagged` edge per distinct tag; `memory_store`/`memory_update` dual-write tags → Topic nodes going forward. See §6 (Topics) and §9 (migration). |
 
 Two cross-cutting decisions inherited from discovery, restated because every task
 depends on them:
 
 - **No cross-store edges.** Memory↔code/bridge links are soft refs (`symbol_refs`)
   or Layer-1 proxy `Topic` nodes — never an omnigraph edge into Layer 2/2.5.
-- **`order` takes `bm25` only.** Composite ranking and superseded-pruning are a
-  **Python re-rank over the candidate set**, not engine `order` clauses.
+- **Composite ranking lives in Python, not `order`.** The engine's `order` clause
+  *can* sort by node fields (the listing queries already use
+  `order { $m.created_at desc }`); the constraint is that the v1 **search** queries
+  are defined to order by `bm25` alone, and the composite score (recency ×
+  corroboration × confidence × penalties) can't be expressed as a single `order`
+  clause. So composite ranking and superseded-pruning are a **Python re-rank over
+  the candidate set**.
 
 ## 1. Task → deliverable map
 
@@ -323,14 +328,31 @@ query link_session_produced($from: String, $to: String) {
 
 ### 5.3 Read — `queries/read.gq`
 
+Both endpoints are bound as typed nodes, and the traversal predicate is the edge
+type lowercased with underscores stripped (`sessionproduced`, not
+`session_produced`) — the engine's convention confirmed in discovery.
+
 ```
 // Memories produced during a session (provenance walk).
 query session_produced_memories($session_slug: String) {
     match {
         $s: WorkflowSession { slug: $session_slug }
-        $s session_produced $m
+        $m: Memory
+        $s sessionproduced $m
     }
     return { $m.slug, $m.kind, $m.title, $m.created_at }
+}
+
+// Reverse: the session(s) that produced a given memory. Needed by the §8.2
+// expand step, which walks a memory → its producing session → that session's
+// other produced memories (provenance siblings).
+query producing_sessions($slug: String) {
+    match {
+        $s: WorkflowSession
+        $m: Memory { slug: $slug }
+        $s sessionproduced $m
+    }
+    return { $s.slug }
 }
 ```
 
@@ -346,7 +368,7 @@ The active session is discoverable from the session-state file written by
 `client.change` (`server.py:315`):
 
 ```python
-active = _active_session_slug()   # reads the /tmp session-state file; None if absent
+active = _active_session_slug()   # None if absent
 if active:
     client.change(
         "mutations.gq", "link_session_produced",
@@ -354,11 +376,29 @@ if active:
     )
 ```
 
-`_active_session_slug()` must fail soft (return `None` on any read/parse error) —
-provenance is best-effort and must never block a memory write. Do the same in
-`memory_update` so a substantive edit also records provenance (idempotent: skip
-if the edge already exists, or accept the duplicate — the engine tolerates it and
-reads dedupe).
+**Parallel sessions:** several `workflow-session-*.json` files can coexist in
+`/tmp` at once (parallel sessions are explicitly supported — discovery §1). So
+`_active_session_slug()` must **not** scan or pick an arbitrary file; it keys off
+`$CLAUDE_SESSION_ID` to read *this* session's state file
+(`_session_state_path(session_id)`, the same path `workflow_session_start` and the
+`session-checkpoint` hook use) and returns its `session_slug`:
+
+```python
+def _active_session_slug() -> str | None:
+    session_id = os.environ.get("CLAUDE_SESSION_ID")
+    if not session_id:
+        return None
+    try:
+        state = json.loads(_session_state_path(session_id).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return state.get("session_slug") or None
+```
+
+It must fail soft (return `None` on missing env / any read/parse error) —
+provenance is best-effort and must never block a memory write. (A `memory_update`
+tool is deferred to the v2 roadmap; when it lands, record provenance there too —
+idempotent: accept the duplicate, reads dedupe.)
 
 ### 5.5 Acceptance criteria
 
@@ -494,8 +534,12 @@ score = w_bm25   * norm_bm25
       - penalty_contradicted * is_contradicted
 ```
 
-- `norm_bm25` — min-max normalised BM25 over the candidate set (BM25 is unbounded;
-  normalise so weights are comparable). If only one candidate, treat as 1.0.
+- `norm_bm25` — a normalised BM25 signal over the candidate set so weights are
+  comparable. The engine can't project the raw `bm25(...)` score as a returnable
+  column (it's only valid inside `order`), so the implementation uses **rank
+  position** as the proxy: the candidate set already comes back in BM25-desc order,
+  so the top hit is `1.0` and the last is `0.0` (single candidate → `1.0`). A true
+  min-max of the raw score would be equivalent if/when the engine exposes it.
 - `age_days` — from `updated_at` to now. `recall`/search receive `now` from the
   server clock at call time.
 - `corroboration` — count of supporting edges into/out of the memory:
@@ -519,6 +563,12 @@ Add a frozen `RankConfig` resolved from `WITAN_RANK_*` env vars / TOML, defaults
 | `default_confidence` | `WITAN_RANK_DEFAULT_CONF` | `0.6` |
 | `penalty_superseded` | `WITAN_RANK_PEN_SUPERSEDED` | `1.0` |
 | `penalty_contradicted` | `WITAN_RANK_PEN_CONTRADICTED` | `0.25` |
+| `w_hop` | `WITAN_RANK_W_HOP` | `0.5` |
+
+`w_hop` is the per-hop distance penalty applied only by graph-aware `recall`
+(§8.2 step 4): seeds (hop 0) outrank expanded neighbours. It lives on `RankConfig`
+alongside the search weights but does not affect plain `memory_search`, which has
+no expansion step.
 
 ### 7.4 Where it runs
 
