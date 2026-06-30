@@ -47,6 +47,22 @@ edge Contradicts: Memory -> Memory
 // RelatedTo: soft associative link. Symmetric; stored one direction.
 edge RelatedTo: Memory -> Memory
 
+// Topic: a join-surface node memories attach to. One node type, several kinds:
+//   topic    — promoted from a free-string tag
+//   contract — name == bridge key_norm (env_var/endpoint/package/service)
+//   symbol   — reserved; not populated in the first cut (symbols stay soft refs)
+//   entity   — a named entity (service, library, person, concept)
+// Slug convention: tp-<kind>-<slug(name)>
+node Topic {
+    slug: String @key
+    name: String @index
+    kind: enum(topic, contract, symbol, entity) @index
+    created_at: DateTime @index
+}
+
+// Tagged: a Memory is about a Topic. Real Layer-1 edge (traversable).
+edge Tagged: Memory -> Topic
+
 // ── Workflow Tracking ─────────────────────────────────────────────
 //
 // WorkflowProject tracks an overarching engineering objective across

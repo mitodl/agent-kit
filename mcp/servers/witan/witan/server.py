@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import subprocess
@@ -70,10 +71,13 @@ mcp = FastMCP(
 MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
 
 MemoryLinkKind = Literal[
-    "supersedes", "refines", "applies_to", "contradicts", "related_to"
+    "supersedes", "refines", "applies_to", "contradicts", "related_to", "tagged"
 ]
 
-# Edge kind → mutation query that writes it.
+TopicKind = Literal["topic", "contract", "symbol", "entity"]
+
+# Edge kind → mutation query that writes it. ``tagged`` (Memory → Topic) is
+# handled separately in memory_link since its target is a Topic, not a Memory.
 _MEMORY_LINK_MUTATIONS = {
     "supersedes": "link_supersedes",
     "refines": "link_refines",
@@ -163,6 +167,102 @@ def _slim_memory(m: dict) -> dict:
     it actually needs rather than absorbing every word of every memory.
     """
     return {k: m[k] for k in _SLIM_KEYS if k in m}
+
+
+def _topic_slug(kind: str, name: str) -> str:
+    """Deterministic, idempotent slug for a Topic: ``tp-<kind>-<slug(name)>``.
+
+    No random suffix — two stores of the same (kind, name) collide on the ``@key``
+    and the second is a no-op, so a topic is created at most once. When the name
+    has no ``[a-z0-9]`` characters to slugify (e.g. punctuation-only, or a
+    non-Latin script like ``日本語``), fall back to a short content hash so
+    distinct names don't all collapse to ``tp-<kind>-``.
+    """
+    sanitised = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:64]
+    if not sanitised:
+        sanitised = hashlib.sha1(name.encode("utf-8")).hexdigest()[:12]
+    return f"tp-{kind}-{sanitised}"
+
+
+def _upsert_topic(name: str, kind: str) -> tuple[str, bool]:
+    """Return the Topic slug for (name, kind), creating it if absent.
+
+    The second element is ``True`` when the node was newly inserted — lets callers
+    (e.g. ``migrate_topics``) count creations without a second ``get_topic`` read.
+    """
+    slug = _topic_slug(kind, name)
+    if client.read("read.gq", "get_topic", {"slug": slug}):
+        return slug, False
+    client.change(
+        "mutations.gq",
+        "insert_topic",
+        {"slug": slug, "name": name, "kind": kind, "created_at": _now_iso()},
+    )
+    return slug, True
+
+
+def _resolve_topic(ref: str) -> str | None:
+    """Resolve a topic reference to a slug, creating the Topic if needed.
+
+    ``ref`` is either an existing Topic slug (``tp-...``) or a ``name:kind`` spec
+    (e.g. ``cryptography:topic`` or ``GET /api/v1/courses/:contract``). Returns the
+    slug, or ``None`` when ``ref`` is a slug that does not resolve to a Topic.
+    """
+    # Only a tp- slug can resolve directly; skip the read for a name:kind spec.
+    if ref.startswith("tp-") and client.read("read.gq", "get_topic", {"slug": ref}):
+        return ref
+    name, sep, kind = ref.rpartition(":")
+    if sep and kind in ("topic", "contract", "symbol", "entity") and name:
+        return _upsert_topic(name, kind)[0]
+    return None
+
+
+def _tag_memory(memory_slug: str, name: str, kind: str) -> str:
+    """Upsert a Topic and link the memory to it. Returns the topic slug."""
+    topic_slug, _ = _upsert_topic(name, kind)
+    client.change(
+        "mutations.gq", "link_tagged", {"from": memory_slug, "to": topic_slug}
+    )
+    return topic_slug
+
+
+def migrate_topics() -> dict:
+    """One-shot, idempotent backfill: promote every memory ``tag`` to a
+    ``Topic{kind:"topic"}`` + ``Tagged`` edge.
+
+    Safe to re-run — topic upsert is keyed on slug and the existing-edge check
+    skips already-linked (memory, topic) pairs. Returns counts for reporting.
+    """
+    # Slim read: only slug + tags, not full memory content.
+    rows = client.read("read.gq", "list_memory_tags", {})
+    topics_created = 0
+    edges_created = 0
+    seen_topics: set[str] = set()
+    for row in rows:
+        slug = row["slug"]
+        existing = {
+            t["slug"]
+            for t in client.read("read.gq", "topics_for_memory", {"slug": slug})
+        }
+        for tag in dict.fromkeys(t for t in (row.get("tags") or []) if t.strip()):
+            topic_slug = _topic_slug("topic", tag)
+            if topic_slug not in seen_topics:
+                _, created = _upsert_topic(tag, "topic")
+                if created:
+                    topics_created += 1
+                seen_topics.add(topic_slug)
+            if topic_slug not in existing:
+                client.change(
+                    "mutations.gq",
+                    "link_tagged",
+                    {"from": slug, "to": topic_slug},
+                )
+                edges_created += 1
+    return {
+        "memories_scanned": len(rows),
+        "topics_created": topics_created,
+        "edges_created": edges_created,
+    }
 
 
 # ── Tools ─────────────────────────────────────────────────────────
@@ -351,18 +451,37 @@ def memory_store(
             "updated_at": now,
         },
     )
+
+    # Dual-write tags → Topic{kind:"topic"} + Tagged edge. The string list stays
+    # the source of truth for old readers; the Topic graph is the new traversal
+    # surface. Idempotent on the topic slug, so shared tags reuse one node. Skip
+    # blank tags and dedup so neither drives redundant upsert/link calls.
+    for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
+        _tag_memory(slug, tag, "topic")
+
     return {"slug": slug, "kind": kind, "repo": detected_repo}
 
 
 @mcp.tool
-def memory_get(slug: str) -> dict | None:
+def memory_get(slug: str, include_topics: bool = False) -> dict | None:
     """
     Retrieve a single memory by its slug.
 
     Returns the full node or ``null`` if not found.
+
+    Parameters
+    ----------
+    include_topics:
+        When ``True``, attach a ``topics`` list of the Topic nodes this memory is
+        tagged with (slug/name/kind).
     """
     rows = client.read("read.gq", "get_memory", {"slug": slug})
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    node = rows[0]
+    if include_topics:
+        node["topics"] = client.read("read.gq", "topics_for_memory", {"slug": slug})
+    return node
 
 
 @mcp.tool
@@ -442,10 +561,14 @@ def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
     - ``contradicts`` — ``from`` and ``to`` conflict. Symmetric; surfaced for
                         review, never hidden.
     - ``related_to``  — soft association. Symmetric.
+    - ``tagged``      — ``from`` (a Memory) is about ``to`` (a Topic). ``to`` is
+                        either an existing Topic slug (``tp-...``) or a ``name:kind``
+                        spec (e.g. ``cryptography:topic``, ``DATABASE_URL:contract``),
+                        in which case the Topic is auto-created.
 
-    Both endpoints must already exist as ``Memory`` nodes; the edge is not written
-    otherwise (avoids dead off-type edges). A memory cannot link to itself. Returns
-    ``linked: False`` in those cases rather than raising.
+    For memory↔memory kinds both endpoints must already exist as ``Memory`` nodes;
+    the edge is not written otherwise (avoids dead off-type edges). A memory cannot
+    link to itself. Returns ``linked: False`` in those cases rather than raising.
     """
     if from_slug == to_slug:
         return {
@@ -455,6 +578,29 @@ def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
             "linked": False,
             "reason": "cannot link a memory to itself",
         }
+
+    if kind == "tagged":
+        if not client.read("read.gq", "get_memory", {"slug": from_slug}):
+            return {
+                "from": from_slug,
+                "to": to_slug,
+                "kind": kind,
+                "linked": False,
+                "missing": [from_slug],
+            }
+        topic_slug = _resolve_topic(to_slug)
+        if topic_slug is None:
+            return {
+                "from": from_slug,
+                "to": to_slug,
+                "kind": kind,
+                "linked": False,
+                "missing": [to_slug],
+            }
+        client.change(
+            "mutations.gq", "link_tagged", {"from": from_slug, "to": topic_slug}
+        )
+        return {"from": from_slug, "to": topic_slug, "kind": kind, "linked": True}
 
     endpoints = {from_slug, to_slug}
     present = {
@@ -500,12 +646,46 @@ def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> di
     wanted = list(_MEMORY_NEIGHBOR_QUERIES) if kinds is None else kinds
     neighbors: dict[str, list[dict]] = {}
     for kind in wanted:
+        if (
+            kind not in _MEMORY_NEIGHBOR_QUERIES
+        ):  # e.g. "tagged" → use memory_get/topic_get
+            continue
         merged: dict[str, dict] = {}
         for query_name in _MEMORY_NEIGHBOR_QUERIES[kind]:
             for row in client.read("read.gq", query_name, {"slug": slug}):
                 merged[row["slug"]] = row
         neighbors[kind] = list(merged.values())
     return {"slug": slug, "neighbors": neighbors}
+
+
+@mcp.tool
+def topic_get(topic: str) -> dict | None:
+    """
+    Resolve a Topic and return it with the memories tagged to it.
+
+    ``topic`` is either a Topic slug (``tp-...``) or a ``name:kind`` spec
+    (e.g. ``uv:topic``). Because topics are a cross-repo join surface, the
+    returned memories may span repositories — this is the traversal-based
+    retrieval primitive: two memories in different repos sharing a topic are
+    one hop apart.
+
+    Returns ``{"topic": {...}, "memories": [...]}`` or ``null`` if no such Topic.
+    """
+    # A tp- slug hits get_topic directly. A name:kind spec resolves through the
+    # deterministic _topic_slug (NOT an exact name match) so that casing/whitespace
+    # differences — stored tag "UV" queried as "uv:topic" — still find tp-topic-uv.
+    if topic.startswith("tp-"):
+        slug = topic
+    else:
+        name, sep, kind = topic.rpartition(":")
+        if not (sep and kind in ("topic", "contract", "symbol", "entity") and name):
+            return None
+        slug = _topic_slug(kind, name)
+    topic_rows = client.read("read.gq", "get_topic", {"slug": slug})
+    if not topic_rows:
+        return None
+    memories = client.read("read.gq", "memories_for_topic", {"topic_slug": slug})
+    return {"topic": topic_rows[0], "memories": memories}
 
 
 # ── Workflow Tracking Tools ───────────────────────────────────────

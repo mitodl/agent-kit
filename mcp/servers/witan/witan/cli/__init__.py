@@ -23,6 +23,10 @@ from . import memory  # noqa: F401
 from . import projects  # noqa: F401
 from . import setup_cmd  # noqa: F401
 from . import tasks  # noqa: F401
+from .migrate import migrate_app
+
+# Mount `witan migrate …` (sub-app, not a flat command).
+app.command(migrate_app, name="migrate")
 
 # Mount the code-graph CLI as `witan code …` when witan-code is installed.
 # Optional: the umbrella works standalone without it.

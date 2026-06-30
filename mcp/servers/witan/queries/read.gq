@@ -241,6 +241,45 @@ query all_superseded_slugs() {
     return { $old.slug }
 }
 
+// ── Topics ────────────────────────────────────────────────────────
+
+// Slim projection for the topic backfill — slug + tags only, no content.
+query list_memory_tags() {
+    match { $m: Memory }
+    return { $m.slug, $m.tags }
+    limit 10000
+}
+
+query get_topic($slug: String) {
+    match { $tp: Topic { slug: $slug } }
+    return { $tp.slug, $tp.name, $tp.kind, $tp.created_at }
+}
+
+query topic_by_name_kind($name: String, $kind: String) {
+    match { $tp: Topic { name: $name, kind: $kind } }
+    return { $tp.slug, $tp.name, $tp.kind }
+}
+
+// Memories attached to a topic (traversal-based retrieval; cross-repo by nature).
+query memories_for_topic($topic_slug: String) {
+    match {
+        $tp: Topic { slug: $topic_slug }
+        $m: Memory
+        $m tagged $tp
+    }
+    return { $m.slug, $m.kind, $m.title, $m.repo, $m.created_at }
+}
+
+// Topics a memory is tagged with (for expand + display).
+query topics_for_memory($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $tp: Topic
+        $m tagged $tp
+    }
+    return { $tp.slug, $tp.name, $tp.kind }
+}
+
 // ── Project facts ─────────────────────────────────────────────────
 
 query get_project_facts($repo: String) {

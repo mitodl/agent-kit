@@ -88,6 +88,18 @@ query link_related_to($from: String, $to: String) {
     insert RelatedTo { from: $from, to: $to }
 }
 
+// ── Topics ────────────────────────────────────────────────────────
+
+query insert_topic(
+    $slug: String, $name: String, $kind: String, $created_at: DateTime
+) {
+    insert Topic { slug: $slug, name: $name, kind: $kind, created_at: $created_at }
+}
+
+query link_tagged($from: String, $to: String) {
+    insert Tagged { from: $from, to: $to }
+}
+
 // ── Workflow Project mutations ─────────────────────────────────────
 
 query insert_workflow_project(
