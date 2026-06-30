@@ -118,6 +118,16 @@ query update_workflow_project_repos(
         where slug = $slug
 }
 
+query update_workflow_project_description(
+    $slug: String,
+    $description: String,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set { description: $description, updated_at: $updated_at }
+        where slug = $slug
+}
+
 query update_workflow_project_phase(
     $slug: String,
     $phase: String,
