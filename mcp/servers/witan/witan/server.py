@@ -1,10 +1,12 @@
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
 import tempfile
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -50,6 +52,7 @@ def _ensure_graph(graph_uri: str) -> None:
 
 
 cfg = cfg_module.load()
+rank_cfg = cfg_module.load_rank_config()
 _ensure_graph(cfg.graph_uri)
 client = OmnigraphClient(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
 
@@ -266,6 +269,114 @@ def migrate_topics() -> dict:
     }
 
 
+# ── Composite re-rank (spec §7) ───────────────────────────────────
+
+
+def _edge_index() -> dict:
+    """Tally support degrees and conflict/supersession sets across the graph.
+
+    Runs a handful of global single-column edge queries and counts in Python:
+    cheaper than per-candidate traversals and independent of result-set size.
+    Bounded by edge count, mirroring ``all_superseded_slugs``.
+    """
+
+    def slugs(query: str) -> list[str]:
+        return [r["slug"] for r in client.read("read.gq", query, {})]
+
+    corroboration: Counter = Counter()
+    for query in (
+        "rel_edges_from",
+        "rel_edges_to",
+        "applies_edges_from",
+        "applies_edges_to",
+        "informed_edges_to",
+        "produced_edges_to",
+    ):
+        corroboration.update(slugs(query))
+    contradicted = set(slugs("contradicts_edges_from")) | set(
+        slugs("contradicts_edges_to")
+    )
+    superseded = set(slugs("all_superseded_slugs"))
+    return {
+        "corroboration": corroboration,
+        "contradicted": contradicted,
+        "superseded": superseded,
+    }
+
+
+def _age_days(ts: str | None, now: datetime) -> float:
+    """Whole/fractional days between an ISO timestamp and ``now`` (≥ 0)."""
+    if not ts:
+        return 0.0
+    try:
+        dt = datetime.fromisoformat(ts)
+    except (ValueError, TypeError):
+        return 0.0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - dt).total_seconds() / 86400.0)
+
+
+def _score(
+    *,
+    norm_bm25: float,
+    age_days: float,
+    corroboration: int,
+    confidence: float | None,
+    is_superseded: bool,
+    is_contradicted: bool,
+    rank_cfg: "cfg_module.RankConfig",
+) -> float:
+    """The composite memory score (spec §7.2). Pure — no I/O."""
+    recency = (
+        math.exp(-age_days / rank_cfg.half_life_days)
+        if rank_cfg.half_life_days
+        else 0.0
+    )
+    conf = rank_cfg.default_confidence if confidence is None else confidence
+    return (
+        rank_cfg.w_bm25 * norm_bm25
+        + rank_cfg.w_recency * recency
+        + rank_cfg.w_corrob * math.log1p(corroboration)
+        + rank_cfg.w_conf * conf
+        - rank_cfg.penalty_superseded * is_superseded
+        - rank_cfg.penalty_contradicted * is_contradicted
+    )
+
+
+def _rerank(
+    rows: list[dict],
+    *,
+    now: datetime,
+    rank_cfg: "cfg_module.RankConfig",
+    edge_index: dict,
+) -> list[dict]:
+    """Re-order a BM25 candidate set by the composite score (spec §7.2).
+
+    The engine can't project the BM25 score, so rank position is the
+    normalised-BM25 proxy (top hit → 1.0, last → 0.0). Stable on ties via the
+    original index.
+    """
+    n = len(rows)
+    corroboration = edge_index["corroboration"]
+    contradicted = edge_index["contradicted"]
+    superseded = edge_index["superseded"]
+    scored = []
+    for i, r in enumerate(rows):
+        score = _score(
+            norm_bm25=1.0 if n <= 1 else (n - 1 - i) / (n - 1),
+            age_days=_age_days(r.get("updated_at") or r.get("created_at"), now),
+            corroboration=corroboration.get(r["slug"], 0),
+            confidence=r.get("confidence"),
+            is_superseded=r["slug"] in superseded,
+            is_contradicted=r["slug"] in contradicted,
+            rank_cfg=rank_cfg,
+        )
+        scored.append((score, i, r))
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    return [r for _, _, r in scored]
+
+
 # ── Tools ─────────────────────────────────────────────────────────
 
 
@@ -324,10 +435,15 @@ def memory_search(
     else:
         rows = client.read("read.gq", "search_all", {"query": query})
 
-    if include_superseded:
-        return rows
-    superseded = {r["slug"] for r in client.read("read.gq", "all_superseded_slugs", {})}
-    return [r for r in rows if r["slug"] not in superseded]
+    edge_index = _edge_index()
+    if not include_superseded:
+        rows = [r for r in rows if r["slug"] not in edge_index["superseded"]]
+    return _rerank(
+        rows,
+        now=datetime.now(timezone.utc),
+        rank_cfg=rank_cfg,
+        edge_index=edge_index,
+    )
 
 
 @mcp.tool
@@ -391,6 +507,7 @@ def memory_store(
     severity: Literal["info", "warning", "critical"] | None = None,
     tags: list[str] | None = None,
     symbol_refs: list[str] | None = None,
+    confidence: float | None = None,
 ) -> dict:
     """
     Store a new memory in the shared graph.
@@ -428,6 +545,10 @@ def memory_store(
         Optional code-graph symbol ids (``repo#path::Name``) this memory concerns,
         e.g. the function a lesson is about. Resolved against the witan-code
         store; stored as a soft reference (no hard cross-store edge).
+    confidence:
+        Optional author/agent trust in this memory, 0.0–1.0. Feeds the search
+        re-rank; omitted (null) memories use the configured default
+        (``WITAN_RANK_DEFAULT_CONF``, default 0.6).
     """
     now = _now_iso()
     slug = _make_slug(kind, title)
@@ -448,6 +569,7 @@ def memory_store(
             "author": cfg.author,
             "tags": tags,
             "symbol_refs": symbol_refs,
+            "confidence": confidence,
             "created_at": now,
             "updated_at": now,
         },
