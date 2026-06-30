@@ -15,7 +15,7 @@ query search_all($query: String) {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { bm25($m.content, $query) desc }
     limit 20
@@ -29,7 +29,7 @@ query search_by_repo($query: String, $repo: String) {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { bm25($m.content, $query) desc }
     limit 20
@@ -43,7 +43,7 @@ query search_by_kind($query: String, $kind: String) {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { bm25($m.content, $query) desc }
     limit 20
@@ -57,7 +57,7 @@ query search_by_repo_and_kind($query: String, $repo: String, $kind: String) {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { bm25($m.content, $query) desc }
     limit 20
@@ -72,7 +72,7 @@ query list_memories() {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { $m.created_at desc }
     limit 100
@@ -85,7 +85,7 @@ query list_memories_by_repo($repo: String) {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { $m.created_at desc }
     limit 100
@@ -98,7 +98,7 @@ query list_memories_by_kind($kind: String) {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { $m.created_at desc }
     limit 100
@@ -111,7 +111,7 @@ query list_memories_by_repo_kind($repo: String, $kind: String) {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { $m.created_at desc }
     limit 100
@@ -128,7 +128,7 @@ query list_memories_unbounded() {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { $m.created_at desc }
     limit 10000
@@ -141,7 +141,7 @@ query list_memories_by_kind_unbounded($kind: String) {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.created_at
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { $m.created_at desc }
     limit 10000
@@ -156,7 +156,8 @@ query get_memory($slug: String) {
     return {
         $m.slug, $m.kind, $m.title, $m.content,
         $m.repo, $m.language, $m.category, $m.severity,
-        $m.author, $m.tags, $m.symbol_refs, $m.created_at, $m.updated_at
+        $m.author, $m.tags, $m.symbol_refs,
+        $m.confidence, $m.created_at, $m.updated_at
     }
 }
 
@@ -239,6 +240,53 @@ query all_superseded_slugs() {
         $m supersedes $old
     }
     return { $old.slug }
+}
+
+// ── Edge index (for the composite re-rank) ────────────────────────
+// Each query returns one endpoint slug per edge (single column — the row
+// unwrapper collapses "a.slug"/"b.slug" to "slug", so returning both would
+// collide). The server tallies degrees in Python to score corroboration and
+// flag contradicted memories. Symmetric edges expose both endpoints.
+
+query rel_edges_from() {
+    match { $a: Memory $b: Memory $a relatedto $b }
+    return { $a.slug }
+}
+query rel_edges_to() {
+    match { $a: Memory $b: Memory $a relatedto $b }
+    return { $b.slug }
+}
+query applies_edges_from() {
+    match { $a: Memory $b: Memory $a appliesto $b }
+    return { $a.slug }
+}
+query applies_edges_to() {
+    match { $a: Memory $b: Memory $a appliesto $b }
+    return { $b.slug }
+}
+query refines_edges_from() {
+    match { $a: Memory $b: Memory $a refines $b }
+    return { $a.slug }
+}
+query refines_edges_to() {
+    match { $a: Memory $b: Memory $a refines $b }
+    return { $b.slug }
+}
+query contradicts_edges_from() {
+    match { $a: Memory $b: Memory $a contradicts $b }
+    return { $a.slug }
+}
+query contradicts_edges_to() {
+    match { $a: Memory $b: Memory $a contradicts $b }
+    return { $b.slug }
+}
+query informed_edges_to() {
+    match { $p: WorkflowProject $m: Memory $p informed $m }
+    return { $m.slug }
+}
+query produced_edges_to() {
+    match { $s: WorkflowSession $m: Memory $s sessionproduced $m }
+    return { $m.slug }
 }
 
 // ── Topics ────────────────────────────────────────────────────────

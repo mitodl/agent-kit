@@ -27,6 +27,7 @@ node Memory {
     updated_at: DateTime
     tags: [String]?
     symbol_refs: [String]?   // soft refs into the code-graph store (repo#path::Name)
+    confidence: F32?         // author/agent-set trust 0.0–1.0; null treated as default
 }
 
 // Supersedes: a newer memory replaces an older one.

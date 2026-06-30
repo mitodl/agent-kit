@@ -35,6 +35,78 @@ class Config:
 
 
 @dataclass(frozen=True)
+class RankConfig:
+    """Weights and decay for the composite memory re-rank (spec §7).
+
+    Sourced from ``WITAN_RANK_*`` env vars (and the ``[rank]`` table in
+    config.toml), defaulting to the constants below. Ranking is always on;
+    these are tuning knobs, not a feature flag. Set every ``w_*`` to 0 to
+    reproduce the raw BM25 order.
+    """
+
+    w_bm25: float = 1.0
+    w_recency: float = 0.3
+    w_corrob: float = 0.2
+    w_conf: float = 0.2
+    half_life_days: float = 90.0
+    default_confidence: float = 0.6
+    penalty_superseded: float = 1.0
+    penalty_contradicted: float = 0.25
+
+
+_RANK_FIELDS = {
+    "w_bm25": "WITAN_RANK_W_BM25",
+    "w_recency": "WITAN_RANK_W_RECENCY",
+    "w_corrob": "WITAN_RANK_W_CORROB",
+    "w_conf": "WITAN_RANK_W_CONF",
+    "half_life_days": "WITAN_RANK_HALFLIFE_DAYS",
+    "default_confidence": "WITAN_RANK_DEFAULT_CONF",
+    "penalty_superseded": "WITAN_RANK_PEN_SUPERSEDED",
+    "penalty_contradicted": "WITAN_RANK_PEN_CONTRADICTED",
+}
+
+
+def load_rank_config() -> RankConfig:
+    """Resolve RankConfig from env > config.toml [rank] > constant defaults.
+
+    Rejects values that would break ranking (non-positive half-life, confidence
+    outside 0–1) so a misconfiguration fails loudly at startup rather than
+    silently skewing or overflowing the score.
+    """
+    file_rank = _load_toml().get("rank", {})
+    if not isinstance(file_rank, dict):
+        raise ValueError("The 'rank' section in config must be a table.")
+    values: dict[str, float] = {}
+    for field, env_var in _RANK_FIELDS.items():
+        raw = os.environ.get(env_var)
+        source = env_var if raw is not None else None
+        if raw is None and field in file_rank:
+            raw = file_rank[field]
+            source = f"[rank].{field} in config.toml"
+        if raw is None:
+            continue
+        try:
+            values[field] = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid rank knob {source}={raw!r}: expected a number."
+            ) from exc
+
+    if values.get("half_life_days", 1.0) <= 0:
+        raise ValueError(
+            f"Invalid rank knob {_RANK_FIELDS['half_life_days']}: "
+            "half_life_days must be > 0."
+        )
+    conf = values.get("default_confidence", 0.6)
+    if not 0.0 <= conf <= 1.0:
+        raise ValueError(
+            f"Invalid rank knob {_RANK_FIELDS['default_confidence']}: "
+            "default_confidence must be between 0.0 and 1.0."
+        )
+    return RankConfig(**values)
+
+
+@dataclass(frozen=True)
 class _Target:
     name: str
     server: str | None

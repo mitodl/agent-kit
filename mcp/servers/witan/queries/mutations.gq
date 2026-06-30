@@ -14,6 +14,7 @@ query insert_memory(
     $author: String,
     $tags: [String]?,
     $symbol_refs: [String]?,
+    $confidence: F32?,
     $created_at: DateTime,
     $updated_at: DateTime
 ) {
@@ -29,6 +30,7 @@ query insert_memory(
         author: $author,
         tags: $tags,
         symbol_refs: $symbol_refs,
+        confidence: $confidence,
         created_at: $created_at,
         updated_at: $updated_at
     }
@@ -49,6 +51,7 @@ query update_memory(
     $severity: String?,
     $tags: [String]?,
     $symbol_refs: [String]?,
+    $confidence: F32?,
     $updated_at: DateTime
 ) {
     update Memory
@@ -61,6 +64,7 @@ query update_memory(
             severity: $severity,
             tags: $tags,
             symbol_refs: $symbol_refs,
+            confidence: $confidence,
             updated_at: $updated_at
         }
         where slug = $slug
