@@ -10,6 +10,8 @@ from typing import Literal
 
 from ._common import app, console
 
+_WITAN_PKG = "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan"
+
 _AGENTS = ("claude", "pi", "copilot", "opencode", "kilo")
 _AGENT_NAMES = {
     "claude": "Claude Code",
@@ -19,6 +21,51 @@ _AGENT_NAMES = {
     "kilo": "Kilo Code",
 }
 AgentName = Literal["claude", "pi", "copilot", "opencode", "kilo", "all"]
+
+
+def _ensure_witan_cli(dry_run: bool) -> None:
+    """Make sure the ``witan`` CLI is on PATH so the installed hooks can call it.
+
+    The hooks invoke a bare ``witan ...`` command, but the recommended
+    ``uvx ... witan setup`` install path runs witan from an ephemeral
+    environment and never puts it on PATH — so the hooks fail with
+    ``witan: command not found`` until the CLI is installed persistently.
+    Install it with ``uv tool install`` (best-effort); fall back to a warning if
+    uv is unavailable or the install fails.
+    """
+    if shutil.which("witan"):
+        return
+    if dry_run:
+        console.print(
+            f"  [dim]would install the witan CLI: uv tool install {_WITAN_PKG}[/dim]"
+        )
+        return
+    if shutil.which("uv"):
+        console.print("  witan CLI not on PATH — installing so hooks can call it …")
+        try:
+            subprocess.run(
+                ["uv", "tool", "install", "--quiet", _WITAN_PKG],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+        else:
+            if shutil.which("witan"):
+                console.print("  [green]witan CLI[/green] → installed via uv tool")
+            else:
+                console.print(
+                    "  [green]witan CLI[/green] → installed, but its bin dir is not on "
+                    "PATH. Run [bold]uv tool update-shell[/bold] and restart your shell "
+                    "so the hooks can find it."
+                )
+            return
+    console.print(
+        "[yellow]Warning:[/yellow] witan not on PATH. "
+        "Hooks calling [bold]witan inject-context[/bold] will fail until:\n"
+        f"  [bold]uv tool install {_WITAN_PKG}[/bold]"
+    )
 
 
 @app.command
@@ -57,14 +104,7 @@ def setup(
             author = ""
         author = author or os.environ.get("USER", "unknown")
 
-    if not shutil.which("witan") and not dry_run:
-        console.print(
-            "[yellow]Warning:[/yellow] witan not on PATH. "
-            "Hooks calling [bold]witan inject-context[/bold] will fail until:\n"
-            "  [bold]uv tool install "
-            "git+https://github.com/mitodl/agent-kit"
-            "#subdirectory=mcp/servers/witan[/bold]"
-        )
+    _ensure_witan_cli(dry_run)
 
     _installers = {
         "claude": su.install_claude,
