@@ -70,3 +70,30 @@ def test_memory_symbol_context_degrades_to_raw_refs(server):
 @requires_omnigraph
 def test_memory_symbol_context_missing_memory(server):
     assert server.memory_symbol_context("pat-nope")["symbols"] == []
+
+
+@requires_omnigraph
+def test_memory_symbol_context_skips_non_symbol_refs(server):
+    # A ref without the :: delimiter isn't a symbol id — it still round-trips as a
+    # raw ref and never trips the resolver.
+    m = server.memory_store(
+        kind="lesson",
+        title="weird",
+        content="x",
+        severity="info",
+        symbol_refs=["not-a-symbol-id", "https://github.com/x/y#a.py::Z"],
+    )
+    out = server.memory_symbol_context(m["slug"])
+    refs = [s["symbol_ref"] for s in out["symbols"]]
+    assert refs == ["not-a-symbol-id", "https://github.com/x/y#a.py::Z"]
+    assert all("definition" not in s for s in out["symbols"])  # witan-code absent
+
+
+@requires_omnigraph
+def test_code_server_absent_is_cached_none(server):
+    from witan import server as srv
+
+    # witan-code isn't a dependency of this package, so this resolves (and caches)
+    # to None without raising.
+    assert srv._code_server() is None
+    assert srv._code_server() is None

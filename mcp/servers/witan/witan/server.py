@@ -2127,12 +2127,20 @@ def _code_server():
     Cross-store resolution (symbol definitions, bridge bindings) is best-effort:
     witan-code is an optional sibling package, so callers degrade to raw refs
     and empty bindings when it is absent — never an edge into another store.
+
+    The result (module or None) is cached on the function: a failed import isn't
+    cached in ``sys.modules``, so without this every call would re-scan
+    ``sys.path``. A broad ``except`` keeps a witan-code that's installed but
+    import-broken from raising into a memory operation.
     """
-    try:
-        from witan_code import server as code_server  # noqa: PLC0415
-    except ImportError:
-        return None
-    return code_server
+    if not hasattr(_code_server, "_cached"):
+        try:
+            from witan_code import server as code_server  # noqa: PLC0415
+
+            _code_server._cached = code_server
+        except Exception:  # noqa: BLE001 — optional dependency; degrade to None
+            _code_server._cached = None
+    return _code_server._cached
 
 
 @mcp.tool
@@ -2148,7 +2156,8 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
     edge across stores.
 
     Tag a memory to a contract first with
-    ``memory_link(mem, "<key_norm>:contract", "tagged")``.
+    ``memory_link(memory_slug, "<key_norm>:contract", "tagged")`` (``from`` is the
+    memory's slug).
 
     Parameters
     ----------
@@ -2209,7 +2218,9 @@ def memory_symbol_context(slug: str) -> dict:
     symbols: list[dict] = []
     for ref in node.get("symbol_refs") or []:
         entry = {"symbol_ref": ref}
-        if code is not None:
+        # Only a well-formed symbol id (repo#path::Name) is worth resolving;
+        # skip the cross-store call for anything without the :: delimiter.
+        if code is not None and "::" in ref:
             try:
                 name = ref.split("::")[-1]
                 repo = ref.split("#", 1)[0] if "#" in ref else None
