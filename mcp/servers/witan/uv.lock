@@ -9,6 +9,20 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agent-config-kit"
+version = "0.1.0"
+source = { editable = "../../../packages/agent-config-kit" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2,<3" }]
+
+[package.metadata.requires-dev]
+test = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
 name = "aiofile"
 version = "3.11.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1468,6 +1482,7 @@ name = "witan"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "agent-config-kit" },
     { name = "cyclopts" },
     { name = "fastmcp" },
     { name = "pydantic" },
@@ -1481,6 +1496,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agent-config-kit", editable = "../../../packages/agent-config-kit" },
     { name = "cyclopts", specifier = ">=4,<5" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "pydantic", specifier = ">=2,<3" },
