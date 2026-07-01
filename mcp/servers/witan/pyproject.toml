@@ -11,6 +11,7 @@ dependencies = [
     "cyclopts>=4,<5",
     "rich>=13",
     "pydantic>=2,<3",
+    "agent-config-kit>=0.1,<1",
 ]
 
 [project.scripts]
@@ -19,6 +20,11 @@ witan = "witan.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+# Until agent-config-kit is published to PyPI, consume it as an editable
+# workspace path dependency.
+agent-config-kit = { path = "../../../packages/agent-config-kit", editable = true }
 
 [tool.hatch.build.hooks.custom]
 # Downloads the omnigraph binary for the current platform during pip install / uvx.

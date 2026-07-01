@@ -1,24 +1,26 @@
-"""Per-agent installation helpers for ``witan setup``.
+"""Witan's registration bundle, plus the omnigraph binary installer.
 
-Each ``install_<agent>()`` function handles the MCP config, skills, and
-hook/extension installation for one coding-agent platform. All functions
-are best-effort when ``dry_run=True`` — they print what would happen
-without writing anything.
+Per-agent MCP/skill/hook installation itself lives in ``agent_config_kit``
+(``apply``/``apply_all``) — this module only builds witan's own
+``RegistrationBundle`` and keeps the omnigraph binary distribution logic,
+which is witan-specific and out of agent-config-kit's scope.
 """
 
 from __future__ import annotations
 
-import json
 import platform
-import re
 import shutil
 from pathlib import Path
 
-from rich.console import Console
-
-console = Console()
-
-# ── MCP server entry builders ─────────────────────────────────────────────────
+from agent_config_kit import (
+    DeclarativeHook,
+    Hook,
+    HookEvent,
+    PluginRegistration,
+    RegistrationBundle,
+    SkillSource,
+    StdioServer,
+)
 
 _WITAN_ARGS = [
     "--from",
@@ -30,95 +32,46 @@ _WITAN_ARGS = [
 ]
 
 
-def _mcp_entry(author: str, **extra: object) -> dict:
-    return {
-        **extra,
-        "command": "uvx",
-        "args": _WITAN_ARGS,
-        "env": {"WITAN_AUTHOR": author},
-    }
+def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
+    skills_dir = pkg_dir / "skills"
+    skills = (
+        [
+            SkillSource(name=d.name, skill_md_path=d / "SKILL.md")
+            for d in sorted(skills_dir.iterdir())
+            if (d / "SKILL.md").exists()
+        ]
+        if skills_dir.is_dir()
+        else []
+    )
 
+    pi_ext_dir = pkg_dir / "extensions" / "pi"
+    hooks: list[Hook] = [
+        DeclarativeHook(
+            event=HookEvent.USER_PROMPT_SUBMIT, command="witan inject-context"
+        ),
+        DeclarativeHook(event=HookEvent.STOP, command="witan session-checkpoint"),
+    ]
+    if pi_ext_dir.is_dir():
+        hooks.extend(
+            PluginRegistration(entry_path=f)
+            for f in sorted(pi_ext_dir.iterdir())
+            if f.suffix == ".ts"
+        )
 
-# ── Shared file-level helpers ─────────────────────────────────────────────────
-
-
-def _load_json_object(path: Path) -> dict | None:
-    """Return a JSON object from path, or None if it can't be loaded as one.
-
-    A missing file yields an empty dict — a fresh config to populate. A file that
-    fails to parse, or parses to a non-object (list/string/number/null), yields
-    None so callers skip writing rather than clobbering or crashing on it.
-    Handles JSONC (VS Code settings.json allows // comments and trailing commas)
-    via a best-effort stripping pass before standard JSON parse.
-    """
-    if not path.exists():
-        return {}
-    text = path.read_text()
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        # Best-effort JSONC → JSON stripping for VS Code settings files.
-        stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-        stripped = re.sub(r"//[^\n]*", "", stripped)
-        stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
-        try:
-            data = json.loads(stripped)
-        except json.JSONDecodeError:
-            return None
-    return data if isinstance(data, dict) else None
-
-
-def _write_json(path: Path, data: dict, dry_run: bool) -> None:
-    if not dry_run:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2) + "\n")
-
-
-def _install_skills(pkg_dir: Path, dest_base: Path, dry_run: bool) -> None:
-    skills_src = pkg_dir / "skills"
-    if not skills_src.is_dir():
-        return
-    for skill_dir in sorted(skills_src.iterdir()):
-        skill_md = skill_dir / "SKILL.md"
-        if not skill_md.exists():
-            continue
-        dest = dest_base / skill_dir.name / "SKILL.md"
-        if not dry_run:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(skill_md, dest)
-        console.print(f"  [green]skill[/green] /{skill_dir.name} → {dest}")
-
-
-def _install_files(
-    src_dir: Path,
-    dest_dir: Path,
-    *,
-    suffix: str,
-    label: str,
-    dry_run: bool,
-    executable: bool = False,
-) -> None:
-    if not src_dir.is_dir():
-        return
-    for src_file in sorted(src_dir.iterdir()):
-        if src_file.suffix != suffix:
-            continue
-        dest = dest_dir / src_file.name
-        if not dry_run:
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_file, dest)
-            if executable:
-                dest.chmod(0o755)
-        console.print(f"  [green]{label}[/green] {src_file.name} → {dest}")
-
-
-def _vscode_user_dir() -> Path:
-    if platform.system() == "Darwin":
-        return Path.home() / "Library" / "Application Support" / "Code" / "User"
-    return Path.home() / ".config" / "Code" / "User"
+    return RegistrationBundle(
+        mcp_servers={
+            "witan": StdioServer(
+                command="uvx", args=_WITAN_ARGS, env={"WITAN_AUTHOR": author}
+            )
+        },
+        skills=skills,
+        hooks=hooks,
+    )
 
 
 # ── Omnigraph binary ──────────────────────────────────────────────────────────
+# Witan's own binary-distribution concern — explicitly out of agent-config-kit's
+# scope (spec §3).
 
 _OMNIGRAPH_VERSION = "0.7.0"
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
@@ -131,6 +84,10 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
     import tarfile
     import tempfile
     import urllib.request
+
+    from rich.console import Console
+
+    console = Console()
 
     key = (platform.system().lower(), platform.machine().lower())
     asset = _OMNIGRAPH_ASSETS.get(key)
@@ -193,6 +150,10 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
 
 
 def install_omnigraph(pkg_dir: Path, dry_run: bool) -> None:
+    from rich.console import Console
+
+    console = Console()
+
     local_bin = Path.home() / ".local" / "bin"
     dest = local_bin / "omnigraph"
 
@@ -212,163 +173,3 @@ def install_omnigraph(pkg_dir: Path, dry_run: bool) -> None:
         # Not bundled — git/dev install or unsupported platform at build time.
         # Download directly from GitHub releases.
         _download_omnigraph(dest, dry_run)
-
-
-# ── Claude Code ───────────────────────────────────────────────────────────────
-
-
-def install_claude(pkg_dir: Path, author: str, dry_run: bool) -> None:
-    _install_skills(pkg_dir, Path.home() / ".claude" / "skills", dry_run)
-    _install_files(
-        pkg_dir / "hooks",
-        Path.home() / ".claude" / "hooks",
-        suffix=".sh",
-        label="hook",
-        dry_run=dry_run,
-        executable=True,
-    )
-    # Hooks live in ~/.claude/settings.json — Claude Code reads hook config there.
-    settings_path = Path.home() / ".claude" / "settings.json"
-    settings = _load_json_object(settings_path)
-    if settings is None:
-        console.print(
-            f"  [yellow]skip settings.json[/yellow] — could not parse {settings_path}; add witan hooks manually"
-        )
-    else:
-        _merge_claude_hooks(settings)
-        _write_json(settings_path, settings, dry_run)
-        console.print(f"  [green]settings.json[/green] (hooks) → {settings_path}")
-
-    # MCP servers (user scope) live in ~/.claude.json under the top-level
-    # "mcpServers" key — the same shape `claude mcp add -s user` writes,
-    # including the "type": "stdio" field. Claude Code reads MCP servers only
-    # from ~/.claude.json and project .mcp.json files, never from settings.json,
-    # so the entry witan setup previously wrote to ~/.claude/settings.json was
-    # silently ignored. Ref: https://code.claude.com/docs/en/mcp#mcp-installation-scopes
-    claude_json = Path.home() / ".claude.json"
-    cfg = _load_json_object(claude_json)
-    if cfg is None:
-        console.print(
-            f"  [yellow]skip .claude.json[/yellow] — could not parse {claude_json}; add witan manually"
-        )
-        return
-    cfg.setdefault("mcpServers", {})["witan"] = _mcp_entry(author, type="stdio")
-    _write_json(claude_json, cfg, dry_run)
-    console.print(f"  [green].claude.json[/green] (mcp server) → {claude_json}")
-
-
-def _merge_claude_hooks(settings: dict) -> None:
-    for event, cmd in (
-        ("UserPromptSubmit", "witan inject-context"),
-        ("Stop", "witan session-checkpoint"),
-    ):
-        entry = {"matcher": "", "hooks": [{"type": "command", "command": cmd}]}
-        existing = settings.setdefault("hooks", {}).setdefault(event, [])
-        if not any(
-            any(h.get("command") == cmd for h in e.get("hooks", [])) for e in existing
-        ):
-            existing.append(entry)
-
-
-# ── Pi ────────────────────────────────────────────────────────────────────────
-
-
-def install_pi(pkg_dir: Path, author: str, dry_run: bool) -> None:
-    # Skills in both the shared pool (~/.agents/skills/) and Pi-specific dir.
-    _install_skills(pkg_dir, Path.home() / ".agents" / "skills", dry_run)
-    _install_skills(pkg_dir, Path.home() / ".pi" / "agent" / "skills", dry_run)
-    # Pi TypeScript extensions (thin wrappers calling `witan` / `witan-code` CLIs).
-    _install_files(
-        pkg_dir / "extensions" / "pi",
-        Path.home() / ".pi" / "agent" / "extensions",
-        suffix=".ts",
-        label="extension",
-        dry_run=dry_run,
-    )
-    # MCP config — Pi uses the same mcpServers key as Claude Code.
-    pi_mcp = Path.home() / ".pi" / "agent" / "mcp.json"
-    cfg = _load_json_object(pi_mcp)
-    if cfg is None:
-        console.print(f"  [yellow]skip mcp.json[/yellow] — could not parse {pi_mcp}")
-        return
-    cfg.setdefault("mcpServers", {})["witan"] = _mcp_entry(author)
-    _write_json(pi_mcp, cfg, dry_run)
-    console.print(f"  [green]mcp.json[/green] → {pi_mcp}")
-
-
-# ── GitHub Copilot ────────────────────────────────────────────────────────────
-
-
-def install_copilot(pkg_dir: Path, author: str, dry_run: bool) -> None:
-    # VS Code 1.99+ supports a global user-level MCP config at
-    # <vscode-user-dir>/mcp.json.  The "servers" key and "type":"stdio" field
-    # are required by the Copilot MCP adapter.
-    mcp_path = _vscode_user_dir() / "mcp.json"
-    cfg = _load_json_object(mcp_path)
-    if cfg is None:
-        console.print(f"  [yellow]skip mcp.json[/yellow] — could not parse {mcp_path}")
-        return
-    cfg.setdefault("servers", {})["witan"] = _mcp_entry(author, type="stdio")
-    _write_json(mcp_path, cfg, dry_run)
-    console.print(f"  [green]mcp.json[/green] → {mcp_path}")
-    console.print(
-        '  [dim]Ensure[/dim] "github.copilot.chat.mcp.enabled": true '
-        "[dim]is set in VS Code settings.[/dim]"
-    )
-
-
-# ── OpenCode ──────────────────────────────────────────────────────────────────
-
-
-def install_opencode(pkg_dir: Path, author: str, dry_run: bool) -> None:
-    # OpenCode (SST) stores its config at ~/.config/opencode/config.json.
-    # MCP servers live under the top-level "mcp" key with no "type" field.
-    cfg_path = Path.home() / ".config" / "opencode" / "config.json"
-    cfg = _load_json_object(cfg_path)
-    if cfg is None:
-        console.print(
-            f"  [yellow]skip config.json[/yellow] — could not parse {cfg_path}"
-        )
-        return
-    cfg.setdefault("mcp", {})["witan"] = _mcp_entry(author)
-    _write_json(cfg_path, cfg, dry_run)
-    console.print(f"  [green]config.json[/green] → {cfg_path}")
-
-
-# ── Kilo Code ─────────────────────────────────────────────────────────────────
-
-
-def install_kilo(pkg_dir: Path, author: str, dry_run: bool) -> None:
-    # Kilo Code is a VS Code extension; MCP servers are stored in VS Code's
-    # user settings.json under the "kilocode.mcpServers" key.
-    settings_path = _vscode_user_dir() / "settings.json"
-    settings = _load_json_object(settings_path)
-    if settings is None:
-        console.print(
-            f"  [yellow]skip settings.json[/yellow] — could not parse {settings_path}; add witan manually"
-        )
-        return
-    settings.setdefault("kilocode.mcpServers", {})["witan"] = _mcp_entry(author)
-    _write_json(settings_path, settings, dry_run)
-    console.print(f"  [green]settings.json[/green] → {settings_path}")
-
-
-# ── Auto-detection for --agent all ───────────────────────────────────────────
-
-
-def is_pi_installed() -> bool:
-    return (Path.home() / ".pi").is_dir()
-
-
-def is_copilot_installed() -> bool:
-    return _vscode_user_dir().is_dir()
-
-
-def is_opencode_installed() -> bool:
-    return (Path.home() / ".config" / "opencode").is_dir()
-
-
-def is_kilo_installed() -> bool:
-    # Kilo uses VS Code; presence of the global storage dir is a reasonable proxy.
-    kilo_storage = _vscode_user_dir().parent / "globalStorage" / "kilocode.kilo-code"
-    return kilo_storage.is_dir()

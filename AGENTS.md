@@ -21,6 +21,8 @@ mcp/             # MCP server install helpers and config snippets
   servers/witan/         # Graph-structured memory MCP server (Python)
   servers/witan-code/    # Tree-sitter code-graph MCP server (Python)
   servers/grafana-cloud/ # Grafana Cloud MCP config
+packages/        # Standalone, independently-versioned Python libraries
+  agent-config-kit/      # Cross-agent MCP/skill/hook registration library
 configs/         # Sample / reference agent configurations
 docs/            # Design docs and implementation specs
 ```

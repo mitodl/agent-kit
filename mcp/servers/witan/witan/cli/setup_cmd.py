@@ -8,17 +8,33 @@ import subprocess
 from pathlib import Path
 from typing import Literal
 
+from agent_config_kit import (
+    InstallResult,
+    apply,
+    apply_all,
+    detect_installed_platforms,
+    known_platforms,
+)
+from agent_config_kit.installers import install_files
+
 from ._common import app, console
 
-_AGENTS = ("claude", "pi", "copilot", "opencode", "kilo")
 _AGENT_NAMES = {
     "claude": "Claude Code",
     "pi": "Pi",
     "copilot": "GitHub Copilot",
     "opencode": "OpenCode",
-    "kilo": "Kilo Code",
 }
-AgentName = Literal["claude", "pi", "copilot", "opencode", "kilo", "all"]
+AgentName = Literal["claude", "pi", "copilot", "opencode", "all"]
+
+
+def _report(name: str, result: InstallResult, *, dry_run: bool) -> None:
+    console.print(f"\n[bold]{_AGENT_NAMES.get(name, name)}[/bold]")
+    for path in result.planned:
+        tag = " [dim](dry-run)[/dim]" if dry_run else ""
+        console.print(f"  [green]→[/green] {path}{tag}")
+    for path, reason in result.skipped:
+        console.print(f"  [yellow]skip[/yellow] {path} — {reason}")
 
 
 @app.command
@@ -38,7 +54,8 @@ def setup(
 
     Parameters
     ----------
-    agent: Target agent — claude | pi | copilot | opencode | kilo | all.
+    agent: Target agent — claude | pi | copilot | opencode | all. (Kilo Code is
+        pending a config-path verification fix — tracked separately.)
     author: Name written to graph nodes (default: git config user.name or $USER).
     dry_run: Print what would happen without writing anything.
     """
@@ -66,32 +83,31 @@ def setup(
             "#subdirectory=mcp/servers/witan[/bold]"
         )
 
-    _installers = {
-        "claude": su.install_claude,
-        "pi": su.install_pi,
-        "copilot": su.install_copilot,
-        "opencode": su.install_opencode,
-        "kilo": su.install_kilo,
-    }
-    _detectors = {
-        "claude": lambda: True,
-        "pi": su.is_pi_installed,
-        "copilot": su.is_copilot_installed,
-        "opencode": su.is_opencode_installed,
-        "kilo": su.is_kilo_installed,
-    }
-
-    targets = list(_AGENTS) if agent == "all" else [agent]
-
     console.print("[bold]omnigraph binary[/bold]")
     su.install_omnigraph(pkg_dir, dry_run)
 
-    for ag in targets:
-        if agent == "all" and not _detectors[ag]():
-            console.print(f"\n[dim]{_AGENT_NAMES[ag]} — not detected, skipping[/dim]")
-            continue
-        console.print(f"\n[bold]{_AGENT_NAMES[ag]}[/bold]")
-        _installers[ag](pkg_dir, author, dry_run)
+    bundle = su.witan_bundle(pkg_dir, author)
+
+    if agent == "all":
+        for name, result in apply_all(bundle, dry_run=dry_run).items():
+            _report(name, result, dry_run=dry_run)
+        for name in sorted(set(known_platforms()) - set(detect_installed_platforms())):
+            console.print(
+                f"\n[dim]{_AGENT_NAMES.get(name, name)} — not detected, skipping[/dim]"
+            )
+    else:
+        _report(agent, apply(agent, bundle, dry_run=dry_run), dry_run=dry_run)
+
+    if agent in ("claude", "all"):
+        # Witan's own hook shell scripts — a generic file-copy, not part of the
+        # JSON-config hook entries registered above.
+        install_files(
+            pkg_dir / "hooks",
+            Path.home() / ".claude" / "hooks",
+            suffix=".sh",
+            dry_run=dry_run,
+            executable=True,
+        )
 
     if dry_run:
         console.print("\n[dim](dry-run — no files written)[/dim]")
