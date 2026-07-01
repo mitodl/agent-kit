@@ -12,7 +12,7 @@ The primary artifact is a catalog of `SKILL.md` files installable via `npx skill
 skills/          # Reusable skills (SKILL.md per skill), organized by category
   python/        # uv, cyclopts CLI conventions
   dagster/       # dg-based code location structure
-  infrastructure/# Pulumi IaC, Vault K8s auth
+  infrastructure/ # Pulumi IaC, Vault K8s auth
   containers/    # Docker image builds with uv
   workflow/      # validate-before-commit, skill authoring
   process/       # GitHub issues/PRs/RFCs, standup, dependency management
@@ -27,11 +27,11 @@ docs/            # Design docs and implementation specs
 
 ## Dev Setup
 
-No build step for skills — they are plain Markdown. For the `witan` MCP servers:
+No build step for skills — they are plain Markdown. For the MCP servers:
 
 ```bash
-cd mcp/servers/witan
-uv sync
+cd mcp/servers/witan && uv sync
+cd mcp/servers/witan-code && uv sync
 ```
 
 Install pre-commit hooks (uses `prek`):
@@ -48,7 +48,8 @@ prek install
 | `npx skills add mitodl/agent-kit --skill <name>` | Install a specific skill |
 | `npx skills add mitodl/agent-kit --list` | Browse skills without installing |
 | `prek run --all-files` | Run all pre-commit checks |
-| `cd mcp/servers/witan && uv run pytest` | Run witan MCP server tests |
+| `cd mcp/servers/witan && uv run --group test pytest` | Run witan MCP server tests |
+| `cd mcp/servers/witan-code && uv run --group test pytest` | Run witan-code MCP server tests |
 
 CI runs on push/PR: skill ZIP packaging (on tags) and witan server tests.
 
