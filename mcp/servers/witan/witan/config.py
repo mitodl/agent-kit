@@ -1,8 +1,9 @@
 import os
 import re
 import tomllib
-from dataclasses import dataclass
 from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
 _QUERIES_DIR = Path(__file__).parent.parent / "queries"
@@ -10,8 +11,9 @@ _DEFAULT_GRAPH_URI = Path.home() / ".local" / "share" / "witan" / "graph.omni"
 _DEFAULT_CONFIG_PATH = Path.home() / ".config" / "witan" / "config.toml"
 
 
-@dataclass(frozen=True)
-class Config:
+class Config(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     graph_uri: str
     """Local path, s3://, or http:// URI pointing at the graph."""
 
@@ -34,8 +36,7 @@ class Config:
     """Name of the matched [targets.<name>] section, or None for global defaults."""
 
 
-@dataclass(frozen=True)
-class RankConfig:
+class RankConfig(BaseModel):
     """Weights and decay for the composite memory re-rank (spec §7).
 
     Sourced from ``WITAN_RANK_*`` env vars (and the ``[rank]`` table in
@@ -44,12 +45,14 @@ class RankConfig:
     reproduce the raw BM25 order.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     w_bm25: float = 1.0
     w_recency: float = 0.3
     w_corrob: float = 0.2
     w_conf: float = 0.2
-    half_life_days: float = 90.0
-    default_confidence: float = 0.6
+    half_life_days: float = Field(default=90.0, gt=0)
+    default_confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     penalty_superseded: float = 1.0
     penalty_contradicted: float = 0.25
     w_hop: float = 0.5
@@ -70,6 +73,24 @@ _RANK_FIELDS = {
 }
 
 
+def _rank_config_error(exc: ValidationError, sources: dict[str, str]) -> ValueError:
+    """Translate a RankConfig ValidationError into a source-attributed message."""
+    err = exc.errors()[0]
+    field = str(err["loc"][0])
+    source = sources.get(field, field)
+    if err["type"] == "float_parsing":
+        return ValueError(
+            f"Invalid rank knob {source}={err['input']!r}: expected a number."
+        )
+    if field == "half_life_days":
+        return ValueError(f"Invalid rank knob {source}: half_life_days must be > 0.")
+    if field == "default_confidence":
+        return ValueError(
+            f"Invalid rank knob {source}: default_confidence must be between 0.0 and 1.0."
+        )
+    return ValueError(f"Invalid rank knob {source}: {err['msg']}")
+
+
 def load_rank_config() -> RankConfig:
     """Resolve RankConfig from env > config.toml [rank] > constant defaults.
 
@@ -80,47 +101,41 @@ def load_rank_config() -> RankConfig:
     file_rank = _load_toml().get("rank", {})
     if not isinstance(file_rank, dict):
         raise ValueError("The 'rank' section in config must be a table.")
-    values: dict[str, float] = {}
+
+    raw: dict[str, object] = {}
+    sources: dict[str, str] = {}
     for field, env_var in _RANK_FIELDS.items():
-        raw = os.environ.get(env_var)
-        source = env_var if raw is not None else None
-        if raw is None and field in file_rank:
-            raw = file_rank[field]
-            source = f"[rank].{field} in config.toml"
-        if raw is None:
-            continue
-        try:
-            values[field] = float(raw)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"Invalid rank knob {source}={raw!r}: expected a number."
-            ) from exc
+        value = os.environ.get(env_var)
+        if value is not None:
+            raw[field] = value
+            sources[field] = env_var
+        elif field in file_rank:
+            raw[field] = file_rank[field]
+            sources[field] = f"[rank].{field} in config.toml"
 
-    if values.get("half_life_days", 1.0) <= 0:
-        raise ValueError(
-            f"Invalid rank knob {_RANK_FIELDS['half_life_days']}: "
-            "half_life_days must be > 0."
-        )
-    conf = values.get("default_confidence", 0.6)
-    if not 0.0 <= conf <= 1.0:
-        raise ValueError(
-            f"Invalid rank knob {_RANK_FIELDS['default_confidence']}: "
-            "default_confidence must be between 0.0 and 1.0."
-        )
-    return RankConfig(**values)
+    try:
+        return RankConfig(**raw)
+    except ValidationError as exc:
+        raise _rank_config_error(exc, sources) from exc
 
 
-@dataclass(frozen=True)
-class _Target:
+class _Target(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     name: str
-    server: str | None
-    token: str | None
-    author: str | None
-    agent: str | None
-    model: str | None
-    match_orgs: list[str]
-    match_repos: list[str]
-    match_hosts: list[str]
+    server: str | None = None
+    token: str | None = None
+    author: str | None = None
+    agent: str | None = None
+    model: str | None = None
+    match_orgs: list[str] = Field(default_factory=list)
+    match_repos: list[str] = Field(default_factory=list)
+    match_hosts: list[str] = Field(default_factory=list)
+
+    @field_validator("match_orgs", "match_repos", "match_hosts", mode="before")
+    @classmethod
+    def _normalize_match_list(cls, v: object) -> list[str]:
+        return _to_list(v)
 
 
 def _load_toml() -> dict:
@@ -169,9 +184,9 @@ def _parse_targets(raw: dict) -> list[_Target]:
                 author=cfg.get("author"),
                 agent=cfg.get("agent"),
                 model=cfg.get("model"),
-                match_orgs=_to_list(cfg.get("match_orgs")),
-                match_repos=_to_list(cfg.get("match_repos")),
-                match_hosts=_to_list(cfg.get("match_hosts")),
+                match_orgs=cfg.get("match_orgs"),
+                match_repos=cfg.get("match_repos"),
+                match_hosts=cfg.get("match_hosts"),
             )
         )
     return result
