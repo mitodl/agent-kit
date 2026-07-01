@@ -73,6 +73,19 @@ def test_parse_targets_target_entry_not_a_table():
         _parse_targets({"targets": {"work": "not-a-table"}})
 
 
+def test_parse_targets_invalid_match_orgs_type():
+    """An invalid match_orgs value surfaces through pydantic field validation."""
+    raw = {"targets": {"work": {"match_orgs": 42}}}
+    with pytest.raises(ValueError, match="Expected a list or string"):
+        _parse_targets(raw)
+
+
+def test_target_is_immutable():
+    t = _parse_targets({"targets": {"work": {"match_orgs": ["mitodl"]}}})[0]
+    with pytest.raises(ValueError):
+        t.name = "other"
+
+
 # ── _match_target ─────────────────────────────────────────────────────────────
 
 _WORK = _Target(
@@ -418,3 +431,23 @@ def test_rank_config_non_numeric_names_source(monkeypatch):
     monkeypatch.setenv("WITAN_RANK_W_BM25", "notanumber")
     with pytest.raises(ValueError, match="WITAN_RANK_W_BM25"):
         load_rank_config()
+
+
+def test_rank_config_is_frozen():
+    from witan.config import RankConfig
+
+    rc = RankConfig()
+    with pytest.raises(ValueError):
+        rc.w_bm25 = 2.0
+
+
+def test_rank_config_non_numeric_type_reports_expected_a_number(monkeypatch, toml_file):
+    """A non-string, non-numeric TOML value (e.g. a list) must not be reported as
+    an out-of-range half_life_days — it's a type error, not a range error."""
+    from witan.config import load_rank_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file("[rank]\nhalf_life_days = [1, 2, 3]"))
+    monkeypatch.delenv("WITAN_RANK_HALFLIFE_DAYS", raising=False)
+    with pytest.raises(ValueError, match="expected a number") as excinfo:
+        load_rank_config()
+    assert "must be > 0" not in str(excinfo.value)
