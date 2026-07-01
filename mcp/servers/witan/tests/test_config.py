@@ -439,3 +439,15 @@ def test_rank_config_is_frozen():
     rc = RankConfig()
     with pytest.raises(ValueError):
         rc.w_bm25 = 2.0
+
+
+def test_rank_config_non_numeric_type_reports_expected_a_number(monkeypatch, toml_file):
+    """A non-string, non-numeric TOML value (e.g. a list) must not be reported as
+    an out-of-range half_life_days — it's a type error, not a range error."""
+    from witan.config import load_rank_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file("[rank]\nhalf_life_days = [1, 2, 3]"))
+    monkeypatch.delenv("WITAN_RANK_HALFLIFE_DAYS", raising=False)
+    with pytest.raises(ValueError, match="expected a number") as excinfo:
+        load_rank_config()
+    assert "must be > 0" not in str(excinfo.value)

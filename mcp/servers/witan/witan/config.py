@@ -78,13 +78,16 @@ def _rank_config_error(exc: ValidationError, sources: dict[str, str]) -> ValueEr
     err = exc.errors()[0]
     field = str(err["loc"][0])
     source = sources.get(field, field)
-    if err["type"] == "float_parsing":
+    if err["type"] in ("float_parsing", "float_type"):
         return ValueError(
             f"Invalid rank knob {source}={err['input']!r}: expected a number."
         )
-    if field == "half_life_days":
+    if field == "half_life_days" and err["type"] == "greater_than":
         return ValueError(f"Invalid rank knob {source}: half_life_days must be > 0.")
-    if field == "default_confidence":
+    if field == "default_confidence" and err["type"] in (
+        "greater_than_equal",
+        "less_than_equal",
+    ):
         return ValueError(
             f"Invalid rank knob {source}: default_confidence must be between 0.0 and 1.0."
         )
