@@ -57,9 +57,14 @@ def _resolve_target(capability: CapabilityScope, scope: Scope) -> ScopeTarget | 
 
 
 def _navigate(data: dict, key_path: tuple[str, ...]) -> dict:
+    """Walk/create ``key_path`` in ``data``, coercing non-dict values found
+    along the way (e.g. a hand-edited config with ``"hooks": []``) to an
+    empty object rather than raising on the next ``dict`` operation."""
     node = data
     for key in key_path:
-        node = node.setdefault(key, {})
+        if not isinstance(node.get(key), dict):
+            node[key] = {}
+        node = node[key]
     return node
 
 
@@ -69,7 +74,9 @@ def _merge_into(
     if strategy == MergeStrategy.OVERRIDE_BY_KEY:
         container[key] = value
     elif strategy == MergeStrategy.DEEP_MERGE:
-        container.setdefault(key, {}).update(value)
+        if not isinstance(container.get(key), dict):
+            container[key] = {}
+        container[key].update(value)
     else:
         raise NotImplementedError(
             f"merge strategy {strategy} not supported for keyed entries"

@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── Capability 1: MCP servers ────────────────────────────────────────────────
 
@@ -154,7 +154,7 @@ class CapabilityScope(BaseModel):
     global_: ScopeTarget | None = Field(default=None, alias="global")
     project: ScopeTarget | None = None
     merge_strategy: MergeStrategy = MergeStrategy.OVERRIDE_BY_KEY
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class AgentPlatform(BaseModel):
@@ -181,4 +181,4 @@ class AgentPlatform(BaseModel):
 
     lsp: CapabilityScope | None = None
 
-    model_config = {"arbitrary_types_allowed": True}
+    model_config = ConfigDict(arbitrary_types_allowed=True)

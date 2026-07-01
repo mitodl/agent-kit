@@ -4,12 +4,19 @@ from pathlib import Path
 from agent_config_kit.models import (
     DeclarativeHook,
     HookEvent,
+    MergeStrategy,
     PluginRegistration,
     SkillSource,
     StdioServer,
 )
 from agent_config_kit.paths import vscode_user_dir
-from agent_config_kit.plan import RegistrationBundle, apply, apply_all
+from agent_config_kit.plan import (
+    RegistrationBundle,
+    _merge_into,
+    _navigate,
+    apply,
+    apply_all,
+)
 
 
 def _bundle(**overrides) -> RegistrationBundle:
@@ -98,6 +105,46 @@ def test_apply_claude_merges_declarative_hooks_deduped_by_command(
             if h["command"] == "witan inject-context"
         )
         == 1
+    )
+
+
+def test_apply_claude_tolerates_non_object_mcp_servers_key(tmp_path, monkeypatch):
+    """A hand-edited .claude.json with "mcpServers": [] (wrong shape) must not
+    crash apply() — the malformed value is coerced to an object rather than
+    raising AttributeError from dict.setdefault on a list."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    claude_json = tmp_path / ".claude.json"
+    claude_json.write_text(json.dumps({"mcpServers": []}))
+
+    apply("claude", _bundle())
+
+    cfg = json.loads(claude_json.read_text())
+    assert cfg["mcpServers"]["witan"]["command"] == "uvx"
+
+
+def test_apply_claude_tolerates_non_object_hooks_value(tmp_path, monkeypatch):
+    """A hand-edited settings.json with "hooks": "oops" or an event whose
+    value isn't a list must not crash merge_hooks()."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    settings_json = tmp_path / ".claude" / "settings.json"
+    settings_json.parent.mkdir(parents=True)
+    settings_json.write_text(json.dumps({"hooks": {"Stop": "oops"}}))
+
+    apply(
+        "claude",
+        _bundle(
+            hooks=[
+                DeclarativeHook(
+                    event=HookEvent.STOP, command="witan session-checkpoint"
+                )
+            ]
+        ),
+    )
+
+    settings = json.loads(settings_json.read_text())
+    assert (
+        settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        == "witan session-checkpoint"
     )
 
 
@@ -212,3 +259,37 @@ def test_apply_all_only_touches_detected_platforms(tmp_path, monkeypatch):
 
     assert set(results) == {"claude"}
     assert not (tmp_path / ".pi").exists()
+
+
+def test_navigate_coerces_non_dict_intermediate_value_instead_of_raising():
+    data = {"hooks": []}
+
+    container = _navigate(data, ("hooks", "Stop"))
+
+    assert container == {}
+    assert data == {"hooks": {"Stop": {}}}
+
+
+def test_navigate_leaves_existing_dict_values_untouched():
+    data = {"mcpServers": {"other": {"command": "foo"}}}
+
+    container = _navigate(data, ("mcpServers",))
+
+    assert container is data["mcpServers"]
+    assert container == {"other": {"command": "foo"}}
+
+
+def test_merge_into_deep_merge_coerces_non_dict_existing_value():
+    container = {"witan": "oops"}
+
+    _merge_into(container, "witan", {"a": 1}, MergeStrategy.DEEP_MERGE)
+
+    assert container["witan"] == {"a": 1}
+
+
+def test_merge_into_deep_merge_merges_into_existing_dict():
+    container = {"witan": {"a": 1}}
+
+    _merge_into(container, "witan", {"b": 2}, MergeStrategy.DEEP_MERGE)
+
+    assert container["witan"] == {"a": 1, "b": 2}

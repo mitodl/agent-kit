@@ -43,7 +43,7 @@ def install_files(
         return []
     dests: list[Path] = []
     for src_file in sorted(src_dir.iterdir()):
-        if src_file.suffix != suffix:
+        if src_file.suffix != suffix or not src_file.is_file():
             continue
         dest = dest_dir / src_file.name
         if not dry_run:

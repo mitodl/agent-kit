@@ -19,6 +19,19 @@ def test_load_json_object_tolerates_jsonc_comments_and_trailing_commas(tmp_path)
     assert load_json_object(f) == {"foo": "bar"}
 
 
+def test_load_json_object_jsonc_stripping_preserves_urls_in_string_values(tmp_path):
+    """A "//" inside a string value (e.g. a URL) must survive JSONC-comment
+    stripping — only a "//" at the start of a line is a comment."""
+    f = tmp_path / "settings.json"
+    f.write_text(
+        '{\n  // a comment\n  "url": "https://example.com/mcp",\n  "headers": {"Referer": "http://other.example/x"},\n}\n'
+    )
+    assert load_json_object(f) == {
+        "url": "https://example.com/mcp",
+        "headers": {"Referer": "http://other.example/x"},
+    }
+
+
 def test_load_json_object_unparsable_returns_none(tmp_path):
     f = tmp_path / "broken.json"
     f.write_text("{not json at all")

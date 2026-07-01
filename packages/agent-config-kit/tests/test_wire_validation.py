@@ -48,3 +48,31 @@ def test_opencode_serialized_stdio_entry_is_schema_valid():
 def test_opencode_serialized_remote_entry_is_schema_valid():
     remote = RemoteServer(url="https://example.com/mcp")
     McpRemoteConfig.model_validate(opencode.serialize_mcp(remote))
+
+
+def test_copilot_serialized_remote_entry_is_schema_valid_and_has_no_leaked_fields():
+    remote = RemoteServer(url="https://example.com/mcp", transport="sse")
+    entry = copilot.serialize_mcp(remote)
+
+    CopilotMcpServer.model_validate(entry)
+    assert entry["type"] == "sse"
+    assert "transport" not in entry
+    assert "oauth" not in entry
+
+
+def test_pi_serialized_remote_entry_is_schema_valid_and_has_no_leaked_fields():
+    remote = RemoteServer(url="https://example.com/mcp")
+    entry = pi.serialize_mcp(remote)
+
+    PiMcpServer.model_validate(entry)
+    assert entry == {"url": "https://example.com/mcp"}
+
+
+def test_claude_serialized_remote_entry_has_no_leaked_fields():
+    # No published schema covers ~/.claude.json's MCP servers (see spec's open
+    # questions) so there's no vendored model to validate against — only
+    # assert the adapter doesn't leak fields no real platform expects.
+    remote = RemoteServer(url="https://example.com/mcp", transport="http")
+    entry = claude.serialize_mcp(remote)
+
+    assert entry == {"type": "http", "url": "https://example.com/mcp"}

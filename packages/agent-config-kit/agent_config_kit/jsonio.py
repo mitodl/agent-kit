@@ -26,7 +26,11 @@ def load_json_object(path: Path) -> dict | None:
         data = json.loads(text)
     except json.JSONDecodeError:
         stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-        stripped = re.sub(r"//[^\n]*", "", stripped)
+        # Anchored to line-start (mod leading whitespace) so "//" inside a
+        # string value (e.g. a "https://..." URL) isn't mistaken for a
+        # comment — only handles whole-line JSONC comments, not trailing
+        # end-of-line ones, which is the safer tradeoff.
+        stripped = re.sub(r"^\s*//[^\n]*", "", stripped, flags=re.MULTILINE)
         stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
         try:
             data = json.loads(stripped)
