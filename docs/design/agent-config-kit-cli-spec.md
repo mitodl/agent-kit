@@ -38,12 +38,12 @@ installed.
 | # | Question | Decision |
 |---|---|---|
 | M1 | Manifest format | **TOML**, parsed with the stdlib `tomllib` (available on Python ≥3.11, matching D4 — no new dependency on the base install). Considered YAML: rejected because it requires a third-party parser (`PyYAML`/`ruamel`) that would either bloat the dependency-light base package or force a parser-only split between `manifest.py` (needs `tomllib`, free) and `[cli]` (everything else) for no real benefit. TOML's `[[array-of-tables]]` syntax maps cleanly onto the `hooks`/`skills` lists and `[table.key]` onto the `mcp_servers` dict; every other structure in this repo that's a hand-authored manifest is already TOML (`pyproject.toml`, `uv.lock`). |
-| M2 | Manifest module location | `agent_config_kit/manifest.py`, part of the **base** package (imports only `tomllib` + existing `models`/`plan`), not gated behind `[cli]` — a caller might want `load_manifest()` without wanting the CLI/`cyclopts`/`rich` dependencies. `agent_config_kit/cli.py` (gated behind `[cli]`, §5) is the only new CLI-only module. |
+| M2 | Manifest module location | `agent_config_kit/manifest.py`, part of the **base** package (imports only `tomllib` + existing `models`/`plan`), not gated behind `[cli]` — a caller might want `load_manifest()` without wanting the CLI/`cyclopts`/`rich` dependencies. `agent_config_kit/cli.py` (gated behind `[cli]`, §4) is the only new CLI-only module. |
 | M3 | CLI framework | `cyclopts`, matching this repo's established convention (`witan`'s own CLI, and the `cyclopts-cli-scripts` skill) — not `argparse`/`click`/`typer`. |
 | M4 | `cli` extra packaging | `[project.optional-dependencies] cli = ["cyclopts>=4,<5", "rich>=13"]` in `packages/agent-config-kit/pyproject.toml`, plus `[project.scripts] agent-config-kit = "agent_config_kit.cli:main"`. Console script registration is unconditional (that's how `pip`/`uv` entry points work), but `cli.py`'s top-level imports are the only place `cyclopts`/`rich` are imported — running the console script without `[cli]` installed fails fast with a clear `ImportError`-derived message, not a silent partial failure. |
 | M5 | Path resolution inside a manifest | All filesystem paths in a manifest (`skill_md_path`, `entry_path`) are resolved **relative to the manifest file's own directory**, not the process CWD — matching how every other tool with a project-relative manifest behaves (e.g. `pyproject.toml` paths, `docker-compose.yml` build contexts). Absolute paths pass through unchanged. Resolution happens in `load_manifest()` (§3.2), so `RegistrationBundle` instances it produces always carry absolute paths — `apply`/`apply_all` are untouched, they already only accept resolved `Path`s. |
-| M6 | Drift detection scope | `validate` (§5.2) diffs *only the keys `agent-config-kit` would write* (by name: MCP server names, hook identity, skill names) against on-disk state — not a full-file diff. Unrelated hand-edited keys in the same file are never flagged as drift; that's the same "additive, override-by-key" contract `apply()` already has (spec §4.1). |
-| M7 | Prune/uninstall mechanism | A **state file** recording what the *last* `apply` from a given manifest actually wrote, so a later `apply` with entries removed from the manifest can remove exactly those (and only those) keys — never touching keys the manifest never owned. Default path: `<manifest>.lock.json` next to the manifest (overridable with `--state-file`). Content and full behavior are this spec's biggest open question — detailed in §6; final shape is this spec's contribution, but the fiddly edge cases (concurrent manifests targeting the same file, state file loss) are left to the implementing task (`tk-design-implement-prune-uninstall-for-entries-rem-4dfcdb`) to resolve against this default design. |
+| M6 | Drift detection scope | `validate` (§4.2) diffs *only the keys `agent-config-kit` would write* (by name: MCP server names, hook identity, skill names) against on-disk state — not a full-file diff. Unrelated hand-edited keys in the same file are never flagged as drift; that's the same "additive, override-by-key" contract `apply()` already has (spec §4.1). |
+| M7 | Prune/uninstall mechanism | A **state file** recording what the *last* `apply` from a given manifest actually wrote, so a later `apply` with entries removed from the manifest can remove exactly those (and only those) keys — never touching keys the manifest never owned. Default path: `<manifest>.lock.json` next to the manifest (overridable with `--state-file`). Content and full behavior are this spec's biggest open question — detailed in §5; final shape is this spec's contribution, but the fiddly edge cases (concurrent manifests targeting the same file, state file loss) are left to the implementing task (`tk-design-implement-prune-uninstall-for-entries-rem-4dfcdb`) to resolve against this default design. |
 | M8 | `instructions`/`lsp_servers` in the manifest | Modeled in the TOML schema (§3.1) for forward compatibility with `RegistrationBundle`'s existing (currently-unpopulated-by-any-v1-caller) fields, but `load_manifest()` only *populates* them if present — no v1 registry entry consumes them yet (spec D7), so a manifest that sets them will parse fine and `apply()` will simply no-op on them for every current platform, exactly as it does today for a hand-built `RegistrationBundle`. |
 
 ## 3. Manifest file format
@@ -52,6 +52,8 @@ installed.
 
 ```toml
 # agent-config.toml — TOML mirror of agent_config_kit.plan.RegistrationBundle
+
+instructions = "See AGENTS.md"    # optional; unpopulated by any v1 platform (M8)
 
 [options]
 scope = "global"                  # "global" | "project" — default: "global"
@@ -69,6 +71,9 @@ kind = "remote"
 url = "https://example.com/mcp"
 transport = "streamable-http"     # "sse" | "http" | "streamable-http"
 
+[lsp_servers.example-lsp]         # optional; unpopulated by any v1 platform (M8)
+command = ["example-lsp", "--stdio"]
+
 [[hooks]]
 kind = "declarative"              # "declarative" | "plugin"
 event = "user_prompt_submit"      # HookEvent value
@@ -81,20 +86,19 @@ entry_path = "extensions/pi/witan.ts"   # resolved relative to this file (M5)
 [[skills]]
 name = "witan-task"
 skill_md_path = "skills/witan-task/SKILL.md"  # resolved relative to this file (M5)
-
-[[lsp_servers]]                   # optional; unpopulated by any v1 platform (M8)
-name = "example-lsp"
-command = ["example-lsp", "--stdio"]
-
-instructions = "See AGENTS.md"    # optional; unpopulated by any v1 platform (M8)
 ```
 
 Table/array names and field names are **identical to the Python model field
 names** (`kind`, `command`, `args`, `env`, `event`, `entry_path`, ...) — no
-separate naming scheme to keep in sync. `mcp_servers` is a table-of-tables
-keyed by server name (mirrors `RegistrationBundle.mcp_servers: dict[str,
-McpServer]`); `hooks`/`skills`/`lsp_servers` are arrays-of-tables (mirror the
-`list[...]` fields).
+separate naming scheme to keep in sync. `mcp_servers` and `lsp_servers` are
+each a table-of-tables keyed by name (mirroring `RegistrationBundle.mcp_servers:
+dict[str, McpServer]` and `lsp_servers: dict[str, LspServer]` respectively);
+`hooks`/`skills` are arrays-of-tables (mirror the `list[...]` fields).
+`instructions` is a plain top-level key — deliberately placed before any
+table/array-of-tables in the example above, since TOML parses trailing
+key-value pairs as belonging to whatever table/array entry precedes them, not
+as top-level keys (a real gotcha the loader's own tests, §6 step 2, should
+cover with a fixture that gets this wrong).
 
 ### 3.2 Loader API
 
@@ -156,7 +160,7 @@ agent-config-kit platforms [--all]
 
 ### 4.1 `apply`
 
-Thin wrapper: `load_manifest(path)` → (optionally prune per §6) →
+Thin wrapper: `load_manifest(path)` → (optionally prune per §5) →
 `apply(platform, bundle, ...)` per selected platform, or `apply_all(bundle,
 ...)` if no `--platform` given and the manifest has no `[options.platforms]`
 allow-list. Prints each platform's `InstallResult` (§4.1 of the base spec)
@@ -175,20 +179,38 @@ New core function, not CLI-only logic (so it's usable from Python too):
 class Drift:
     platform: str
     path: Path
-    missing_keys: list[str]     # in manifest, absent on disk
+    missing_keys: list[str]     # in manifest, absent on disk (JSON capabilities)
     mismatched_keys: list[str]  # in manifest, present on disk, different value
+    missing_paths: list[Path]   # in manifest, absent on disk (filesystem capabilities)
 
 def diff(platform_name: str, bundle: RegistrationBundle, *, scope: Scope = Scope.GLOBAL) -> Drift: ...
 ```
 
-`diff()` loads each target file read-only (via the existing
-`jsonio.load_json_object`), computes what `apply()` *would* write per-key
-(reusing the same per-platform `mcp_serialize`/`hooks_merge` projections so
-there is exactly one place that knows a platform's wire format — no
-duplicated serialization logic between `apply()` and `diff()`), and compares
-against what's actually there — never writes. The CLI's `validate` command
-runs `diff()` per selected platform, prints any non-empty `Drift`s, and sets
-the exit code accordingly (§4).
+`agent-config-kit`'s two capability shapes need two different comparison
+strategies, since not everything `apply()` writes is a JSON key:
+
+- **MCP servers and declarative hooks** are JSON-config keys. `diff()` loads
+  each target file read-only (via the existing `jsonio.load_json_object`),
+  computes what `apply()` *would* write per-key (reusing the same
+  per-platform `mcp_serialize`/`hooks_merge` projections so there is exactly
+  one place that knows a platform's wire format — no duplicated
+  serialization logic between `apply()` and `diff()`), and compares against
+  what's actually there, populating `missing_keys`/`mismatched_keys`.
+- **Skills and plugin-file hooks** are files/directories copied to disk, not
+  JSON keys — `apply()`'s own `install_skills` writes a `SKILL.md` per skill
+  under one or more dest dirs. `diff()` checks filesystem existence at the
+  same dest path(s) `apply()` would compute (via `installers.install_skills`'s
+  own dest-path logic, called with `dry_run=True`-equivalent semantics so
+  nothing is written) and records anything missing in `missing_paths`. v1
+  drift detection for these is existence-only — it does **not** hash file
+  contents to catch a hand-edited `SKILL.md`, matching M6's "additive,
+  override-by-key" contract: `apply()` itself always overwrites on every
+  run regardless of on-disk content, so content-level drift is never
+  actionable information the way a missing file is.
+
+`diff()` never writes. The CLI's `validate` command runs it per selected
+platform, prints any non-empty `Drift`s, and sets the exit code accordingly
+(§4).
 
 ### 4.3 `platforms`
 
@@ -241,7 +263,14 @@ don't change, which is the same granularity `apply()` already uses implicitly
    the skill's destination directory) — never touch keys outside that set,
    so a key a human hand-added directly to `~/.claude.json` is left alone
    even though it wasn't in the previous *or* current manifest.
-5. Write the new state file reflecting the current manifest's keys.
+5. Update the state file by merging the current manifest's keys **for the
+   platform(s) actually applied this run** into the state loaded in step 1,
+   then write the merged result back — never overwrite the whole file
+   wholesale. This matters because `apply --prune --platform claude` (a
+   single-platform run) must not erase the `pi` entry a prior `apply --prune`
+   (with no `--platform` filter, i.e. all detected platforms) recorded — the
+   state file describes *all* platforms this manifest has ever pruned
+   against, not just the ones touched by the current invocation.
 
 This deliberately does **not** try to detect "a human hand-edited a key
 `agent-config-kit` previously wrote" (e.g. changed the MCP server's `args`)
@@ -258,7 +287,7 @@ file describes "what *this* manifest wrote," which is correct per-manifest,
 but nothing currently reconciles two state files against one shared target
 file. Flagging, not solving here: v1's answer may simply be "state files
 track per-manifest ownership; if two manifests target the same platform, use
-`--state-file` to point both at a explicitly shared location, or accept that
+`--state-file` to point both at an explicitly shared location, or accept that
 prune only prunes what its own manifest last wrote."
 
 ## 6. Sequencing
@@ -279,7 +308,7 @@ Matches the already-created task graph under
 4. `tk-implement-drift-detection-validate-core-diff-cli-717f35` —
    `agent_config_kit/diff.py`'s `diff()` (§4.2) + `validate` command.
 5. `tk-design-implement-prune-uninstall-for-entries-rem-4dfcdb` — state file +
-   prune algorithm per §6, wires `--prune` into the `apply` command from
+   prune algorithm per §5, wires `--prune` into the `apply` command from
    step 3.
 6. `tk-tests-readme-docs-for-agent-config-kit-cli-020aef` — CLI-level
    integration tests (`apply`/`validate`/`platforms` against a temp home
@@ -300,5 +329,5 @@ Matches the already-created task graph under
   machine-readable (`--json`) output mode for CI use — not designed here;
   add if a real CI consumer asks for it (D7-style "extension point, not
   built until there's a real caller").
-- The prune state-file's shared-target collision case (§6, last paragraph)
+- The prune state-file's shared-target collision case (§5, last paragraph)
   is explicitly deferred to the implementing task, not resolved here.
