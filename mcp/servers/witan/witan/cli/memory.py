@@ -30,7 +30,10 @@ def memory(
         return
     table = Table(title=title, header_style="bold")
     for col in ("kind", "slug", "title", "repo"):
-        table.add_column(col, overflow="fold", no_wrap=False)
+        if col == "kind":
+            table.add_column(col, no_wrap=True)
+        else:
+            table.add_column(col, overflow="fold", no_wrap=False)
     for r in rows:
         table.add_row(
             r.get("kind", "project_fact"),

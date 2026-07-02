@@ -87,6 +87,7 @@ def tasks(
         scope = "all repos (no git context)"
     base_title = "Ready tasks" if ready else "Tasks"
     table = Table(title=f"{base_title} — {scope}", header_style="bold")
+    _short_cols = {"priority", "status", "type"}
     for col in (
         "priority",
         "status",
@@ -97,7 +98,10 @@ def tasks(
         "assignee",
         "blocked_by",
     ):
-        table.add_column(col, overflow="fold", no_wrap=False)
+        if col in _short_cols:
+            table.add_column(col, no_wrap=True)
+        else:
+            table.add_column(col, overflow="fold", no_wrap=False)
     for r in rows:
         repo_display = _short_repo(r.get("repo")) or "[dim](unscoped)[/dim]"
         table.add_row(

@@ -54,8 +54,12 @@ def projects(
     else:
         scope = "all repos (no git context)"
     table = Table(title=f"Workflow projects — {scope}", header_style="bold")
+    _short_cols = {"status", "phase"}
     for col in ("status", "phase", "slug", "title", "repos"):
-        table.add_column(col, overflow="fold", no_wrap=False)
+        if col in _short_cols:
+            table.add_column(col, no_wrap=True)
+        else:
+            table.add_column(col, overflow="fold", no_wrap=False)
     for r in rows:
         table.add_row(
             _styled(r.get("status", ""), _STATUS_STYLE),
