@@ -127,6 +127,11 @@ class LspServer(BaseModel):
 
 
 class SkillSource(BaseModel):
+    """``skill_md_path``'s parent directory is treated as the skill's full
+    root (Agent Skills packaging convention) — ``installers.install_skills``
+    copies everything alongside ``SKILL.md`` (``scripts/``, ``references/``,
+    etc.), not just the file itself."""
+
     name: str
     skill_md_path: Path
 
@@ -171,6 +176,9 @@ class AgentPlatform(BaseModel):
 
     hooks: CapabilityScope | None = None
     hooks_merge: Callable[[dict, list[DeclarativeHook]], None] | None = None
+    hooks_remove: Callable[[dict, list[DeclarativeHook]], bool] | None = (
+        None  # inverse of hooks_merge, for `apply --prune` (spec §5)
+    )
 
     instructions: InstructionsConfig | None = None
 

@@ -70,3 +70,34 @@ def merge_hooks(settings: dict, hooks: list[DeclarativeHook]) -> None:
         )
         if not already_present:
             existing.append(entry)
+
+
+def remove_hooks(settings: dict, hooks: list[DeclarativeHook]) -> bool:
+    """Inverse of ``merge_hooks``: remove entries matching the given hooks'
+    (event, command) identity. Drops a matcher entry entirely once it has no
+    remaining hooks, rather than leaving an empty ``"hooks": []`` behind."""
+    hooks_section = settings.get("hooks")
+    if not isinstance(hooks_section, dict):
+        return False
+    changed = False
+    for hook in hooks:
+        event_name = _EVENT_NAMES[hook.event]
+        entries = hooks_section.get(event_name)
+        if not isinstance(entries, list):
+            continue
+        kept = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                kept.append(entry)
+                continue
+            remaining = [
+                h
+                for h in entry["hooks"]
+                if not (isinstance(h, dict) and h.get("command") == hook.command)
+            ]
+            if len(remaining) != len(entry["hooks"]):
+                changed = True
+            if remaining:
+                kept.append({**entry, "hooks": remaining})
+        hooks_section[event_name] = kept
+    return changed

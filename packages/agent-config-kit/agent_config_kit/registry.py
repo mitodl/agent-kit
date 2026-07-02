@@ -46,6 +46,7 @@ def _registry() -> dict[str, AgentPlatform]:
                 }
             ),
             hooks_merge=claude_adapter.merge_hooks,
+            hooks_remove=claude_adapter.remove_hooks,
             skills=CapabilityScope(
                 **{"global": ScopeTarget(path=Path.home() / ".claude" / "skills")}
             ),
