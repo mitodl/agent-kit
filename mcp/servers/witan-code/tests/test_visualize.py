@@ -113,6 +113,35 @@ def test_render_rich_smoke():
     visualize.render_rich(g, console=Console(file=open("/dev/null", "w")))
 
 
+def test_render_rich_wraps_long_repos_at_narrow_width():
+    """Regression: long repo names must fold, not ellipsize (see PR #55).
+
+    A narrow console forces the two repo columns to overflow. With the
+    previous ``no_wrap=True`` config these were truncated with a Unicode
+    ellipsis; with ``overflow="fold"`` they wrap over multiple lines
+    instead.
+    """
+    import io
+
+    from rich.console import Console
+
+    long_src = "https://github.com/mitodl/some-really-really-long-source-repo"
+    long_dst = "https://github.com/mitodl/some-really-really-long-provider-repo"
+    g = visualize.DepGraph()
+    g.edge(long_src, long_dst).add("endpoint", "/api/v1/thing")
+
+    buf = io.StringIO()
+    visualize.render_rich(
+        g, console=Console(file=buf, width=60, force_terminal=False)
+    )
+    out = buf.getvalue()
+
+    assert "\u2026" not in out, (
+        "render_rich ellipsized a cell instead of folding it — a wrapping "
+        "column was likely marked no_wrap=True. Rendered output:\n" + out
+    )
+
+
 def test_self_provided_path_suppressed():
     """When a consumer repo also provides the same key_norm, no edge is emitted.
 
