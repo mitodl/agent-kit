@@ -163,10 +163,30 @@ uvx --from . witan-code index path/to/file.py   # single file/subpath
 uv run witan-code index
 ```
 
+**Standalone omnigraph binary install:** witan-code needs the `omnigraph` CLI
+on `PATH`. If `witan` is also installed, its own `witan setup` already put it
+there and nothing further is needed. Running witan-code truly standalone
+(no `witan`), run `witan-code setup` once:
+
+```bash
+witan-code setup            # fetches the pinned omnigraph release to ~/.local/bin/
+witan-code setup --dry-run  # preview without writing
+```
+
+This downloads the release pinned by `_OMNIGRAPH_VERSION` in
+[`witan_code/setup.py`](./witan_code/setup.py) — the same pin `witan`'s own
+`setup.py` uses, kept in lockstep by Renovate (see the repo-root
+`renovate.json`'s `omnigraph-version` customManager, which bumps both files
+in one PR). There is no build-time bundling of the binary into the wheel —
+`witan-code setup` (or `witan setup`) is the only source of the binary, and
+re-running it is how you pick up a version bump.
+
 Per-repo stores are created **lazily** on the first index — the indexer runs
 `omnigraph init --schema code-schema.pg <store>` when the store is missing.
-The `./install.sh` script only verifies the omnigraph binary and prints a hint;
-it is not required when installing via uvx/uv.
+The `./install.sh` script only verifies the omnigraph binary (installing the
+latest upstream release directly if missing, independent of the
+`witan-code setup`/`_OMNIGRAPH_VERSION` pin) and prints a hint; it is not
+required when installing via uvx/uv.
 
 To add witan-code as a standalone MCP server (without the witan memory/task
 tools), copy the appropriate snippet from `config/` into your agent's config:
@@ -218,6 +238,8 @@ an empty shape when it does not exist yet):
 
 `witan-code` (cyclopts); also available as `witan code …` when witan-code is installed alongside witan:
 
+- `setup [--dry-run]` — fetch the pinned omnigraph binary to `~/.local/bin/`
+  for standalone use (see [Install](#install)).
 - `index [PATH]` — incremental; skips files whose content hash is unchanged.
 - `reindex [PATH]` — force rebuild a path.
 - `repos` — list all indexed repos with file count, symbol count, and store size.

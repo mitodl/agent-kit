@@ -9,7 +9,6 @@ which is witan-specific and out of agent-config-kit's scope.
 from __future__ import annotations
 
 import platform
-import shutil
 from pathlib import Path
 
 from agent_config_kit import (
@@ -72,8 +71,15 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
 # ── Omnigraph binary ──────────────────────────────────────────────────────────
 # Witan's own binary-distribution concern — explicitly out of agent-config-kit's
 # scope (spec §3).
+#
+# No build-time bundling — `witan setup` always fetches the pinned release
+# directly, so every install/re-run converges on the same version instead of
+# a build hook and this module silently drifting apart (see the identical
+# constant in witan-code/witan_code/setup.py, kept in lockstep by the
+# omnigraph-version customManager in renovate.json — a single Renovate PR
+# bumps both).
 
-_OMNIGRAPH_VERSION = "0.7.0"
+_OMNIGRAPH_VERSION = "0.8.0"
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
     ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
@@ -149,27 +155,15 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
         tmp_dest.unlink(missing_ok=True)
 
 
-def install_omnigraph(pkg_dir: Path, dry_run: bool) -> None:
-    from rich.console import Console
+def install_omnigraph(dry_run: bool) -> None:
+    """Fetch the pinned omnigraph release into ``~/.local/bin/``.
 
-    console = Console()
-
+    Always re-downloads rather than skipping when a binary is already
+    present — `witan setup`'s own docstring promises "re-run after every
+    upgrade to refresh installed files," and always converging on the
+    current pin is what prevents a machine being stuck on a stale binary
+    (the exact failure mode a build-time-only bundle produced before).
+    """
     local_bin = Path.home() / ".local" / "bin"
     dest = local_bin / "omnigraph"
-
-    bundled = pkg_dir / "_bin" / "omnigraph"
-    if bundled.exists():
-        if not dry_run:
-            local_bin.mkdir(parents=True, exist_ok=True)
-            tmp_dest = dest.with_name(dest.name + ".tmp")
-            try:
-                shutil.copy2(bundled, tmp_dest)
-                tmp_dest.chmod(0o755)
-                tmp_dest.replace(dest)
-            finally:
-                tmp_dest.unlink(missing_ok=True)
-        console.print(f"  [green]omnigraph[/green] (bundled) → {dest}")
-    else:
-        # Not bundled — git/dev install or unsupported platform at build time.
-        # Download directly from GitHub releases.
-        _download_omnigraph(dest, dry_run)
+    _download_omnigraph(dest, dry_run)

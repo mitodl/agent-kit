@@ -89,6 +89,19 @@ def serve() -> None:
     mcp.run()
 
 
+@app.command
+def setup(*, dry_run: bool = False) -> None:
+    """Install the omnigraph binary to ~/.local/bin/ for standalone witan-code use.
+
+    Only needed when running witan-code without witan already installed —
+    `witan setup` installs the same binary to the same place. Re-run after an
+    omnigraph version bump to refresh it.
+    """
+    from .setup import install_omnigraph
+
+    install_omnigraph(dry_run=dry_run)
+
+
 def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:
     print(
         f"{action} {path}: "

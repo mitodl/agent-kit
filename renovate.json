@@ -4,9 +4,10 @@
 	"customManagers": [
 		{
 			"customType": "regex",
-			"description": "omnigraph binary version pinned in hatch_build.py",
+			"description": "omnigraph binary version pinned in witan/setup.py and witan-code/setup.py — both fetch this pinned release at runtime (no build-time bundling), and must stay in lockstep, so one Renovate PR updates both together",
 			"managerFilePatterns": [
-				"/^mcp/servers/witan.*/hatch_build\\.py$/"
+				"/^mcp/servers/witan/witan/setup\\.py$/",
+				"/^mcp/servers/witan-code/witan_code/setup\\.py$/"
 			],
 			"matchStrings": ["_OMNIGRAPH_VERSION = \"(?<currentValue>[^\"]+)\""],
 			"datasourceTemplate": "github-releases",

@@ -30,10 +30,6 @@ witan-code = "witan_code.cli:cli"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.build.hooks.custom]
-# Downloads the omnigraph binary for the current platform during pip install / uvx.
-path = "hatch_build.py"
-
 [dependency-groups]
 test = ["pytest>=8"]
 
@@ -45,8 +41,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 # witan_code/queries/, witan_code/schema/, and witan_code/queries_ts/ are
-# discovered automatically via packages = ["witan_code"].
-# witan_code/_bin/ is populated by the build hook above and must be force-included
-# because hatchling excludes non-.py files inside package dirs by default.
-[tool.hatch.build.targets.wheel.force-include]
-"witan_code/_bin" = "witan_code/_bin"
+# discovered automatically via packages = ["witan_code"]. The omnigraph
+# binary is no longer build-time-bundled — `witan-code setup` fetches it at
+# install/runtime instead (see witan_code/setup.py) — so there is no
+# witan_code/_bin/ to force-include.

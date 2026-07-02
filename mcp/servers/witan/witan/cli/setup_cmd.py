@@ -84,7 +84,7 @@ def setup(
         )
 
     console.print("[bold]omnigraph binary[/bold]")
-    su.install_omnigraph(pkg_dir, dry_run)
+    su.install_omnigraph(dry_run)
 
     bundle = su.witan_bundle(pkg_dir, author)
 
