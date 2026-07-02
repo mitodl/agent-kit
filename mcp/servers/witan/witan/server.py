@@ -3,6 +3,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -315,6 +316,169 @@ def migrate_topics() -> dict:
         "memories_scanned": len(rows),
         "topics_created": topics_created,
         "edges_created": edges_created,
+    }
+
+
+# ── Storage-format migration ────────────────────────────────────
+
+# omnigraph uses strict single-version storage: a release that bumps the
+# internal schema version refuses to open graphs an older binary wrote,
+# raising exactly this pair of substrings (see docs/user/operations/upgrade.md).
+_STORAGE_VERSION_MISMATCH_MARKERS = ("stamped at internal schema", "reads only")
+
+
+def _is_storage_version_mismatch(msg: str) -> bool:
+    return all(marker in msg for marker in _STORAGE_VERSION_MISMATCH_MARKERS)
+
+
+def _snapshot(binary: str, store: str) -> tuple[bool, str]:
+    """Run ``<binary> snapshot --store <store>``; returns (ok, stdout-or-stderr)."""
+    result = subprocess.run(
+        [binary, "snapshot", "--store", store], capture_output=True, text=True
+    )
+    return result.returncode == 0, (
+        result.stdout if result.returncode == 0 else result.stderr
+    )
+
+
+def _find_pre_upgrade_binary(current_binary: str) -> str | None:
+    """First ``omnigraph`` on PATH that isn't the binary witan is currently
+    using — a candidate for whatever wrote the store before witan's own
+    bundled binary moved on to a newer release."""
+    current_real = Path(current_binary).resolve()
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        candidate = Path(entry) / "omnigraph"
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            if candidate.resolve() == current_real:
+                continue
+        except OSError:
+            continue
+        return str(candidate)
+    return None
+
+
+def _run_omnigraph(cmd: list[str], *, label: str) -> str:
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"omnigraph {label} failed:\n{result.stderr.strip()}")
+    return result.stdout
+
+
+def migrate_storage_format(old_binary: str | None = None) -> dict:
+    """Rebuild the configured local store when the current omnigraph binary
+    refuses to open it because it was written by an older, incompatible
+    on-disk format (a strict single-version storage bump, e.g. 0.7 → 0.8).
+
+    Replays the rebuild omnigraph's upgrade docs prescribe: ``schema show``
+    + ``export`` with the *old* binary, ``init`` + ``load --mode overwrite``
+    with the *new* one, into a scratch store. Verifies the rebuilt store
+    opens, then swaps it in and renames the original aside as
+    ``<store>.pre-migrate`` rather than deleting it. Node/edge rows, vectors,
+    and blobs survive; commit history and branches do not.
+
+    Returns ``{"migrated": False, "reason": ...}`` when the current binary
+    already opens the store fine (nothing to do). Raises ``RuntimeError`` for
+    a genuinely broken store, a missing/incapable old binary, or any failed
+    step of the rebuild.
+    """
+    store = client.graph_uri
+    if store.startswith(("http://", "https://", "s3://")):
+        raise RuntimeError(
+            f"{store} is a remote store — rebuild it by hand with the old and "
+            "new omnigraph binaries per the upgrade docs "
+            "(docs/user/operations/upgrade.md); this command only handles "
+            "local on-disk stores."
+        )
+
+    new_binary = client._binary
+    ok, out = _snapshot(new_binary, store)
+    if ok:
+        return {
+            "migrated": False,
+            "reason": "already readable by the current omnigraph binary",
+        }
+    if not _is_storage_version_mismatch(out):
+        raise RuntimeError(
+            f"omnigraph snapshot failed for an unrelated reason:\n{out.strip()}"
+        )
+
+    old = old_binary or _find_pre_upgrade_binary(new_binary)
+    if old is None:
+        raise RuntimeError(
+            "The store was written by an older, incompatible omnigraph "
+            "on-disk format, and no other `omnigraph` binary was found on "
+            "PATH to export it. Pass the path to the pre-upgrade binary that "
+            "last wrote this store."
+        )
+    old_ok, old_out = _snapshot(old, store)
+    if not old_ok:
+        raise RuntimeError(
+            f"The candidate old binary {old!r} can't read the store either:\n"
+            f"{old_out.strip()}"
+        )
+
+    store_path = Path(store)
+    with tempfile.TemporaryDirectory(prefix="witan-migrate-") as tmp:
+        tmp_path = Path(tmp)
+        schema_file = tmp_path / "schema.pg"
+        data_file = tmp_path / "graph.jsonl"
+        rebuilt = tmp_path / "rebuilt.omni"
+
+        schema_file.write_text(
+            _run_omnigraph(
+                [old, "schema", "show", "--store", store],
+                label="schema show (old binary)",
+            )
+        )
+        data_file.write_text(
+            _run_omnigraph(
+                [old, "export", "--store", store], label="export (old binary)"
+            )
+        )
+        _run_omnigraph(
+            [new_binary, "init", "--schema", str(schema_file), str(rebuilt)],
+            label="init (new binary)",
+        )
+        _run_omnigraph(
+            [
+                new_binary,
+                "load",
+                "--store",
+                str(rebuilt),
+                "--data",
+                str(data_file),
+                "--mode",
+                "overwrite",
+            ],
+            label="load (new binary)",
+        )
+
+        verify_ok, verify_out = _snapshot(new_binary, str(rebuilt))
+        if not verify_ok:
+            raise RuntimeError(
+                f"Rebuilt store failed verification:\n{verify_out.strip()}"
+            )
+
+        backup_path = store_path.with_name(store_path.name + ".pre-migrate")
+        if backup_path.exists():
+            raise RuntimeError(
+                f"Backup path {backup_path} already exists from a previous "
+                "migration attempt; remove or rename it before retrying."
+            )
+        store_path.rename(backup_path)
+        shutil.move(str(rebuilt), str(store_path))
+
+    return {
+        "migrated": True,
+        "store": str(store_path),
+        "backup": str(backup_path),
+        "old_binary": old,
+        "new_binary": new_binary,
+        "verify": verify_out.strip(),
     }
 
 

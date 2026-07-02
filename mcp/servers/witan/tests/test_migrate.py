@@ -58,3 +58,48 @@ def test_apply_schema_upgrades_an_old_store(server, tmp_path, monkeypatch):
     # ...applying the bundled schema adds it.
     srv.apply_schema()
     assert srv._topic_schema_present() is True
+
+
+def test_is_storage_version_mismatch():
+    from witan import server as srv
+
+    msg = (
+        "__manifest is stamped at internal schema v3, but this omnigraph reads only v4."
+    )
+    assert srv._is_storage_version_mismatch(msg) is True
+    assert srv._is_storage_version_mismatch("some other omnigraph error") is False
+
+
+def test_migrate_storage_format_rejects_remote_stores(monkeypatch):
+    from witan import server as srv
+
+    class _FakeClient:
+        graph_uri = "s3://bucket/graph.omni"
+
+    monkeypatch.setattr(srv, "client", _FakeClient())
+    try:
+        srv.migrate_storage_format()
+    except RuntimeError as exc:
+        assert "remote store" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for a remote store")
+
+
+@requires_omnigraph
+def test_migrate_storage_format_is_noop_when_already_readable(server):
+    from witan import server as srv
+
+    assert srv.migrate_storage_format() == {
+        "migrated": False,
+        "reason": "already readable by the current omnigraph binary",
+    }
+
+
+@requires_omnigraph
+def test_find_pre_upgrade_binary_skips_the_current_one():
+    import shutil
+
+    from witan import server as srv
+
+    current = shutil.which("omnigraph")
+    assert srv._find_pre_upgrade_binary(current) is None
