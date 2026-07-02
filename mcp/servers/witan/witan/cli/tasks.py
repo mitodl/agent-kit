@@ -97,7 +97,7 @@ def tasks(
         "assignee",
         "blocked_by",
     ):
-        table.add_column(col)
+        table.add_column(col, overflow="fold", no_wrap=False)
     for r in rows:
         repo_display = _short_repo(r.get("repo")) or "[dim](unscoped)[/dim]"
         table.add_row(
