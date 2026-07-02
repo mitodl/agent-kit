@@ -10,7 +10,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from .models import SkillSource
+from .models import SKILL_NAME_PATTERN, SkillSource
 
 
 def skill_files(skill: SkillSource) -> list[Path]:
@@ -23,7 +23,24 @@ def skill_files(skill: SkillSource) -> list[Path]:
     file set can change between two applies without its name or
     ``skill_md_path`` changing, so anything that needs to know "what did this
     skill actually put on disk" must re-derive it from here rather than the
-    manifest alone."""
+    manifest alone.
+
+    Raises ``FileNotFoundError`` if ``skill_md_path`` doesn't exist — silently
+    yielding an empty list here would otherwise make ``apply``/``validate``
+    quietly skip an entire skill instead of surfacing the mistake.
+    """
+    if not skill.skill_md_path.is_file():
+        raise FileNotFoundError(
+            f"skill_md_path does not exist or is not a file: {skill.skill_md_path}"
+        )
+    # Belt-and-suspenders: SkillSource.name is already validated at
+    # construction time (models.py), but that validation can't help state
+    # loaded straight from an on-disk file (prune.py's state file) or a
+    # SkillSource mutated after construction — check again here, at the
+    # point a name is actually used to build a filesystem path, since that's
+    # the one place path traversal via a crafted name would actually matter.
+    if not SKILL_NAME_PATTERN.fullmatch(skill.name):
+        raise ValueError(f"unsafe or invalid skill name: {skill.name!r}")
     src_dir = skill.skill_md_path.parent
     return [p.relative_to(src_dir) for p in sorted(src_dir.rglob("*")) if p.is_file()]
 
@@ -51,9 +68,10 @@ def install_skills(
     dests: list[Path] = []
     for skill in skills:
         src_dir = skill.skill_md_path.parent
+        rel_files = skill_files(skill)
         for dest_base in dest_dirs:
             skill_dest_dir = dest_base / skill.name
-            for rel in skill_files(skill):
+            for rel in rel_files:
                 dest = skill_dest_dir / rel
                 if not dry_run:
                     dest.parent.mkdir(parents=True, exist_ok=True)

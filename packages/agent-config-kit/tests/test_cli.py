@@ -429,6 +429,38 @@ def test_apply_prune_state_file_flag_overrides_default_path(tmp_path, monkeypatc
     assert not (tmp_path / "agent-config.toml.lock.json").exists()
 
 
+def test_apply_prune_does_not_record_state_for_a_skipped_platform(
+    tmp_path, monkeypatch
+):
+    """A platform whose target couldn't be parsed this run never actually got
+    applied — recording its state anyway would let a *later* prune remove
+    entries it never truly wrote. The prior state (if any) must survive
+    untouched instead."""
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--prune"])
+    state_file = tmp_path / "agent-config.toml.lock.json"
+    good_state = json.loads(state_file.read_text())
+    assert good_state["platforms"]["claude"]["mcp_servers"] == ["witan"]
+
+    (tmp_path / ".claude.json").write_text("[1, 2, 3]")  # now unparsable
+
+    with pytest.raises(SystemExit):
+        app(["apply", str(manifest), "--platform", "claude", "--prune"])
+
+    state_after_skip = json.loads(state_file.read_text())
+    assert state_after_skip["platforms"]["claude"]["mcp_servers"] == ["witan"]
+
+
 def test_apply_then_validate_then_prune_full_lifecycle(tmp_path, monkeypatch):
     """End-to-end: apply a two-server manifest, confirm validate sees no
     drift, drop one server from the manifest, confirm validate now flags it

@@ -99,3 +99,13 @@ def test_skill_source_rejects_non_compliant_names(name):
 def test_skill_source_rejects_skill_md_path_not_named_skill_md():
     with pytest.raises(ValidationError, match="SKILL.md"):
         SkillSource(name="pdf-processing", skill_md_path=Path("/x/skill.md"))
+
+
+def test_skill_source_revalidates_name_on_reassignment():
+    """validate_assignment=True closes the gap where a valid SkillSource
+    could be mutated after construction to smuggle an unsafe name past the
+    field_validator that only runs at __init__ time."""
+    skill = SkillSource(name="pdf-processing", skill_md_path=Path("/x/SKILL.md"))
+
+    with pytest.raises(ValidationError):
+        skill.name = "../../etc"

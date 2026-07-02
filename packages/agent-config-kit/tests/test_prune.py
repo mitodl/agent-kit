@@ -245,6 +245,64 @@ def test_default_state_path_is_manifest_name_plus_lock_json(tmp_path):
     assert default_state_path(manifest) == tmp_path / "agent-config.toml.lock.json"
 
 
+def test_apply_with_prune_ignores_path_traversal_skill_entry(tmp_path, monkeypatch):
+    """A crafted/corrupted state-file entry trying to escape dest_base via
+    `..` must be skipped, not followed."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    canary = tmp_path / "canary.txt"
+    canary.write_text("do not delete me")
+    previous = PlatformState(skills=["my-skill/../../../canary.txt"])
+
+    result, _ = apply_with_prune("claude", _bundle(mcp_servers={}, skills=[]), previous)
+
+    assert canary.exists()
+    assert result.removed == []
+
+
+def test_apply_with_prune_ignores_invalid_skill_name_in_state_entry(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    dest = tmp_path / ".claude" / "skills" / "UPPERCASE" / "SKILL.md"
+    dest.parent.mkdir(parents=True)
+    dest.write_text("# skill")
+    previous = PlatformState(skills=["UPPERCASE/SKILL.md"])
+
+    result, _ = apply_with_prune("claude", _bundle(mcp_servers={}, skills=[]), previous)
+
+    assert dest.exists()
+    assert result.removed == []
+
+
+def test_apply_with_prune_hook_removal_does_not_crash_on_directory(
+    tmp_path, monkeypatch
+):
+    """If something other than agent-config-kit put a directory where a
+    plugin hook file would be, removal must skip it (is_file, not exists)
+    rather than crash with IsADirectoryError."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    ext_dir = tmp_path / ".pi" / "agent" / "extensions" / "witan.ts"
+    ext_dir.mkdir(parents=True)  # a directory, not a file, at the hook's path
+    hook = PluginRegistration(entry_path=Path("/some/where/witan.ts"))
+    previous = PlatformState(hooks=[hook_identity(hook)])
+
+    result, _ = apply_with_prune("pi", _bundle(mcp_servers={}, hooks=[]), previous)
+
+    assert ext_dir.is_dir()
+    assert result.removed == []
+
+
+def test_write_state_leaves_no_tmp_file_behind_after_success(tmp_path):
+    manifest = tmp_path / "agent-config.toml"
+    manifest.write_text("")
+    state_path = default_state_path(manifest)
+
+    write_state(state_path, manifest, {"claude": PlatformState(mcp_servers=["witan"])})
+
+    assert state_path.exists()
+    assert not state_path.with_name(state_path.name + ".tmp").exists()
+
+
 def test_hook_identity_distinguishes_declarative_and_plugin():
     declarative = hook_identity(
         DeclarativeHook(event=HookEvent.STOP, command="witan session-checkpoint")

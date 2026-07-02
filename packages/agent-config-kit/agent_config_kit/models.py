@@ -126,7 +126,13 @@ class LspServer(BaseModel):
 
 # ── Capability 5: skills (Agent Skills spec: https://agentskills.io/specification) ─
 
-_SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# Exported (not module-private) — installers.py and prune.py both re-check a
+# skill name against this before using it to build a filesystem path, since
+# that's the one place a crafted name could matter (path traversal): the
+# field_validator below only protects names that go through SkillSource's own
+# construction, not ones round-tripped through the prune state file's raw
+# JSON strings.
+SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
 class SkillSource(BaseModel):
@@ -135,6 +141,8 @@ class SkillSource(BaseModel):
     copies everything alongside ``SKILL.md`` (``scripts/``, ``references/``,
     ``assets/``, etc.), not just the file itself, since ``dest/name/`` is
     where the whole directory lands."""
+
+    model_config = ConfigDict(validate_assignment=True)
 
     name: str
     skill_md_path: Path
@@ -151,7 +159,7 @@ class SkillSource(BaseModel):
             raise ValueError(
                 f"must be 1-64 characters (Agent Skills spec), got {len(value)}: {value!r}"
             )
-        if not _SKILL_NAME_PATTERN.fullmatch(value):
+        if not SKILL_NAME_PATTERN.fullmatch(value):
             raise ValueError(
                 "must be lowercase alphanumeric segments separated by single "
                 f"hyphens, with no leading/trailing/consecutive hyphens "

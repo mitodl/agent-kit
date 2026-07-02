@@ -149,7 +149,14 @@ def apply_command(
                 dry_run=dry_run,
             )
             results[name] = result
-            states[name] = current_state
+            # A skipped target (e.g. unreadable JSON) means apply() didn't
+            # actually write anything for this platform this run — recording
+            # "current_state" as if it had would claim ownership over
+            # entries never actually applied, so a later prune could remove
+            # something this run never truly wrote. Leave the platform's
+            # last-known-good state untouched instead.
+            if not result.skipped:
+                states[name] = current_state
         if not dry_run:
             write_state(state_path, manifest, states)
     elif platforms is not None:

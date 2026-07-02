@@ -19,7 +19,14 @@ from pathlib import Path
 from . import registry
 from .installers import skill_files
 from .jsonio import load_json_object, write_json
-from .models import DeclarativeHook, Hook, HookEvent, PluginRegistration, Scope
+from .models import (
+    SKILL_NAME_PATTERN,
+    DeclarativeHook,
+    Hook,
+    HookEvent,
+    PluginRegistration,
+    Scope,
+)
 from .plan import InstallResult, RegistrationBundle, _navigate, _resolve_target, apply
 
 
@@ -105,7 +112,13 @@ def write_state(
     freshly-applied platforms into a dict already loaded from ``path`` (via
     ``load_state``) rather than starting from ``{}`` — otherwise a
     single-platform run (e.g. ``--platform claude``) would erase every other
-    platform's previously recorded state (spec §5 step 5)."""
+    platform's previously recorded state (spec §5 step 5).
+
+    Writes via a temp file + atomic rename so a crash or interrupt mid-write
+    can never leave a truncated/corrupt state file behind — this file is the
+    only record of what prune is allowed to remove later, so a half-written
+    one would be actively unsafe, not just inconvenient.
+    """
     data = {
         "manifest_hash": manifest_hash(manifest_path),
         "platforms": {
@@ -118,7 +131,9 @@ def write_state(
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(json.dumps(data, indent=2) + "\n")
+    tmp_path.replace(path)
 
 
 def _remove_mcp_servers(
@@ -175,7 +190,7 @@ def _remove_hooks(
         if target is not None:
             for identity, hook in plugins:
                 dest = target.path / hook.entry_path.name
-                if dest.exists():
+                if dest.is_file():
                     if not dry_run:
                         dest.unlink()
                     removed.append(identity)
@@ -193,6 +208,15 @@ def _prune_empty_dirs(start: Path, *, stop_above: Path) -> None:
         current = current.parent
 
 
+def _is_safe_relative_path(rel: str) -> bool:
+    """Reject anything that could escape ``dest_base / skill_name`` once
+    joined — an absolute path, or any ``..`` segment."""
+    if not rel:
+        return False
+    path = Path(rel)
+    return not path.is_absolute() and ".." not in path.parts
+
+
 def _remove_skills(
     platform: registry.AgentPlatform, entries: set[str], *, scope: Scope, dry_run: bool
 ) -> list[Path]:
@@ -200,7 +224,16 @@ def _remove_skills(
     ``_bundle_platform_state``) — removed at file granularity so a skill that
     only dropped one supporting file (not its whole self) gets exactly that
     file pruned, with now-empty directories (e.g. an emptied ``scripts/``, or
-    the skill's own dir once every file is gone) cleaned up behind it."""
+    the skill's own dir once every file is gone) cleaned up behind it.
+
+    Both halves of ``entry`` come straight from the state file's JSON — an
+    externally-editable file, not something that goes through
+    ``SkillSource``'s own validation — so each is re-checked here before
+    being used to build a filesystem path. An entry that fails either check
+    is skipped rather than raising: it can only mean the state file was
+    hand-edited or corrupted, and the safe response to "I can't fully trust
+    this entry" is to leave it alone, not to guess.
+    """
     if not entries or platform.skills is None:
         return []
     target = _resolve_target(platform.skills, scope)
@@ -214,6 +247,10 @@ def _remove_skills(
     removed: list[Path] = []
     for entry in sorted(entries):
         skill_name, _, rel = entry.partition("/")
+        if not SKILL_NAME_PATTERN.fullmatch(skill_name) or not _is_safe_relative_path(
+            rel
+        ):
+            continue
         for dest_base in dest_dirs:
             dest_file = dest_base / skill_name / rel
             if dest_file.is_file():

@@ -1,4 +1,6 @@
-from agent_config_kit.installers import install_files, install_skills
+import pytest
+
+from agent_config_kit.installers import install_files, install_skills, skill_files
 from agent_config_kit.models import SkillSource
 
 
@@ -92,3 +94,33 @@ def test_install_skills_single_file_skill_still_works(tmp_path):
     dests = install_skills([skill], [dest_dir], dry_run=False)
 
     assert dests == [dest_dir / "my-skill" / "SKILL.md"]
+
+
+def test_skill_files_raises_if_skill_md_path_does_not_exist(tmp_path):
+    """Silently yielding an empty file list here would make apply()/diff()
+    quietly skip the whole skill instead of surfacing the mistake."""
+    skill = SkillSource(
+        name="my-skill", skill_md_path=tmp_path / "does-not-exist" / "SKILL.md"
+    )
+
+    with pytest.raises(FileNotFoundError):
+        skill_files(skill)
+
+
+def test_skill_files_rejects_unsafe_name_even_if_constructed_bypassing_validation(
+    tmp_path,
+):
+    """SkillSource.name is validated at construction, but skill_files() (the
+    one place a name is actually used to build a filesystem path) re-checks
+    independently — this covers a SkillSource built via model_construct()
+    (bypasses validators) or any other path that doesn't go through
+    SkillSource.__init__."""
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "SKILL.md").write_text("# skill")
+    skill = SkillSource.model_construct(
+        name="../../etc", skill_md_path=src_dir / "SKILL.md"
+    )
+
+    with pytest.raises(ValueError, match="unsafe or invalid skill name"):
+        skill_files(skill)
