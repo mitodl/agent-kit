@@ -18,7 +18,7 @@ from fastmcp import FastMCP
 
 from . import config as cfg_module
 from . import repo as repo_module
-from .graph import OmnigraphClient
+from .graph import OmnigraphClient, _is_storage_version_mismatch
 
 # ── Startup ───────────────────────────────────────────────────────
 
@@ -322,15 +322,9 @@ def migrate_topics() -> dict:
 
 # ── Storage-format migration ────────────────────────────────────
 
-# omnigraph uses strict single-version storage: a release that bumps the
-# internal schema version refuses to open graphs an older binary wrote,
-# raising exactly this pair of substrings (see docs/user/operations/upgrade.md).
-_STORAGE_VERSION_MISMATCH_MARKERS = ("stamped at internal schema", "reads only")
-
-
-def _is_storage_version_mismatch(msg: str) -> bool:
-    lowered = msg.lower()
-    return all(marker in lowered for marker in _STORAGE_VERSION_MISMATCH_MARKERS)
+# _is_storage_version_mismatch is imported from .graph — the same detector
+# OmnigraphClient uses to turn a raw Rust panic into a friendly, actionable
+# error for every read/change/apply_schema call (not just this module).
 
 
 def _snapshot(binary: str, store: str) -> tuple[bool, str]:

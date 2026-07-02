@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -16,6 +17,30 @@ _WRITE_SUBCOMMANDS = {"mutate", "load"}
 _RETRYABLE = ("stale view", "manifest table version", "refresh and retry")
 _NEEDS_REPAIR = ("ahead of manifest", "omnigraph repair")
 _MAX_ATTEMPTS = 8
+
+# omnigraph uses strict single-version storage: a release that bumps the
+# internal schema version refuses to open graphs an older binary wrote,
+# raising exactly this pair of substrings wrapped in an unhelpful Rust panic +
+# backtrace (see docs/user/operations/upgrade.md). Not retryable/repairable.
+_STORAGE_VERSION_MISMATCH_MARKERS = ("stamped at internal schema", "reads only")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _is_storage_version_mismatch(msg: str) -> bool:
+    lowered = msg.lower()
+    return all(marker in lowered for marker in _STORAGE_VERSION_MISMATCH_MARKERS)
+
+
+def _friendly_storage_error(raw: str) -> str:
+    """Strip the Rust panic's ANSI codes and backtrace boilerplate ("Location:",
+    "Backtrace omitted...") from a storage-version-mismatch error, keeping just
+    omnigraph's own message, and append witan's own fix for it."""
+    cleaned = _ANSI_RE.sub("", raw).split("Location:")[0].strip()
+    return (
+        f"{cleaned}\n\n"
+        "Run `witan migrate storage` to rebuild this store for the "
+        "currently installed omnigraph version."
+    )
 
 
 class OmnigraphClient:
@@ -122,6 +147,8 @@ class OmnigraphClient:
                 if result.returncode == 0:
                     return result.stdout
                 err = result.stderr
+                if _is_storage_version_mismatch(err):
+                    raise RuntimeError(_friendly_storage_error(err)) from None
                 if attempt + 1 < _MAX_ATTEMPTS:
                     if any(m in err for m in _NEEDS_REPAIR):
                         self._repair(env)

@@ -12,21 +12,11 @@ migrate_app = cyclopts.App(
 )
 
 
-def _print_error(exc: Exception) -> None:
-    console.print(f"[red]{exc}[/red]")
-    if _srv()._is_storage_version_mismatch(str(exc)):
-        console.print(
-            "[yellow]This looks like an incompatible on-disk storage "
-            "upgrade (e.g. omnigraph 0.7 → 0.8). Run "
-            "`witan migrate storage` first.[/yellow]"
-        )
-
-
 def _apply_schema() -> None:
     try:
         result = _srv().apply_schema()
     except RuntimeError as exc:
-        _print_error(exc)
+        console.print(f"[red]{exc}[/red]")
         raise SystemExit(1) from None
     console.print(result["output"] or f"schema applied to {result['store']}")
 
@@ -42,7 +32,7 @@ def _backfill_topics() -> None:
             raise SystemExit(1)
         result = s.migrate_topics()
     except RuntimeError as exc:
-        _print_error(exc)
+        console.print(f"[red]{exc}[/red]")
         raise SystemExit(1) from None
     console.print(
         f"Scanned {result['memories_scanned']} memories; "
