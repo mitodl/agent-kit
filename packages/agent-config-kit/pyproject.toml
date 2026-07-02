@@ -15,7 +15,7 @@ dependencies = [
 cli = ["cyclopts>=4,<5", "rich>=13"]
 
 [project.scripts]
-agent-config-kit = "agent_config_kit.cli:main"
+ac-kit = "agent_config_kit.cli:main"
 
 [build-system]
 requires = ["hatchling"]

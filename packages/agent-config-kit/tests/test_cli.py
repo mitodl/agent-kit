@@ -11,7 +11,7 @@ def test_cli_help_smoke(capsys):
         app(["--help"])
 
     assert exc_info.value.code == 0
-    assert "agent-config-kit" in capsys.readouterr().out.lower()
+    assert "ac-kit" in capsys.readouterr().out.lower()
 
 
 def test_cli_without_extra_exits_with_friendly_message(monkeypatch, capsys):
