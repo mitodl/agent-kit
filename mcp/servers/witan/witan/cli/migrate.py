@@ -60,7 +60,14 @@ def _migrate_storage(old_binary: str | None, yes: bool) -> None:
             "on-disk format. Commit history and branches are dropped; the "
             "original is kept as a `.pre-migrate` backup, not deleted.[/yellow]"
         )
-        if input("Continue? [y/N] ").strip().lower() not in ("y", "yes"):
+        try:
+            response = input("Continue? [y/N] ").strip().lower()
+        except EOFError:
+            console.print(
+                "\n[red]Aborted (non-interactive terminal; pass --yes to skip the prompt).[/red]"
+            )
+            raise SystemExit(1) from None
+        if response not in ("y", "yes"):
             console.print("Aborted.")
             raise SystemExit(1)
     try:

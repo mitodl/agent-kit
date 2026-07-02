@@ -1,3 +1,4 @@
+import fcntl
 import hashlib
 import json
 import math
@@ -328,17 +329,22 @@ _STORAGE_VERSION_MISMATCH_MARKERS = ("stamped at internal schema", "reads only")
 
 
 def _is_storage_version_mismatch(msg: str) -> bool:
-    return all(marker in msg for marker in _STORAGE_VERSION_MISMATCH_MARKERS)
+    lowered = msg.lower()
+    return all(marker in lowered for marker in _STORAGE_VERSION_MISMATCH_MARKERS)
 
 
 def _snapshot(binary: str, store: str) -> tuple[bool, str]:
-    """Run ``<binary> snapshot --store <store>``; returns (ok, stdout-or-stderr)."""
+    """Run ``<binary> snapshot --store <store>``; returns (ok, output).
+
+    On failure, stdout and stderr are both included — the mismatch text isn't
+    guaranteed to land on stderr alone.
+    """
     result = subprocess.run(
         [binary, "snapshot", "--store", store], capture_output=True, text=True
     )
-    return result.returncode == 0, (
-        result.stdout if result.returncode == 0 else result.stderr
-    )
+    if result.returncode == 0:
+        return True, result.stdout
+    return False, "\n".join(s for s in (result.stdout, result.stderr) if s)
 
 
 def _find_pre_upgrade_binary(current_binary: str) -> str | None:
@@ -361,11 +367,34 @@ def _find_pre_upgrade_binary(current_binary: str) -> str | None:
     return None
 
 
-def _run_omnigraph(cmd: list[str], *, label: str) -> str:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+def _run_omnigraph(cmd: list[str], *, label: str, stdout=None) -> str:
+    """Run an omnigraph subcommand.
+
+    When ``stdout`` is an open file, output streams straight there (so a
+    large ``export`` never sits fully buffered in memory) and ``""`` is
+    returned; otherwise stdout is captured and returned as a string.
+    """
+    result = subprocess.run(
+        cmd,
+        stdout=stdout if stdout is not None else subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     if result.returncode != 0:
-        raise RuntimeError(f"omnigraph {label} failed:\n{result.stderr.strip()}")
-    return result.stdout
+        raise RuntimeError(
+            f"omnigraph {label} failed:\n{(result.stderr or '').strip()}"
+        )
+    return result.stdout or ""
+
+
+def _acquire_store_lock(store: str):
+    """Hold the same ``<store>.lock`` writers use (``OmnigraphClient``) for the
+    full rebuild+swap, so a concurrent witan write can't race the migration."""
+    lock_path = Path(f"{store}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "w")  # noqa: SIM115 — released by the caller
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    return fh
 
 
 def migrate_storage_format(old_binary: str | None = None) -> dict:
@@ -422,55 +451,71 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
         )
 
     store_path = Path(store)
-    with tempfile.TemporaryDirectory(prefix="witan-migrate-") as tmp:
-        tmp_path = Path(tmp)
-        schema_file = tmp_path / "schema.pg"
-        data_file = tmp_path / "graph.jsonl"
-        rebuilt = tmp_path / "rebuilt.omni"
+    lock_fh = _acquire_store_lock(store)
+    try:
+        # Scratch dir shares the store's filesystem (not /tmp, which is often a
+        # size-limited tmpfs): keeps a large export off a RAM disk and makes the
+        # final swap below a same-device rename instead of a copy.
+        with tempfile.TemporaryDirectory(
+            dir=store_path.parent, prefix=".witan-migrate-"
+        ) as tmp:
+            tmp_path = Path(tmp)
+            schema_file = tmp_path / "schema.pg"
+            data_file = tmp_path / "graph.jsonl"
+            rebuilt = tmp_path / "rebuilt.omni"
 
-        schema_file.write_text(
+            schema_file.write_text(
+                _run_omnigraph(
+                    [old, "schema", "show", "--store", store],
+                    label="schema show (old binary)",
+                )
+            )
+            with open(data_file, "w", encoding="utf-8") as f:
+                _run_omnigraph(
+                    [old, "export", "--store", store],
+                    label="export (old binary)",
+                    stdout=f,
+                )
             _run_omnigraph(
-                [old, "schema", "show", "--store", store],
-                label="schema show (old binary)",
+                [new_binary, "init", "--schema", str(schema_file), str(rebuilt)],
+                label="init (new binary)",
             )
-        )
-        data_file.write_text(
             _run_omnigraph(
-                [old, "export", "--store", store], label="export (old binary)"
-            )
-        )
-        _run_omnigraph(
-            [new_binary, "init", "--schema", str(schema_file), str(rebuilt)],
-            label="init (new binary)",
-        )
-        _run_omnigraph(
-            [
-                new_binary,
-                "load",
-                "--store",
-                str(rebuilt),
-                "--data",
-                str(data_file),
-                "--mode",
-                "overwrite",
-            ],
-            label="load (new binary)",
-        )
-
-        verify_ok, verify_out = _snapshot(new_binary, str(rebuilt))
-        if not verify_ok:
-            raise RuntimeError(
-                f"Rebuilt store failed verification:\n{verify_out.strip()}"
+                [
+                    new_binary,
+                    "load",
+                    "--store",
+                    str(rebuilt),
+                    "--data",
+                    str(data_file),
+                    "--mode",
+                    "overwrite",
+                ],
+                label="load (new binary)",
             )
 
-        backup_path = store_path.with_name(store_path.name + ".pre-migrate")
-        if backup_path.exists():
-            raise RuntimeError(
-                f"Backup path {backup_path} already exists from a previous "
-                "migration attempt; remove or rename it before retrying."
-            )
-        store_path.rename(backup_path)
-        shutil.move(str(rebuilt), str(store_path))
+            verify_ok, verify_out = _snapshot(new_binary, str(rebuilt))
+            if not verify_ok:
+                raise RuntimeError(
+                    f"Rebuilt store failed verification:\n{verify_out.strip()}"
+                )
+
+            backup_path = store_path.with_name(store_path.name + ".pre-migrate")
+            if backup_path.exists():
+                raise RuntimeError(
+                    f"Backup path {backup_path} already exists from a previous "
+                    "migration attempt; remove or rename it before retrying."
+                )
+            store_path.rename(backup_path)
+            try:
+                shutil.move(str(rebuilt), str(store_path))
+            except OSError:
+                # Restore the original so the store path isn't left empty.
+                backup_path.rename(store_path)
+                raise
+    finally:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        lock_fh.close()
 
     return {
         "migrated": True,
