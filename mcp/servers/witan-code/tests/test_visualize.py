@@ -131,9 +131,7 @@ def test_render_rich_wraps_long_repos_at_narrow_width():
     g.edge(long_src, long_dst).add("endpoint", "/api/v1/thing")
 
     buf = io.StringIO()
-    visualize.render_rich(
-        g, console=Console(file=buf, width=60, force_terminal=False)
-    )
+    visualize.render_rich(g, console=Console(file=buf, width=60, force_terminal=False))
     out = buf.getvalue()
 
     assert "\u2026" not in out, (
