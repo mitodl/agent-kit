@@ -138,8 +138,12 @@ def repos() -> None:
         return
 
     table = Table(title="Indexed repositories", header_style="bold")
+    _short_cols = {"files", "size", "last indexed"}
     for col in ("repo", "files", "size", "last indexed"):
-        table.add_column(col)
+        if col in _short_cols:
+            table.add_column(col, no_wrap=True)
+        else:
+            table.add_column(col, overflow="fold", no_wrap=False)
     for store in stores:
         repo_uri, file_count = _code_store_stats(store)
         size, mtime = _dir_stats(store)
