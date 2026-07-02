@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .diff import Drift, diff
 from .jsonio import load_json_object, write_json
 from .manifest import Manifest, ManifestError, ManifestOptions, load_manifest
 from .models import (
@@ -24,6 +25,14 @@ from .models import (
     StdioServer,
 )
 from .plan import InstallResult, RegistrationBundle, apply, apply_all
+from .prune import (
+    PlatformState,
+    apply_with_prune,
+    default_state_path,
+    hook_identity,
+    load_state,
+    write_state,
+)
 from .registry import detect_installed_platforms, get_platform, known_platforms
 
 __all__ = [
@@ -32,6 +41,7 @@ __all__ = [
     "ApprovalPolicy",
     "CapabilityScope",
     "DeclarativeHook",
+    "Drift",
     "FrontmatterRule",
     "Hook",
     "HookEvent",
@@ -43,6 +53,7 @@ __all__ = [
     "ManifestOptions",
     "McpServer",
     "MergeStrategy",
+    "PlatformState",
     "PluginRegistration",
     "RegistrationBundle",
     "RemoteServer",
@@ -53,10 +64,16 @@ __all__ = [
     "StdioServer",
     "apply",
     "apply_all",
+    "apply_with_prune",
+    "default_state_path",
     "detect_installed_platforms",
+    "diff",
     "get_platform",
+    "hook_identity",
     "known_platforms",
     "load_json_object",
     "load_manifest",
+    "load_state",
     "write_json",
+    "write_state",
 ]

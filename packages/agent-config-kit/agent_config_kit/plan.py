@@ -37,6 +37,9 @@ class InstallResult:
         default_factory=list
     )  # files that would be written (always populated)
     skipped: list[tuple[Path, str]] = field(default_factory=list)  # (path, reason)
+    removed: list[Path | str] = field(
+        default_factory=list
+    )  # entries pruned by `apply --prune` (see prune.py); always empty otherwise
 
 
 @dataclass
