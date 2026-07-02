@@ -35,6 +35,12 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --group test
 
+      - name: Install omnigraph binary
+        # witan/server.py bootstraps a local graph at import time, so the
+        # binary must exist before pytest even collects tests — no more
+        # build-time bundling (see witan/setup.py), so fetch it explicitly.
+        run: uv run python -c "from witan.setup import install_omnigraph; install_omnigraph(dry_run=False)"
+
       - name: Run tests
         run: uv run pytest -v
 
