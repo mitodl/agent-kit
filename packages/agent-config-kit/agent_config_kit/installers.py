@@ -18,15 +18,33 @@ def install_skills(
     dest_dirs: list[Path],
     dry_run: bool,
 ) -> list[Path]:
-    """Copy each skill's SKILL.md into every dest dir (Pi needs two)."""
+    """Copy each skill's full directory into every dest dir (Pi needs two).
+
+    Per the Agent Skills packaging convention, a skill is its ``SKILL.md``
+    plus whatever sits alongside it in the same directory — ``scripts/``,
+    ``references/``, ``evals/``, or anything else the skill's instructions
+    refer to by relative path. Copying only ``SKILL.md`` would silently
+    strip those out and break any skill that isn't a single bare file.
+    ``shutil.copy2`` preserves each file's mode bits, so executable scripts
+    stay executable at the destination.
+
+    Returns every destination file path copied (or that would be copied,
+    under ``dry_run``) — not just each skill's ``SKILL.md`` — so drift
+    detection (``diff.py``) also catches a partially-installed skill missing
+    one of its supporting files.
+    """
     dests: list[Path] = []
     for skill in skills:
+        src_dir = skill.skill_md_path.parent
+        src_files = [p for p in sorted(src_dir.rglob("*")) if p.is_file()]
         for dest_base in dest_dirs:
-            dest = dest_base / skill.name / "SKILL.md"
-            if not dry_run:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(skill.skill_md_path, dest)
-            dests.append(dest)
+            skill_dest_dir = dest_base / skill.name
+            for src_file in src_files:
+                dest = skill_dest_dir / src_file.relative_to(src_dir)
+                if not dry_run:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_file, dest)
+                dests.append(dest)
     return dests
 
 
