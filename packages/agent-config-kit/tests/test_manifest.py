@@ -106,6 +106,36 @@ def test_load_manifest_resolves_skill_md_path_relative_to_manifest_dir(tmp_path)
     assert skill.skill_md_path == tmp_path / "skills" / "witan-task" / "SKILL.md"
 
 
+def test_load_manifest_non_string_entry_path_raises_manifest_error(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[hooks]]
+        kind = "plugin"
+        entry_path = 123
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="entry_path"):
+        load_manifest(manifest)
+
+
+def test_load_manifest_non_string_skill_md_path_raises_manifest_error(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[skills]]
+        name = "witan-task"
+        skill_md_path = 123
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="skill_md_path"):
+        load_manifest(manifest)
+
+
 def test_load_manifest_leaves_absolute_paths_unchanged(tmp_path):
     skill_md = tmp_path / "elsewhere" / "SKILL.md"
     skill_md.parent.mkdir(parents=True)

@@ -56,26 +56,43 @@ class Manifest:
     path: Path  # the manifest file this was loaded from
 
 
-def _resolve_path_field(value: str, manifest_dir: Path) -> str:
+def _resolve_path_field(
+    value: object, manifest_dir: Path, *, manifest_path: Path, field: str
+) -> str:
     """Resolve a manifest-relative path against the manifest's own
     directory, not the process CWD (spec M5). Absolute paths pass through."""
+    if not isinstance(value, str):
+        raise ManifestError(
+            f"{manifest_path}: {field} must be a string path, got "
+            f"{type(value).__name__}: {value!r}"
+        )
     candidate = Path(value)
     return str(candidate) if candidate.is_absolute() else str(manifest_dir / candidate)
 
 
-def _resolve_relative_paths(data: dict, manifest_dir: Path) -> None:
+def _resolve_relative_paths(
+    data: dict, manifest_dir: Path, manifest_path: Path
+) -> None:
     for hook in data.get("hooks", []) or []:
         if (
             isinstance(hook, dict)
             and hook.get("kind") == "plugin"
             and "entry_path" in hook
         ):
-            hook["entry_path"] = _resolve_path_field(hook["entry_path"], manifest_dir)
+            hook["entry_path"] = _resolve_path_field(
+                hook["entry_path"],
+                manifest_dir,
+                manifest_path=manifest_path,
+                field="hooks[].entry_path",
+            )
 
     for skill in data.get("skills", []) or []:
         if isinstance(skill, dict) and "skill_md_path" in skill:
             skill["skill_md_path"] = _resolve_path_field(
-                skill["skill_md_path"], manifest_dir
+                skill["skill_md_path"],
+                manifest_dir,
+                manifest_path=manifest_path,
+                field="skills[].skill_md_path",
             )
 
 
@@ -91,7 +108,7 @@ def load_manifest(path: Path) -> Manifest:
     path = Path(path)
 
     try:
-        raw_text = path.read_text()
+        raw_text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise ManifestError(f"{path}: could not read manifest file: {exc}") from exc
 
@@ -101,7 +118,7 @@ def load_manifest(path: Path) -> Manifest:
         raise ManifestError(f"{path}: invalid TOML: {exc}") from exc
 
     manifest_dir = path.parent
-    _resolve_relative_paths(data, manifest_dir)
+    _resolve_relative_paths(data, manifest_dir, path)
 
     options_data = data.pop("options", {})
     try:
