@@ -24,7 +24,7 @@ shell-scripted dotfiles setup, a CI job) currently has no way to use
 1. A manifest file format that declares the same `RegistrationBundle` content
    declaratively.
 2. A `cli` extra (`pip install agent-config-kit[cli]`) exposing an
-   `agent-config-kit` console script that loads a manifest and calls
+   `ac-kit` console script that loads a manifest and calls
    `apply`/`apply_all`, plus a dry-run-safe `validate` command for drift
    detection, and prune/uninstall support for entries removed from a
    manifest between runs.
@@ -40,7 +40,7 @@ installed.
 | M1 | Manifest format | **TOML**, parsed with the stdlib `tomllib` (available on Python ≥3.11, matching D4 — no new dependency on the base install). Considered YAML: rejected because it requires a third-party parser (`PyYAML`/`ruamel`) that would either bloat the dependency-light base package or force a parser-only split between `manifest.py` (needs `tomllib`, free) and `[cli]` (everything else) for no real benefit. TOML's `[[array-of-tables]]` syntax maps cleanly onto the `hooks`/`skills` lists and `[table.key]` onto the `mcp_servers` dict; every other structure in this repo that's a hand-authored manifest is already TOML (`pyproject.toml`, `uv.lock`). |
 | M2 | Manifest module location | `agent_config_kit/manifest.py`, part of the **base** package (imports only `tomllib` + existing `models`/`plan`), not gated behind `[cli]` — a caller might want `load_manifest()` without wanting the CLI/`cyclopts`/`rich` dependencies. `agent_config_kit/cli.py` (gated behind `[cli]`, §4) is the only new CLI-only module. |
 | M3 | CLI framework | `cyclopts`, matching this repo's established convention (`witan`'s own CLI, and the `cyclopts-cli-scripts` skill) — not `argparse`/`click`/`typer`. |
-| M4 | `cli` extra packaging | `[project.optional-dependencies] cli = ["cyclopts>=4,<5", "rich>=13"]` in `packages/agent-config-kit/pyproject.toml`, plus `[project.scripts] agent-config-kit = "agent_config_kit.cli:main"`. Console script registration is unconditional (that's how `pip`/`uv` entry points work), but `cli.py`'s top-level imports are the only place `cyclopts`/`rich` are imported — running the console script without `[cli]` installed fails fast with a clear `ImportError`-derived message, not a silent partial failure. |
+| M4 | `cli` extra packaging | `[project.optional-dependencies] cli = ["cyclopts>=4,<5", "rich>=13"]` in `packages/agent-config-kit/pyproject.toml`, plus `[project.scripts] ac-kit = "agent_config_kit.cli:main"`. Console script name is `ac-kit`, not `agent-config-kit` — shorter to type, and avoids the package-name-as-command-name default; `ack` was considered and rejected as too likely to collide with the well-known `ack`/`ack-grep` code-search tool many dev machines already have on `PATH`. Console script registration is unconditional (that's how `pip`/`uv` entry points work), but `cli.py`'s top-level imports are the only place `cyclopts`/`rich` are imported — running the console script without `[cli]` installed fails fast with a clear `ImportError`-derived message, not a silent partial failure. |
 | M5 | Path resolution inside a manifest | All filesystem paths in a manifest (`skill_md_path`, `entry_path`) are resolved **relative to the manifest file's own directory**, not the process CWD — matching how every other tool with a project-relative manifest behaves (e.g. `pyproject.toml` paths, `docker-compose.yml` build contexts). Absolute paths pass through unchanged. Resolution happens in `load_manifest()` (§3.2), so `RegistrationBundle` instances it produces always carry absolute paths — `apply`/`apply_all` are untouched, they already only accept resolved `Path`s. |
 | M6 | Drift detection scope | `validate` (§4.2) diffs *only the keys `agent-config-kit` would write* (by name: MCP server names, hook identity, skill names) against on-disk state — not a full-file diff. Unrelated hand-edited keys in the same file are never flagged as drift; that's the same "additive, override-by-key" contract `apply()` already has (spec §4.1). |
 | M7 | Prune/uninstall mechanism | A **state file** recording what the *last* `apply` from a given manifest actually wrote, so a later `apply` with entries removed from the manifest can remove exactly those (and only those) keys — never touching keys the manifest never owned. Default path: `<manifest>.lock.json` next to the manifest (overridable with `--state-file`). Content and full behavior are this spec's biggest open question — detailed in §5; final shape is this spec's contribution, but the fiddly edge cases (concurrent manifests targeting the same file, state file loss) are left to the implementing task (`tk-design-implement-prune-uninstall-for-entries-rem-4dfcdb`) to resolve against this default design. |
@@ -136,14 +136,13 @@ a bare `pydantic.ValidationError`.
 
 ## 4. CLI command surface
 
-Three `cyclopts` subcommands under the `agent-config-kit` console script
-(M3/M4):
+Three `cyclopts` subcommands under the `ac-kit` console script (M3/M4):
 
 ```
-agent-config-kit apply MANIFEST [--scope global|project] [--platform NAME]...
-                                 [--prune/--no-prune] [--dry-run] [--state-file PATH]
-agent-config-kit validate MANIFEST [--scope global|project] [--platform NAME]...
-agent-config-kit platforms [--all]
+ac-kit apply MANIFEST [--scope global|project] [--platform NAME]...
+                       [--prune/--no-prune] [--dry-run] [--state-file PATH]
+ac-kit validate MANIFEST [--scope global|project] [--platform NAME]...
+ac-kit platforms [--all]
 ```
 
 - `--platform NAME` (repeatable) intersects with `[options.platforms]` from

@@ -1,0 +1,152 @@
+"""TOML manifest loading — a declarative alternative to building a
+``RegistrationBundle`` in Python by hand.
+
+Part of the base package (only ``tomllib`` + existing ``models``/``plan``/
+``registry`` — no ``cli``-extra dependency) so a programmatic caller can load
+a manifest without pulling in ``cyclopts``/``rich``. See
+``docs/design/agent-config-kit-cli-spec.md`` §3 for the full format spec.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from .models import Hook, LspServer, McpServer, Scope, SkillSource
+from .plan import RegistrationBundle
+from .registry import known_platforms
+
+
+class ManifestError(Exception):
+    """Raised when a manifest file fails to parse or validate."""
+
+
+class ManifestBundle(BaseModel):
+    """Validate-on-load mirror of ``RegistrationBundle``'s shape."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    instructions: str | None = None
+    mcp_servers: dict[str, McpServer] = Field(default_factory=dict)
+    lsp_servers: dict[str, LspServer] = Field(default_factory=dict)
+    hooks: list[Hook] = Field(default_factory=list)
+    skills: list[SkillSource] = Field(default_factory=list)
+
+
+class _ManifestOptionsModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Scope = Scope.GLOBAL
+    platforms: list[str] | None = None
+
+
+@dataclass
+class ManifestOptions:
+    scope: Scope = Scope.GLOBAL
+    platforms: list[str] | None = None  # None => apply_all's own detection
+
+
+@dataclass
+class Manifest:
+    bundle: RegistrationBundle
+    options: ManifestOptions
+    path: Path  # the manifest file this was loaded from
+
+
+def _resolve_path_field(
+    value: object, manifest_dir: Path, *, manifest_path: Path, field: str
+) -> str:
+    """Resolve a manifest-relative path against the manifest's own
+    directory, not the process CWD (spec M5). Absolute paths pass through."""
+    if not isinstance(value, str):
+        raise ManifestError(
+            f"{manifest_path}: {field} must be a string path, got "
+            f"{type(value).__name__}: {value!r}"
+        )
+    candidate = Path(value)
+    return str(candidate) if candidate.is_absolute() else str(manifest_dir / candidate)
+
+
+def _resolve_relative_paths(
+    data: dict, manifest_dir: Path, manifest_path: Path
+) -> None:
+    for hook in data.get("hooks", []) or []:
+        if (
+            isinstance(hook, dict)
+            and hook.get("kind") == "plugin"
+            and "entry_path" in hook
+        ):
+            hook["entry_path"] = _resolve_path_field(
+                hook["entry_path"],
+                manifest_dir,
+                manifest_path=manifest_path,
+                field="hooks[].entry_path",
+            )
+
+    for skill in data.get("skills", []) or []:
+        if isinstance(skill, dict) and "skill_md_path" in skill:
+            skill["skill_md_path"] = _resolve_path_field(
+                skill["skill_md_path"],
+                manifest_dir,
+                manifest_path=manifest_path,
+                field="skills[].skill_md_path",
+            )
+
+
+def _format_validation_error(exc: ValidationError, path: Path) -> str:
+    lines = [f"{path}: manifest failed validation:"]
+    for err in exc.errors():
+        loc = ".".join(str(part) for part in err["loc"]) or "<root>"
+        lines.append(f"  - {loc}: {err['msg']}")
+    return "\n".join(lines)
+
+
+def load_manifest(path: Path) -> Manifest:
+    path = Path(path)
+
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ManifestError(f"{path}: could not read manifest file: {exc}") from exc
+
+    try:
+        data = tomllib.loads(raw_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ManifestError(f"{path}: invalid TOML: {exc}") from exc
+
+    manifest_dir = path.parent
+    _resolve_relative_paths(data, manifest_dir, path)
+
+    options_data = data.pop("options", {})
+    try:
+        options_model = _ManifestOptionsModel.model_validate(options_data)
+    except ValidationError as exc:
+        raise ManifestError(_format_validation_error(exc, path)) from exc
+
+    if options_model.platforms is not None:
+        unknown = sorted(set(options_model.platforms) - set(known_platforms()))
+        if unknown:
+            raise ManifestError(
+                f"{path}: [options] unknown platform(s): {', '.join(unknown)} "
+                f"(known: {', '.join(known_platforms())})"
+            )
+
+    try:
+        bundle_model = ManifestBundle.model_validate(data)
+    except ValidationError as exc:
+        raise ManifestError(_format_validation_error(exc, path)) from exc
+
+    bundle = RegistrationBundle(
+        mcp_servers=bundle_model.mcp_servers,
+        hooks=bundle_model.hooks,
+        skills=bundle_model.skills,
+        lsp_servers=bundle_model.lsp_servers,
+        instructions=bundle_model.instructions,
+    )
+    options = ManifestOptions(
+        scope=options_model.scope, platforms=options_model.platforms
+    )
+    return Manifest(bundle=bundle, options=options, path=path)

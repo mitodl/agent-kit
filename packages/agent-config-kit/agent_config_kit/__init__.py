@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .jsonio import load_json_object, write_json
+from .manifest import Manifest, ManifestError, ManifestOptions, load_manifest
 from .models import (
     AgentPlatform,
     ApprovalMode,
@@ -37,6 +38,9 @@ __all__ = [
     "InstallResult",
     "InstructionsConfig",
     "LspServer",
+    "Manifest",
+    "ManifestError",
+    "ManifestOptions",
     "McpServer",
     "MergeStrategy",
     "PluginRegistration",
@@ -53,5 +57,6 @@ __all__ = [
     "get_platform",
     "known_platforms",
     "load_json_object",
+    "load_manifest",
     "write_json",
 ]
