@@ -76,7 +76,10 @@ def _fetch_http_file(uri: str, dest: Path) -> Path:
     meta_path = _meta_path(dest)
     headers: dict[str, str] = {}
     if dest.is_file() and meta_path.is_file():
-        prior_meta = json.loads(meta_path.read_text())
+        try:
+            prior_meta = json.loads(meta_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            prior_meta = {}  # corrupted/partial sidecar — fetch unconditionally
         if etag := prior_meta.get("etag"):
             headers["If-None-Match"] = etag
         if last_modified := prior_meta.get("last_modified"):
@@ -117,17 +120,21 @@ def _run_git(args: list[str], *, cwd: Path | None = None) -> None:
 def _parse_git_uri(uri: str) -> tuple[str, str | None, str | None]:
     """``git+<url>[@ref][#subdirectory=<path>]`` -> ``(clone_url, ref, subdirectory)``.
 
-    ``ref`` is only recognized after the last ``/`` in the URL, i.e. after
-    the repo path — matching the common ``...repo.git@v1.0.0`` convention —
-    so it can't be confused with a userinfo ``@`` earlier in the URL (e.g.
-    ``https://user@host/...``, which has no ref)."""
+    ``ref`` is only recognized after the last ``/`` or ``:`` in the URL, i.e.
+    after the repo path — matching the common ``...repo.git@v1.0.0``
+    convention — so it can't be confused with a userinfo ``@`` earlier in
+    the URL (e.g. ``https://user@host/...``, which has no ref). The ``:``
+    half of that also covers SCP-like syntax (``git@host:org/repo.git`` or,
+    with no ``/`` at all, ``git@host:repo.git@v1.0.0``), where the repo path
+    is separated from the host by ``:`` rather than a URL scheme's ``/``."""
     rest = uri[len(_GIT_PREFIX) :]
     subdirectory = None
     if match := _SUBDIRECTORY_RE.search(rest):
         subdirectory = match.group(1)
         rest = rest[: match.start()]
     ref = None
-    at_idx = rest.find("@", rest.rfind("/"))
+    last_sep = max(rest.rfind("/"), rest.rfind(":"))
+    at_idx = rest.find("@", last_sep) if last_sep != -1 else rest.rfind("@")
     if at_idx != -1:
         ref = rest[at_idx + 1 :]
         rest = rest[:at_idx]

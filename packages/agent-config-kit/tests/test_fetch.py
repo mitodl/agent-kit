@@ -8,7 +8,7 @@ import pytest
 
 from agent_config_kit.fetch import FetchError, fetch_remote, is_remote_uri
 
-pytestmark = pytest.mark.skipif(
+requires_git = pytest.mark.skipif(
     shutil.which("git") is None, reason="git binary not on PATH"
 )
 
@@ -125,6 +125,7 @@ def _init_git_repo(path: Path) -> None:
     subprocess.run(["git", "commit", "--quiet", "-m", "init"], cwd=path, check=True)
 
 
+@requires_git
 def test_fetch_git_clones_and_resolves_subdirectory(tmp_path):
     repo = tmp_path / "origin"
     _init_git_repo(repo)
@@ -137,6 +138,7 @@ def test_fetch_git_clones_and_resolves_subdirectory(tmp_path):
     assert (dest / "SKILL.md").read_text() == "# my-skill\n"
 
 
+@requires_git
 def test_fetch_git_is_idempotent_across_calls(tmp_path):
     repo = tmp_path / "origin"
     _init_git_repo(repo)
@@ -157,3 +159,47 @@ def test_fetch_git_missing_git_binary_raises_fetch_error(tmp_path, monkeypatch):
 
     with pytest.raises(FetchError, match="git.*PATH"):
         fetch_remote("git+file:///nonexistent", tmp_path / "cache")
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected_url", "expected_ref"),
+    [
+        (
+            "git+https://github.com/org/repo.git",
+            "https://github.com/org/repo.git",
+            None,
+        ),
+        (
+            "git+https://github.com/org/repo.git@v1.0.0",
+            "https://github.com/org/repo.git",
+            "v1.0.0",
+        ),
+        (
+            "git+https://user@github.com/org/repo.git",
+            "https://user@github.com/org/repo.git",
+            None,
+        ),
+        # SCP-like syntax with a path segment: the ":" separates host from
+        # path, same as a URL scheme's "/" would.
+        (
+            "git+git@github.com:org/repo.git@v1.0.0",
+            "git@github.com:org/repo.git",
+            "v1.0.0",
+        ),
+        # SCP-like syntax with NO "/" anywhere — regression case for the
+        # previous rfind("/")-only heuristic, which returned -1 here and
+        # broke ref detection entirely.
+        (
+            "git+git@github.com:repo.git@v1.0.0",
+            "git@github.com:repo.git",
+            "v1.0.0",
+        ),
+    ],
+)
+def test_parse_git_uri_resolves_ref_across_url_shapes(uri, expected_url, expected_ref):
+    from agent_config_kit.fetch import _parse_git_uri
+
+    clone_url, ref, _subdirectory = _parse_git_uri(uri)
+
+    assert clone_url == expected_url
+    assert ref == expected_ref
