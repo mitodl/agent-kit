@@ -168,9 +168,16 @@ class OmnigraphClient:
     @staticmethod
     def _find_binary() -> str:
         binary = shutil.which("omnigraph")
-        if binary is None:
-            raise RuntimeError(
-                "omnigraph binary not found. Install via: witan-code setup "
-                "(or `witan setup`, if witan is also installed)"
-            )
-        return binary
+        if binary is not None:
+            return binary
+        # MCP servers are often launched by a desktop app or IDE extension
+        # whose process doesn't inherit a shell PATH — `witan setup`/
+        # `witan-code setup` always install to this fixed location, so check
+        # it directly rather than relying on PATH alone.
+        fallback = Path.home() / ".local" / "bin" / "omnigraph"
+        if fallback.exists():
+            return str(fallback)
+        raise RuntimeError(
+            "omnigraph binary not found. Install via: witan-code setup "
+            "(or `witan setup`, if witan is also installed)"
+        )
