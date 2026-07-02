@@ -15,6 +15,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .fetch import FetchError, fetch_remote, is_remote_uri
 from .models import Hook, LspServer, McpServer, Scope, SkillSource
 from .plan import RegistrationBundle
 from .registry import known_platforms
@@ -57,21 +58,33 @@ class Manifest:
 
 
 def _resolve_path_field(
-    value: object, manifest_dir: Path, *, manifest_path: Path, field: str
+    value: object,
+    manifest_dir: Path,
+    *,
+    manifest_path: Path,
+    field: str,
+    cache_dir: Path,
 ) -> str:
     """Resolve a manifest-relative path against the manifest's own
-    directory, not the process CWD (spec M5). Absolute paths pass through."""
+    directory, not the process CWD (spec M5). Absolute paths pass through.
+    A remote (``https://``/``git+``) URI is fetched into ``cache_dir`` and
+    replaced with the resulting local path — see ``fetch.py``."""
     if not isinstance(value, str):
         raise ManifestError(
             f"{manifest_path}: {field} must be a string path, got "
             f"{type(value).__name__}: {value!r}"
         )
+    if is_remote_uri(value):
+        try:
+            return str(fetch_remote(value, cache_dir))
+        except FetchError as exc:
+            raise ManifestError(f"{manifest_path}: {field}: {exc}") from exc
     candidate = Path(value)
     return str(candidate) if candidate.is_absolute() else str(manifest_dir / candidate)
 
 
 def _resolve_relative_paths(
-    data: dict, manifest_dir: Path, manifest_path: Path
+    data: dict, manifest_dir: Path, manifest_path: Path, cache_dir: Path
 ) -> None:
     for hook in data.get("hooks", []) or []:
         if (
@@ -84,6 +97,7 @@ def _resolve_relative_paths(
                 manifest_dir,
                 manifest_path=manifest_path,
                 field="hooks[].entry_path",
+                cache_dir=cache_dir,
             )
 
     for skill in data.get("skills", []) or []:
@@ -93,6 +107,7 @@ def _resolve_relative_paths(
                 manifest_dir,
                 manifest_path=manifest_path,
                 field="skills[].skill_md_path",
+                cache_dir=cache_dir,
             )
 
 
@@ -104,7 +119,15 @@ def _format_validation_error(exc: ValidationError, path: Path) -> str:
     return "\n".join(lines)
 
 
-def load_manifest(path: Path) -> Manifest:
+def default_cache_dir(manifest_path: Path) -> Path:
+    """Where remote (``https://``/``git+``) skill/hook sources fetched by
+    this manifest are cached, by default — alongside the manifest itself,
+    matching M5's "resolved relative to the manifest's own directory"
+    convention for local paths."""
+    return manifest_path.parent / ".agent-config-kit-cache"
+
+
+def load_manifest(path: Path, *, cache_dir: Path | None = None) -> Manifest:
     path = Path(path)
 
     try:
@@ -118,7 +141,8 @@ def load_manifest(path: Path) -> Manifest:
         raise ManifestError(f"{path}: invalid TOML: {exc}") from exc
 
     manifest_dir = path.parent
-    _resolve_relative_paths(data, manifest_dir, path)
+    resolved_cache_dir = cache_dir if cache_dir is not None else default_cache_dir(path)
+    _resolve_relative_paths(data, manifest_dir, path, resolved_cache_dir)
 
     options_data = data.pop("options", {})
     try:

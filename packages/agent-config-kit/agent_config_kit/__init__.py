@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from .diff import Drift, diff
+from .fetch import FetchError, fetch_remote, is_remote_uri
 from .jsonio import load_json_object, write_json
-from .manifest import Manifest, ManifestError, ManifestOptions, load_manifest
+from .manifest import (
+    Manifest,
+    ManifestError,
+    ManifestOptions,
+    default_cache_dir,
+    load_manifest,
+)
 from .models import (
     AgentPlatform,
     ApprovalMode,
@@ -42,6 +49,7 @@ __all__ = [
     "CapabilityScope",
     "DeclarativeHook",
     "Drift",
+    "FetchError",
     "FrontmatterRule",
     "Hook",
     "HookEvent",
@@ -65,11 +73,14 @@ __all__ = [
     "apply",
     "apply_all",
     "apply_with_prune",
+    "default_cache_dir",
     "default_state_path",
     "detect_installed_platforms",
     "diff",
+    "fetch_remote",
     "get_platform",
     "hook_identity",
+    "is_remote_uri",
     "known_platforms",
     "load_json_object",
     "load_manifest",

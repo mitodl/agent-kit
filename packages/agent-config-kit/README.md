@@ -85,6 +85,39 @@ constraints (1-64 characters, lowercase alphanumeric segments separated by
 single hyphens, no leading/trailing/consecutive hyphens) since it becomes
 the installed skill's directory name.
 
+#### Remote skill/hook sources
+
+`skill_md_path` and `entry_path` also accept a remote URI instead of a
+local, manifest-relative path — fetched and cached automatically, no
+pre-cloning required:
+
+```toml
+[[skills]]
+name = "remote-skill"
+skill_md_path = "https://raw.githubusercontent.com/org/repo/main/skills/remote-skill/SKILL.md"
+
+[[hooks]]
+kind = "plugin"
+entry_path = "git+https://github.com/org/repo.git@v1.0.0#subdirectory=extensions/pi/witan.ts"
+```
+
+- A plain `https://`/`http://` URI fetches exactly one file — enough for
+  `entry_path` or a single-file skill, but not a skill with supporting files
+  (`scripts/`, `references/`, ...), since there's no directory on the other
+  end of one GET.
+- A `git+https://...#subdirectory=...` URI (optionally with `@ref` for a
+  branch/tag/commit) shallow-clones the repo and resolves the subdirectory —
+  use this for a skill that needs its full directory.
+- Fetched sources are cached under `.agent-config-kit-cache/` next to the
+  manifest by default (override with `ac-kit apply/validate --cache-dir`, or
+  `load_manifest(path, cache_dir=...)` from Python). Every `apply`/`validate`
+  re-fetches; HTTP(S) uses a conditional GET so an unchanged remote is a
+  cheap 304, and a transient network failure falls back to the last good
+  cache instead of failing a run that would otherwise have worked offline.
+- `git` must be on `PATH` for `git+` URIs — there's no pure-Python git
+  client dependency here, by design (no new dependency on the base
+  package).
+
 ### `ac-kit apply`
 
 Applies a manifest's MCP servers, hooks, and skills to one or more platforms:
@@ -109,6 +142,8 @@ ac-kit apply agent-config.toml --scope project --dry-run
   manifest's first-ever `--prune` run removes nothing, since there's no
   recorded state yet to diff against, and a hand-edited key that's absent
   from both the previous and current manifest is never touched.
+- `--cache-dir PATH` overrides where remote skill/hook sources are fetched
+  and cached (default: `.agent-config-kit-cache` next to the manifest).
 
 Exit codes: `0` success, `1` a platform's target couldn't be parsed as JSON,
 `2` the manifest failed to load.

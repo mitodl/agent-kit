@@ -41,7 +41,7 @@ installed.
 | M2 | Manifest module location | `agent_config_kit/manifest.py`, part of the **base** package (imports only `tomllib` + existing `models`/`plan`), not gated behind `[cli]` — a caller might want `load_manifest()` without wanting the CLI/`cyclopts`/`rich` dependencies. `agent_config_kit/cli.py` (gated behind `[cli]`, §4) is the only new CLI-only module. |
 | M3 | CLI framework | `cyclopts`, matching this repo's established convention (`witan`'s own CLI, and the `cyclopts-cli-scripts` skill) — not `argparse`/`click`/`typer`. |
 | M4 | `cli` extra packaging | `[project.optional-dependencies] cli = ["cyclopts>=4,<5", "rich>=13"]` in `packages/agent-config-kit/pyproject.toml`, plus `[project.scripts] ac-kit = "agent_config_kit.cli:main"`. Console script name is `ac-kit`, not `agent-config-kit` — shorter to type, and avoids the package-name-as-command-name default; `ack` was considered and rejected as too likely to collide with the well-known `ack`/`ack-grep` code-search tool many dev machines already have on `PATH`. Console script registration is unconditional (that's how `pip`/`uv` entry points work), but `cli.py`'s top-level imports are the only place `cyclopts`/`rich` are imported — running the console script without `[cli]` installed fails fast with a clear `ImportError`-derived message, not a silent partial failure. |
-| M5 | Path resolution inside a manifest | All filesystem paths in a manifest (`skill_md_path`, `entry_path`) are resolved **relative to the manifest file's own directory**, not the process CWD — matching how every other tool with a project-relative manifest behaves (e.g. `pyproject.toml` paths, `docker-compose.yml` build contexts). Absolute paths pass through unchanged. Resolution happens in `load_manifest()` (§3.2), so `RegistrationBundle` instances it produces always carry absolute paths — `apply`/`apply_all` are untouched, they already only accept resolved `Path`s. |
+| M5 | Path resolution inside a manifest | All filesystem paths in a manifest (`skill_md_path`, `entry_path`) are resolved **relative to the manifest file's own directory**, not the process CWD — matching how every other tool with a project-relative manifest behaves (e.g. `pyproject.toml` paths, `docker-compose.yml` build contexts). Absolute paths pass through unchanged. Resolution happens in `load_manifest()` (§3.2), so `RegistrationBundle` instances it produces always carry absolute paths — `apply`/`apply_all` are untouched, they already only accept resolved `Path`s. **Extension (implemented, see §3.3):** a `skill_md_path`/`entry_path` value can also be a remote `https://`/`git+` URI, sniffed by prefix (no new manifest field) and fetched into a local cache before the same absolute-`Path` contract applies — `installers.py`/`plan.py`/`prune.py` remain untouched. |
 | M6 | Drift detection scope | `validate` (§4.2) diffs *only the keys `agent-config-kit` would write* (by name: MCP server names, hook identity, skill names) against on-disk state — not a full-file diff. Unrelated hand-edited keys in the same file are never flagged as drift; that's the same "additive, override-by-key" contract `apply()` already has (spec §4.1). |
 | M7 | Prune/uninstall mechanism | A **state file** recording what the *last* `apply` from a given manifest actually wrote, so a later `apply` with entries removed from the manifest can remove exactly those (and only those) keys — never touching keys the manifest never owned. Default path: `<manifest>.lock.json` next to the manifest (overridable with `--state-file`). Content and full behavior are this spec's biggest open question — detailed in §5; final shape is this spec's contribution, but the fiddly edge cases (concurrent manifests targeting the same file, state file loss) are left to the implementing task (`tk-design-implement-prune-uninstall-for-entries-rem-4dfcdb`) to resolve against this default design. |
 | M8 | `instructions`/`lsp_servers` in the manifest | Modeled in the TOML schema (§3.1) for forward compatibility with `RegistrationBundle`'s existing (currently-unpopulated-by-any-v1-caller) fields, but `load_manifest()` only *populates* them if present — no v1 registry entry consumes them yet (spec D7), so a manifest that sets them will parse fine and `apply()` will simply no-op on them for every current platform, exactly as it does today for a hand-built `RegistrationBundle`. |
@@ -125,7 +125,7 @@ class Manifest:
     path: Path  # the manifest file this was loaded from
 
 
-def load_manifest(path: Path) -> Manifest: ...
+def load_manifest(path: Path, *, cache_dir: Path | None = None) -> Manifest: ...
 ```
 
 `load_manifest` raises `ManifestError` (new, in the same module) with a
@@ -134,6 +134,61 @@ message that includes the manifest path and the offending table/key on any
 propagated raw, since a CLI user has no Python traceback context to interpret
 a bare `pydantic.ValidationError`.
 
+### 3.3 Remote (`https://`/`git+`) skill/hook sources
+
+Answers `tk-support-remote-git-https-uris-for-skill-hook-plu-18590e`. A
+`skill_md_path`/`entry_path` value is sniffed by prefix — `https://`,
+`http://`, or `git+` — rather than adding a new field or a `Path | AnyUrl`
+union type: `_resolve_path_field` (§3.2) already sits at the one place every
+such value passes through before a `SkillSource`/`PluginRegistration` is
+constructed, so remote resolution is an extra branch there, not a model
+change. `installers.py`, `plan.py`, and `prune.py` are untouched — they only
+ever see a resolved, absolute, local `Path`, exactly as before.
+
+Implemented in `agent_config_kit/fetch.py`, **in the base package** —
+resolving this spec's original open question of whether remote fetch needs
+an opt-in extra (to avoid an HTTP client dependency on the dependency-light
+base install, per the base spec's D3): it doesn't, because fetching is done
+with stdlib-only tooling (`urllib.request` for `https://`/`http://`, the
+`git` binary via `subprocess` for `git+`), not a new third-party dependency.
+`load_manifest()` already does filesystem I/O to resolve relative paths; a
+network fetch at the same step is judged an extension of that, not new
+packaging weight.
+
+- **`https://`/`http://`** fetches exactly one file — sufficient for
+  `entry_path` (a single plugin script) or a single-file skill, but *not* a
+  skill with supporting files (`scripts/`, `references/`, ...), since a bare
+  GET has no directory on the other end.
+- **`git+<url>[@ref][#subdirectory=<path>]`** (pip VCS-URL convention)
+  shallow-clones the repo and resolves `subdirectory`, covering the
+  multi-file skill case the HTTP path can't.
+- **Caching/staleness:** cached under `<manifest_dir>/.agent-config-kit-cache/`
+  by default (`cache_dir` param / CLI `--cache-dir`), keyed by a hash of the
+  URI. Every `load_manifest()` call re-fetches — no separate "only on
+  manifest change" mode — but HTTP(S) sends a conditional GET
+  (`If-None-Match`/`If-Modified-Since` against a stored ETag/Last-Modified
+  sidecar) so an unchanged remote is a cheap 304, and a connection-level
+  failure (no response at all) falls back to the last successfully-fetched
+  copy rather than failing an `apply`/`validate` that would otherwise have
+  worked offline. A real HTTP error response (404, 403, ...) is not treated
+  as transient and always raises, even with a stale cache present — that
+  response means the resource is actually gone, not just unreachable this
+  instant. `git+` follows the same fallback shape via a shallow `git fetch`.
+- **Prune implication (§5):** none needed. A fetched file is tracked by
+  `skill_files`/`hook_identity` exactly like any other local file — prune
+  diffs by path/identity, not by fetch origin. The one real consequence:
+  content drift for an *unchanged* URI between two applies is invisible
+  unless a fetch actually notices a change, which is the same
+  "content-level drift isn't actionable, only presence/absence is"
+  reasoning §4.2 already establishes for ordinary local skills.
+- **Not solved here (flagged as follow-up):** no auth support for private
+  `https://` URLs or private git remotes (git's own credential helpers work
+  for `git+` today since `git` itself does the clone; a bare `https://`
+  single-file fetch has no equivalent). `git` must be on `PATH` — there is
+  no pure-Python git client dependency, by design, so a `git+` URI on a
+  machine without `git` fails with a clear `FetchError` rather than a
+  cryptic one.
+
 ## 4. CLI command surface
 
 Three `cyclopts` subcommands under the `ac-kit` console script (M3/M4):
@@ -141,7 +196,8 @@ Three `cyclopts` subcommands under the `ac-kit` console script (M3/M4):
 ```
 ac-kit apply MANIFEST [--scope global|project] [--platform NAME]...
                        [--prune/--no-prune] [--dry-run] [--state-file PATH]
-ac-kit validate MANIFEST [--scope global|project] [--platform NAME]...
+                       [--cache-dir PATH]
+ac-kit validate MANIFEST [--scope global|project] [--platform NAME]... [--cache-dir PATH]
 ac-kit platforms [--all]
 ```
 
