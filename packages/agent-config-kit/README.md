@@ -76,6 +76,15 @@ Table/field names mirror the Python model field names exactly
 (`kind`, `command`, `args`, `env`, `event`, `entry_path`, ...) — see
 `docs/design/agent-config-kit-cli-spec.md` for the full schema and rationale.
 
+Skills follow the [Agent Skills specification](https://agentskills.io/specification):
+`skill_md_path` must point to a file literally named `SKILL.md`, and its
+parent directory is installed wholesale — `scripts/`, `references/`,
+`assets/`, or any other supporting files alongside it are copied too, not
+just `SKILL.md` itself. `name` must match the spec's frontmatter `name`
+constraints (1-64 characters, lowercase alphanumeric segments separated by
+single hyphens, no leading/trailing/consecutive hyphens) since it becomes
+the installed skill's directory name.
+
 ### `ac-kit apply`
 
 Applies a manifest's MCP servers, hooks, and skills to one or more platforms:

@@ -13,6 +13,21 @@ from pathlib import Path
 from .models import SkillSource
 
 
+def skill_files(skill: SkillSource) -> list[Path]:
+    """Every file belonging to a skill, relative to the skill's own
+    directory — the full Agent Skills payload (``SKILL.md`` plus whatever
+    sits alongside it: ``scripts/``, ``references/``, ``assets/``, or
+    anything else). The manifest only ever names a skill's ``SKILL.md``; this
+    walk is how the *rest* of its files are discovered, both for copying
+    (``install_skills``) and for prune tracking (``prune.py``) — a skill's
+    file set can change between two applies without its name or
+    ``skill_md_path`` changing, so anything that needs to know "what did this
+    skill actually put on disk" must re-derive it from here rather than the
+    manifest alone."""
+    src_dir = skill.skill_md_path.parent
+    return [p.relative_to(src_dir) for p in sorted(src_dir.rglob("*")) if p.is_file()]
+
+
 def install_skills(
     skills: list[SkillSource],
     dest_dirs: list[Path],
@@ -36,14 +51,13 @@ def install_skills(
     dests: list[Path] = []
     for skill in skills:
         src_dir = skill.skill_md_path.parent
-        src_files = [p for p in sorted(src_dir.rglob("*")) if p.is_file()]
         for dest_base in dest_dirs:
             skill_dest_dir = dest_base / skill.name
-            for src_file in src_files:
-                dest = skill_dest_dir / src_file.relative_to(src_dir)
+            for rel in skill_files(skill):
+                dest = skill_dest_dir / rel
                 if not dry_run:
                     dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src_file, dest)
+                    shutil.copy2(src_dir / rel, dest)
                 dests.append(dest)
     return dests
 

@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
+from .installers import skill_files
 from .jsonio import load_json_object, write_json
 from .models import DeclarativeHook, Hook, HookEvent, PluginRegistration, Scope
 from .plan import InstallResult, RegistrationBundle, _navigate, _resolve_target, apply
@@ -45,14 +45,30 @@ def _decode_hook_identity(identity: str) -> Hook:
 class PlatformState:
     mcp_servers: list[str] = field(default_factory=list)
     hooks: list[str] = field(default_factory=list)
-    skills: list[str] = field(default_factory=list)
+    skills: list[str] = field(
+        default_factory=list
+    )  # "<skill-name>/<relative-file-path>", not just skill names — see
+    # _bundle_platform_state
 
 
 def _bundle_platform_state(bundle: RegistrationBundle) -> PlatformState:
+    # Unlike mcp_servers/hooks, a skill's supporting files (scripts/,
+    # references/, assets/, ...) are never enumerated in the manifest — only
+    # its name and SKILL.md path are. Tracking skills by name alone would mean
+    # a skill that drops a file (but keeps its name) between two applies
+    # could never have that stale file pruned, since name-level diffing sees
+    # no change at all. Tracking one entry per actual file — re-derived from
+    # disk via skill_files, the same walk install_skills uses to copy — makes
+    # prune diff at the same granularity apply() actually writes at.
+    skill_entries = [
+        f"{skill.name}/{rel.as_posix()}"
+        for skill in bundle.skills
+        for rel in skill_files(skill)
+    ]
     return PlatformState(
         mcp_servers=sorted(bundle.mcp_servers),
         hooks=sorted(hook_identity(h) for h in bundle.hooks),
-        skills=sorted(skill.name for skill in bundle.skills),
+        skills=sorted(skill_entries),
     )
 
 
@@ -167,10 +183,25 @@ def _remove_hooks(
     return removed
 
 
+def _prune_empty_dirs(start: Path, *, stop_above: Path) -> None:
+    """Remove ``start`` and any now-empty ancestor directories, stopping
+    before (never removing) ``stop_above`` itself — e.g. a platform's shared
+    ``skills/`` dir must survive even after every skill under it is gone."""
+    current = start
+    while current != stop_above and current.is_dir() and not any(current.iterdir()):
+        current.rmdir()
+        current = current.parent
+
+
 def _remove_skills(
-    platform: registry.AgentPlatform, names: set[str], *, scope: Scope, dry_run: bool
+    platform: registry.AgentPlatform, entries: set[str], *, scope: Scope, dry_run: bool
 ) -> list[Path]:
-    if not names or platform.skills is None:
+    """``entries`` are ``"<skill-name>/<relative-file-path>"`` strings (see
+    ``_bundle_platform_state``) — removed at file granularity so a skill that
+    only dropped one supporting file (not its whole self) gets exactly that
+    file pruned, with now-empty directories (e.g. an emptied ``scripts/``, or
+    the skill's own dir once every file is gone) cleaned up behind it."""
+    if not entries or platform.skills is None:
         return []
     target = _resolve_target(platform.skills, scope)
     if target is None:
@@ -181,13 +212,15 @@ def _remove_skills(
         else [target.path]
     )
     removed: list[Path] = []
-    for name in sorted(names):
+    for entry in sorted(entries):
+        skill_name, _, rel = entry.partition("/")
         for dest_base in dest_dirs:
-            dest_dir = dest_base / name
-            if dest_dir.is_dir():
+            dest_file = dest_base / skill_name / rel
+            if dest_file.is_file():
                 if not dry_run:
-                    shutil.rmtree(dest_dir)
-                removed.append(dest_dir)
+                    dest_file.unlink()
+                    _prune_empty_dirs(dest_file.parent, stop_above=dest_base)
+                removed.append(dest_file)
     return removed
 
 

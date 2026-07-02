@@ -137,17 +137,54 @@ def test_apply_with_prune_removes_dropped_skill_dirs(tmp_path, monkeypatch):
     dest_agents = tmp_path / ".agents" / "skills" / "my-skill"
     assert dest_claude_style.is_dir()
     assert dest_agents.is_dir()
-    previous = PlatformState(skills=["my-skill"])
+    previous = PlatformState(skills=["my-skill/SKILL.md"])
 
     result, current_state = apply_with_prune(
         "pi", _bundle(mcp_servers={}, skills=[]), previous
     )
 
+    # every file gone -> the now-empty skill dir itself is cleaned up too
     assert not dest_claude_style.exists()
     assert not dest_agents.exists()
-    assert dest_claude_style in result.removed
-    assert dest_agents in result.removed
+    assert dest_claude_style / "SKILL.md" in result.removed
+    assert dest_agents / "SKILL.md" in result.removed
     assert current_state.skills == []
+
+
+def test_apply_with_prune_removes_stale_supporting_file_when_skill_name_unchanged(
+    tmp_path, monkeypatch
+):
+    """The manifest only ever names a skill's SKILL.md, never its scripts/
+    references/ files — those are discovered from disk at apply time. If a
+    skill drops a supporting file between two applies but keeps the same
+    name, prune must still catch and remove the now-stale file, not treat
+    "same skill name in both manifests" as "nothing changed"."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "SKILL.md").write_text("# skill")
+    (src_dir / "scripts").mkdir()
+    old_script = src_dir / "scripts" / "old.sh"
+    old_script.write_text("#!/bin/sh\necho old\n")
+    skill = SkillSource(name="my-skill", skill_md_path=src_dir / "SKILL.md")
+    _, previous = apply_with_prune(
+        "claude", _bundle(mcp_servers={}, skills=[skill]), PlatformState()
+    )
+    dest_script = tmp_path / ".claude" / "skills" / "my-skill" / "scripts" / "old.sh"
+    dest_skill_md = tmp_path / ".claude" / "skills" / "my-skill" / "SKILL.md"
+    assert dest_script.exists()
+
+    old_script.unlink()  # the source skill drops this script, name unchanged
+
+    result, current_state = apply_with_prune(
+        "claude", _bundle(mcp_servers={}, skills=[skill]), previous
+    )
+
+    assert not dest_script.exists()
+    assert not dest_script.parent.exists()  # emptied scripts/ dir cleaned up
+    assert dest_skill_md.exists()  # the skill itself is still installed
+    assert dest_script in result.removed
+    assert current_state.skills == ["my-skill/SKILL.md"]
 
 
 def test_apply_with_prune_never_touches_keys_manifest_never_owned(

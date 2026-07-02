@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from pydantic import TypeAdapter
+import pytest
+from pydantic import TypeAdapter, ValidationError
 
 from agent_config_kit.models import (
     CapabilityScope,
@@ -11,6 +12,7 @@ from agent_config_kit.models import (
     PluginRegistration,
     RemoteServer,
     ScopeTarget,
+    SkillSource,
     StdioServer,
 )
 
@@ -68,3 +70,32 @@ def test_capability_scope_dump_by_alias_uses_global_key():
     dumped = scope.model_dump(mode="json", by_alias=True)
     assert "global" in dumped
     assert "global_" not in dumped
+
+
+@pytest.mark.parametrize(
+    "name", ["pdf-processing", "data-analysis", "a", "a" * 64, "a1-b2"]
+)
+def test_skill_source_accepts_agent_skills_compliant_names(name):
+    SkillSource(name=name, skill_md_path=Path("/x/SKILL.md"))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PDF-Processing",  # uppercase not allowed
+        "-pdf",  # cannot start with a hyphen
+        "pdf-",  # cannot end with a hyphen
+        "pdf--processing",  # consecutive hyphens not allowed
+        "",  # must be non-empty
+        "a" * 65,  # max 64 characters
+        "pdf_processing",  # underscores aren't hyphens
+    ],
+)
+def test_skill_source_rejects_non_compliant_names(name):
+    with pytest.raises(ValidationError):
+        SkillSource(name=name, skill_md_path=Path("/x/SKILL.md"))
+
+
+def test_skill_source_rejects_skill_md_path_not_named_skill_md():
+    with pytest.raises(ValidationError, match="SKILL.md"):
+        SkillSource(name="pdf-processing", skill_md_path=Path("/x/skill.md"))
