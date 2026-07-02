@@ -195,15 +195,7 @@ class OmnigraphClient:
 
     @staticmethod
     def _find_binary() -> str:
-        # Check for the binary bundled inside the package by the hatchling build hook.
-        bundled = Path(__file__).parent / "_bin" / "omnigraph"
-        if bundled.exists():
-            return str(bundled)
         binary = shutil.which("omnigraph")
         if binary is None:
-            raise RuntimeError(
-                "omnigraph binary not found. "
-                "Install via: curl -fsSL "
-                "https://raw.githubusercontent.com/ModernRelay/omnigraph/main/scripts/install.sh | bash"
-            )
+            raise RuntimeError("omnigraph binary not found. Install via: witan setup")
         return binary

@@ -8,11 +8,15 @@ hook commands, i.e. that the wiring is correct.
 """
 
 import json
+import re
 from pathlib import Path
 
+import pytest
 from agent_config_kit import apply
 
 from witan import setup
+
+_OMNIGRAPH_VERSION_RE = re.compile(r'_OMNIGRAPH_VERSION = "([^"]+)"')
 
 
 def test_witan_bundle_registers_witan_mcp_server_and_hooks(tmp_path, monkeypatch):
@@ -63,3 +67,24 @@ def test_witan_bundle_includes_bundled_skills(tmp_path):
     bundle = setup.witan_bundle(pkg_dir, "tester")
 
     assert any(s.name == "witan-task" for s in bundle.skills)
+
+
+def test_omnigraph_version_matches_witan_code():
+    """witan and witan-code each fetch their own omnigraph binary at runtime
+    (no build-time bundling, no cross-package import — see setup.py's
+    docstring), so nothing at import time enforces they stay pinned to the
+    same release. renovate.json's customManager is supposed to bump both in
+    one PR, but a manual edit to just one copy (exactly what caused a prior
+    schema-version-mismatch outage) wouldn't touch the other — this is the
+    CI-level backstop for that."""
+    witan_code_setup = (
+        Path(__file__).parent.parent.parent / "witan-code" / "witan_code" / "setup.py"
+    )
+    if not witan_code_setup.exists():
+        pytest.skip("witan-code not present in this checkout")
+
+    other_version = _OMNIGRAPH_VERSION_RE.search(witan_code_setup.read_text())
+    assert other_version is not None, (
+        f"couldn't find _OMNIGRAPH_VERSION in {witan_code_setup}"
+    )
+    assert setup._OMNIGRAPH_VERSION == other_version.group(1)

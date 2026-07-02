@@ -12,6 +12,15 @@ platform-specific code.
 MCP server entry into your agent config in one step. Run it once; re-run after
 upgrades to refresh installed files.
 
+The omnigraph binary step always downloads the release pinned by
+`_OMNIGRAPH_VERSION` in [`witan/setup.py`](./witan/setup.py) straight from
+GitHub releases into `~/.local/bin/omnigraph` — there is no build-time
+bundling, so re-running `witan setup` is also how you pick up an omnigraph
+version bump (a Renovate PR bumps the pin; see `renovate.json`'s
+`omnigraph-version` customManager). `witan-code`, if installed standalone
+(without `witan`), has its own equivalent `witan-code setup` — see its
+[README](../witan-code/README.md#install).
+
 **With persistent CLI** — required for **Claude Code** and **Pi** (and `--agent all`),
 whose hooks/extensions call the `witan` command directly, so it must stay on your `PATH`:
 
@@ -193,7 +202,6 @@ deployment instructions, the graph schema, and the v2 roadmap.
 witan/
 ├── README.md                  # This file
 ├── install.sh                 # Initialise local graph (manual alternative to `witan setup`)
-├── hatch_build.py             # Build hook: downloads omnigraph binary into wheel
 ├── pyproject.toml             # Python package metadata
 ├── schema/
 │   └── schema.pg              # Omnigraph graph schema
@@ -210,8 +218,7 @@ witan/
 │   ├── context.py             # inject-context / session-checkpoint helpers
 │   ├── repo.py                # Git remote → canonical repo slug
 │   ├── graph.py               # OmnigraphClient (CLI subprocess wrapper)
-│   ├── setup.py               # `witan setup` agent-installer logic
-│   ├── _bin/                  # Bundled omnigraph binary (populated by build hook)
+│   ├── setup.py               # `witan setup` agent-installer + omnigraph fetch logic
 │   ├── extensions/            # Agent extension configs (bundled by setup)
 │   ├── hooks/                 # Shell hooks (bundled by setup)
 │   └── skills/                # Bundled agent skills

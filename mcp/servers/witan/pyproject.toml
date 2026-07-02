@@ -26,18 +26,16 @@ build-backend = "hatchling.build"
 # workspace path dependency.
 agent-config-kit = { path = "../../../packages/agent-config-kit", editable = true }
 
-[tool.hatch.build.hooks.custom]
-# Downloads the omnigraph binary for the current platform during pip install / uvx.
-path = "hatch_build.py"
-
 [tool.hatch.build.targets.wheel]
 packages = ["witan"]
 
 # queries/ and schema/ live outside the witan/ package directory; force-include
 # them so `uv tool install` / uvx git installs find them at runtime.
-# witan/_bin/, witan/skills/, witan/hooks/, witan/extensions/ are already
-# discovered via packages = ["witan"] and must NOT appear here to avoid
-# the duplicate-path build error hatchling raises.
+# witan/skills/, witan/hooks/, witan/extensions/ are already discovered via
+# packages = ["witan"] and must NOT appear here to avoid the duplicate-path
+# build error hatchling raises. The omnigraph binary is no longer
+# build-time-bundled — `witan setup` fetches it at install/runtime instead
+# (see witan/setup.py) — so there is no witan/_bin/ to force-include either.
 [tool.hatch.build.targets.wheel.force-include]
 "queries" = "queries"
 "schema" = "schema"
