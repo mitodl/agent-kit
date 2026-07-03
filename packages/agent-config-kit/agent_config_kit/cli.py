@@ -96,6 +96,7 @@ def apply_command(
     dry_run: bool = False,
     prune: bool = False,
     state_file: Path | None = None,
+    cache_dir: Path | None = None,
 ) -> None:
     """Apply a manifest's MCP servers, hooks, and skills to one or more
     coding-agent platforms.
@@ -121,9 +122,13 @@ def apply_command(
     state_file
         Where to read/write the prune state file. Defaults to
         ``<manifest>.lock.json``. Ignored unless ``--prune`` is given.
+    cache_dir
+        Where remote (``https://``/``git+``) skill/hook sources are fetched
+        and cached. Defaults to ``.agent-config-kit-cache`` next to the
+        manifest.
     """
     try:
-        loaded = load_manifest(manifest)
+        loaded = load_manifest(manifest, cache_dir=cache_dir)
     except ManifestError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
@@ -199,6 +204,7 @@ def validate_command(
     *,
     scope: Scope | None = None,
     platform: list[str] | None = None,
+    cache_dir: Path | None = None,
 ) -> None:
     """Report drift between a manifest and each platform's on-disk config,
     without writing anything.
@@ -213,9 +219,13 @@ def validate_command(
         Platform name to check; repeatable. Overrides the manifest's
         ``[options.platforms]`` and, if neither is given, every detected
         platform is checked (same default as ``apply_all``).
+    cache_dir
+        Where remote (``https://``/``git+``) skill/hook sources are fetched
+        and cached. Defaults to ``.agent-config-kit-cache`` next to the
+        manifest.
     """
     try:
-        loaded = load_manifest(manifest)
+        loaded = load_manifest(manifest, cache_dir=cache_dir)
     except ManifestError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc

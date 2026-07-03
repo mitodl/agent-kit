@@ -33,3 +33,6 @@ __cluster/
 .mcp-cache/
 mcp-server.log
 .ruff_cache/
+
+# agent-config-kit remote skill/hook fetch cache
+.agent-config-kit-cache/

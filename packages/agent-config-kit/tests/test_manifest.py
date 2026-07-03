@@ -136,6 +136,112 @@ def test_load_manifest_non_string_skill_md_path_raises_manifest_error(tmp_path):
         load_manifest(manifest)
 
 
+def test_load_manifest_fetches_remote_skill_md_path(tmp_path, monkeypatch):
+    import agent_config_kit.manifest as manifest_module
+
+    fetched = tmp_path / "cache" / "SKILL.md"
+    fetched.parent.mkdir(parents=True)
+    fetched.write_text("# remote skill")
+    calls = []
+
+    def fake_fetch(uri, cache_dir):
+        calls.append((uri, cache_dir))
+        return fetched
+
+    monkeypatch.setattr(manifest_module, "fetch_remote", fake_fetch)
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[skills]]
+        name = "witan-task"
+        skill_md_path = "https://raw.githubusercontent.com/org/repo/main/SKILL.md"
+        """,
+    )
+
+    result = load_manifest(manifest)
+
+    assert result.bundle.skills[0].skill_md_path == fetched
+    assert calls == [
+        (
+            "https://raw.githubusercontent.com/org/repo/main/SKILL.md",
+            tmp_path / ".agent-config-kit-cache",
+        )
+    ]
+
+
+def test_load_manifest_fetches_remote_plugin_entry_path(tmp_path, monkeypatch):
+    import agent_config_kit.manifest as manifest_module
+
+    fetched = tmp_path / "cache" / "witan.ts"
+    fetched.parent.mkdir(parents=True)
+    fetched.write_text("// remote plugin")
+
+    monkeypatch.setattr(manifest_module, "fetch_remote", lambda uri, cache_dir: fetched)
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[hooks]]
+        kind = "plugin"
+        entry_path = "git+https://github.com/org/repo.git#subdirectory=witan.ts"
+        """,
+    )
+
+    result = load_manifest(manifest)
+
+    assert result.bundle.hooks[0].entry_path == fetched
+
+
+def test_load_manifest_respects_explicit_cache_dir(tmp_path, monkeypatch):
+    import agent_config_kit.manifest as manifest_module
+
+    fetched = tmp_path / "elsewhere" / "SKILL.md"
+    calls = []
+
+    monkeypatch.setattr(
+        manifest_module,
+        "fetch_remote",
+        lambda uri, cache_dir: calls.append(cache_dir) or fetched,
+    )
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[skills]]
+        name = "witan-task"
+        skill_md_path = "https://example.com/SKILL.md"
+        """,
+    )
+    custom_cache = tmp_path / "custom-cache"
+
+    load_manifest(manifest, cache_dir=custom_cache)
+
+    assert calls == [custom_cache]
+
+
+def test_load_manifest_wraps_fetch_error_as_manifest_error(tmp_path, monkeypatch):
+    import agent_config_kit.manifest as manifest_module
+    from agent_config_kit.fetch import FetchError
+
+    def fake_fetch(uri, cache_dir):
+        raise FetchError(f"could not fetch {uri}: HTTP 404")
+
+    monkeypatch.setattr(manifest_module, "fetch_remote", fake_fetch)
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[skills]]
+        name = "witan-task"
+        skill_md_path = "https://example.com/does-not-exist.md"
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="skill_md_path.*404"):
+        load_manifest(manifest)
+
+
 def test_load_manifest_leaves_absolute_paths_unchanged(tmp_path):
     skill_md = tmp_path / "elsewhere" / "SKILL.md"
     skill_md.parent.mkdir(parents=True)
