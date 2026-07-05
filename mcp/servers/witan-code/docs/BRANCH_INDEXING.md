@@ -68,7 +68,16 @@ bridge writes entirely, so the shared `main` bridge view keeps reflecting
 
 Branch-aware stores answer "what does branch B look like"; the
 work-coordination graph should answer "*why* does branch B exist and who is
-on it". New node + edges in the witan (Layer 1) schema:
+on it". This linkage lives in **witan, not witan-code**: it is coordination
+state that must be shared and durable, while witan-code stores are local
+re-derivable caches that `branches --prune` may destroy at any time. The
+coupling stays one-way via soft references — the same pattern as
+`Task.symbol_refs` — with git as the shared vocabulary: `CodeBranch`
+references the **raw git branch name** (`feature/new-api`), never
+witan-code's sanitized omnigraph branch name (`feature_new-api`), which is a
+storage detail that must not leak into the witan schema. Consumers sanitize
+at the edge before calling `code_*` tools with `branch=…`. New node + edges
+in the witan (Layer 1) schema:
 
 ```
 node CodeBranch {
