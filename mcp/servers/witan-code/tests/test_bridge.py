@@ -474,3 +474,45 @@ def test_bridge_tools_empty_without_store(tmp_path, monkeypatch):
         "bindings": [],
         "cross_repo": [],
     }
+
+
+@requires_stack
+def test_incremental_index_preserves_unchanged_file_bindings(tmp_path, monkeypatch):
+    """A full-repo incremental index skips unchanged files; their bindings must
+    survive the purge, and bindings for deleted files must be cleaned up."""
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/inc")
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_mod.load()
+
+    base = tmp_path / "repo"
+    base.mkdir()
+    (base / "a.ts").write_text('const a = fetch("/api/v0/aaa/");\n')
+    (base / "b.ts").write_text('const b = fetch("/api/v0/bbb/");\n')
+    indexer.index_path(base, config=cfg)
+
+    def binding_files():
+        client = OmnigraphClient(
+            str(cfg_mod.bridge_store_path(cfg.code_dir)), cfg.queries_dir
+        )
+        return {
+            r["file"]
+            for r in client.read("bridge.gq", "all_bindings", {})
+            if r["kind"] == "endpoint"
+        }
+
+    assert binding_files() == {"a.ts", "b.ts"}
+
+    # Touch only a.ts; b.ts is skipped by the hash check but must keep its row.
+    (base / "a.ts").write_text('const a = fetch("/api/v0/aaa2/");\n')
+    stats = indexer.index_path(base, config=cfg)
+    assert stats.skipped >= 1
+    assert binding_files() == {"a.ts", "b.ts"}
+
+    # Deleting b.ts must clear its bindings on the next full-repo index.
+    (base / "b.ts").unlink()
+    indexer.index_path(base, config=cfg)
+    assert binding_files() == {"a.ts"}

@@ -6,17 +6,11 @@
 // `where`/quoted-key parse-errors in reads); deletes use `where`.
 
 // ── Deletes (reindex cleanup) ─────────────────────────────────────
-// Full-repo purge: drop every binding for a repo before a full reload (also
-// clears bindings for files that were deleted from disk).
-
-query delete_bindings_for_repo($repo: String) {
-    delete InterfaceBinding where repo = $repo
-}
-
-// Incremental per-file purge: drop just one source file's bindings so a single
-// PostToolUse reindex doesn't wipe the repo's other bindings. Keyed on the
-// composite repo_file ("repo|file") because delete `where` takes a single
-// condition (no compound `and`).
+// Per-file purge: drop one source file's bindings so a reindex only replaces
+// what it re-extracted (an incremental full-repo index skips unchanged files,
+// so a repo-wide purge would orphan their bindings). Keyed on the composite
+// repo_file ("repo|file") because delete `where` takes a single condition
+// (no compound `and`).
 
 query delete_bindings_in_file($repo_file: String) {
     delete InterfaceBinding where repo_file = $repo_file

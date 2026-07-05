@@ -54,16 +54,17 @@ def load(repo_root: Path, repo: str) -> PackageIdentity:
         return fallback_identity(repo)
     try:
         data = tomllib.loads(path.read_text())
-    except (tomllib.TOMLDecodeError, OSError):
+    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError):
         return fallback_identity(repo)
 
     pkg = data.get("package")
     if not isinstance(pkg, dict) or not isinstance(pkg.get("name"), str):
         return fallback_identity(repo)
 
-    provides = tuple(
-        entry for entry in pkg.get("provides", ()) if isinstance(entry, str)
-    )
+    provides_raw = pkg.get("provides", ())
+    if not isinstance(provides_raw, (list, tuple)):
+        provides_raw = ()
+    provides = tuple(entry for entry in provides_raw if isinstance(entry, str))
     return PackageIdentity(
         name=pkg["name"],
         manager=str(pkg.get("manager", EMPTY)),

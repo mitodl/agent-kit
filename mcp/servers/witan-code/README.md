@@ -63,10 +63,11 @@ every repo.
 
 The bridge is written in a **separate phase after the per-repo store write**, so
 the two stores' advisory write locks never nest (no deadlock) and a bridge
-failure never corrupts a per-repo store. A full-repo index purges bindings by
-repo and runs the repo-level provider extractors (OpenAPI / Pulumi / service /
-`package.json`); a narrow target (single file via the reindex hook) only
-refreshes the files it touched, leaving sibling bindings intact.
+failure never corrupts a per-repo store. A full-repo index runs the repo-level
+provider extractors (OpenAPI / Pulumi / service / `package.json`) and clears
+bindings for files deleted from disk; all purging is per-file, so unchanged
+(skipped) files — and, for a narrow target like the reindex hook, sibling
+files — keep their bindings.
 
 Every binding also carries a **canonical symbol string**
 (`{scheme}:{manager}:{package}:{version}:{descriptor}`, SCIP-inspired) — the

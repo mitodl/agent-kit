@@ -121,6 +121,19 @@ def sanitize_branch(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or DETACHED_BRANCH
 
 
+def branch_store_name(name: str) -> str:
+    """Omnigraph branch name for a NON-DEFAULT git branch.
+
+    Omnigraph reserves ``main`` for the store's default branch, so a feature
+    branch literally named ``main`` (possible when the repo's default is
+    ``master``) maps to ``_main``. sanitize_branch strips leading
+    underscores, so no other git branch can produce a ``_``-prefixed name —
+    the underscore namespace (``_main``, ``_detached``) is collision-free.
+    """
+    sanitized = sanitize_branch(name)
+    return "_main" if sanitized == "main" else sanitized
+
+
 def current_branch(start: Path | None = None) -> str | None:
     """Current git branch name for ``start`` (or the cwd).
 
@@ -166,12 +179,40 @@ def _origin_default_branch(base: Path) -> str | None:
     return (ref.partition("/")[2] or None) if ref else None
 
 
+def _default_branch(base: Path) -> str | None:
+    """The repo's default branch: origin HEAD, else main/master by presence.
+
+    The local fallback prefers ``main`` over ``master`` when both exist so
+    the choice is deterministic; whichever loses maps to its own store branch
+    (collision-free either way). Returns None when no default is
+    recognizable — then every branch gets its own store branch and nothing
+    claims the store's main.
+    """
+    if default := _origin_default_branch(base):
+        return default
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(base), "branch", "--list", *_DEFAULT_BRANCHES],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    present = {line.lstrip("*+ ").strip() for line in result.stdout.splitlines()}
+    for name in ("main", "master"):
+        if name in present:
+            return name
+    return None
+
+
 def store_branch(start: Path | None = None) -> str | None:
     """Omnigraph branch for the checkout at ``start``: ``None`` = store main.
 
-    The repo's default branch (origin HEAD, falling back to main/master by
-    name) maps to the store's main branch; any other branch maps to its
-    sanitized name; a detached HEAD maps to the ``_detached`` scratch branch.
+    The repo's default branch maps to the store's main branch; any other
+    branch maps through ``branch_store_name`` (so a non-default branch named
+    ``main`` gets ``_main``, never colliding with the store's default); a
+    detached HEAD maps to the ``_detached`` scratch branch.
     """
     base = start or Path.cwd()
     branch = current_branch(base)
@@ -179,14 +220,18 @@ def store_branch(start: Path | None = None) -> str | None:
         return None
     if branch == "HEAD":
         return DETACHED_BRANCH
-    default = _origin_default_branch(base)
-    if branch == default or (default is None and branch in _DEFAULT_BRANCHES):
+    if branch == _default_branch(base):
         return None
-    return sanitize_branch(branch)
+    return branch_store_name(branch)
 
 
 def local_branches(start: Path | None = None) -> frozenset[str] | None:
-    """Sanitized names of all local git branches, or None when git fails."""
+    """Store-branch names of all local git branches, or None when git fails.
+
+    Uses the same mapping as ``store_branch`` (``branch_store_name``) so
+    ``branches --prune`` compares like with like — a git branch named
+    ``main`` yields ``_main`` here, protecting its store branch from pruning.
+    """
     base = start or Path.cwd()
     try:
         result = subprocess.run(
@@ -207,7 +252,7 @@ def local_branches(start: Path | None = None) -> frozenset[str] | None:
     if result.returncode != 0:
         return None
     return frozenset(
-        sanitize_branch(line) for line in result.stdout.splitlines() if line.strip()
+        branch_store_name(line) for line in result.stdout.splitlines() if line.strip()
     )
 
 

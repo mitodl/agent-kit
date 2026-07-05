@@ -257,8 +257,9 @@ def index_path(
 
     # Cross-repo bridge — a SEPARATE phase after the per-repo store write, so the
     # two stores' write locks never nest. A full-repo index (target is the repo
-    # root) also runs the repo-level provider extractors and purges by repo;
-    # narrower targets only refresh the files they touched.
+    # root) also runs the repo-level provider extractors and clears bindings for
+    # files deleted from disk; all purging is per-file so unchanged (skipped)
+    # files keep their bindings.
     full_repo = target.is_dir() and target.resolve() == base.resolve()
     if branch is not None:
         # Branch indexes skip the shared bridge store: its main view must keep
@@ -275,6 +276,7 @@ def index_path(
             full_repo=full_repo,
             touched_files=tuple(touched_files),
             identity=package_map.load(base, slug),
+            base=base,
         )
     except Exception as exc:  # noqa: BLE001 — bridge is best-effort, never fatal
         print(f"codegraph: bridge update failed: {exc}", file=sys.stderr)

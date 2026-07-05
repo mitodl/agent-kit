@@ -120,8 +120,10 @@ class OmnigraphClient:
         except json.JSONDecodeError:
             return []
         rows = parsed.get("branches", parsed) if isinstance(parsed, dict) else parsed
+        if not isinstance(rows, list):
+            return []
         out: list[str] = []
-        for row in rows or []:
+        for row in rows:
             name = row.get("name") if isinstance(row, dict) else row
             if isinstance(name, str):
                 out.append(name)

@@ -51,6 +51,20 @@ def test_load_missing_name_falls_back(tmp_path):
     assert not identity.declared
 
 
+def test_load_non_utf8_file_falls_back(tmp_path):
+    (tmp_path / "witan-code.toml").write_bytes(b"\xff\xfe[package]\n")
+    identity = package_map.load(tmp_path, REPO)
+    assert not identity.declared
+
+
+def test_load_provides_as_string_is_ignored_not_char_split(tmp_path):
+    (tmp_path / "witan-code.toml").write_text(
+        '[package]\nname = "mit-learn"\nprovides = "npm:@mitodl/x"\n'
+    )
+    identity = package_map.load(tmp_path, REPO)
+    assert identity.provides == ()
+
+
 def test_provided_names_includes_primary_and_provides():
     identity = package_map.PackageIdentity(
         name="mit-learn",

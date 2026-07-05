@@ -1,3 +1,4 @@
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
@@ -31,9 +32,12 @@ mcp = FastMCP(
 # Client cache keyed by "store path|branch" ("" = main).
 _clients: dict[str, OmnigraphClient] = {}
 
-# Known branch sets per store — positive cache only: a miss re-lists so a
-# branch created after server start becomes visible on the next lookup.
-_store_branches: dict[str, frozenset[str]] = {}
+# Known branch sets per store, with a short TTL: a cache miss re-lists (so a
+# branch created after server start appears immediately) and expiry bounds how
+# long a deleted branch (e.g. `branches --prune`) keeps routing reads before
+# they degrade back to main.
+_store_branches: dict[str, tuple[float, frozenset[str]]] = {}
+_BRANCH_CACHE_TTL = 30.0
 
 _NO_STORE_HINT = "No code graph yet. Run `witan code index` to build it."
 
@@ -48,13 +52,15 @@ def _client_for_path(path, branch: str | None = None) -> OmnigraphClient:
 def _branch_in_store(path, branch: str) -> bool:
     key = str(path)
     cached = _store_branches.get(key)
-    if cached is not None and branch in cached:
-        return True
+    if cached is not None:
+        stamp, branches = cached
+        if time.monotonic() - stamp < _BRANCH_CACHE_TTL and branch in branches:
+            return True
     try:
         branches = frozenset(_client_for_path(path).list_branches())
     except Exception:  # noqa: BLE001 — degrade to main on any listing failure
         return False
-    _store_branches[key] = branches
+    _store_branches[key] = (time.monotonic(), branches)
     return branch in branches
 
 
@@ -67,7 +73,10 @@ def _resolve_branch(store, repo: str, requested: str | None) -> str | None:
     feature branch sees its own in-flight view by default.
     """
     if requested:
-        b = repo_module.sanitize_branch(requested)
+        # Same git→store mapping as indexing, so a request for branch "main"
+        # in a master-default repo routes to its "_main" store branch rather
+        # than the store's default view.
+        b = repo_module.branch_store_name(requested)
         return b if _branch_in_store(store, b) else None
     if repo == repo_module.detect():
         b = repo_module.store_branch()

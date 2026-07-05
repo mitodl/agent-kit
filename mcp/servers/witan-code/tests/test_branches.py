@@ -62,6 +62,38 @@ def test_store_branch_feature_branch_maps_to_sanitized_name(tmp_path):
     assert repo_module.store_branch(base) == "feature_thing"
 
 
+def test_nondefault_branch_named_main_maps_to_reserved_name(tmp_path):
+    """A feature branch literally named 'main' in a master-default repo must
+    not collide with omnigraph's reserved main branch."""
+    base = _git_repo(tmp_path / "r", branch="master")
+    _git(base, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _git(base, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+    _git(base, "checkout", "-q", "-b", "main")
+    assert repo_module.store_branch(base) == "_main"
+
+
+def test_no_origin_both_defaults_is_collision_free(tmp_path):
+    """Without origin HEAD and with both main and master present, main wins
+    the default slot deterministically and master gets its own store branch."""
+    base = _git_repo(tmp_path / "r", branch="master")
+    _git(base, "branch", "main")
+    assert repo_module.store_branch(base) == "master"
+    _git(base, "checkout", "-q", "main")
+    assert repo_module.store_branch(base) is None
+
+
+def test_local_branches_protects_reserved_main_mapping(tmp_path):
+    base = _git_repo(tmp_path / "r", branch="master")
+    _git(base, "branch", "main")
+    branches = repo_module.local_branches(base)
+    assert "_main" in branches, "prune must see the store name for a git 'main' branch"
+
+
+def test_branch_store_name_reserves_main():
+    assert repo_module.branch_store_name("main") == "_main"
+    assert repo_module.branch_store_name("feature/x") == "feature_x"
+
+
 def test_store_branch_detached_head_maps_to_scratch(tmp_path):
     base = _git_repo(tmp_path / "r")
     _git(base, "checkout", "-q", "--detach")
@@ -72,10 +104,12 @@ def test_store_branch_outside_git_is_none(tmp_path):
     assert repo_module.store_branch(tmp_path) is None
 
 
-def test_local_branches_sanitized(tmp_path):
+def test_local_branches_use_store_names(tmp_path):
     base = _git_repo(tmp_path / "r")
     _git(base, "branch", "feature/x")
-    assert repo_module.local_branches(base) == {"main", "feature_x"}
+    # "main" maps through branch_store_name like store_branch does, so prune
+    # compares like with like; the store's own "main" is never pruned anyway.
+    assert repo_module.local_branches(base) == {"_main", "feature_x"}
 
 
 # ── Integration: branch indexes land on omnigraph branches ───────
