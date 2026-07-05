@@ -94,29 +94,21 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> Path:
     """
     cfg = config or cfg_module.load()
     store = cfg_module.bridge_store_path(cfg.code_dir)
+    binary = _binary()
     if store.exists():
+        # Pick up additive schema changes (new nodes/fields) on existing
+        # stores; the mtime stamp keeps hot reindex paths subprocess-free.
+        _schema_apply_if_changed(binary, cfg.bridge_schema_file, store)
         return store
 
     store.parent.mkdir(parents=True, exist_ok=True)
-    binary = _binary()
     subprocess.run(
         [binary, "init", "--schema", str(cfg.bridge_schema_file), str(store)],
         check=True,
         capture_output=True,
         text=True,
     )
-    subprocess.run(
-        [
-            binary,
-            "schema",
-            "apply",
-            "--schema",
-            str(cfg.bridge_schema_file),
-            str(store),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    _schema_apply(binary, cfg.bridge_schema_file, store)
     return store
 
 

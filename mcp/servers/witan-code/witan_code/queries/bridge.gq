@@ -6,17 +6,11 @@
 // `where`/quoted-key parse-errors in reads); deletes use `where`.
 
 // ── Deletes (reindex cleanup) ─────────────────────────────────────
-// Full-repo purge: drop every binding for a repo before a full reload (also
-// clears bindings for files that were deleted from disk).
-
-query delete_bindings_for_repo($repo: String) {
-    delete InterfaceBinding where repo = $repo
-}
-
-// Incremental per-file purge: drop just one source file's bindings so a single
-// PostToolUse reindex doesn't wipe the repo's other bindings. Keyed on the
-// composite repo_file ("repo|file") because delete `where` takes a single
-// condition (no compound `and`).
+// Per-file purge: drop one source file's bindings so a reindex only replaces
+// what it re-extracted (an incremental full-repo index skips unchanged files,
+// so a repo-wide purge would orphan their bindings). Keyed on the composite
+// repo_file ("repo|file") because delete `where` takes a single condition
+// (no compound `and`).
 
 query delete_bindings_in_file($repo_file: String) {
     delete InterfaceBinding where repo_file = $repo_file
@@ -30,9 +24,25 @@ query all_bindings() {
     }
     return {
         $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
-        $b.file, $b.symbol_id, $b.framework, $b.generic, $b.confidence
+        $b.file, $b.symbol_id, $b.framework, $b.generic, $b.confidence,
+        $b.symbol
     }
     limit 1000000
+}
+
+// ── Package maps ──────────────────────────────────────────────────
+// Every repo's declared/fallback package identity (docs/PACKAGE_MAP.md).
+// Read at bridge-write time to qualify symbols and feed the
+// known_provider_package heuristic.
+
+query all_package_maps() {
+    match {
+        $p: PackageMap
+    }
+    return {
+        $p.repo, $p.name, $p.manager, $p.version, $p.provides, $p.declared
+    }
+    limit 10000
 }
 
 // ── Grouping reads ────────────────────────────────────────────────
@@ -45,7 +55,8 @@ query bindings_by_key($kind: String, $key_norm: String) {
     }
     return {
         $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
-        $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic
+        $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic,
+        $b.symbol
     }
     order { $b.repo asc }
     limit 500
@@ -59,7 +70,8 @@ query bindings_by_key_role($kind: String, $key_norm: String, $role: String) {
     }
     return {
         $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
-        $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic
+        $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic,
+        $b.symbol
     }
     order { $b.repo asc }
     limit 500

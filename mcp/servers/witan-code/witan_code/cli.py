@@ -111,6 +111,64 @@ def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:
     )
 
 
+@app.command
+def branches(*, prune: bool = False) -> None:
+    """List omnigraph branches per indexed repo store.
+
+    Non-default git branches index onto same-named omnigraph branches
+    (docs/BRANCH_INDEXING.md). Branch stores are re-derivable caches, so
+    lifecycle is deletion, not merge.
+
+    Parameters
+    ----------
+    prune:
+        Delete the CURRENT repo's store branches whose git branch no longer
+        exists locally, plus the ``_detached`` scratch branch. Other repos'
+        stores are only listed (their git refs aren't visible from here).
+    """
+    from . import config as cfg_module
+    from . import repo as repo_module
+    from .graph import OmnigraphClient
+
+    cfg = cfg_module.load()
+    if not cfg.code_dir.is_dir():
+        print(f"No code stores at {cfg.code_dir}.")
+        return
+
+    current_slug = repo_module.detect()
+    current_store = (
+        cfg_module.store_path(current_slug, cfg.code_dir) if current_slug else None
+    )
+    git_branches = repo_module.local_branches() if prune else None
+
+    stores = [
+        p
+        for p in sorted(cfg.code_dir.glob("*.omni"))
+        if p.name != cfg_module.BRIDGE_STORE_NAME
+    ]
+    for store in stores:
+        client = OmnigraphClient(str(store), cfg.queries_dir)
+        try:
+            names = client.list_branches()
+        except Exception as exc:  # noqa: BLE001 — one bad store shouldn't abort
+            print(f"{_store_repo(store)}: <error: {exc}>")
+            continue
+        extra = [n for n in names if n != "main"]
+        print(f"{_store_repo(store)}: main" + ("," + ",".join(extra) if extra else ""))
+
+        if not (
+            prune
+            and current_store is not None
+            and store == current_store
+            and git_branches is not None
+        ):
+            continue
+        for name in extra:
+            if name == repo_module.DETACHED_BRANCH or name not in git_branches:
+                client.delete_branch(name)
+                print(f"  pruned {name}")
+
+
 # ── Indexed repositories ─────────────────────────────────────────────────────
 
 

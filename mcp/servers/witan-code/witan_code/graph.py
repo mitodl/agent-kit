@@ -31,10 +31,15 @@ class OmnigraphClient:
         graph_uri: str,
         queries_dir: Path,
         token: str | None = None,
+        branch: str | None = None,
     ) -> None:
         self.graph_uri = graph_uri
         self.queries_dir = queries_dir
         self.token = token
+        # Target omnigraph branch for query/mutate/load; None = the store's
+        # main branch. Loads pass `--from main` so the branch forks lazily on
+        # first write (docs/BRANCH_INDEXING.md).
+        self.branch = branch
         self._binary = self._find_binary()
 
     # ── Public API ────────────────────────────────────────────────
@@ -105,9 +110,58 @@ class OmnigraphClient:
 
     # ── Internals ─────────────────────────────────────────────────
 
+    # ── Branch operations ─────────────────────────────────────────
+
+    def list_branches(self) -> list[str]:
+        """Names of all branches on this store (includes ``main``)."""
+        result = self._run("branch", "list", "--json")
+        try:
+            parsed = json.loads(result)
+        except json.JSONDecodeError:
+            return []
+        rows = parsed.get("branches", parsed) if isinstance(parsed, dict) else parsed
+        if not isinstance(rows, list):
+            return []
+        out: list[str] = []
+        for row in rows:
+            name = row.get("name") if isinstance(row, dict) else row
+            if isinstance(name, str):
+                out.append(name)
+        return out
+
+    def ensure_branch(self) -> None:
+        """Create ``self.branch`` from main if it doesn't exist yet.
+
+        Needed before the first *read* on a new branch — reads never fork
+        (only ``load --from`` does), so a read against a missing branch errors.
+        """
+        if self.branch is None or self.branch in self.list_branches():
+            return
+        self._run("branch", "create", self.branch, "--from", "main")
+
+    def delete_branch(self, name: str) -> None:
+        self._run("branch", "delete", name, "--yes")
+
+    # ── Internals ─────────────────────────────────────────────────
+
+    def _branch_args(self, subcommand: str) -> list[str]:
+        if self.branch is None or subcommand == "branch":
+            return []
+        if subcommand == "load":
+            return ["--branch", self.branch, "--from", "main"]
+        return ["--branch", self.branch]
+
     def _run(self, subcommand: str, *args: str) -> str:
         quiet = ["--quiet"] if subcommand in _WRITE_SUBCOMMANDS else []
-        cmd = [self._binary, subcommand, "--store", self.graph_uri, *quiet, *args]
+        cmd = [
+            self._binary,
+            subcommand,
+            "--store",
+            self.graph_uri,
+            *quiet,
+            *self._branch_args(subcommand),
+            *args,
+        ]
         env = dict(os.environ)
         if self.token:
             env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = self.token

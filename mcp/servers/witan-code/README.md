@@ -63,10 +63,19 @@ every repo.
 
 The bridge is written in a **separate phase after the per-repo store write**, so
 the two stores' advisory write locks never nest (no deadlock) and a bridge
-failure never corrupts a per-repo store. A full-repo index purges bindings by
-repo and runs the repo-level provider extractors (OpenAPI / Pulumi / service /
-`package.json`); a narrow target (single file via the reindex hook) only
-refreshes the files it touched, leaving sibling bindings intact.
+failure never corrupts a per-repo store. A full-repo index runs the repo-level
+provider extractors (OpenAPI / Pulumi / service / `package.json`) and clears
+bindings for files deleted from disk; all purging is per-file, so unchanged
+(skipped) files — and, for a narrow target like the reindex hook, sibling
+files — keep their bindings.
+
+Every binding also carries a **canonical symbol string**
+(`{scheme}:{manager}:{package}:{version}:{descriptor}`, SCIP-inspired) — the
+join key for the precise cross-repo linking tier. Provider symbols are
+qualified by the repo's declared package identity from an optional
+`witan-code.toml` at the repo root; repos without one get a fallback identity
+derived from the repo URI. See [docs/SYMBOL_FORMAT.md](docs/SYMBOL_FORMAT.md)
+and [docs/PACKAGE_MAP.md](docs/PACKAGE_MAP.md).
 
 ## Heuristic edges (important)
 
@@ -243,6 +252,11 @@ an empty shape when it does not exist yet):
 - `index [PATH]` — incremental; skips files whose content hash is unchanged.
 - `reindex [PATH]` — force rebuild a path.
 - `repos` — list all indexed repos with file count, symbol count, and store size.
+- `branches [--prune]` — list omnigraph branches per store; `--prune` deletes
+  the current repo's store branches whose git branch is gone (plus
+  `_detached`). Non-default git branches index onto same-named omnigraph
+  branches so in-flight work never overwrites the shared `main` view — see
+  [docs/BRANCH_INDEXING.md](docs/BRANCH_INDEXING.md).
 - `deps [--kind K] [--repo SUBSTR] [--html PATH] [--open-browser]` —
   visualize cross-repo dependencies from the bridge store. Prints a Rich
   summary of "repo A depends on repo B" links (A consumes a contract B

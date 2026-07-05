@@ -33,5 +33,23 @@ node InterfaceBinding {
     generic: String?              // "1" for stoplisted generic keys (DEBUG, PORT, …)
     confidence: F32?              // 0.0–1.0 endpoint-consumer trust score (phantom
                                   // suppression); null/absent treated as 1.0 by readers
+    symbol: String? @index        // canonical symbol string (docs/SYMBOL_FORMAT.md):
+                                  // {scheme}:{manager}:{package}:{version}:{descriptor}
+                                  // Stage-2 precise join key; "."-fields = unresolved
+    indexed_at: DateTime
+}
+
+// One row per indexed repo: its declared (or fallback) package identity from
+// witan-code.toml (docs/PACKAGE_MAP.md). Overwritten on each full-repo index
+// (merge by slug). Qualifies provider symbols and backs the
+// known_provider_package confidence heuristic.
+node PackageMap {
+    slug: String @key             // canonical repo URI
+    repo: String @index
+    name: String @index           // canonical package name
+    manager: String               // pypi | npm | "."
+    version: String               // "main" = trunk-tracking
+    provides: String?             // JSON array of extra "manager:name" identities
+    declared: String?             // "1" when read from witan-code.toml (vs fallback)
     indexed_at: DateTime
 }
