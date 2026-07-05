@@ -50,6 +50,9 @@ class ParsedBinding:
     # bindings by _compute_file_confidence.  Defaults to 1.0 so non-endpoint
     # consumers and providers pass through unfiltered.
     confidence: float = 1.0
+    # Canonical symbol string (docs/SYMBOL_FORMAT.md), filled at bridge-write
+    # time by canonical_symbol() once the repo's package identity is known.
+    symbol: str | None = None
 
 
 # Generic env names that appear in unrelated repos — extracted but flagged so
@@ -104,6 +107,59 @@ def normalize_key(kind: str, key: str) -> str:
             return normalize_endpoint(rest)
         return normalize_endpoint(key)
     return key.strip()
+
+
+# ── Canonical symbol strings (docs/SYMBOL_FORMAT.md) ──────────────
+#
+# {scheme}:{manager}:{package}:{version}:{descriptor} — five colon-separated
+# fields; descriptor is terminal (parse with maxsplit=4). "." = empty/unknown.
+# Providers are qualified with the repo's PackageIdentity; consumers emit
+# unresolved external symbols (".") except package imports, which name their
+# package at the reference site.
+
+_SYMBOL_SCHEME = {
+    "endpoint": "http",
+    "env_var": "env",
+    "package": "pkg",
+    "service": "svc",
+}
+
+_MANAGER_BY_FRAMEWORK = {"npm": "npm", "python": "pypi"}
+
+
+def _esc(field: str) -> str:
+    return field.replace("%", "%25").replace(":", "%3A")
+
+
+def canonical_symbol(binding: ParsedBinding, identity=None) -> str:
+    """Build the canonical symbol string for ``binding``.
+
+    ``identity`` is the repo's ``package_map.PackageIdentity``; only provider
+    bindings use it (consumers stay unresolved by design).
+    """
+    scheme = _SYMBOL_SCHEME.get(binding.kind, binding.kind)
+    provider = binding.role == "provider"
+
+    if binding.kind == "package":
+        manager = _MANAGER_BY_FRAMEWORK.get(binding.framework or "", ".")
+        package = binding.key_norm
+        version = identity.version if provider and identity else "."
+        descriptor = "."
+    else:
+        manager = identity.manager if provider and identity else "."
+        package = identity.name if provider and identity else "."
+        version = identity.version if provider and identity else "."
+        if binding.kind == "endpoint":
+            method, _, rest = binding.key.strip().partition(" ")
+            method = method.upper() if rest else "*"
+            descriptor = f"{method} {binding.key_norm}"
+        elif binding.kind == "service":
+            descriptor = f"{binding.sub_kind or '.'}/{binding.key_norm}"
+        else:
+            descriptor = binding.key_norm
+
+    prefix = ":".join(_esc(f) for f in (scheme, manager, package, version))
+    return f"{prefix}:{descriptor}"
 
 
 def _binding(kind, key, role, file, *, sub_kind=None, **kw) -> ParsedBinding:

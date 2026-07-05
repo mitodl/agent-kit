@@ -28,33 +28,65 @@ mcp = FastMCP(
     ),
 )
 
-# Client cache keyed by store path.
+# Client cache keyed by "store path|branch" ("" = main).
 _clients: dict[str, OmnigraphClient] = {}
+
+# Known branch sets per store — positive cache only: a miss re-lists so a
+# branch created after server start becomes visible on the next lookup.
+_store_branches: dict[str, frozenset[str]] = {}
 
 _NO_STORE_HINT = "No code graph yet. Run `witan code index` to build it."
 
 
-def _client_for_path(path) -> OmnigraphClient:
-    key = str(path)
+def _client_for_path(path, branch: str | None = None) -> OmnigraphClient:
+    key = f"{path}|{branch or ''}"
     if key not in _clients:
-        _clients[key] = OmnigraphClient(key, cfg.queries_dir)
+        _clients[key] = OmnigraphClient(str(path), cfg.queries_dir, branch=branch)
     return _clients[key]
 
 
-def _client_for_repo(repo: str) -> OmnigraphClient | None:
+def _branch_in_store(path, branch: str) -> bool:
+    key = str(path)
+    cached = _store_branches.get(key)
+    if cached is not None and branch in cached:
+        return True
+    try:
+        branches = frozenset(_client_for_path(path).list_branches())
+    except Exception:  # noqa: BLE001 — degrade to main on any listing failure
+        return False
+    _store_branches[key] = branches
+    return branch in branches
+
+
+def _resolve_branch(store, repo: str, requested: str | None) -> str | None:
+    """Effective omnigraph branch for a read: None = the store's main branch.
+
+    An explicit ``requested`` branch is used when it exists in the store
+    (else main — degrade, don't error). With no request, a query against the
+    *current* repo follows the checkout's branch so an agent working on a
+    feature branch sees its own in-flight view by default.
+    """
+    if requested:
+        b = repo_module.sanitize_branch(requested)
+        return b if _branch_in_store(store, b) else None
+    if repo == repo_module.detect():
+        b = repo_module.store_branch()
+        if b and _branch_in_store(store, b):
+            return b
+    return None
+
+
+def _client_for_repo(repo: str, branch: str | None = None) -> OmnigraphClient | None:
     """Client for a specific repo's store (origin scoping), or None if absent."""
     store = store_module.store_for_repo(repo, cfg)
-    return _client_for_path(store) if store.exists() else None
+    if not store.exists():
+        return None
+    return _client_for_path(store, _resolve_branch(store, repo, branch))
 
 
 def _client_for_symbol(symbol_id: str) -> OmnigraphClient | None:
     """Route a `repo#path::Name` id to the store of its repo prefix."""
     return _client_for_repo(symbol_id.split("#", 1)[0])
-
-
-def _current_repo_client() -> OmnigraphClient | None:
-    slug = repo_module.detect()
-    return _client_for_repo(slug) if slug else None
 
 
 def _all_clients() -> list[OmnigraphClient]:
@@ -69,17 +101,22 @@ def _all_clients() -> list[OmnigraphClient]:
     ]
 
 
-def _resolve_clients(repo: str | None) -> list[OmnigraphClient]:
+def _resolve_clients(
+    repo: str | None, branch: str | None = None
+) -> list[OmnigraphClient]:
     """Stores to query: the named repo → the current repo → all repos (fan-out).
 
     Rows already carry their `repo`, so fan-out results are self-tagging.
+    ``branch`` scopes the single-repo cases; fan-out always reads main.
     """
     if repo:
-        client = _client_for_repo(repo)
+        client = _client_for_repo(repo, branch)
         return [client] if client else []
-    current = _current_repo_client()
-    if current is not None:
-        return [current]
+    slug = repo_module.detect()
+    if slug:
+        client = _client_for_repo(slug, branch)
+        if client is not None:
+            return [client]
     return _all_clients()
 
 
@@ -130,7 +167,9 @@ def _file_id(path: str, repo: str) -> str:
 
 
 @mcp.tool
-def code_find_definition(name: str, repo: str | None = None) -> list[dict]:
+def code_find_definition(
+    name: str, repo: str | None = None, branch: str | None = None
+) -> list[dict]:
     """
     Find symbol definitions whose name or qualified name matches ``name``.
 
@@ -144,6 +183,10 @@ def code_find_definition(name: str, repo: str | None = None) -> list[dict]:
     repo:
         Canonical repo URI to scope to. Omit to use the current repo, or to
         search across every indexed repo when not inside one.
+    branch:
+        Git branch whose indexed view to query (e.g. another agent's
+        in-flight branch). Defaults to the current checkout's branch when
+        querying the current repo, else the store's main view.
     """
 
     def _query(client: OmnigraphClient) -> list[dict]:
@@ -152,7 +195,7 @@ def code_find_definition(name: str, repo: str | None = None) -> list[dict]:
         )
         return rows or client.read("code_read.gq", "find_by_name", {"name": name})
 
-    return _fan_out(_resolve_clients(repo), _query)
+    return _fan_out(_resolve_clients(repo, branch), _query)
 
 
 @mcp.tool
@@ -296,7 +339,10 @@ SymbolKind = Literal[
 
 @mcp.tool
 def code_search_symbol(
-    query: str, kind: SymbolKind | None = None, repo: str | None = None
+    query: str,
+    kind: SymbolKind | None = None,
+    repo: str | None = None,
+    branch: str | None = None,
 ) -> list[dict]:
     """
     Full-text/substring search over symbol qualified names (BM25-ranked).
@@ -317,6 +363,10 @@ def code_search_symbol(
     repo:
         Canonical repo URI to scope to. Omit to use the current repo, or to
         search across every indexed repo when not inside one.
+    branch:
+        Git branch whose indexed view to query (e.g. another agent's
+        in-flight branch). Defaults to the current checkout's branch when
+        querying the current repo, else the store's main view.
     """
 
     def _query(client: OmnigraphClient) -> list[dict]:
@@ -326,7 +376,7 @@ def code_search_symbol(
             )
         return client.read("code_read.gq", "search_symbols", {"query": query})
 
-    return _fan_out(_resolve_clients(repo), _query)
+    return _fan_out(_resolve_clients(repo, branch), _query)
 
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]

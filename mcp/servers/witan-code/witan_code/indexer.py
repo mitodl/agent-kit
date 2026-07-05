@@ -20,6 +20,7 @@ from pathlib import Path
 from . import bridge as bridge_module
 from . import bridge_extractors
 from . import config as cfg_module
+from . import package_map
 from . import repo as repo_module
 from .bridge_extractors import ParsedBinding
 from .graph import OmnigraphClient
@@ -206,8 +207,15 @@ def index_path(
         slug = (target if target.is_dir() else target.parent).name
     base = repo_root or (target if target.is_dir() else target.parent)
 
+    # Non-default git branches index onto the same-named omnigraph branch,
+    # forked from main on first write (docs/BRANCH_INDEXING.md), so in-flight
+    # work never overwrites the shared main view and stays visible per-branch.
+    branch = repo_module.store_branch(base) if repo_root else None
+
     store = ensure_store(slug, cfg)
-    client = OmnigraphClient(str(store), cfg.queries_dir)
+    client = OmnigraphClient(str(store), cfg.queries_dir, branch=branch)
+    # The hash read below never forks; create the branch before reading.
+    client.ensure_branch()
 
     # One query for all existing file hashes → the incremental skip check is
     # in-memory, not a query per file.
@@ -252,6 +260,11 @@ def index_path(
     # root) also runs the repo-level provider extractors and purges by repo;
     # narrower targets only refresh the files they touched.
     full_repo = target.is_dir() and target.resolve() == base.resolve()
+    if branch is not None:
+        # Branch indexes skip the shared bridge store: its main view must keep
+        # reflecting main code only. Branch-overlay bridge writes are tracked
+        # separately (docs/BRANCH_INDEXING.md § Bridge store).
+        return stats
     if full_repo:
         bindings.extend(bridge_extractors.extract_repo_bindings(base, slug))
     try:
@@ -261,6 +274,7 @@ def index_path(
             cfg,
             full_repo=full_repo,
             touched_files=tuple(touched_files),
+            identity=package_map.load(base, slug),
         )
     except Exception as exc:  # noqa: BLE001 — bridge is best-effort, never fatal
         print(f"codegraph: bridge update failed: {exc}", file=sys.stderr)

@@ -5,10 +5,12 @@ stores' advisory write locks are never held at once (no nesting → no deadlock)
 and a bridge failure can't corrupt a per-repo store that already succeeded.
 """
 
+import json
 from datetime import datetime, timezone
 
 from . import config as cfg_module
-from .bridge_extractors import ParsedBinding, adjust_confidence
+from . import package_map
+from .bridge_extractors import ParsedBinding, adjust_confidence, canonical_symbol
 from .graph import OmnigraphClient
 from .store import bridge_store, ensure_bridge_store
 
@@ -24,6 +26,7 @@ def write_bindings(
     *,
     full_repo: bool,
     touched_files: tuple[str, ...] = (),
+    identity: package_map.PackageIdentity | None = None,
 ) -> int:
     """Purge stale bindings and merge in fresh ones for ``repo``.
 
@@ -41,6 +44,7 @@ def write_bindings(
     if not bindings and not bridge_store(cfg).exists():
         return 0
 
+    identity = identity or package_map.fallback_identity(repo)
     store = ensure_bridge_store(cfg)
     client = OmnigraphClient(str(store), cfg.queries_dir)
 
@@ -59,7 +63,10 @@ def write_bindings(
     # query, so the current bindings must be included explicitly to allow the
     # self_provided_key penalty to fire when the same repo both provides and
     # consumes a key_norm.
-    # provider_pkg_slugs: key_norm values for package providers from OTHER repos.
+    # provider_pkg_slugs: key_norm values for package providers from OTHER repos,
+    # plus package names other repos DECLARE via their package map — the map is
+    # the source of truth; incidentally indexed package.json rows remain as a
+    # fallback signal.
     try:
         all_rows = client.read("bridge.gq", "all_bindings", {})
         provider_keys: frozenset[tuple[str, str]] = frozenset(
@@ -71,7 +78,7 @@ def write_bindings(
             if r.get("role") == "provider"
             and r.get("kind") == "package"
             and r.get("repo") != repo
-        )
+        ) | _declared_provider_packages(client, exclude_repo=repo)
     except Exception:  # noqa: BLE001 — store may be empty or query unavailable
         provider_keys = frozenset(
             (repo, b.key_norm) for b in bindings if b.role == "provider"
@@ -99,9 +106,53 @@ def write_bindings(
             )
         adjusted.append(b)
 
+    for b in adjusted:
+        b.symbol = canonical_symbol(b, identity)
+
     records = _dedupe([_record(b, repo) for b in adjusted])
+    if full_repo:
+        records.append(_package_map_record(identity, repo))
     client.load(records, mode="merge")
     return len(records)
+
+
+def _declared_provider_packages(
+    client: OmnigraphClient, *, exclude_repo: str
+) -> frozenset[str]:
+    """Package names declared by other repos' package maps in the bridge store."""
+    names: set[str] = set()
+    for row in client.read("bridge.gq", "all_package_maps", {}):
+        if row.get("repo") == exclude_repo:
+            continue
+        if row.get("name"):
+            names.add(row["name"])
+        try:
+            provides = json.loads(row.get("provides") or "[]")
+        except (TypeError, ValueError):
+            provides = []
+        for entry in provides:
+            if isinstance(entry, str):
+                _, _, name = entry.partition(":")
+                names.add(name or entry)
+    return frozenset(names)
+
+
+def _package_map_record(identity: package_map.PackageIdentity, repo: str) -> dict:
+    return {
+        "type": "PackageMap",
+        "data": {
+            "slug": repo,
+            "repo": repo,
+            "name": identity.name,
+            "manager": identity.manager,
+            "version": identity.version,
+            "provides": json.dumps(list(identity.provides))
+            if identity.provides
+            else None,
+            "declared": "1" if identity.declared else None,
+            "indexed_at": _now_iso(),
+        },
+    }
 
 
 def _file_imports_known_provider(
@@ -139,6 +190,7 @@ def _record(b: ParsedBinding, repo: str) -> dict:
             "framework": b.framework,
             "generic": "1" if b.generic else None,
             "confidence": b.confidence,
+            "symbol": b.symbol,
             "indexed_at": _now_iso(),
         },
     }

@@ -109,6 +109,108 @@ def _normalise(url: str) -> str:
     return url
 
 
+# Omnigraph scratch branch for detached-HEAD checkouts: never index a detached
+# state onto main (it would overwrite the shared view with an arbitrary commit).
+DETACHED_BRANCH = "_detached"
+
+_DEFAULT_BRANCHES = frozenset({"main", "master"})
+
+
+def sanitize_branch(name: str) -> str:
+    """Make a git branch name safe as an omnigraph branch name."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or DETACHED_BRANCH
+
+
+def current_branch(start: Path | None = None) -> str | None:
+    """Current git branch name for ``start`` (or the cwd).
+
+    Returns ``"HEAD"`` for a detached checkout (git's own convention) and
+    ``None`` outside a git repository or when git is unavailable.
+    """
+    base = start or Path.cwd()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(base), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _origin_default_branch(base: Path) -> str | None:
+    """Short name of origin's HEAD branch (``main``), if resolvable locally."""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(base),
+                "symbolic-ref",
+                "--short",
+                "refs/remotes/origin/HEAD",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    ref = result.stdout.strip()
+    return (ref.partition("/")[2] or None) if ref else None
+
+
+def store_branch(start: Path | None = None) -> str | None:
+    """Omnigraph branch for the checkout at ``start``: ``None`` = store main.
+
+    The repo's default branch (origin HEAD, falling back to main/master by
+    name) maps to the store's main branch; any other branch maps to its
+    sanitized name; a detached HEAD maps to the ``_detached`` scratch branch.
+    """
+    base = start or Path.cwd()
+    branch = current_branch(base)
+    if branch is None:
+        return None
+    if branch == "HEAD":
+        return DETACHED_BRANCH
+    default = _origin_default_branch(base)
+    if branch == default or (default is None and branch in _DEFAULT_BRANCHES):
+        return None
+    return sanitize_branch(branch)
+
+
+def local_branches(start: Path | None = None) -> frozenset[str] | None:
+    """Sanitized names of all local git branches, or None when git fails."""
+    base = start or Path.cwd()
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(base),
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/heads",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return frozenset(
+        sanitize_branch(line) for line in result.stdout.splitlines() if line.strip()
+    )
+
+
 def root(start: Path | None = None) -> Path | None:
     """Return the git repository root for ``start`` (or the cwd).
 
