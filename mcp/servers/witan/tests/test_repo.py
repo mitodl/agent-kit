@@ -45,6 +45,52 @@ def test_detect_empty_override_means_no_scope(monkeypatch):
     assert repo.detect(override="") is None
 
 
+def _git(base, *args):
+    subprocess.run(
+        ["git", "-C", str(base), *args], check=True, capture_output=True, text=True
+    )
+
+
+def _git_repo(path):
+    path.mkdir(exist_ok=True)
+    _git(path, "init", "-q", "-b", "main")
+    _git(
+        path,
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "--allow-empty",
+        "-q",
+        "-m",
+        "init",
+    )
+    return path
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_current_branch_returns_raw_unsanitized_name(tmp_path):
+    """witan-code's sanitize_branch() would collapse the "/" to "_"
+    (omnigraph branch names can't contain it) — witan's raw detector must
+    keep it as-is, since the raw git name is the shared vocabulary between
+    the two packages (schema.pg § Code Branches)."""
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "feature/new-api")
+    assert repo.current_branch(base) == "feature/new-api"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_current_branch_detached_head_is_none(tmp_path):
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "--detach")
+    assert repo.current_branch(base) is None
+
+
+def test_current_branch_outside_git_is_none(tmp_path):
+    assert repo.current_branch(tmp_path) is None
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_detect_tolerates_multivalued_fetch(tmp_path, monkeypatch):
     # git allows several `fetch =` lines under a remote; configparser rejects

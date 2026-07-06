@@ -46,6 +46,33 @@ def detect(override: str | None = None) -> str | None:
     return _parse_origin(git_config_path)
 
 
+def current_branch(start: Path | None = None) -> str | None:
+    """Raw git branch name for ``start`` (or the cwd), or ``None``.
+
+    Returns ``None`` outside a git repository, when git is unavailable, or
+    for a detached HEAD checkout — CodeBranch tracks meaningful work
+    branches, not arbitrary commits. Unlike witan-code's own
+    ``current_branch()``/``store_branch()``, this is never sanitized: the
+    raw name is the shared vocabulary between witan and witan-code (see
+    ``CodeBranch`` in schema.pg); sanitizing for omnigraph-safe storage is a
+    witan-code concern that must not leak here.
+    """
+    base = start or Path.cwd()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(base), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    branch = result.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
 def _git_origin(start: Path) -> str | None:
     """Resolve the ``origin`` remote URL via git itself."""
     try:

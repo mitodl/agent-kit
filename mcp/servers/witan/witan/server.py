@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -1113,6 +1114,102 @@ def topic_get(topic: str) -> dict | None:
     return {"topic": topic_rows[0], "memories": memories}
 
 
+# ── Code Branch Tracking ───────────────────────────────────────────
+#
+# Links a git branch (repo + raw branch name) to the task/project it's
+# carrying — schema.pg § Code Branches. Wired into workflow_session_start
+# and task_claim below; both auto-detect the current checkout's repo+branch
+# and no-op silently when neither is available (no git context, detached
+# HEAD) — this is best-effort coordination metadata, never a hard
+# requirement for the tool it's attached to.
+
+
+def _code_branch_slug(repo: str, branch: str) -> str:
+    return f"{repo}|{branch}"
+
+
+def _upsert_code_branch(repo: str, branch: str) -> str:
+    """Return the CodeBranch slug for (repo, branch), creating/touching it.
+
+    A fresh branch is inserted with status ``active``; an existing one is
+    just touched (``updated_at`` bumped, status reset to ``active`` — a
+    branch resuming work after being marked ``abandoned`` is active again).
+    """
+    slug = _code_branch_slug(repo, branch)
+    now = _now_iso()
+    if client.read("read.gq", "get_code_branch", {"slug": slug}):
+        client.change(
+            "mutations.gq",
+            "touch_code_branch",
+            {"slug": slug, "status": "active", "updated_at": now},
+        )
+    else:
+        client.change(
+            "mutations.gq",
+            "insert_code_branch",
+            {
+                "slug": slug,
+                "repo": repo,
+                "branch": branch,
+                "status": "active",
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+    return slug
+
+
+def _link_works_on(branch_slug: str, task_slug: str) -> None:
+    """Idempotent WorksOn edge — task_claim re-calls (lease renewal) must not
+    pile up duplicate edges between the same branch and task."""
+    if not client.read(
+        "read.gq",
+        "code_branch_works_on_edge",
+        {"branch_slug": branch_slug, "task_slug": task_slug},
+    ):
+        client.change(
+            "mutations.gq", "link_works_on", {"from": branch_slug, "to": task_slug}
+        )
+
+
+def _link_for_project(branch_slug: str, project_slug: str) -> None:
+    """Idempotent ForProject edge — see ``_link_works_on``."""
+    if not client.read(
+        "read.gq",
+        "code_branch_for_project_edge",
+        {"branch_slug": branch_slug, "project_slug": project_slug},
+    ):
+        client.change(
+            "mutations.gq",
+            "link_for_project",
+            {"from": branch_slug, "to": project_slug},
+        )
+
+
+def _track_code_branch(
+    repo: str | None, *, task_slug: str | None = None, project_slug: str | None = None
+) -> None:
+    """Best-effort CodeBranch upsert + edge link for the current checkout.
+
+    No-ops when there's no repo context or no current git branch (detached
+    HEAD, outside a repo) — never raises, since this is metadata riding
+    alongside a task/workflow tool call, not the tool's actual purpose.
+    """
+    if not repo:
+        return
+    branch = repo_module.current_branch()
+    if not branch:
+        return
+    try:
+        slug = _upsert_code_branch(repo, branch)
+        if task_slug:
+            _link_works_on(slug, task_slug)
+        if project_slug:
+            _link_for_project(slug, project_slug)
+    except Exception as exc:  # noqa: BLE001 — coordination metadata, never fatal
+        print(f"witan: CodeBranch tracking failed: {exc}", file=sys.stderr)
+
+
 # ── Workflow Tracking Tools ───────────────────────────────────────
 
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
@@ -1630,6 +1727,11 @@ def workflow_session_start(
     Also writes a state file to ``/tmp`` so the ``Stop`` hook can close the
     session automatically if ``workflow_session_end`` is not called explicitly.
 
+    When a repo is detected and the checkout is on a git branch, also
+    upserts a ``CodeBranch`` (repo, branch) and links it ``ForProject`` to
+    this project — schema.pg § Code Branches. Best-effort: silently skipped
+    with no repo/branch context, never fails the session start.
+
     Parameters
     ----------
     project_slug:
@@ -1686,6 +1788,8 @@ def workflow_session_start(
                         "updated_at": now,
                     },
                 )
+
+    _track_code_branch(detected_repo, project_slug=project_slug)
 
     # Write state file so Stop hook can close this session
     state = {"session_slug": slug, "project_slug": project_slug, "started_at": now}
@@ -2113,6 +2217,12 @@ def task_claim(
     and never closes/releases, the task becomes reclaimable after the lease lapses
     (see ``task_ready``). Re-calling ``task_claim`` renews the lease.
 
+    On success, also upserts a ``CodeBranch`` for the current checkout's
+    repo+branch and links it ``WorksOn`` this task (schema.pg § Code
+    Branches) — so "which branch carries task X" is a one-hop query.
+    Best-effort: silently skipped with no repo/branch context (e.g. detached
+    HEAD, no git repo), never fails the claim.
+
     Parameters
     ----------
     slug:
@@ -2157,6 +2267,7 @@ def task_claim(
 
     now = _now_iso()
     _update_task(slug, {"status": "in_progress", "assignee": holder, "claimed_at": now})
+    _track_code_branch(repo_module.detect(), task_slug=slug)
     return {
         "slug": slug,
         "claimed": True,

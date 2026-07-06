@@ -132,6 +132,33 @@ Tasks are **hierarchical** (an `epic` decomposes into sub-issues via `parent`, w
 maintains a denormalized `blockedBy` list that drives the `task_ready` query without
 graph traversal). `external_uri` links a task to a GitHub issue/PR or any reference.
 
+### Code Branch Tracking
+
+Links a git branch (repo + raw branch name, e.g. `feature/new-api` — never
+witan-code's sanitized omnigraph branch name) to the task/project it's
+carrying, so "which branch carries task X" and "which tasks are in flight on
+branch B" are one-hop graph queries. Coordination state that lives in witan
+(shared, durable), not witan-code's per-repo/bridge omnigraph stores (local,
+re-derivable caches `branches --prune` may destroy at any time).
+
+Wired in automatically, best-effort — no dedicated tool call needed:
+
+- `workflow_session_start` upserts a `CodeBranch` for the current checkout's
+  repo+branch (when detected) and links it `ForProject` to the session's
+  project.
+- `task_claim` upserts a `CodeBranch` on success and links it `WorksOn` the
+  claimed task; re-calling `task_claim` (lease renewal) does not duplicate
+  the edge.
+- The `UserPromptSubmit` context-injection hook surfaces an **In-Flight
+  Branch** section when the current checkout's branch already carries an
+  open task — a signal that this session should likely continue that work
+  rather than pick up something new.
+
+Both call sites no-op silently with no repo/branch context (detached HEAD,
+outside a git repo, or a store that predates this feature and hasn't run
+`witan migrate schema` yet) — this is metadata riding alongside a task/
+workflow tool call, never a hard requirement for the tool it's attached to.
+
 ## Tests
 
 Integration tests spin up throwaway omnigraph graphs and exercise the real query

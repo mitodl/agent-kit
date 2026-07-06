@@ -700,3 +700,61 @@ query tasks_with_refs() {
     return { $t.slug, $t.title, $t.type, $t.status, $t.repo, $t.symbol_refs }
     limit 200
 }
+
+// ── Code Branches ───────────────────────────────────────────────────
+
+query get_code_branch($slug: String) {
+    match {
+        $b: CodeBranch { slug: $slug }
+    }
+    return { $b.slug, $b.repo, $b.branch, $b.status, $b.created_at, $b.updated_at }
+}
+
+query code_branches_by_repo($repo: String) {
+    match {
+        $b: CodeBranch { repo: $repo }
+    }
+    return { $b.slug, $b.repo, $b.branch, $b.status, $b.created_at, $b.updated_at }
+}
+
+// Tasks a branch WorksOn — "which task(s) does branch B carry".
+query code_branch_tasks($branch_slug: String) {
+    match {
+        $b: CodeBranch { slug: $branch_slug }
+        $t: Task
+        $b workson $t
+    }
+    return {
+        $t.slug, $t.title, $t.status, $t.priority, $t.assignee, $t.claimed_at
+    }
+}
+
+// The branch(es) carrying a task — "which branch carries task X".
+query task_code_branches($task_slug: String) {
+    match {
+        $t: Task { slug: $task_slug }
+        $b: CodeBranch
+        $b workson $t
+    }
+    return { $b.slug, $b.repo, $b.branch, $b.status, $b.updated_at }
+}
+
+// Existence checks so repeated workflow_session_start/task_claim calls for
+// the same branch don't pile up duplicate edges.
+query code_branch_works_on_edge($branch_slug: String, $task_slug: String) {
+    match {
+        $b: CodeBranch { slug: $branch_slug }
+        $t: Task { slug: $task_slug }
+        $b workson $t
+    }
+    return { $b.slug }
+}
+
+query code_branch_for_project_edge($branch_slug: String, $project_slug: String) {
+    match {
+        $b: CodeBranch { slug: $branch_slug }
+        $p: WorkflowProject { slug: $project_slug }
+        $b forproject $p
+    }
+    return { $b.slug }
+}

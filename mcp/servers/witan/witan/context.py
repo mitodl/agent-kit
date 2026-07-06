@@ -15,6 +15,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import repo as repo_module
 from .graph import OmnigraphClient
 
 _PRIORITY = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
@@ -54,6 +55,25 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
     except Exception:  # noqa: BLE001
         return ""
 
+    # Isolated from the block above: a CodeBranch query failing (e.g. an
+    # existing store that hasn't run `witan migrate schema` since CodeBranch
+    # was added) must never blank the projects/ready-tasks context that
+    # already works.
+    branch_tasks: list[dict] = []
+    if repo:
+        try:
+            project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
+            branch = repo_module.current_branch(Path(project_dir))
+            if branch:
+                branch_tasks = client.read(
+                    "read.gq",
+                    "code_branch_tasks",
+                    {"branch_slug": f"{repo}|{branch}"},
+                )
+        except Exception:  # noqa: BLE001
+            branch_tasks = []
+    open_branch_tasks = [t for t in branch_tasks if t.get("status") != "closed"]
+
     status_by_slug = {t["slug"]: t.get("status") for t in tasks}
     ready = [
         t
@@ -85,6 +105,22 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
             "If this session is contributing to one of the projects above, call",
             "`workflow_session_start` with the matching slug and the current phase",
             "before doing substantive work.",
+            "",
+        ]
+
+    if open_branch_tasks:
+        lines += [
+            "## In-Flight Branch",
+            "",
+            "The current git branch is already linked to task(s) in progress:",
+            "",
+        ]
+        for t in open_branch_tasks:
+            held_by = f" (claimed by {t['assignee']})" if t.get("assignee") else ""
+            lines.append(f"- **{t['title']}** (slug: `{t['slug']}`){held_by}")
+        lines += [
+            "",
+            "This is likely the work this session should continue, not a new task.",
             "",
         ]
 
