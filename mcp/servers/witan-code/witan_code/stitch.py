@@ -41,10 +41,16 @@ class PreciseEdge:
     provider_repo: str
     provider_symbol: str
     kind: str
+    key_norm: str
     scheme: str
     match_count: int
     preferred: bool
     ambiguous_version: bool
+    # One Stage-1 exemplar occurrence per side (RepoSymbol keeps only one, not
+    # every occurrence — see SYMBOL_TABLE.md); omitted where the store row
+    # predates file/line or has none. Consumed by witan_code.edges to build
+    # the typed-edge evidence list for the :CALLS/precise tier.
+    evidence: tuple[dict, ...] = ()
 
     def as_dict(self) -> dict:
         return {
@@ -53,10 +59,12 @@ class PreciseEdge:
             "provider_repo": self.provider_repo,
             "provider_symbol": self.provider_symbol,
             "kind": self.kind,
+            "key_norm": self.key_norm,
             "scheme": self.scheme,
             "match_count": self.match_count,
             "preferred": self.preferred,
             "ambiguous_version": self.ambiguous_version,
+            "evidence": list(self.evidence),
         }
 
 
@@ -107,6 +115,16 @@ def _select_preferred(
     return set(range(len(candidates))), len(candidates) > 1
 
 
+def _evidence(ext: dict, prov: dict) -> tuple[dict, ...]:
+    out = []
+    for row in (ext, prov):
+        if row.get("file"):
+            out.append(
+                {"repo": row["repo"], "file": row["file"], "line": row.get("line")}
+            )
+    return tuple(out)
+
+
 def resolve(rows: list[dict]) -> tuple[list[PreciseEdge], list[dict]]:
     """Join a full ``RepoSymbol`` dump (``all_repo_symbols``) into edges + gaps.
 
@@ -148,10 +166,12 @@ def resolve(rows: list[dict]) -> tuple[list[PreciseEdge], list[dict]]:
                     provider_repo=prov["repo"],
                     provider_symbol=prov["symbol"],
                     kind=ext["kind"],
+                    key_norm=ext.get("key_norm") or prov.get("key_norm") or "",
                     scheme=ext["scheme"],
                     match_count=len(candidates),
                     preferred=i in preferred_idx,
                     ambiguous_version=ambiguous,
+                    evidence=_evidence(ext, prov),
                 )
             )
     return edges, unresolved

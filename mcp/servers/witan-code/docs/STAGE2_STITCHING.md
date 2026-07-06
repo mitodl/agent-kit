@@ -1,7 +1,8 @@
 # Stage 2: cross-repo symbol stitching (read time)
 
 Status: accepted (implementation phase, 2026-07-06)
-Related: [SYMBOL_TABLE.md](SYMBOL_TABLE.md), [SYMBOL_FORMAT.md](SYMBOL_FORMAT.md)
+Related: [SYMBOL_TABLE.md](SYMBOL_TABLE.md), [SYMBOL_FORMAT.md](SYMBOL_FORMAT.md),
+[EDGE_PRECISION_TIERS.md](EDGE_PRECISION_TIERS.md)
 
 Stage 2 joins the per-repo symbol tables Stage 1 emits into precise
 cross-repo edges — entirely at read time, entirely in Python, never written
@@ -66,9 +67,9 @@ these gaps; `code_interface_consumers`/`code_interface_providers` remain the
 way to check the heuristic tier for the same reference.
 
 Typed edge kinds (`:CALLS/precise`, `:CALLS/heuristic`, `:CALLS/fuzzy`) that
-formally merge these two tiers into one filterable result are tracked
-separately (edge precision tiers task) — Stage 2 here only had to produce
-the precise side of that join.
+formally merge these two tiers into one filterable result now exist —
+`witan_code.edges.cross_repo_edges()`, see
+[EDGE_PRECISION_TIERS.md](EDGE_PRECISION_TIERS.md).
 
 ## Surface
 

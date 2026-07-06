@@ -90,6 +90,14 @@ is `witan_code.stitch.resolve()`. Inspect it with `witan code stitch`
 `code_unresolved_symbols` MCP tools. See
 [docs/STAGE2_STITCHING.md](docs/STAGE2_STITCHING.md).
 
+Precise (Stage 2) and heuristic (Stage 3) edges are merged into one **typed,
+precision-tiered** result by `witan_code.edges.cross_repo_edges()`. Every
+tool that produces cross-repo links — `witan code deps`,
+`code_interface_providers`/`_consumers`/`_search`, `code_cross_repo_impact` —
+accepts `min_precision` (`"precise" | "heuristic" | "fuzzy"`, default
+`"heuristic"` = current behavior unchanged). See
+[docs/EDGE_PRECISION_TIERS.md](docs/EDGE_PRECISION_TIERS.md).
+
 ## Heuristic edges (important)
 
 `Defines` and `Contains` are exact (derived from the syntax tree). But:
