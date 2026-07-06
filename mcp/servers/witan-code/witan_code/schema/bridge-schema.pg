@@ -39,6 +39,33 @@ node InterfaceBinding {
     indexed_at: DateTime
 }
 
+// Per-repo symbol table (Stage 1 artifact — docs/SYMBOL_TABLE.md): one row per
+// (repo, role, symbol), aggregated from that repo's InterfaceBinding rows on
+// every bridge write. role=exported is the repo's public contract surface;
+// role=external is an unresolved reference to another repo's contract (a
+// RANGER-style import placeholder, redirected at read time by Stage 2 — no
+// cross-repo edges are ever written). Rows are repo-scoped, so concurrent
+// writers never touch the same row (same argument as InterfaceBinding).
+node RepoSymbol {
+    slug: String @key             // repo|role|symbol
+    repo: String @index           // canonical HTTPS repo URI
+    role: enum(exported, external) @index
+    symbol: String @index         // full canonical string (docs/SYMBOL_FORMAT.md)
+    scheme: String @index         // http | env | pkg | svc
+    descriptor: String @index     // precise Stage-2 join key (with scheme)
+    key_norm: String @index       // coarse join key — descriptor minus the
+                                  // method for http (consumer methods are "*")
+    manager: String?              // "." = unknown
+    package: String?              // "." = unresolved (typical for external)
+    version: String?
+    kind: String                  // binding kind: env_var | package | service | endpoint
+    n_refs: I32                   // occurrence count in this repo
+    confidence: F32?              // max occurrence confidence; 1.0 for exported
+    file: String?                 // exemplar occurrence (deterministic: min file/line)
+    line: I32?
+    indexed_at: DateTime
+}
+
 // One row per indexed repo: its declared (or fallback) package identity from
 // witan-code.toml (docs/PACKAGE_MAP.md). Overwritten on each full-repo index
 // (merge by slug). Qualifies provider symbols and backs the

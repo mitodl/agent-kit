@@ -82,6 +82,82 @@ def deps(
 
 
 @app.command
+def symbols(
+    repo: str | None = None,
+    role: Literal["exported", "external"] | None = None,
+    scheme: str | None = None,
+) -> None:
+    """Print a repo's symbol table from the bridge store (docs/SYMBOL_TABLE.md).
+
+    One row per (role, symbol): `exported` rows are the repo's public contract
+    surface; `external` rows are unresolved references Stage 2 joins against
+    other repos' exports.
+
+    Parameters
+    ----------
+    repo:
+        Canonical repo URI. Defaults to the repo detected from the CWD.
+    role:
+        Filter to exported or external rows.
+    scheme:
+        Filter to one symbol scheme (http/env/pkg/svc).
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from . import config as cfg_module
+    from . import repo as repo_module
+    from . import store as store_module
+    from .graph import OmnigraphClient
+
+    console = Console()
+    cfg = cfg_module.load()
+    store = store_module.bridge_store(cfg)
+    if not store.exists():
+        console.print(
+            "No bridge store yet — run `witan code index` in your repos first."
+        )
+        return
+
+    repo = repo or repo_module.detect()
+    if not repo:
+        console.print("No repo detected — pass --repo <canonical URI>.")
+        return
+
+    client = OmnigraphClient(str(store), cfg.queries_dir)
+    rows = client.read("bridge.gq", "repo_symbols", {"repo": repo})
+    rows = [
+        r
+        for r in rows
+        if (role is None or r.get("role") == role)
+        and (scheme is None or r.get("scheme") == scheme)
+    ]
+    if not rows:
+        console.print(f"[dim]No symbol table rows for {repo}.[/dim]")
+        return
+
+    table = Table(title=f"Symbol table — {repo}", header_style="bold")
+    for col in ("role", "symbol", "kind", "refs", "conf", "where"):
+        table.add_column(col)
+    for r in rows:
+        conf = r.get("confidence")
+        where = (
+            f"{r.get('file') or ''}:{r.get('line')}"
+            if r.get("line")
+            else (r.get("file") or "")
+        )
+        table.add_row(
+            r.get("role", ""),
+            r.get("symbol", ""),
+            r.get("kind", ""),
+            str(r.get("n_refs", "")),
+            f"{conf:.2f}" if isinstance(conf, (int, float)) else "",
+            where,
+        )
+    console.print(table)
+
+
+@app.command
 def serve() -> None:
     """Run the code-graph MCP server standalone (code_* tools only)."""
     from .server import mcp

@@ -162,6 +162,35 @@ def canonical_symbol(binding: ParsedBinding, identity=None) -> str:
     return f"{prefix}:{descriptor}"
 
 
+@dataclass(frozen=True)
+class ParsedSymbol:
+    scheme: str
+    manager: str
+    package: str
+    version: str
+    descriptor: str
+
+
+def _unesc(field: str) -> str:
+    # Inverse of _esc: %3A first, %25 last (so an escaped "%253A" round-trips
+    # to the literal "%3A" instead of ":").
+    return field.replace("%3A", ":").replace("%25", "%")
+
+
+def parse_symbol(symbol: str) -> ParsedSymbol | None:
+    """Split a canonical symbol string into its five fields.
+
+    The descriptor is terminal and may contain colons, so split with
+    ``maxsplit=4``; only the first four fields are percent-decoded
+    (descriptors are never encoded). Returns None on a malformed string.
+    """
+    parts = symbol.split(":", 4)
+    if len(parts) != 5:
+        return None
+    scheme, manager, package, version = (_unesc(p) for p in parts[:4])
+    return ParsedSymbol(scheme, manager, package, version, parts[4])
+
+
 def _binding(kind, key, role, file, *, sub_kind=None, **kw) -> ParsedBinding:
     key_norm = normalize_key(kind, key)
     generic = kind == "env_var" and key in GENERIC_ENV
