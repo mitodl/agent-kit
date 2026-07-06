@@ -113,15 +113,21 @@ def build_graph(
     ``"fuzzy"`` is currently identical to ``"heuristic"`` (no fuzzy tier
     exists yet). The special ``service`` "repo depends on what it deploys"
     edge is unaffected by ``min_precision`` — it isn't a symbol-joined
-    consumer/provider relationship.
+    consumer/provider relationship. Raises ``ValueError`` for any other
+    value, matching ``edges.cross_repo_edges``.
     """
+    from . import edges as edges_module
+
+    if min_precision not in edges_module.PRECISION_TIERS:
+        raise ValueError(
+            f"min_precision must be one of {edges_module.PRECISION_TIERS!r}"
+        )
+
     filtered = cross_repo_edges(rows, kind=kind, min_confidence=min_confidence)
 
     require_precise = min_precision == "precise"
     precise_pairs = None
     if require_precise:
-        from . import edges as edges_module
-
         precise_pairs = edges_module.precise_pairs(repo_symbol_rows or [])
 
     groups: dict[tuple[str, str], dict] = defaultdict(

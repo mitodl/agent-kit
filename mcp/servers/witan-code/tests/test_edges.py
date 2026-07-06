@@ -179,6 +179,18 @@ def test_low_confidence_endpoint_consumer_filtered_by_min_confidence():
     assert len(cross_repo_edges([], bindings, min_confidence=0.05)) == 1
 
 
+def test_zero_confidence_is_not_treated_as_missing():
+    """A genuine 0.0 confidence must survive as 0.0, not fall back to 1.0
+    (0.0 is falsy in Python — `x or 1.0` silently discards it)."""
+    bindings = [
+        _binding_row("a", "consumer", "endpoint", "/api/v0/x/{}", confidence=0.0),
+        _binding_row("b", "provider", "endpoint", "/api/v0/x/{}"),
+    ]
+    edges = cross_repo_edges([], bindings, min_confidence=0.0)
+    assert len(edges) == 1
+    assert edges[0].confidence == 0.0
+
+
 def test_typed_edge_as_dict_shape():
     e = TypedEdge(
         precision="precise",

@@ -405,7 +405,7 @@ def _precise_pairs() -> frozenset:
 
 
 def _filter_by_precision(rows: list[dict], min_precision: str) -> list[dict]:
-    if min_precision != "precise":
+    if not rows or min_precision != "precise":
         return rows
     key_norms = {(kind, key_norm) for _, _, kind, key_norm in _precise_pairs()}
     return [r for r in rows if (r.get("kind"), r.get("key_norm")) in key_norms]

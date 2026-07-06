@@ -1,5 +1,7 @@
 """Unit tests for the cross-repo dependency visualizer (no graph store needed)."""
 
+import pytest
+
 from witan_code import visualize
 
 A = "https://github.com/mitodl/repo-a"
@@ -322,3 +324,8 @@ def test_build_graph_confidence_on_emitted_edge_contracts():
     ep_contracts = [c for c in g.edges[(A, B)].contracts if c["kind"] == "endpoint"]
     assert ep_contracts, "endpoint contract should be present in edge"
     assert ep_contracts[0]["confidence"] == 0.75
+
+
+def test_build_graph_rejects_invalid_min_precision():
+    with pytest.raises(ValueError):
+        visualize.build_graph(ROWS, min_precision="nonsense")

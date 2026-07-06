@@ -121,7 +121,11 @@ def _heuristic_edges(
                         kind=kind,
                         key_norm=key_norm,
                         canonical_symbol=None,
-                        confidence=cons["confidence"] or 1.0,
+                        confidence=(
+                            cons["confidence"]
+                            if cons["confidence"] is not None
+                            else 1.0
+                        ),
                         evidence=tuple(cons["evidence"]),
                     )
                 )
