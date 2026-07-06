@@ -12,7 +12,7 @@
 #   ac-kit apply agent-config.toml --dry-run   # preview without writing
 #   ac-kit validate agent-config.toml          # check for drift
 #
-# Set WITAN_AUTHOR below to your own name before applying.
+# WITAN_AUTHOR is optional and defaults to your git config user.name or $USER.
 
 [mcp_servers.witan]
 kind = "stdio"
