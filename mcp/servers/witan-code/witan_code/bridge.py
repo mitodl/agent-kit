@@ -46,8 +46,13 @@ def write_bindings(
     restore them.
 
     Store-level confidence adjustments (self_provided_key, known_provider_package)
-    are applied here before writing, using provider data already present in the
-    bridge store from previously-indexed repos.
+    are applied here before writing. The cross-repo half of each signal is
+    sourced from other repos' Stage 1 symbol tables (RepoSymbol `exported`
+    rows, docs/SYMBOL_TABLE.md) — the stable, deduplicated artifact those
+    repos' own writes already produced. This repo's own contribution can't
+    come from the same place: its Stage 1 table hasn't been rebuilt for THIS
+    write yet (that happens further down), so it's read directly from the
+    surviving + fresh bindings already in hand.
 
     Returns the number of binding records written.
     """
@@ -63,6 +68,7 @@ def write_bindings(
         all_rows = client.read("bridge.gq", "all_bindings", {})
     except Exception:  # noqa: BLE001 — store may be empty or query unavailable
         all_rows = []
+    repo_symbol_rows = _read_repo_symbols(client)
 
     purge_files = set(touched_files) | {b.file for b in bindings}
     if full_repo and base is not None:
@@ -79,24 +85,34 @@ def write_bindings(
         )
 
     # Collect store-level context for confidence adjustments.
-    # provider_keys: (repo, key_norm) for provider records that will survive
-    # the purge (own-repo rows in purged files are stale) plus provider
-    # bindings from the current batch, so the self_provided_key penalty fires
-    # when the same repo both provides and consumes a key_norm.
-    # provider_pkg_slugs: key_norm values for package providers from OTHER repos,
-    # plus package names other repos DECLARE via their package map — the map is
-    # the source of truth; incidentally indexed package.json rows remain as a
-    # fallback signal.
-    provider_keys: frozenset[tuple[str, str]] = frozenset(
-        (r["repo"], r["key_norm"])
-        for r in all_rows
-        if r.get("role") == "provider"
-        and not (r.get("repo") == repo and r.get("file") in purge_files)
-    ) | frozenset((repo, b.key_norm) for b in bindings if b.role == "provider")
+    # provider_keys: (repo, key_norm) pairs so the self_provided_key penalty
+    # fires when the same repo both provides and consumes a key_norm. OTHER
+    # repos' pairs come from their Stage 1 symbol table (exported rows); this
+    # repo's own pairs come from its surviving (not-purged) + fresh provider
+    # bindings, since its own Stage 1 table is stale until the rebuild below.
+    # provider_pkg_slugs: key_norm values for package providers from OTHER
+    # repos' Stage 1 symbol tables, plus package names other repos DECLARE
+    # via their package map — the map is the source of truth for identities
+    # a repo doesn't necessarily emit a binding for.
+    provider_keys: frozenset[tuple[str, str]] = (
+        frozenset(
+            (r["repo"], r["key_norm"])
+            for r in repo_symbol_rows
+            if r.get("role") == "exported" and r.get("repo") != repo
+        )
+        | frozenset(
+            (r["repo"], r["key_norm"])
+            for r in all_rows
+            if r.get("role") == "provider"
+            and r.get("repo") == repo
+            and r.get("file") not in purge_files
+        )
+        | frozenset((repo, b.key_norm) for b in bindings if b.role == "provider")
+    )
     provider_pkg_slugs: frozenset[str] = frozenset(
         r["key_norm"]
-        for r in all_rows
-        if r.get("role") == "provider"
+        for r in repo_symbol_rows
+        if r.get("role") == "exported"
         and r.get("kind") == "package"
         and r.get("repo") != repo
     ) | _declared_provider_packages(client, exclude_repo=repo)
@@ -232,6 +248,20 @@ def _symbol_table_records(
             }
         )
     return out
+
+
+def _read_repo_symbols(client: OmnigraphClient) -> list[dict]:
+    """Every RepoSymbol row in the bridge store, best-effort.
+
+    Empty on a store that predates Stage 1 (no RepoSymbol node yet) or any
+    other query failure — the confidence heuristics that use this degrade to
+    their pre-Stage-1 baseline (no cross-repo boost/penalty) rather than
+    aborting the write.
+    """
+    try:
+        return client.read("bridge.gq", "all_repo_symbols", {})
+    except Exception:  # noqa: BLE001 — store may predate RepoSymbol
+        return []
 
 
 def _declared_provider_packages(

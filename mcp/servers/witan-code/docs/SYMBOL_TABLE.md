@@ -73,6 +73,24 @@ A successful join is a `:CALLS/precise` edge (computed, never stored); the
 The concrete join implementation, its edge shape, and the unresolved-symbol
 gap report are specified in [STAGE2_STITCHING.md](STAGE2_STITCHING.md).
 
+## Second consumer: the heuristic tier's confidence signals
+
+The table has a second reader beyond Stage 2's join: `bridge.write_bindings`
+sources the cross-repo half of two confidence heuristics
+(`bridge_extractors.adjust_confidence`) from other repos' `exported` rows
+rather than re-deriving the same information from raw `InterfaceBinding`
+rows —
+
+* `self_provided_key` (−0.5): the consuming repo also exports the same
+  `key_norm` — checked against other repos' `exported` rows plus this
+  repo's own surviving/fresh provider bindings (its own table hasn't been
+  rebuilt yet at this point in the write).
+* `known_provider_package` (+0.3): a co-located package import matches an
+  `exported` package row from a different repo.
+
+Both signals degrade to their pre-Stage-1 baseline (no boost/penalty) if the
+bridge store predates `RepoSymbol` — the write is never blocked on it.
+
 ## Inspecting
 
 ```
