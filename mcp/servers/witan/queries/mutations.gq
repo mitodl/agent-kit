@@ -279,6 +279,16 @@ query insert_workflow_trace(
     }
 }
 
+query update_workflow_trace_annotations(
+    $slug: String,
+    $lessons_slug: [String]?,
+    $patterns_slug: [String]?
+) {
+    update WorkflowTrace
+        set { lessons_slug: $lessons_slug, patterns_slug: $patterns_slug }
+        where slug = $slug
+}
+
 // ── Workflow Edge mutations ────────────────────────────────────────
 
 query link_belongs_to($from: String, $to: String) {

@@ -23,6 +23,7 @@ from . import memory  # noqa: F401
 from . import projects  # noqa: F401
 from . import setup_cmd  # noqa: F401
 from . import tasks  # noqa: F401
+from . import traces  # noqa: F401
 from .migrate import migrate_app
 
 # Mount `witan migrate …` (sub-app, not a flat command).

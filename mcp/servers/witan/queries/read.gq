@@ -564,6 +564,23 @@ query get_trace($slug: String) {
     }
 }
 
+// Repo/tag membership can't be expressed as a match-shorthand on list fields,
+// so callers fetch every trace and Python-filter — same pattern as
+// list_all_projects.
+query list_all_traces() {
+    match {
+        $t: WorkflowTrace
+    }
+    return {
+        $t.slug, $t.project_slug, $t.title, $t.description,
+        $t.repos, $t.phases, $t.session_count, $t.duration,
+        $t.outcome, $t.lessons_slug, $t.patterns_slug,
+        $t.author, $t.created_at, $t.tags
+    }
+    order { $t.created_at desc }
+    limit 1000000
+}
+
 // ── Tasks ─────────────────────────────────────────────────────────
 
 query get_task($slug: String) {

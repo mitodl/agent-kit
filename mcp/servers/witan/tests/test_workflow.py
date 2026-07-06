@@ -204,3 +204,82 @@ def test_list_blocked_projects_includes_blocked_by(server):
     blocked_row = next((r for r in rows if r["slug"] == blocked["slug"]), None)
     assert blocked_row is not None
     assert blocker["slug"] in (blocked_row.get("blocked_by") or [])
+
+
+@requires_omnigraph
+def test_trace_list_filters_by_repo_tags_author(server):
+    proj = server.workflow_project_create(
+        title="traced project",
+        description="d",
+        repos=["https://github.com/x/one"],
+        tags=["alpha"],
+    )
+    server.workflow_project_complete(proj["slug"], outcome="done")
+
+    other = server.workflow_project_create(
+        title="other project", description="d", repos=["https://github.com/x/two"]
+    )
+    server.workflow_project_complete(other["slug"], outcome="done")
+
+    by_repo = server.workflow_trace_list(repo="https://github.com/x/one")
+    assert {t["slug"] for t in by_repo} == {f"wt-{proj['slug']}"}
+
+    by_tag = server.workflow_trace_list(repo="", tags=["alpha"])
+    assert {t["slug"] for t in by_tag} == {f"wt-{proj['slug']}"}
+
+    by_author = server.workflow_trace_list(repo="", author="nobody")
+    assert by_author == []
+
+
+@requires_omnigraph
+def test_trace_annotate_unions_and_is_idempotent(server):
+    proj = server.workflow_project_create(title="annotate me", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="done")
+    trace_slug = done["trace_slug"]
+
+    first = server.workflow_trace_annotate(trace_slug, lessons_slug=["les-a"])
+    assert first["lessons_slug"] == ["les-a"]
+
+    second = server.workflow_trace_annotate(
+        trace_slug, lessons_slug=["les-a", "les-b"], patterns_slug=["pat-a"]
+    )
+    assert second["lessons_slug"] == ["les-a", "les-b"]
+    assert second["patterns_slug"] == ["pat-a"]
+
+
+@requires_omnigraph
+def test_mine_trace_without_proposals_returns_material(server):
+    proj = server.workflow_project_create(title="mine me", description="d")
+    sid = uuid.uuid4().hex
+    sess = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="discovery"
+    )
+    server.workflow_session_end(sess["session_slug"], summary="learned a thing")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
+
+    material = server.mine_trace(done["trace_slug"])
+    assert material["trace"]["slug"] == done["trace_slug"]
+    assert [s["slug"] for s in material["sessions"]] == [sess["session_slug"]]
+
+
+@requires_omnigraph
+def test_mine_trace_with_proposals_creates_memories_and_links_project(server):
+    proj = server.workflow_project_create(title="mine me too", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
+    trace_slug = done["trace_slug"]
+
+    created = server.mine_trace(
+        trace_slug,
+        patterns=[{"title": "a pattern", "content": "do X because Y"}],
+        lessons=[{"title": "a lesson", "content": "watch out for Z"}],
+    )
+    assert len(created["created_patterns"]) == 1
+    assert len(created["created_lessons"]) == 1
+
+    trace = server.workflow_trace_list(repo="")
+    tr = next(t for t in trace if t["slug"] == trace_slug)
+    assert tr["patterns_slug"] == created["created_patterns"]
+    assert tr["lessons_slug"] == created["created_lessons"]
+
+    informed = {m["slug"] for m in server.project_memories(proj["slug"])["memories"]}
+    assert informed == {*created["created_patterns"], *created["created_lessons"]}
