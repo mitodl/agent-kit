@@ -500,10 +500,13 @@ def code_precise_edges(repo: str | None = None) -> list[dict]:
     Each edge carries ``match_count`` (how many providers this reference
     joined to) and ``ambiguous_version`` (true when more than one provider
     survives version disambiguation — see SYMBOL_FORMAT.md decision 1);
-    filter to ``preferred`` edges to collapse a fan-out to one winner per
-    reference. A reference with no precise match at all shows up in
-    ``code_unresolved_symbols`` instead — fall back to the heuristic
-    ``code_interface_consumers``/``code_interface_providers`` tools for those.
+    filter to ``preferred`` edges to narrow a fan-out to its best candidate(s)
+    — usually one winner, but still more than one when ``ambiguous_version``
+    is also true (e.g. two repos both export ``main``), since Stage 2 never
+    silently guesses a single winner in that case. A reference with no
+    precise match at all shows up in ``code_unresolved_symbols`` instead —
+    fall back to the heuristic ``code_interface_consumers``/
+    ``code_interface_providers`` tools for those.
 
     Parameters
     ----------

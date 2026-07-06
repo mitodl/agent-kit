@@ -255,6 +255,33 @@ def test_no_exact_version_falls_back_to_main():
     assert not by_repo["repo-b"].preferred
 
 
+def test_none_descriptor_and_version_handled_gracefully():
+    """Legacy/malformed store rows may carry None instead of "." — must not crash."""
+    ext = _row(
+        "repo-a",
+        "external",
+        "http:.:.:.:GET /api/v0/x/{}",
+        "http",
+        None,
+        "/api/v0/x/{}",
+        version=None,
+    )
+    exp = _row(
+        "repo-b",
+        "exported",
+        "http:pypi:b:main:GET /api/v0/x/{}",
+        "http",
+        "GET /api/v0/x/{}",
+        "/api/v0/x/{}",
+        version="main",
+    )
+    edges, unresolved = resolve([ext, exp])
+    assert unresolved == []
+    assert len(edges) == 1
+    assert edges[0].provider_repo == "repo-b"
+    assert edges[0].preferred
+
+
 # ── Integration: full store → MCP tools → CLI ─────────────────────
 
 

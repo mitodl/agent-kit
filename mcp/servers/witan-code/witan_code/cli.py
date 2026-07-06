@@ -204,8 +204,16 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
         table = Table(title="Unresolved external symbols", header_style="bold")
         for col in ("repo", "symbol", "kind", "refs"):
             table.add_column(col)
-        for r in sorted(unresolved_rows, key=lambda r: (r["repo"], r["symbol"])):
-            table.add_row(r["repo"], r["symbol"], r["kind"], str(r.get("n_refs", "")))
+        for r in sorted(
+            unresolved_rows, key=lambda r: (r["repo"] or "", r["symbol"] or "")
+        ):
+            n_refs = r.get("n_refs")
+            table.add_row(
+                r["repo"] or "",
+                r["symbol"] or "",
+                r["kind"] or "",
+                str(n_refs) if n_refs is not None else "",
+            )
         console.print(table)
         return
 
@@ -217,11 +225,14 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
     table = Table(title="Precise cross-repo edges (Stage 2)", header_style="bold")
     for col in ("consumer", "provider", "kind", "matches", "preferred", "ambiguous"):
         table.add_column(col)
-    for e in sorted(edges, key=lambda e: (e.consumer_repo, e.provider_repo, e.kind)):
+    for e in sorted(
+        edges,
+        key=lambda e: (e.consumer_repo or "", e.provider_repo or "", e.kind or ""),
+    ):
         table.add_row(
-            e.consumer_repo,
-            e.provider_repo,
-            e.kind,
+            e.consumer_repo or "",
+            e.provider_repo or "",
+            e.kind or "",
             str(e.match_count),
             "yes" if e.preferred else "",
             "yes" if e.ambiguous_version else "",

@@ -60,13 +60,17 @@ class PreciseEdge:
         }
 
 
-def _method(descriptor: str) -> str | None:
+def _method(descriptor: str | None) -> str | None:
     """The leading method token of an http descriptor, or None if there isn't one."""
+    if not descriptor:
+        return None
     method, _, rest = descriptor.partition(" ")
     return method if rest else None
 
 
-def _http_compatible(consumer_descriptor: str, provider_descriptor: str) -> bool:
+def _http_compatible(
+    consumer_descriptor: str | None, provider_descriptor: str | None
+) -> bool:
     consumer_method = _method(consumer_descriptor)
     return consumer_method in (None, "*") or consumer_method == _method(
         provider_descriptor
@@ -81,7 +85,7 @@ def _join_key(row: dict) -> tuple:
 
 
 def _select_preferred(
-    consumer_version: str, candidates: list[dict]
+    consumer_version: str | None, candidates: list[dict]
 ) -> tuple[set, bool]:
     """Indices of the preferred candidate(s) plus whether the group is ambiguous.
 
@@ -93,7 +97,7 @@ def _select_preferred(
     def where(pred) -> set:
         return {i for i, c in enumerate(candidates) if pred(c)}
 
-    if consumer_version not in (".", ""):
+    if consumer_version not in (".", "", None):
         exact = where(lambda c: c["version"] == consumer_version)
         if exact:
             return exact, len(exact) > 1
