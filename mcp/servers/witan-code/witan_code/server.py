@@ -390,10 +390,31 @@ def code_search_symbol(
 
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]
+PrecisionTier = Literal["precise", "heuristic", "fuzzy"]
+
+
+def _precise_pairs() -> frozenset:
+    """(consumer_repo, provider_repo, kind, key_norm) covered by a Stage-2 join."""
+    client = _bridge_client()
+    if client is None:
+        return frozenset()
+    from . import edges as edges_module
+
+    rows = client.read("bridge.gq", "all_repo_symbols", {})
+    return edges_module.precise_pairs(rows)
+
+
+def _filter_by_precision(rows: list[dict], min_precision: str) -> list[dict]:
+    if min_precision != "precise":
+        return rows
+    key_norms = {(kind, key_norm) for _, _, kind, key_norm in _precise_pairs()}
+    return [r for r in rows if (r.get("kind"), r.get("key_norm")) in key_norms]
 
 
 @mcp.tool
-def code_interface_providers(kind: BindingKind, key: str) -> list[dict]:
+def code_interface_providers(
+    kind: BindingKind, key: str, min_precision: PrecisionTier = "heuristic"
+) -> list[dict]:
     """
     Find repos that PROVIDE a cross-repo contract ``key`` of ``kind``.
 
@@ -409,12 +430,20 @@ def code_interface_providers(kind: BindingKind, key: str) -> list[dict]:
     key:
         The contract value. For ``endpoint`` a raw path is accepted and
         normalized (path params collapse to ``{}``).
+    min_precision:
+        Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
+        ``heuristic`` preserves prior behavior (every binding this tool has
+        always returned). ``precise`` keeps only bindings whose
+        (kind, key_norm) is also covered by a Stage-2 canonical-symbol join
+        (see ``code_precise_edges``).
     """
-    return _bindings_by_role(kind, key, "provider")
+    return _bindings_by_role(kind, key, "provider", min_precision)
 
 
 @mcp.tool
-def code_interface_consumers(kind: BindingKind, key: str) -> list[dict]:
+def code_interface_consumers(
+    kind: BindingKind, key: str, min_precision: PrecisionTier = "heuristic"
+) -> list[dict]:
     """
     Find repos that CONSUME a cross-repo contract ``key`` of ``kind``.
 
@@ -427,24 +456,35 @@ def code_interface_consumers(kind: BindingKind, key: str) -> list[dict]:
         ``env_var``, ``package``, ``service``, or ``endpoint``.
     key:
         The contract value (``endpoint`` paths are normalized).
+    min_precision:
+        Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
+        ``heuristic`` preserves prior behavior (every binding this tool has
+        always returned). ``precise`` keeps only bindings whose
+        (kind, key_norm) is also covered by a Stage-2 canonical-symbol join
+        (see ``code_precise_edges``).
     """
-    return _bindings_by_role(kind, key, "consumer")
+    return _bindings_by_role(kind, key, "consumer", min_precision)
 
 
-def _bindings_by_role(kind: str, key: str, role: str) -> list[dict]:
+def _bindings_by_role(
+    kind: str, key: str, role: str, min_precision: str = "heuristic"
+) -> list[dict]:
     client = _bridge_client()
     if client is None:
         return []
     key_norm = bridge_extractors.normalize_key(kind, key)
-    return client.read(
+    rows = client.read(
         "bridge.gq",
         "bindings_by_key_role",
         {"kind": kind, "key_norm": key_norm, "role": role},
     )
+    return _filter_by_precision(rows, min_precision)
 
 
 @mcp.tool
-def code_cross_repo_impact(symbol_id: str) -> dict:
+def code_cross_repo_impact(
+    symbol_id: str, min_precision: PrecisionTier = "heuristic"
+) -> dict:
     """
     Find the cross-repo surface of a symbol.
 
@@ -461,6 +501,13 @@ def code_cross_repo_impact(symbol_id: str) -> dict:
     ----------
     symbol_id:
         Full symbol id ``repo#path::QualifiedName``.
+    min_precision:
+        Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
+        ``heuristic`` preserves prior behavior (every cross-repo binding this
+        tool has always returned). ``precise`` keeps only an ``other``
+        binding when a Stage-2 edge links ``own_repo`` and that binding's
+        repo specifically for that (kind, key_norm) — not merely because
+        some unrelated repo pair happens to resolve it precisely.
     """
     empty = {"symbol_id": symbol_id, "bindings": [], "cross_repo": []}
     client = _bridge_client()
@@ -471,6 +518,7 @@ def code_cross_repo_impact(symbol_id: str) -> dict:
     if not own:
         return empty
 
+    pairs = _precise_pairs() if min_precision == "precise" else None
     own_repo = symbol_id.split("#", 1)[0]
     seen: set[str] = set()
     cross: list[dict] = []
@@ -483,6 +531,11 @@ def code_cross_repo_impact(symbol_id: str) -> dict:
             {"kind": b["kind"], "key_norm": b["key_norm"]},
         ):
             if other["repo"] == own_repo or other["slug"] in seen:
+                continue
+            if pairs is not None and not (
+                (own_repo, other["repo"], b["kind"], b["key_norm"]) in pairs
+                or (other["repo"], own_repo, b["kind"], b["key_norm"]) in pairs
+            ):
                 continue
             seen.add(other["slug"])
             cross.append(other)
@@ -553,7 +606,11 @@ def code_unresolved_symbols(repo: str | None = None) -> list[dict]:
 
 
 @mcp.tool
-def code_interface_search(query: str, kind: BindingKind | None = None) -> list[dict]:
+def code_interface_search(
+    query: str,
+    kind: BindingKind | None = None,
+    min_precision: PrecisionTier = "heuristic",
+) -> list[dict]:
     """
     BM25 search over cross-repo interface bindings (by normalized key).
 
@@ -566,15 +623,23 @@ def code_interface_search(query: str, kind: BindingKind | None = None) -> list[d
         Search terms matched against the normalized key.
     kind:
         Optional filter to one kind.
+    min_precision:
+        Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
+        ``heuristic`` preserves prior behavior (every match this tool has
+        always returned). ``precise`` keeps only matches whose
+        (kind, key_norm) is also covered by a Stage-2 canonical-symbol join
+        (see ``code_precise_edges``).
     """
     client = _bridge_client()
     if client is None:
         return []
     if kind:
-        return client.read(
+        rows = client.read(
             "bridge.gq", "search_bindings_by_kind", {"query": query, "kind": kind}
         )
-    return client.read("bridge.gq", "search_bindings", {"query": query})
+    else:
+        rows = client.read("bridge.gq", "search_bindings", {"query": query})
+    return _filter_by_precision(rows, min_precision)
 
 
 @mcp.tool

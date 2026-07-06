@@ -39,6 +39,7 @@ def deps(
     repo: str | None = None,
     html: Path | None = None,
     open_browser: bool = False,
+    min_precision: Literal["precise", "heuristic", "fuzzy"] = "heuristic",
 ) -> None:
     """Visualize cross-repo dependencies from the shared bridge store.
 
@@ -55,6 +56,11 @@ def deps(
         Write a self-contained interactive HTML graph to this path.
     open_browser:
         Open the generated HTML in the default browser.
+    min_precision:
+        Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
+        `heuristic` preserves prior behavior (every consumer/provider link
+        this command has always shown). `precise` keeps only edges also
+        covered by a Stage-2 canonical-symbol join — see `witan code stitch`.
     """
     from . import config as cfg_module
     from . import store as store_module
@@ -69,7 +75,18 @@ def deps(
 
     client = OmnigraphClient(str(store), cfg.queries_dir)
     rows = client.read("bridge.gq", "all_bindings", {})
-    graph = visualize.build_graph(rows, kind=kind, repo=repo)
+    repo_symbol_rows = (
+        client.read("bridge.gq", "all_repo_symbols", {})
+        if min_precision == "precise"
+        else None
+    )
+    graph = visualize.build_graph(
+        rows,
+        kind=kind,
+        repo=repo,
+        min_precision=min_precision,
+        repo_symbol_rows=repo_symbol_rows,
+    )
     visualize.render_rich(graph)
 
     if html is not None:

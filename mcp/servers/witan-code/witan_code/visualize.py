@@ -95,6 +95,8 @@ def build_graph(
     kind: str | None = None,
     repo: str | None = None,
     min_confidence: float = 0.5,
+    min_precision: str = "heuristic",
+    repo_symbol_rows: list[dict] | None = None,
 ) -> DepGraph:
     """Compute the cross-repo dependency graph from raw binding rows.
 
@@ -103,8 +105,24 @@ def build_graph(
     suppresses low-confidence endpoint consumer rows before graph construction —
     only endpoint consumers are filtered; all providers and non-endpoint consumers
     pass through unconditionally.
+
+    ``min_precision`` (docs/EDGE_PRECISION_TIERS.md) defaults to ``"heuristic"``
+    — every edge this function has always produced, unchanged. Pass
+    ``"precise"`` plus ``repo_symbol_rows`` (a full ``all_repo_symbols`` dump)
+    to keep only edges also covered by a Stage-2 canonical-symbol join;
+    ``"fuzzy"`` is currently identical to ``"heuristic"`` (no fuzzy tier
+    exists yet). The special ``service`` "repo depends on what it deploys"
+    edge is unaffected by ``min_precision`` — it isn't a symbol-joined
+    consumer/provider relationship.
     """
     filtered = cross_repo_edges(rows, kind=kind, min_confidence=min_confidence)
+
+    require_precise = min_precision == "precise"
+    precise_pairs = None
+    if require_precise:
+        from . import edges as edges_module
+
+        precise_pairs = edges_module.precise_pairs(repo_symbol_rows or [])
 
     groups: dict[tuple[str, str], dict] = defaultdict(
         lambda: {"providers": set(), "consumers": {}}
@@ -152,9 +170,15 @@ def build_graph(
             if cons in self_providing:
                 continue
             for prov in g["providers"]:
-                if cons != prov:
-                    conf = consumer_conf.get((b_kind, key_norm, cons), 1.0)
-                    graph.edge(cons, prov).add(b_kind, key_norm, conf)
+                if cons == prov:
+                    continue
+                if (
+                    require_precise
+                    and (cons, prov, b_kind, key_norm) not in precise_pairs
+                ):
+                    continue
+                conf = consumer_conf.get((b_kind, key_norm, cons), 1.0)
+                graph.edge(cons, prov).add(b_kind, key_norm, conf)
 
     if repo:
         graph.edges = {
