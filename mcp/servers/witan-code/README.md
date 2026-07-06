@@ -255,7 +255,10 @@ indexer first).
 | `code_reindex(path=None)` | index/re-index the repo or a subpath |
 
 Cross-repo bridge tools (resolve the shared `_bridge.omni` store; return `[]` /
-an empty shape when it does not exist yet):
+an empty shape when it does not exist yet). When the current checkout is on a
+non-default git branch with in-flight bindings, these auto-detect and read
+that repo's bridge branch overlay instead of `main` — see
+[docs/BRANCH_INDEXING.md § Bridge store](docs/BRANCH_INDEXING.md#bridge-store):
 
 | Tool | Returns |
 |------|---------|

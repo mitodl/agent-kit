@@ -260,12 +260,12 @@ def index_path(
     # root) also runs the repo-level provider extractors and clears bindings for
     # files deleted from disk; all purging is per-file so unchanged (skipped)
     # files keep their bindings.
+    #
+    # A non-default branch targets its repo-qualified bridge branch overlay
+    # (docs/BRANCH_INDEXING.md § Bridge store) rather than skipping the bridge
+    # entirely: the shared main view still never sees in-flight bindings, but
+    # they're no longer dropped on the floor either.
     full_repo = target.is_dir() and target.resolve() == base.resolve()
-    if branch is not None:
-        # Branch indexes skip the shared bridge store: its main view must keep
-        # reflecting main code only. Branch-overlay bridge writes are tracked
-        # separately (docs/BRANCH_INDEXING.md § Bridge store).
-        return stats
     if full_repo:
         bindings.extend(bridge_extractors.extract_repo_bindings(base, slug))
     try:
@@ -277,6 +277,7 @@ def index_path(
             touched_files=tuple(touched_files),
             identity=package_map.load(base, slug),
             base=base,
+            branch=branch,
         )
     except Exception as exc:  # noqa: BLE001 — bridge is best-effort, never fatal
         print(f"codegraph: bridge update failed: {exc}", file=sys.stderr)
