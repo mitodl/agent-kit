@@ -158,6 +158,78 @@ def symbols(
 
 
 @app.command
+def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
+    """Print Stage-2 precise cross-repo edges from the bridge store (docs/SYMBOL_TABLE.md).
+
+    Joins every repo's unresolved external symbols against other repos'
+    exported symbols by canonical symbol string — distinct from the coarser
+    `witan code deps` heuristic (kind, key_norm) grouping.
+
+    Parameters
+    ----------
+    repo:
+        Keep only edges/gaps touching this repo. Omit to see the whole store.
+    unresolved:
+        Print external references with no precise match instead of edges —
+        gaps in indexing coverage (a provider isn't indexed yet, or none
+        exists in this SOA).
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from . import config as cfg_module
+    from . import store as store_module
+    from . import stitch as stitch_module
+    from .graph import OmnigraphClient
+
+    console = Console()
+    cfg = cfg_module.load()
+    store = store_module.bridge_store(cfg)
+    if not store.exists():
+        console.print(
+            "No bridge store yet — run `witan code index` in your repos first."
+        )
+        return
+
+    client = OmnigraphClient(str(store), cfg.queries_dir)
+    rows = client.read("bridge.gq", "all_repo_symbols", {})
+    edges, unresolved_rows = stitch_module.resolve(rows)
+
+    if unresolved:
+        if repo is not None:
+            unresolved_rows = [r for r in unresolved_rows if r["repo"] == repo]
+        if not unresolved_rows:
+            console.print("[dim]No unresolved external symbols.[/dim]")
+            return
+        table = Table(title="Unresolved external symbols", header_style="bold")
+        for col in ("repo", "symbol", "kind", "refs"):
+            table.add_column(col)
+        for r in sorted(unresolved_rows, key=lambda r: (r["repo"], r["symbol"])):
+            table.add_row(r["repo"], r["symbol"], r["kind"], str(r.get("n_refs", "")))
+        console.print(table)
+        return
+
+    if repo is not None:
+        edges = [e for e in edges if repo in (e.consumer_repo, e.provider_repo)]
+    if not edges:
+        console.print("[dim]No precise cross-repo edges.[/dim]")
+        return
+    table = Table(title="Precise cross-repo edges (Stage 2)", header_style="bold")
+    for col in ("consumer", "provider", "kind", "matches", "preferred", "ambiguous"):
+        table.add_column(col)
+    for e in sorted(edges, key=lambda e: (e.consumer_repo, e.provider_repo, e.kind)):
+        table.add_row(
+            e.consumer_repo,
+            e.provider_repo,
+            e.kind,
+            str(e.match_count),
+            "yes" if e.preferred else "",
+            "yes" if e.ambiguous_version else "",
+        )
+    console.print(table)
+
+
+@app.command
 def serve() -> None:
     """Run the code-graph MCP server standalone (code_* tools only)."""
     from .server import mcp

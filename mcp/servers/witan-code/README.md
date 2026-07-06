@@ -83,6 +83,13 @@ surface, `external` rows are unresolved references to other repos' contracts.
 This deduplicated table is the Stage-2 read-time join artifact; inspect it
 with `witan code symbols`. See [docs/SYMBOL_TABLE.md](docs/SYMBOL_TABLE.md).
 
+Stage 2 itself — joining external symbol references against other repos'
+exported symbols by canonical string, entirely at read time, never stored —
+is `witan_code.stitch.resolve()`. Inspect it with `witan code stitch`
+(`--unresolved` for indexing-coverage gaps) or the `code_precise_edges` /
+`code_unresolved_symbols` MCP tools. See
+[docs/STAGE2_STITCHING.md](docs/STAGE2_STITCHING.md).
+
 ## Heuristic edges (important)
 
 `Defines` and `Contains` are exact (derived from the syntax tree). But:
