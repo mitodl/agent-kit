@@ -40,7 +40,37 @@ _clients: dict[str, OmnigraphClient] = {}
 _store_branches: dict[str, tuple[float, frozenset[str]]] = {}
 _BRANCH_CACHE_TTL = 30.0
 
+# repo_module.detect()/store_branch() spawn git subprocesses, and every
+# per-repo AND bridge read that follows "the current checkout" calls them.
+# A short TTL amortizes a burst of tool calls within one agent turn (the
+# common case) while still picking up a branch switch within a couple
+# seconds — long-lived enough to matter for latency, short enough that no
+# test needs to know about it (git state changes mid-test would otherwise
+# read stale for the TTL window; tests that switch branches mid-test must
+# call ``_git_context.clear()``).
+_git_context: dict[str, tuple[float, str | None]] = {}
+_GIT_CONTEXT_TTL = 2.0
+
 _NO_STORE_HINT = "No code graph yet. Run `witan code index` to build it."
+
+
+def _cached_git(key: str, fn) -> str | None:
+    cached = _git_context.get(key)
+    if cached is not None:
+        stamp, val = cached
+        if time.monotonic() - stamp < _GIT_CONTEXT_TTL:
+            return val
+    val = fn()
+    _git_context[key] = (time.monotonic(), val)
+    return val
+
+
+def _cached_detect() -> str | None:
+    return _cached_git("detect", repo_module.detect)
+
+
+def _cached_store_branch() -> str | None:
+    return _cached_git("store_branch", repo_module.store_branch)
 
 
 def _client_for_path(path, branch: str | None = None) -> OmnigraphClient:
@@ -79,8 +109,8 @@ def _resolve_branch(store, repo: str, requested: str | None) -> str | None:
         # than the store's default view.
         b = repo_module.branch_store_name(requested)
         return b if _branch_in_store(store, b) else None
-    if repo == repo_module.detect():
-        b = repo_module.store_branch()
+    if repo == _cached_detect():
+        b = _cached_store_branch()
         if b and _branch_in_store(store, b):
             return b
     return None
@@ -122,7 +152,7 @@ def _resolve_clients(
     if repo:
         client = _client_for_repo(repo, branch)
         return [client] if client else []
-    slug = repo_module.detect()
+    slug = _cached_detect()
     if slug:
         client = _client_for_repo(slug, branch)
         if client is not None:
@@ -144,9 +174,9 @@ def _resolve_bridge_branch(store, repo: str | None) -> str | None:
     agent asking about some other repo's symbol while sitting elsewhere
     should not silently pick up an unrelated overlay branch.
     """
-    if repo is None or repo != repo_module.detect():
+    if repo is None or repo != _cached_detect():
         return None
-    branch = repo_module.store_branch()
+    branch = _cached_store_branch()
     if not branch:
         return None
     bridge_branch = _bridge_branch_name(repo, branch)
@@ -166,7 +196,7 @@ def _bridge_client(repo: str | None = None) -> OmnigraphClient | None:
     if not store.exists():
         return None
     if repo is None:
-        repo = repo_module.detect()
+        repo = _cached_detect()
     return _client_for_path(store, _resolve_bridge_branch(store, repo))
 
 
@@ -357,7 +387,7 @@ def code_symbols_in_file(path: str, repo: str | None = None) -> list[dict]:
     repo:
         Canonical repo URI the file belongs to. Defaults to the current repo.
     """
-    slug = repo or repo_module.detect()
+    slug = repo or _cached_detect()
     if slug is None:
         return []
     client = _client_for_repo(slug)
@@ -604,9 +634,11 @@ def code_precise_edges(repo: str | None = None) -> list[dict]:
     ----------
     repo:
         Keep only edges whose consumer OR provider is this repo. Omit to see
-        every precise edge in the bridge store.
+        every precise edge in the bridge store. When this matches the
+        checkout's own repo, the read is scoped to its overlay branch (if
+        any) — see ``_bridge_client``.
     """
-    client = _bridge_client()
+    client = _bridge_client(repo=repo)
     if client is None:
         return []
     rows = client.read("bridge.gq", "all_repo_symbols", {})
@@ -634,9 +666,11 @@ def code_unresolved_symbols(repo: str | None = None) -> list[dict]:
     ----------
     repo:
         Keep only unresolved references from this consumer repo. Omit to
-        see every unresolved reference in the bridge store.
+        see every unresolved reference in the bridge store. When this
+        matches the checkout's own repo, the read is scoped to its overlay
+        branch (if any) — see ``_bridge_client``.
     """
-    client = _bridge_client()
+    client = _bridge_client(repo=repo)
     if client is None:
         return []
     rows = client.read("bridge.gq", "all_repo_symbols", {})

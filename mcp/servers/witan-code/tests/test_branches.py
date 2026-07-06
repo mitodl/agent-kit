@@ -241,6 +241,49 @@ def _fn(tool):
     return getattr(tool, "fn", tool)
 
 
+# ── Git-context caching (server.py) ───────────────────────────────
+
+
+def test_cached_git_amortizes_repeated_calls_within_ttl(monkeypatch):
+    """_cached_detect/_cached_store_branch spawn a git subprocess via
+    repo_module at most once per TTL window, not once per tool call."""
+    from witan_code import server as srv
+
+    srv._git_context.clear()
+    calls = {"detect": 0, "store_branch": 0}
+    monkeypatch.setattr(
+        srv.repo_module,
+        "detect",
+        lambda: calls.__setitem__("detect", calls["detect"] + 1) or "r",
+    )
+    monkeypatch.setattr(
+        srv.repo_module,
+        "store_branch",
+        lambda: calls.__setitem__("store_branch", calls["store_branch"] + 1) or "b",
+    )
+
+    for _ in range(5):
+        assert srv._cached_detect() == "r"
+        assert srv._cached_store_branch() == "b"
+
+    assert calls == {"detect": 1, "store_branch": 1}
+
+
+def test_cached_git_refreshes_after_ttl(monkeypatch):
+    from witan_code import server as srv
+
+    srv._git_context.clear()
+    values = iter(["a", "b"])
+    monkeypatch.setattr(srv.repo_module, "detect", lambda: next(values))
+
+    assert srv._cached_detect() == "a"
+    srv._git_context["detect"] = (
+        srv._git_context["detect"][0] - srv._GIT_CONTEXT_TTL - 1,
+        "a",
+    )
+    assert srv._cached_detect() == "b"
+
+
 @requires_stack
 def test_bridge_client_follows_current_checkout_branch(tmp_path, monkeypatch):
     """code_interface_providers auto-detects the cwd's repo+branch: sees the
@@ -255,6 +298,7 @@ def test_bridge_client_follows_current_checkout_branch(tmp_path, monkeypatch):
     monkeypatch.setattr(srv, "cfg", cfg_mod.load())
     srv._clients.clear()
     srv._store_branches.clear()
+    srv._git_context.clear()
 
     base = _git_repo(tmp_path / "r")
     (base / "svc.py").write_text(SAMPLE)
@@ -271,5 +315,6 @@ def test_bridge_client_follows_current_checkout_branch(tmp_path, monkeypatch):
     )
 
     _git(base, "checkout", "-q", "main")
+    srv._git_context.clear()  # the 2s TTL would otherwise still see feature/pkg
     on_main = _fn(srv.code_interface_providers)("package", "@mitodl/branch-pkg")
     assert on_main == [], "back on main, the in-flight-only binding is invisible"
