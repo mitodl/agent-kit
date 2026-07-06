@@ -153,9 +153,13 @@ def test_feature_branch_indexes_to_own_branch(tmp_path, monkeypatch):
 
 
 @requires_stack
-def test_branch_index_skips_bridge_store(tmp_path, monkeypatch):
+def test_branch_index_writes_to_bridge_overlay_not_main(tmp_path, monkeypatch):
+    """A non-default branch's bridge writes land on its repo-qualified
+    overlay branch (docs/BRANCH_INDEXING.md § Bridge store) — visible when
+    reading that branch, invisible on bridge main."""
     from witan_code import config as cfg_module
     from witan_code import indexer
+    from witan_code.graph import OmnigraphClient
 
     monkeypatch.setenv("WITAN_REPO", REPO)
     monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
@@ -169,7 +173,148 @@ def test_branch_index_skips_bridge_store(tmp_path, monkeypatch):
     (base / "package.json").write_text('{"name": "@mitodl/branch-pkg"}')
     stats = indexer.index_path(base, config=cfg)
 
-    assert stats.bindings == 0
-    assert not cfg_module.bridge_store_path(cfg.code_dir).exists(), (
-        "branch index must not create/write the shared bridge store"
+    assert stats.bindings > 0
+    bridge_store = cfg_module.bridge_store_path(cfg.code_dir)
+    assert bridge_store.exists()
+
+    bridge_branch = f"{cfg_module.sanitize_slug(REPO)}/feature_pkg"
+    main_client = OmnigraphClient(str(bridge_store), cfg.queries_dir)
+    assert bridge_branch in main_client.list_branches()
+
+    main_rows = main_client.read("bridge.gq", "all_bindings", {})
+    assert not any(r["key_norm"] == "@mitodl/branch-pkg" for r in main_rows), (
+        "in-flight branch binding must not pollute the shared bridge main view"
     )
+
+    branch_client = OmnigraphClient(
+        str(bridge_store), cfg.queries_dir, branch=bridge_branch
+    )
+    branch_rows = branch_client.read("bridge.gq", "all_bindings", {})
+    assert any(r["key_norm"] == "@mitodl/branch-pkg" for r in branch_rows), (
+        "the repo-qualified overlay branch should see the in-flight binding"
+    )
+
+
+OTHER_REPO = "https://github.com/test/other-cg"
+
+
+@requires_stack
+def test_bridge_overlay_includes_other_repos_main_bindings(tmp_path, monkeypatch):
+    """The overlay branch forks from bridge main, so it starts as a full copy:
+    a repo's in-flight branch view still sees every OTHER repo's main
+    bindings, not just its own in-flight ones."""
+    from witan_code import config as cfg_module
+    from witan_code import indexer
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_module.load()
+
+    other = _git_repo(tmp_path / "other")
+    (other / "package.json").write_text('{"name": "@mitodl/other-pkg"}')
+    monkeypatch.setenv("WITAN_REPO", OTHER_REPO)
+    indexer.index_path(other, config=cfg)
+
+    base = _git_repo(tmp_path / "r")
+    (base / "svc.py").write_text(SAMPLE)
+    monkeypatch.setenv("WITAN_REPO", REPO)
+    indexer.index_path(base, config=cfg)
+
+    _git(base, "checkout", "-q", "-b", "feature/pkg")
+    (base / "package.json").write_text('{"name": "@mitodl/branch-pkg"}')
+    indexer.index_path(base, config=cfg)
+
+    bridge_store = cfg_module.bridge_store_path(cfg.code_dir)
+    bridge_branch = f"{cfg_module.sanitize_slug(REPO)}/feature_pkg"
+    branch_client = OmnigraphClient(
+        str(bridge_store), cfg.queries_dir, branch=bridge_branch
+    )
+    branch_rows = branch_client.read("bridge.gq", "all_bindings", {})
+    key_norms = {r["key_norm"] for r in branch_rows}
+    assert "@mitodl/branch-pkg" in key_norms, "this repo's own in-flight binding"
+    assert "@mitodl/other-pkg" in key_norms, (
+        "the OTHER repo's main binding should still be visible on the overlay"
+    )
+
+
+def _fn(tool):
+    return getattr(tool, "fn", tool)
+
+
+# ── Git-context caching (server.py) ───────────────────────────────
+
+
+def test_cached_git_amortizes_repeated_calls_within_ttl(monkeypatch):
+    """_cached_detect/_cached_store_branch spawn a git subprocess via
+    repo_module at most once per TTL window, not once per tool call."""
+    from witan_code import server as srv
+
+    srv._git_context.clear()
+    calls = {"detect": 0, "store_branch": 0}
+    monkeypatch.setattr(
+        srv.repo_module,
+        "detect",
+        lambda: calls.__setitem__("detect", calls["detect"] + 1) or "r",
+    )
+    monkeypatch.setattr(
+        srv.repo_module,
+        "store_branch",
+        lambda: calls.__setitem__("store_branch", calls["store_branch"] + 1) or "b",
+    )
+
+    for _ in range(5):
+        assert srv._cached_detect() == "r"
+        assert srv._cached_store_branch() == "b"
+
+    assert calls == {"detect": 1, "store_branch": 1}
+
+
+def test_cached_git_refreshes_after_ttl(monkeypatch):
+    from witan_code import server as srv
+
+    srv._git_context.clear()
+    values = iter(["a", "b"])
+    monkeypatch.setattr(srv.repo_module, "detect", lambda: next(values))
+
+    assert srv._cached_detect() == "a"
+    srv._git_context["detect"] = (
+        srv._git_context["detect"][0] - srv._GIT_CONTEXT_TTL - 1,
+        "a",
+    )
+    assert srv._cached_detect() == "b"
+
+
+@requires_stack
+def test_bridge_client_follows_current_checkout_branch(tmp_path, monkeypatch):
+    """code_interface_providers auto-detects the cwd's repo+branch: sees the
+    in-flight overlay while checked out on the branch, falls back to bridge
+    main (which doesn't have it) once back on the default branch."""
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code import server as srv
+
+    monkeypatch.setenv("WITAN_REPO", REPO)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+    srv._store_branches.clear()
+    srv._git_context.clear()
+
+    base = _git_repo(tmp_path / "r")
+    (base / "svc.py").write_text(SAMPLE)
+    indexer.index_path(base, config=srv.cfg)
+
+    _git(base, "checkout", "-q", "-b", "feature/pkg")
+    (base / "package.json").write_text('{"name": "@mitodl/branch-pkg"}')
+    indexer.index_path(base, config=srv.cfg)
+
+    monkeypatch.chdir(base)
+    on_branch = _fn(srv.code_interface_providers)("package", "@mitodl/branch-pkg")
+    assert any(p["repo"] == REPO for p in on_branch), (
+        "cwd on the feature branch should see its own overlay"
+    )
+
+    _git(base, "checkout", "-q", "main")
+    srv._git_context.clear()  # the 2s TTL would otherwise still see feature/pkg
+    on_main = _fn(srv.code_interface_providers)("package", "@mitodl/branch-pkg")
+    assert on_main == [], "back on main, the in-flight-only binding is invisible"

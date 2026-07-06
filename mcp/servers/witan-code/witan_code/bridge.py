@@ -34,6 +34,7 @@ def write_bindings(
     touched_files: tuple[str, ...] = (),
     identity: package_map.PackageIdentity | None = None,
     base: Path | None = None,
+    branch: str | None = None,
 ) -> int:
     """Purge stale bindings and merge in fresh ones for ``repo``.
 
@@ -54,6 +55,17 @@ def write_bindings(
     write yet (that happens further down), so it's read directly from the
     surviving + fresh bindings already in hand.
 
+    ``branch`` is the per-repo omnigraph branch name (``repo_module.
+    store_branch()`` — already sanitized, ``None`` for the default git
+    branch). When set, every read/write in this call targets the
+    repo-qualified bridge branch ``<sanitized-repo-slug>/<branch>``
+    (docs/BRANCH_INDEXING.md § Bridge store) instead of bridge ``main``: an
+    overlay forked once from bridge main, so it starts as every repo's main
+    bindings and then only ``repo``'s own writes land on it — the shared
+    main view never sees in-flight branch bindings, while a read scoped to
+    this branch sees this repo's in-flight state overlaid on everyone else's
+    (possibly since-updated) main.
+
     Returns the number of binding records written.
     """
     # Skip creating the store for a contract-less repo on its first index.
@@ -62,7 +74,10 @@ def write_bindings(
 
     identity = identity or package_map.fallback_identity(repo)
     store = ensure_bridge_store(cfg)
-    client = OmnigraphClient(str(store), cfg.queries_dir)
+    bridge_branch = f"{cfg_module.sanitize_slug(repo)}/{branch}" if branch else None
+    client = OmnigraphClient(str(store), cfg.queries_dir, branch=bridge_branch)
+    # The reads below never fork; create the branch (from bridge main) first.
+    client.ensure_branch()
 
     try:
         all_rows = client.read("bridge.gq", "all_bindings", {})

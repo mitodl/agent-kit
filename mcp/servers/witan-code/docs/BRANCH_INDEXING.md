@@ -1,7 +1,8 @@
 # Branch-aware indexing — omnigraph branches mirror git branches
 
-Status: per-repo branching implemented (2026-07-05); bridge overlay and
-CodeBranch↔task linking tracked as follow-up tasks
+Status: per-repo branching implemented (2026-07-05); bridge overlay
+implemented (2026-07-06); CodeBranch↔task linking (witan, Layer 1) tracked
+as a follow-up task
 Related: [SYMBOL_FORMAT.md](SYMBOL_FORMAT.md), [PACKAGE_MAP.md](PACKAGE_MAP.md)
 
 Today every index write lands on the store's default branch regardless of the
@@ -56,13 +57,18 @@ bridge branch = <sanitized-repo-slug>/<sanitized-git-branch>
 ```
 
 forked from the bridge `main`. Writes for repo R on git branch B go to that
-branch; a read of R@B's cross-repo impact queries the bridge at
-`R/B` (R's in-flight bindings overlaid on everyone else's `main`). Bridge
-branch pruning rides the same `branches --prune` sweep.
-
-*Interim behavior until the overlay lands*: a non-default-branch index skips
-bridge writes entirely, so the shared `main` bridge view keeps reflecting
-`main` code only. Branch bindings appear once the overlay task is done.
+branch (`bridge.write_bindings`'s `branch` parameter, repo-qualified
+internally); `code_cross_repo_impact`/`code_interface_*` auto-detect the
+current checkout's repo+branch and read `R/B` when it exists, else `main` —
+so an agent working on branch B sees its own in-flight bindings overlaid on
+everyone else's `main`. Because the branch is forked once (on first write)
+rather than kept continuously in sync, an overlay's view of *other* repos
+can go stale relative to their current `main` if they're reindexed while
+this branch is still open — the same re-derivable-cache tradeoff already
+accepted for per-repo `main` (see Lifecycle above); prune/re-fork on the
+next index resolves it. Bridge branch pruning rides the same
+`branches --prune` sweep. The CLI (`witan code deps`/`stitch`/`symbols`)
+does not yet follow this — it always reads bridge `main`.
 
 ## Linking code branches to projects and tasks (witan graph)
 
@@ -107,10 +113,11 @@ edge ForProject: CodeBranch -> WorkflowProject
 
 ## Implementation order
 
-1. `OmnigraphClient` grows a `branch: str | None` (adds `--branch`, and
+1. ✅ `OmnigraphClient` grows a `branch: str | None` (adds `--branch`, and
    `--from main` on `load`); `repo.py` grows `current_branch()`.
-2. Per-repo indexer + `code_*` read tools honor the branch with
+2. ✅ Per-repo indexer + `code_*` read tools honor the branch with
    `main` fallback; `witan-code branches --prune`.
-3. Bridge writes/reads use repo-qualified branch overlay.
+3. ✅ Bridge writes/reads use repo-qualified branch overlay.
 4. witan-graph `CodeBranch` node + `WorksOn`/`ForProject` edges, wired into
-   `workflow_session_start` / `task_claim` / the context hook.
+   `workflow_session_start` / `task_claim` / the context hook — tracked as a
+   follow-up task (lives in witan, not witan-code).
