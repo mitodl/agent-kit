@@ -208,3 +208,33 @@ edge Addresses: Task -> Memory
 
 // Closes: a WorkflowSession executed/closed a task.
 edge Closes: WorkflowSession -> Task
+
+// ── Code Branches ───────────────────────────────────────────────────
+//
+// Links a git branch to the task/project it is carrying, so "which branch
+// carries task X" and "which tasks are in flight on branch B" are one-hop
+// graph queries. Coordination state — lives here (shared, durable), not in
+// witan-code's per-repo/bridge omnigraph stores, which are local
+// re-derivable caches that `witan-code branches --prune` may destroy at any
+// time. The coupling to witan-code stays one-way, via the raw git branch
+// name as the shared vocabulary: `branch` is always the branch as git names
+// it (e.g. "feature/new-api"), never witan-code's sanitized omnigraph
+// branch name ("feature_new-api") — that sanitization is a witan-code
+// storage detail and must not leak here.
+//
+// Slug convention: "<repo URI>|<git branch>"
+
+node CodeBranch {
+    slug:       String @key
+    repo:       String @index
+    branch:     String @index
+    status:     enum(active, merged, abandoned) @index
+    created_at: DateTime @index
+    updated_at: DateTime
+}
+
+// WorksOn: a CodeBranch is carrying out a Task.
+edge WorksOn: CodeBranch -> Task
+
+// ForProject: a CodeBranch belongs to a WorkflowProject.
+edge ForProject: CodeBranch -> WorkflowProject

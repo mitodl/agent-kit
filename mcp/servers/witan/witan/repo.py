@@ -46,6 +46,48 @@ def detect(override: str | None = None) -> str | None:
     return _parse_origin(git_config_path)
 
 
+def current_branch(start: Path | None = None) -> str | None:
+    """Raw git branch name for ``start`` (or ``CLAUDE_PROJECT_DIR``, or the
+    cwd), or ``None``.
+
+    The ``CLAUDE_PROJECT_DIR`` fallback matters for a persistent/global witan
+    MCP server (docs: ``WITAN_REPO`` — "set in a global MCP server config
+    where the server CWD is not the session's repo"): ``detect()`` already
+    has its own escape hatch for that mode via ``WITAN_REPO``, but there is
+    no analogous "WITAN_BRANCH" override, so branch detection needs its own
+    fallback to the session's actual project directory rather than silently
+    reading whatever repo the server process happens to be sitting in (or
+    finding no repo at all).
+
+    Returns ``None`` outside a git repository, when git is unavailable, or
+    for a detached HEAD checkout — CodeBranch tracks meaningful work
+    branches, not arbitrary commits. Unlike witan-code's own
+    ``current_branch()``/``store_branch()``, this is never sanitized: the
+    raw name is the shared vocabulary between witan and witan-code (see
+    ``CodeBranch`` in schema.pg); sanitizing for omnigraph-safe storage is a
+    witan-code concern that must not leak here.
+    """
+    if start is not None:
+        base = start
+    elif project_dir := os.environ.get("CLAUDE_PROJECT_DIR"):
+        base = Path(project_dir)
+    else:
+        base = Path.cwd()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(base), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    branch = result.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
 def _git_origin(start: Path) -> str | None:
     """Resolve the ``origin`` remote URL via git itself."""
     try:

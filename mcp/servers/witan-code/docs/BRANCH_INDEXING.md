@@ -1,8 +1,8 @@
 # Branch-aware indexing — omnigraph branches mirror git branches
 
 Status: per-repo branching implemented (2026-07-05); bridge overlay
-implemented (2026-07-06); CodeBranch↔task linking (witan, Layer 1) tracked
-as a follow-up task
+implemented (2026-07-06); CodeBranch↔task linking (witan, Layer 1)
+implemented (2026-07-06)
 Related: [SYMBOL_FORMAT.md](SYMBOL_FORMAT.md), [PACKAGE_MAP.md](PACKAGE_MAP.md)
 
 Today every index write lands on the store's default branch regardless of the
@@ -118,6 +118,6 @@ edge ForProject: CodeBranch -> WorkflowProject
 2. ✅ Per-repo indexer + `code_*` read tools honor the branch with
    `main` fallback; `witan-code branches --prune`.
 3. ✅ Bridge writes/reads use repo-qualified branch overlay.
-4. witan-graph `CodeBranch` node + `WorksOn`/`ForProject` edges, wired into
-   `workflow_session_start` / `task_claim` / the context hook — tracked as a
-   follow-up task (lives in witan, not witan-code).
+4. ✅ witan-graph `CodeBranch` node + `WorksOn`/`ForProject` edges, wired into
+   `workflow_session_start` / `task_claim` / the context hook (lives in
+   witan, not witan-code — see witan's README § Code Branch Tracking).

@@ -411,3 +411,37 @@ query link_addresses($from: String, $to: String) {
 query link_closes($from: String, $to: String) {
     insert Closes { from: $from, to: $to }
 }
+
+// ── Code Branch mutations ──────────────────────────────────────────
+
+query insert_code_branch(
+    $slug: String,
+    $repo: String,
+    $branch: String,
+    $status: String,
+    $created_at: DateTime,
+    $updated_at: DateTime
+) {
+    insert CodeBranch {
+        slug: $slug,
+        repo: $repo,
+        branch: $branch,
+        status: $status,
+        created_at: $created_at,
+        updated_at: $updated_at
+    }
+}
+
+query touch_code_branch($slug: String, $status: String, $updated_at: DateTime) {
+    update CodeBranch
+        set { status: $status, updated_at: $updated_at }
+        where slug = $slug
+}
+
+query link_works_on($from: String, $to: String) {
+    insert WorksOn { from: $from, to: $to }
+}
+
+query link_for_project($from: String, $to: String) {
+    insert ForProject { from: $from, to: $to }
+}
