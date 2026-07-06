@@ -2,6 +2,8 @@
 
 import uuid
 
+import pytest
+
 from .conftest import requires_omnigraph
 
 
@@ -232,6 +234,18 @@ def test_trace_list_filters_by_repo_tags_author(server):
 
 
 @requires_omnigraph
+def test_trace_list_tags_as_bare_string_is_coerced(server):
+    """A single string (an easy LLM-caller mistake) must not be iterated char-by-char."""
+    proj = server.workflow_project_create(
+        title="stringy tags", description="d", tags=["alpha"]
+    )
+    server.workflow_project_complete(proj["slug"], outcome="done")
+
+    rows = server.workflow_trace_list(repo="", tags="alpha")
+    assert {t["slug"] for t in rows} == {f"wt-{proj['slug']}"}
+
+
+@requires_omnigraph
 def test_trace_annotate_unions_and_is_idempotent(server):
     proj = server.workflow_project_create(title="annotate me", description="d")
     done = server.workflow_project_complete(proj["slug"], outcome="done")
@@ -245,6 +259,18 @@ def test_trace_annotate_unions_and_is_idempotent(server):
     )
     assert second["lessons_slug"] == ["les-a", "les-b"]
     assert second["patterns_slug"] == ["pat-a"]
+
+
+@requires_omnigraph
+def test_trace_annotate_bare_string_slugs_are_coerced(server):
+    proj = server.workflow_project_create(title="stringy annotate", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="done")
+
+    result = server.workflow_trace_annotate(
+        done["trace_slug"], lessons_slug="les-a", patterns_slug="pat-a"
+    )
+    assert result["lessons_slug"] == ["les-a"]
+    assert result["patterns_slug"] == ["pat-a"]
 
 
 @requires_omnigraph
@@ -283,3 +309,26 @@ def test_mine_trace_with_proposals_creates_memories_and_links_project(server):
 
     informed = {m["slug"] for m in server.project_memories(proj["slug"])["memories"]}
     assert informed == {*created["created_patterns"], *created["created_lessons"]}
+
+
+@requires_omnigraph
+def test_mine_trace_bare_dict_proposal_is_coerced(server):
+    """A single dict (not wrapped in a list) is a common LLM-caller mistake."""
+    proj = server.workflow_project_create(title="mine bare dict", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
+
+    created = server.mine_trace(
+        done["trace_slug"],
+        patterns={"title": "a pattern", "content": "do X because Y"},
+    )
+    assert len(created["created_patterns"]) == 1
+    assert created["created_lessons"] == []
+
+
+@requires_omnigraph
+def test_mine_trace_rejects_proposal_missing_required_keys(server):
+    proj = server.workflow_project_create(title="mine invalid", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
+
+    with pytest.raises(ValueError, match="title.*content"):
+        server.mine_trace(done["trace_slug"], patterns=[{"title": "no content"}])

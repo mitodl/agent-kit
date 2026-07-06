@@ -795,6 +795,10 @@ def _store_memory(
     confidence: float | None = None,
 ) -> dict:
     """Create a Memory node — shared by memory_store and mine_trace."""
+    if isinstance(tags, str):
+        tags = [tags]
+    if isinstance(symbol_refs, str):
+        symbol_refs = [symbol_refs]
     now = _now_iso()
     slug = _make_slug(kind, title)
     detected_repo = repo_module.detect(override=repo)
@@ -1547,6 +1551,8 @@ def workflow_trace_list(
     limit:
         Max rows to return (applied after filtering).
     """
+    if isinstance(tags, str):
+        tags = [tags]
     detected_repo = repo_module.detect(override=repo)
     rows = client.read("read.gq", "list_all_traces", {})
 
@@ -1566,6 +1572,10 @@ def _annotate_trace(
     patterns_slug: list[str] | None = None,
 ) -> dict:
     """Union new lesson/pattern slugs into a trace's annotation fields."""
+    if isinstance(lessons_slug, str):
+        lessons_slug = [lessons_slug]
+    if isinstance(patterns_slug, str):
+        patterns_slug = [patterns_slug]
     rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
     if not rows:
         raise ValueError(f"no trace {trace_slug!r}")
@@ -1669,6 +1679,11 @@ def mine_trace(
         raise ValueError(f"no trace {trace_slug!r}")
     trace = rows[0]
 
+    if isinstance(patterns, dict):
+        patterns = [patterns]
+    if isinstance(lessons, dict):
+        lessons = [lessons]
+
     if patterns is None and lessons is None:
         sessions = client.read(
             "read.gq",
@@ -1676,6 +1691,17 @@ def mine_trace(
             {"project_slug": trace["project_slug"]},
         )
         return {"trace": trace, "sessions": sessions}
+
+    for label, specs in (("pattern", patterns), ("lesson", lessons)):
+        for spec in specs or []:
+            if (
+                not isinstance(spec, dict)
+                or "title" not in spec
+                or "content" not in spec
+            ):
+                raise ValueError(
+                    f"Each proposed {label} must be a dict containing 'title' and 'content', got {spec!r}"
+                )
 
     created_patterns = [
         _store_memory(

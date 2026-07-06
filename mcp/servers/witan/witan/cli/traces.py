@@ -89,9 +89,21 @@ def _trace_show(slug: str) -> None:
     console.print(f"\n{tr.get('description') or '(no description)'}\n")
     console.print(f"[bold]Outcome[/bold]\n{tr.get('outcome') or '(none recorded)'}\n")
 
-    for label, key, kind in (
-        ("Patterns mined", "patterns_slug", "pattern"),
-        ("Lessons mined", "lessons_slug", "lesson"),
+    sessions = s.client.read(
+        "read.gq", "list_sessions_by_project", {"project_slug": tr.get("project_slug")}
+    )
+    if sessions:
+        console.print("[bold]Sessions[/bold]")
+        for sess in sessions:
+            console.print(
+                f"  {sess['slug']}  [{sess.get('phase')}]  "
+                f"{sess.get('summary') or '(in progress)'}"[:120]
+            )
+        console.print()
+
+    for label, key in (
+        ("Patterns mined", "patterns_slug"),
+        ("Lessons mined", "lessons_slug"),
     ):
         slugs = tr.get(key) or []
         if not slugs:
