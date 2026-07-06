@@ -401,6 +401,30 @@ def test_cross_repo_env_and_endpoint_linkage(tmp_path, monkeypatch):
     assert any(c["repo"] == "https://github.com/test/repo-a" for c in ep_consumers)
 
 
+@requires_stack
+def test_repo_symbols_not_read_without_endpoint_consumers(tmp_path, monkeypatch):
+    """provider_keys/provider_pkg_slugs only feed adjust_confidence, which only
+    runs for endpoint consumer bindings — a batch with none of those must not
+    pay for the extra all_repo_symbols store read."""
+    from witan_code import bridge as bridge_mod
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/no-endpoints")
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_mod.load()
+
+    base = tmp_path / "repo"
+    (base / "main").mkdir(parents=True)
+    (base / "main" / "settings.py").write_text(A_SETTINGS)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("_read_repo_symbols must not be called")
+
+    monkeypatch.setattr(bridge_mod, "_read_repo_symbols", _boom)
+    indexer.index_path(base, config=cfg)
+
+
 C_PACKAGE_JSON = '{"name": "@mitodl/search-utils"}'
 
 D_CLIENT_TS = """\

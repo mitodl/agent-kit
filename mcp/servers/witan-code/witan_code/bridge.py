@@ -68,7 +68,14 @@ def write_bindings(
         all_rows = client.read("bridge.gq", "all_bindings", {})
     except Exception:  # noqa: BLE001 — store may be empty or query unavailable
         all_rows = []
-    repo_symbol_rows = _read_repo_symbols(client)
+
+    # provider_keys/provider_pkg_slugs only feed adjust_confidence, which only
+    # runs for endpoint consumer bindings — skip the extra full-store
+    # RepoSymbol read entirely when this batch has none to adjust.
+    has_endpoint_consumers = any(
+        b.kind == "endpoint" and b.role == "consumer" for b in bindings
+    )
+    repo_symbol_rows = _read_repo_symbols(client) if has_endpoint_consumers else []
 
     purge_files = set(touched_files) | {b.file for b in bindings}
     if full_repo and base is not None:
@@ -98,16 +105,22 @@ def write_bindings(
         frozenset(
             (r["repo"], r["key_norm"])
             for r in repo_symbol_rows
-            if r.get("role") == "exported" and r.get("repo") != repo
+            if r.get("role") == "exported"
+            and r.get("repo")
+            and r.get("key_norm")
+            and r.get("repo") != repo
         )
         | frozenset(
             (r["repo"], r["key_norm"])
             for r in all_rows
             if r.get("role") == "provider"
             and r.get("repo") == repo
+            and r.get("key_norm")
             and r.get("file") not in purge_files
         )
-        | frozenset((repo, b.key_norm) for b in bindings if b.role == "provider")
+        | frozenset(
+            (repo, b.key_norm) for b in bindings if b.role == "provider" and b.key_norm
+        )
     )
     provider_pkg_slugs: frozenset[str] = frozenset(
         r["key_norm"]
@@ -115,6 +128,7 @@ def write_bindings(
         if r.get("role") == "exported"
         and r.get("kind") == "package"
         and r.get("repo") != repo
+        and r.get("key_norm")
     ) | _declared_provider_packages(client, exclude_repo=repo)
 
     # Apply store-level confidence adjustments to endpoint consumer bindings.
