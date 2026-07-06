@@ -228,10 +228,10 @@ def render_rich(graph: DepGraph, console=None) -> None:
     )
 
     table = Table(show_lines=False, header_style="bold")
-    table.add_column("depends on →", style="cyan", no_wrap=True)
-    table.add_column("provider", style="green", no_wrap=True)
-    table.add_column("links", justify="right")
-    table.add_column("by kind")
+    table.add_column("depends on →", style="cyan", overflow="fold", no_wrap=False)
+    table.add_column("provider", style="green", overflow="fold", no_wrap=False)
+    table.add_column("links", justify="right", no_wrap=True)
+    table.add_column("by kind", overflow="fold", no_wrap=False)
     for e in sorted(graph.edges.values(), key=lambda e: e.weight, reverse=True):
         kinds = "  ".join(
             f"[{_rich_color(k)}]{k}:{n}[/]" for k, n in sorted(e.kinds.items())
