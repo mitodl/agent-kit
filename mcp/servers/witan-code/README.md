@@ -77,6 +77,12 @@ qualified by the repo's declared package identity from an optional
 derived from the repo URI. See [docs/SYMBOL_FORMAT.md](docs/SYMBOL_FORMAT.md)
 and [docs/PACKAGE_MAP.md](docs/PACKAGE_MAP.md).
 
+Each bridge write also rebuilds the repo's **symbol table** — one `RepoSymbol`
+row per (repo, role, symbol): `exported` rows are the repo's public contract
+surface, `external` rows are unresolved references to other repos' contracts.
+This deduplicated table is the Stage-2 read-time join artifact; inspect it
+with `witan code symbols`. See [docs/SYMBOL_TABLE.md](docs/SYMBOL_TABLE.md).
+
 ## Heuristic edges (important)
 
 `Defines` and `Contains` are exact (derived from the syntax tree). But:

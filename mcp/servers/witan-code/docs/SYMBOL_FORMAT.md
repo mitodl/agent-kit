@@ -134,4 +134,9 @@ precision tier on top: identical descriptors with compatible package identity
 are computed at bridge-write time (`bridge.write_bindings`), not extraction
 time, because provider identity comes from the package map which is loaded
 once per repo. The pure construction function is
-`bridge_extractors.canonical_symbol`.
+`bridge_extractors.canonical_symbol`; its inverse is
+`bridge_extractors.parse_symbol`.
+
+Bindings are per-occurrence. The deduplicated per-repo aggregate — one
+`RepoSymbol` row per (repo, role, symbol), the artifact Stage 2 actually joins
+against — is specified in [SYMBOL_TABLE.md](SYMBOL_TABLE.md).

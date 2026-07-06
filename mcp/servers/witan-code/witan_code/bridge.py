@@ -11,7 +11,12 @@ from pathlib import Path
 
 from . import config as cfg_module
 from . import package_map
-from .bridge_extractors import ParsedBinding, adjust_confidence, canonical_symbol
+from .bridge_extractors import (
+    ParsedBinding,
+    adjust_confidence,
+    canonical_symbol,
+    parse_symbol,
+)
 from .graph import OmnigraphClient
 from .store import bridge_store, ensure_bridge_store
 
@@ -120,11 +125,113 @@ def write_bindings(
     for b in adjusted:
         b.symbol = canonical_symbol(b, identity)
 
+    # Rebuild the repo's symbol table (docs/SYMBOL_TABLE.md) from every binding
+    # occurrence that survives this write: stored rows outside the purge set
+    # plus the fresh batch. Bindings are per-occurrence; the table is the
+    # deduplicated per-symbol artifact Stage 2 joins against.
+    surviving = [
+        r
+        for r in all_rows
+        if r.get("repo") == repo and r.get("file") not in purge_files
+    ]
+    client.change("bridge.gq", "delete_repo_symbols", {"repo": repo})
+
     records = _dedupe([_record(b, repo) for b in adjusted])
+    n_bindings = len(records)
+    records.extend(_symbol_table_records(repo, surviving, adjusted))
     if full_repo:
         records.append(_package_map_record(identity, repo))
     client.load(records, mode="merge")
-    return len(records)
+    return n_bindings
+
+
+# Binding role → symbol-table role. Providers export contract surface;
+# consumers hold unresolved external references (RANGER import placeholders).
+# The legacy "shared" role has no table semantics and is skipped.
+_TABLE_ROLE = {"provider": "exported", "consumer": "external"}
+
+
+def _symbol_table_records(
+    repo: str,
+    surviving: list[dict],
+    fresh: list[ParsedBinding],
+) -> list[dict]:
+    """One RepoSymbol record per (role, symbol) across the given occurrences.
+
+    Aggregates: ``n_refs`` counts occurrences, ``confidence`` keeps the max
+    (absent treated as 1.0, matching readers of InterfaceBinding.confidence),
+    and the exemplar file/line is the lexicographic minimum so rebuilds are
+    deterministic. Rows without a symbol (pre-symbol stores) are skipped —
+    they regain table coverage on the next reindex of their file.
+    """
+    entries = [
+        (
+            r.get("symbol"),
+            r.get("kind"),
+            r.get("role"),
+            r.get("key_norm"),
+            r.get("file"),
+            r.get("line"),
+            r.get("confidence"),
+        )
+        for r in surviving
+    ] + [
+        (b.symbol, b.kind, b.role, b.key_norm, b.file, b.line, b.confidence)
+        for b in fresh
+    ]
+
+    agg: dict[tuple[str, str], dict] = {}
+    for symbol, kind, role, key_norm, file, line, confidence in entries:
+        table_role = _TABLE_ROLE.get(role or "")
+        if not symbol or table_role is None:
+            continue
+        conf = 1.0 if confidence is None else float(confidence)
+        loc = (file or "", line if isinstance(line, int) else 0)
+        row = agg.get((table_role, symbol))
+        if row is None:
+            agg[(table_role, symbol)] = {
+                "kind": kind,
+                "key_norm": key_norm,
+                "n_refs": 1,
+                "confidence": conf,
+                "loc": loc,
+            }
+        else:
+            row["n_refs"] += 1
+            row["confidence"] = max(row["confidence"], conf)
+            row["loc"] = min(row["loc"], loc)
+
+    now = _now_iso()
+    out: list[dict] = []
+    for (table_role, symbol), row in agg.items():
+        parsed = parse_symbol(symbol)
+        if parsed is None:
+            continue
+        file, line = row["loc"]
+        out.append(
+            {
+                "type": "RepoSymbol",
+                "data": {
+                    "slug": f"{repo}|{table_role}|{symbol}",
+                    "repo": repo,
+                    "role": table_role,
+                    "symbol": symbol,
+                    "scheme": parsed.scheme,
+                    "descriptor": parsed.descriptor,
+                    "key_norm": row["key_norm"],
+                    "manager": parsed.manager,
+                    "package": parsed.package,
+                    "version": parsed.version,
+                    "kind": row["kind"],
+                    "n_refs": row["n_refs"],
+                    "confidence": row["confidence"],
+                    "file": file or None,
+                    "line": line or None,
+                    "indexed_at": now,
+                },
+            }
+        )
+    return out
 
 
 def _declared_provider_packages(

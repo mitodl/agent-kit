@@ -25,9 +25,61 @@ query all_bindings() {
     return {
         $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
         $b.file, $b.symbol_id, $b.framework, $b.generic, $b.confidence,
-        $b.symbol
+        $b.symbol, $b.line
     }
     limit 1000000
+}
+
+// ── Per-repo symbol table (Stage 1 — docs/SYMBOL_TABLE.md) ────────
+// The table is rebuilt exactly on every bridge write: delete the repo's rows,
+// re-aggregate from surviving + fresh bindings. Delete is keyed on the single
+// repo field (delete `where` takes one condition).
+
+query delete_repo_symbols($repo: String) {
+    delete RepoSymbol where repo = $repo
+}
+
+query repo_symbols($repo: String) {
+    match {
+        $s: RepoSymbol { repo: $repo }
+    }
+    return {
+        $s.slug, $s.repo, $s.role, $s.symbol, $s.scheme, $s.descriptor,
+        $s.key_norm, $s.manager, $s.package, $s.version, $s.kind,
+        $s.n_refs, $s.confidence, $s.file, $s.line
+    }
+    order { $s.symbol asc }
+    limit 100000
+}
+
+// Stage-2 join primitives: exact descriptor match (env/pkg/svc, and http when
+// the consumer's method is known), and the coarse key_norm match (http — the
+// descriptor embeds the method, which consumers usually record as "*").
+
+query symbols_by_descriptor($scheme: String, $descriptor: String) {
+    match {
+        $s: RepoSymbol { scheme: $scheme, descriptor: $descriptor }
+    }
+    return {
+        $s.slug, $s.repo, $s.role, $s.symbol, $s.scheme, $s.descriptor,
+        $s.key_norm, $s.manager, $s.package, $s.version, $s.kind,
+        $s.n_refs, $s.confidence, $s.file, $s.line
+    }
+    order { $s.repo asc }
+    limit 1000
+}
+
+query symbols_by_key($scheme: String, $key_norm: String) {
+    match {
+        $s: RepoSymbol { scheme: $scheme, key_norm: $key_norm }
+    }
+    return {
+        $s.slug, $s.repo, $s.role, $s.symbol, $s.scheme, $s.descriptor,
+        $s.key_norm, $s.manager, $s.package, $s.version, $s.kind,
+        $s.n_refs, $s.confidence, $s.file, $s.line
+    }
+    order { $s.repo asc }
+    limit 1000
 }
 
 // ── Package maps ──────────────────────────────────────────────────
