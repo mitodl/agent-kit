@@ -142,7 +142,7 @@ def symbols(
     for r in rows:
         conf = r.get("confidence")
         where = (
-            f"{r.get('file') or ''}:{r['line']}"
+            f"{r.get('file') or ''}:{r.get('line')}"
             if r.get("line")
             else (r.get("file") or "")
         )

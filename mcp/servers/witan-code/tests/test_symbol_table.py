@@ -125,6 +125,24 @@ def test_aggregation_merges_surviving_store_rows():
     assert records[0]["data"]["n_refs"] == 2
 
 
+def test_package_descriptor_is_always_dot_key_norm_disambiguates():
+    """pkg canonical descriptors collapse to "." regardless of package name —
+    only key_norm (which carries the package name) can join package symbols."""
+    foo = _with_symbol(
+        _b("package", "@mitodl/foo", "consumer", "a.ts", framework="npm")
+    )
+    bar = _with_symbol(
+        _b("package", "@mitodl/bar", "provider", "package.json", framework="npm")
+    )
+    records = {
+        r["data"]["role"]: r["data"]
+        for r in _symbol_table_records(REPO, [], [foo, bar])
+    }
+    assert records["external"]["descriptor"] == records["exported"]["descriptor"] == "."
+    assert records["external"]["key_norm"] == "@mitodl/foo"
+    assert records["exported"]["key_norm"] == "@mitodl/bar"
+
+
 def test_aggregation_skips_rows_without_symbol():
     legacy = {"symbol": None, "kind": "env_var", "role": "consumer", "file": "x.py"}
     shared = _b("env_var", "FOO", "shared")
@@ -230,6 +248,61 @@ def test_symbol_table_written_and_joinable(tmp_path, monkeypatch):
     assert {(r["repo"], r["role"]) for r in http_rows} == {
         ("https://github.com/test/repo-a", "external"),
         ("https://github.com/test/repo-b", "exported"),
+    }
+
+
+@requires_stack
+def test_package_symbols_join_via_key_norm_not_descriptor(tmp_path, monkeypatch):
+    """symbols_by_descriptor(scheme="pkg", descriptor=".") is unusably broad —
+    every package symbol shares descriptor "." — so Stage 2 must join packages
+    via symbols_by_key instead, which uses key_norm (the package name)."""
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    (consumer / "client.ts").write_text(
+        "import { search } from '@mitodl/course-search-utils';\n"
+    )
+    provider = tmp_path / "provider"
+    provider.mkdir()
+    (provider / "package.json").write_text('{"name": "@mitodl/course-search-utils"}')
+    other_provider = tmp_path / "other"
+    other_provider.mkdir()
+    (other_provider / "package.json").write_text('{"name": "@mitodl/unrelated"}')
+
+    for repo, path in (
+        ("https://github.com/test/consumer", consumer),
+        ("https://github.com/test/provider", provider),
+        ("https://github.com/test/other", other_provider),
+    ):
+        monkeypatch.setenv("WITAN_REPO", repo)
+        cfg = cfg_mod.load()
+        indexer.index_path(path, config=cfg)
+
+    client = _bridge_client(cfg)
+
+    # Over-broad: every pkg symbol (any repo, any package) shares descriptor ".".
+    broad = client.read(
+        "bridge.gq", "symbols_by_descriptor", {"scheme": "pkg", "descriptor": "."}
+    )
+    assert {r["repo"] for r in broad} >= {
+        "https://github.com/test/consumer",
+        "https://github.com/test/provider",
+        "https://github.com/test/other",
+    }
+
+    # Correct: key_norm carries the package name, isolating just the real pair.
+    precise = client.read(
+        "bridge.gq",
+        "symbols_by_key",
+        {"scheme": "pkg", "key_norm": "@mitodl/course-search-utils"},
+    )
+    assert {(r["repo"], r["role"]) for r in precise} == {
+        ("https://github.com/test/consumer", "external"),
+        ("https://github.com/test/provider", "exported"),
     }
 
 

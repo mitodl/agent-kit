@@ -52,14 +52,20 @@ skipped; they regain table coverage when their file is next reindexed.
 
 Stage 2 matches `external` rows against other repos' `exported` rows:
 
-1. `env` / `pkg` / `svc` — exact `(scheme, descriptor)` match
-   (`symbols_by_descriptor`).
-2. `http` — `(scheme, key_norm)` match (`symbols_by_key`), then method
-   compatibility: a consumer method of `*` matches any provider method.
-3. Package identity disambiguates when several repos export the same
-   descriptor; version matching follows SYMBOL_FORMAT.md decision 1
-   (`.` matches anything; prefer exact, then `main`, else flag
-   `ambiguous_version`).
+1. `env` / `svc` — exact `(scheme, descriptor)` match (`symbols_by_descriptor`).
+2. `http` / `pkg` — `(scheme, key_norm)` match (`symbols_by_key`). `http`
+   descriptors embed the method, which consumers usually can't determine
+   statically (`*`), so the coarse key_norm (method-less path) is the join
+   key, followed by method compatibility: a consumer method of `*` matches
+   any provider method. `pkg` canonical descriptors are always `.`
+   ([SYMBOL_FORMAT.md](SYMBOL_FORMAT.md) — identity lives in the
+   manager/package fields, not the descriptor); `key_norm` carries the
+   package name for both `exported` and `external` rows instead, so it is the
+   only usable join key for packages.
+3. Package identity (`manager`/`package` fields) disambiguates when several
+   repos export the same descriptor or key_norm; version matching follows
+   SYMBOL_FORMAT.md decision 1 (`.` matches anything; prefer exact, then
+   `main`, else flag `ambiguous_version`).
 
 A successful join is a `:CALLS/precise` edge (computed, never stored); the
 `(kind, key_norm)` binding grouping remains the `:CALLS/heuristic` fallback.

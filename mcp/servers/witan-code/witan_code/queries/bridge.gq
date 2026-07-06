@@ -52,9 +52,14 @@ query repo_symbols($repo: String) {
     limit 100000
 }
 
-// Stage-2 join primitives: exact descriptor match (env/pkg/svc, and http when
-// the consumer's method is known), and the coarse key_norm match (http — the
-// descriptor embeds the method, which consumers usually record as "*").
+// Stage-2 join primitives: exact descriptor match (env/svc), and the key_norm
+// match (http/pkg). pkg canonical descriptors are always "." (SYMBOL_FORMAT.md
+// — package identity lives in the manager/package fields, not the
+// descriptor), so symbols_by_descriptor cannot distinguish packages;
+// key_norm carries the package name for both exported and external rows
+// instead. http also joins on key_norm rather than descriptor because the
+// descriptor embeds the method, which consumers usually can't determine
+// statically ("*").
 
 query symbols_by_descriptor($scheme: String, $descriptor: String) {
     match {
