@@ -9,6 +9,7 @@ from . import bridge_extractors
 from . import config as cfg_module
 from . import indexer
 from . import repo as repo_module
+from . import stitch
 from . import store as store_module
 from .graph import OmnigraphClient
 
@@ -486,6 +487,69 @@ def code_cross_repo_impact(symbol_id: str) -> dict:
             seen.add(other["slug"])
             cross.append(other)
     return {"symbol_id": symbol_id, "bindings": own, "cross_repo": cross}
+
+
+@mcp.tool
+def code_precise_edges(repo: str | None = None) -> list[dict]:
+    """
+    Stage-2 cross-repo edges resolved by canonical symbol string (docs/SYMBOL_TABLE.md).
+
+    Joins every repo's unresolved external-symbol references against other
+    repos' exported symbols — the SCIP-style read-time join, distinct from
+    the coarser (kind, key_norm) heuristic grouping ``code_interface_*`` use.
+    Each edge carries ``match_count`` (how many providers this reference
+    joined to) and ``ambiguous_version`` (true when more than one provider
+    survives version disambiguation — see SYMBOL_FORMAT.md decision 1);
+    filter to ``preferred`` edges to narrow a fan-out to its best candidate(s)
+    — usually one winner, but still more than one when ``ambiguous_version``
+    is also true (e.g. two repos both export ``main``), since Stage 2 never
+    silently guesses a single winner in that case. A reference with no
+    precise match at all shows up in ``code_unresolved_symbols`` instead —
+    fall back to the heuristic ``code_interface_consumers``/
+    ``code_interface_providers`` tools for those.
+
+    Parameters
+    ----------
+    repo:
+        Keep only edges whose consumer OR provider is this repo. Omit to see
+        every precise edge in the bridge store.
+    """
+    client = _bridge_client()
+    if client is None:
+        return []
+    rows = client.read("bridge.gq", "all_repo_symbols", {})
+    edges, _ = stitch.resolve(rows)
+    return [
+        e.as_dict()
+        for e in edges
+        if repo is None or repo in (e.consumer_repo, e.provider_repo)
+    ]
+
+
+@mcp.tool
+def code_unresolved_symbols(repo: str | None = None) -> list[dict]:
+    """
+    External symbol references with no Stage-2 precise match (docs/SYMBOL_TABLE.md).
+
+    Surfaces indexing-coverage gaps: a repo consumes a contract (env var,
+    package, endpoint, service) that no indexed repo's symbol table
+    currently exports — either the provider repo isn't indexed yet, or the
+    reference genuinely has no provider in this SOA. These still get a
+    heuristic-tier chance via ``code_interface_consumers``/``_providers``;
+    this tool is for finding what's NOT precisely resolved.
+
+    Parameters
+    ----------
+    repo:
+        Keep only unresolved references from this consumer repo. Omit to
+        see every unresolved reference in the bridge store.
+    """
+    client = _bridge_client()
+    if client is None:
+        return []
+    rows = client.read("bridge.gq", "all_repo_symbols", {})
+    _, unresolved = stitch.resolve(rows)
+    return [r for r in unresolved if repo is None or r["repo"] == repo]
 
 
 @mcp.tool

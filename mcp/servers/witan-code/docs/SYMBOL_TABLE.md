@@ -1,7 +1,8 @@
 # Per-repo symbol tables (Stage 1)
 
 Status: accepted (implementation phase, 2026-07-05)
-Related: [SYMBOL_FORMAT.md](SYMBOL_FORMAT.md), [PACKAGE_MAP.md](PACKAGE_MAP.md)
+Related: [SYMBOL_FORMAT.md](SYMBOL_FORMAT.md), [PACKAGE_MAP.md](PACKAGE_MAP.md),
+[STAGE2_STITCHING.md](STAGE2_STITCHING.md)
 
 Stage 1 of the two-stage cross-repo model: every indexed repo emits a
 **self-contained symbol table** — the stable, deduplicated artifact that
@@ -69,11 +70,14 @@ Stage 2 matches `external` rows against other repos' `exported` rows:
 
 A successful join is a `:CALLS/precise` edge (computed, never stored); the
 `(kind, key_norm)` binding grouping remains the `:CALLS/heuristic` fallback.
+The concrete join implementation, its edge shape, and the unresolved-symbol
+gap report are specified in [STAGE2_STITCHING.md](STAGE2_STITCHING.md).
 
 ## Inspecting
 
 ```
 witan code symbols [--repo URI] [--role exported|external] [--scheme http]
+witan code stitch [--repo URI] [--unresolved]
 ```
 
 ## Write contention

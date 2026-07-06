@@ -52,6 +52,23 @@ query repo_symbols($repo: String) {
     limit 100000
 }
 
+// Every RepoSymbol row across all repos — Stage 2 (witan_code.stitch) reads
+// this once and joins external/exported rows in Python, the same "bulk read,
+// group in Python" pattern all_bindings/build_graph already use for the
+// heuristic tier.
+
+query all_repo_symbols() {
+    match {
+        $s: RepoSymbol
+    }
+    return {
+        $s.repo, $s.role, $s.symbol, $s.scheme, $s.descriptor,
+        $s.key_norm, $s.manager, $s.package, $s.version, $s.kind,
+        $s.n_refs, $s.confidence, $s.file, $s.line
+    }
+    limit 1000000
+}
+
 // Stage-2 join primitives: exact descriptor match (env/svc), and the key_norm
 // match (http/pkg). pkg canonical descriptors are always "." (SYMBOL_FORMAT.md
 // — package identity lives in the manager/package fields, not the
