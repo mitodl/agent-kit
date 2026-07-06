@@ -5,6 +5,8 @@ and in combination.  Integration tests (requiring omnigraph + tree-sitter) verif
 full indexing and store round-trips.
 """
 
+import pytest
+
 from witan_code.bridge_extractors import (
     _compute_file_confidence,
     adjust_confidence,
@@ -397,6 +399,94 @@ def test_cross_repo_env_and_endpoint_linkage(tmp_path, monkeypatch):
         "endpoint", "/api/v1/courses/{id}/"
     )
     assert any(c["repo"] == "https://github.com/test/repo-a" for c in ep_consumers)
+
+
+@requires_stack
+def test_repo_symbols_not_read_without_endpoint_consumers(tmp_path, monkeypatch):
+    """provider_keys/provider_pkg_slugs only feed adjust_confidence, which only
+    runs for endpoint consumer bindings — a batch with none of those must not
+    pay for the extra all_repo_symbols store read."""
+    from witan_code import bridge as bridge_mod
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/no-endpoints")
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_mod.load()
+
+    base = tmp_path / "repo"
+    (base / "main").mkdir(parents=True)
+    (base / "main" / "settings.py").write_text(A_SETTINGS)
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("_read_repo_symbols must not be called")
+
+    monkeypatch.setattr(bridge_mod, "_read_repo_symbols", _boom)
+    indexer.index_path(base, config=cfg)
+
+
+C_PACKAGE_JSON = '{"name": "@mitodl/search-utils"}'
+
+D_CLIENT_TS = """\
+import { search } from '@mitodl/search-utils';
+
+export function doSearch(q) {
+  return fetch('/api/v0/search/' + q);
+}
+"""
+
+
+@requires_stack
+def test_known_provider_package_boost_sourced_from_stage1_symbol_table(
+    tmp_path, monkeypatch
+):
+    """known_provider_package's cross-repo signal comes from another repo's
+    Stage 1 RepoSymbol table (bridge.py provider_pkg_slugs), not a
+    re-derivation from raw InterfaceBinding rows — verify the confidence
+    boost actually lands end-to-end through a real index + bridge write.
+
+    D_CLIENT_TS's endpoint consumer has only the relative_url penalty
+    (-0.5, no other signal fires): base 0.5 - 0.5 = 0.0. The co-located
+    package import of the repo-c-provided package should then boost it by
+    +0.3 to 0.3.
+    """
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code import server as srv
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+
+    c = tmp_path / "repo_c"
+    c.mkdir()
+    (c / "package.json").write_text(C_PACKAGE_JSON)
+    d = tmp_path / "repo_d"
+    d.mkdir()
+    (d / "client.ts").write_text(D_CLIENT_TS)
+
+    # Index the provider FIRST so its Stage 1 symbol table exists when
+    # repo-d's write computes provider_pkg_slugs.
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/repo-c")
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+    _index(srv, indexer, c)
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/repo-d")
+    cfg = cfg_mod.load()
+    monkeypatch.setattr(srv, "cfg", cfg)
+    srv._clients.clear()
+    _index(srv, indexer, d)
+
+    client = OmnigraphClient(
+        str(cfg_mod.bridge_store_path(cfg.code_dir)), cfg.queries_dir
+    )
+    rows = [
+        r
+        for r in client.read("bridge.gq", "all_bindings", {})
+        if r["repo"] == "https://github.com/test/repo-d" and r["kind"] == "endpoint"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["confidence"] == pytest.approx(0.3)
 
 
 @requires_stack
