@@ -47,7 +47,17 @@ def detect(override: str | None = None) -> str | None:
 
 
 def current_branch(start: Path | None = None) -> str | None:
-    """Raw git branch name for ``start`` (or the cwd), or ``None``.
+    """Raw git branch name for ``start`` (or ``CLAUDE_PROJECT_DIR``, or the
+    cwd), or ``None``.
+
+    The ``CLAUDE_PROJECT_DIR`` fallback matters for a persistent/global witan
+    MCP server (docs: ``WITAN_REPO`` — "set in a global MCP server config
+    where the server CWD is not the session's repo"): ``detect()`` already
+    has its own escape hatch for that mode via ``WITAN_REPO``, but there is
+    no analogous "WITAN_BRANCH" override, so branch detection needs its own
+    fallback to the session's actual project directory rather than silently
+    reading whatever repo the server process happens to be sitting in (or
+    finding no repo at all).
 
     Returns ``None`` outside a git repository, when git is unavailable, or
     for a detached HEAD checkout — CodeBranch tracks meaningful work
@@ -57,7 +67,12 @@ def current_branch(start: Path | None = None) -> str | None:
     ``CodeBranch`` in schema.pg); sanitizing for omnigraph-safe storage is a
     witan-code concern that must not leak here.
     """
-    base = start or Path.cwd()
+    if start is not None:
+        base = start
+    elif project_dir := os.environ.get("CLAUDE_PROJECT_DIR"):
+        base = Path(project_dir)
+    else:
+        base = Path.cwd()
     try:
         result = subprocess.run(
             ["git", "-C", str(base), "rev-parse", "--abbrev-ref", "HEAD"],

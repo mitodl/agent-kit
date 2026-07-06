@@ -62,8 +62,7 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
     branch_tasks: list[dict] = []
     if repo:
         try:
-            project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
-            branch = repo_module.current_branch(Path(project_dir))
+            branch = repo_module.current_branch()
             if branch:
                 branch_tasks = client.read(
                     "read.gq",
