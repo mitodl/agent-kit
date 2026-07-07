@@ -19,6 +19,7 @@ from fastmcp import FastMCP
 
 from . import config as cfg_module
 from . import repo as repo_module
+from . import scan
 from .graph import OmnigraphClient, _is_storage_version_mismatch
 
 # ── Startup ───────────────────────────────────────────────────────
@@ -57,8 +58,14 @@ def _ensure_graph(graph_uri: str) -> None:
 
 cfg = cfg_module.load()
 rank_cfg = cfg_module.load_rank_config()
+scan_cfg = cfg_module.load_scan_config()
 _ensure_graph(cfg.graph_uri)
-client = OmnigraphClient(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
+client = OmnigraphClient(
+    cfg.graph_uri,
+    cfg.queries_dir,
+    cfg.graph_token,
+    guard=scan.write_guard_from_config(scan_cfg),
+)
 
 
 def apply_schema() -> dict:

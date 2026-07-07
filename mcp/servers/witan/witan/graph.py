@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 # omnigraph local stores use optimistic concurrency (Lance manifest versions) and
@@ -51,10 +52,12 @@ class OmnigraphClient:
         graph_uri: str,
         queries_dir: Path,
         token: str | None = None,
+        guard: Callable[[str, dict], dict] | None = None,
     ) -> None:
         self.graph_uri = graph_uri
         self.queries_dir = queries_dir
         self.token = token
+        self.guard = guard
         self._binary = self._find_binary()
 
     # ── Public API ────────────────────────────────────────────────
@@ -93,7 +96,15 @@ class OmnigraphClient:
         query_name: str,
         params: dict,
     ) -> None:
-        """Run a named mutation query."""
+        """Run a named mutation query.
+
+        The optional ``guard`` runs first: it may raise to reject the write, or
+        return rewritten params (e.g. with secrets redacted) that are what
+        actually get persisted. It sees the query name and full params, so it is
+        the single point that covers every node type's write.
+        """
+        if self.guard is not None:
+            params = self.guard(query_name, params)
         self._run(
             "mutate",
             "--query",
