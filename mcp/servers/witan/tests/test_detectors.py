@@ -35,25 +35,21 @@ def test_every_finding_carries_its_detector_and_no_raw_value():
 # ── secret detectors ────────────────────────────────────────────────────────────
 
 
-# Samples are assembled from fragments so the repo's own gitleaks /
-# detect-private-key pre-commit hooks don't flag this fixture file — the
-# detectors still see the fully-reconstructed values at runtime.
+# These are synthetic test fixtures, not real credentials. The repo's own
+# secret hooks are told so explicitly: gitleaks via inline `# gitleaks:allow`,
+# and detect-private-key via an exclude for this file in prek.toml.
 @pytest.mark.parametrize(
     "name,sample",
     [
-        ("aws_access_key", "AKIA" + "IOSFODNN7EXAMPLE"),
+        ("aws_access_key", "AKIAIOSFODNN7EXAMPLE"),  # gitleaks:allow
         ("github_token", "ghp_" + "a" * 36),
         ("github_token", "github_pat_" + "b" * 60),
-        ("slack_token", "xox" + "b-123456789012-abcdef"),
+        ("slack_token", "xoxb-123456789012-abcdef"),  # gitleaks:allow
         ("google_api_key", "AIza" + "C" * 35),
-        ("private_key_block", "-----BEGIN RSA PRIVATE " + "KEY-----"),
+        ("private_key_block", "-----BEGIN RSA PRIVATE KEY-----"),  # gitleaks:allow
         (
             "jwt",
-            "eyJhbGciOiJIUzI1NiJ9"
-            + "."
-            + "eyJzdWIiOiIxMjM0NTY3ODkwIn0"
-            + "."
-            + "dozjgNryP4J3jVmNHl0w5N",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",  # gitleaks:allow
         ),
     ],
 )

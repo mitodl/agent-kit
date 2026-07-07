@@ -54,6 +54,10 @@ priority = 0
 [[repos.hooks]]
 id = "detect-private-key"
 priority = 0
+# The witan scanner's own test fixtures contain a sample PEM header on purpose;
+# gitleaks handles them via inline `# gitleaks:allow`, but detect-private-key has
+# no inline pragma, so exclude that one fixture file here.
+exclude = "^mcp/servers/witan/tests/test_detectors\\.py$"
 
 # ── Shell: shellcheck (priority 10) ───────────────────────────────────────────
 
