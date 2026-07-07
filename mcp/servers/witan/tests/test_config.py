@@ -451,3 +451,124 @@ def test_rank_config_non_numeric_type_reports_expected_a_number(monkeypatch, tom
     with pytest.raises(ValueError, match="expected a number") as excinfo:
         load_rank_config()
     assert "must be > 0" not in str(excinfo.value)
+
+
+# ── load_scan_config ──────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _clear_scan_env(monkeypatch):
+    """Scan settings come from a small fixed set of env vars — clear them so a
+    real WITAN_SCAN_* in the dev shell can't leak into these tests."""
+    from witan.config import _SCAN_FIELDS
+
+    for env_var in _SCAN_FIELDS.values():
+        monkeypatch.delenv(env_var, raising=False)
+
+
+def test_scan_config_defaults(monkeypatch):
+    from witan.config import load_scan_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    sc = load_scan_config()
+    assert sc.enabled is False
+    assert sc.secret_action == "block"
+    assert sc.pii_action == "redact"
+    assert sc.on_scanner_error == "block"
+    assert sc.enabled_detectors == []
+    assert sc.plugins == []
+
+
+def test_scan_config_enabled_from_env(monkeypatch):
+    from witan.config import load_scan_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_SCAN_ENABLED", "true")
+    assert load_scan_config().enabled is True
+
+
+def test_scan_config_action_env_override(monkeypatch):
+    from witan.config import load_scan_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_SCAN_PII_ACTION", "block")
+    assert load_scan_config().pii_action == "block"
+
+
+def test_scan_config_env_list_is_comma_split(monkeypatch):
+    from witan.config import load_scan_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_SCAN_DISABLED_DETECTORS", "aws_key, github_token ,")
+    assert load_scan_config().disabled_detectors == ["aws_key", "github_token"]
+
+
+def test_scan_config_toml_list(monkeypatch, toml_file):
+    from witan.config import load_scan_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [scan]
+            enabled = true
+            plugins = ["acme.scanners:BadgeScanner", "acme.scanners:PanScanner"]
+            """
+        ),
+    )
+    sc = load_scan_config()
+    assert sc.enabled is True
+    assert sc.plugins == ["acme.scanners:BadgeScanner", "acme.scanners:PanScanner"]
+
+
+def test_scan_config_env_overrides_file(monkeypatch, toml_file):
+    from witan.config import load_scan_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file("[scan]\nsecret_action = 'warn'"))
+    monkeypatch.setenv("WITAN_SCAN_SECRET_ACTION", "redact")
+    assert load_scan_config().secret_action == "redact"
+
+
+def test_scan_config_rejects_unknown_action(monkeypatch):
+    from witan.config import load_scan_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_SCAN_SECRET_ACTION", "nuke")
+    with pytest.raises(ValueError, match="WITAN_SCAN_SECRET_ACTION") as excinfo:
+        load_scan_config()
+    assert "block, redact, warn" in str(excinfo.value)
+
+
+def test_scan_config_on_error_rejects_redact(monkeypatch):
+    """on_scanner_error can't redact (no spans to redact) — only block or warn."""
+    from witan.config import load_scan_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_SCAN_ON_ERROR", "redact")
+    with pytest.raises(ValueError, match="expected one of block, warn"):
+        load_scan_config()
+
+
+def test_scan_config_rejects_non_boolean_enabled(monkeypatch):
+    from witan.config import load_scan_config
+
+    monkeypatch.delenv("WITAN_CONFIG", raising=False)
+    monkeypatch.setenv("WITAN_SCAN_ENABLED", "maybe")
+    with pytest.raises(ValueError, match="expected a boolean"):
+        load_scan_config()
+
+
+def test_scan_config_section_not_a_table(monkeypatch, toml_file):
+    from witan.config import load_scan_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file("scan = 'on'"))
+    with pytest.raises(ValueError, match="'scan' section .* must be a table"):
+        load_scan_config()
+
+
+def test_scan_config_is_frozen():
+    from witan.config import ScanConfig
+
+    sc = ScanConfig()
+    with pytest.raises(ValueError):
+        sc.enabled = True

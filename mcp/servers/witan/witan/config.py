@@ -2,6 +2,7 @@ import os
 import re
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -120,6 +121,129 @@ def load_rank_config() -> RankConfig:
         return RankConfig(**raw)
     except ValidationError as exc:
         raise _rank_config_error(exc, sources) from exc
+
+
+ScanAction = Literal["block", "redact", "warn"]
+"""What to do when a scanner flags content on the write path (ADR 0001 §D3).
+
+- ``block``  — reject the write; the mutation never reaches the store.
+- ``redact`` — replace the matched span with a placeholder, then proceed.
+- ``warn``   — emit an audit event and store the content unchanged.
+"""
+
+
+class ScanConfig(BaseModel):
+    """Write-path content-scanning policy (ADR 0001).
+
+    Sourced from ``WITAN_SCAN_*`` env vars and the ``[scan]`` table in
+    config.toml, defaulting to the constants below. Ships **disabled** — like
+    ``WITAN_EMBED_ENABLED``, scanning is turned on deliberately, not by default.
+
+    ``enabled_detectors``/``disabled_detectors``/``plugins``/``allowlist`` accept
+    a TOML list or a comma-separated string (env-var ergonomics). An empty
+    ``enabled_detectors`` means "every registered detector is active"; naming any
+    detector switches to an explicit allowlist. ``disabled_detectors`` always
+    wins over ``enabled_detectors``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = False
+    """Master switch. When False the write path is not scanned at all."""
+
+    secret_action: ScanAction = "block"
+    """Enforcement for ``secret`` findings. Fail-closed by default."""
+
+    pii_action: ScanAction = "redact"
+    """Enforcement for ``pii`` findings. Mask-and-proceed by default."""
+
+    enabled_detectors: list[str] = Field(default_factory=list)
+    disabled_detectors: list[str] = Field(default_factory=list)
+    plugins: list[str] = Field(default_factory=list)
+    """Dotted import paths of external scanners to load in addition to those
+    discovered via the ``witan.scanners`` entry-point group."""
+
+    allowlist: list[str] = Field(default_factory=list)
+    """Regexes whose matches are downgraded to audit-only (false-positive
+    suppression). The full allowlist engine is a separate task; this is the
+    config surface it will read."""
+
+    on_scanner_error: Literal["block", "warn"] = "block"
+    """What to do when a scanner itself raises. Fail-closed by default so a
+    broken detector cannot silently open the gate."""
+
+    @field_validator(
+        "enabled_detectors",
+        "disabled_detectors",
+        "plugins",
+        "allowlist",
+        mode="before",
+    )
+    @classmethod
+    def _split_list(cls, v: object) -> list[str]:
+        """Accept a TOML list or a comma-separated string (for env vars)."""
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return _to_list(v)
+
+
+_SCAN_FIELDS = {
+    "enabled": "WITAN_SCAN_ENABLED",
+    "secret_action": "WITAN_SCAN_SECRET_ACTION",
+    "pii_action": "WITAN_SCAN_PII_ACTION",
+    "enabled_detectors": "WITAN_SCAN_ENABLED_DETECTORS",
+    "disabled_detectors": "WITAN_SCAN_DISABLED_DETECTORS",
+    "plugins": "WITAN_SCAN_PLUGINS",
+    "allowlist": "WITAN_SCAN_ALLOWLIST",
+    "on_scanner_error": "WITAN_SCAN_ON_ERROR",
+}
+
+
+def _scan_config_error(exc: ValidationError, sources: dict[str, str]) -> ValueError:
+    """Translate a ScanConfig ValidationError into a source-attributed message."""
+    err = exc.errors()[0]
+    field = str(err["loc"][0])
+    source = sources.get(field, field)
+    if err["type"] in ("bool_parsing", "bool_type"):
+        return ValueError(
+            f"Invalid scan setting {source}={err['input']!r}: expected a boolean."
+        )
+    if err["type"] == "literal_error":
+        allowed = (
+            "block, warn" if field == "on_scanner_error" else "block, redact, warn"
+        )
+        return ValueError(
+            f"Invalid scan setting {source}={err['input']!r}: expected one of {allowed}."
+        )
+    return ValueError(f"Invalid scan setting {source}: {err['msg']}")
+
+
+def load_scan_config() -> ScanConfig:
+    """Resolve ScanConfig from env > config.toml [scan] > constant defaults.
+
+    Rejects unknown enforcement actions and non-boolean enable flags so a
+    misconfigured policy fails loudly at startup rather than silently letting
+    writes through unscanned.
+    """
+    file_scan = _load_toml().get("scan", {})
+    if not isinstance(file_scan, dict):
+        raise ValueError("The 'scan' section in config must be a table.")
+
+    raw: dict[str, object] = {}
+    sources: dict[str, str] = {}
+    for field, env_var in _SCAN_FIELDS.items():
+        value = os.environ.get(env_var)
+        if value is not None:
+            raw[field] = value
+            sources[field] = env_var
+        elif field in file_scan:
+            raw[field] = file_scan[field]
+            sources[field] = f"[scan].{field} in config.toml"
+
+    try:
+        return ScanConfig(**raw)
+    except ValidationError as exc:
+        raise _scan_config_error(exc, sources) from exc
 
 
 class _Target(BaseModel):

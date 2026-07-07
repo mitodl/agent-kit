@@ -57,6 +57,7 @@ def _ensure_graph(graph_uri: str) -> None:
 
 cfg = cfg_module.load()
 rank_cfg = cfg_module.load_rank_config()
+scan_cfg = cfg_module.load_scan_config()
 _ensure_graph(cfg.graph_uri)
 client = OmnigraphClient(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
 
