@@ -12,6 +12,10 @@ It is a thin presentation layer: every query goes through the same
 
 from __future__ import annotations
 
+from typing import Annotated, Literal
+
+import cyclopts
+
 from ._common import app, console
 from .. import config as cfg_module
 from .run_helpers import _run_task_slug
@@ -40,12 +44,35 @@ except ImportError:
 
 
 @app.command
-def serve() -> None:
+def serve(
+    *,
+    transport: Annotated[
+        Literal["stdio", "http", "streamable-http", "sse"],
+        cyclopts.Parameter(env_var="WITAN_MCP_TRANSPORT"),
+    ] = "stdio",
+    host: Annotated[str, cyclopts.Parameter(env_var="WITAN_MCP_HOST")] = "127.0.0.1",
+    port: Annotated[int, cyclopts.Parameter(env_var="WITAN_MCP_PORT")] = 8000,
+    path: Annotated[str, cyclopts.Parameter(env_var="WITAN_MCP_PATH")] = "/mcp",
+) -> None:
     """Run the witan MCP server.
 
     Serves the work-coordination tools (memory_*, task_*, workflow_*) and, when
     witan-code is installed, mounts the code-graph tools (code_*) into the same
     server so a single MCP entry exposes everything.
+
+    Defaults to ``stdio`` for local per-user use (Claude Desktop, ``uvx``). Pass
+    ``--transport streamable-http`` (or set ``WITAN_MCP_TRANSPORT``) to expose an
+    HTTP endpoint for a shared, deployed service — this is what ToolHive hosts.
+
+    Parameters
+    ----------
+    transport: MCP transport. ``stdio`` for local; ``streamable-http``/``http``/
+        ``sse`` bind a network listener. Env: ``WITAN_MCP_TRANSPORT``.
+    host: Interface to bind for HTTP transports. ``0.0.0.0`` inside a container.
+        Env: ``WITAN_MCP_HOST``.
+    port: Port to bind for HTTP transports. Env: ``WITAN_MCP_PORT``.
+    path: URL path the MCP endpoint is served on (HTTP transports only).
+        Env: ``WITAN_MCP_PATH``.
     """
     from ..server import mcp as witan_mcp
 
@@ -55,7 +82,14 @@ def serve() -> None:
         witan_mcp.mount(code_mcp, prefix=None)
     except ImportError:
         pass
-    witan_mcp.run()
+
+    if transport == "stdio":
+        witan_mcp.run()
+    else:
+        # Starlette routing asserts a leading slash; be forgiving of `mcp`.
+        if not path.startswith("/"):
+            path = f"/{path}"
+        witan_mcp.run(transport=transport, host=host, port=port, path=path)
 
 
 @app.command
