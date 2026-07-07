@@ -19,11 +19,13 @@ from .models import (
     Severity,
     masked_preview,
 )
+from .redact import REDACTED_TAG, flag_redacted, redact_spans
 from .registry import ENTRY_POINT_GROUP, ScannerRegistry, builtin_scanners
 
 __all__ = [
     "ENTRY_POINT_GROUP",
     "FIELD_MAP",
+    "REDACTED_TAG",
     "Category",
     "Finding",
     "Scanner",
@@ -33,6 +35,8 @@ __all__ = [
     "WriteBlocked",
     "WriteGuard",
     "builtin_scanners",
+    "flag_redacted",
     "masked_preview",
+    "redact_spans",
     "write_guard_from_config",
 ]

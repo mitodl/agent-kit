@@ -13,6 +13,7 @@ import logging
 
 from ..config import ScanAction, ScanConfig
 from .models import Finding, ScannerError
+from .redact import flag_redacted, redact_spans
 from .registry import ScannerRegistry
 
 logger = logging.getLogger("witan.scan")
@@ -85,7 +86,7 @@ class WriteGuard:
         if blocked:
             raise WriteBlocked(query_name, blocked)
         if redactions:
-            return {**params, **redactions}
+            return flag_redacted({**params, **redactions})
         return params
 
     def _scan(self, value: str, field: str, node_type: str) -> list[Finding]:
@@ -129,31 +130,12 @@ class WriteGuard:
                 )
         if blocked:
             return blocked, None  # write will be rejected; don't bother redacting
-        return blocked, (_redact(value, to_redact) if to_redact else None)
+        return blocked, (redact_spans(value, to_redact) if to_redact else None)
 
     def _action_for(self, category: str) -> ScanAction:
         return (
             self._config.pii_action if category == "pii" else self._config.secret_action
         )
-
-
-def _redact(value: str, findings: list[Finding]) -> str:
-    """Replace each finding span with a placeholder, merging overlaps.
-
-    Minimal but correct: the fuller redaction engine (node flagging, salted
-    hashes) is a separate task; this is what interception needs to function.
-    """
-    spans = sorted((f.start, f.end, f.detector) for f in findings)
-    merged: list[list] = []
-    for start, end, detector in spans:
-        if merged and start <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], end)
-        else:
-            merged.append([start, end, detector])
-    out = value
-    for start, end, detector in reversed(merged):
-        out = f"{out[:start]}«redacted:{detector}»{out[end:]}"
-    return out
 
 
 def write_guard_from_config(config: ScanConfig) -> WriteGuard | None:
