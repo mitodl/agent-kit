@@ -181,10 +181,13 @@ class ScanConfig(BaseModel):
     )
     @classmethod
     def _split_list(cls, v: object) -> list[str]:
-        """Accept a TOML list or a comma-separated string (for env vars)."""
-        if isinstance(v, str):
-            return [s.strip() for s in v.split(",") if s.strip()]
-        return _to_list(v)
+        """Accept a TOML list or a comma-separated string (for env vars).
+
+        Items are stripped and blanks dropped in both cases, so a stray space in
+        a plugin path (from either source) can't become an unimportable entry.
+        """
+        items = v.split(",") if isinstance(v, str) else _to_list(v)
+        return [s.strip() for s in items if s.strip()]
 
 
 _SCAN_FIELDS = {

@@ -503,6 +503,18 @@ def test_scan_config_env_list_is_comma_split(monkeypatch):
     assert load_scan_config().disabled_detectors == ["aws_key", "github_token"]
 
 
+def test_scan_config_toml_list_is_stripped_and_filtered(monkeypatch, toml_file):
+    """TOML list items get the same strip/blank-drop as env values so a stray
+    space can't become an unimportable plugin path."""
+    from witan.config import load_scan_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file("[scan]\nplugins = [' acme:Scanner ', '', 'acme:Other']"),
+    )
+    assert load_scan_config().plugins == ["acme:Scanner", "acme:Other"]
+
+
 def test_scan_config_toml_list(monkeypatch, toml_file):
     from witan.config import load_scan_config
 

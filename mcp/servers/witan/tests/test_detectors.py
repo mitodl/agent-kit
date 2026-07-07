@@ -35,24 +35,23 @@ def test_every_finding_carries_its_detector_and_no_raw_value():
 # ── secret detectors ────────────────────────────────────────────────────────────
 
 
-# These are synthetic test fixtures, not real credentials. The repo's own
-# secret hooks are told so explicitly: gitleaks via inline `# gitleaks:allow`,
-# and detect-private-key via an exclude for this file in prek.toml.
+# These are synthetic test fixtures, not real credentials. The secret scanners
+# are told so explicitly: `# pragma: allowlist secret` (honored by GitGuardian in
+# CI) plus `gitleaks:allow` for the local gitleaks hook; detect-private-key has no
+# inline pragma, so this file is excluded from it in prek.toml.
 @pytest.mark.parametrize(
     "name,sample",
     [
-        ("aws_access_key", "AKIAIOSFODNN7EXAMPLE"),  # gitleaks:allow
+        # Value + pragma share one line so both scanners see the marker.
+        ("aws_access_key", "AKIAIOSFODNN7EXAMPLE"),  # pragma: allowlist secret gitleaks:allow
         ("github_token", "ghp_" + "a" * 36),
         ("github_token", "github_pat_" + "b" * 60),
-        ("slack_token", "xoxb-123456789012-abcdef"),  # gitleaks:allow
+        ("slack_token", "xoxb-123456789012-abcdef"),  # pragma: allowlist secret gitleaks:allow
         ("google_api_key", "AIza" + "C" * 35),
-        ("private_key_block", "-----BEGIN RSA PRIVATE KEY-----"),  # gitleaks:allow
-        (
-            "jwt",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",  # gitleaks:allow
-        ),
+        ("private_key_block", "-----BEGIN RSA PRIVATE KEY-----"),  # pragma: allowlist secret gitleaks:allow
+        ("jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N"),  # pragma: allowlist secret gitleaks:allow
     ],
-)
+)  # fmt: skip
 def test_secret_detector_matches(name, sample):
     assert sample in matched(name, f"prefix {sample} suffix")
 
