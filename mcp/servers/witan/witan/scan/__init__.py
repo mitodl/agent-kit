@@ -5,6 +5,7 @@ built-in and third-party detectors implement, and the :class:`ScannerRegistry`
 that discovers and runs them.
 """
 
+from .audit import AuditEvent, AuditOutcome
 from .enforce import (
     FIELD_MAP,
     WriteBlocked,
@@ -26,6 +27,8 @@ __all__ = [
     "ENTRY_POINT_GROUP",
     "FIELD_MAP",
     "REDACTED_TAG",
+    "AuditEvent",
+    "AuditOutcome",
     "Category",
     "Finding",
     "Scanner",

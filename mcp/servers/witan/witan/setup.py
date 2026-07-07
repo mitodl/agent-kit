@@ -155,6 +155,31 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
         tmp_dest.unlink(missing_ok=True)
 
 
+def install_default_config(dry_run: bool) -> None:
+    """Write a starter ``config.toml`` if one doesn't already exist.
+
+    Unlike the omnigraph binary (always re-fetched to the current pin), a
+    config file is user-owned once created — never overwritten by a re-run,
+    so `witan setup` can't clobber edits the user has already made.
+    """
+    from rich.console import Console
+
+    from . import config as cfg_module
+
+    console = Console()
+    dest = cfg_module.DEFAULT_CONFIG_PATH
+
+    if dest.exists():
+        console.print(f"  [dim]config.toml[/dim] — {dest} already exists, skipping")
+        return
+    if dry_run:
+        console.print(f"  [green]config.toml[/green] → {dest} [dim](dry-run)[/dim]")
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(cfg_module.default_config_toml())
+    console.print(f"  [green]config.toml[/green] → {dest}")
+
+
 def install_omnigraph(dry_run: bool) -> None:
     """Fetch the pinned omnigraph release into ``~/.local/bin/``.
 

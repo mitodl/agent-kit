@@ -119,6 +119,44 @@ def test_omnigraph_version_matches_witan_code():
     assert setup._OMNIGRAPH_VERSION == other_version.group(1)
 
 
+def test_install_default_config_writes_starter_file(tmp_path, monkeypatch):
+    import tomllib
+
+    from witan import config as cfg_module
+
+    dest = tmp_path / "config.toml"
+    monkeypatch.setattr(cfg_module, "DEFAULT_CONFIG_PATH", dest)
+
+    setup.install_default_config(dry_run=False)
+
+    assert dest.exists()
+    parsed = tomllib.loads(dest.read_text())
+    assert parsed == {"rank": {}, "scan": {}}  # everything ships commented out
+
+
+def test_install_default_config_skips_existing_file(tmp_path, monkeypatch):
+    from witan import config as cfg_module
+
+    dest = tmp_path / "config.toml"
+    dest.write_text("author = 'do not touch'\n")
+    monkeypatch.setattr(cfg_module, "DEFAULT_CONFIG_PATH", dest)
+
+    setup.install_default_config(dry_run=False)
+
+    assert dest.read_text() == "author = 'do not touch'\n"
+
+
+def test_install_default_config_dry_run_writes_nothing(tmp_path, monkeypatch):
+    from witan import config as cfg_module
+
+    dest = tmp_path / "config.toml"
+    monkeypatch.setattr(cfg_module, "DEFAULT_CONFIG_PATH", dest)
+
+    setup.install_default_config(dry_run=True)
+
+    assert not dest.exists()
+
+
 def _dest(tmp_path: Path) -> Path:
     return tmp_path / ".local" / "bin" / "omnigraph"
 

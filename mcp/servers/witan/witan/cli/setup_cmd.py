@@ -46,9 +46,10 @@ def setup(
 ) -> None:
     """Install witan for one or all supported coding agents.
 
-    Installs the omnigraph binary to ``~/.local/bin/``, copies bundled skills
-    and hooks/extensions to the agent's config directories, and merges the
-    witan MCP server entry into the agent's config file.
+    Installs the omnigraph binary to ``~/.local/bin/``, writes a starter
+    ``config.toml`` if one doesn't exist yet, copies bundled skills and
+    hooks/extensions to the agent's config directories, and merges the witan
+    MCP server entry into the agent's config file.
 
     Re-run after every upgrade to refresh installed files.
 
@@ -85,6 +86,9 @@ def setup(
 
     console.print("[bold]omnigraph binary[/bold]")
     su.install_omnigraph(dry_run)
+
+    console.print("\n[bold]config.toml[/bold]")
+    su.install_default_config(dry_run)
 
     bundle = su.witan_bundle(pkg_dir, author)
 

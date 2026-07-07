@@ -2,8 +2,9 @@
 
 A minimal, standalone package demonstrating how another organization plugs its
 own detection rules into witan's write-path content scanning (see
-[ADR 0001](../../docs/adr/0001-write-path-content-scanning.md)), without
-forking witan.
+[ADR 0001](../../docs/adr/0001-write-path-content-scanning.md) for the design
+and [the operator/developer guide](../../docs/write-path-scanning.md) for the
+full config surface and CLI), without forking witan.
 
 ## The contract
 
@@ -54,10 +55,13 @@ select or silence it like any built-in rule.
 
 ```bash
 uv pip install -e examples/example-scanner-plugin
-WITAN_SCAN_ENABLED=true uv run python -c "
+uv run python -c "
 from witan.config import load_scan_config
 from witan.scan import ScannerRegistry
 reg = ScannerRegistry.from_config(load_scan_config())
 print([s.name for s in reg.scanners])  # includes acme_employee_id
 "
 ```
+
+(Scanning is on by default — no `WITAN_SCAN_ENABLED` needed. Set it to
+`false` to opt out.)

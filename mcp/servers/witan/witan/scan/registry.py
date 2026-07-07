@@ -31,13 +31,24 @@ def builtin_scanners() -> list[Scanner]:
 
 
 class ScannerRegistry:
-    def __init__(self, scanners: Iterable[Scanner]) -> None:
+    def __init__(
+        self,
+        scanners: Iterable[Scanner],
+        sources: dict[str, str] | None = None,
+    ) -> None:
         self._scanners: list[Scanner] = list(scanners)
+        self._sources: dict[str, str] = dict(sources) if sources else {}
 
     @property
     def scanners(self) -> list[Scanner]:
         """The active scanners, in run order (after allow/deny selection)."""
         return list(self._scanners)
+
+    def source_for(self, name: str) -> str:
+        """Where an active scanner came from: ``built-in``, ``entry-point:<id>``,
+        or ``config:<dotted.path>``. ``"unknown"`` for a scanner not built via
+        :meth:`from_config` (e.g. one injected directly in a test)."""
+        return self._sources.get(name, "unknown")
 
     @classmethod
     def from_config(
@@ -52,15 +63,18 @@ class ScannerRegistry:
         Plugin load failures raise loudly at build time — a policy configured to
         scan must not silently start with a detector missing.
         """
-        discovered: list[Scanner] = list(
-            builtin_scanners() if builtins is None else builtins
-        )
+        discovered: list[tuple[Scanner, str]] = [
+            (s, "built-in")
+            for s in (builtin_scanners() if builtins is None else builtins)
+        ]
         discovered.extend(_load_entry_point_scanners())
         discovered.extend(_load_plugin_paths(config.plugins))
         selected = _select(
             discovered, config.enabled_detectors, config.disabled_detectors
         )
-        return cls(selected)
+        scanners = [s for s, _ in selected]
+        sources = {_name(s): src for s, src in selected}
+        return cls(scanners, sources)
 
     def scan(self, text: str, field: str, node_type: str) -> list[Finding]:
         """Run every active scanner and return the concatenated findings.
@@ -78,26 +92,26 @@ class ScannerRegistry:
 
 
 def _select(
-    scanners: Iterable[Scanner],
+    pairs: Iterable[tuple[Scanner, str]],
     enabled: list[str],
     disabled: list[str],
-) -> list[Scanner]:
+) -> list[tuple[Scanner, str]]:
     """Apply allow/deny. Empty ``enabled`` means "all"; ``disabled`` always wins."""
     allow = set(enabled)
     deny = set(disabled)
     result = []
-    for scanner in scanners:
+    for scanner, source in pairs:
         name = _name(scanner)
         if name in deny:
             continue
         if allow and name not in allow:
             continue
-        result.append(scanner)
+        result.append((scanner, source))
     return result
 
 
-def _load_entry_point_scanners() -> list[Scanner]:
-    out: list[Scanner] = []
+def _load_entry_point_scanners() -> list[tuple[Scanner, str]]:
+    out: list[tuple[Scanner, str]] = []
     for ep in metadata.entry_points(group=ENTRY_POINT_GROUP):
         try:
             factory = ep.load()
@@ -105,12 +119,15 @@ def _load_entry_point_scanners() -> list[Scanner]:
             raise RuntimeError(
                 f"Failed to load scanner plugin {ep.name!r} ({ep.value}): {exc}"
             ) from exc
-        out.append(_instantiate(factory, f"entry-point {ep.name!r}"))
+        scanner = _instantiate(factory, f"entry-point {ep.name!r}")
+        out.append((scanner, f"entry-point:{ep.name}"))
     return out
 
 
-def _load_plugin_paths(paths: Iterable[str]) -> list[Scanner]:
-    return [_instantiate(_import_path(p), f"plugin {p!r}") for p in paths]
+def _load_plugin_paths(paths: Iterable[str]) -> list[tuple[Scanner, str]]:
+    return [
+        (_instantiate(_import_path(p), f"plugin {p!r}"), f"config:{p}") for p in paths
+    ]
 
 
 def _import_path(path: str) -> object:

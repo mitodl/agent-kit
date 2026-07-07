@@ -215,8 +215,7 @@ audit-only.
 
 **Neutral**
 
-- Feature ships disabled (`enabled=false`) and is turned on deliberately per the
-  `WITAN_EMBED_ENABLED` precedent.
+- Feature ships **enabled** (opt-out); see the 2026-07-07 amendment below.
 - `witan-code` has a **separate** write path (`witan_code/store.py`,
   `indexer.py`) that does not share this choke point; whether indexed-source
   secrets are in scope is a separate decision
@@ -229,3 +228,16 @@ the `Scanner` protocol + registry, and the `change()` interception with the fiel
 map and enforcement. Then built-in secret + PII detectors, entry-point plugin
 discovery, redaction, allowlisting, audit logging, the `witan scan` CLI, the
 multi-tenant policy control, tests, and docs.
+
+## Amendment (2026-07-07): enabled by default
+
+D4 originally shipped the feature **disabled**, following the
+`WITAN_EMBED_ENABLED` opt-in precedent. Revised: `ScanConfig.enabled` now
+defaults to **`true`** — scanning is opt-out (`WITAN_SCAN_ENABLED=false` or
+`[scan] enabled = false` to turn it off), not opt-in. Rationale: an opt-in
+default means most installs run unscanned unless an operator deliberately
+turns it on — the exact accidental-ingestion risk this ADR exists to close.
+The redact-by-default PII path and fail-closed secret blocking make an
+enabled default low-friction; false positives are handled via the allow/deny
+detector lists, per-category mode, and the eventual allowlist engine, not by
+leaving the feature off. Everything else in D1–D4 is unchanged.
