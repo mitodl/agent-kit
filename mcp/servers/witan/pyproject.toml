@@ -46,3 +46,6 @@ test = ["pytest>=8"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "perf: loose latency guardrails; excludable on slow/contended runners with -m 'not perf'",
+]

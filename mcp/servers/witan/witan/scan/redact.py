@@ -46,7 +46,13 @@ def flag_redacted(params: dict) -> dict:
     """
     if "tags" not in params:
         return params
-    tags = params.get("tags") or []
+    raw_tags = params.get("tags")
+    if raw_tags is None:
+        tags: list = []
+    elif isinstance(raw_tags, str):
+        tags = [raw_tags]  # a bare string isn't the [String]? the schema expects
+    else:
+        tags = list(raw_tags)
     if REDACTED_TAG in tags:
         return params
     return {**params, "tags": [*tags, REDACTED_TAG]}

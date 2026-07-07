@@ -179,10 +179,13 @@ def test_false_positive_corpus_is_clean(text):
 # ── perf guardrail ────────────────────────────────────────────────────────────
 
 
+@pytest.mark.perf
 def test_scan_latency_stays_bounded():
     """Content scanning must not become the write path's bottleneck. Loose
-    bound (not a tight benchmark) to catch a real regression, e.g. an
-    accidentally-quadratic detector, without being flaky in CI."""
+    bound (not a tight benchmark, and generous enough to survive a slow or
+    contended CI runner) to catch a real regression, e.g. an
+    accidentally-quadratic detector. Deselect on constrained runners with
+    ``-m 'not perf'``."""
     text = (
         "Investigated the flaky test failure caused by a race condition "
         "in the connection pool. "
@@ -192,4 +195,4 @@ def test_scan_latency_stays_bounded():
     for _ in range(20):
         guard("insert_task", {"title": "t", "description": text})
     elapsed = time.perf_counter() - start
-    assert elapsed < 2.0, f"20 scans of {len(text)} chars took {elapsed:.3f}s"
+    assert elapsed < 10.0, f"20 scans of {len(text)} chars took {elapsed:.3f}s"

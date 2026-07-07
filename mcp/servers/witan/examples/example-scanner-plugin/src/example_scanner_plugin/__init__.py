@@ -13,8 +13,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Literal
 
 _EMPLOYEE_ID_RE = re.compile(r"\bACME-EMP-\d{6}\b")
+
+# Mirrors witan.scan.models.Category/Severity and witan.config.ScanAction —
+# copied rather than imported (see module docstring), but kept exact so a
+# plugin author can't accidentally return a value enforcement doesn't
+# recognize (e.g. an unsupported `action` silently falling through to warn).
+Category = Literal["secret", "pii"]
+Severity = Literal["low", "medium", "high", "critical"]
+Action = Literal["block", "redact", "warn"]
 
 
 @dataclass(frozen=True)
@@ -28,12 +37,12 @@ class Finding:
     """
 
     detector: str
-    category: str
+    category: Category
     start: int
     end: int
-    severity: str = "high"
+    severity: Severity = "high"
     preview: str = ""
-    action: str | None = None
+    action: Action | None = None
 
 
 class AcmeEmployeeIdScanner:

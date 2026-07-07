@@ -25,9 +25,17 @@ def test_redact_spans_merges_overlapping():
     assert out == "«redacted:a»"
 
 
-def test_redact_spans_merges_adjacent():
+def test_redact_spans_leaves_a_gap_between_separate_matches():
+    """Non-touching spans are redacted independently; the gap survives."""
     out = redact_spans("XX-XX", [_f("tok", 0, 2), _f("tok", 3, 5)])
     assert out == "«redacted:tok»-«redacted:tok»"
+
+
+def test_redact_spans_merges_touching_spans():
+    """Spans that touch (one's end == the next's start) collapse into a
+    single placeholder — the true adjacency case."""
+    out = redact_spans("XXYY", [_f("tok", 0, 2), _f("tok", 2, 4)])
+    assert out == "«redacted:tok»"
 
 
 def test_redact_spans_is_idempotent_against_rescanning():
