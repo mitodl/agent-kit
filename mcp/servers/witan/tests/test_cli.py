@@ -220,3 +220,11 @@ def test_serve_streamable_http_passes_transport_kwargs(monkeypatch):
             "path": "/witan",
         }
     ]
+
+
+def test_serve_http_prepends_missing_leading_slash(monkeypatch):
+    from witan.cli import serve
+
+    fake = _patch_mcp(monkeypatch)
+    serve(transport="http", path="mcp")
+    assert fake.run_calls[0]["path"] == "/mcp"

@@ -86,6 +86,9 @@ def serve(
     if transport == "stdio":
         witan_mcp.run()
     else:
+        # Starlette routing asserts a leading slash; be forgiving of `mcp`.
+        if not path.startswith("/"):
+            path = f"/{path}"
         witan_mcp.run(transport=transport, host=host, port=port, path=path)
 
 
