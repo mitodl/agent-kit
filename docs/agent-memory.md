@@ -1155,9 +1155,18 @@ before a team server is deployed.
 Runs a Docker-backed S3-compatible store locally. Enables the full S3 code path
 without team infrastructure — useful for testing the team mode locally.
 
-```bash
-RUSTFS=1 ./install.sh
+> As of omnigraph 0.8.1, upstream no longer ships a `local-rustfs-bootstrap.sh`
+> helper (removed from `ModernRelay/omnigraph`'s `scripts/`) — `RUSTFS=1
+> ./install.sh` will 404. Run the official `rustfs/rustfs` Docker image
+> directly instead:
+>
+> ```bash
+> mkdir -p /tmp/rustfs-data && chown -R 10001:10001 /tmp/rustfs-data
+> docker run -d --name rustfs-local -p 9000:9000 -p 9001:9001 \
+>   -v /tmp/rustfs-data:/data rustfs/rustfs:latest /data
+> ```
 
+```bash
 export WITAN_MEMORY_URI=s3://omnigraph-local/agent-memory/
 export AWS_ACCESS_KEY_ID=rustfsadmin
 export AWS_SECRET_ACCESS_KEY=rustfsadmin
@@ -1181,24 +1190,40 @@ export WITAN_AUTHOR="Alice Smith"
 
 **Deploying the server:**
 
+As of omnigraph 0.8.1, `omnigraph-server` boots only via `--cluster` (a
+`cluster.yaml`-config directory, or a bare `s3://` storage-root URI for
+config-free serving) — the older positional-graph-URI form below no longer
+works. Minimal `cluster.yaml`:
+
+```yaml
+version: 1
+metadata:
+  name: mitodl-witan
+state:
+  backend: cluster
+storage: s3://mitodl-agent-memory
+graphs:
+  main:
+    schema: schema.pg   # path relative to this config dir; copy schema/schema.pg here
+```
+
 ```bash
+# Bootstrap once (creates the graph root under storage/graphs/main.omni):
+omnigraph cluster import --config <cluster-config-dir>
+omnigraph cluster apply --config <cluster-config-dir>
+
 # On the server host or in a container:
 OMNIGRAPH_SERVER_BEARER_TOKEN="<token>" \
 AWS_REGION="us-east-1" \
 AWS_ACCESS_KEY_ID="<key>" \
 AWS_SECRET_ACCESS_KEY="<secret>" \
-omnigraph-server s3://mitodl-agent-memory/graph.omni \
-  --bind 0.0.0.0:8080
+omnigraph-server --cluster <cluster-config-dir> --bind 0.0.0.0:8080
 ```
 
-The graph must already exist. Bootstrap it once:
-
-```bash
-# From any machine with AWS credentials and the omnigraph binary:
-omnigraph init \
-  --schema mcp/servers/witan/schema/schema.pg \
-  s3://mitodl-agent-memory/graph.omni
-```
+See `docs/user/operations/policy.md` and `docs/user/clusters/config.md` in
+[ModernRelay/omnigraph](https://github.com/ModernRelay/omnigraph) for the
+full cluster-config and Cedar-policy-bundle reference — Cedar authorization
+there is graph+branch scoped only, not per-node-type.
 
 **Promoting a local graph to S3:**
 
