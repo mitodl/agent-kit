@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from ..config import ScanAction, ScanConfig
+from . import audit
 from .models import Finding, ScannerError
 from .redact import flag_redacted, redact_spans
 from .registry import ScannerRegistry
@@ -68,6 +69,7 @@ class WriteGuard:
         if entry is None:
             return params
         node_type, fields = entry
+        slug = params.get("slug")
 
         blocked: list[tuple[str, Finding]] = []
         redactions: dict[str, str] = {}
@@ -78,7 +80,9 @@ class WriteGuard:
             findings = self._scan(value, field, node_type)
             if not findings:
                 continue
-            field_blocked, redacted = self._apply(field, value, findings)
+            field_blocked, redacted = self._apply(
+                query_name, node_type, slug, field, value, findings
+            )
             blocked.extend(field_blocked)
             if redacted is not None:
                 redactions[field] = redacted
@@ -105,29 +109,31 @@ class WriteGuard:
             raise  # fail-closed: the ScannerError aborts the write
 
     def _apply(
-        self, field: str, value: str, findings: list[Finding]
+        self,
+        query_name: str,
+        node_type: str,
+        slug: str | None,
+        field: str,
+        value: str,
+        findings: list[Finding],
     ) -> tuple[list[tuple[str, Finding]], str | None]:
         blocked: list[tuple[str, Finding]] = []
         to_redact: list[Finding] = []
         for finding in findings:
             action = finding.action or self._action_for(finding.category)
+            audit.emit(
+                query_name=query_name,
+                node_type=node_type,
+                field=field,
+                slug=slug,
+                finding=finding,
+                action=action,
+            )
             if action == "block":
                 blocked.append((field, finding))
             elif action == "redact":
                 to_redact.append(finding)
-                logger.info(
-                    "witan scan: redacting %s in %s (%s)",
-                    finding.detector,
-                    field,
-                    finding.preview,
-                )
-            else:  # warn
-                logger.warning(
-                    "witan scan: %s in %s (%s) stored unredacted (warn)",
-                    finding.detector,
-                    field,
-                    finding.preview,
-                )
+            # warn: audit event above is the only side effect.
         if blocked:
             return blocked, None  # write will be rejected; don't bother redacting
         return blocked, (redact_spans(value, to_redact) if to_redact else None)
@@ -141,8 +147,9 @@ class WriteGuard:
 def write_guard_from_config(config: ScanConfig) -> WriteGuard | None:
     """Build the guard, or None when scanning is disabled.
 
-    Returning None keeps the write path completely untouched (and skips loading
-    any plugins) unless scanning is explicitly enabled.
+    Returning None keeps the write path completely untouched (and skips
+    loading any plugins) when scanning is explicitly turned off — it's on by
+    default.
     """
     if not config.enabled:
         return None

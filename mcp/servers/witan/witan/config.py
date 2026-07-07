@@ -133,11 +133,13 @@ ScanAction = Literal["block", "redact", "warn"]
 
 
 class ScanConfig(BaseModel):
-    """Write-path content-scanning policy (ADR 0001).
+    """Write-path content-scanning policy (ADR 0001, amended).
 
     Sourced from ``WITAN_SCAN_*`` env vars and the ``[scan]`` table in
-    config.toml, defaulting to the constants below. Ships **disabled** — like
-    ``WITAN_EMBED_ENABLED``, scanning is turned on deliberately, not by default.
+    config.toml, defaulting to the constants below. Ships **enabled** —
+    opt-out (set ``WITAN_SCAN_ENABLED=false`` or ``[scan] enabled = false`` to
+    turn it off), unlike the ``WITAN_EMBED_ENABLED`` opt-in precedent this
+    package originally followed.
 
     ``enabled_detectors``/``disabled_detectors``/``plugins``/``allowlist`` accept
     a TOML list or a comma-separated string (env-var ergonomics). An empty
@@ -148,7 +150,7 @@ class ScanConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    enabled: bool = False
+    enabled: bool = True
     """Master switch. When False the write path is not scanned at all."""
 
     secret_action: ScanAction = "block"

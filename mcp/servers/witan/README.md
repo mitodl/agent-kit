@@ -66,6 +66,7 @@ export WITAN_AUTHOR="Your Name"
 | `WITAN_MEMORY_TOKEN` | Only for `http://` | — | Bearer token for remote server auth |
 | `WITAN_AUTHOR` | No | `$USER` | Attribution on every insert |
 | `WITAN_REPO` | No | — | Repo slug override (bypasses git detection) |
+| `WITAN_SCAN_ENABLED` | No | `true` | Write-path secret/PII scanning; set to `false` to opt out — see [Write-path content scanning](docs/write-path-scanning.md) |
 
 ## MCP Tools
 
@@ -159,6 +160,18 @@ outside a git repo, or a store that predates this feature and hasn't run
 `witan migrate schema` yet) — this is metadata riding alongside a task/
 workflow tool call, never a hard requirement for the tool it's attached to.
 
+## Write-path content scanning
+
+Pluggable secret/PII scanning on every write (memories, tasks, projects,
+sessions, traces), with block/redact/warn enforcement and a `witan.scanners`
+entry-point mechanism so other organizations can add their own detection
+rules without forking. Enabled by default (opt-out) — see
+[`docs/write-path-scanning.md`](docs/write-path-scanning.md) for the full
+config surface, the `witan scan test`/`witan scan rules` CLI, the audit
+trail, and how to write a plugin, and
+[ADR 0001](docs/adr/0001-write-path-content-scanning.md) for the design
+rationale.
+
 ## Tests
 
 Integration tests spin up throwaway omnigraph graphs and exercise the real query
@@ -186,6 +199,8 @@ or `uv tool install` the package to get it on `PATH`):
 | `project create <title>` | Create a workflow project from the CLI |
 | `memory [QUERY] [--kind …]` | BM25 memory search, or (with no query) list memories |
 | `code repos` | Repositories with a code graph indexed (requires witan-code) |
+| `scan test <text>` | Dry-run active detectors against an ad-hoc string; prints findings (never the matched text) |
+| `scan rules` | List active write-path scan detectors, their category, source, and enforcement mode |
 | `serve` | Start the MCP server (memory + code tools when witan-code is installed) |
 
 `run` claims the task (`in_progress` + your author), then hands the terminal to
