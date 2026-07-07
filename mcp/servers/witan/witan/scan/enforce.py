@@ -71,8 +71,13 @@ class WriteGuard:
         node_type, fields = entry
         slug = params.get("slug")
 
+        # Resolve every field's findings to an action first, without emitting
+        # audit events or mutating anything, so the write's fate (blocked or
+        # not) is known before it's recorded — otherwise a block in field B
+        # would leave field A's redact/warn findings audited as having
+        # happened, when in fact nothing about this write was ever persisted.
+        per_field: list[tuple[str, str, list[tuple[Finding, ScanAction]]]] = []
         blocked: list[tuple[str, Finding]] = []
-        redactions: dict[str, str] = {}
         for field in fields:
             value = params.get(field)
             if not isinstance(value, str) or not value:
@@ -80,14 +85,29 @@ class WriteGuard:
             findings = self._scan(value, field, node_type)
             if not findings:
                 continue
-            field_blocked, redacted = self._apply(
-                query_name, node_type, slug, field, value, findings
-            )
-            blocked.extend(field_blocked)
-            if redacted is not None:
-                redactions[field] = redacted
+            resolved = [(f, f.action or self._action_for(f.category)) for f in findings]
+            per_field.append((field, value, resolved))
+            blocked.extend((field, f) for f, a in resolved if a == "block")
 
-        if blocked:
+        write_blocked = bool(blocked)
+        redactions: dict[str, str] = {}
+        for field, value, resolved in per_field:
+            for finding, action in resolved:
+                audit.emit(
+                    query_name=query_name,
+                    node_type=node_type,
+                    field=field,
+                    slug=slug,
+                    finding=finding,
+                    action=action,
+                    write_blocked=write_blocked,
+                )
+            if not write_blocked:
+                to_redact = [f for f, a in resolved if a == "redact"]
+                if to_redact:
+                    redactions[field] = redact_spans(value, to_redact)
+
+        if write_blocked:
             raise WriteBlocked(query_name, blocked)
         if redactions:
             return flag_redacted({**params, **redactions})
@@ -107,36 +127,6 @@ class WriteGuard:
                 )
                 return []
             raise  # fail-closed: the ScannerError aborts the write
-
-    def _apply(
-        self,
-        query_name: str,
-        node_type: str,
-        slug: str | None,
-        field: str,
-        value: str,
-        findings: list[Finding],
-    ) -> tuple[list[tuple[str, Finding]], str | None]:
-        blocked: list[tuple[str, Finding]] = []
-        to_redact: list[Finding] = []
-        for finding in findings:
-            action = finding.action or self._action_for(finding.category)
-            audit.emit(
-                query_name=query_name,
-                node_type=node_type,
-                field=field,
-                slug=slug,
-                finding=finding,
-                action=action,
-            )
-            if action == "block":
-                blocked.append((field, finding))
-            elif action == "redact":
-                to_redact.append(finding)
-            # warn: audit event above is the only side effect.
-        if blocked:
-            return blocked, None  # write will be rejected; don't bother redacting
-        return blocked, (redact_spans(value, to_redact) if to_redact else None)
 
     def _action_for(self, category: str) -> ScanAction:
         return (

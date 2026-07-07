@@ -38,7 +38,14 @@ _OUTCOME_FOR_ACTION: dict[ScanAction, AuditOutcome] = {
 
 
 class AuditEvent(BaseModel):
-    """One scan finding's disposition on a single write. Secret-free."""
+    """One scan finding's disposition on a single write. Secret-free.
+
+    ``action`` is the policy resolved for this specific finding (what its
+    category/override says to do). ``outcome`` is what actually happened to
+    the *write* — always ``"blocked"`` when any finding on the write (this
+    one or another field's) caused a block, since nothing is persisted in
+    that case regardless of what any individual finding's own action was.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -62,8 +69,16 @@ def emit(
     slug: str | None,
     finding: Finding,
     action: ScanAction,
+    write_blocked: bool = False,
 ) -> None:
-    """Log one structured audit line for a single finding's disposition."""
+    """Log one structured audit line for a single finding's disposition.
+
+    ``write_blocked`` must reflect the *overall* write's fate, not just this
+    finding's own action — pass ``True`` for every finding on a write that
+    ends up rejected, even ones whose own action resolved to redact/warn,
+    since none of them were actually redacted/warned into the store.
+    """
+    outcome: AuditOutcome = "blocked" if write_blocked else _OUTCOME_FOR_ACTION[action]
     event = AuditEvent(
         query_name=query_name,
         node_type=node_type,
@@ -73,7 +88,7 @@ def emit(
         category=finding.category,
         severity=finding.severity,
         action=action,
-        outcome=_OUTCOME_FOR_ACTION[action],
+        outcome=outcome,
         preview=finding.preview,
     )
     logger.info(

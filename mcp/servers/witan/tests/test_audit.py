@@ -105,3 +105,54 @@ def test_slug_absent_is_none(caplog):
     [record] = caplog.records
     event = AuditEvent(**record.scan_audit)
     assert event.slug is None
+
+
+def test_block_in_one_field_marks_redact_in_another_field_as_blocked_too(caplog):
+    """A write is all-or-nothing: if any field blocks, nothing is persisted,
+    so every finding on the write must audit as "blocked" — not just the one
+    that actually triggered it. Regression for a bug where a redact/warn
+    finding processed before the blocking one was already logged as having
+    succeeded, even though the whole write was then rejected."""
+    caplog.set_level(logging.INFO, logger="witan.scan.audit")
+    guard = _guard(
+        [
+            MatchScanner(
+                "email", "pii", "a@b.com"
+            ),  # would redact — title scanned first
+            MatchScanner(
+                "aws_key", "secret", "AKIA"
+            ),  # blocks — content scanned second
+        ]
+    )
+    with pytest.raises(WriteBlocked):
+        guard("insert_memory", {"slug": "mem-4", "title": "a@b.com", "content": "AKIA"})
+
+    events = {r.scan_audit["field"]: AuditEvent(**r.scan_audit) for r in caplog.records}
+    assert events["title"].action == "redact"
+    assert (
+        events["title"].outcome == "blocked"
+    )  # not "redacted" — nothing was persisted
+    assert events["content"].action == "block"
+    assert events["content"].outcome == "blocked"
+
+
+def test_block_later_in_same_field_marks_earlier_redact_as_blocked_too(caplog):
+    """Same regression, but both findings are in the same field/value."""
+    caplog.set_level(logging.INFO, logger="witan.scan.audit")
+    guard = _guard(
+        [
+            MatchScanner("email", "pii", "a@b.com"),
+            MatchScanner("aws_key", "secret", "AKIA"),
+        ]
+    )
+    with pytest.raises(WriteBlocked):
+        guard(
+            "insert_memory", {"slug": "mem-5", "title": "t", "content": "a@b.com AKIA"}
+        )
+
+    events = {
+        r.scan_audit["detector"]: AuditEvent(**r.scan_audit) for r in caplog.records
+    }
+    assert events["email"].action == "redact"
+    assert events["email"].outcome == "blocked"
+    assert events["aws_key"].outcome == "blocked"
