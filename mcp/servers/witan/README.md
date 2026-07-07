@@ -189,7 +189,7 @@ or `uv tool install` the package to get it on `PATH`):
 
 | Command | Description |
 |---|---|
-| `setup [--agent claude\|pi\|…\|all]` | Install witan for one or all supported coding agents |
+| `setup [--agent claude\|pi\|…\|all]` | Install witan for one or all supported coding agents; also writes a starter `~/.config/witan/config.toml` if one doesn't exist yet |
 | `tasks [--ready] [--status …] [--project wp-…] [--all-repos]` | Tasks for the current repo; `--ready` = open with no open blockers |
 | `task <tk-slug>` | One task's details, blockers, and sub-tasks |
 | `task create <title>` | Create a task from the CLI |

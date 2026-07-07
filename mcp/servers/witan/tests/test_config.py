@@ -593,3 +593,26 @@ def test_scan_config_is_frozen():
     sc = ScanConfig()
     with pytest.raises(ValueError):
         sc.enabled = True
+
+
+def test_default_config_toml_is_valid_and_fully_commented():
+    """Every setting ships commented out — loading it must change nothing."""
+    import tomllib
+
+    from witan.config import RankConfig, ScanConfig, default_config_toml
+
+    text = default_config_toml()
+    parsed = tomllib.loads(text)
+    assert parsed == {"rank": {}, "scan": {}}
+    assert RankConfig(**parsed["rank"]) == RankConfig()
+    assert ScanConfig(**parsed["scan"]) == ScanConfig()
+
+
+def test_default_config_toml_reflects_actual_defaults():
+    """Commented values must match the real defaults, not stale copy-paste."""
+    from witan.config import ScanConfig, default_config_toml
+
+    text = default_config_toml()
+    scan = ScanConfig()
+    assert f'secret_action = "{scan.secret_action}"' in text
+    assert f"enabled = {str(scan.enabled).lower()}" in text

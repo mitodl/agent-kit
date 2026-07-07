@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 _QUERIES_DIR = Path(__file__).parent.parent / "queries"
 _DEFAULT_GRAPH_URI = Path.home() / ".local" / "share" / "witan" / "graph.omni"
-_DEFAULT_CONFIG_PATH = Path.home() / ".config" / "witan" / "config.toml"
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "witan" / "config.toml"
 
 
 class Config(BaseModel):
@@ -251,6 +251,90 @@ def load_scan_config() -> ScanConfig:
         raise _scan_config_error(exc, sources) from exc
 
 
+def default_config_toml() -> str:
+    """Render a starter ``config.toml``: every optional setting present,
+    commented out, shown at its actual current default (pulled from
+    :class:`RankConfig`/:class:`ScanConfig` so this can't drift from the real
+    defaults). Written by ``witan setup``; never overwrites an existing file.
+    """
+    rank = RankConfig()
+    scan = ScanConfig()
+    return f"""\
+# witan configuration.
+#
+# Every setting below is optional, shown commented-out at its current
+# default. Uncomment and edit to override. Resolution order (highest to
+# lowest precedence): environment variable > this file > built-in default.
+# See mcp/servers/witan/README.md and docs/write-path-scanning.md for the
+# full reference.
+
+# Attribution written to every graph node you create.
+# Env: WITAN_AUTHOR (falls back to `git config user.name`, then $USER).
+# author = "Your Name"
+
+# Graph store location: a local path, s3://, or http:// URI.
+# Env: WITAN_MEMORY_URI (default: ~/.local/share/witan/graph.omni)
+# server = "~/.local/share/witan/graph.omni"
+
+# Bearer token, required only for an http:// server.
+# Env: WITAN_MEMORY_TOKEN
+# token = "..."
+
+# Default coding agent CLI for `witan run`: claude | pi | copilot | opencode | kilo
+# Env: WITAN_AGENT
+# agent = "claude"
+
+# Default --model passed to the agent by `witan run`.
+# Env: WITAN_MODEL
+# model = "claude-opus-4-8"
+
+# ── Named targets ────────────────────────────────────────────────────────────
+# Route different repos/orgs at different stores (e.g. work vs. personal).
+# The first target whose match_repos/match_hosts/match_orgs matches the
+# current repo wins; see the `load()` docstring in witan/config.py for the
+# full precedence rules.
+#
+# [targets.work]
+# server = "http://witan.internal:8080"
+# token = "..."
+# author = "Your Name <you@corp.com>"
+# agent = "claude"
+# match_orgs = ["myorg"]
+#
+# [targets.personal]
+# server = "~/.local/share/witan-personal/graph.omni"
+# match_repos = ["github.com/you/dotfiles"]
+
+# ── [rank] — memory search re-ranking ───────────────────────────────────────
+# Ranking is always on; these are tuning knobs, not a feature flag. Set every
+# w_* to 0 to reproduce the raw BM25 order.
+[rank]
+# w_bm25 = {rank.w_bm25}
+# w_recency = {rank.w_recency}
+# w_corrob = {rank.w_corrob}
+# w_conf = {rank.w_conf}
+# half_life_days = {rank.half_life_days}
+# default_confidence = {rank.default_confidence}
+# penalty_superseded = {rank.penalty_superseded}
+# penalty_contradicted = {rank.penalty_contradicted}
+# w_hop = {rank.w_hop}
+
+# ── [scan] — write-path secret/PII scanning (ADR 0001) ──────────────────────
+# Enabled by default (opt-out) — set enabled = false below to turn it off.
+# See docs/write-path-scanning.md for the full guide and `witan scan rules`
+# to see what's active.
+[scan]
+# enabled = {str(scan.enabled).lower()}
+# secret_action = "{scan.secret_action}"       # block | redact | warn
+# pii_action = "{scan.pii_action}"       # block | redact | warn
+# enabled_detectors = []       # empty = every registered detector is active
+# disabled_detectors = []      # detector names to turn off; wins over enabled_detectors
+# plugins = []                 # dotted "module:Attr" paths to extra scanners
+# allowlist = []               # reserved for false-positive suppression; not yet enforced
+# on_scanner_error = "{scan.on_scanner_error}"       # block | warn
+"""
+
+
 class _Target(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -272,7 +356,7 @@ class _Target(BaseModel):
 
 def _load_toml() -> dict:
     """Load WITAN_CONFIG path or ~/.config/witan/config.toml. Returns {} on missing file."""
-    path = Path(os.environ.get("WITAN_CONFIG", str(_DEFAULT_CONFIG_PATH)))
+    path = Path(os.environ.get("WITAN_CONFIG", str(DEFAULT_CONFIG_PATH)))
     try:
         with open(path, "rb") as f:
             return tomllib.load(f)
