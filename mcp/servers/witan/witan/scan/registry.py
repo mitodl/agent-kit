@@ -20,13 +20,14 @@ ENTRY_POINT_GROUP = "witan.scanners"
 
 
 def builtin_scanners() -> list[Scanner]:
-    """The scanners shipped with witan.
+    """The scanners shipped with witan (built-in secret + PII detectors).
 
-    Empty for now — the built-in secret and PII detectors are separate tasks
-    that will register here. The registry mechanism does not depend on them
-    existing yet.
+    Imported lazily so the regex set is only compiled when scanning is actually
+    enabled (the registry is only built then).
     """
-    return []
+    from .detectors import default_scanners
+
+    return default_scanners()
 
 
 class ScannerRegistry:
