@@ -1,0 +1,103 @@
+# agent-config.toml — declarative install of this repo's own MCP servers
+# (witan, witan-code) and skill catalog (skills/**) via agent-config-kit's
+# `ac-kit` CLI, for consumers that don't want to write Python.
+#
+# Skills owned by witan itself (mcp/servers/witan/witan/skills/) are
+# installed by `witan setup`, not this manifest — witan owns its own
+# registration lifecycle.
+#
+# Usage (from the repo root):
+#   uv tool install 'agent-config-kit[cli]'
+#   ac-kit apply agent-config.toml            # register on every detected platform
+#   ac-kit apply agent-config.toml --dry-run   # preview without writing
+#   ac-kit validate agent-config.toml          # check for drift
+#
+# WITAN_AUTHOR is optional and defaults to your git config user.name or $USER.
+
+[mcp_servers.witan]
+kind = "stdio"
+command = "uvx"
+args = [
+    "--from",
+    "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
+    "--with",
+    "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code",
+    "witan",
+    "serve",
+]
+env = { WITAN_AUTHOR = "<your-name>" }
+
+[mcp_servers.witan-code]
+kind = "stdio"
+command = "uvx"
+args = [
+    "--from",
+    "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code",
+    "witan-code",
+    "serve",
+]
+env = { WITAN_AUTHOR = "<your-name>" }
+
+[[skills]]
+name = "docker-uv-image-builds"
+skill_md_path = "skills/containers/docker-uv-image-builds/SKILL.md"
+
+[[skills]]
+name = "dagster-code-location-structure"
+skill_md_path = "skills/dagster/dagster-code-location-structure/SKILL.md"
+
+[[skills]]
+name = "pulumi-modify-existing"
+skill_md_path = "skills/infrastructure/pulumi-modify-existing/SKILL.md"
+
+[[skills]]
+name = "vault-k8s-auth"
+skill_md_path = "skills/infrastructure/vault-k8s-auth/SKILL.md"
+
+[[skills]]
+name = "create-ol-github-issue"
+skill_md_path = "skills/process/create-ol-github-issue/SKILL.md"
+
+[[skills]]
+name = "create-ol-pull-request"
+skill_md_path = "skills/process/create-ol-pull-request/SKILL.md"
+
+[[skills]]
+name = "create-ol-rfc-discussion"
+skill_md_path = "skills/process/create-ol-rfc-discussion/SKILL.md"
+
+[[skills]]
+name = "dependency-pruning"
+skill_md_path = "skills/process/dependency-pruning/SKILL.md"
+
+[[skills]]
+name = "dependency-updates"
+skill_md_path = "skills/process/dependency-updates/SKILL.md"
+
+[[skills]]
+name = "generate-standup"
+skill_md_path = "skills/process/generate-standup/SKILL.md"
+
+[[skills]]
+name = "github-issue-triage"
+skill_md_path = "skills/process/github-issue-triage/SKILL.md"
+
+[[skills]]
+name = "screenshot-pr"
+skill_md_path = "skills/process/screenshot-pr/SKILL.md"
+
+[[skills]]
+name = "cyclopts-cli-scripts"
+skill_md_path = "skills/python/cyclopts-cli-scripts/SKILL.md"
+
+[[skills]]
+name = "uv-python-workflow"
+skill_md_path = "skills/python/uv-python-workflow/SKILL.md"
+
+[[skills]]
+name = "creating-skills"
+skill_md_path = "skills/workflow/creating-skills/SKILL.md"
+
+[[skills]]
+name = "validate-before-commit"
+skill_md_path = "skills/workflow/validate-before-commit/SKILL.md"
