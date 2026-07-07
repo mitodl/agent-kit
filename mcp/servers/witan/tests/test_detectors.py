@@ -1,5 +1,7 @@
 """Tests for the built-in secret and PII detectors."""
 
+import time
+
 import pytest
 
 from witan.config import ScanConfig
@@ -141,3 +143,56 @@ def test_guard_allows_git_sha():
         "description": "fixed in a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
     }
     assert _guard()("insert_task", params) == params
+
+
+# ── false-positive corpus ─────────────────────────────────────────────────────
+#
+# Realistic memory/task/code content that must NOT trip any built-in detector.
+# Each entry failing here is a false positive that would block or mangle a
+# perfectly ordinary write.
+
+FALSE_POSITIVE_CORPUS = [
+    "Fixed in a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 per review feedback.",
+    "See docs/adr/0001-write-path-content-scanning.md for the design.",
+    "Bumped tree-sitter to >=0.26,<0.27 in pyproject.toml.",
+    "Node ids are UUIDv4, e.g. 550e8400-e29b-41d4-a716-446655440000.",
+    "config.py:39-122 mirrors the RankConfig pattern.",
+    "docker image tag: registry.example.com/witan:2026.07.07-a1b2c3d",
+    "def scan(self, text: str, field: str, node_type: str) -> list[Finding]: ...",
+    "WITAN_SCAN_ENABLED=true and WITAN_SCAN_SECRET_ACTION=block are the env knobs.",
+    "PR #70 merged the write-path scanning skeleton.",
+    "curl -s https://api.github.com/repos/mitodl/agent-kit/pulls/70",
+    "The retry loop sleeps 0.05 * (attempt + 1) seconds between attempts.",
+]
+
+
+@pytest.mark.parametrize("text", FALSE_POSITIVE_CORPUS)
+def test_false_positive_corpus_is_clean(text):
+    findings = [
+        f
+        for scanner in default_scanners()
+        for f in scanner.scan(text, "content", "Memory")
+    ]
+    assert findings == [], f"unexpected finding(s) in {text!r}: {findings}"
+
+
+# ── perf guardrail ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.perf
+def test_scan_latency_stays_bounded():
+    """Content scanning must not become the write path's bottleneck. Loose
+    bound (not a tight benchmark, and generous enough to survive a slow or
+    contended CI runner) to catch a real regression, e.g. an
+    accidentally-quadratic detector. Deselect on constrained runners with
+    ``-m 'not perf'``."""
+    text = (
+        "Investigated the flaky test failure caused by a race condition "
+        "in the connection pool. "
+    ) * 100  # a few KB of ordinary prose, no matches
+    guard = _guard()
+    start = time.perf_counter()
+    for _ in range(20):
+        guard("insert_task", {"title": "t", "description": text})
+    elapsed = time.perf_counter() - start
+    assert elapsed < 10.0, f"20 scans of {len(text)} chars took {elapsed:.3f}s"
