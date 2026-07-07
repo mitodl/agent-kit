@@ -125,6 +125,14 @@ def _project_show(slug: str) -> None:
                 f"\n  [blue]trace[/blue]: {tr.get('session_count')} sessions, "
                 f"phases={tr.get('phases')}, duration={tr.get('duration')}h"
             )
+            if tr.get("outcome"):
+                console.print(f"    outcome: {tr['outcome']}"[:200])
+            console.print(
+                f"    lessons: {', '.join(tr.get('lessons_slug') or []) or '(none mined yet)'}"
+            )
+            console.print(
+                f"    patterns: {', '.join(tr.get('patterns_slug') or []) or '(none mined yet)'}"
+            )
 
 
 project_app = cyclopts.App(

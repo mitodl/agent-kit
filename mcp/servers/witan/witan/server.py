@@ -782,6 +782,75 @@ def memory_list(
     return [_slim_memory(r) for r in unscoped]
 
 
+def _store_memory(
+    kind: MemoryKind,
+    title: str,
+    content: str,
+    *,
+    repo: str | None = None,
+    language: str | None = None,
+    category: str | None = None,
+    severity: Literal["info", "warning", "critical"] | None = None,
+    tags: list[str] | None = None,
+    symbol_refs: list[str] | None = None,
+    confidence: float | None = None,
+) -> dict:
+    """Create a Memory node — shared by memory_store and mine_trace."""
+    if isinstance(tags, str):
+        tags = [tags]
+    if isinstance(symbol_refs, str):
+        symbol_refs = [symbol_refs]
+    now = _now_iso()
+    slug = _make_slug(kind, title)
+    detected_repo = repo_module.detect(override=repo)
+
+    client.change(
+        "mutations.gq",
+        "insert_memory",
+        {
+            "slug": slug,
+            "kind": kind,
+            "title": title,
+            "content": content,
+            "repo": detected_repo,
+            "language": language,
+            "category": category,
+            "severity": severity,
+            "author": cfg.author,
+            "tags": tags,
+            "symbol_refs": symbol_refs,
+            "confidence": confidence,
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
+
+    # Dual-write tags → Topic{kind:"topic"} + Tagged edge. The string list stays
+    # the source of truth for old readers; the Topic graph is the new traversal
+    # surface. Idempotent on the topic slug, so shared tags reuse one node. Skip
+    # blank tags and dedup so neither drives redundant upsert/link calls.
+    for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
+        _tag_memory(slug, tag, "topic")
+
+    # Provenance: record which session produced this memory (best-effort). The
+    # engine validates edge endpoints, so a stale /tmp state file pointing at a
+    # session that no longer exists in the store would raise — swallow it so a
+    # provenance failure never blocks the memory write.
+    active = _active_session_slug()
+    if active:
+        try:
+            client.change(
+                "mutations.gq",
+                "link_session_produced",
+                {"from": active, "to": slug},
+            )
+            _invalidate_edge_index()  # SessionProduced feeds corroboration
+        except RuntimeError:
+            pass
+
+    return {"slug": slug, "kind": kind, "repo": detected_repo}
+
+
 @mcp.tool
 def memory_store(
     kind: MemoryKind,
@@ -836,55 +905,18 @@ def memory_store(
         re-rank; omitted (null) memories use the configured default
         (``WITAN_RANK_DEFAULT_CONF``, default 0.6).
     """
-    now = _now_iso()
-    slug = _make_slug(kind, title)
-    detected_repo = repo_module.detect(override=repo)
-
-    client.change(
-        "mutations.gq",
-        "insert_memory",
-        {
-            "slug": slug,
-            "kind": kind,
-            "title": title,
-            "content": content,
-            "repo": detected_repo,
-            "language": language,
-            "category": category,
-            "severity": severity,
-            "author": cfg.author,
-            "tags": tags,
-            "symbol_refs": symbol_refs,
-            "confidence": confidence,
-            "created_at": now,
-            "updated_at": now,
-        },
+    return _store_memory(
+        kind,
+        title,
+        content,
+        repo=repo,
+        language=language,
+        category=category,
+        severity=severity,
+        tags=tags,
+        symbol_refs=symbol_refs,
+        confidence=confidence,
     )
-
-    # Dual-write tags → Topic{kind:"topic"} + Tagged edge. The string list stays
-    # the source of truth for old readers; the Topic graph is the new traversal
-    # surface. Idempotent on the topic slug, so shared tags reuse one node. Skip
-    # blank tags and dedup so neither drives redundant upsert/link calls.
-    for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
-        _tag_memory(slug, tag, "topic")
-
-    # Provenance: record which session produced this memory (best-effort). The
-    # engine validates edge endpoints, so a stale /tmp state file pointing at a
-    # session that no longer exists in the store would raise — swallow it so a
-    # provenance failure never blocks the memory write.
-    active = _active_session_slug()
-    if active:
-        try:
-            client.change(
-                "mutations.gq",
-                "link_session_produced",
-                {"from": active, "to": slug},
-            )
-            _invalidate_edge_index()  # SessionProduced feeds corroboration
-        except RuntimeError:
-            pass
-
-    return {"slug": slug, "kind": kind, "repo": detected_repo}
 
 
 @mcp.tool
@@ -1583,6 +1615,230 @@ def project_memories(project_slug: str, group_by_session: bool = False) -> dict:
         "memories": list(merged.values()),
         "by_session": by_session,
     }
+
+
+# ── Workflow Traces (corpus) ───────────────────────────────────────
+
+
+@mcp.tool
+def workflow_trace_list(
+    repo: str | None = None,
+    tags: list[str] | None = None,
+    author: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """
+    List corpus WorkflowTrace records, optionally filtered by repo, tags, or author.
+
+    Traces are otherwise only reachable by slug (``wt-<project-slug>``) via
+    ``get_trace`` — this is the discovery path for browsing or mining across
+    many completed projects (e.g. as onboarding case studies of how a project
+    went end to end).
+
+    Parameters
+    ----------
+    repo:
+        Canonical repo URI to filter to (membership test against each trace's
+        repo set). Auto-detected from ``.git/config`` if omitted. Pass an
+        empty string to list traces across all repos.
+    tags:
+        Only return traces that carry ALL of these tags.
+    author:
+        Only return traces created by this author.
+    limit:
+        Max rows to return (applied after filtering).
+    """
+    if isinstance(tags, str):
+        tags = [tags]
+    detected_repo = repo_module.detect(override=repo)
+    rows = client.read("read.gq", "list_all_traces", {})
+
+    if detected_repo:
+        rows = [r for r in rows if detected_repo in _project_repos(r)]
+    if tags:
+        rows = [r for r in rows if set(tags) <= set(r.get("tags") or [])]
+    if author:
+        rows = [r for r in rows if r.get("author") == author]
+
+    return rows[:limit]
+
+
+def _annotate_trace(
+    trace_slug: str,
+    lessons_slug: list[str] | None = None,
+    patterns_slug: list[str] | None = None,
+) -> dict:
+    """Union new lesson/pattern slugs into a trace's annotation fields."""
+    if isinstance(lessons_slug, str):
+        lessons_slug = [lessons_slug]
+    if isinstance(patterns_slug, str):
+        patterns_slug = [patterns_slug]
+    rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
+    if not rows:
+        raise ValueError(f"no trace {trace_slug!r}")
+    trace = rows[0]
+
+    merged_lessons = list(
+        dict.fromkeys([*(trace.get("lessons_slug") or []), *(lessons_slug or [])])
+    )
+    merged_patterns = list(
+        dict.fromkeys([*(trace.get("patterns_slug") or []), *(patterns_slug or [])])
+    )
+
+    client.change(
+        "mutations.gq",
+        "update_workflow_trace_annotations",
+        {
+            "slug": trace_slug,
+            "lessons_slug": merged_lessons or None,
+            "patterns_slug": merged_patterns or None,
+        },
+    )
+    return {
+        "slug": trace_slug,
+        "lessons_slug": merged_lessons or None,
+        "patterns_slug": merged_patterns or None,
+    }
+
+
+@mcp.tool
+def workflow_trace_annotate(
+    trace_slug: str,
+    lessons_slug: list[str] | None = None,
+    patterns_slug: list[str] | None = None,
+) -> dict:
+    """
+    Append lesson/pattern memory slugs to an existing WorkflowTrace.
+
+    Lets an agent (or ``mine_trace``) record which Memory nodes a completed
+    project's trace produced without re-running ``workflow_project_complete``
+    (traces are otherwise immutable after creation). Unions with whatever is
+    already recorded, so it's safe to call repeatedly as more lessons/patterns
+    are mined over time.
+
+    Parameters
+    ----------
+    trace_slug:
+        The ``wt-`` slug of the trace to annotate.
+    lessons_slug:
+        ``les-`` memory slugs to add to the trace's ``lessons_slug`` field.
+    patterns_slug:
+        ``pat-`` memory slugs to add to the trace's ``patterns_slug`` field.
+    """
+    return _annotate_trace(
+        trace_slug, lessons_slug=lessons_slug, patterns_slug=patterns_slug
+    )
+
+
+@mcp.tool
+def mine_trace(
+    trace_slug: str,
+    patterns: list[dict] | None = None,
+    lessons: list[dict] | None = None,
+) -> dict:
+    """
+    Turn a completed WorkflowTrace into reusable Pattern/Lesson Memory nodes.
+
+    Call with no ``patterns``/``lessons`` first — returns the trace itself
+    (title, description, outcome) plus every session summary from its project,
+    the raw material to mine for reusable knowledge. Review that, then call
+    again with the patterns/lessons you propose to persist them: each becomes
+    a ``Memory`` node, gets an ``Informed`` edge back to the trace's project,
+    and its slug is appended to the trace's ``lessons_slug``/``patterns_slug``
+    fields.
+
+    These mined memories are read by other agents for self-improvement, but
+    are equally a corpus of worked examples for people onboarding onto this
+    system — write ``title``/``content`` so a newcomer unfamiliar with the
+    project can follow the reasoning, not just a terse note for a future agent.
+
+    Parameters
+    ----------
+    trace_slug:
+        The ``wt-`` slug of the trace to mine.
+    patterns:
+        Proposed pattern memories to create on this call. Each dict needs
+        ``title`` and ``content``; may also include ``repo``, ``language``,
+        and ``tags``.
+    lessons:
+        Proposed lesson memories to create on this call. Each dict needs
+        ``title`` and ``content``; may also include ``repo``, ``severity``,
+        and ``tags``.
+
+    Returns
+    -------
+    Without proposals: ``{"trace": ..., "sessions": [...]}``.
+    With proposals: ``{"created_patterns": [...], "created_lessons": [...]}``
+    — the slugs of the memories just created.
+    """
+    rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
+    if not rows:
+        raise ValueError(f"no trace {trace_slug!r}")
+    trace = rows[0]
+
+    if isinstance(patterns, dict):
+        patterns = [patterns]
+    if isinstance(lessons, dict):
+        lessons = [lessons]
+
+    if patterns is None and lessons is None:
+        sessions = client.read(
+            "read.gq",
+            "list_sessions_by_project",
+            {"project_slug": trace["project_slug"]},
+        )
+        return {"trace": trace, "sessions": sessions}
+
+    for label, specs in (("pattern", patterns), ("lesson", lessons)):
+        for spec in specs or []:
+            if (
+                not isinstance(spec, dict)
+                or "title" not in spec
+                or "content" not in spec
+            ):
+                raise ValueError(
+                    f"Each proposed {label} must be a dict containing 'title' and 'content', got {spec!r}"
+                )
+
+    created_patterns = [
+        _store_memory(
+            "pattern",
+            spec["title"],
+            spec["content"],
+            repo=spec.get("repo"),
+            language=spec.get("language"),
+            tags=spec.get("tags"),
+        )["slug"]
+        for spec in patterns or []
+    ]
+    created_lessons = [
+        _store_memory(
+            "lesson",
+            spec["title"],
+            spec["content"],
+            repo=spec.get("repo"),
+            severity=spec.get("severity"),
+            tags=spec.get("tags"),
+        )["slug"]
+        for spec in lessons or []
+    ]
+
+    for slug in (*created_patterns, *created_lessons):
+        client.change(
+            "mutations.gq",
+            "link_informed",
+            {"from": trace["project_slug"], "to": slug},
+        )
+    if created_patterns or created_lessons:
+        _invalidate_edge_index()  # Informed feeds corroboration
+
+    _annotate_trace(
+        trace_slug,
+        lessons_slug=created_lessons or None,
+        patterns_slug=created_patterns or None,
+    )
+
+    return {"created_patterns": created_patterns, "created_lessons": created_lessons}
 
 
 @mcp.tool

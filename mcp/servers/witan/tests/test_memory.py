@@ -20,6 +20,22 @@ def test_store_and_get(server):
 
 
 @requires_omnigraph
+def test_store_bare_string_tags_and_symbol_refs_are_coerced(server):
+    """A single string (not wrapped in a list) is a common LLM-caller mistake —
+    iterating it char-by-char would create one-letter Topic nodes."""
+    res = server.memory_store(
+        kind="pattern",
+        title="stringy inputs",
+        content="content",
+        tags="alpha",
+        symbol_refs="repo#path::Name",
+    )
+    node = server.memory_get(res["slug"])
+    assert node["tags"] == ["alpha"]
+    assert node["symbol_refs"] == ["repo#path::Name"]
+
+
+@requires_omnigraph
 def test_search_bm25_ranked(server):
     server.memory_store(
         kind="pattern",
