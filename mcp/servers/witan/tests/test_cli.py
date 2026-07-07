@@ -176,3 +176,47 @@ def test_graph_command_html_output(server, monkeypatch, tmp_path):
     assert blocked["slug"] in html
     assert '"group": "project"' in html
     assert '"group": "task"' in html
+
+
+class _FakeMCP:
+    """Records run()/mount() calls so serve() dispatch can be asserted."""
+
+    def __init__(self):
+        self.run_calls = []
+
+    def mount(self, *a, **kw):  # pragma: no cover - only when witan-code present
+        pass
+
+    def run(self, *a, **kw):
+        self.run_calls.append(kw)
+
+
+def _patch_mcp(monkeypatch):
+    from witan import server as srv
+
+    fake = _FakeMCP()
+    monkeypatch.setattr(srv, "mcp", fake)
+    return fake
+
+
+def test_serve_defaults_to_stdio(monkeypatch):
+    from witan.cli import serve
+
+    fake = _patch_mcp(monkeypatch)
+    serve()
+    assert fake.run_calls == [{}]
+
+
+def test_serve_streamable_http_passes_transport_kwargs(monkeypatch):
+    from witan.cli import serve
+
+    fake = _patch_mcp(monkeypatch)
+    serve(transport="streamable-http", host="0.0.0.0", port=9001, path="/witan")
+    assert fake.run_calls == [
+        {
+            "transport": "streamable-http",
+            "host": "0.0.0.0",
+            "port": 9001,
+            "path": "/witan",
+        }
+    ]
