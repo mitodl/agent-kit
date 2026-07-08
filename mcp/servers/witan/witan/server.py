@@ -915,7 +915,7 @@ def _store_memory(
 
 
 @mcp.tool
-def memory_store(
+async def memory_store(
     kind: MemoryKind,
     title: str,
     content: str,
@@ -926,6 +926,7 @@ def memory_store(
     tags: list[str] | None = None,
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """
     Store a new memory in the shared graph.
@@ -967,6 +968,10 @@ def memory_store(
         Optional author/agent trust in this memory, 0.0–1.0. Feeds the search
         re-rank; omitted memories use the configured default.
     """
+    # When no repo is known (not passed, and detection finds none), offer to
+    # scope it rather than silently persisting an unscoped node. Falls back to
+    # None (today's behavior) under automation / an unsupported client.
+    repo = await elicit.repo_or_detect(ctx, repo)
     return _store_memory(
         kind,
         title,
@@ -2359,7 +2364,7 @@ def _update_task(
 
 
 @mcp.tool
-def task_create(
+async def task_create(
     title: str,
     description: str,
     type: TaskType = "task",
@@ -2372,6 +2377,7 @@ def task_create(
     external_uri: str | None = None,
     symbol_refs: list[str] | None = None,
     tags: list[str] | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """
     Create a task in the work-coordination graph.
@@ -2408,6 +2414,9 @@ def task_create(
     """
     now = _now_iso()
     slug = _make_slug("task", title)
+    # Offer to scope the task when nothing is detected; falls back to an
+    # unscoped task (today's behavior) under automation / an unsupported client.
+    repo = await elicit.repo_or_detect(ctx, repo)
     detected_repo = repo_module.detect(override=repo)
     # Only "blocked" if a blocker is not already closed — otherwise it's ready
     # now and would never be auto-unblocked.
