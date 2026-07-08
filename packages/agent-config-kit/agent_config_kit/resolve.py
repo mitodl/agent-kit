@@ -6,8 +6,7 @@ invocation should use, in O2 order:
 
 1. explicit CLI flags — handled by the caller before reaching this module.
 2. a repo-local ``agent-config.toml`` at the repo root.
-3. ``[[org]]`` match against the git remote — not yet implemented; tracked
-   as a separate follow-on task.
+3. ``[[org]]`` match against the git remote (spec §8, decision O1).
 4. the longest matching ``[[scope]]`` ``match_prefix``.
 5. ``default_manifest``.
 
@@ -18,12 +17,17 @@ travel with it (overridable by ``--profile``/``--scope`` at the CLI layer).
 from __future__ import annotations
 
 import os
+import re
+import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import GlobalConfig, ScopeConfig
+from .config import GlobalConfig, OrgConfig, ScopeConfig
 from .fetch import fetch_remote, is_remote_uri
 from .models import Scope
+
+_GITHUB_OWNER_RE = re.compile(r"github\.com[:/]([^/]+)/")
 
 
 @dataclass
@@ -49,6 +53,55 @@ def find_repo_root(start: Path) -> Path | None:
     for candidate in (current, *current.parents):
         if (candidate / ".git").exists():
             return candidate
+    return None
+
+
+def _run_git(args: list[str], cwd: Path) -> str | None:
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _parse_github_owner(remote_url: str) -> str | None:
+    if match := _GITHUB_OWNER_RE.search(remote_url):
+        return match.group(1)
+    return None
+
+
+def detect_org(repo_root: Path) -> str | None:
+    """``git remote get-url origin`` (falling back to other remotes if
+    there's no ``origin``), owner parsed from ``github.com[:/]<owner>/...``
+    — covers both the SSH (``git@github.com:owner/repo.git``) and HTTPS
+    (``https://github.com/owner/repo.git``) remote forms. No network, no
+    ``gh`` dependency (O1) — every failure mode (``git`` not on ``PATH``,
+    not a git repo, no remotes, no ``github.com`` remote) degrades to
+    ``None``, an ordinary O2 fall-through rather than an error."""
+    if shutil.which("git") is None:
+        return None
+
+    remote_names = (_run_git(["remote"], repo_root) or "").splitlines()
+    if not remote_names:
+        return None
+    if "origin" in remote_names:
+        remote_names = ["origin", *(n for n in remote_names if n != "origin")]
+
+    for name in remote_names:
+        url = _run_git(["remote", "get-url", name], repo_root)
+        if url and (owner := _parse_github_owner(url)):
+            return owner
+    return None
+
+
+def _match_org(owner: str, orgs: list[OrgConfig]) -> OrgConfig | None:
+    for org_cfg in orgs:
+        if org_cfg.name.lower() == owner.lower():
+            return org_cfg
     return None
 
 
@@ -87,9 +140,8 @@ def resolve_zero_arg_manifest(
     cwd: Path, config: GlobalConfig, *, cache_dir: Path | None = None
 ) -> ResolvedManifest | None:
     """O2 steps 2-5 (step 1, explicit CLI flags, never reaches this
-    function; step 3, org match, isn't implemented yet). ``None`` means
-    nothing resolved — the caller reports that as a clear, non-crashing
-    error rather than this function raising."""
+    function). ``None`` means nothing resolved — the caller reports that as
+    a clear, non-crashing error rather than this function raising."""
     resolved_cache_dir = (
         cache_dir if cache_dir is not None else default_manifest_cache_dir()
     )
@@ -104,6 +156,16 @@ def resolve_zero_arg_manifest(
                 profiles=None,
                 write_scope=None,
                 source=f"repo-local manifest at {local_manifest}",
+            )
+
+        if (owner := detect_org(repo_root)) and (
+            org_match := _match_org(owner, config.org)
+        ):
+            return ResolvedManifest(
+                path=_materialize(org_match.manifest, cache_dir=resolved_cache_dir),
+                profiles=org_match.profiles,
+                write_scope=None,
+                source=f"org {owner!r}",
             )
 
     if scope_match := _longest_scope_match(resolved_cwd, config.scope):

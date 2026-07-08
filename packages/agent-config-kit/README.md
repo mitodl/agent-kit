@@ -187,6 +187,18 @@ agent-kit apply agent-config.toml --scope project --dry-run
 agent-kit apply agent-config.toml --profile python
 ```
 
+`MANIFEST` is optional (`agent-kit apply` / `agent-kit validate` with no
+argument) — omitting it resolves one from the global config (`agent-kit
+config init`, see below), in order: a repo-local `agent-config.toml` at the
+repo root; an `[[org]]` match against the current repo's `origin` git
+remote (the GitHub owner parsed from the URL — no network call, no `gh`
+dependency, and not a check that you're actually a *member* of that org);
+the longest matching `[[scope]] match_prefix` against the CWD; then
+`default_manifest`. Whichever hits first also supplies its own default
+profiles/write scope (still overridable by `--profile`/`--scope`), and the
+resolved source is printed (e.g. `resolved manifest from org 'mitodl'`) so
+the zero-arg "magic" stays legible.
+
 - `--platform NAME` (repeatable) overrides the manifest's
   `[options.platforms]`; with neither given, every detected platform is
   targeted.

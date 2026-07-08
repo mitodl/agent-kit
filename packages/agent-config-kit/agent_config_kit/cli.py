@@ -315,8 +315,8 @@ def _resolve_manifest_arg(
         console.print(
             "[red]no MANIFEST given and none could be resolved from the "
             "global config (no repo-local agent-config.toml, no matching "
-            "[[scope]] prefix, and no default_manifest set — see `agent-kit "
-            "config init`)[/red]"
+            "[[org]] on the git remote, no matching [[scope]] prefix, and "
+            "no default_manifest set — see `agent-kit config init`)[/red]"
         )
         raise SystemExit(2)
     console.print(f"resolved manifest from {resolved.source}")
@@ -362,7 +362,8 @@ def apply_command(
     manifest
         Path to the manifest TOML file. Omit it to resolve one from the
         global config (spec §7.2): a repo-local ``agent-config.toml`` at the
-        repo root, then the longest matching ``[[scope]] match_prefix``,
+        repo root, then an ``[[org]]`` match against the git remote's
+        GitHub owner, then the longest matching ``[[scope]] match_prefix``,
         then ``default_manifest`` — whichever hits first also supplies its
         default profiles/write scope, still overridable by
         ``--profile``/``--scope``.

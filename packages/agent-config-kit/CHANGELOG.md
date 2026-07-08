@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.3.1] - 2026-07-08
+
+### Added
+
+- **GitHub org-scoped zero-arg apply**: zero-argument `apply`/`validate`
+  now also tries an `[[org]]` match (spec §8) between the repo-local and
+  directory-prefix resolution steps — `resolve.detect_org()` parses the
+  GitHub owner from `git remote get-url origin` (falling back to other
+  remotes), for both SSH and HTTPS remote URL forms. No network call, no
+  `gh` dependency, and no check that you're actually a member of the
+  matched org (deferred). Degrades to `None` — an ordinary fall-through to
+  the next O2 step, not an error — outside a git repo, with no
+  `github.com` remote, or when `git` isn't on `PATH`.
+
 ## [0.3.0] - 2026-07-08
 
 ### Added
