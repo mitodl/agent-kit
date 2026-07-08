@@ -356,6 +356,44 @@ def test_session_start_end_list_cli(server, monkeypatch):
     assert "did the work" in combined
 
 
+def _table_column(table, header):
+    """Return a rich Table column's cell values by header name."""
+    for col in table.columns:
+        if col.header == header:
+            return list(col._cells)
+    return []
+
+
+@requires_omnigraph
+def test_tasks_elides_closed_by_default(server, monkeypatch):
+    """`witan tasks` hides closed tasks unless --status is given."""
+    from witan.cli import _common
+    from witan.cli._common import _fn
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common, "_server", server)
+    captured = []
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: captured.append(a[0]))
+
+    live = _fn(server.task_create)(title="live work", description="d")
+    done = _fn(server.task_create)(title="finished work", description="d")
+    _fn(server.task_close)(done["slug"])
+
+    tasks(all_repos=True)
+    table = next(c for c in captured if hasattr(c, "columns"))
+    slugs = _table_column(table, "slug")
+    assert live["slug"] in slugs
+    assert done["slug"] not in slugs
+
+    # --status closed surfaces the closed one (and only it)
+    captured.clear()
+    tasks(all_repos=True, status="closed")
+    table = next(c for c in captured if hasattr(c, "columns"))
+    slugs = _table_column(table, "slug")
+    assert done["slug"] in slugs
+    assert live["slug"] not in slugs
+
+
 @requires_omnigraph
 def test_graph_command_rich_output(server, monkeypatch):
     """witan graph prints projects and tasks without requiring HTML output."""

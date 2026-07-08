@@ -46,10 +46,14 @@ def tasks(
 ) -> None:
     """List tasks for the current repo (or filtered).
 
+    Closed tasks are elided by default — the list is a working view of live work.
+    Pass ``--status closed`` to see them (or any other status to filter to it).
+
     Parameters
     ----------
     repo: Scope to a specific repo URI (default: the current git repo).
-    status: Filter by open | in_progress | blocked | closed.
+    status: Filter by open | in_progress | blocked | closed. Omitted: all
+        non-closed statuses.
     project: Scope to a WorkflowProject (``wp-`` slug).
     assignee: Filter by owner.
     ready: Show only ready-to-work tasks (open, all blockers closed).
@@ -69,7 +73,12 @@ def tasks(
     else:
         rows = _fn(s.task_list)(
             repo=repo_arg, status=status, project_slug=project, assignee=assignee
-        )[:limit]
+        )
+        # A bare `witan tasks` is a live-work view: drop closed tasks unless the
+        # user explicitly asks for a status (including `--status closed`).
+        if status is None:
+            rows = [r for r in rows if r.get("status") != "closed"]
+        rows = rows[:limit]
 
     if not rows:
         if detected_repo and not all_repos:
