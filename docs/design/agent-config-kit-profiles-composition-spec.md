@@ -67,6 +67,12 @@ include = [                             # feature 2 (§5)
   "./team-shared.toml",
 ]
 
+hooks = [                               # NEW inline array-of-tables (was [[hooks]]) —
+  { kind = "declarative", event = "user_prompt_submit", command = "witan inject-context" },
+  { kind = "plugin", entry_path = "extensions/pi/witan.ts" },
+]                                        # also keep before any table (same gotcha as
+                                         # `instructions` — see the regression tests)
+
 [options]
 scope = "global"                        # "global" | "project"
 platforms = ["claude", "pi"]            # optional allow-list
@@ -81,11 +87,6 @@ commit          = "./skills/commit/SKILL.md"                 # string  = skill_m
 webapp-testing  = "https://cfg.mitodl.org/skills/webapp-testing/SKILL.md"
 frontend-design = { skill_md_path = "./skills/frontend-design/SKILL.md" }  # table form
 
-hooks = [                               # NEW inline array-of-tables (was [[hooks]])
-  { kind = "declarative", event = "user_prompt_submit", command = "witan inject-context" },
-  { kind = "plugin", entry_path = "extensions/pi/witan.ts" },
-]
-
 [profiles.universal]                    # feature 1 (§4)
 skills      = ["commit"]
 mcp_servers = ["witan"]
@@ -94,6 +95,13 @@ mcp_servers = ["witan"]
 inherits    = ["universal"]
 skills      = ["webapp-testing", "frontend-design"]
 ```
+
+**Gotcha, corrected from an earlier draft of this doc:** a bare `hooks = [...]`
+placed *after* a `[skills]`/`[mcp_servers.*]` table header parses as that
+table's own `hooks` key (e.g. `skills.hooks`), not the top-level `hooks` —
+identical to the `instructions`-placement pitfall §3.1 already calls out.
+Both bare top-level keys (`instructions`, `include`, `hooks`) must precede
+every table/array-of-tables header in the file.
 
 ### 3.2 Loader changes
 

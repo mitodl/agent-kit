@@ -29,7 +29,7 @@ except ImportError as exc:
 from .config import resolve_config_path
 from .diff import Drift
 from .diff import diff as diff_bundle
-from .manifest import ManifestError, load_manifest
+from .manifest import ManifestError, load_manifest, resolve_profile
 from .models import Scope
 from .plan import InstallResult
 from .plan import apply as apply_bundle
@@ -269,6 +269,17 @@ def _resolve_platforms(
     return platforms
 
 
+def _resolve_profiles(
+    manifest_default_profiles: list[str], cli_profiles: list[str] | None
+) -> list[str]:
+    """CLI ``--profile`` wins over the manifest's ``[options].default_profiles``
+    (spec §4.4/§7.2: "explicit beats declarative", same precedent as
+    ``_resolve_platforms``). Neither given -> ``[]``, which ``resolve_profile``
+    treats as "apply the whole manifest" (profiles are opt-in filters, not
+    gates — O-DEFAULT)."""
+    return list(cli_profiles) if cli_profiles else list(manifest_default_profiles)
+
+
 def _report(results: dict[str, InstallResult], *, dry_run: bool) -> bool:
     """Print a rich table of each platform's result. Returns True if any
     platform had a skipped entry."""
@@ -294,6 +305,7 @@ def apply_command(
     *,
     scope: Scope | None = None,
     platform: list[str] | None = None,
+    profile: list[str] | None = None,
     dry_run: bool = False,
     prune: bool = False,
     state_file: Path | None = None,
@@ -312,6 +324,11 @@ def apply_command(
         Platform name to target; repeatable. Overrides the manifest's
         ``[options.platforms]`` and, if neither is given, every detected
         platform is targeted (same default as ``apply_all``).
+    profile
+        Profile name to select; repeatable, unions the named profiles'
+        entries (expanding ``inherits``). Overrides the manifest's
+        ``[options].default_profiles``; neither given applies the whole
+        manifest (profiles are opt-in filters, not gates).
     dry_run
         Report what would be written/removed without writing anything.
     prune
@@ -330,6 +347,9 @@ def apply_command(
     """
     try:
         loaded = load_manifest(manifest, cache_dir=cache_dir)
+        bundle = resolve_profile(
+            loaded, _resolve_profiles(loaded.options.default_profiles, profile)
+        )
     except ManifestError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
@@ -349,7 +369,7 @@ def apply_command(
         for name in target_platforms:
             result, current_state = apply_with_prune(
                 name,
-                loaded.bundle,
+                bundle,
                 states.get(name, PlatformState()),
                 scope=resolved_scope,
                 dry_run=dry_run,
@@ -367,13 +387,11 @@ def apply_command(
             write_state(state_path, manifest, states)
     elif platforms is not None:
         results = {
-            name: apply_bundle(
-                name, loaded.bundle, scope=resolved_scope, dry_run=dry_run
-            )
+            name: apply_bundle(name, bundle, scope=resolved_scope, dry_run=dry_run)
             for name in platforms
         }
     else:
-        results = apply_all_bundle(loaded.bundle, scope=resolved_scope, dry_run=dry_run)
+        results = apply_all_bundle(bundle, scope=resolved_scope, dry_run=dry_run)
 
     if _report(results, dry_run=dry_run):
         raise SystemExit(1)
@@ -405,6 +423,7 @@ def validate_command(
     *,
     scope: Scope | None = None,
     platform: list[str] | None = None,
+    profile: list[str] | None = None,
     cache_dir: Path | None = None,
 ) -> None:
     """Report drift between a manifest and each platform's on-disk config,
@@ -420,6 +439,44 @@ def validate_command(
         Platform name to check; repeatable. Overrides the manifest's
         ``[options.platforms]`` and, if neither is given, every detected
         platform is checked (same default as ``apply_all``).
+    profile
+        Profile name to select; repeatable, same resolution as
+        ``apply --profile``.
+    cache_dir
+        Where remote (``https://``/``git+``) skill/hook sources are fetched
+        and cached. Defaults to ``.agent-config-kit-cache`` next to the
+        manifest.
+    """
+    try:
+        loaded = load_manifest(manifest, cache_dir=cache_dir)
+        bundle = resolve_profile(
+            loaded, _resolve_profiles(loaded.options.default_profiles, profile)
+        )
+    except ManifestError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(2) from exc
+
+    resolved_scope = scope if scope is not None else loaded.options.scope
+    platforms = _resolve_platforms(loaded.options.platforms, platform)
+    if platforms is None:
+        platforms = detect_installed_platforms()
+
+    drifts = {
+        name: diff_bundle(name, bundle, scope=resolved_scope) for name in platforms
+    }
+
+    if _report_drift(drifts):
+        raise SystemExit(1)
+
+
+@app.command(name="profiles")
+def profiles_command(manifest: Path, *, cache_dir: Path | None = None) -> None:
+    """List a manifest's profiles and each one's resolved entry counts.
+
+    Parameters
+    ----------
+    manifest
+        Path to the manifest TOML file.
     cache_dir
         Where remote (``https://``/``git+``) skill/hook sources are fetched
         and cached. Defaults to ``.agent-config-kit-cache`` next to the
@@ -431,18 +488,24 @@ def validate_command(
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
 
-    resolved_scope = scope if scope is not None else loaded.options.scope
-    platforms = _resolve_platforms(loaded.options.platforms, platform)
-    if platforms is None:
-        platforms = detect_installed_platforms()
+    if not loaded.profiles:
+        console.print("this manifest defines no profiles")
+        return
 
-    drifts = {
-        name: diff_bundle(name, loaded.bundle, scope=resolved_scope)
-        for name in platforms
-    }
-
-    if _report_drift(drifts):
-        raise SystemExit(1)
+    table = Table(
+        "profile", "inherits", "mcp_servers", "skills", "hooks", "lsp_servers"
+    )
+    for name, profile in loaded.profiles.items():
+        resolved = resolve_profile(loaded, [name])
+        table.add_row(
+            name,
+            ", ".join(profile.inherits) or "-",
+            str(len(resolved.mcp_servers)),
+            str(len(resolved.skills)),
+            str(len(resolved.hooks)),
+            str(len(resolved.lsp_servers)),
+        )
+    console.print(table)
 
 
 def main() -> None:
