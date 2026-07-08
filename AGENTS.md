@@ -4,7 +4,10 @@
 
 A shared toolkit of AI agent utilities for the mitodl team: reusable skills,
 custom agent definitions, MCP server configurations, and sample agent configs.
-The primary artifact is a catalog of `SKILL.md` files installable via `npx skills`.
+The primary artifact is a catalog of `SKILL.md` files, plus MCP server
+registrations, installed declaratively via
+[`agent-config-kit`](./packages/agent-config-kit/README.md) (`ac-kit`) and
+this repo's [`agent-config.toml`](./agent-config.toml) manifest.
 
 ## Repository Layout
 
@@ -46,9 +49,11 @@ prek install
 
 | Command | Purpose |
 |---------|---------|
-| `npx skills add mitodl/agent-kit` | Install all skills into current project |
-| `npx skills add mitodl/agent-kit --skill <name>` | Install a specific skill |
-| `npx skills add mitodl/agent-kit --list` | Browse skills without installing |
+| `uv tool install 'agent-config-kit[cli]'` | Install the `ac-kit` CLI |
+| `ac-kit apply agent-config.toml` | Install all MCP servers/skills into every detected platform |
+| `ac-kit apply agent-config.toml --profile <name>` | Install just one profile's skills (+ `universal`) |
+| `ac-kit validate agent-config.toml` | Check for drift between the manifest and on-disk config |
+| `ac-kit profiles agent-config.toml` | List profiles and their resolved entry counts |
 | `prek run --all-files` | Run all pre-commit checks |
 | `cd mcp/servers/witan && uv run --group test pytest` | Run witan MCP server tests |
 | `cd mcp/servers/witan-code && uv run --group test pytest` | Run witan-code MCP server tests |
@@ -71,7 +76,8 @@ CI runs on push/PR: skill ZIP packaging (on tags) and witan server tests.
    ```
 
 2. Add the skill to its category `README.md` table and to `skills/README.md`.
-3. Open a PR.
+3. Register it in [`agent-config.toml`](./agent-config.toml)'s `[skills]` table (and the relevant `[profiles.*]` entry) so `ac-kit apply` picks it up.
+4. Open a PR.
 
 See [`skills/workflow/creating-skills/SKILL.md`](./skills/workflow/creating-skills/SKILL.md) for the full authoring guide.
 
@@ -85,6 +91,8 @@ See [`skills/workflow/creating-skills/SKILL.md`](./skills/workflow/creating-skil
 
 ## Further Reading
 
+- [`README.md`](./README.md) — Quick Start for installing/applying `ac-kit`
+- [`packages/agent-config-kit/README.md`](./packages/agent-config-kit/README.md) — `ac-kit` manifest schema and command reference
 - [`skills/README.md`](./skills/README.md) — full skill catalog with descriptions
 - [`mcp/README.md`](./mcp/README.md) — MCP server structure and available servers
 - [`mcp/servers/witan/README.md`](./mcp/servers/witan/README.md) — witan graph-memory server
