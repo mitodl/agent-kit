@@ -355,15 +355,18 @@ def project_advance(
     result = _fn(s.workflow_project_advance)(
         slug=slug, phase=phase, github_pr=github_pr
     )
+    # Escape the advisory: it is free text and could carry bracketed fragments
+    # Rich would try to parse as markup.
+    advisory = escape((result.get("advisory") or "").strip())
     if result.get("advanced") is False:
-        console.print(f"[yellow]Not advanced:[/yellow] {result.get('advisory', '')}")
+        console.print(f"[yellow]Not advanced:[/yellow] {advisory}")
         return
     console.print(
         f"[green]Advanced[/green] [bold]{slug}[/bold] → phase "
         f"[bold]{result.get('phase', phase)}[/bold]"
     )
-    if result.get("advisory"):
-        console.print(f"  [yellow]note:[/yellow] {result['advisory']}")
+    if advisory:
+        console.print(f"  [yellow]note:[/yellow] {advisory}")
 
 
 @project_app.command(name="complete")
@@ -407,7 +410,8 @@ def project_block(slug: str, blocks: str) -> None:
     s = _srv()
     result = _fn(s.workflow_project_block)(slug=slug, blocks_slug=blocks)
     if not result.get("linked"):
-        console.print(f"[red]Not linked:[/red] {result.get('reason', 'unknown')}")
+        reason = escape((result.get("reason") or "").strip() or "unknown")
+        console.print(f"[red]Not linked:[/red] {reason}")
         return
     console.print(f"[green]Blocked[/green] {blocks} on {slug}")
 

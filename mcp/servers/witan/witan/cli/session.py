@@ -1,10 +1,11 @@
 """Session commands: start, end, list.
 
 Sessions are the continuity primitive — ``workflow_session_start`` links an
-agent session to a project (and writes the ``/tmp`` state file the Stop hook
-reads), ``workflow_session_end`` records the handoff summary. These were
-MCP-only; the CLI now lets a human drive them too, e.g. to close a session
-that leaked open or to inspect a project's session history.
+agent session to a project (and writes a state file, in the system temp dir
+resolved by ``witan.session_state``, that the Stop hook reads),
+``workflow_session_end`` records the handoff summary. These were MCP-only; the
+CLI now lets a human drive them too, e.g. to close a session that leaked open
+or to inspect a project's session history.
 """
 
 from __future__ import annotations
@@ -13,9 +14,11 @@ import os
 import uuid
 
 import cyclopts
+from rich.markup import escape
 
 from ._common import (
     _fn,
+    _split_csv,
     _srv,
     WorkflowPhase,
     app,
@@ -56,7 +59,7 @@ def session_start(
         session_id=sid,
         phase=phase,
         repo=repo,
-        tags=tags,
+        tags=_split_csv(tags),
     )
     console.print(
         f"[green]Started session[/green] [bold]{result['session_slug']}[/bold]"
@@ -86,8 +89,8 @@ def session_end(
     result = _fn(s.workflow_session_end)(
         session_slug=session_slug,
         summary=summary,
-        tools_used=tools_used,
-        files_changed=files_changed,
+        tools_used=_split_csv(tools_used),
+        files_changed=_split_csv(files_changed),
     )
     console.print(f"[green]Ended session[/green] [bold]{session_slug}[/bold]")
     console.print(f"  ended_at: {result.get('ended_at')}")
@@ -112,5 +115,8 @@ def session_list(project_slug: str) -> None:
     for sess in sessions:
         state = "open" if not sess.get("ended_at") else "ended"
         summary = (sess.get("summary") or "(in progress)").splitlines()
-        first = summary[0] if summary else "(in progress)"
-        console.print(f"  {sess['slug']}  [{sess.get('phase')}/{state}]  {first}"[:140])
+        # Escape the free-text first line and use parentheses (not brackets) for
+        # phase/state — Rich would parse "[implementation/open]" as a malformed
+        # markup tag and could error out on it.
+        first = escape(summary[0] if summary else "(in progress)")
+        console.print(f"  {sess['slug']}  ({sess.get('phase')}/{state})  {first}"[:140])
