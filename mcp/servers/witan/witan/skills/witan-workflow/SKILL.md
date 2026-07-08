@@ -111,10 +111,13 @@ Return the new project slug and continue to Step 5 of the main flow.
 ## End session
 
 Call `workflow_project_list()` to find active projects in this repo, then read
-the `session_slug` from this session's state file in `/tmp`: it is
+the `session_slug` from this session's state file in the system temp dir
+(`$TMPDIR`, else the platform default — run `python -c "import tempfile;
+print(tempfile.gettempdir())"` if unsure): it is
 `workflow-session-<session id>.json`, where `<session id>` is the value passed
 to `workflow_session_start` (`$CLAUDE_SESSION_ID` on Claude Code). If you no
-longer have the id, pick the newest matching `/tmp/workflow-session-*.json`.
+longer have the id, pick the newest matching `workflow-session-*.json` in that
+directory.
 
 Ask the user for a session summary: "Briefly describe what this session
 accomplished (will be saved to the workflow corpus)."

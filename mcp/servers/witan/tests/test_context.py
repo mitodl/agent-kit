@@ -151,3 +151,77 @@ def test_inject_context_survives_missing_code_branch_schema(tmp_path, monkeypatc
     assert "## Ready Tasks" in text
     assert "still visible" in text
     assert "## In-Flight Branch" not in text
+
+
+# ── B1: latest session handoff summary on resume ─────────────────────────────
+
+
+class _FakeSessClient:
+    def __init__(self, rows=None, raises=False):
+        self._rows = rows or []
+        self._raises = raises
+
+    def read(self, *args, **kwargs):
+        if self._raises:
+            raise RuntimeError("boom")
+        return self._rows
+
+
+def test_latest_session_line_formats_and_isolates():
+    from witan import context as ctx
+
+    # query orders by started_at asc → the LAST row is newest; summary is
+    # truncated to its first line.
+    rows = [
+        {"summary": "old work", "ended_at": "t1"},
+        {"summary": "newest work\nsecond line ignored", "ended_at": "t2"},
+    ]
+    assert (
+        ctx._latest_session_line(_FakeSessClient(rows), "wp-x")
+        == "  Last session (ended): newest work"
+    )
+    # an open session (no ended_at) is flagged as such
+    assert (
+        ctx._latest_session_line(
+            _FakeSessClient([{"summary": "wip", "ended_at": None}]), "wp-x"
+        )
+        == "  Last session (still open): wip"
+    )
+    # no sessions / empty summary → no line
+    assert ctx._latest_session_line(_FakeSessClient([]), "wp-x") is None
+    assert (
+        ctx._latest_session_line(
+            _FakeSessClient([{"summary": "", "ended_at": "t"}]), "wp-x"
+        )
+        is None
+    )
+    # a failing read never raises — it degrades to None so the block survives
+    assert ctx._latest_session_line(_FakeSessClient(raises=True), "wp-x") is None
+
+
+@requires_omnigraph
+def test_inject_context_surfaces_last_session_summary(tmp_path, monkeypatch):
+    import uuid
+
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-repo-4"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    proj = _unwrap(srv.workflow_project_create)(
+        title="ctx proj", description="d", repos=[repo]
+    )
+    sess = _unwrap(srv.workflow_session_start)(
+        project_slug=proj["slug"], session_id=uuid.uuid4().hex, phase="implementation"
+    )
+    _unwrap(srv.workflow_session_end)(
+        sess["session_slug"], summary="left the helper half-wired"
+    )
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "## Active Workflow Projects" in text
+    assert "Last session (ended): left the helper half-wired" in text

@@ -1,6 +1,9 @@
-"""Project commands: list, show, create, run."""
+"""Project commands: list, show, status, create, run."""
 
 from __future__ import annotations
+
+import json as _json
+from typing import Annotated
 
 import cyclopts
 from rich.table import Table
@@ -141,6 +144,65 @@ project_app = cyclopts.App(
     default_command=_project_show,
 )
 app.command(project_app)
+
+
+@project_app.command(name="status")
+def project_status(
+    slug: str,
+    *,
+    json: Annotated[bool, cyclopts.Parameter(name="--json")] = False,
+) -> None:
+    """ "What should I do next" — phase, ready tasks, last session, blockers.
+
+    The single-call resume view for a project. Pass ``--json`` for the raw
+    ``workflow_project_status`` payload.
+
+    Parameters
+    ----------
+    slug: Project ``wp-`` slug.
+    json: Emit the raw JSON payload instead of the formatted view.
+    """
+    s = _srv()
+    st = _fn(s.workflow_project_status)(slug)
+    if not st:
+        console.print(f"[red]No project {slug!r}.[/red]")
+        raise SystemExit(1)
+
+    if json:
+        console.print_json(_json.dumps(st))
+        return
+
+    p = st["project"]
+    repos_s = ", ".join(_short_repo(r) for r in (p.get("repos") or [])) or "—"
+    console.print(f"[bold]{p['slug']}[/bold]  {p.get('title', '')}")
+    console.print(
+        f"  phase={p.get('phase')}  "
+        f"status={_styled(p.get('status', ''), _STATUS_STYLE)}  repos={repos_s}"
+    )
+    if p.get("github_pr"):
+        console.print(f"  pr: {p['github_pr']}")
+    if st["blockers"]:
+        console.print(f"  [yellow]blocked by[/yellow]: {', '.join(st['blockers'])}")
+
+    ls = st["last_session"]
+    if ls:
+        state = "still open" if ls["open"] else f"ended {ls['ended_at']}"
+        summary = ls.get("summary") or "(no summary)"
+        console.print(f"\n  [blue]last session[/blue] ({state}): {summary}"[:300])
+    else:
+        console.print("\n  [dim]no sessions yet[/dim]")
+
+    c = st["counts"]
+    console.print(
+        f"\n  [bold]ready tasks[/bold]: {c['ready']} of {c['open_tasks']} open"
+    )
+    for t in st["ready_tasks"]:
+        held = f" [dim](claimed by {t['assignee']})[/dim]" if t.get("assignee") else ""
+        # Escape the priority brackets so Rich renders literal "[p1]" rather than
+        # treating it as markup and swallowing it.
+        console.print(
+            f"    \\[{t.get('priority', 'p2')}] {t['slug']}  {t.get('title', '')}{held}"
+        )
 
 
 @project_app.command(name="create")

@@ -199,3 +199,62 @@ def test_install_omnigraph_downloads_and_extracts(tmp_path, monkeypatch):
     dest = _dest(tmp_path)
     assert dest.read_bytes() == b"#!/bin/sh\necho fake"
     assert dest.stat().st_mode & 0o111  # executable
+
+
+# ── Legacy workflow-hook prune (A1 double-emission fix) ──────────────────────
+
+
+def _settings_with(commands_by_event):
+    return {
+        "hooks": {
+            event: [
+                {"matcher": "", "hooks": [{"type": "command", "command": c}]}
+                for c in commands
+            ]
+            for event, commands in commands_by_event.items()
+        }
+    }
+
+
+def test_prune_removes_wrapper_keeps_bare():
+    settings = _settings_with(
+        {
+            "UserPromptSubmit": [
+                "witan inject-context",
+                "bash ~/.claude/hooks/workflow-context-inject.sh",
+            ],
+            "Stop": ["bash ~/.claude/hooks/workflow-session-checkpoint.sh"],
+        }
+    )
+    changed = setup.prune_legacy_hook_entries(settings)
+    assert changed is True
+    ups = settings["hooks"]["UserPromptSubmit"]
+    assert [e["hooks"][0]["command"] for e in ups] == ["witan inject-context"]
+    # Stop had only the wrapper → matcher entry dropped entirely, no empty hooks list.
+    assert settings["hooks"]["Stop"] == []
+
+
+def test_prune_matches_configs_hooks_form():
+    settings = _settings_with(
+        {
+            "UserPromptSubmit": ["bash $REPO/configs/hooks/workflow-context-inject.sh"],
+        }
+    )
+    assert setup.prune_legacy_hook_entries(settings) is True
+    assert settings["hooks"]["UserPromptSubmit"] == []
+
+
+def test_prune_idempotent_and_leaves_others():
+    settings = _settings_with(
+        {
+            "UserPromptSubmit": ["witan inject-context"],
+            "PostToolUse": ["bash ~/.claude/hooks/codegraph-reindex.sh"],
+        }
+    )
+    assert setup.prune_legacy_hook_entries(settings) is False
+    assert setup.prune_legacy_hook_entries(settings) is False
+    assert len(settings["hooks"]["PostToolUse"]) == 1
+
+
+def test_prune_no_hooks_section_is_noop():
+    assert setup.prune_legacy_hook_entries({}) is False

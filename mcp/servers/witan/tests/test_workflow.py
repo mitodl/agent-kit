@@ -45,6 +45,50 @@ def test_project_lifecycle_and_trace(server):
 
 
 @requires_omnigraph
+def test_project_status_resume_view(server):
+    proj = server.workflow_project_create(
+        title="resume me", description="d", phase="implementation"
+    )
+    slug = proj["slug"]
+
+    # A ready task and a closed one under the project.
+    ready = server.task_create(
+        title="do the thing", description="x", project_slug=slug, priority="p1"
+    )
+    done = server.task_create(title="already done", description="x", project_slug=slug)
+    server.task_close(done["slug"])
+
+    # Two sessions; the later-started one carries the handoff summary.
+    server.workflow_session_start(
+        project_slug=slug, session_id=uuid.uuid4().hex, phase="spec"
+    )
+    s2 = server.workflow_session_start(
+        project_slug=slug, session_id=uuid.uuid4().hex, phase="implementation"
+    )
+    server.workflow_session_end(s2["session_slug"], summary="wired the helper")
+
+    st = server.workflow_project_status(slug)
+    assert st["project"]["phase"] == "implementation"
+    assert st["counts"] == {"ready": 1, "open_tasks": 1}
+    assert [t["slug"] for t in st["ready_tasks"]] == [ready["slug"]]
+    assert st["last_session"]["summary"] == "wired the helper"
+    assert st["last_session"]["open"] is False
+    assert st["blockers"] == []
+
+
+@requires_omnigraph
+def test_project_status_missing_returns_none(server):
+    assert server.workflow_project_status("wp-does-not-exist") is None
+
+
+@requires_omnigraph
+def test_project_status_no_sessions(server):
+    proj = server.workflow_project_create(title="fresh", description="d")
+    st = server.workflow_project_status(proj["slug"])
+    assert st["last_session"] is None
+
+
+@requires_omnigraph
 def test_link_memory_to_project(server):
     proj = server.workflow_project_create(title="linked", description="d")
     mem = server.memory_store(kind="lesson", title="watch out", content="be careful")

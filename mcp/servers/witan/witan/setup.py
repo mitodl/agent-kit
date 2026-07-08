@@ -68,6 +68,58 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     )
 
 
+# ── Legacy hook migration ─────────────────────────────────────────────────────
+# Older docs told users to register the workflow hooks as
+# ``bash ~/.claude/hooks/workflow-context-inject.sh`` (a wrapper that just calls
+# ``witan inject-context``). ``witan setup`` now registers the bare command, but
+# Claude's hook dedup keys on the exact command string, so a pre-existing wrapper
+# entry survives alongside the bare one and the context block prints twice. Prune
+# any wrapper entry so the bare command is the single source of truth.
+
+_LEGACY_HOOK_MARKERS = (
+    "workflow-context-inject.sh",
+    "workflow-session-checkpoint.sh",
+)
+
+
+def prune_legacy_hook_entries(settings: dict) -> bool:
+    """Remove legacy ``.sh``-wrapper workflow-hook registrations from a Claude
+    ``settings.json`` dict, in place. Returns ``True`` if anything changed.
+
+    Matches on the wrapper script basename (an unambiguous witan-legacy marker),
+    so it catches the ``bash ~/.claude/hooks/…`` and ``$REPO/configs/hooks/…``
+    forms alike. Idempotent; leaves the bare ``witan …`` command entries and all
+    non-witan hooks untouched. Drops a matcher entry entirely once it has no
+    remaining hooks rather than leaving an empty ``"hooks": []`` behind.
+    """
+    hooks_section = settings.get("hooks")
+    if not isinstance(hooks_section, dict):
+        return False
+    changed = False
+    for event_name, entries in list(hooks_section.items()):
+        if not isinstance(entries, list):
+            continue
+        kept: list = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                kept.append(entry)
+                continue
+            remaining = [
+                h
+                for h in entry["hooks"]
+                if not (
+                    isinstance(h, dict)
+                    and any(m in (h.get("command") or "") for m in _LEGACY_HOOK_MARKERS)
+                )
+            ]
+            if len(remaining) != len(entry["hooks"]):
+                changed = True
+            if remaining:
+                kept.append({**entry, "hooks": remaining})
+        hooks_section[event_name] = kept
+    return changed
+
+
 # ── Omnigraph binary ──────────────────────────────────────────────────────────
 # Witan's own binary-distribution concern — explicitly out of agent-config-kit's
 # scope (spec §3).

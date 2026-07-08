@@ -14,6 +14,8 @@ from agent_config_kit import (
     apply_all,
     detect_installed_platforms,
     known_platforms,
+    load_json_object,
+    write_json,
 )
 from agent_config_kit.installers import install_files
 
@@ -112,6 +114,20 @@ def setup(
             dry_run=dry_run,
             executable=True,
         )
+
+        # Heal config drift: an older docs flow registered the workflow hooks as
+        # `bash ~/.claude/hooks/workflow-*.sh` wrappers, which now coexist with
+        # the bare `witan …` commands apply() just registered and make the block
+        # emit twice. Prune the legacy wrapper entries so the bare command is the
+        # single source of truth.
+        settings_path = Path.home() / ".claude" / "settings.json"
+        settings = load_json_object(settings_path)
+        if settings and su.prune_legacy_hook_entries(settings):
+            console.print(
+                "  [yellow]pruned[/yellow] legacy workflow-hook wrapper "
+                "registration(s) (were duplicating the bare `witan …` commands)"
+            )
+            write_json(settings_path, settings, dry_run)
 
     if dry_run:
         console.print("\n[dim](dry-run — no files written)[/dim]")
