@@ -158,6 +158,70 @@ def test_advance_normal_step_never_prompts(server):
     assert server.workflow_project_get(p["slug"])["phase"] == "spec"
 
 
+# ── C5: elicit repo when detection returns None ──────────────────────────────
+
+
+def _no_repo_context(monkeypatch, tmp_path):
+    """Force repo detection to yield None: no WITAN_REPO, cwd outside any git
+    repo (tmp_path lives under the system temp dir, not this checkout)."""
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+
+@requires_omnigraph
+def test_memory_store_elicits_repo_when_undetected(server, monkeypatch, tmp_path):
+    _no_repo_context(monkeypatch, tmp_path)
+    r = server.memory_store(
+        kind="lesson",
+        title="scoped",
+        content="c",
+        ctx=_AcceptCtx("https://github.com/x/elicited"),
+    )
+    assert r["repo"] == "https://github.com/x/elicited"
+
+
+@requires_omnigraph
+def test_memory_store_headless_stays_unscoped(server, monkeypatch, tmp_path):
+    # No elicitation support → today's behavior: a silently unscoped memory.
+    _no_repo_context(monkeypatch, tmp_path)
+    r = server.memory_store(kind="lesson", title="unscoped", content="c")
+    assert r["repo"] is None
+
+
+@requires_omnigraph
+def test_memory_store_declined_stays_unscoped(server, monkeypatch, tmp_path):
+    _no_repo_context(monkeypatch, tmp_path)
+    r = server.memory_store(
+        kind="lesson", title="declined", content="c", ctx=_DeclineCtx()
+    )
+    assert r["repo"] is None
+
+
+@requires_omnigraph
+def test_task_create_elicits_repo_when_undetected(server, monkeypatch, tmp_path):
+    _no_repo_context(monkeypatch, tmp_path)
+    r = server.task_create(
+        title="scoped task",
+        description="d",
+        ctx=_AcceptCtx("https://github.com/x/elicited"),
+    )
+    assert r["repo"] == "https://github.com/x/elicited"
+
+
+@requires_omnigraph
+def test_write_explicit_repo_never_prompts(server, monkeypatch, tmp_path):
+    # An explicit repo short-circuits elicitation even with a declining ctx.
+    _no_repo_context(monkeypatch, tmp_path)
+    r = server.task_create(
+        title="explicit",
+        description="d",
+        repo="https://github.com/x/given",
+        ctx=_DeclineCtx(),
+    )
+    assert r["repo"] == "https://github.com/x/given"
+
+
 # ── elicit helper contract (no omnigraph needed) ─────────────────────────────
 
 
@@ -211,6 +275,22 @@ def test_text_no_ctx_error_or_empty_returns_default():
     # whitespace-only is treated as empty → default; a real value is stripped
     assert asyncio.run(elicit.text(_AcceptCtx("   "), "q?", default="d")) == "d"
     assert asyncio.run(elicit.text(_AcceptCtx("  real  "), "q?", default="d")) == "real"
+
+
+def test_repo_or_detect_passthrough_and_fallbacks(monkeypatch):
+    # An explicit repo is returned untouched (no detection, no prompt).
+    assert asyncio.run(elicit.repo_or_detect(None, "https://x/y")) == "https://x/y"
+    # Detection succeeds → return None so the callee's own detect() resolves it.
+    monkeypatch.setenv("WITAN_REPO", "https://env/r")
+    assert asyncio.run(elicit.repo_or_detect(_RaiseCtx(), None)) is None
+    # Detection fails and elicitation is unsupported → None (unscoped, as before).
+    monkeypatch.setenv("WITAN_REPO", "")  # explicitly disables detection
+    assert asyncio.run(elicit.repo_or_detect(_RaiseCtx(), None)) is None
+    # Detection fails but the user supplies one → that value.
+    assert (
+        asyncio.run(elicit.repo_or_detect(_AcceptCtx("https://x/picked"), None))
+        == "https://x/picked"
+    )
 
 
 def test_cli_fn_runs_async_tools():

@@ -1,7 +1,6 @@
 """Tests for the UserPromptSubmit context-injection hook (witan/context.py),
 focused on the CodeBranch "In-Flight Branch" section."""
 
-import asyncio
 import subprocess
 
 from .conftest import SCHEMA, requires_omnigraph
@@ -31,8 +30,30 @@ def _git_repo(path):
     return path
 
 
+class _NoElicitCtx:
+    """A ctx whose elicit always errors, so async tools fall back to their
+    non-interactive default (mirrors conftest._NoElicitCtx)."""
+
+    async def elicit(self, *args, **kwargs):
+        raise RuntimeError("elicitation unsupported in tests")
+
+
 def _unwrap(tool):
-    return getattr(tool, "fn", tool)
+    """Return a directly-callable tool. Async tools (those taking ``ctx``) are
+    run to completion with a no-elicit ctx injected, so sync call sites keep
+    working and get today's non-interactive behavior."""
+    import asyncio
+    import inspect
+
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            kwargs.setdefault("ctx", _NoElicitCtx())
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
 
 
 def _setup(tmp_path, monkeypatch, repo):
@@ -70,7 +91,7 @@ def test_inject_context_surfaces_in_flight_branch_task(tmp_path, monkeypatch):
     monkeypatch.chdir(base)
 
     task = _unwrap(srv.task_create)(title="ctx task", description="x")
-    asyncio.run(_unwrap(srv.task_claim)(task["slug"], ctx=None))
+    _unwrap(srv.task_claim)(task["slug"])
 
     text = ctx_module.inject_context(str(store), queries_dir, None)
     assert "## In-Flight Branch" in text
