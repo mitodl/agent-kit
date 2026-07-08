@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections import Counter
@@ -17,6 +18,7 @@ from typing import Literal
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from fastmcp.server.dependencies import get_access_token
 
 from . import config as cfg_module
 from . import readiness
@@ -24,7 +26,7 @@ from . import repo as repo_module
 from . import scan
 from . import session_state
 from .graph import OmnigraphClient, OmnigraphConflict, _is_storage_version_mismatch
-from .identity import ActorTokenResolver
+from .identity import ActorTokenResolver, derive_actor_id
 
 # ── Startup ───────────────────────────────────────────────────────
 
@@ -65,17 +67,16 @@ rank_cfg = cfg_module.load_rank_config()
 scan_cfg = cfg_module.load_scan_config()
 identity_cfg = cfg_module.load_identity_config()
 _ensure_graph(cfg.graph_uri)
-client = OmnigraphClient(
+_write_guard = scan.write_guard_from_config(scan_cfg)
+_default_client = OmnigraphClient(
     cfg.graph_uri,
     cfg.queries_dir,
     cfg.graph_token,
-    guard=scan.write_guard_from_config(scan_cfg),
+    guard=_write_guard,
 )
 
 # Per-user actor/token mapping for the deployed streamable-http service (ADR
-# 0004). None in local stdio use, where identity_cfg.oidc_issuer is unset —
-# every tool handler still runs against the single `client` above until the
-# follow-up wires per-actor resolution into each handler.
+# 0004). None in local stdio use, where identity_cfg.oidc_issuer is unset.
 actor_token_resolver = (
     ActorTokenResolver(identity_cfg.actor_tokens_file)
     if identity_cfg.actor_tokens_file
@@ -90,6 +91,67 @@ _jwt_verifier = (
     if identity_cfg.oidc_issuer
     else None
 )
+
+_actor_clients: dict[str, OmnigraphClient] = {}
+_actor_clients_lock = threading.Lock()
+
+
+def _resolve_client() -> OmnigraphClient:
+    """Return the ``OmnigraphClient`` for the current MCP request's actor.
+
+    Local stdio use (``identity_cfg.oidc_issuer`` unset) always returns the
+    single process-lifetime ``_default_client`` — byte-identical to
+    pre-ADR-0004 behavior.
+
+    In deployed streamable-http mode, a validated JWT is required to reach
+    any tool handler (FastMCP itself rejects unauthenticated requests via
+    ``_jwt_verifier``), so ``get_access_token()`` returning ``None`` here
+    means this call is *not* a tool request — e.g. an admin/migration CLI
+    command (``apply-schema``, ``migrate-topics``) invoked directly inside
+    the deployed container. Those fall back to the shared default client
+    rather than erroring, since they have no per-user identity to isolate.
+
+    Otherwise, the JWT's ``sub`` claim is mapped to an actor id and its
+    pre-provisioned omnigraph bearer token is looked up, and a client for
+    that actor is constructed once and cached — ``OmnigraphClient`` shells
+    out to a subprocess per call, so reusing one across a user's requests
+    (rather than rebuilding it every call) is worth the cache.
+    """
+    if identity_cfg.oidc_issuer is None:
+        return _default_client
+    token = get_access_token()
+    if token is None:
+        return _default_client
+    actor_id = derive_actor_id(token.claims.get("sub", ""))
+    if actor_id in _actor_clients:
+        return _actor_clients[actor_id]
+    with _actor_clients_lock:
+        if actor_id not in _actor_clients:
+            assert actor_token_resolver is not None  # implied by oidc_issuer being set
+            bearer = actor_token_resolver.resolve(actor_id)
+            _actor_clients[actor_id] = OmnigraphClient(
+                cfg.graph_uri,
+                cfg.queries_dir,
+                bearer,
+                guard=_write_guard,
+            )
+    return _actor_clients[actor_id]
+
+
+class _ActorScopedClient:
+    """Proxy that delegates every attribute access to ``_resolve_client()``.
+
+    Bound to the module-level name ``client`` so none of the ~30 tool
+    handlers (and the helpers they call) need to change: each ``client.foo``
+    reference already re-resolves to the current request's actor client on
+    every access, rather than closing over one process-lifetime client.
+    """
+
+    def __getattr__(self, name: str):
+        return getattr(_resolve_client(), name)
+
+
+client = _ActorScopedClient()
 
 
 def apply_schema() -> dict:
