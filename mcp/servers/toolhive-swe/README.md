@@ -8,8 +8,8 @@ Unlike [`witan`](../witan/README.md) and [`witan-code`](../witan-code/README.md)
 there is nothing to build, package, or run locally. You only wire a config entry
 into your agent and authenticate through a browser.
 
-We run one installation per environment tier, each at its own hostname (there
-is no shared endpoint + routing header like `grafana-cloud` uses):
+We run one installation per environment tier, each at its own hostname (no shared
+endpoint or routing header):
 
 | Server name | Tier | URL |
 |---|---|---|
