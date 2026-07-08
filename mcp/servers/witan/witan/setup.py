@@ -44,11 +44,20 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     )
 
     pi_ext_dir = pkg_dir / "extensions" / "pi"
+    # These hooks run on the prompt/stop critical path and do git + graph I/O, so
+    # they carry a timeout: a hung git or graph read must degrade to no context,
+    # never stall the agent. Matches Pi's 5s cap on the equivalent extension.
     hooks: list[Hook] = [
         DeclarativeHook(
-            event=HookEvent.USER_PROMPT_SUBMIT, command="witan inject-context"
+            event=HookEvent.USER_PROMPT_SUBMIT,
+            command="witan inject-context",
+            timeout_seconds=5,
         ),
-        DeclarativeHook(event=HookEvent.STOP, command="witan session-checkpoint"),
+        DeclarativeHook(
+            event=HookEvent.STOP,
+            command="witan session-checkpoint",
+            timeout_seconds=5,
+        ),
     ]
     if pi_ext_dir.is_dir():
         hooks.extend(

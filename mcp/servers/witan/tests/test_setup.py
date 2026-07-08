@@ -63,16 +63,22 @@ def test_witan_bundle_registers_witan_mcp_server_and_hooks(tmp_path, monkeypatch
     assert entry["env"]["WITAN_AUTHOR"] == "tester"
 
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
-    assert any(
-        h["command"] == "witan inject-context"
+    inject = [
+        h
         for e in settings["hooks"]["UserPromptSubmit"]
         for h in e["hooks"]
-    )
-    assert any(
-        h["command"] == "witan session-checkpoint"
+        if h["command"] == "witan inject-context"
+    ]
+    checkpoint = [
+        h
         for e in settings["hooks"]["Stop"]
         for h in e["hooks"]
-    )
+        if h["command"] == "witan session-checkpoint"
+    ]
+    assert inject and checkpoint
+    # Both prompt-path hooks carry a timeout so a hung git/graph can't stall.
+    assert inject[0]["timeout"] == 5
+    assert checkpoint[0]["timeout"] == 5
 
 
 def test_witan_bundle_includes_pi_extensions_as_plugin_hooks(tmp_path):
