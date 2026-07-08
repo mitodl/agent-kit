@@ -211,6 +211,90 @@ def project_status(
         )
 
 
+@project_app.command(name="tasks")
+def project_tasks(
+    slug: str,
+    *,
+    status: str | None = None,
+    detail: bool = False,
+) -> None:
+    """List a project's tasks, optionally with their dependency structure.
+
+    ``project <slug>`` already shows a flat task list; this focuses on the tasks
+    and, with ``--detail``, expands each task's blockers (what it waits on) and
+    dependents (what waits on it), resolving statuses from the project's own task
+    set so the dependency chain is visible without hopping between commands.
+
+    Parameters
+    ----------
+    slug: Project ``wp-`` slug.
+    status: Filter to open | in_progress | blocked | closed.
+    detail: Expand each task's blockers and dependents.
+    """
+    s = _srv()
+    p = _fn(s.workflow_project_get)(slug)
+    if not p:
+        console.print(f"[red]No project {slug!r}.[/red]")
+        raise SystemExit(1)
+
+    rows = _fn(s.task_list)(project_slug=slug)
+    if status:
+        rows = [r for r in rows if r.get("status") == status]
+    if not rows:
+        scope = f" ({status})" if status else ""
+        console.print(f"[dim]No tasks{scope} for {slug}.[/dim]")
+        return
+
+    scope = f" ({status})" if status else ""
+    console.print(
+        f"[bold]Tasks{scope} — {escape(p.get('title', slug))}[/bold] ({len(rows)}):"
+    )
+    for r in rows:
+        blk = r.get("blocked_by") or []
+        blk_note = f" [dim](blocked by {len(blk)})[/dim]" if blk else ""
+        console.print(
+            f"  \\[{r.get('priority', 'p2')}] "
+            f"[{_styled(r.get('status', ''), _STATUS_STYLE)}] "
+            f"{r['slug']}  {escape(r.get('title', ''))}{blk_note}"
+        )
+
+    if not detail:
+        return
+
+    # Dependents = tasks in this project that name r as a blocker. Resolve
+    # statuses from the project's own set first, falling back to a fetch for a
+    # cross-project/unscoped blocker referenced from here.
+    by_slug = {r["slug"]: r for r in rows}
+    dependents: dict[str, list[str]] = {}
+    for r in rows:
+        for b in r.get("blocked_by") or []:
+            dependents.setdefault(b, []).append(r["slug"])
+
+    def _status_of(task_slug: str) -> str:
+        if task_slug in by_slug:
+            return by_slug[task_slug].get("status") or "open"
+        fetched = _fn(s.task_get)(task_slug)
+        return fetched.get("status", "missing") if fetched else "missing"
+
+    console.print("\n[bold]Dependencies[/bold]")
+    any_edges = False
+    for r in rows:
+        blockers = r.get("blocked_by") or []
+        deps = dependents.get(r["slug"], [])
+        if not blockers and not deps:
+            continue
+        any_edges = True
+        console.print(f"  [bold]{r['slug']}[/bold] {escape(r.get('title', ''))}")
+        for b in blockers:
+            console.print(
+                f"    ↑ blocked by {b} [{_styled(_status_of(b), _STATUS_STYLE)}]"
+            )
+        for d in deps:
+            console.print(f"    ↓ blocks {d} [{_styled(_status_of(d), _STATUS_STYLE)}]")
+    if not any_edges:
+        console.print("  [dim]no dependencies between these tasks.[/dim]")
+
+
 @project_app.command(name="create")
 def project_create(
     title: str,

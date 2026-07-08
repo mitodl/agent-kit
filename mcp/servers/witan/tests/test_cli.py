@@ -202,6 +202,55 @@ def test_project_block_and_unblock_cli(server, monkeypatch):
 
 
 @requires_omnigraph
+def test_project_tasks_detail_cli(server, monkeypatch):
+    """project tasks --detail lists tasks and their blocker/dependent edges."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_tasks
+
+    printed = _patch_server(monkeypatch, server)
+    proj = _fn(srv.workflow_project_create)(title="Dep Project", description="d")
+    blocker = _fn(srv.task_create)(
+        title="the blocker", description="d", project_slug=proj["slug"]
+    )
+    blocked = _fn(srv.task_create)(
+        title="the blocked",
+        description="d",
+        project_slug=proj["slug"],
+        blocked_by=[blocker["slug"]],
+    )
+
+    project_tasks(proj["slug"], detail=True)
+
+    combined = "\n".join(printed)
+    assert blocker["slug"] in combined
+    assert blocked["slug"] in combined
+    assert "Dependencies" in combined
+    # the blocked task shows it is blocked by the blocker; the blocker shows it
+    # blocks the blocked task
+    assert "blocked by" in combined
+    assert "blocks" in combined
+
+
+@requires_omnigraph
+def test_project_tasks_no_detail_omits_dependency_section(server, monkeypatch):
+    """Without --detail, only the task table prints (no Dependencies section)."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_tasks
+
+    printed = _patch_server(monkeypatch, server)
+    proj = _fn(srv.workflow_project_create)(title="Flat Project", description="d")
+    _fn(srv.task_create)(title="lone task", description="d", project_slug=proj["slug"])
+
+    project_tasks(proj["slug"])
+
+    combined = "\n".join(printed)
+    assert "lone task" in combined
+    assert "Dependencies" not in combined
+
+
+@requires_omnigraph
 def test_task_close_cli(server, monkeypatch):
     """task close sets a task closed with a resolution."""
     from witan import server as srv

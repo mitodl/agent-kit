@@ -198,6 +198,7 @@ or `uv tool install` the package to get it on `PATH`):
 | `projects [--status …] [--all-repos]` | Workflow projects (default: active in this repo) |
 | `project <wp-slug>` | A project with its sessions, tasks, and corpus trace |
 | `project status <wp-slug> [--json]` | "What next" resume view — phase, ready tasks, last session, blockers |
+| `project tasks <wp-slug> [--status …] [--detail]` | A project's tasks; `--detail` expands each task's blockers and dependents |
 | `project create <title>` | Create a workflow project from the CLI |
 | `project advance\|complete\|block\|unblock <wp-slug> …` | Drive project phase/dependency transitions from the CLI |
 | `session start\|end\|list …` | Start/close a workflow session, or list a project's sessions |
