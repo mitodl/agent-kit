@@ -248,6 +248,103 @@ def project_create(
     console.print(f"  phase: {result['phase']}")
 
 
+@project_app.command(name="advance")
+def project_advance(
+    slug: str,
+    *,
+    phase: WorkflowPhase,
+    github_pr: str | None = None,
+) -> None:
+    """Advance a project to a new phase.
+
+    A backward or skip transition is not blocked from the CLI (elicitation is
+    only available in an MCP session), but the resulting ``advisory`` note is
+    surfaced so an unusual transition is still visible.
+
+    Parameters
+    ----------
+    slug: Project ``wp-`` slug.
+    phase: New phase: discovery | spec | implementation | delivery.
+    github_pr: URL of the PR, if one has been opened (recorded on delivery).
+    """
+    s = _srv()
+    result = _fn(s.workflow_project_advance)(
+        slug=slug, phase=phase, github_pr=github_pr
+    )
+    if result.get("advanced") is False:
+        console.print(f"[yellow]Not advanced:[/yellow] {result.get('advisory', '')}")
+        return
+    console.print(
+        f"[green]Advanced[/green] [bold]{slug}[/bold] → phase "
+        f"[bold]{result.get('phase', phase)}[/bold]"
+    )
+    if result.get("advisory"):
+        console.print(f"  [yellow]note:[/yellow] {result['advisory']}")
+
+
+@project_app.command(name="complete")
+def project_complete(
+    slug: str,
+    *,
+    outcome: str,
+    github_pr: str | None = None,
+) -> None:
+    """Complete a project and seal its immutable corpus trace.
+
+    Parameters
+    ----------
+    slug: Project ``wp-`` slug.
+    outcome: Narrative of what was delivered — the primary content of the trace.
+    github_pr: URL of the merged PR, if applicable.
+    """
+    s = _srv()
+    result = _fn(s.workflow_project_complete)(
+        slug=slug, outcome=outcome, github_pr=github_pr
+    )
+    if result.get("existed"):
+        console.print(
+            f"[dim]Trace {result.get('trace_slug')} already exists — no change.[/dim]"
+        )
+        return
+    console.print(f"[green]Completed[/green] [bold]{slug}[/bold]")
+    if result.get("trace_slug"):
+        console.print(f"  trace: {result['trace_slug']}")
+
+
+@project_app.command(name="block")
+def project_block(slug: str, blocks: str) -> None:
+    """Declare that ``slug`` must complete before ``blocks`` can begin.
+
+    Parameters
+    ----------
+    slug: The blocking project's ``wp-`` slug (must finish first).
+    blocks: The blocked project's ``wp-`` slug.
+    """
+    s = _srv()
+    result = _fn(s.workflow_project_block)(slug=slug, blocks_slug=blocks)
+    if not result.get("linked"):
+        console.print(f"[red]Not linked:[/red] {result.get('reason', 'unknown')}")
+        return
+    console.print(f"[green]Blocked[/green] {blocks} on {slug}")
+
+
+@project_app.command(name="unblock")
+def project_unblock(slug: str, blocks: str) -> None:
+    """Remove a project dependency declared with ``project block``.
+
+    Parameters
+    ----------
+    slug: The blocking project's ``wp-`` slug to remove.
+    blocks: The project to unblock.
+    """
+    s = _srv()
+    result = _fn(s.workflow_project_unblock)(slug=slug, blocks_slug=blocks)
+    if result.get("removed"):
+        console.print(f"[green]Unblocked[/green] {blocks} (removed blocker {slug})")
+    else:
+        console.print(f"[dim]{slug} was not a blocker of {blocks} — no change.[/dim]")
+
+
 @project_app.command(name="run")
 def project_run(
     slug: str | None = None,
