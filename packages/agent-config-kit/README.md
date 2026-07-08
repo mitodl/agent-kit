@@ -336,7 +336,7 @@ profiles = ["platform-eng"]
 
 [[scope]]
 match_prefix = "~/code/mit"           # longest match wins; directory-boundary matched
-manifest = "~/code/mit/org-bundle.toml"
+manifest = "https://raw.githubusercontent.com/mitodl/agent-config/main/agent-config.toml"
 profiles = ["platform-eng"]
 write_scope = "project"               # "global" | "project" — default: "project"
 ```

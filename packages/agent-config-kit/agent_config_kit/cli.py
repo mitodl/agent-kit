@@ -73,7 +73,7 @@ app.command(manifest_app)
 
 _CONFIG_TEMPLATE_COMMENTS = {
     "default_manifest": (
-        "# default_manifest is a local path or a remote https:// /git+ URI, e.g.\n"
+        "# default_manifest is a local path or a remote https:// or git+ URI, e.g.\n"
         '# default_manifest = "~/dotfiles/agent-config.toml"\n'
         '# default_manifest = "https://raw.githubusercontent.com/'
         'your-org/dotfiles/main/agent-config.toml"'
@@ -332,12 +332,15 @@ def _skill_entries(
     by_name: dict[str, Path] = {}
     for skill_md in skill_md_paths:
         name = _frontmatter_name(skill_md) or skill_md.parent.name
-        if not SKILL_NAME_PATTERN.fullmatch(name):
+        # Mirrors SkillSource._validate_name's two checks (models.py) — both
+        # matter here, not just the pattern, since a >64-char name would
+        # otherwise write a manifest that immediately fails to load.
+        if not 1 <= len(name) <= 64 or not SKILL_NAME_PATTERN.fullmatch(name):
             console.print(
                 f"[red]{skill_md}: derived skill name {name!r} is not a valid "
-                "Agent Skills name (lowercase alphanumeric segments separated "
-                "by single hyphens) — fix its SKILL.md 'name' frontmatter or "
-                "its directory name[/red]"
+                "Agent Skills name (1-64 characters, lowercase alphanumeric "
+                "segments separated by single hyphens) — fix its SKILL.md "
+                "'name' frontmatter or its directory name[/red]"
             )
             raise SystemExit(2)
         if name in by_name and by_name[name] != skill_md:

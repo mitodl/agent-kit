@@ -1087,6 +1087,26 @@ def test_manifest_init_exits_2_on_invalid_derived_name(tmp_path, capsys):
     assert "not a valid Agent Skills name" in capsys.readouterr().out
 
 
+def test_manifest_init_exits_2_on_derived_name_over_64_chars(tmp_path, capsys):
+    """SKILL_NAME_PATTERN alone doesn't bound length -- SkillSource's own
+    validator additionally requires 1-64 chars (Agent Skills spec), so a
+    manifest generated without that same check could write a name that
+    passes manifest init but fails the very first `load_manifest`."""
+    from agent_config_kit.cli import app
+
+    too_long = "a-" * 32 + "a"  # 65 chars, still matches SKILL_NAME_PATTERN
+    assert len(too_long) == 65
+    repo = tmp_path / "repo"
+    _write_skill(repo, f"skills/{too_long}", name=too_long)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["manifest", "init", str(repo)])
+
+    assert exc_info.value.code == 2
+    assert "not a valid Agent Skills name" in capsys.readouterr().out
+    assert not (repo / "agent-config.toml").is_file()
+
+
 def test_manifest_init_refuses_to_overwrite_without_force(tmp_path, capsys):
     from agent_config_kit.cli import app
 
