@@ -363,6 +363,37 @@ def test_load_manifest_bad_discriminator_raises_manifest_error(tmp_path):
         load_manifest(manifest)
 
 
+def test_load_manifest_old_skills_array_form_raises_manifest_error(tmp_path):
+    """The dropped [[skills]] array-of-tables form must fail with a clear
+    ManifestError, not an AttributeError from calling .items() on a list
+    (PR #76 review)."""
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[skills]]
+        name = "witan-task"
+        skill_md_path = "skills/witan-task/SKILL.md"
+        """,
+    )
+
+    with pytest.raises(ManifestError, match=r"\[skills\] must be a table"):
+        load_manifest(manifest)
+
+
+def test_load_manifest_non_table_skills_value_raises_manifest_error(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        skills = "not-a-table"
+        """,
+    )
+
+    with pytest.raises(ManifestError, match=r"\[skills\] must be a table"):
+        load_manifest(manifest)
+
+
 def test_load_manifest_unknown_top_level_key_raises_manifest_error(tmp_path):
     manifest = _write(
         tmp_path,

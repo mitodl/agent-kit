@@ -247,7 +247,7 @@ def config_init_command(
     )
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_render_config_toml(**values))
+    path.write_text(_render_config_toml(**values), encoding="utf-8")
     console.print(f"wrote {path}")
 
 

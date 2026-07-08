@@ -173,6 +173,33 @@ def test_load_global_config_expands_tilde_in_scope_match_prefix(tmp_path, monkey
     assert result.scope[0].match_prefix == str(tmp_path / "code" / "mit")
 
 
+def test_load_global_config_non_string_default_manifest_raises_config_error(tmp_path):
+    """A non-string value must surface as a clean ConfigError from pydantic
+    validation, not a raw TypeError from Path(123).expanduser() during ~
+    expansion (PR #76 review)."""
+    config_path = _write(tmp_path, "config.toml", "default_manifest = 123\n")
+
+    with pytest.raises(ConfigError, match="default_manifest"):
+        load_global_config(config_path)
+
+
+def test_load_global_config_non_string_scope_match_prefix_raises_config_error(
+    tmp_path,
+):
+    config_path = _write(
+        tmp_path,
+        "config.toml",
+        """
+        [[scope]]
+        match_prefix = 123
+        manifest     = "~/dotfiles/agent-config.toml"
+        """,
+    )
+
+    with pytest.raises(ConfigError, match="match_prefix"):
+        load_global_config(config_path)
+
+
 def test_load_global_config_invalid_toml_raises_config_error(tmp_path):
     config_path = _write(tmp_path, "config.toml", "this is not [valid toml")
 

@@ -76,9 +76,15 @@ def resolve_config_path(explicit: Path | None) -> Path:
     return default_config_path()
 
 
-def _expand_path_like(value: str) -> str:
-    """``~`` in a local path is expanded; a remote (``https://``/``git+``)
-    manifest URI is left untouched."""
+def _expand_path_like(value: object) -> object:
+    """``~`` in a local path string is expanded; a remote (``https://``/
+    ``git+``) manifest URI is left untouched. A non-string value (e.g. a
+    manifest author's typo like ``default_manifest = 123``) is returned
+    unchanged rather than raising here — ``GlobalConfig.model_validate``
+    reports the type mismatch as a clean ``ConfigError`` afterward instead
+    of this function crashing with a raw ``TypeError`` first."""
+    if not isinstance(value, str):
+        return value
     if is_remote_uri(value):
         return value
     return str(Path(value).expanduser())
@@ -94,7 +100,7 @@ def _expand_config_paths(data: dict) -> None:
         if not isinstance(scope, dict):
             continue
         if "match_prefix" in scope:
-            scope["match_prefix"] = str(Path(scope["match_prefix"]).expanduser())
+            scope["match_prefix"] = _expand_path_like(scope["match_prefix"])
         if "manifest" in scope:
             scope["manifest"] = _expand_path_like(scope["manifest"])
 

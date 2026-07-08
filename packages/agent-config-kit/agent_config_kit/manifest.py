@@ -108,9 +108,16 @@ def _resolve_relative_paths(
                 cache_dir=cache_dir,
             )
 
-    for name, value in (data.get("skills", {}) or {}).items():
+    skills_data = data.get("skills", {}) or {}
+    if not isinstance(skills_data, dict):
+        raise ManifestError(
+            f"{manifest_path}: [skills] must be a table of skill-name -> "
+            f"path/table (the old [[skills]] array form is no longer "
+            f"supported), got {type(skills_data).__name__}"
+        )
+    for name, value in skills_data.items():
         if isinstance(value, str):
-            data["skills"][name] = _resolve_path_field(
+            skills_data[name] = _resolve_path_field(
                 value,
                 manifest_dir,
                 manifest_path=manifest_path,
