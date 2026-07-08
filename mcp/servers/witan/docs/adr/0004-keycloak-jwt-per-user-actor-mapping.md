@@ -132,6 +132,21 @@ function is tracked as an explicit follow-up
 (`tk-witan-wire-per-actor-omnigraphclient-into-every--f1f787`), not silently
 deferred.
 
+**Resolved** by that follow-up: rather than editing all 129 call sites (or
+threading a `client` parameter through every handler and helper), the
+module-level `client` name is now bound to a small proxy
+(`_ActorScopedClient`) whose `__getattr__` calls `_resolve_client()` on every
+access. `_resolve_client()` returns the single `_default_client` unchanged
+when `identity_cfg.oidc_issuer` is unset (byte-identical local/stdio
+behavior), and otherwise reads the validated JWT via fastmcp's
+`get_access_token()`, derives the actor id from its `sub` claim, and
+returns a per-actor `OmnigraphClient` built once and cached by actor id. A
+request with no access token in scope (an admin/migration CLI command run
+inside the deployed container, not an MCP tool call — FastMCP's own auth
+already rejects unauthenticated tool requests) also falls back to
+`_default_client`. See `witan/server.py` (`_resolve_client`,
+`_ActorScopedClient`) and `tests/test_actor_client.py`.
+
 ## Consequences
 
 - Closes the open question ADR-0009 left as a fallback: witan does its own
