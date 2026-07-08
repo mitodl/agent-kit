@@ -520,6 +520,159 @@ def test_apply_then_validate_then_prune_full_lifecycle(tmp_path, monkeypatch):
     _run_ok(app, ["validate", str(one_server), "--platform", "claude"])
 
 
+def test_apply_with_profile_only_installs_selected_entries(tmp_path, monkeypatch):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+
+        [mcp_servers.other]
+        kind = "stdio"
+        command = "other"
+
+        [profiles.universal]
+        mcp_servers = ["witan"]
+        """,
+    )
+
+    _run_ok(
+        app,
+        ["apply", str(manifest), "--platform", "claude", "--profile", "universal"],
+    )
+
+    cfg = json.loads((tmp_path / ".claude.json").read_text())
+    assert "witan" in cfg["mcpServers"]
+    assert "other" not in cfg["mcpServers"]
+
+
+def test_apply_profile_flag_overrides_manifest_default_profiles(tmp_path, monkeypatch):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+
+        [mcp_servers.other]
+        kind = "stdio"
+        command = "other"
+
+        [profiles.a]
+        mcp_servers = ["witan"]
+
+        [profiles.b]
+        mcp_servers = ["other"]
+
+        [options]
+        default_profiles = ["a"]
+        """,
+    )
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--profile", "b"])
+
+    cfg = json.loads((tmp_path / ".claude.json").read_text())
+    assert "other" in cfg["mcpServers"]
+    assert "witan" not in cfg["mcpServers"]
+
+
+def test_apply_no_profile_flag_uses_manifest_default_profiles(tmp_path, monkeypatch):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+
+        [mcp_servers.other]
+        kind = "stdio"
+        command = "other"
+
+        [profiles.a]
+        mcp_servers = ["witan"]
+
+        [options]
+        default_profiles = ["a"]
+        """,
+    )
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude"])
+
+    cfg = json.loads((tmp_path / ".claude.json").read_text())
+    assert "witan" in cfg["mcpServers"]
+    assert "other" not in cfg["mcpServers"]
+
+
+def test_apply_unknown_profile_exits_2(tmp_path, monkeypatch, capsys):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [profiles.universal]
+        """,
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["apply", str(manifest), "--profile", "does-not-exist"])
+
+    assert exc_info.value.code == 2
+    assert "does-not-exist" in capsys.readouterr().out
+
+
+def test_profiles_command_lists_profiles_with_resolved_counts(tmp_path, capsys):
+    from agent_config_kit.cli import app
+
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+
+        [profiles.universal]
+        mcp_servers = ["witan"]
+
+        [profiles.frontend]
+        inherits = ["universal"]
+        """,
+    )
+
+    _run_ok(app, ["profiles", str(manifest)])
+
+    out = capsys.readouterr().out
+    assert "universal" in out
+    assert "frontend" in out
+
+
+def test_profiles_command_reports_no_profiles(tmp_path, capsys):
+    from agent_config_kit.cli import app
+
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+
+    _run_ok(app, ["profiles", str(manifest)])
+
+    assert "no profiles" in capsys.readouterr().out
+
+
 def test_config_init_writes_all_commented_starter_at_default_location(
     tmp_path, monkeypatch
 ):

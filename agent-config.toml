@@ -6,11 +6,21 @@
 # installed by `witan setup`, not this manifest — witan owns its own
 # registration lifecycle.
 #
+# Profiles mirror the skills/ category layout (see AGENTS.md) so a
+# consumer picks up the MCP servers plus just the skills relevant to their
+# work, instead of the whole catalog. `universal` (validate-before-commit,
+# creating-skills, create-ol-pull-request, plus both MCP servers) is what
+# every other profile inherits — it's the baseline useful regardless of
+# specialty. Selecting no profile installs everything (profiles are
+# opt-in filters, not gates).
+#
 # Usage (from the repo root):
 #   uv tool install 'agent-config-kit[cli]'
-#   ac-kit apply agent-config.toml            # register on every detected platform
-#   ac-kit apply agent-config.toml --dry-run   # preview without writing
-#   ac-kit validate agent-config.toml          # check for drift
+#   ac-kit apply agent-config.toml                        # everything, every platform
+#   ac-kit apply agent-config.toml --profile python        # just the python profile
+#   ac-kit apply agent-config.toml --dry-run               # preview without writing
+#   ac-kit validate agent-config.toml                      # check for drift
+#   ac-kit profiles agent-config.toml                      # list profiles + entry counts
 #
 # WITAN_AUTHOR is optional and defaults to your git config user.name or $USER.
 
@@ -38,66 +48,52 @@ args = [
 ]
 env = { WITAN_AUTHOR = "<your-name>" }
 
-[[skills]]
-name = "docker-uv-image-builds"
-skill_md_path = "skills/containers/docker-uv-image-builds/SKILL.md"
+[skills]
+docker-uv-image-builds          = "skills/containers/docker-uv-image-builds/SKILL.md"
+dagster-code-location-structure = "skills/dagster/dagster-code-location-structure/SKILL.md"
+pulumi-modify-existing          = "skills/infrastructure/pulumi-modify-existing/SKILL.md"
+vault-k8s-auth                  = "skills/infrastructure/vault-k8s-auth/SKILL.md"
+create-ol-github-issue          = "skills/process/create-ol-github-issue/SKILL.md"
+create-ol-pull-request          = "skills/process/create-ol-pull-request/SKILL.md"
+create-ol-rfc-discussion        = "skills/process/create-ol-rfc-discussion/SKILL.md"
+dependency-pruning              = "skills/process/dependency-pruning/SKILL.md"
+dependency-updates              = "skills/process/dependency-updates/SKILL.md"
+generate-standup                = "skills/process/generate-standup/SKILL.md"
+github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
+screenshot-pr                   = "skills/process/screenshot-pr/SKILL.md"
+cyclopts-cli-scripts            = "skills/python/cyclopts-cli-scripts/SKILL.md"
+uv-python-workflow               = "skills/python/uv-python-workflow/SKILL.md"
+creating-skills                 = "skills/workflow/creating-skills/SKILL.md"
+validate-before-commit          = "skills/workflow/validate-before-commit/SKILL.md"
 
-[[skills]]
-name = "dagster-code-location-structure"
-skill_md_path = "skills/dagster/dagster-code-location-structure/SKILL.md"
+[profiles.universal]
+mcp_servers = ["witan", "witan-code"]
+skills = ["validate-before-commit", "creating-skills", "create-ol-pull-request"]
 
-[[skills]]
-name = "pulumi-modify-existing"
-skill_md_path = "skills/infrastructure/pulumi-modify-existing/SKILL.md"
+[profiles.python]
+inherits = ["universal"]
+skills = ["cyclopts-cli-scripts", "uv-python-workflow"]
 
-[[skills]]
-name = "vault-k8s-auth"
-skill_md_path = "skills/infrastructure/vault-k8s-auth/SKILL.md"
+[profiles.infrastructure]
+inherits = ["universal"]
+skills = ["pulumi-modify-existing", "vault-k8s-auth"]
 
-[[skills]]
-name = "create-ol-github-issue"
-skill_md_path = "skills/process/create-ol-github-issue/SKILL.md"
+[profiles.containers]
+inherits = ["universal"]
+skills = ["docker-uv-image-builds"]
 
-[[skills]]
-name = "create-ol-pull-request"
-skill_md_path = "skills/process/create-ol-pull-request/SKILL.md"
+[profiles.dagster]
+inherits = ["universal"]
+skills = ["dagster-code-location-structure"]
 
-[[skills]]
-name = "create-ol-rfc-discussion"
-skill_md_path = "skills/process/create-ol-rfc-discussion/SKILL.md"
-
-[[skills]]
-name = "dependency-pruning"
-skill_md_path = "skills/process/dependency-pruning/SKILL.md"
-
-[[skills]]
-name = "dependency-updates"
-skill_md_path = "skills/process/dependency-updates/SKILL.md"
-
-[[skills]]
-name = "generate-standup"
-skill_md_path = "skills/process/generate-standup/SKILL.md"
-
-[[skills]]
-name = "github-issue-triage"
-skill_md_path = "skills/process/github-issue-triage/SKILL.md"
-
-[[skills]]
-name = "screenshot-pr"
-skill_md_path = "skills/process/screenshot-pr/SKILL.md"
-
-[[skills]]
-name = "cyclopts-cli-scripts"
-skill_md_path = "skills/python/cyclopts-cli-scripts/SKILL.md"
-
-[[skills]]
-name = "uv-python-workflow"
-skill_md_path = "skills/python/uv-python-workflow/SKILL.md"
-
-[[skills]]
-name = "creating-skills"
-skill_md_path = "skills/workflow/creating-skills/SKILL.md"
-
-[[skills]]
-name = "validate-before-commit"
-skill_md_path = "skills/workflow/validate-before-commit/SKILL.md"
+[profiles.process]
+inherits = ["universal"]
+skills = [
+    "create-ol-github-issue",
+    "create-ol-rfc-discussion",
+    "dependency-pruning",
+    "dependency-updates",
+    "generate-standup",
+    "github-issue-triage",
+    "screenshot-pr",
+]

@@ -10,7 +10,7 @@ a manifest without pulling in ``cyclopts``/``rich``. See
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .fetch import FetchError, fetch_remote, is_remote_uri
 from .models import Hook, LspServer, McpServer, Scope, SkillSource
 from .plan import RegistrationBundle
+from .prune import hook_identity
 from .registry import known_platforms
 
 
@@ -50,12 +51,37 @@ class _ManifestOptionsModel(BaseModel):
 
     scope: Scope = Scope.GLOBAL
     platforms: list[str] | None = None
+    default_profiles: list[str] = Field(default_factory=list)
 
 
 @dataclass
 class ManifestOptions:
     scope: Scope = Scope.GLOBAL
     platforms: list[str] | None = None  # None => apply_all's own detection
+    default_profiles: list[str] = field(default_factory=list)
+
+
+class _ProfileModel(BaseModel):
+    """A ``[profiles.<name>]`` table (spec §4.1) — each field is a list of
+    entry keys selected from the manifest's own top-level tables, plus
+    ``inherits`` to union with other profiles first."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inherits: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    mcp_servers: list[str] = Field(default_factory=list)
+    hooks: list[str] = Field(default_factory=list)
+    lsp_servers: list[str] = Field(default_factory=list)
+
+
+@dataclass
+class ProfileDef:
+    inherits: list[str] = field(default_factory=list)
+    skills: list[str] = field(default_factory=list)
+    mcp_servers: list[str] = field(default_factory=list)
+    hooks: list[str] = field(default_factory=list)
+    lsp_servers: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -63,6 +89,7 @@ class Manifest:
     bundle: RegistrationBundle
     options: ManifestOptions
     path: Path  # the manifest file this was loaded from
+    profiles: dict[str, ProfileDef] = field(default_factory=dict)
 
 
 def _resolve_path_field(
@@ -163,6 +190,134 @@ def _build_skill_sources(
     return sources
 
 
+def _parse_profiles(data: dict, path: Path) -> dict[str, ProfileDef]:
+    profiles_data = data.get("profiles", {}) or {}
+    if not isinstance(profiles_data, dict):
+        raise ManifestError(
+            f"{path}: [profiles] must be a table of profile-name -> table, got "
+            f"{type(profiles_data).__name__}"
+        )
+    profiles: dict[str, ProfileDef] = {}
+    for name, prof_data in profiles_data.items():
+        try:
+            prof_model = _ProfileModel.model_validate(prof_data)
+        except ValidationError as exc:
+            raise ManifestError(_format_validation_error(exc, path)) from exc
+        profiles[name] = ProfileDef(
+            inherits=prof_model.inherits,
+            skills=prof_model.skills,
+            mcp_servers=prof_model.mcp_servers,
+            hooks=prof_model.hooks,
+            lsp_servers=prof_model.lsp_servers,
+        )
+    return profiles
+
+
+def _detect_profile_cycles(profiles: dict[str, ProfileDef], path: Path) -> None:
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = dict.fromkeys(profiles, WHITE)
+
+    def _visit(name: str, chain: list[str]) -> None:
+        color[name] = GRAY
+        for parent in profiles[name].inherits:
+            if parent not in profiles:
+                raise ManifestError(
+                    f"{path}: profiles.{name}.inherits: no such profile {parent!r}"
+                )
+            if color[parent] == GRAY:
+                cycle = " -> ".join([*chain, name, parent])
+                raise ManifestError(f"{path}: profile inheritance cycle: {cycle}")
+            if color[parent] == WHITE:
+                _visit(parent, [*chain, name])
+        color[name] = BLACK
+
+    for name in profiles:
+        if color[name] == WHITE:
+            _visit(name, [])
+
+
+def _validate_profile_entry_refs(
+    profiles: dict[str, ProfileDef], bundle: RegistrationBundle, path: Path
+) -> None:
+    """A profile's entry-key lists must reference real top-level entries —
+    fail fast on a typo'd reference (spec §4.2 step 3), at load time so this
+    is caught even for a profile that isn't selected this run."""
+    valid_keys = {
+        "skills": {s.name for s in bundle.skills},
+        "mcp_servers": set(bundle.mcp_servers),
+        "hooks": {hook_identity(h) for h in bundle.hooks},
+        "lsp_servers": set(bundle.lsp_servers),
+    }
+    for name, profile in profiles.items():
+        for field_name, keys in valid_keys.items():
+            for key in getattr(profile, field_name):
+                if key not in keys:
+                    raise ManifestError(
+                        f"{path}: profiles.{name}.{field_name}: {key!r} does "
+                        "not match any top-level entry"
+                    )
+
+
+def resolve_profile(manifest: Manifest, names: list[str]) -> RegistrationBundle:
+    """Union the resolved entries of every named profile, expanding
+    ``inherits`` transitively (spec §4.2). ``names=[]`` (no profile selected)
+    returns the manifest's full bundle unchanged — profiles are opt-in
+    filters, not gates (O-DEFAULT); a manifest can still narrow the
+    zero-selection default via ``[options] default_profiles``."""
+    if not names:
+        return manifest.bundle
+
+    selected: dict[str, set[str]] = {
+        "skills": set(),
+        "mcp_servers": set(),
+        "hooks": set(),
+        "lsp_servers": set(),
+    }
+    seen: set[str] = set()
+
+    def _collect(name: str) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        profile = manifest.profiles.get(name)
+        if profile is None:
+            raise ManifestError(
+                f"{manifest.path}: --profile {name!r}: no such profile in this manifest"
+            )
+        for parent in profile.inherits:
+            _collect(parent)
+        selected["skills"].update(profile.skills)
+        selected["mcp_servers"].update(profile.mcp_servers)
+        selected["hooks"].update(profile.hooks)
+        selected["lsp_servers"].update(profile.lsp_servers)
+
+    for name in names:
+        _collect(name)
+
+    # Filter the manifest's own ordered lists rather than iterating the
+    # `selected` sets directly — set iteration order is randomized per
+    # process (PYTHONHASHSEED), which would make the resolved bundle's
+    # hook/skill order nondeterministic across runs (PR #78 review).
+    return RegistrationBundle(
+        mcp_servers={
+            k: v
+            for k, v in manifest.bundle.mcp_servers.items()
+            if k in selected["mcp_servers"]
+        },
+        hooks=[
+            h for h in manifest.bundle.hooks if hook_identity(h) in selected["hooks"]
+        ],
+        skills=[s for s in manifest.bundle.skills if s.name in selected["skills"]],
+        lsp_servers={
+            k: v
+            for k, v in manifest.bundle.lsp_servers.items()
+            if k in selected["lsp_servers"]
+        },
+        # Profile-independent scalar in v1 (O-INSTR, spec §9).
+        instructions=manifest.bundle.instructions,
+    )
+
+
 def _format_validation_error(exc: ValidationError, path: Path) -> str:
     lines = [f"{path}: manifest failed validation:"]
     for err in exc.errors():
@@ -210,6 +365,9 @@ def load_manifest(path: Path, *, cache_dir: Path | None = None) -> Manifest:
                 f"(known: {', '.join(known_platforms())})"
             )
 
+    profiles = _parse_profiles(data, path)
+    data.pop("profiles", None)
+
     try:
         bundle_model = ManifestBundle.model_validate(data)
     except ValidationError as exc:
@@ -222,7 +380,21 @@ def load_manifest(path: Path, *, cache_dir: Path | None = None) -> Manifest:
         lsp_servers=bundle_model.lsp_servers,
         instructions=bundle_model.instructions,
     )
+
+    _detect_profile_cycles(profiles, path)
+    _validate_profile_entry_refs(profiles, bundle, path)
+
+    if options_model.default_profiles:
+        unknown_profiles = sorted(set(options_model.default_profiles) - set(profiles))
+        if unknown_profiles:
+            raise ManifestError(
+                f"{path}: [options] default_profiles: no such profile(s): "
+                f"{', '.join(unknown_profiles)}"
+            )
+
     options = ManifestOptions(
-        scope=options_model.scope, platforms=options_model.platforms
+        scope=options_model.scope,
+        platforms=options_model.platforms,
+        default_profiles=options_model.default_profiles,
     )
-    return Manifest(bundle=bundle, options=options, path=path)
+    return Manifest(bundle=bundle, options=options, path=path, profiles=profiles)
