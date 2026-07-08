@@ -301,7 +301,7 @@ def task_run(
     console.print("  [1] Consolidate: one agent session covering all tasks")
     console.print("  [2] Sequential: a separate agent invocation per task")
     try:
-        choice = Prompt.ask("Choice", choices=["1", "2"], default="1")
+        choice = Prompt.ask("Choice", choices=["1", "2"], default="1", console=console)
     except (EOFError, KeyboardInterrupt):
         console.print("\n[yellow]Cancelled.[/yellow]")
         raise SystemExit(0)
