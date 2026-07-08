@@ -616,3 +616,47 @@ def test_default_config_toml_reflects_actual_defaults():
     scan = ScanConfig()
     assert f'secret_action = "{scan.secret_action}"' in text
     assert f"enabled = {str(scan.enabled).lower()}" in text
+
+
+# ── IdentityConfig / load_identity_config (ADR 0004) ─────────────────────────
+
+
+def test_load_identity_config_defaults_disabled(monkeypatch):
+    from witan.config import load_identity_config
+
+    monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("WITAN_OIDC_AUDIENCE", raising=False)
+    monkeypatch.delenv("WITAN_ACTOR_TOKENS_FILE", raising=False)
+    identity = load_identity_config()
+    assert identity.oidc_issuer is None
+    assert identity.actor_tokens_file is None
+
+
+def test_load_identity_config_from_env(monkeypatch):
+    from witan.config import load_identity_config
+
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/witan")
+    monkeypatch.setenv("WITAN_OIDC_AUDIENCE", "witan")
+    monkeypatch.setenv("WITAN_ACTOR_TOKENS_FILE", "/etc/witan/actor-tokens.json")
+    identity = load_identity_config()
+    assert identity.oidc_issuer == "https://sso.example.org/realms/witan"
+    assert identity.oidc_audience == "witan"
+    assert identity.actor_tokens_file == "/etc/witan/actor-tokens.json"
+
+
+def test_load_identity_config_issuer_without_tokens_file_raises(monkeypatch):
+    from witan.config import load_identity_config
+
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/witan")
+    monkeypatch.delenv("WITAN_ACTOR_TOKENS_FILE", raising=False)
+    with pytest.raises(ValueError, match="must be set together"):
+        load_identity_config()
+
+
+def test_load_identity_config_tokens_file_without_issuer_raises(monkeypatch):
+    from witan.config import load_identity_config
+
+    monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
+    monkeypatch.setenv("WITAN_ACTOR_TOKENS_FILE", "/etc/witan/actor-tokens.json")
+    with pytest.raises(ValueError, match="must be set together"):
+        load_identity_config()

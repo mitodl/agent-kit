@@ -123,6 +123,51 @@ def load_rank_config() -> RankConfig:
         raise _rank_config_error(exc, sources) from exc
 
 
+class IdentityConfig(BaseModel):
+    """Keycloak JWT → omnigraph per-user actor mapping (ADR 0004).
+
+    Sourced entirely from ``WITAN_OIDC_*``/``WITAN_ACTOR_TOKENS_FILE`` env
+    vars — this is deployment/ops config for the shared ``streamable-http``
+    service, not something an individual local user sets in config.toml.
+    ``oidc_issuer`` unset means the deployed-auth path is disabled entirely
+    (local ``stdio`` usage never sets it).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    oidc_issuer: str | None = None
+    """Keycloak realm issuer URL, e.g. https://sso.example.org/realms/ol-platform-engineering."""
+
+    oidc_audience: str | None = None
+    """Expected JWT audience claim for this witan deployment."""
+
+    actor_tokens_file: str | None = None
+    """Path to the {actor_id: token} JSON map — same artifact omnigraph-server
+    reads via OMNIGRAPH_SERVER_BEARER_TOKENS_FILE. Required when oidc_issuer
+    is set."""
+
+
+def load_identity_config() -> IdentityConfig:
+    """Resolve IdentityConfig from WITAN_OIDC_ISSUER / _AUDIENCE / WITAN_ACTOR_TOKENS_FILE.
+
+    Raises ValueError if oidc_issuer is set without actor_tokens_file (or vice
+    versa) — a half-configured deployment should fail loudly at startup
+    rather than silently leave every request unauthenticated or unresolvable.
+    """
+    issuer = os.environ.get("WITAN_OIDC_ISSUER")
+    tokens_file = os.environ.get("WITAN_ACTOR_TOKENS_FILE")
+    if bool(issuer) != bool(tokens_file):
+        raise ValueError(
+            "WITAN_OIDC_ISSUER and WITAN_ACTOR_TOKENS_FILE must be set together: "
+            f"WITAN_OIDC_ISSUER={issuer!r}, WITAN_ACTOR_TOKENS_FILE={tokens_file!r}."
+        )
+    return IdentityConfig(
+        oidc_issuer=issuer,
+        oidc_audience=os.environ.get("WITAN_OIDC_AUDIENCE"),
+        actor_tokens_file=tokens_file,
+    )
+
+
 ScanAction = Literal["block", "redact", "warn"]
 """What to do when a scanner flags content on the write path (ADR 0001 §D3).
 
