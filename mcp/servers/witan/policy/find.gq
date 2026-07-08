@@ -1,0 +1,5 @@
+// Stub stored query so `invoke_query` has a target to authorize in the fixture.
+query find_node($slug: String) {
+  match { $n: Node { slug: $slug } }
+  return { $n.slug }
+}

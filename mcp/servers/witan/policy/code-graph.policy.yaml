@@ -1,0 +1,65 @@
+# witan v1 Cedar policy — Layer-2 per-repo code graphs.
+#
+# applies_to: EVERY per-repo code-graph id served by the cluster. In the fixture
+# below (policy/cluster.yaml) that is [code_example]; in the deployed cluster,
+# ol-infrastructure templates the full list of `<sanitize_slug(repo)>` graph ids
+# (one per indexed repository) into this bundle's applies_to. All per-repo code
+# graphs share the SAME rule set, so one bundle governs all of them.
+#
+# Branch model (witan-code repo.py:store_branch): the repo's default git branch
+# (main/master) maps to the code store's **main** branch — the committed,
+# deliberately-merged index. Every other git branch (WIP feature branches,
+# detached HEAD → _detached) maps to a NON-main store branch. So:
+#
+#   store `main`      == protected (reviewed index for the repo's default branch)
+#   everything else   == unprotected (per-user / per-session WIP reindexes)
+#
+# Humans reindex freely on their own WIP branches but never mutate `main`
+# directly; svc-witan-ci owns main-branch writes, merges, and schema applies —
+# WIP branches are promoted into main deliberately, not by ambient reindex.
+#
+# Group membership is templated by ol-infrastructure — see server.policy.yaml.
+version: 1
+
+groups:
+  witan-users: [act-alice, act-bob]
+  witan-ci: [act-svc-witan-ci]
+
+protected_branches: [main]
+
+rules:
+  - id: users-read-any-branch
+    allow:
+      actors: { group: witan-users }
+      actions: [read, export]
+      branch_scope: any
+  - id: users-invoke
+    allow:
+      actors: { group: witan-users }
+      actions: [invoke_query]
+  # Humans reindex on their own WIP branches only — never on the protected main.
+  - id: users-write-wip
+    allow:
+      actors: { group: witan-users }
+      actions: [change]
+      branch_scope: unprotected
+  - id: users-manage-wip-branches
+    allow:
+      actors: { group: witan-users }
+      actions: [branch_create, branch_delete]
+      target_branch_scope: unprotected
+  # svc-witan-ci owns the protected main index: reindex-on-merge, deliberate
+  # promotion of a WIP branch, and schema migrations. `change` scopes on the
+  # source branch (branch_scope); branch ops scope on the destination
+  # (target_branch_scope) — keep them in separate rules so each action gets the
+  # scope kind it actually reads.
+  - id: ci-write-any-branch
+    allow:
+      actors: { group: witan-ci }
+      actions: [change]
+      branch_scope: any
+  - id: ci-manage-any-branch
+    allow:
+      actors: { group: witan-ci }
+      actions: [branch_create, branch_delete, branch_merge, schema_apply]
+      target_branch_scope: any

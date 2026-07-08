@@ -1,0 +1,16 @@
+# Declarative policy tests for the server-level bundle (graph_list).
+# Run: omnigraph policy test --cluster policy --tests policy/tests/server.tests.yaml
+version: 1
+cases:
+  - id: user-can-list-graphs
+    actor: act-alice
+    action: graph_list
+    expect: allow
+  - id: ci-can-list-graphs
+    actor: act-svc-witan-ci
+    action: graph_list
+    expect: allow
+  - id: stranger-cannot-list-graphs
+    actor: act-nobody
+    action: graph_list
+    expect: deny

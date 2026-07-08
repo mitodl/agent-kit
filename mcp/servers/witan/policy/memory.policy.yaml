@@ -1,0 +1,52 @@
+# witan v1 Cedar policy — Layer-1 shared work/knowledge graph (applies_to: [memory]).
+#
+# The memory graph holds Memory / Task / Workflow* / CodeBranch nodes. It is a
+# FLAT, single-branch, team-shared graph: every witan user reads and writes it.
+#
+# IMPORTANT — no per-node-type granularity is possible. omnigraph Cedar's finest
+# scope is graph + branch; "Per-type and per-row authority is the query-layer's
+# job" and is not implemented server-side (per
+# tk-witan-v1-cedar-policy-bundle-team-repo-scoped-re-77655e's spike findings).
+# So do NOT attempt "Memory yes, Task no" rules here — they are not expressible.
+# Any witan-user who can change this graph can change every node kind in it.
+#
+# Because the graph is single-branch, writes land on the store's main branch;
+# `change` is therefore granted with branch_scope: any (an `unprotected`-only
+# grant would deny all writes). Schema migrations are deliberate ops, restricted
+# to the CI/admin actor.
+#
+# Group membership is templated by ol-infrastructure — see server.policy.yaml.
+version: 1
+
+groups:
+  witan-users: [act-alice, act-bob]
+  witan-ci: [act-svc-witan-ci]
+
+rules:
+  - id: users-read-memory
+    allow:
+      actors: { group: witan-users }
+      actions: [read, export]
+      branch_scope: any
+  - id: users-invoke-memory
+    allow:
+      actors: { group: witan-users }
+      actions: [invoke_query]
+  - id: users-write-memory
+    allow:
+      actors: { group: witan-users }
+      actions: [change]
+      branch_scope: any
+  - id: ci-write-memory
+    allow:
+      actors: { group: witan-ci }
+      actions: [change]
+      branch_scope: any
+  # Schema migrations (schema_apply) are deliberate, CI/admin-only operations.
+  # NOTE: `omnigraph repair`/`optimize`/`cleanup` are direct-storage-only and
+  # CANNOT be Cedar-gated — restrict those with AWS IAM on the bucket instead.
+  - id: ci-schema-apply-memory
+    allow:
+      actors: { group: witan-ci }
+      actions: [schema_apply]
+      target_branch_scope: any

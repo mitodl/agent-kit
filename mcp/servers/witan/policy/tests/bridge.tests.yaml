@@ -1,0 +1,30 @@
+# Declarative policy tests for the Layer-2.5 cross-repo bridge graph bundle.
+# Run: omnigraph policy test --cluster policy --graph bridge \
+#        --tests policy/tests/bridge.tests.yaml
+version: 1
+cases:
+  - id: user-reads-bridge
+    actor: act-alice
+    action: read
+    branch: main
+    expect: allow
+  - id: user-invokes-bridge
+    actor: act-alice
+    action: invoke_query
+    expect: allow
+  # The bridge is derived — humans never write it.
+  - id: user-cannot-write-bridge
+    actor: act-alice
+    action: change
+    branch: main
+    expect: deny
+  - id: ci-writes-bridge
+    actor: act-svc-witan-ci
+    action: change
+    branch: main
+    expect: allow
+  - id: stranger-cannot-read-bridge
+    actor: act-nobody
+    action: read
+    branch: main
+    expect: deny

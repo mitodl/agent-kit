@@ -1,0 +1,35 @@
+# witan v1 Cedar policy — Layer-2.5 cross-repo bridge graph (applies_to: [bridge]).
+#
+# The bridge store (_bridge.omni) links SOA repos by shared contract keys
+# (env_var / endpoint / package / service). It is DERIVED, not authored: it is
+# (re)built by the code-graph indexer, so humans read it but only svc-witan-ci
+# writes it. Single-branch/flat, like the memory graph.
+#
+# Group membership is templated by ol-infrastructure — see server.policy.yaml.
+version: 1
+
+groups:
+  witan-users: [act-alice, act-bob]
+  witan-ci: [act-svc-witan-ci]
+
+rules:
+  - id: users-read-bridge
+    allow:
+      actors: { group: witan-users }
+      actions: [read, export]
+      branch_scope: any
+  - id: users-invoke-bridge
+    allow:
+      actors: { group: witan-users }
+      actions: [invoke_query]
+  # Only CI writes the bridge — it is a derived cross-repo projection.
+  - id: ci-write-bridge
+    allow:
+      actors: { group: witan-ci }
+      actions: [change]
+      branch_scope: any
+  - id: ci-schema-apply-bridge
+    allow:
+      actors: { group: witan-ci }
+      actions: [schema_apply]
+      target_branch_scope: any

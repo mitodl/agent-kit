@@ -1,0 +1,36 @@
+# Declarative policy tests for the Layer-1 shared work/knowledge graph bundle.
+# Run: omnigraph policy test --cluster policy --graph memory \
+#        --tests policy/tests/memory.tests.yaml
+version: 1
+cases:
+  - id: user-reads-memory
+    actor: act-alice
+    action: read
+    branch: main
+    expect: allow
+  - id: user-invokes-memory
+    actor: act-alice
+    action: invoke_query
+    expect: allow
+  # Flat shared graph — humans write the (single) main branch directly.
+  - id: user-writes-memory-main
+    actor: act-alice
+    action: change
+    branch: main
+    expect: allow
+  # Schema migrations are CI/admin-only.
+  - id: user-cannot-schema-apply-memory
+    actor: act-bob
+    action: schema_apply
+    target_branch: main
+    expect: deny
+  - id: ci-schema-applies-memory
+    actor: act-svc-witan-ci
+    action: schema_apply
+    target_branch: main
+    expect: allow
+  - id: stranger-cannot-read-memory
+    actor: act-nobody
+    action: read
+    branch: main
+    expect: deny

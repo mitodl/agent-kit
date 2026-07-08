@@ -1,0 +1,74 @@
+# Declarative policy tests for the Layer-2 per-repo code-graph bundle.
+# Run: omnigraph policy test --cluster policy --graph code_example \
+#        --tests policy/tests/code-graph.tests.yaml
+version: 1
+cases:
+  # Humans: read anywhere, reindex WIP, never touch protected main.
+  - id: user-reads-main
+    actor: act-alice
+    action: read
+    branch: main
+    expect: allow
+  - id: user-reads-wip
+    actor: act-alice
+    action: read
+    branch: feature-x
+    expect: allow
+  - id: user-invokes-query
+    actor: act-alice
+    action: invoke_query
+    expect: allow
+  - id: user-writes-wip
+    actor: act-alice
+    action: change
+    branch: feature-x
+    expect: allow
+  - id: user-cannot-write-main
+    actor: act-alice
+    action: change
+    branch: main
+    expect: deny
+  - id: user-creates-wip-branch
+    actor: act-bob
+    action: branch_create
+    target_branch: feature-y
+    expect: allow
+  - id: user-cannot-create-main
+    actor: act-bob
+    action: branch_create
+    target_branch: main
+    expect: deny
+  - id: user-cannot-merge-to-main
+    actor: act-bob
+    action: branch_merge
+    target_branch: main
+    expect: deny
+  - id: user-cannot-schema-apply
+    actor: act-bob
+    action: schema_apply
+    target_branch: main
+    expect: deny
+
+  # svc-witan-ci: owns the protected main index.
+  - id: ci-writes-main
+    actor: act-svc-witan-ci
+    action: change
+    branch: main
+    expect: allow
+  - id: ci-merges-to-main
+    actor: act-svc-witan-ci
+    action: branch_merge
+    target_branch: main
+    expect: allow
+  - id: ci-schema-applies-main
+    actor: act-svc-witan-ci
+    action: schema_apply
+    target_branch: main
+    expect: allow
+
+  # Unknown actor: default-deny.
+  - id: stranger-cannot-read
+    actor: act-nobody
+    action: read
+    branch: main
+    expect: deny
