@@ -25,15 +25,21 @@ def test_reindex_then_query_tools(sample_repo, monkeypatch):
 
     helper_def = _fn(srv.code_find_definition)("helper")
     assert helper_def
-    callers = _fn(srv.code_callers)(helper_def[0]["slug"])
+    # The id round-trips under one name: definitions expose `symbol_id`, which
+    # is exactly what the id-routed tools consume (no `slug` on symbol output).
+    helper_id = helper_def[0]["symbol_id"]
+    assert "slug" not in helper_def[0]
+    callers = _fn(srv.code_callers)(helper_id)
     assert "Service.run" in {c["qualified_name"] for c in callers}
+    assert all("symbol_id" in c and "slug" not in c for c in callers)
 
-    impact = _fn(srv.code_impact)(helper_def[0]["slug"])
-    assert impact["root"] == helper_def[0]["slug"]
+    impact = _fn(srv.code_impact)(helper_id)
+    assert impact["root"] == helper_id
     assert "Service.run" in {s["qualified_name"] for s in impact["impacted"]}
 
     hits = _fn(srv.code_search_symbol)("helper")
     assert any(h["name"] == "helper" for h in hits)
+    assert all("symbol_id" in h for h in hits)
 
 
 @requires_stack

@@ -61,6 +61,6 @@ def test_repo_scope_route_and_fanout(tmp_path, monkeypatch):
 
     # symbol-id routing: callers of repo-a's `shared` resolve in repo-a's store.
     a_shared = _fn(srv.code_find_definition)("shared", repo=RA)[0]
-    callers = _fn(srv.code_callers)(a_shared["slug"])
+    callers = _fn(srv.code_callers)(a_shared["symbol_id"])
     assert any(c["qualified_name"] == "alpha" for c in callers)
     assert all(c["repo"] == RA for c in callers)

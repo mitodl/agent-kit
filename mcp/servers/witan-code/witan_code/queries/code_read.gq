@@ -1,7 +1,9 @@
 // Code Graph — read queries.
 //
 // Dispatch strategy mirrors witan: the MCP server picks the named
-// query based on the call. Symbol ids are `repo#path::QualifiedName`.
+// query based on the call. Symbol ids are `<repo>#<path/to/file.py>::<Name>`.
+// Queries project the id as `slug`; the server renames it to `symbol_id`
+// (see server._as_symbol_id) so it round-trips under the tools' param name.
 
 // ── Definition lookup ─────────────────────────────────────────────
 
