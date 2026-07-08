@@ -15,9 +15,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 
 from . import config as cfg_module
+from . import elicit
 from . import readiness
 from . import repo as repo_module
 from . import scan
@@ -1003,7 +1004,9 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
 
 
 @mcp.tool
-def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
+async def memory_link(
+    from_slug: str, to_slug: str, kind: MemoryLinkKind, ctx: Context | None = None
+) -> dict:
     """
     Create a typed edge between two memories.
 
@@ -1070,6 +1073,23 @@ def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
             "kind": kind,
             "linked": False,
             "missing": missing,
+        }
+
+    # ``supersedes`` hides the older memory from default search — confirm that
+    # loss of visibility. Headless/unsupported clients proceed as before; only an
+    # explicit decline aborts. Other kinds don't hide anything, so no prompt.
+    if kind == "supersedes" and not await elicit.confirm(
+        ctx,
+        f"Superseding hides {to_slug} from default memory_search results "
+        f"(in favor of {from_slug}). Proceed?",
+        default_when_unsupported=True,
+    ):
+        return {
+            "from": from_slug,
+            "to": to_slug,
+            "kind": kind,
+            "linked": False,
+            "reason": "declined",
         }
 
     client.change(
@@ -1245,6 +1265,10 @@ WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 WorkflowStatus = Literal["active", "completed", "abandoned"]
 
 _PHASE_ORDER = {"discovery": 0, "spec": 1, "implementation": 2, "delivery": 3}
+
+# Below this, a completion outcome is "thin" enough to offer to expand it before
+# it's sealed into the immutable corpus trace (workflow_project_complete).
+_THIN_OUTCOME_CHARS = 40
 
 
 def _advance_advisory(prev_phase: str | None, new_phase: str) -> str | None:
@@ -1513,10 +1537,11 @@ def workflow_project_list(
 
 
 @mcp.tool
-def workflow_project_advance(
+async def workflow_project_advance(
     slug: str,
     phase: WorkflowPhase,
     github_pr: str | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """
     Advance a workflow project to the next phase.
@@ -1536,6 +1561,20 @@ def workflow_project_advance(
     now = _now_iso()
     before = client.read("read.gq", "get_workflow_project", {"slug": slug})
     prev_phase = before[0].get("phase") if before else None
+    advisory = _advance_advisory(prev_phase, phase)
+
+    # A backward/skip transition (advisory set AND the phase actually changes) is
+    # confirmed before committing. Headless/unsupported clients proceed as before;
+    # only an explicit decline aborts, leaving the project untouched.
+    if (
+        advisory
+        and prev_phase != phase
+        and not await elicit.confirm(
+            ctx, f"{advisory} Proceed with the advance?", default_when_unsupported=True
+        )
+    ):
+        current = before[0] if before else {"slug": slug, "phase": prev_phase}
+        return {**current, "advisory": advisory, "advanced": False}
 
     client.change(
         "mutations.gq",
@@ -1546,17 +1585,17 @@ def workflow_project_advance(
     result = rows[0] if rows else {"slug": slug, "phase": phase}
 
     # Soft validation: flag an unusual transition without blocking it.
-    advisory = _advance_advisory(prev_phase, phase)
     if advisory:
         result["advisory"] = advisory
     return result
 
 
 @mcp.tool
-def workflow_project_complete(
+async def workflow_project_complete(
     slug: str,
     outcome: str,
     github_pr: str | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """
     Mark a workflow project as completed and assemble its corpus trace.
@@ -1581,6 +1620,18 @@ def workflow_project_complete(
     existing = client.read("read.gq", "get_trace", {"slug": trace_slug})
     if existing:
         return {"project_slug": slug, "trace_slug": trace_slug, "existed": True}
+
+    # Completing seals an immutable corpus trace; a thin outcome makes a poor
+    # permanent record. When it's terse, offer to expand it. Headless/unsupported
+    # clients (or a decline) keep the provided outcome — nothing is blocked.
+    if len(outcome.strip()) < _THIN_OUTCOME_CHARS:
+        outcome = await elicit.text(
+            ctx,
+            f"Completing {slug} writes an immutable corpus trace. The current "
+            f"outcome is brief ({outcome!r}). Provide a fuller narrative of what "
+            "was delivered:",
+            default=outcome,
+        )
 
     client.change(
         "mutations.gq",
@@ -2571,8 +2622,11 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
 
 
 @mcp.tool
-def task_claim(
-    slug: str, assignee: str | None = None, force: bool = False
+async def task_claim(
+    slug: str,
+    assignee: str | None = None,
+    force: bool = False,
+    ctx: Context | None = None,
 ) -> dict | None:
     """
     Claim a task for work: set it ``in_progress`` under ``assignee`` with a lease.
@@ -2633,13 +2687,24 @@ def task_claim(
     claimed_at = task.get("claimed_at")
     held = status == "in_progress" and current_holder and not _lease_expired(claimed_at)
     if held and current_holder != holder and not force:
-        return {
-            "slug": slug,
-            "claimed": False,
-            "reason": "held",
-            "held_by": current_holder,
-            "claimed_at": claimed_at,
-        }
+        # Offer to steal instead of a flat refusal. Headless/unsupported clients
+        # get the historical behavior (no steal); an explicit confirm proceeds as
+        # if ``force`` had been passed.
+        stole = await elicit.confirm(
+            ctx,
+            f"Task {slug} is held by {current_holder} (claimed {claimed_at}). "
+            "Steal the claim?",
+            default_when_unsupported=False,
+        )
+        if not stole:
+            return {
+                "slug": slug,
+                "claimed": False,
+                "reason": "held",
+                "held_by": current_holder,
+                "claimed_at": claimed_at,
+            }
+        force = True
 
     now = _now_iso()
     claim = {"status": "in_progress", "assignee": holder, "claimed_at": now}

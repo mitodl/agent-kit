@@ -1,6 +1,7 @@
 """Tests for the UserPromptSubmit context-injection hook (witan/context.py),
 focused on the CodeBranch "In-Flight Branch" section."""
 
+import asyncio
 import subprocess
 
 from .conftest import SCHEMA, requires_omnigraph
@@ -69,7 +70,7 @@ def test_inject_context_surfaces_in_flight_branch_task(tmp_path, monkeypatch):
     monkeypatch.chdir(base)
 
     task = _unwrap(srv.task_create)(title="ctx task", description="x")
-    _unwrap(srv.task_claim)(task["slug"])
+    asyncio.run(_unwrap(srv.task_claim)(task["slug"], ctx=None))
 
     text = ctx_module.inject_context(str(store), queries_dir, None)
     assert "## In-Flight Branch" in text
