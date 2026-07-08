@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.3.4] - 2026-07-08
+
+### Added
+
+- **`agent-kit manifest init [REPO] [--output PATH] [--force]`**: walks a
+  repo for `SKILL.md` files and generates a manifest's `[skills]` table
+  instead of requiring each entry to be hand-written. Each skill's name is
+  taken from its `SKILL.md` frontmatter `name` field, falling back to its
+  parent directory name; dot-directories (`.git`, `.venv`, a
+  `.claude/worktrees` checkout, ...) and common vendor directories
+  (`node_modules`, `site-packages`, `dist`, `build`, ...) are pruned during
+  the walk. Fails fast (exit 2) rather than silently overwriting/mangling
+  on a duplicate derived name or one that doesn't satisfy the Agent Skills
+  spec's slug/length constraints (1-64 chars, matching `SkillSource`'s own
+  validation). This is the only discovery agent-kit ever does — `apply`/
+  `validate` never auto-scan a repo for skills, only read what a manifest
+  explicitly declares.
+- `agent-kit config init`'s generated template comments now show real
+  GitHub URI forms (`https://raw.githubusercontent.com/...`,
+  `git+https://github.com/...@ref#subdirectory=...`) for
+  `default_manifest`/`[[org]]`/`[[scope]]` `manifest` fields, replacing a
+  placeholder domain that wasn't a copy-pasteable example.
+
+### Fixed
+
+- **Explicit remote `MANIFEST` argument**: `agent-kit apply/validate/
+  profiles <https://... | git+...>` previously failed — `MANIFEST` was
+  typed `Path`, so cyclopts' `Path` coercion collapsed a URI's
+  `scheme://` into `scheme:/` before any remote-URI check ran, and the
+  explicit-argument branch never checked `is_remote_uri` in the first
+  place. Remote manifests only ever worked when resolved indirectly
+  through the global config's `default_manifest`/`[[org]]`/`[[scope]]`.
+  `MANIFEST` is now a plain string routed through a `_materialize_manifest_arg`
+  helper (mirrors `resolve.py`'s `_materialize`) — a `git+` URI clones the
+  whole repo, so the manifest's own relative `skill_md_path`/`entry_path`/
+  `include` values still resolve against its location inside that
+  checkout (M5), exactly as a local manifest would.
+
 ## [0.3.3] - 2026-07-08
 
 ### Fixed
