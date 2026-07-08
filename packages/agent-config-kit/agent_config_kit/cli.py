@@ -31,7 +31,7 @@ except ImportError as exc:
 from .config import load_global_config, resolve_config_path
 from .diff import Drift
 from .diff import diff as diff_bundle
-from .fetch import FetchError
+from .fetch import FetchError, fetch_remote, is_remote_uri
 from .manifest import ManifestError, load_manifest, resolve_profile
 from .models import SKILL_NAME_PATTERN, Scope
 from .plan import InstallResult
@@ -45,7 +45,11 @@ from .prune import (
     write_state,
 )
 from .registry import detect_installed_platforms, known_platforms
-from .resolve import find_repo_root, resolve_zero_arg_manifest
+from .resolve import (
+    default_manifest_cache_dir,
+    find_repo_root,
+    resolve_zero_arg_manifest,
+)
 
 app = cyclopts.App(
     name="agent-kit",
@@ -450,15 +454,37 @@ def _resolve_profiles(
     return list(manifest_default_profiles)
 
 
+def _materialize_manifest_arg(value: str, *, cache_dir: Path | None) -> Path:
+    """A local path or a remote ``https://``/``git+`` URI — the same value
+    shape ``include``/``skill_md_path`` and the global config's
+    ``default_manifest``/``[[org]]``/``[[scope]]`` ``manifest`` fields
+    accept (``resolve.py``'s ``_materialize``). Takes a plain ``str``, not a
+    ``Path``, because routing a CLI argument through cyclopts' ``Path``
+    coercion first collapses a URI's ``scheme://`` into ``scheme:/``
+    (``pathlib``'s POSIX separator normalization), silently breaking
+    ``is_remote_uri``'s prefix check before this function ever sees it."""
+    if is_remote_uri(value):
+        try:
+            resolved_cache_dir = (
+                cache_dir if cache_dir is not None else default_manifest_cache_dir()
+            )
+            return fetch_remote(value, resolved_cache_dir)
+        except FetchError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise SystemExit(2) from exc
+    return Path(value).expanduser()
+
+
 def _resolve_manifest_arg(
-    manifest: Path | None, *, cache_dir: Path | None
+    manifest: str | None, *, cache_dir: Path | None
 ) -> tuple[Path, list[str] | None, Scope | None]:
-    """``MANIFEST`` given explicitly -> use it as-is (no profile/scope
-    override from this step). Otherwise resolve it from the global config
-    per O2 (``resolve.py``), printing which source won so the "magic" a
-    zero-arg apply performs is legible (spec §7.2)."""
+    """``MANIFEST`` given explicitly -> materialize it (fetching a remote
+    URI if that's what it is) with no profile/scope override from this
+    step. Otherwise resolve it from the global config per O2
+    (``resolve.py``), printing which source won so the "magic" a zero-arg
+    apply performs is legible (spec §7.2)."""
     if manifest is not None:
-        return manifest, None, None
+        return _materialize_manifest_arg(manifest, cache_dir=cache_dir), None, None
 
     config = load_global_config()
     try:
@@ -522,7 +548,7 @@ def _report(results: dict[str, InstallResult], *, dry_run: bool) -> bool:
 
 @app.command(name="apply")
 def apply_command(
-    manifest: Path | None = None,
+    manifest: str | None = None,
     *,
     scope: Scope | None = None,
     platform: list[str] | None = None,
@@ -538,9 +564,13 @@ def apply_command(
     Parameters
     ----------
     manifest
-        Path to the manifest TOML file. Omit it to resolve one from the
-        global config (spec §7.2): a repo-local ``agent-config.toml`` at the
-        repo root, then an ``[[org]]`` match against the git remote's
+        Path to the manifest TOML file, or a remote ``https://``/``git+``
+        URI — a ``git+`` URI clones the whole repo, so a manifest's own
+        relative ``skill_md_path``/``entry_path``/``include`` values still
+        resolve against its location inside that checkout (M5), same as a
+        local manifest. Omit ``MANIFEST`` to resolve one from the global
+        config instead (spec §7.2): a repo-local ``agent-config.toml`` at
+        the repo root, then an ``[[org]]`` match against the git remote's
         GitHub owner, then the longest matching ``[[scope]] match_prefix``,
         then ``default_manifest`` — whichever hits first also supplies its
         default profiles/write scope, still overridable by
@@ -568,9 +598,13 @@ def apply_command(
         Where to read/write the prune state file. Defaults to
         ``<manifest>.lock.json``. Ignored unless ``--prune`` is given.
     cache_dir
-        Where remote (``https://``/``git+``) skill/hook sources are fetched
-        and cached. Defaults to ``.agent-config-kit-cache`` next to the
-        manifest.
+        Where remote (``https://``/``git+``) sources are fetched and
+        cached — both a remote ``MANIFEST`` itself and any remote skill/hook
+        sources it references. Defaults to ``.agent-config-kit-cache`` next
+        to the manifest for the latter; for a remote ``MANIFEST`` (no local
+        manifest to sit "next to" yet) defaults to the same
+        ``~/.cache/agent-config-kit/manifests`` location a zero-arg
+        resolution uses.
     """
     manifest_path, source_profiles, source_write_scope = _resolve_manifest_arg(
         manifest, cache_dir=cache_dir
@@ -658,7 +692,7 @@ def _report_drift(drifts: dict[str, Drift]) -> bool:
 
 @app.command(name="validate")
 def validate_command(
-    manifest: Path | None = None,
+    manifest: str | None = None,
     *,
     scope: Scope | None = None,
     platform: list[str] | None = None,
@@ -671,8 +705,9 @@ def validate_command(
     Parameters
     ----------
     manifest
-        Path to the manifest TOML file. Omit it to resolve one from the
-        global config, same as ``apply`` (spec §7.2).
+        Path to the manifest TOML file, or a remote ``https://``/``git+``
+        URI (same as ``apply``). Omit it to resolve one from the global
+        config, same as ``apply`` (spec §7.2).
     scope
         Overrides the manifest's ``[options].scope`` for this run.
     platform
@@ -720,20 +755,24 @@ def validate_command(
 
 
 @app.command(name="profiles")
-def profiles_command(manifest: Path, *, cache_dir: Path | None = None) -> None:
+def profiles_command(manifest: str, *, cache_dir: Path | None = None) -> None:
     """List a manifest's profiles and each one's resolved entry counts.
 
     Parameters
     ----------
     manifest
-        Path to the manifest TOML file.
+        Path to the manifest TOML file, or a remote ``https://``/``git+``
+        URI (same as ``apply``).
     cache_dir
-        Where remote (``https://``/``git+``) skill/hook sources are fetched
-        and cached. Defaults to ``.agent-config-kit-cache`` next to the
-        manifest.
+        Where remote (``https://``/``git+``) sources are fetched and
+        cached — both a remote ``MANIFEST`` itself and any remote skill/hook
+        sources it references. Defaults to ``.agent-config-kit-cache`` next
+        to the manifest for the latter; for a remote ``MANIFEST`` defaults
+        to ``~/.cache/agent-config-kit/manifests``.
     """
+    manifest_path = _materialize_manifest_arg(manifest, cache_dir=cache_dir)
     try:
-        loaded = load_manifest(manifest, cache_dir=cache_dir)
+        loaded = load_manifest(manifest_path, cache_dir=cache_dir)
     except ManifestError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc

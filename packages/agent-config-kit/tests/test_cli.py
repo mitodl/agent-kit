@@ -1,9 +1,15 @@
 import importlib
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+requires_git = pytest.mark.skipif(
+    shutil.which("git") is None, reason="git binary not on PATH"
+)
 
 
 def _write_manifest(tmp_path: Path, text: str) -> Path:
@@ -1160,3 +1166,104 @@ def test_manifest_init_defaults_to_git_repo_root(tmp_path, monkeypatch):
     manifest_path = repo / "agent-config.toml"
     assert manifest_path.is_file()
     assert "real-skill" in manifest_path.read_text()
+
+
+def _init_git_manifest_repo(path: Path, *, subdirectory: str) -> str:
+    """A git repo with a manifest at ``<subdirectory>/agent-config.toml``
+    that references a skill by a path relative to *that* manifest — the
+    fixture used to prove a ``git+`` ``MANIFEST`` URI clones the whole repo
+    (not just the one manifest file), so the manifest's own relative
+    ``skill_md_path`` still resolves against its location inside the
+    checkout, same as a local manifest (spec M5). Returns the resulting
+    ``git+file://...#subdirectory=...`` URI."""
+    manifest_dir = path / subdirectory
+    (manifest_dir / "skills" / "remote-skill").mkdir(parents=True)
+    (manifest_dir / "skills" / "remote-skill" / "SKILL.md").write_text(
+        "---\nname: remote-skill\ndescription: test\n---\n"
+    )
+    (manifest_dir / "agent-config.toml").write_text(
+        '[skills]\nremote-skill = "skills/remote-skill/SKILL.md"\n'
+    )
+    subprocess.run(["git", "init", "--quiet"], cwd=path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "commit", "--quiet", "-m", "init"], cwd=path, check=True)
+    return f"git+file://{path}#subdirectory={subdirectory}/agent-config.toml"
+
+
+@requires_git
+def test_apply_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch):
+    """A `git+` URI passed directly as MANIFEST (not via the global config's
+    default_manifest/[[org]]/[[scope]] indirection) must itself be fetched
+    and applied — regression test for a bug where cyclopts' `Path` argument
+    coercion collapsed the URI's `scheme://` into `scheme:/` before
+    `_resolve_manifest_arg` ever saw it, so an explicit remote MANIFEST
+    silently failed to parse as a URI at all."""
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    source = tmp_path / "source"
+    uri = _init_git_manifest_repo(source, subdirectory="platform-eng")
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    monkeypatch.chdir(consumer)
+
+    _run_ok(
+        app,
+        [
+            "apply",
+            uri,
+            "--platform",
+            "claude",
+            "--scope",
+            "project",
+            "--cache-dir",
+            str(tmp_path / "cache"),
+        ],
+    )
+
+    assert (consumer / ".claude" / "skills" / "remote-skill" / "SKILL.md").is_file()
+
+
+@requires_git
+def test_validate_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    source = tmp_path / "source"
+    uri = _init_git_manifest_repo(source, subdirectory="platform-eng")
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    monkeypatch.chdir(consumer)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(
+            [
+                "validate",
+                uri,
+                "--platform",
+                "claude",
+                "--scope",
+                "project",
+                "--cache-dir",
+                str(tmp_path / "cache"),
+            ]
+        )
+
+    # exit 1: the skill is missing on disk (never applied) -- proves the
+    # remote manifest was actually fetched and read, not silently skipped.
+    assert exc_info.value.code == 1
+
+
+@requires_git
+def test_profiles_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    source = tmp_path / "source"
+    uri = _init_git_manifest_repo(source, subdirectory="platform-eng")
+
+    _run_ok(app, ["profiles", uri, "--cache-dir", str(tmp_path / "cache")])

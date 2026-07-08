@@ -221,10 +221,21 @@ agent-kit apply agent-config.toml
 agent-kit apply agent-config.toml --platform claude --platform pi
 agent-kit apply agent-config.toml --scope project --dry-run
 agent-kit apply agent-config.toml --profile python
+agent-kit apply "git+https://github.com/mitodl/agent-config-bundles.git@main#subdirectory=platform-eng/agent-config.toml"
 ```
 
-`MANIFEST` is optional (`agent-kit apply` / `agent-kit validate` with no
-argument) — omitting it resolves one from the global config (`agent-kit
+`MANIFEST` accepts anything `include`/`skill_md_path`/the global config's
+`manifest` fields do — a local path, or a remote `https://`/`git+` URI,
+fetched the same way (`--cache-dir` applies to this fetch too). A `git+`
+`MANIFEST` clones the *whole* repo, so the manifest's own relative
+`skill_md_path`/`entry_path`/`include` values still resolve against its
+location inside that checkout (M5), exactly as if it were a local manifest
+— there's no separate "discovery" step at apply time; `agent-kit manifest
+init` (above) is the only thing that walks a repo for `SKILL.md` files, and
+only when you explicitly ask it to.
+
+`MANIFEST` is also optional (`agent-kit apply` / `agent-kit validate` with
+no argument) — omitting it resolves one from the global config (`agent-kit
 config init`, see below), in order: a repo-local `agent-config.toml` at the
 repo root; an `[[org]]` match against the current repo's `origin` git
 remote (the GitHub owner parsed from the URL — no network call, no `gh`
