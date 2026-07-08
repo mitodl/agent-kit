@@ -20,7 +20,7 @@ endpoint or routing header):
 | | |
 |---|---|
 | **Transport** | Streamable HTTP only (no stdio, no SSE) |
-| **Auth** | OAuth 2.1 via Keycloak — browser consent flow on first connect (no token/API key to store), same flow as `grafana-cloud` |
+| **Auth** | OAuth 2.1 via Keycloak — browser consent flow on first connect (no token/API key to store) |
 
 ## Quick Start
 
