@@ -150,3 +150,31 @@ deferred.
 - Does not solve self-service/on-demand provisioning for a brand-new Keycloak
   user before the sync pipeline has run — out of scope for v1, same
   limitation the per-team model had, just at finer grain.
+
+### Addendum (2026-07-08) — the "Forces" premise above was about `toolhive_swe`'s config, not a ToolHive platform limitation
+
+A capability audit of upstream `stacklok/toolhive` at `v0.33.0` — the exact
+version already pinned as `TOOLHIVE_OPERATOR_CHART_VERSION` in
+ol-infrastructure — found that ToolHive natively supports an "External OIDC
+provider" auth scenario (`docs/middleware.md`) where **the client's JWT is
+forwarded to the backend MCP container unmodified**, plus a pluggable
+authorization framework including a Cedar-based authorizer (`docs/authz.md`)
+and a real, tested OAuth 2.0 Token Exchange (RFC 8693) implementation
+(`pkg/oauthproto/tokenexchange/`).
+
+The "Forces" section above is accurate about what it checked — `toolhive_swe`
+specifically uses ToolHive's *other* scenario ("Embedded auth server" →
+upstream-token-swap, vMCP-scoped JWT only) — but generalizes that
+configuration choice into "ToolHive's embedded broker does not propagate
+end-user identity to the backend container," which overstates it: a
+*different* toolhive_witan configuration could plausibly get per-user JWT
+forwarding, Cedar authz, or RFC 8693 token exchange from ToolHive itself,
+narrowing or removing the need for D1's own `JWTVerifier` path. This wasn't
+a "future ToolHive release" scenario as line 139 speculated — the capability
+was already present in the pinned version at the time this ADR was written.
+
+Whether to actually change course (and where the authz source of truth
+should live if witan's own Cedar bundle and ToolHive's authz framework would
+otherwise overlap) is tracked as a separate decision, not resolved here:
+`tk-revisit-adr-0004-adr-0009-per-user-identity-desi-e9005a`
+(project `wp-witan-multi-user-service-deployment-dcf6ee`).
