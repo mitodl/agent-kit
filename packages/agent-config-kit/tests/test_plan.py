@@ -6,6 +6,7 @@ from agent_config_kit.models import (
     HookEvent,
     MergeStrategy,
     PluginRegistration,
+    Scope,
     SkillSource,
     StdioServer,
 )
@@ -250,6 +251,92 @@ def test_apply_opencode_registers_mcp_server_folded_command_array(
     assert entry["environment"]["WITAN_AUTHOR"] == "tester"
     assert "env" not in entry
     assert "args" not in entry
+
+
+def test_apply_project_scope_writes_relative_to_cwd_not_home(tmp_path, monkeypatch):
+    """Project-scope targets are plain relative paths (registry.py) — they
+    resolve against the process CWD, i.e. the repo root ac-kit is run from,
+    never Path.home()."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "should-not-be-used")
+    monkeypatch.chdir(tmp_path)
+
+    apply("claude", _bundle(), scope=Scope.PROJECT)
+
+    entry = json.loads((tmp_path / ".mcp.json").read_text())["mcpServers"]["witan"]
+    assert entry["command"] == "uvx"
+    assert not (tmp_path / "should-not-be-used").exists()
+
+
+def test_apply_project_scope_installs_claude_skills_and_hooks(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    skill_md = tmp_path / "src" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("# skill")
+
+    apply(
+        "claude",
+        _bundle(
+            skills=[SkillSource(name="my-skill", skill_md_path=skill_md)],
+            hooks=[DeclarativeHook(event=HookEvent.STOP, command="witan checkpoint")],
+        ),
+        scope=Scope.PROJECT,
+    )
+
+    assert (tmp_path / ".claude" / "skills" / "my-skill" / "SKILL.md").read_text() == (
+        "# skill"
+    )
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
+    assert settings["hooks"]["Stop"][0]["hooks"][0]["command"] == "witan checkpoint"
+
+
+def test_apply_project_scope_pi_writes_dot_pi_not_dot_pi_agent(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+
+    apply("pi", _bundle(), scope=Scope.PROJECT)
+
+    assert (tmp_path / ".pi" / "settings.json").is_file()
+    assert not (tmp_path / ".pi" / "agent").exists()
+
+
+def test_apply_project_scope_copilot_installs_skills_under_dot_github(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    skill_md = tmp_path / "src" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("# skill")
+
+    apply(
+        "copilot",
+        _bundle(skills=[SkillSource(name="my-skill", skill_md_path=skill_md)]),
+        scope=Scope.PROJECT,
+    )
+
+    assert (tmp_path / ".github" / "skills" / "my-skill" / "SKILL.md").read_text() == (
+        "# skill"
+    )
+
+
+def test_apply_project_scope_opencode_writes_both_skill_dir_spellings(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    skill_md = tmp_path / "src" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("# skill")
+
+    apply(
+        "opencode",
+        _bundle(skills=[SkillSource(name="my-skill", skill_md_path=skill_md)]),
+        scope=Scope.PROJECT,
+    )
+
+    assert (tmp_path / ".opencode" / "skill" / "my-skill" / "SKILL.md").is_file()
+    assert (tmp_path / ".opencode" / "skills" / "my-skill" / "SKILL.md").is_file()
 
 
 def test_apply_all_only_touches_detected_platforms(tmp_path, monkeypatch):

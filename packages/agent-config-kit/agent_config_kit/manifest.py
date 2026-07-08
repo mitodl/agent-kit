@@ -12,6 +12,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -26,7 +27,14 @@ class ManifestError(Exception):
 
 
 class ManifestBundle(BaseModel):
-    """Validate-on-load mirror of ``RegistrationBundle``'s shape."""
+    """Validate-on-load mirror of ``RegistrationBundle``'s shape.
+
+    ``skills`` stays a permissive ``dict[str, Any]`` here (name -> a string
+    ``skill_md_path`` shorthand, or an inline table) rather than
+    ``dict[str, SkillSource]`` — ``_build_skill_sources`` does the real
+    per-entry validation afterward so it can raise a ``ManifestError`` naming
+    the offending skill key instead of a generic pydantic union error.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -34,7 +42,7 @@ class ManifestBundle(BaseModel):
     mcp_servers: dict[str, McpServer] = Field(default_factory=dict)
     lsp_servers: dict[str, LspServer] = Field(default_factory=dict)
     hooks: list[Hook] = Field(default_factory=list)
-    skills: list[SkillSource] = Field(default_factory=list)
+    skills: dict[str, Any] = Field(default_factory=dict)
 
 
 class _ManifestOptionsModel(BaseModel):
@@ -100,15 +108,52 @@ def _resolve_relative_paths(
                 cache_dir=cache_dir,
             )
 
-    for skill in data.get("skills", []) or []:
-        if isinstance(skill, dict) and "skill_md_path" in skill:
-            skill["skill_md_path"] = _resolve_path_field(
-                skill["skill_md_path"],
+    for name, value in (data.get("skills", {}) or {}).items():
+        if isinstance(value, str):
+            data["skills"][name] = _resolve_path_field(
+                value,
                 manifest_dir,
                 manifest_path=manifest_path,
-                field="skills[].skill_md_path",
+                field=f"skills.{name}",
                 cache_dir=cache_dir,
             )
+        elif isinstance(value, dict) and "skill_md_path" in value:
+            value["skill_md_path"] = _resolve_path_field(
+                value["skill_md_path"],
+                manifest_dir,
+                manifest_path=manifest_path,
+                field=f"skills.{name}.skill_md_path",
+                cache_dir=cache_dir,
+            )
+
+
+def _build_skill_sources(
+    skills: dict[str, Any], manifest_path: Path
+) -> list[SkillSource]:
+    """Normalize the manifest's ``[skills]`` name-keyed table (F1: each value
+    is either a string ``skill_md_path`` shorthand or an inline table) into
+    ``RegistrationBundle``'s ``list[SkillSource]`` shape."""
+    sources = []
+    for name, value in skills.items():
+        if isinstance(value, str):
+            skill_md_path = value
+        elif isinstance(value, dict):
+            if "skill_md_path" not in value:
+                raise ManifestError(
+                    f"{manifest_path}: skills.{name}: table form requires a "
+                    "'skill_md_path' key"
+                )
+            skill_md_path = value["skill_md_path"]
+        else:
+            raise ManifestError(
+                f"{manifest_path}: skills.{name}: must be a string path or an "
+                f"inline table, got {type(value).__name__}: {value!r}"
+            )
+        try:
+            sources.append(SkillSource(name=name, skill_md_path=Path(skill_md_path)))
+        except ValidationError as exc:
+            raise ManifestError(_format_validation_error(exc, manifest_path)) from exc
+    return sources
 
 
 def _format_validation_error(exc: ValidationError, path: Path) -> str:
@@ -166,7 +211,7 @@ def load_manifest(path: Path, *, cache_dir: Path | None = None) -> Manifest:
     bundle = RegistrationBundle(
         mcp_servers=bundle_model.mcp_servers,
         hooks=bundle_model.hooks,
-        skills=bundle_model.skills,
+        skills=_build_skill_sources(bundle_model.skills, path),
         lsp_servers=bundle_model.lsp_servers,
         instructions=bundle_model.instructions,
     )

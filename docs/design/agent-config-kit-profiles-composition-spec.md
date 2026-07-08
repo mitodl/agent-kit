@@ -196,6 +196,18 @@ without re-listing its entries. Interaction with `inherits`/explicit lists:
 union of (inherited) ∪ (this profile's `include` entries) ∪ (explicit key
 lists).
 
+Clarification (PR #76 review): if the *included* manifest itself declares
+`[profiles]`, per-profile `include` still selects **all** of that manifest's
+top-level entries — its own profile slicing is bypassed, not composed with.
+This is an intentional v1 limitation, not an oversight: there is no
+fragment syntax (e.g. `URL#profile_name`) to target one of the included
+manifest's profiles specifically. A per-profile `include` is for pulling in
+an independently-versioned bundle wholesale; if you need one of *its*
+profiles specifically, include it at the top level instead and reference its
+entries by key from your own `[profiles.<name>]`, or ask the bundle's author
+to split that profile into its own manifest. Revisit if a real need for
+targeted profile-of-an-include appears.
+
 ### 5.3 Precedence summary (most-wins-last)
 
 ```
@@ -250,10 +262,16 @@ D-INV notes.
 
 Global config `[[scope]]` entries (§7) map a directory prefix to a
 manifest + profile. Zero-arg `ac-kit apply` (§7.2) expands `~`, canonicalizes
-the CWD, and picks the **longest** matching `match_prefix`. Default write
-scope for prefix-routed applies is `project` (materialize into the current
-repo); `scope = "global"` in the `[[scope]]` entry opts into writing the
-prefix's config to the agent's global location instead.
+the CWD, and picks the **longest** matching `match_prefix`, matched at
+directory-component boundaries (`Path` ancestry, e.g. `is_relative_to`) —
+**not** a naive `str.startswith(prefix)`, which would wrongly match a
+sibling directory like `~/code/mit-backup` against a `~/code/mit` prefix
+(PR #76 review). Default write scope for prefix-routed applies is `project`
+(materialize into the current repo); `write_scope = "global"` in the
+`[[scope]]` entry opts into writing the prefix's config to the agent's
+global location instead. (Named `write_scope`, not `scope`, to avoid reading
+as self-referential on a `[[scope]]` entry and colliding with manifest
+`[options].scope` — PR #76 review.)
 
 ## 7. Global config file (feature 5 — S1)
 
@@ -283,7 +301,7 @@ profiles     = ["platform-eng"]
 match_prefix = "~/code/personal"
 manifest     = "~/dotfiles/personal-agent-config.toml"
 profiles     = ["universal"]
-scope        = "project"                             # write target scope (§6.3)
+write_scope  = "project"                             # write target scope (§6.3)
 ```
 
 Loaded by a new `config.py` (`load_global_config()`), XDG-aware, absent-file =
@@ -300,6 +318,14 @@ overrides the profile, `--scope` overrides the write scope. `ac-kit apply`
 prints *which* source resolved the manifest (so the "magic" is legible), e.g.
 `resolved manifest from org 'mitodl' → profile platform-eng`.
 
+Implementation note (PR #76 review): `apply_command`/`validate_command`
+(`cli.py`) currently declare `manifest: Path` as a required positional
+argument — this must become `manifest: Path | None = None` before zero-arg
+resolution can be wired in, with the `MANIFEST is None` case triggering the
+O2 resolution chain instead of `load_manifest(manifest)` directly. Tracked
+against the directory-prefix-routing/zero-arg task, not the foundational
+tasks landed so far.
+
 ## 8. GitHub org-scoped apply (feature 4 — O1)
 
 `detect_org(repo_root) -> str | None`: read `git remote get-url origin` (then
@@ -307,6 +333,14 @@ other remotes), parse the owner from `github.com[:/]<owner>/<repo>` for both
 SSH and HTTPS forms; return `<owner>`. No network, no `gh` dependency (O1).
 Zero-arg apply (§7.2 step 3) looks the owner up in `[[org]]`; a hit supplies
 that org's manifest + profiles. No match → fall through to prefix/default.
+
+`repo_root` is **not** assumed to be the CWD — the caller resolves it first
+(`git rev-parse --show-toplevel`, or an upward walk for `.git`) since
+zero-arg apply may run from a subdirectory of the repo. `detect_org` itself
+degrades to `None` rather than raising when `git` isn't on `PATH`, the
+directory isn't a git repo, or there's no `origin`/matching remote (PR #76
+review) — a missing org match is an ordinary fall-through in O2, not an
+error.
 
 Non-goals (deferred, O-MEM §9): verifying the user is actually a *member* of
 the org (would need `gh api user/memberships` + auth); private-manifest auth

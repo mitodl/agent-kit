@@ -67,9 +67,8 @@ command = "witan inject-context"
 kind = "plugin"
 entry_path = "extensions/pi/witan.ts"   # resolved relative to this file
 
-[[skills]]
-name = "witan-task"
-skill_md_path = "skills/witan-task/SKILL.md"   # resolved relative to this file
+[skills]
+witan-task = "skills/witan-task/SKILL.md"   # resolved relative to this file
 ```
 
 Table/field names mirror the Python model field names exactly
@@ -92,9 +91,8 @@ local, manifest-relative path — fetched and cached automatically, no
 pre-cloning required:
 
 ```toml
-[[skills]]
-name = "remote-skill"
-skill_md_path = "https://raw.githubusercontent.com/org/repo/main/skills/remote-skill/SKILL.md"
+[skills]
+remote-skill = "https://raw.githubusercontent.com/org/repo/main/skills/remote-skill/SKILL.md"
 
 [[hooks]]
 kind = "plugin"

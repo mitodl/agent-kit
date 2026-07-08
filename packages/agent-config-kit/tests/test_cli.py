@@ -179,12 +179,13 @@ def test_apply_exits_1_when_a_platform_skips_a_target(tmp_path, monkeypatch, cap
 
 
 def test_apply_cli_scope_overrides_manifest_scope(tmp_path, monkeypatch):
-    """Passing --scope project should be accepted even though the current
-    registry only populates global ScopeTargets (apply() itself already
-    no-ops when a platform has no target for that scope)."""
+    """Passing --scope project routes claude's mcp target to the
+    project-scoped .mcp.json (relative to CWD, i.e. the repo root ac-kit is
+    run from) instead of the manifest's own [options] scope = "global"."""
     from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.chdir(tmp_path)
     manifest = _write_manifest(
         tmp_path,
         """
@@ -200,6 +201,12 @@ def test_apply_cli_scope_overrides_manifest_scope(tmp_path, monkeypatch):
     _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--scope", "project"])
 
     assert not (tmp_path / ".claude.json").exists()
+    assert (
+        json.loads((tmp_path / ".mcp.json").read_text())["mcpServers"]["witan"][
+            "command"
+        ]
+        == "uvx"
+    )
 
 
 def test_validate_exits_0_and_no_drift_when_already_applied(
