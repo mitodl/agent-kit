@@ -52,9 +52,14 @@ async def confirm(
 async def repo_or_detect(ctx: Context | None, repo: str | None) -> str | None:
     """Resolve the repo for a write, offering to elicit one when nothing is known.
 
+    Returns the *resolved* repo so the caller can pass it straight back as the
+    write's ``repo`` override — detection then runs only once, not again inside
+    the write path:
+
     - An explicit ``repo`` (caller passed one) is returned untouched.
-    - Otherwise, if git/``WITAN_REPO`` detection already yields a repo, return
-      ``None`` so the callee's own ``detect()`` resolves it exactly as before.
+    - Otherwise git/``WITAN_REPO`` detection runs; a detected repo is returned
+      as-is (the caller forwards it as the override, so the write doesn't
+      re-detect).
     - Only when detection finds *nothing* do we prompt for a canonical URI. A
       headless/unsupported client, a decline, or an empty answer all fall back to
       ``None`` — i.e. today's silently-unscoped node — so the additive-only
@@ -66,8 +71,9 @@ async def repo_or_detect(ctx: Context | None, repo: str | None) -> str | None:
     # keeps this module free of a hard dependency for callers that never elicit.
     from . import repo as repo_module
 
-    if repo_module.detect() is not None:
-        return None
+    detected = repo_module.detect()
+    if detected is not None:
+        return detected
     chosen = await text(
         ctx,
         "No repo detected for this write (not in a git repo, or no remote). "

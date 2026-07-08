@@ -280,9 +280,10 @@ def test_text_no_ctx_error_or_empty_returns_default():
 def test_repo_or_detect_passthrough_and_fallbacks(monkeypatch):
     # An explicit repo is returned untouched (no detection, no prompt).
     assert asyncio.run(elicit.repo_or_detect(None, "https://x/y")) == "https://x/y"
-    # Detection succeeds → return None so the callee's own detect() resolves it.
+    # Detection succeeds → return the detected repo (caller forwards it as the
+    # override so the write path doesn't re-detect).
     monkeypatch.setenv("WITAN_REPO", "https://env/r")
-    assert asyncio.run(elicit.repo_or_detect(_RaiseCtx(), None)) is None
+    assert asyncio.run(elicit.repo_or_detect(_RaiseCtx(), None)) == "https://env/r"
     # Detection fails and elicitation is unsupported → None (unscoped, as before).
     monkeypatch.setenv("WITAN_REPO", "")  # explicitly disables detection
     assert asyncio.run(elicit.repo_or_detect(_RaiseCtx(), None)) is None
