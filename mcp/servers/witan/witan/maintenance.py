@@ -58,10 +58,23 @@ def _last_run(graph_uri: str) -> float:
 
 
 def _mark_run(graph_uri: str, when: float) -> None:
+    """Record the last-optimize time atomically.
+
+    Concurrent Stop hooks (or an interrupted write) could otherwise leave a
+    half-written stamp that ``_last_run`` reads as "never run", defeating the
+    throttle and letting optimize spawn repeatedly. Write a process-unique temp
+    file and ``os.replace`` it in, so a reader always sees a complete file.
+    """
+    path = _stamp_file(graph_uri)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
-        _stamp_file(graph_uri).write_text(json.dumps({"stamp": when}))
+        tmp.write_text(json.dumps({"stamp": when}))
+        os.replace(tmp, path)
     except OSError:
-        pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def due(graph_uri: str, now: float | None = None) -> bool:

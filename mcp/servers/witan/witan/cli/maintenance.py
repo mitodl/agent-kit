@@ -20,12 +20,18 @@ _REMOTE_PREFIXES = ("http://", "https://", "s3://")
 
 def _resolve_store(store: str | None) -> str | None:
     """Resolve the store URI (explicit or from config); None if a local store
-    file is missing (nothing to compact)."""
+    file is missing (nothing to compact).
+
+    Expands ``~`` for a local ``--store`` path so a user-supplied ``~/…`` isn't
+    treated as missing (config paths are already expanded by the config loader).
+    """
     cfg = cfg_module.load()
     graph_uri = store or cfg.graph_uri
-    if not graph_uri.startswith(_REMOTE_PREFIXES) and not Path(graph_uri).exists():
-        console.print(f"[dim]No store at {graph_uri} — nothing to do.[/dim]")
-        return None
+    if not graph_uri.startswith(_REMOTE_PREFIXES):
+        graph_uri = str(Path(graph_uri).expanduser())
+        if not Path(graph_uri).exists():
+            console.print(f"[dim]No store at {graph_uri} — nothing to do.[/dim]")
+            return None
     return graph_uri
 
 

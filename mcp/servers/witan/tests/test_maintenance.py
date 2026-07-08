@@ -160,3 +160,26 @@ def test_cli_optimize_missing_store_is_noop(tmp_path, monkeypatch):
     )
     cli_maint.optimize(store=str(tmp_path / "does-not-exist.omni"))
     assert any("nothing to do" in p.lower() for p in printed)
+
+
+def test_resolve_store_expands_user(tmp_path, monkeypatch):
+    from witan.cli import maintenance as cli_maint
+
+    # A `--store ~/…` path is expanded before the existence check, so an existing
+    # store under HOME resolves instead of being treated as missing.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "g.omni").mkdir()
+    resolved = cli_maint._resolve_store("~/g.omni")
+    assert resolved == str(tmp_path / "g.omni")
+    assert "~" not in resolved
+
+
+def test_mark_run_atomic_roundtrip(tmp_path, monkeypatch):
+    from witan import maintenance
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    store = str(tmp_path / "g.omni")
+    maintenance._mark_run(store, 12345.0)
+    assert maintenance._last_run(store) == 12345.0
+    # no leftover temp files from the atomic write
+    assert not list(maintenance.session_state.session_state_dir().glob("*.tmp"))
