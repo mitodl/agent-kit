@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.3.3] - 2026-07-08
+
+### Fixed
+
+- **Malformed-manifest error handling for `include`-composed manifests**
+  (PR #92 review): the include-merge machinery (`_merge_manifest_data`/
+  `_raw_hook_identity`) previously assumed well-typed input and let a
+  malformed manifest crash with a raw `TypeError`/`ValueError`/
+  `AttributeError`/`KeyError` instead of a clean `ManifestError` —
+  `[mcp_servers]`/`[lsp_servers]`/`[profiles]` as the wrong type, `hooks`
+  as a non-list or containing non-table entries, a plugin hook missing
+  `entry_path`, a per-profile `include` entry that isn't a string, or a
+  per-profile `include` alongside a malformed explicit selection field
+  (e.g. `skills = "not-a-list"`). All now raise `ManifestError` naming the
+  offending key, both for the manifest being loaded and for any manifest
+  it `include`s.
+
 ## [0.3.2] - 2026-07-08
 
 ### Fixed

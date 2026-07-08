@@ -175,28 +175,33 @@ def _materialize_ref(ref: str, manifest_dir: Path, cache_dir: Path) -> Path:
     return resolved.resolve()
 
 
-def _raw_hook_identity(hook: dict) -> str:
+def _raw_hook_identity(hook: dict, path: Path) -> str:
     """``prune.hook_identity``, but operating on a still-raw hook dict (no
     ``Hook`` model built yet) so includes can be merged before Pydantic ever
-    sees the data — mirrors ``DeclarativeHook``'s ``kind`` default."""
+    sees the data — mirrors ``DeclarativeHook``'s ``kind`` default. Runs
+    ahead of Pydantic, so a malformed hook (a plugin hook missing
+    ``entry_path``) must raise ``ManifestError`` itself rather than let a
+    raw ``KeyError`` escape."""
     if hook.get("kind", "declarative") == "plugin":
+        if "entry_path" not in hook:
+            raise ManifestError(f"{path}: hooks[]: plugin hook missing 'entry_path'")
         return f"plugin:{Path(hook['entry_path']).name}"
     return f"declarative:{hook.get('event')}:{hook.get('command')}"
 
 
-def _merge_hooks(base_hooks: list, overlay_hooks: list) -> list[dict]:
+def _merge_hooks(base_hooks: list, overlay_hooks: list, path: Path) -> list[dict]:
     merged: dict[str, dict] = {}
     for hook in base_hooks:
-        merged[_raw_hook_identity(hook)] = hook
+        merged[_raw_hook_identity(hook, path)] = hook
     for hook in overlay_hooks:
-        merged[_raw_hook_identity(hook)] = hook
+        merged[_raw_hook_identity(hook, path)] = hook
     return list(merged.values())
 
 
 _MERGE_TABLE_KEYS = ("mcp_servers", "lsp_servers", "skills", "profiles")
 
 
-def _merge_manifest_data(base: dict, overlay: dict) -> dict:
+def _merge_manifest_data(base: dict, overlay: dict, path: Path) -> dict:
     """Merge ``overlay``'s tables on top of ``base``'s — C2, local/overlay
     wins on key collision (spec §5.1 step 3, §5.3). Used both to fold
     ``include`` refs left-to-right into an accumulator and to merge that
@@ -224,7 +229,9 @@ def _merge_manifest_data(base: dict, overlay: dict) -> dict:
             if table:
                 merged[key] = table
         elif key == "hooks":
-            hooks = _merge_hooks(base.get("hooks") or [], overlay.get("hooks") or [])
+            hooks = _merge_hooks(
+                base.get("hooks") or [], overlay.get("hooks") or [], path
+            )
             if hooks:
                 merged["hooks"] = hooks
         else:
@@ -233,7 +240,7 @@ def _merge_manifest_data(base: dict, overlay: dict) -> dict:
 
 
 def _process_profile_includes(
-    data: dict, manifest_dir: Path, cache_dir: Path, chain: list[str]
+    data: dict, manifest_dir: Path, cache_dir: Path, chain: list[str], path: Path
 ) -> None:
     """Per-profile ``include`` (spec §5.2): each referenced manifest's
     entries are merged into this file's own pool (``setdefault`` — never
@@ -248,8 +255,22 @@ def _process_profile_includes(
         if not refs:
             continue
         if not isinstance(refs, list):
-            raise ManifestError(f"profiles.{name}.include must be a list of refs")
+            raise ManifestError(
+                f"{path}: profiles.{name}.include must be a list of refs"
+            )
+        for table_key in ("skills", "mcp_servers", "lsp_servers", "hooks"):
+            existing = profile.get(table_key)
+            if existing is not None and not isinstance(existing, list):
+                raise ManifestError(
+                    f"{path}: profiles.{name}.{table_key} must be a list of "
+                    f"entry keys, got {type(existing).__name__}"
+                )
         for ref in refs:
+            if not isinstance(ref, str):
+                raise ManifestError(
+                    f"{path}: profiles.{name}.include entries must be strings, "
+                    f"got {ref!r}"
+                )
             included_path = _materialize_ref(ref, manifest_dir, cache_dir)
             included = _load_raw_manifest(included_path, cache_dir, chain)
             for table_key in ("skills", "mcp_servers", "lsp_servers"):
@@ -260,15 +281,43 @@ def _process_profile_includes(
                     if key not in selection:
                         selection.append(key)
             own_hooks = data.setdefault("hooks", [])
-            own_identities = {_raw_hook_identity(h) for h in own_hooks}
+            own_identities = {_raw_hook_identity(h, path) for h in own_hooks}
             selection = profile.setdefault("hooks", [])
             for hook in included.get("hooks") or []:
-                identity = _raw_hook_identity(hook)
+                identity = _raw_hook_identity(hook, path)
                 if identity not in own_identities:
                     own_hooks.append(hook)
                     own_identities.add(identity)
                 if identity not in selection:
                     selection.append(identity)
+
+
+def _validate_raw_shapes(data: dict, path: Path) -> None:
+    """The include-merge machinery (``_merge_manifest_data``/
+    ``_raw_hook_identity``) assumes ``mcp_servers``/``lsp_servers``/
+    ``profiles`` are tables and ``hooks`` is a list of tables, and isn't
+    itself defensive about it — a malformed manifest must fail with a
+    clean ``ManifestError`` right here, before any merging touches it, not
+    a raw ``TypeError``/``ValueError``/``AttributeError`` from deep inside
+    the merge. (``skills`` is validated separately, in
+    ``_resolve_relative_paths``, which already runs right after this.)"""
+    for key in ("mcp_servers", "lsp_servers", "profiles"):
+        value = data.get(key)
+        if value is not None and not isinstance(value, dict):
+            raise ManifestError(
+                f"{path}: [{key}] must be a table, got {type(value).__name__}"
+            )
+    hooks = data.get("hooks")
+    if hooks is not None:
+        if not isinstance(hooks, list):
+            raise ManifestError(
+                f"{path}: hooks must be a list, got {type(hooks).__name__}"
+            )
+        for i, hook in enumerate(hooks):
+            if not isinstance(hook, dict):
+                raise ManifestError(
+                    f"{path}: hooks[{i}] must be a table, got {type(hook).__name__}"
+                )
 
 
 def _load_raw_manifest(path: Path, cache_dir: Path, chain: list[str]) -> dict:
@@ -295,9 +344,10 @@ def _load_raw_manifest(path: Path, cache_dir: Path, chain: list[str]) -> dict:
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"{path}: invalid TOML: {exc}") from exc
 
+    _validate_raw_shapes(data, path)
     manifest_dir = path.parent
     _resolve_relative_paths(data, manifest_dir, path, cache_dir)
-    _process_profile_includes(data, manifest_dir, cache_dir, chain)
+    _process_profile_includes(data, manifest_dir, cache_dir, chain, path)
 
     include_refs = data.pop("include", None) or []
     if not isinstance(include_refs, list):
@@ -309,9 +359,9 @@ def _load_raw_manifest(path: Path, cache_dir: Path, chain: list[str]) -> dict:
             raise ManifestError(f"{path}: include entries must be strings, got {ref!r}")
         included_path = _materialize_ref(ref, manifest_dir, cache_dir)
         included_data = _load_raw_manifest(included_path, cache_dir, chain)
-        merged = _merge_manifest_data(merged, included_data)
+        merged = _merge_manifest_data(merged, included_data, path)
 
-    merged = _merge_manifest_data(merged, data)
+    merged = _merge_manifest_data(merged, data, path)
     merged["options"] = data.get("options", {})
     return merged
 

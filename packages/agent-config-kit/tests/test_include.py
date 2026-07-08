@@ -515,3 +515,131 @@ def test_per_profile_include_cycle_raises_manifest_error(tmp_path):
 
     with pytest.raises(ManifestError, match="cycle"):
         load_manifest(manifest)
+
+
+def test_per_profile_include_non_string_ref_raises_manifest_error(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [profiles.team]
+        include = [123]
+        """,
+    )
+
+    with pytest.raises(
+        ManifestError, match="profiles.team.include entries must be strings"
+    ):
+        load_manifest(manifest)
+
+
+def test_per_profile_include_non_list_ref_raises_manifest_error(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [profiles.team]
+        include = "base.toml"
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="profiles.team.include must be a list"):
+        load_manifest(manifest)
+
+
+def test_per_profile_include_with_malformed_selection_field_raises_manifest_error(
+    tmp_path,
+):
+    """A profile that both has `include` and a malformed explicit selection
+    list (a string instead of a list) must fail cleanly -- this used to
+    reach `profile.setdefault(table_key, [])`, which doesn't correct an
+    already-wrong-typed existing value, and crash with a raw AttributeError
+    on `.append()`."""
+    _write(
+        tmp_path,
+        "base.toml",
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [profiles.team]
+        include = ["base.toml"]
+        skills = "not-a-list"
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="profiles.team.skills must be a list"):
+        load_manifest(manifest)
+
+
+def test_non_table_mcp_servers_raises_manifest_error(tmp_path):
+    manifest = _write(tmp_path, "agent-config.toml", 'mcp_servers = "oops"\n')
+
+    with pytest.raises(ManifestError, match=r"\[mcp_servers\] must be a table"):
+        load_manifest(manifest)
+
+
+def test_non_table_lsp_servers_raises_manifest_error(tmp_path):
+    manifest = _write(tmp_path, "agent-config.toml", 'lsp_servers = "oops"\n')
+
+    with pytest.raises(ManifestError, match=r"\[lsp_servers\] must be a table"):
+        load_manifest(manifest)
+
+
+def test_non_table_profiles_raises_manifest_error(tmp_path):
+    manifest = _write(tmp_path, "agent-config.toml", 'profiles = "oops"\n')
+
+    with pytest.raises(ManifestError, match=r"\[profiles\] must be a table"):
+        load_manifest(manifest)
+
+
+def test_non_list_hooks_raises_manifest_error(tmp_path):
+    manifest = _write(tmp_path, "agent-config.toml", 'hooks = "oops"\n')
+
+    with pytest.raises(ManifestError, match="hooks must be a list"):
+        load_manifest(manifest)
+
+
+def test_hooks_list_with_non_table_entry_raises_manifest_error(tmp_path):
+    manifest = _write(tmp_path, "agent-config.toml", 'hooks = ["oops"]\n')
+
+    with pytest.raises(ManifestError, match=r"hooks\[0\] must be a table"):
+        load_manifest(manifest)
+
+
+def test_plugin_hook_missing_entry_path_raises_manifest_error(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[hooks]]
+        kind = "plugin"
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="missing 'entry_path'"):
+        load_manifest(manifest)
+
+
+def test_include_with_malformed_mcp_servers_in_included_file_raises_manifest_error(
+    tmp_path,
+):
+    """The shape check must run for an included manifest too, not just the
+    top-level one being loaded."""
+    _write(tmp_path, "base.toml", 'mcp_servers = "oops"\n')
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        include = ["base.toml"]
+        """,
+    )
+
+    with pytest.raises(ManifestError, match=r"\[mcp_servers\] must be a table"):
+        load_manifest(manifest)
