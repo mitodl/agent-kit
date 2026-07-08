@@ -403,3 +403,34 @@ def test_output_cache_file_is_private_and_atomic(tmp_path, monkeypatch):
     assert stat.S_IMODE(cache_files[0].stat().st_mode) == 0o600
     # atomic replace leaves no process-unique temp file behind
     assert not list(tmp_path.glob("witan-ctx-*.tmp"))
+
+
+@requires_omnigraph
+def test_inject_context_survives_failing_sessions_read(tmp_path, monkeypatch):
+    """The batched list_all_sessions read is isolated: if it fails, the resume/
+    staleness lines drop but the projects + ready-tasks context still renders."""
+    from witan import context as ctx_module
+    from witan import server as srv
+    from witan.graph import OmnigraphClient
+
+    repo = "https://github.com/test/ctx-sessfail"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    _unwrap(srv.workflow_project_create)(title="proj", description="d", repos=[repo])
+    _unwrap(srv.task_create)(title="visible task", description="x")
+
+    orig_read = OmnigraphClient.read
+
+    def _read(self, query_file, query_name, params):
+        if query_name == "list_all_sessions":
+            raise RuntimeError("sessions query boom")
+        return orig_read(self, query_file, query_name, params)
+
+    monkeypatch.setattr(OmnigraphClient, "read", _read)
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "## Active Workflow Projects" in text
+    assert "## Ready Tasks" in text
+    assert "visible task" in text

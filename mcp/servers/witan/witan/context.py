@@ -126,11 +126,11 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
 
         client = OmnigraphClient(graph_uri, queries_dir, token)
 
-        # One read returns every Task (the "list_unscoped_tasks" query is an
-        # all-tasks scan). Derive both the unscoped and the repo-scoped sets from
-        # it rather than issuing a second list_tasks_by_repo read — each omnigraph
-        # read is ~1-2s of fixed scan overhead regardless of row count, so fewer
-        # reads is the win, not narrower results.
+        # The "list_unscoped_tasks" query is an all-tasks scan (capped at the
+        # query's own limit 10000). Derive both the unscoped and the repo-scoped
+        # sets from that one result rather than issuing a second
+        # list_tasks_by_repo read — each omnigraph read is fixed overhead
+        # regardless of row count, so fewer reads is the win, not narrower results.
         all_rows = client.read("read.gq", "list_unscoped_tasks", {})
         unscoped = [r for r in all_rows if not r.get("repo")]
 
@@ -149,15 +149,22 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
         # belt-and-suspenders.
         seen = {t["slug"] for t in repo_tasks}
         tasks = repo_tasks + [t for t in unscoped if t["slug"] not in seen]
-
-        # Every session in one read, grouped by project — one omnigraph call for
-        # the resume/staleness lines instead of one per shown project.
-        sessions_by_project: dict[str, list[dict]] = {}
-        if projects:
-            for s in client.read("read.gq", "list_all_sessions", {}):
-                sessions_by_project.setdefault(s.get("project_slug"), []).append(s)
     except Exception:  # noqa: BLE001
         return ""
+
+    # Isolated (like the CodeBranch read below): one read grouped by project
+    # replaces one read per shown project, but a failing/absent sessions query
+    # must still only drop the resume/staleness lines, never blank the
+    # projects/ready-tasks context. Sessions with no project_slug are skipped.
+    sessions_by_project: dict[str, list[dict]] = {}
+    if projects:
+        try:
+            for s in client.read("read.gq", "list_all_sessions", {}):
+                p_slug = s.get("project_slug")
+                if p_slug:
+                    sessions_by_project.setdefault(p_slug, []).append(s)
+        except Exception:  # noqa: BLE001
+            sessions_by_project = {}
 
     # Isolated from the block above: a CodeBranch query failing (e.g. an
     # existing store that hasn't run `witan migrate schema` since CodeBranch
