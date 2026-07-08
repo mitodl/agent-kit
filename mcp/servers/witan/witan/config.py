@@ -139,7 +139,9 @@ class IdentityConfig(BaseModel):
     """Keycloak realm issuer URL, e.g. https://sso.example.org/realms/ol-platform-engineering."""
 
     oidc_audience: str | None = None
-    """Expected JWT audience claim for this witan deployment."""
+    """Expected JWT audience claim for this witan deployment. Required when
+    oidc_issuer is set — an unchecked audience would accept a token minted
+    for a different client."""
 
     actor_tokens_file: str | None = None
     """Path to the {actor_id: token} JSON map — same artifact omnigraph-server
@@ -150,20 +152,28 @@ class IdentityConfig(BaseModel):
 def load_identity_config() -> IdentityConfig:
     """Resolve IdentityConfig from WITAN_OIDC_ISSUER / _AUDIENCE / WITAN_ACTOR_TOKENS_FILE.
 
-    Raises ValueError if oidc_issuer is set without actor_tokens_file (or vice
-    versa) — a half-configured deployment should fail loudly at startup
-    rather than silently leave every request unauthenticated or unresolvable.
+    Raises ValueError unless all three are set together, or none are — a
+    half-configured deployment should fail loudly at startup rather than
+    silently leave every request unauthenticated or unresolvable.
+    ``oidc_audience`` is not optional here even though JWTVerifier itself
+    treats a missing audience as "don't check": skipping audience validation
+    would accept a token minted for a different client/application (a token
+    substitution / confused-deputy risk), so witan requires it explicitly
+    whenever OIDC is enabled at all.
     """
     issuer = os.environ.get("WITAN_OIDC_ISSUER")
+    audience = os.environ.get("WITAN_OIDC_AUDIENCE")
     tokens_file = os.environ.get("WITAN_ACTOR_TOKENS_FILE")
-    if bool(issuer) != bool(tokens_file):
+    if not (bool(issuer) == bool(audience) == bool(tokens_file)):
         raise ValueError(
-            "WITAN_OIDC_ISSUER and WITAN_ACTOR_TOKENS_FILE must be set together: "
-            f"WITAN_OIDC_ISSUER={issuer!r}, WITAN_ACTOR_TOKENS_FILE={tokens_file!r}."
+            "WITAN_OIDC_ISSUER, WITAN_OIDC_AUDIENCE, and WITAN_ACTOR_TOKENS_FILE "
+            "must be set together: "
+            f"WITAN_OIDC_ISSUER={issuer!r}, WITAN_OIDC_AUDIENCE={audience!r}, "
+            f"WITAN_ACTOR_TOKENS_FILE={tokens_file!r}."
         )
     return IdentityConfig(
         oidc_issuer=issuer,
-        oidc_audience=os.environ.get("WITAN_OIDC_AUDIENCE"),
+        oidc_audience=audience,
         actor_tokens_file=tokens_file,
     )
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9-]+")
@@ -27,9 +28,12 @@ def derive_actor_id(sub: str) -> str:
     practice, so this is close to identity — sanitizing defensively means a
     claim value never reaches a CLI arg or bearer-token lookup key unescaped.
 
-    Raises ``ValueError`` for an empty or all-punctuation ``sub`` — an actor
-    id of just ``act-`` would silently collide with every other such claim.
+    Raises ``ValueError`` for a non-string ``sub``, or an empty/all-punctuation
+    one — an actor id of just ``act-`` would silently collide with every other
+    such claim.
     """
+    if not isinstance(sub, str):
+        raise ValueError(f"sub must be a string, got {type(sub).__name__}")
     slug = _SANITIZE_RE.sub("-", sub.strip().lower()).strip("-")
     if not slug:
         raise ValueError(f"Cannot derive an actor id from sub={sub!r}")
@@ -48,12 +52,19 @@ class ActorTokenResolver:
     is missing from the current cache — not on a fixed TTL — so a
     newly-provisioned user succeeds on their first request without waiting
     for this process to restart, as long as their entry already exists on
-    disk by the time they ask.
+    disk by the time they ask. A reload re-parses the file only if its
+    ``(mtime, size)`` changed since the last load, so a burst of misses for
+    an unprovisioned/invalid actor costs a cheap ``stat()`` each time, not a
+    repeated read-and-parse. FastMCP runs synchronous tool handlers in a
+    thread pool, so ``resolve`` is called concurrently — a lock serializes
+    the check-and-reload sequence.
     """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._cache: dict[str, str] = {}
+        self._lock = threading.Lock()
+        self._last_stat: tuple[float, int] | None = None
 
     def resolve(self, actor_id: str) -> str:
         """Return the bearer token provisioned for ``actor_id``.
@@ -64,7 +75,9 @@ class ActorTokenResolver:
         identity.
         """
         if actor_id not in self._cache:
-            self._load()
+            with self._lock:
+                if actor_id not in self._cache:
+                    self._load()
         if actor_id not in self._cache:
             raise LookupError(
                 f"No omnigraph bearer token provisioned for actor {actor_id!r} "
@@ -75,9 +88,16 @@ class ActorTokenResolver:
 
     def _load(self) -> None:
         try:
-            raw = self.path.read_text()
-        except FileNotFoundError as exc:
+            stat = self.path.stat()
+        except OSError as exc:
             raise ValueError(f"Actor token file not found: {self.path}") from exc
+
+        current_stat = (stat.st_mtime, stat.st_size)
+        if current_stat == self._last_stat:
+            return
+
+        try:
+            raw = self.path.read_text(encoding="utf-8")
         except OSError as exc:
             raise ValueError(
                 f"Failed to read actor token file {self.path}: {exc}"
@@ -99,3 +119,4 @@ class ActorTokenResolver:
             )
 
         self._cache = parsed
+        self._last_stat = current_stat

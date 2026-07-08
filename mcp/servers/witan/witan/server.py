@@ -83,7 +83,7 @@ actor_token_resolver = (
 )
 _jwt_verifier = (
     JWTVerifier(
-        jwks_uri=f"{identity_cfg.oidc_issuer}/protocol/openid-connect/certs",
+        jwks_uri=f"{identity_cfg.oidc_issuer.rstrip('/')}/protocol/openid-connect/certs",
         issuer=identity_cfg.oidc_issuer,
         audience=identity_cfg.oidc_audience,
     )

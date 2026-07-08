@@ -648,6 +648,7 @@ def test_load_identity_config_issuer_without_tokens_file_raises(monkeypatch):
     from witan.config import load_identity_config
 
     monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/witan")
+    monkeypatch.setenv("WITAN_OIDC_AUDIENCE", "witan")
     monkeypatch.delenv("WITAN_ACTOR_TOKENS_FILE", raising=False)
     with pytest.raises(ValueError, match="must be set together"):
         load_identity_config()
@@ -657,6 +658,19 @@ def test_load_identity_config_tokens_file_without_issuer_raises(monkeypatch):
     from witan.config import load_identity_config
 
     monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("WITAN_OIDC_AUDIENCE", raising=False)
+    monkeypatch.setenv("WITAN_ACTOR_TOKENS_FILE", "/etc/witan/actor-tokens.json")
+    with pytest.raises(ValueError, match="must be set together"):
+        load_identity_config()
+
+
+def test_load_identity_config_issuer_without_audience_raises(monkeypatch):
+    """Audience is not optional: an unchecked aud claim would accept a token
+    minted for a different client (token-substitution risk)."""
+    from witan.config import load_identity_config
+
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/witan")
+    monkeypatch.delenv("WITAN_OIDC_AUDIENCE", raising=False)
     monkeypatch.setenv("WITAN_ACTOR_TOKENS_FILE", "/etc/witan/actor-tokens.json")
     with pytest.raises(ValueError, match="must be set together"):
         load_identity_config()
