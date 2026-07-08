@@ -298,7 +298,13 @@ def test_apply_zero_arg_exits_2_with_no_manifest_and_no_config(
         app(["apply"])
 
     assert exc_info.value.code == 2
-    assert "no MANIFEST given" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "no MANIFEST given" in out
+    # regression: `[[org]]`/`[[scope]]` must render literally, not get
+    # silently eaten as invalid Rich markup tags (a real bug the first
+    # version of this message had).
+    assert "[[org]]" in out
+    assert "[[scope]]" in out
 
 
 def test_apply_zero_arg_scope_match_with_no_profiles_overrides_manifest_default(
