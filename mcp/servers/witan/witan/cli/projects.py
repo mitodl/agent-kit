@@ -6,6 +6,7 @@ import json as _json
 from typing import Annotated
 
 import cyclopts
+from rich.markup import escape
 from rich.table import Table
 
 from .. import config as cfg_module
@@ -174,7 +175,7 @@ def project_status(
 
     p = st["project"]
     repos_s = ", ".join(_short_repo(r) for r in (p.get("repos") or [])) or "—"
-    console.print(f"[bold]{p['slug']}[/bold]  {p.get('title', '')}")
+    console.print(f"[bold]{p['slug']}[/bold]  {escape(p.get('title', ''))}")
     console.print(
         f"  phase={p.get('phase')}  "
         f"status={_styled(p.get('status', ''), _STATUS_STYLE)}  repos={repos_s}"
@@ -187,8 +188,10 @@ def project_status(
     ls = st["last_session"]
     if ls:
         state = "still open" if ls["open"] else f"ended {ls['ended_at']}"
-        summary = ls.get("summary") or "(no summary)"
-        console.print(f"\n  [blue]last session[/blue] ({state}): {summary}"[:300])
+        # Free-text summary: truncate first, then escape, so slicing can't strip a
+        # closing tag and a literal "[bug]" isn't parsed as Rich markup.
+        summary = escape((ls.get("summary") or "(no summary)")[:250])
+        console.print(f"\n  [blue]last session[/blue] ({state}): {summary}")
     else:
         console.print("\n  [dim]no sessions yet[/dim]")
 
@@ -198,10 +201,11 @@ def project_status(
     )
     for t in st["ready_tasks"]:
         held = f" [dim](claimed by {t['assignee']})[/dim]" if t.get("assignee") else ""
-        # Escape the priority brackets so Rich renders literal "[p1]" rather than
-        # treating it as markup and swallowing it.
+        # Escape the priority brackets so Rich renders literal "[p1]"; escape the
+        # free-text title so a "[bug]"-style title isn't swallowed as markup.
         console.print(
-            f"    \\[{t.get('priority', 'p2')}] {t['slug']}  {t.get('title', '')}{held}"
+            f"    \\[{t.get('priority', 'p2')}] {t['slug']}  "
+            f"{escape(t.get('title', ''))}{held}"
         )
 
 

@@ -21,14 +21,23 @@ _PRIORITY = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
 
 
 def lease_expired(claimed_at: str | None, *, now: datetime | None = None) -> bool:
-    """True when an advisory claim's lease has elapsed (or there is no claim)."""
+    """True when an advisory claim's lease has elapsed (or there is no claim).
+
+    Tolerates a naive ``claimed_at`` (a legacy/hand-edited store may lack a tz
+    offset): a naive timestamp is read as UTC so the subtraction can't raise
+    ``TypeError`` (offset-naive vs offset-aware) and crash ``task_ready``.
+    """
     if not claimed_at:
         return True
     try:
         started = datetime.fromisoformat(claimed_at)
     except (ValueError, TypeError):
         return True
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
     now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     return (now - started).total_seconds() > CLAIM_LEASE_SECONDS
 
 

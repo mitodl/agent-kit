@@ -28,6 +28,22 @@ def test_in_progress_pickable_only_when_lease_expired():
     assert readiness.status_pickable(stale)
 
 
+def test_lease_expired_tolerates_naive_timestamp():
+    # A legacy/hand-edited store may have a claimed_at without a tz offset.
+    # Subtracting it from tz-aware now must not raise TypeError; a naive value is
+    # read as UTC. (Build the strings from UTC wall-clock, stripped of tzinfo, so
+    # the assertion is independent of the test machine's local timezone.)
+    utc_now = datetime.now(timezone.utc)
+    naive_recent = utc_now.replace(tzinfo=None).isoformat()
+    assert readiness.lease_expired(naive_recent) is False
+    naive_old = (
+        (utc_now - timedelta(seconds=readiness.CLAIM_LEASE_SECONDS + 60))
+        .replace(tzinfo=None)
+        .isoformat()
+    )
+    assert readiness.lease_expired(naive_old) is True
+
+
 def test_in_progress_missing_claim_is_pickable():
     # No claimed_at → lease treated as expired → reclaimable.
     assert readiness.status_pickable({"status": "in_progress", "claimed_at": None})
