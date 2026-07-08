@@ -209,6 +209,196 @@ def test_apply_cli_scope_overrides_manifest_scope(tmp_path, monkeypatch):
     )
 
 
+def test_apply_zero_arg_resolves_repo_local_manifest(tmp_path, monkeypatch, capsys):
+    """No MANIFEST given, no global config file at all -> still resolves via
+    a repo-local agent-config.toml at the repo root (O2 step 2), with no
+    global config needed."""
+    import subprocess
+
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    _write_manifest(
+        repo,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+    monkeypatch.chdir(repo)
+
+    _run_ok(app, ["apply", "--platform", "claude", "--scope", "project"])
+
+    out = capsys.readouterr().out
+    assert "resolved manifest from repo-local manifest" in out
+    assert (
+        json.loads((repo / ".mcp.json").read_text())["mcpServers"]["witan"]["command"]
+        == "uvx"
+    )
+
+
+def test_apply_zero_arg_falls_back_to_default_manifest_from_global_config(
+    tmp_path, monkeypatch, capsys
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    manifest = _write_manifest(
+        dotfiles,
+        """
+        [options]
+        scope = "project"
+
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+    config_dir = tmp_path / ".config" / "agent-config-kit"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(f'default_manifest = "{manifest}"\n')
+
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+
+    _run_ok(app, ["apply", "--platform", "claude"])
+
+    out = capsys.readouterr().out
+    assert "resolved manifest from default_manifest" in out
+    assert (
+        json.loads((cwd / ".mcp.json").read_text())["mcpServers"]["witan"]["command"]
+        == "uvx"
+    )
+
+
+def test_apply_zero_arg_exits_2_with_no_manifest_and_no_config(
+    tmp_path, monkeypatch, capsys
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["apply"])
+
+    assert exc_info.value.code == 2
+    assert "no MANIFEST given" in capsys.readouterr().out
+
+
+def test_apply_zero_arg_scope_match_with_no_profiles_overrides_manifest_default(
+    tmp_path, monkeypatch
+):
+    """A matching [[scope]] entry with no `profiles` set resolves to an
+    empty profiles list, not `None` -- that's still a real override from the
+    resolution source (spec §7.2: "profile is taken from the same source"),
+    so it must install the whole manifest rather than falling back to the
+    manifest's own [options] default_profiles."""
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    manifest = _write_manifest(
+        dotfiles,
+        """
+        [options]
+        scope = "project"
+        default_profiles = ["a"]
+
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+
+        [mcp_servers.other]
+        kind = "stdio"
+        command = "other"
+
+        [profiles.a]
+        mcp_servers = ["witan"]
+        """,
+    )
+    config_dir = tmp_path / ".config" / "agent-config-kit"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        f'[[scope]]\nmatch_prefix = "{tmp_path / "code"}"\nmanifest = "{manifest}"\n'
+    )
+
+    cwd = tmp_path / "code" / "myrepo"
+    cwd.mkdir(parents=True)
+    monkeypatch.chdir(cwd)
+
+    _run_ok(app, ["apply", "--platform", "claude"])
+
+    cfg = json.loads((cwd / ".mcp.json").read_text())
+    assert "witan" in cfg["mcpServers"]
+    assert "other" in cfg["mcpServers"]
+
+
+def test_apply_zero_arg_passes_cache_dir_through_to_resolution(tmp_path, monkeypatch):
+    """--cache-dir must reach a remote manifest resolved from the global
+    config too, not just remote skill/hook sources inside an
+    already-local manifest."""
+    import agent_config_kit.resolve as resolve_module
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    local_manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+    config_dir = tmp_path / ".config" / "agent-config-kit"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        'default_manifest = "https://example.invalid/agent-config.toml"\n'
+    )
+
+    seen_cache_dirs = []
+
+    def fake_fetch_remote(uri, cache_dir):
+        seen_cache_dirs.append(cache_dir)
+        return local_manifest
+
+    monkeypatch.setattr(resolve_module, "fetch_remote", fake_fetch_remote)
+
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    custom_cache_dir = tmp_path / "custom-cache"
+
+    _run_ok(
+        app,
+        ["apply", "--platform", "claude", "--cache-dir", str(custom_cache_dir)],
+    )
+
+    assert seen_cache_dirs == [custom_cache_dir]
+
+
 def test_validate_exits_0_and_no_drift_when_already_applied(
     tmp_path, monkeypatch, capsys
 ):
