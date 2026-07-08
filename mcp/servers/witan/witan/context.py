@@ -13,7 +13,9 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -108,20 +110,39 @@ def _write_output_cache(
 # ── Context injection (UserPromptSubmit hook) ─────────────────────────────────
 
 
-def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
+def _dbg(enabled: bool, msg: str) -> None:
+    """Print a diagnostic line to stderr when ``--debug`` is on.
+
+    stderr (not stdout) so it never contaminates the block the hook injects into
+    the prompt — the hook reads stdout only."""
+    if enabled:
+        print(f"[witan inject-context] {msg}", file=sys.stderr)
+
+
+def inject_context(
+    graph_uri: str, queries_dir: Path, token: str | None, debug: bool = False
+) -> str:
     """Return markdown context for active projects + ready tasks, or empty string.
 
     Builds the same output as ``workflow-context-inject.sh`` without the
     checkout-relative QUERIES_DIR assumption.
+
+    With ``debug=True`` the fault-tolerant swallows still return ``""`` (the hook
+    must never crash a prompt), but each one first reports *why* to stderr — a
+    broken graph, missing git, or empty result is otherwise indistinguishable
+    from "nothing to show".
     """
     try:
         # Kept inside the try so the hook still degrades to "" on the off chance
         # any of this raises — the module contract is that it never does.
         repo, branch = _cached_repo_and_branch()
+        _dbg(debug, f"detected repo={repo!r} branch={branch!r}")
+        _dbg(debug, f"graph_uri={graph_uri!r} output_cache_ttl={_output_cache_ttl()}s")
 
         # Serve a recently-rendered block without touching the graph at all.
         cached = _read_output_cache(graph_uri, repo, branch)
         if cached is not None:
+            _dbg(debug, f"served from output cache ({len(cached)} chars)")
             return cached
 
         client = OmnigraphClient(graph_uri, queries_dir, token)
@@ -149,7 +170,15 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
         # belt-and-suspenders.
         seen = {t["slug"] for t in repo_tasks}
         tasks = repo_tasks + [t for t in unscoped if t["slug"] not in seen]
+        _dbg(
+            debug,
+            f"graph reads OK: projects={len(projects)} "
+            f"repo_tasks={len(repo_tasks)} unscoped={len(unscoped)}",
+        )
     except Exception:  # noqa: BLE001
+        if debug:
+            _dbg(debug, "FAILED building context (returning empty block):")
+            traceback.print_exc(file=sys.stderr)
         return ""
 
     # Isolated (like the CodeBranch read below): one read grouped by project
@@ -164,6 +193,9 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
                 if p_slug:
                     sessions_by_project.setdefault(p_slug, []).append(s)
         except Exception:  # noqa: BLE001
+            if debug:
+                _dbg(debug, "sessions read failed (skipping resume/staleness lines):")
+                traceback.print_exc(file=sys.stderr)
             sessions_by_project = {}
 
     # Isolated from the block above: a CodeBranch query failing (e.g. an
@@ -179,12 +211,23 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
                 {"branch_slug": f"{repo}|{branch}"},
             )
         except Exception:  # noqa: BLE001
+            if debug:
+                _dbg(
+                    debug,
+                    "code_branch_tasks read failed (run `witan migrate schema`?):",
+                )
+                traceback.print_exc(file=sys.stderr)
             branch_tasks = []
     open_branch_tasks = [t for t in branch_tasks if t.get("status") != "closed"]
 
     # Shared with ``task_ready`` so the injected list and the tool agree —
     # including the reclaim of ``in_progress`` tasks whose lease has lapsed.
     ready = readiness.filter_ready(tasks)
+    _dbg(
+        debug,
+        f"ready={len(ready)} open_branch_tasks={len(open_branch_tasks)} "
+        f"sessions_for={len(sessions_by_project)} project(s)",
+    )
 
     lines: list[str] = []
 
@@ -264,6 +307,11 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
     # Cache the freshly rendered block (including an empty one) so the next
     # prompt in this window skips the graph reads entirely.
     _write_output_cache(graph_uri, repo, branch, output)
+    _dbg(
+        debug,
+        f"rendered {len(output)} chars"
+        + ("" if output else " (empty — no projects, ready tasks, or branch tasks)"),
+    )
     return output
 
 
@@ -364,32 +412,22 @@ def _detect_repo() -> str | None:
     """Detect canonical repo URI from WITAN_REPO, CLAUDE_PROJECT_DIR, or cwd.
 
     WITAN_REPO="" (explicitly set to empty string) suppresses detection entirely.
-    """
-    import re
 
+    Shares ``repo`` module's resolution (``origin`` first, then the first remote
+    of any name) and its normaliser, so the hook and ``repo.detect`` can't drift
+    — but keyed off ``CLAUDE_PROJECT_DIR``/cwd rather than ``Path.cwd()`` because
+    a persistent MCP server's cwd is not the session's checkout.
+    """
     witan_repo = os.environ.get("WITAN_REPO")
     if witan_repo is not None:
         return witan_repo or None  # "" → disabled; non-empty → use as-is
 
     project_dir = _cwd_or_dot()
     try:
-        raw = subprocess.check_output(
-            ["git", "-C", project_dir, "remote", "get-url", "origin"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except (subprocess.CalledProcessError, OSError):
-        # OSError covers a missing git binary (FileNotFoundError) so this hook
-        # helper degrades to "no repo" instead of crashing the prompt hook.
+        raw = repo_module.git_remote_url(Path(project_dir))
+    except Exception:  # noqa: BLE001 — the prompt hook must never crash
         return None
-    if not raw:
-        return None
-    url = re.sub(r"\.git$", "", raw).rstrip("/")
-    if m := re.match(r"(?:ssh://)?[^@]+@([^:/]+)[:/](.+)", url):
-        return f"https://{m.group(1)}/{m.group(2)}"
-    if m := re.match(r"https?://(?:[^@/]+@)?([^/]+)/(.+)", url):
-        return f"https://{m.group(1)}/{m.group(2)}"
-    return url
+    return repo_module.normalise(raw) if raw else None
 
 
 # ── Session checkpoint (Stop hook) ────────────────────────────────────────────
