@@ -190,13 +190,18 @@ or `uv tool install` the package to get it on `PATH`):
 | Command | Description |
 |---|---|
 | `setup [--agent claude\|pi\|…\|all]` | Install witan for one or all supported coding agents; also writes a starter `~/.config/witan/config.toml` if one doesn't exist yet |
-| `tasks [--ready] [--status …] [--project wp-…] [--all-repos]` | Tasks for the current repo; `--ready` = open with no open blockers |
+| `tasks [--ready] [--status …] [--project wp-…] [--all-repos]` | Tasks for the current repo (closed elided by default — pass `--status closed` to see them); `--ready` = open with no open blockers |
 | `task <tk-slug>` | One task's details, blockers, and sub-tasks |
 | `task create <title>` | Create a task from the CLI |
+| `task close\|claim\|release\|update\|link <tk-slug> …` | Drive task state transitions from the CLI |
 | `run <tk-slug> [--agent claude\|pi] [--dry-run]` | Claim a task and launch an agent to execute it |
 | `projects [--status …] [--all-repos]` | Workflow projects (default: active in this repo) |
 | `project <wp-slug>` | A project with its sessions, tasks, and corpus trace |
+| `project status <wp-slug> [--json]` | "What next" resume view — phase, ready tasks, last session, blockers |
+| `project tasks <wp-slug> [--status …] [--detail]` | A project's tasks; `--detail` expands each task's blockers and dependents |
 | `project create <title>` | Create a workflow project from the CLI |
+| `project advance\|complete\|block\|unblock <wp-slug> …` | Drive project phase/dependency transitions from the CLI |
+| `session start\|end\|list …` | Start/close a workflow session, or list a project's sessions |
 | `memory [QUERY] [--kind …]` | BM25 memory search, or (with no query) list memories |
 | `code repos` | Repositories with a code graph indexed (requires witan-code) |
 | `scan test <text>` | Dry-run active detectors against an ad-hoc string; prints findings (never the matched text) |

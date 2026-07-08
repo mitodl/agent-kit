@@ -15,7 +15,9 @@ from .. import repo as repo_module
 # Enum literals mirrored from witan.server — drive CLI argument validation.
 MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
 TaskType = Literal["bug", "feature", "task", "chore", "epic"]
+TaskStatus = Literal["open", "in_progress", "blocked", "closed"]
 TaskPriority = Literal["p0", "p1", "p2", "p3"]
+TaskLinkKind = Literal["blocks", "parent", "discovered_from", "addresses"]
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 
 app = cyclopts.App(

@@ -17,7 +17,9 @@ from ._common import (
     _split_csv,
     _srv,
     _styled,
+    TaskLinkKind,
     TaskPriority,
+    TaskStatus,
     TaskType,
     app,
     console,
@@ -44,10 +46,14 @@ def tasks(
 ) -> None:
     """List tasks for the current repo (or filtered).
 
+    Closed tasks are elided by default — the list is a working view of live work.
+    Pass ``--status closed`` to see them (or any other status to filter to it).
+
     Parameters
     ----------
     repo: Scope to a specific repo URI (default: the current git repo).
-    status: Filter by open | in_progress | blocked | closed.
+    status: Filter by open | in_progress | blocked | closed. Omitted: all
+        non-closed statuses.
     project: Scope to a WorkflowProject (``wp-`` slug).
     assignee: Filter by owner.
     ready: Show only ready-to-work tasks (open, all blockers closed).
@@ -67,7 +73,12 @@ def tasks(
     else:
         rows = _fn(s.task_list)(
             repo=repo_arg, status=status, project_slug=project, assignee=assignee
-        )[:limit]
+        )
+        # A bare `witan tasks` is a live-work view: drop closed tasks unless the
+        # user explicitly asks for a status (including `--status closed`).
+        if status is None:
+            rows = [r for r in rows if r.get("status") != "closed"]
+        rows = rows[:limit]
 
     if not rows:
         if detected_repo and not all_repos:
@@ -219,6 +230,177 @@ def task_create_cmd(
     console.print(f"  status: {_styled(result['status'], _STATUS_STYLE)}")
     if result.get("repo"):
         console.print(f"  repo: {_short_repo(result['repo'])}")
+
+
+@task_app.command(name="close")
+def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
+    """Close a task, recording an optional resolution.
+
+    Closing a blocker unblocks its dependents.
+
+    Parameters
+    ----------
+    slug: The ``tk-`` slug to close.
+    resolution: Short note on what was done.
+    """
+    s = _srv()
+    result = _fn(s.task_close)(slug, resolution=resolution)
+    if not result:
+        console.print(f"[red]No task {slug!r}.[/red]")
+        raise SystemExit(1)
+    console.print(f"[green]Closed[/green] [bold]{slug}[/bold]")
+    if resolution:
+        console.print(f"  resolution: {resolution}")
+
+
+@task_app.command(name="claim")
+def task_claim_cmd(
+    slug: str,
+    *,
+    assignee: str | None = None,
+    force: bool = False,
+) -> None:
+    """Claim a task for work (status in_progress, with a lease).
+
+    A live claim held by someone else is refused unless ``--force`` is passed
+    (CLI has no interactive steal prompt).
+
+    Parameters
+    ----------
+    slug: The ``tk-`` slug to claim.
+    assignee: Holder identity (default: the configured author).
+    force: Steal the task even if another holder's lease is still valid.
+    """
+    s = _srv()
+    result = _fn(s.task_claim)(slug, assignee=assignee, force=force)
+    if result is None:
+        console.print(f"[red]No task {slug!r}.[/red]")
+        raise SystemExit(1)
+    if result.get("claimed"):
+        console.print(
+            f"[green]Claimed[/green] [bold]{slug}[/bold] "
+            f"(assignee={result.get('assignee')})"
+        )
+        return
+    reason = result.get("held_by") or result.get("reason") or "unavailable"
+    console.print(f"[yellow]Not claimed[/yellow] ({reason}).")
+    raise SystemExit(1)
+
+
+@task_app.command(name="release")
+def task_release_cmd(
+    slug: str,
+    *,
+    assignee: str | None = None,
+    status: TaskStatus = "open",
+    force: bool = False,
+) -> None:
+    """Release a claim, returning the task to ``open`` (or another status).
+
+    Parameters
+    ----------
+    slug: The ``tk-`` slug to release.
+    assignee: Holder identity releasing the task (default: the configured author).
+    status: Status to return the task to (default ``open``).
+    force: Release even if held by a different assignee.
+    """
+    s = _srv()
+    result = _fn(s.task_release)(slug, assignee=assignee, status=status, force=force)
+    if result is None:
+        console.print(f"[red]No task {slug!r}.[/red]")
+        raise SystemExit(1)
+    if result.get("released"):
+        console.print(
+            f"[green]Released[/green] [bold]{slug}[/bold] → "
+            f"{_styled(result.get('status', status), _STATUS_STYLE)}"
+        )
+        return
+    console.print(
+        f"[yellow]Not released[/yellow] — held by {result.get('held_by')} "
+        f"(pass --force)."
+    )
+    raise SystemExit(1)
+
+
+@task_app.command(name="update")
+def task_update_cmd(
+    slug: str,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    type: TaskType | None = None,
+    priority: TaskPriority | None = None,
+    status: TaskStatus | None = None,
+    repo: str | None = None,
+    project: str | None = None,
+    parent: str | None = None,
+    assignee: str | None = None,
+    external_uri: str | None = None,
+    tags: list[str] | None = None,
+) -> None:
+    """Update a task's mutable fields (only provided fields change).
+
+    To *close* a task prefer ``task close``; to *claim* it prefer ``task claim``;
+    to add dependencies use ``task link``.
+
+    Parameters
+    ----------
+    slug: The ``tk-`` slug to update.
+    title: New short label.
+    description: New full description.
+    type: bug | feature | task | chore | epic.
+    priority: p0 (highest) … p3.
+    status: open | in_progress | blocked | closed.
+    repo: Canonical repo URI to (re)assign this task to.
+    project: ``wp-`` slug of the WorkflowProject this task rolls up to.
+    parent: ``tk-`` slug of the parent task/epic.
+    assignee: Owner identity.
+    external_uri: Reference URI (e.g. a GitHub issue or PR).
+    tags: Replacement free-form tags.
+    """
+    s = _srv()
+    result = _fn(s.task_update)(
+        slug=slug,
+        title=title,
+        description=description,
+        type=type,
+        priority=priority,
+        status=status,
+        repo=repo,
+        project_slug=project,
+        parent=parent,
+        assignee=assignee,
+        external_uri=external_uri,
+        tags=_split_csv(tags),
+    )
+    if not result:
+        console.print(f"[red]No task {slug!r}.[/red]")
+        raise SystemExit(1)
+    console.print(f"[green]Updated[/green] [bold]{slug}[/bold]")
+    console.print(
+        f"  status={_styled(result.get('status', ''), _STATUS_STYLE)}  "
+        f"priority={_styled(result.get('priority', ''), _PRIORITY_STYLE)}"
+    )
+
+
+@task_app.command(name="link")
+def task_link_cmd(from_slug: str, to_slug: str, kind: TaskLinkKind) -> None:
+    """Link two tasks (or a task to a memory).
+
+    ``from``/``to`` meaning depends on ``kind``:
+    blocks — from blocks to; parent — from is parent of to;
+    discovered_from — from was discovered from to; addresses — from addresses
+    memory to.
+
+    Parameters
+    ----------
+    from_slug: Source ``tk-`` slug.
+    to_slug: Target ``tk-`` (or memory) slug.
+    kind: blocks | parent | discovered_from | addresses.
+    """
+    s = _srv()
+    _fn(s.task_link)(from_slug=from_slug, to_slug=to_slug, kind=kind)
+    console.print(f"[green]Linked[/green] {from_slug} —[{kind}]→ {to_slug}")
 
 
 @task_app.command(name="run")

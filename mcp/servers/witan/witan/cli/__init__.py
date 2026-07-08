@@ -26,6 +26,7 @@ from . import hooks  # noqa: F401
 from . import memory  # noqa: F401
 from . import projects  # noqa: F401
 from . import scan  # noqa: F401
+from . import session  # noqa: F401
 from . import setup_cmd  # noqa: F401
 from . import tasks  # noqa: F401
 from . import traces  # noqa: F401
