@@ -255,7 +255,7 @@ def test_apply_opencode_registers_mcp_server_folded_command_array(
 
 def test_apply_project_scope_writes_relative_to_cwd_not_home(tmp_path, monkeypatch):
     """Project-scope targets are plain relative paths (registry.py) — they
-    resolve against the process CWD, i.e. the repo root ac-kit is run from,
+    resolve against the process CWD, i.e. the repo root agent-kit is run from,
     never Path.home()."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "should-not-be-used")
     monkeypatch.chdir(tmp_path)

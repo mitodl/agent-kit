@@ -5,7 +5,7 @@ Phase: discovery → spec
 Status: design only — nothing here is implemented yet.
 
 Builds on the shipped manifest/CLI layer described in
-[`agent-config-kit-cli-spec.md`](./agent-config-kit-cli-spec.md) (the `ac-kit`
+[`agent-config-kit-cli-spec.md`](./agent-config-kit-cli-spec.md) (the `agent-kit`
 console script, `load_manifest()`, `apply`/`apply_all`, `fetch.py`'s
 `https://`/`git+` resolution, `prune.py`'s state file). That project
 (`wp-cross-agent-coding-agent-config-management-libra-5593b0`) is complete;
@@ -25,15 +25,15 @@ Five behavioral extensions, in dependency order:
 3. **Directory-prefix & project scoping** — provision different config under
    `~/code/mit` vs `~/code/personal` (and per-project targets), driven by a
    global config that routes a working directory to a manifest + profile.
-4. **GitHub org-scoped apply** — `ac-kit apply` in a freshly cloned
+4. **GitHub org-scoped apply** — `agent-kit apply` in a freshly cloned
    `github.com/mitodl/*` repo detects the org from the git remote and applies
    that org's manifest + default profile automatically.
 5. **Global config file** — a user-level `config.toml` that holds the default
    manifests/profiles per scope (global, per-org, per-directory-prefix), so
-   the ergonomic zero-argument `ac-kit apply` "just works".
+   the ergonomic zero-argument `agent-kit apply` "just works".
 
 A running example of the end state (feature 4): clone a mitodl repo, run
-`ac-kit apply` with no arguments, and the mitodl org manifest's
+`agent-kit apply` with no arguments, and the mitodl org manifest's
 `platform-eng` profile is installed — because the global config maps the
 `mitodl` org (and/or the `~/code/mit` prefix) to that manifest+profile.
 
@@ -48,10 +48,10 @@ A running example of the end state (feature 4): clone a mitodl repo, run
 | C1 | Include mechanism | A top-level `include = ["...", ...]` list of manifest references, each a local path (resolved per M5, relative to the *including* manifest's dir) or a remote `https://`/`git+` URI (reusing `fetch.py`). A `[profiles.<name>]` may also carry its own `include` (§5.2). |
 | C2 | Include merge & precedence | Includes are merged **depth-first, left-to-right**, then the including manifest's own top-level entries are merged last (**local wins**). Same-keyed entries: **last writer wins** (later include, then local). Cycles are detected (a manifest transitively including itself) and raise `ManifestError`. |
 | S1 | Global config location | `${XDG_CONFIG_HOME:-~/.config}/agent-config-kit/config.toml` (overridable with `--config` / `AC_KIT_CONFIG`). Holds default manifests/profiles keyed by scope: a global default, a `[[org]]` list, and a `[[scope]]` prefix list. |
-| S2 | Directory-prefix scoping | **ac-kit-side routing** — the global config's `[[scope]]` entries map a directory prefix to a manifest + profile; zero-arg `ac-kit apply` picks the **longest-matching** prefix for the CWD. Native per-agent hierarchy loading does **not** cover this case (see D-INV / §6.1), so ac-kit materializes into per-repo project-scoped targets rather than relying on the agent to walk ancestors. |
-| S3 | Native vs. ac-kit division of labor | **Native-first, ac-kit fills gaps.** For the *within-repo / monorepo* case, defer to native discovery where it exists (do not fight it). For the *cross-repo directory-prefix* case (`~/code/mit` spanning many independent git repos), no agent supports it — ac-kit routing is mandatory. Established by the D-INV investigation (§6.1). |
+| S2 | Directory-prefix scoping | **agent-kit-side routing** — the global config's `[[scope]]` entries map a directory prefix to a manifest + profile; zero-arg `agent-kit apply` picks the **longest-matching** prefix for the CWD. Native per-agent hierarchy loading does **not** cover this case (see D-INV / §6.1), so agent-kit materializes into per-repo project-scoped targets rather than relying on the agent to walk ancestors. |
+| S3 | Native vs. agent-kit division of labor | **Native-first, agent-kit fills gaps.** For the *within-repo / monorepo* case, defer to native discovery where it exists (do not fight it). For the *cross-repo directory-prefix* case (`~/code/mit` spanning many independent git repos), no agent supports it — agent-kit routing is mandatory. Established by the D-INV investigation (§6.1). |
 | O1 | Org detection | **Git-remote-URL only** — parse the org/owner from `git remote get-url origin` (and other remotes as fallback). Offline, no auth, no new dependency. It intentionally does **not** verify GitHub *membership* via API; anyone who cloned the repo and has a matching `[[org]]` entry gets that config. (Membership verification is a deferred enhancement, §8, open question O-MEM.) |
-| O2 | Zero-arg `apply` resolution order | `ac-kit apply` with no `MANIFEST` resolves its manifest+profile from the global config by, in order: **(1) explicit CLI flags** → **(2) a repo-local `agent-config.toml`** if present → **(3) org match** from the git remote → **(4) longest directory-prefix match** → **(5) the global default**. First hit wins for *which manifest*; profile is taken from the same source, overridable by `--profile`. |
+| O2 | Zero-arg `apply` resolution order | `agent-kit apply` with no `MANIFEST` resolves its manifest+profile from the global config by, in order: **(1) explicit CLI flags** → **(2) a repo-local `agent-config.toml`** if present → **(3) org match** from the git remote → **(4) longest directory-prefix match** → **(5) the global default**. First hit wins for *which manifest*; profile is taken from the same source, overridable by `--profile`. |
 | S4 | Project-scope targets | The registry today populates only each platform's `global` `ScopeTarget`; `project` is `None` everywhere. This work **populates `project` targets** (`.claude/skills`, `.mcp.json`, Pi/OpenCode/Copilot project paths) so `--scope project` and per-repo materialization (S2) actually write somewhere. |
 
 ## 3. Manifest format changes
@@ -163,9 +163,9 @@ proves clumsy, a follow-up may allow naming hooks — deferred.)
 ### 4.4 CLI
 
 ```
-ac-kit apply [MANIFEST] --profile NAME...      # repeatable; union
-ac-kit validate [MANIFEST] --profile NAME...
-ac-kit profiles [MANIFEST]                     # list a manifest's profiles + resolved entry counts
+agent-kit apply [MANIFEST] --profile NAME...      # repeatable; union
+agent-kit validate [MANIFEST] --profile NAME...
+agent-kit profiles [MANIFEST]                     # list a manifest's profiles + resolved entry counts
 ```
 
 `--profile` intersects nothing — it *selects*. With profiles present but no
@@ -246,12 +246,12 @@ tree bounds the walk at the enclosing `.git`:
 independent repos under `~/code/mit` — is **not** natively expressible in any
 agent. So:
 
-- **Within-repo case:** defer to native (S3). ac-kit's `--scope project`
+- **Within-repo case:** defer to native (S3). agent-kit's `--scope project`
   writes to the repo-local dirs the agent already reads; nested/monorepo
-  skill loading is the agent's job, not ac-kit's.
-- **Cross-repo prefix case:** ac-kit routing is mandatory (S2). ac-kit
+  skill loading is the agent's job, not agent-kit's.
+- **Cross-repo prefix case:** agent-kit routing is mandatory (S2). agent-kit
   materializes the prefix's manifest+profile into each repo's project-scoped
-  targets when `ac-kit apply` runs there (or, opt-in, into the agent's global
+  targets when `agent-kit apply` runs there (or, opt-in, into the agent's global
   location). The portable lever the agents *do* expose — injecting absolute
   skill paths into a settings allowlist (OpenCode `skills.paths`, Pi
   `skills[]`, Copilot `*Locations`) — can't be prefix-scoped (global settings
@@ -263,13 +263,13 @@ Populate each platform's `project` `ScopeTarget` in the registry (relative to
 a repo root): `claude` → `.claude/skills`, `.mcp.json`, `.claude/settings.json`;
 `pi` → `.pi/skills`, `.pi/extensions`, `.pi/settings.json`; `opencode` →
 `.opencode/...`; `copilot` → `.github/skills`, `.vscode/mcp.json`. Enables
-`ac-kit apply --scope project` and S2 materialization. Verify each path per
+`agent-kit apply --scope project` and S2 materialization. Verify each path per
 D-INV notes.
 
 ### 6.3 Prefix routing (S2)
 
 Global config `[[scope]]` entries (§7) map a directory prefix to a
-manifest + profile. Zero-arg `ac-kit apply` (§7.2) expands `~`, canonicalizes
+manifest + profile. Zero-arg `agent-kit apply` (§7.2) expands `~`, canonicalizes
 the CWD, and picks the **longest** matching `match_prefix`, matched at
 directory-component boundaries (`Path` ancestry, e.g. `is_relative_to`) —
 **not** a naive `str.startswith(prefix)`, which would wrongly match a
@@ -316,11 +316,11 @@ Loaded by a new `config.py` (`load_global_config()`), XDG-aware, absent-file =
 empty config (never an error — zero-arg apply just falls through to "no
 manifest resolved" with a clear message). Wrapped errors like `ManifestError`.
 
-### 7.1a `ac-kit config init`
+### 7.1a `agent-kit config init`
 
 Since the whole point of the global config is to make zero-arg `apply` "just
-work" without the user hand-writing TOML from memory, `ac-kit config init`
-bootstraps it: `ac-kit config init [--config PATH] [--force] [--wizard]`.
+work" without the user hand-writing TOML from memory, `agent-kit config init`
+bootstraps it: `agent-kit config init [--config PATH] [--force] [--wizard]`.
 
 - **Non-interactive (default):** writes every key in §7.1's schema as a
   commented-out example — a self-documenting starting point the user edits
@@ -341,11 +341,11 @@ bootstraps it: `ac-kit config init [--config PATH] [--force] [--wizard]`.
 
 ### 7.2 Zero-arg `apply` (O2)
 
-`ac-kit apply` with no `MANIFEST` resolves per O2's order: explicit flags →
+`agent-kit apply` with no `MANIFEST` resolves per O2's order: explicit flags →
 repo-local `agent-config.toml` at the repo root → `[[org]]` match (git remote,
 §8) → longest `[[scope]]` prefix match → `default_manifest`. The chosen
 source supplies both the manifest and its default profiles; `--profile`
-overrides the profile, `--scope` overrides the write scope. `ac-kit apply`
+overrides the profile, `--scope` overrides the write scope. `agent-kit apply`
 prints *which* source resolved the manifest (so the "magic" is legible), e.g.
 `resolved manifest from org 'mitodl' → profile platform-eng`.
 

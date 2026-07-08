@@ -1,4 +1,4 @@
-"""``ac-kit`` console script — gated behind the ``cli`` extra.
+"""``agent-kit`` console script — gated behind the ``cli`` extra.
 
 The base ``agent_config_kit`` package stays importable with only ``pydantic``
 as a dependency (spec D3); this module is the only place ``cyclopts``/``rich``
@@ -20,7 +20,7 @@ try:
     from rich.table import Table
 except ImportError as exc:
     sys.stderr.write(
-        "ac-kit: the CLI requires the `cli` extra.\n"
+        "agent-kit: the CLI requires the `cli` extra.\n"
         "Install it with: pip install 'agent-config-kit[cli]'\n"
         "(or: uv tool install 'agent-config-kit[cli]')\n"
     )
@@ -44,7 +44,7 @@ from .prune import (
 from .registry import detect_installed_platforms, known_platforms
 
 app = cyclopts.App(
-    name="ac-kit",
+    name="agent-kit",
     help=(
         "Apply and validate manifest-driven MCP server, skill, and hook "
         "registration across coding-agent platforms."
@@ -53,7 +53,7 @@ app = cyclopts.App(
 console = Console()
 
 config_app = cyclopts.App(
-    name="config", help="Manage the global ac-kit config file (spec §7)."
+    name="config", help="Manage the global agent-kit config file (spec §7)."
 )
 app.command(config_app)
 
@@ -171,7 +171,7 @@ def _ask_write_scope(prompt: str) -> str:
 
 def _run_config_wizard() -> dict:
     console.print(
-        "[bold]ac-kit config init --wizard[/bold] — press Enter to skip any "
+        "[bold]agent-kit config init --wizard[/bold] — press Enter to skip any "
         "optional value.\n"
     )
 
@@ -182,7 +182,7 @@ def _run_config_wizard() -> dict:
 
     orgs = []
     while _ask_yes_no(
-        "Add a GitHub org -> manifest mapping (auto-applied when ac-kit runs "
+        "Add a GitHub org -> manifest mapping (auto-applied when agent-kit runs "
         "in a freshly cloned repo under that org)?"
     ):
         orgs.append(

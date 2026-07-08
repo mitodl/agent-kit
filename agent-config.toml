@@ -1,6 +1,6 @@
 # agent-config.toml — declarative install of this repo's own MCP servers
 # (witan, witan-code) and skill catalog (skills/**) via agent-config-kit's
-# `ac-kit` CLI, for consumers that don't want to write Python.
+# `agent-kit` CLI, for consumers that don't want to write Python.
 #
 # Skills owned by witan itself (mcp/servers/witan/witan/skills/) are
 # installed by `witan setup`, not this manifest — witan owns its own
@@ -16,11 +16,11 @@
 #
 # Usage (from the repo root):
 #   uv tool install 'agent-config-kit[cli]'
-#   ac-kit apply agent-config.toml                        # everything, every platform
-#   ac-kit apply agent-config.toml --profile python        # just the python profile
-#   ac-kit apply agent-config.toml --dry-run               # preview without writing
-#   ac-kit validate agent-config.toml                      # check for drift
-#   ac-kit profiles agent-config.toml                      # list profiles + entry counts
+#   agent-kit apply agent-config.toml                    # everything, every platform
+#   agent-kit apply agent-config.toml --profile python   # just the python profile
+#   agent-kit apply agent-config.toml --dry-run          # preview without writing
+#   agent-kit validate agent-config.toml                 # check for drift
+#   agent-kit profiles agent-config.toml                 # list profiles + entry counts
 #
 # WITAN_AUTHOR is optional and defaults to your git config user.name or $USER.
 
