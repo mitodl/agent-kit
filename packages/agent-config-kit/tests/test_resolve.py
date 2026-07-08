@@ -45,7 +45,7 @@ def test_resolve_prefers_repo_local_manifest_over_scope_and_default(tmp_path):
 
     assert resolved is not None
     assert resolved.path == local_manifest
-    assert resolved.profiles == []
+    assert resolved.profiles is None
     assert "repo-local manifest" in resolved.source
 
 

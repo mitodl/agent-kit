@@ -29,7 +29,14 @@ from .models import Scope
 @dataclass
 class ResolvedManifest:
     path: Path
-    profiles: list[str]
+    # `None` -> this source carries no profile opinion of its own (the
+    # repo-local case); fall through to the manifest's own
+    # `[options].default_profiles`. A `list[str]` -- even `[]` -- is a real
+    # override from `[[scope]]`/`[[org]]`/`default_profiles` and is used
+    # verbatim ("profile is taken from the same source", spec §7.2), so an
+    # explicitly-empty source list means "apply the whole manifest", not
+    # "no opinion".
+    profiles: list[str] | None
     write_scope: Scope | None
     source: str
 
@@ -94,7 +101,7 @@ def resolve_zero_arg_manifest(
         if local_manifest.is_file():
             return ResolvedManifest(
                 path=local_manifest,
-                profiles=[],
+                profiles=None,
                 write_scope=None,
                 source=f"repo-local manifest at {local_manifest}",
             )

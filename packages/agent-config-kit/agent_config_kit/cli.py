@@ -281,12 +281,16 @@ def _resolve_profiles(
     match from a zero-arg resolution, spec §7.2's "profile is taken from the
     same source"), which in turn wins over the manifest's own
     ``[options].default_profiles`` (spec §4.4: "explicit beats declarative",
-    same precedent as ``_resolve_platforms``). None given -> ``[]``, which
-    ``resolve_profile`` treats as "apply the whole manifest" (profiles are
-    opt-in filters, not gates — O-DEFAULT)."""
+    same precedent as ``_resolve_platforms``). ``source_profiles`` is checked
+    against ``None``, not truthiness — a source that resolved with an
+    explicitly empty profile list (e.g. an ``[[scope]]`` entry with no
+    ``profiles`` set) still overrides the manifest's own defaults, per O2;
+    ``resolve_profile`` treats ``[]`` as "apply the whole manifest" (profiles
+    are opt-in filters, not gates — O-DEFAULT), same as no ``--profile`` at
+    all when nothing resolved a source."""
     if cli_profiles:
         return list(cli_profiles)
-    if source_profiles:
+    if source_profiles is not None:
         return list(source_profiles)
     return list(manifest_default_profiles)
 
@@ -303,7 +307,7 @@ def _resolve_manifest_arg(
 
     config = load_global_config()
     try:
-        resolved = resolve_zero_arg_manifest(Path.cwd(), config)
+        resolved = resolve_zero_arg_manifest(Path.cwd(), config, cache_dir=cache_dir)
     except FetchError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
