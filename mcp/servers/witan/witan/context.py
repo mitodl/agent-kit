@@ -15,10 +15,10 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import readiness
 from . import repo as repo_module
+from . import session_state
 from .graph import OmnigraphClient
-
-_PRIORITY = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
 
 
 # ── Context injection (UserPromptSubmit hook) ─────────────────────────────────
@@ -73,17 +73,9 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
             branch_tasks = []
     open_branch_tasks = [t for t in branch_tasks if t.get("status") != "closed"]
 
-    status_by_slug = {t["slug"]: t.get("status") for t in tasks}
-    ready = [
-        t
-        for t in tasks
-        if t.get("status") in ("open", "blocked")
-        and all(
-            status_by_slug.get(b, "closed") == "closed"
-            for b in (t.get("blocked_by") or [])
-        )
-    ]
-    ready.sort(key=lambda t: _PRIORITY.get(t.get("priority", "p3"), 9))
+    # Shared with ``task_ready`` so the injected list and the tool agree —
+    # including the reclaim of ``in_progress`` tasks whose lease has lapsed.
+    ready = readiness.filter_ready(tasks)
 
     lines: list[str] = []
 
@@ -99,6 +91,9 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
             lines.append(f"  Phase: {p['phase']}")
             if p.get("github_issue"):
                 lines.append(f"  Issue: {p['github_issue']}")
+            session_line = _latest_session_line(client, p["slug"])
+            if session_line:
+                lines.append(session_line)
         lines += [
             "",
             "If this session is contributing to one of the projects above, call",
@@ -149,6 +144,32 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
     return "\n".join(lines)
 
 
+def _latest_session_line(client: OmnigraphClient, project_slug: str) -> str | None:
+    """One-line "where things stand" from the project's most recent session.
+
+    This is the handoff summary written by ``workflow_session_end`` — the single
+    most valuable continuity artifact, otherwise invisible on resume. Isolated
+    and fault-tolerant: any failure (including a store without the session query)
+    yields ``None`` so a broken session read can never blank the projects/tasks
+    context that already works.
+    """
+    try:
+        sessions = client.read(
+            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+        )
+        if not sessions:
+            return None
+        latest = sessions[-1]  # query orders by started_at asc → last is newest
+        summary_lines = (latest.get("summary") or "").strip().splitlines()
+        summary = summary_lines[0][:200] if summary_lines else ""
+        if not summary:
+            return None
+        state = "still open" if not latest.get("ended_at") else "ended"
+        return f"  Last session ({state}): {summary}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _detect_repo() -> str | None:
     """Detect canonical repo URI from WITAN_REPO, CLAUDE_PROJECT_DIR, or cwd.
 
@@ -192,9 +213,7 @@ def session_checkpoint(graph_uri: str, queries_dir: Path, token: str | None) -> 
     if not session_id:
         return
 
-    state_file = (
-        Path(os.environ.get("TMPDIR", "/tmp")) / f"workflow-session-{session_id}.json"
-    )
+    state_file = session_state.session_state_path(session_id)
     if not state_file.exists():
         return
 

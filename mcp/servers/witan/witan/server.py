@@ -18,8 +18,10 @@ from typing import Literal
 from fastmcp import FastMCP
 
 from . import config as cfg_module
+from . import readiness
 from . import repo as repo_module
 from . import scan
+from . import session_state
 from .graph import OmnigraphClient, OmnigraphConflict, _is_storage_version_mismatch
 
 # ── Startup ───────────────────────────────────────────────────────
@@ -189,27 +191,17 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# Advisory-claim lease: a task left ``in_progress`` longer than this without being
-# re-claimed is treated as abandoned (the holder likely crashed) and becomes
-# reclaimable. Holders renew by calling ``task_claim`` again.
-_CLAIM_LEASE_SECONDS = 3600
+# Advisory-claim lease lives in ``readiness`` (shared with the context hook so
+# the injected "Ready Tasks" list and ``task_ready`` agree). Re-exported under
+# the historical names for the in-module call sites.
+_CLAIM_LEASE_SECONDS = readiness.CLAIM_LEASE_SECONDS
+_lease_expired = readiness.lease_expired
 
 # Bounded re-tries for the best-effort CAS claim loop: on each surfaced
 # optimistic-concurrency conflict we re-read and either bail (a rival won) or
 # re-attempt the claim. Small, since a claim conflicting this many times in a row
 # without a rival taking it is pathological.
 _CLAIM_MAX_ATTEMPTS = 3
-
-
-def _lease_expired(claimed_at: str | None) -> bool:
-    """True when an advisory claim's lease has elapsed (or there is no claim)."""
-    if not claimed_at:
-        return True
-    try:
-        started = datetime.fromisoformat(claimed_at)
-    except (ValueError, TypeError):
-        return True
-    return (datetime.now(timezone.utc) - started).total_seconds() > _CLAIM_LEASE_SECONDS
 
 
 def _project_repos(row: dict) -> list[str]:
@@ -1234,11 +1226,10 @@ def _track_code_branch(
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 WorkflowStatus = Literal["active", "completed", "abandoned"]
 
-_STATE_FILE_PREFIX = "workflow-session-"
-
-
-def _session_state_path(session_id: str) -> Path:
-    return Path(tempfile.gettempdir()) / f"{_STATE_FILE_PREFIX}{session_id}.json"
+# Session-state path lives in ``session_state`` (shared with the Stop hook so
+# the writer and reader can't diverge under a custom TMPDIR).
+_STATE_FILE_PREFIX = session_state.STATE_FILE_PREFIX
+_session_state_path = session_state.session_state_path
 
 
 def _active_session_slug() -> str | None:
@@ -1350,6 +1341,66 @@ def workflow_project_get(slug: str) -> dict | None:
     blocks = [r["slug"] for r in all_rows if slug in (r.get("blocked_by") or [])]
     project["blocks"] = blocks
     return project
+
+
+def _latest_session_summary(project_slug: str) -> dict | None:
+    """The most-recently-started session for a project, condensed for resume.
+
+    ``list_sessions_by_project`` returns sessions ordered by ``started_at`` asc,
+    so the last row is the latest. Returns ``None`` when the project has no
+    sessions yet. Shared by ``workflow_project_status`` and the context hook so
+    "where things stand" reads the same everywhere.
+    """
+    sessions = client.read(
+        "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+    )
+    if not sessions:
+        return None
+    latest = sessions[-1]
+    return {
+        "slug": latest.get("slug"),
+        "phase": latest.get("phase"),
+        "summary": latest.get("summary"),
+        "ended_at": latest.get("ended_at"),
+        "open": not latest.get("ended_at"),
+    }
+
+
+@mcp.tool
+def workflow_project_status(slug: str) -> dict | None:
+    """One-call "what should I do next" resume view for a workflow project.
+
+    Combines the four things an agent (or the context hook) needs to pick up a
+    project without re-deriving state: current **phase**, the **ready tasks**
+    under it (same readiness rule as ``task_ready``), the **last session's
+    handoff summary** (and whether it's still open), and any project-level
+    **blockers**. Returns ``None`` if the project doesn't exist.
+    """
+    rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    if not rows:
+        return None
+    p = rows[0]
+
+    tasks = client.read("read.gq", "list_tasks_by_project", {"project_slug": slug})
+    open_tasks = sum(1 for t in tasks if t.get("status") != "closed")
+    # Delegate to task_ready (not readiness.filter_ready) so the "same rule as
+    # task_ready" promise is literal: it fetches out-of-project blockers instead
+    # of treating a blocker absent from this project's task set as closed.
+    ready = task_ready(project_slug=slug, limit=100)
+
+    return {
+        "project": {
+            k: p.get(k)
+            for k in ("slug", "title", "phase", "status", "repos", "github_pr")
+        },
+        "ready_tasks": [
+            {k: t.get(k) for k in ("slug", "title", "priority", "status", "assignee")}
+            for t in ready
+        ],
+        "last_session": _latest_session_summary(slug),
+        "blockers": list(p.get("blocked_by") or []),
+        "counts": {"ready": len(ready), "open_tasks": open_tasks},
+    }
 
 
 @mcp.tool
@@ -2101,8 +2152,7 @@ def workflow_session_end(
 
     # Clean up state file for any session_id that maps to this slug
     # (best-effort; Stop hook will also attempt cleanup)
-    tmp = Path(tempfile.gettempdir())
-    for state_file in tmp.glob(f"{_STATE_FILE_PREFIX}*.json"):
+    for state_file in session_state.iter_session_state_files():
         try:
             data = json.loads(state_file.read_text())
             if data.get("session_slug") == session_slug:
@@ -2676,21 +2726,11 @@ def task_ready(
         # A blocker that no longer exists does not hold anything back.
         return fetched[0].get("status", "closed") if fetched else "closed"
 
-    def is_ready(r: dict) -> bool:
-        status = r.get("status")
-        # in_progress tasks are owned — only reclaimable once their lease lapses
-        # (the holder likely crashed). open/blocked are pickable when unblocked.
-        if status == "in_progress":
-            if not _lease_expired(r.get("claimed_at")):
-                return False
-        elif status not in ("open", "blocked"):
-            return False
-        return all(blocker_status(b) == "closed" for b in (r.get("blocked_by") or []))
-
     ready = [
         r
         for r in rows
-        if is_ready(r) and (assignee is None or r.get("assignee") == assignee)
+        if readiness.is_ready(r, blocker_status)
+        and (assignee is None or r.get("assignee") == assignee)
     ]
     ready.sort(key=lambda r: _PRIORITY_ORDER.get(r.get("priority"), 9))
     return ready[:limit]

@@ -94,21 +94,26 @@ installs tree-sitter — one-time, slow).
 
 ### 2. Hooks — Claude Code
 
-Symlink the three hooks and register them. The scripts resolve their real
-location through the symlink (via `readlink -f`), so the symlink install just works:
+The two **workflow** hooks (`UserPromptSubmit` → context-inject, `Stop` →
+session-checkpoint) are installed and registered for you by `witan setup`,
+which writes them into `~/.claude/settings.json` as the bare commands
+`witan inject-context` / `witan session-checkpoint`. **Do not** also register
+`bash ~/.claude/hooks/workflow-context-inject.sh` — that wrapper only calls
+`witan inject-context`, so registering both makes the context block print
+twice. (`witan setup` prunes any such legacy entry on its next run.)
+
+The two **codegraph** hooks are not yet part of `witan setup`; symlink and
+register them manually:
 
 ```bash
 mkdir -p ~/.claude/hooks
-ln -sf "$REPO/configs/hooks/workflow-context-inject.sh"     ~/.claude/hooks/
-ln -sf "$REPO/configs/hooks/workflow-session-checkpoint.sh" ~/.claude/hooks/
 ln -sf "$REPO/configs/hooks/codegraph-session-init.sh"      ~/.claude/hooks/
 ln -sf "$REPO/configs/hooks/codegraph-reindex.sh"           ~/.claude/hooks/
 ```
 
-Register them in `~/.claude/settings.json` under `hooks` —
-`UserPromptSubmit` → context-inject, `Stop` → session-checkpoint,
-`SessionStart` → codegraph-session-init (seeds/refreshes the whole code graph in
-the background), and `PostToolUse` (matcher `Edit|Write`) → codegraph-reindex
+Register them in `~/.claude/settings.json` under `hooks` — `SessionStart` →
+codegraph-session-init (seeds/refreshes the whole code graph in the
+background), and `PostToolUse` (matcher `Edit|Write`) → codegraph-reindex
 (keeps edited files fresh). See
 [`configs/hooks/README.md`](../configs/hooks/README.md) for the exact JSON.
 
@@ -1514,11 +1519,14 @@ documentation is in
 
 ### Session State File
 
-`workflow_session_start` writes a JSON state file to
-`/tmp/workflow-session-<session_id>.json`. The `Stop` hook at
-`configs/hooks/workflow-session-checkpoint.sh` reads this file to auto-close
-sessions that did not call `workflow_session_end` explicitly. The file is
-deleted after the hook runs (or after `workflow_session_end` is called).
+`workflow_session_start` writes a JSON state file named
+`workflow-session-<session_id>.json` into the system temp dir
+(`tempfile.gettempdir()` — honors `TMPDIR`/`TEMP`/`TMP`, else the platform
+default). The `Stop` hook (`witan session-checkpoint`) reads this file to
+auto-close sessions that did not call `workflow_session_end` explicitly. Writer
+and reader resolve the path through one shared helper (`witan/session_state.py`)
+so a custom `TMPDIR` can't make them diverge. The file is deleted after the hook
+runs (or after `workflow_session_end` is called).
 
 ### Corpus and Pattern Mining
 
@@ -1544,31 +1552,25 @@ then emit those as new skill templates.
 
 ### Hook Setup
 
-```bash
-mkdir -p ~/.claude/hooks
-cd /path/to/agent-kit/configs/hooks
-ln -sf "$(pwd)/workflow-context-inject.sh" ~/.claude/hooks/
-ln -sf "$(pwd)/workflow-session-checkpoint.sh" ~/.claude/hooks/
-```
-
-Add to `~/.claude/settings.json`:
+Run `witan setup` — it registers the two workflow hooks in
+`~/.claude/settings.json` as bare commands and installs the wrapper scripts:
 
 ```json
 "hooks": {
   "UserPromptSubmit": [
-    {
-      "matcher": "",
-      "hooks": [{"type": "command", "command": "bash ~/.claude/hooks/workflow-context-inject.sh"}]
-    }
+    {"matcher": "", "hooks": [{"type": "command", "command": "witan inject-context"}]}
   ],
   "Stop": [
-    {
-      "matcher": "",
-      "hooks": [{"type": "command", "command": "bash ~/.claude/hooks/workflow-session-checkpoint.sh"}]
-    }
+    {"matcher": "", "hooks": [{"type": "command", "command": "witan session-checkpoint"}]}
   ]
 }
 ```
+
+Register the bare `witan …` commands, **not** `bash
+~/.claude/hooks/workflow-*.sh`. The wrapper scripts exist only as a fallback for
+environments where `witan` isn't on `PATH`; each just calls the corresponding
+bare command, so registering both duplicates the hook and prints its output
+twice. `witan setup` prunes a pre-existing wrapper registration when it runs.
 
 See `configs/hooks/README.md` for full details.
 

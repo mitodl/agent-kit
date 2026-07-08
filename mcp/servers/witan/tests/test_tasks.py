@@ -202,10 +202,11 @@ def test_claim_refuses_closed(server):
 
 @requires_omnigraph
 def test_expired_lease_is_reclaimable(server, monkeypatch):
-    from witan import server as srv
+    from witan import readiness
 
-    # Make any claim's lease count as elapsed immediately.
-    monkeypatch.setattr(srv, "_CLAIM_LEASE_SECONDS", -1)
+    # Make any claim's lease count as elapsed immediately. The lease constant is
+    # shared by task_ready and the context hook, so it lives in `readiness`.
+    monkeypatch.setattr(readiness, "CLAIM_LEASE_SECONDS", -1)
 
     t = server.task_create(title="leasey", description="x")
     server.task_claim(t["slug"], assignee="agentA")
