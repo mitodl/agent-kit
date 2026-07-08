@@ -91,6 +91,45 @@ def test_profile_inherits_transitively(tmp_path):
     assert set(resolved.mcp_servers) == {"witan"}
 
 
+def test_resolve_profile_preserves_manifest_declaration_order_not_set_order(tmp_path):
+    """Regression for PR #78 review: resolve_profile must filter the
+    manifest's own ordered skills/hooks lists, not iterate a `set` (whose
+    order is randomized per-process by PYTHONHASHSEED) -- otherwise the
+    resolved bundle's order (and downstream JSON/dedup output) would be
+    nondeterministic across runs."""
+    tmp_path.joinpath("skills", "commit").mkdir(parents=True)
+    tmp_path.joinpath("skills", "commit", "SKILL.md").write_text("# commit")
+    tmp_path.joinpath("skills", "webapp-testing").mkdir(parents=True)
+    tmp_path.joinpath("skills", "webapp-testing", "SKILL.md").write_text("# webapp")
+    manifest = _write(
+        tmp_path,
+        """
+        hooks = [
+          { kind = "declarative", event = "stop", command = "first" },
+          { kind = "declarative", event = "stop", command = "second" },
+        ]
+
+        [skills]
+        commit = "./skills/commit/SKILL.md"
+        webapp-testing = "./skills/webapp-testing/SKILL.md"
+
+        [profiles.universal]
+        # listed in reverse of the manifest's own declaration order
+        skills = ["webapp-testing", "commit"]
+        hooks = [
+          "declarative:stop:second",
+          "declarative:stop:first",
+        ]
+        """,
+    )
+
+    loaded = load_manifest(manifest)
+    resolved = resolve_profile(loaded, ["universal"])
+
+    assert [s.name for s in resolved.skills] == ["commit", "webapp-testing"]
+    assert [h.command for h in resolved.hooks] == ["first", "second"]
+
+
 def test_selecting_multiple_profiles_is_a_union(tmp_path):
     _write_skills(tmp_path)
     manifest = _write(

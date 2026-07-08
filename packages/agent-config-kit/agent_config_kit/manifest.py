@@ -294,17 +294,20 @@ def resolve_profile(manifest: Manifest, names: list[str]) -> RegistrationBundle:
     for name in names:
         _collect(name)
 
-    skills_by_name = {s.name: s for s in manifest.bundle.skills}
-    hooks_by_identity = {hook_identity(h): h for h in manifest.bundle.hooks}
-
+    # Filter the manifest's own ordered lists rather than iterating the
+    # `selected` sets directly — set iteration order is randomized per
+    # process (PYTHONHASHSEED), which would make the resolved bundle's
+    # hook/skill order nondeterministic across runs (PR #78 review).
     return RegistrationBundle(
         mcp_servers={
             k: v
             for k, v in manifest.bundle.mcp_servers.items()
             if k in selected["mcp_servers"]
         },
-        hooks=[hooks_by_identity[h] for h in selected["hooks"]],
-        skills=[skills_by_name[s] for s in selected["skills"]],
+        hooks=[
+            h for h in manifest.bundle.hooks if hook_identity(h) in selected["hooks"]
+        ],
+        skills=[s for s in manifest.bundle.skills if s.name in selected["skills"]],
         lsp_servers={
             k: v
             for k, v in manifest.bundle.lsp_servers.items()
