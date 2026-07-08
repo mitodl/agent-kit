@@ -1821,12 +1821,13 @@ def workflow_trace_get(slug: str) -> dict | None:
     """
     Retrieve a single corpus WorkflowTrace by slug.
 
-    Accepts either the trace slug (``wt-<project-slug>``) or the bare
-    ``wp-<project-slug>`` it derives from — a plain project slug is prefixed
-    with ``wt-`` automatically, so callers no longer have to hand-construct the
-    trace slug (which is exactly the fragile step the ``witan-project-tracker``
-    skill used to instruct). Returns the full trace node
-    (title/description/outcome, ``session_count``, ``phases``, ``duration``,
+    Slug handling is simple: a slug already starting with ``wt-`` is used as-is;
+    **any other** slug is prefixed with ``wt-``. So the trace slug
+    (``wt-<project-slug>``) and the project slug (``wp-<project-slug>``, which
+    becomes ``wt-wp-<project-slug>``) both resolve to the same trace, and callers
+    never have to hand-construct the ``wt-`` slug (the fragile step the
+    ``witan-project-tracker`` skill used to instruct). Returns the full trace
+    node (title/description/outcome, ``session_count``, ``phases``, ``duration``,
     and any mined ``lessons_slug``/``patterns_slug``) or ``None`` if no trace
     exists — a project only has a trace once ``workflow_project_complete`` has
     sealed it.
@@ -1834,7 +1835,8 @@ def workflow_trace_get(slug: str) -> dict | None:
     Parameters
     ----------
     slug:
-        The ``wt-`` trace slug, or the ``wp-`` project slug it was minted from.
+        The ``wt-`` trace slug, or the ``wp-`` project slug it was minted from
+        (anything not already ``wt-``-prefixed gets the prefix added).
     """
     trace_slug = slug if slug.startswith("wt-") else f"wt-{slug}"
     rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
