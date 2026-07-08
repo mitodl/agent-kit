@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# install.sh — Wire the Grafana Cloud MCP server(s) into your agent config.
+# install.sh — Wire the ToolHive SWE MCP server(s) into your agent config.
 #
-# Grafana Cloud MCP is a remote, hosted server (not a local process):
-#   - Endpoint:   https://mcp.grafana.com/mcp
+# ToolHive SWE MCP is a remote, hosted server (not a local process). We run
+# one installation per environment tier, each at its own hostname:
+#
+#   ci    -> https://toolhive-swe.ci.ol.mit.edu/mcp
+#   qa    -> https://toolhive-swe.qa.ol.mit.edu/mcp
+#   prod  -> https://toolhive-swe.ol.mit.edu/mcp
+#
 #   - Transport:  Streamable HTTP only (no stdio / no SSE)
 #   - Auth:       OAuth 2.1 — a browser consent flow runs on first connect,
-#                 so there is NO token or API key to configure here.
-#
-# Each MCP server entry is pinned to ONE Grafana stack via the `X-Grafana-URL`
-# header. We have three stacks, so this registers three separately-named
-# servers (grafana-ci / grafana-qa / grafana-prod), each with its own OAuth.
-#
-#   ci    -> https://mitolci.grafana.net
-#   qa    -> https://mitolqa.grafana.net
-#   prod  -> https://mitolproduction.grafana.net
+#                 so there is NO token or API key to configure here. You must
+#                 have an account in the `ol-platform-engineering` realm of
+#                 Keycloak for the tier you're connecting to.
 #
 # By default the server is registered at USER scope so it is available from any
 # repo / directory you work in (not just the current project). Pass
@@ -21,15 +20,12 @@
 # `--scope local` for the old project-private behavior.
 #
 # Usage:
-#   ./install.sh                       # all three stacks, agent=claude, scope=user
+#   ./install.sh                       # all three tiers, agent=claude, scope=user
 #   ./install.sh --agent claude        # explicit agent
-#   ./install.sh --instance prod       # just one stack (ci | qa | prod)
+#   ./install.sh --instance prod       # just one tier (ci | qa | prod)
 #   ./install.sh --scope project       # share via project .mcp.json instead
-#
-# Docs: https://grafana.com/docs/grafana-cloud/machine-learning/assistant/configure/cloud-mcp/
 set -euo pipefail
 
-ENDPOINT="https://mcp.grafana.com/mcp"
 AGENT="claude"
 INSTANCE="all"
 SCOPE="user"
@@ -37,9 +33,9 @@ SCOPE="user"
 # Parallel arrays (macOS bash 3.2 has no associative arrays).
 INSTANCE_KEYS=(ci qa prod)
 INSTANCE_URLS=(
-	"https://mitolci.grafana.net"
-	"https://mitolqa.grafana.net"
-	"https://mitolproduction.grafana.net"
+	"https://toolhive-swe.ci.ol.mit.edu/mcp"
+	"https://toolhive-swe.qa.ol.mit.edu/mcp"
+	"https://toolhive-swe.ol.mit.edu/mcp"
 )
 
 while [[ $# -gt 0 ]]; do
@@ -66,7 +62,7 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-# Resolve the X-Grafana-URL for an instance key; empty if unknown.
+# Resolve the endpoint URL for an instance key; empty if unknown.
 url_for() {
 	local key="$1" i
 	for i in "${!INSTANCE_KEYS[@]}"; do
@@ -98,31 +94,28 @@ case "$AGENT" in
 			exit 1
 		fi
 		for key in "${keys_to_install[@]}"; do
-			gurl="$(url_for "$key")"
-			name="grafana-${key}"
-			echo "==> Adding ${name} -> ${gurl} ..."
-			# NB: name + URL come BEFORE --header. `--header` is variadic, so if it
-			# precedes the URL the parser swallows the URL as another header value
-			# ("missing required argument 'commandOrUrl'").
-			claude mcp add "$name" "$ENDPOINT" \
+			url="$(url_for "$key")"
+			name="toolhive-swe-${key}"
+			echo "==> Adding ${name} -> ${url} ..."
+			claude mcp add "$name" "$url" \
 				--scope "$SCOPE" \
-				--transport http \
-				--header "X-Grafana-URL: ${gurl}"
+				--transport http
 		done
 		echo ""
 		echo "Done (scope: ${SCOPE}). On first use of each server, Claude opens a"
-		echo "browser for the Grafana OAuth consent flow (once per stack)."
+		echo "browser for the Keycloak OAuth consent flow (once per tier). You must"
+		echo "have an account in the 'ol-platform-engineering' realm for that tier."
 		echo "Run '/mcp' inside Claude Code (or 'claude mcp list') to confirm and authenticate."
 		;;
 	copilot | vscode)
 		echo "==> VS Code / GitHub Copilot uses a JSON config file, not a CLI."
 		echo "    Copy config/copilot.json into .vscode/mcp.json (or your user mcp.json)."
-		echo "    It already contains all three stacks (grafana-ci / -qa / -prod)."
+		echo "    It already contains all three tiers (toolhive-swe-ci / -qa / -prod)."
 		;;
 	pi)
 		echo "==> pi uses a JSON config file."
 		echo "    Copy config/pi.json into ~/.pi/agent/mcp.json."
-		echo "    It already contains all three stacks (grafana-ci / -qa / -prod)."
+		echo "    It already contains all three tiers (toolhive-swe-ci / -qa / -prod)."
 		;;
 	*)
 		echo "Unknown agent: ${AGENT} (expected: claude | copilot | vscode | pi)" >&2

@@ -28,7 +28,7 @@ mcp/
 |--------|-------------|
 | [`witan`](servers/witan/README.md) | Team-wide shared knowledge graph: memory, workflow projects, task tracking, and the umbrella CLI. Uses `witan serve` to mount both memory and code tools in one MCP entry. |
 | [`witan-code`](servers/witan-code/README.md) | Tree-sitter code graph (Layer 2): indexes repo symbols and their relationships. Can run standalone or be mounted automatically by `witan serve`. |
-| [`grafana-cloud`](servers/grafana-cloud/README.md) | Remote, hosted [Grafana Cloud MCP](https://grafana.com/docs/grafana-cloud/machine-learning/assistant/configure/cloud-mcp/) server (Streamable HTTP + OAuth). Queries dashboards, datasources, Prometheus/Loki, alerts, and incidents. No local process — just config + browser auth. |
+| [`toolhive-swe`](servers/toolhive-swe/README.md) | Remote, hosted ToolHive SWE MCP server, one installation per environment tier (ci/qa/production) each at its own hostname (Streamable HTTP + Keycloak OAuth). No local process — just config + browser auth. |
 
 ## Resources
 

@@ -20,7 +20,7 @@ custom-agents/   # Agent definitions for Claude Code and GitHub Copilot
 mcp/             # MCP server install helpers and config snippets
   servers/witan/         # Graph-structured memory MCP server (Python)
   servers/witan-code/    # Tree-sitter code-graph MCP server (Python)
-  servers/grafana-cloud/ # Grafana Cloud MCP config
+  servers/toolhive-swe/  # ToolHive SWE MCP config (per-tier: ci/qa/prod)
 packages/        # Standalone, independently-versioned Python libraries
   agent-config-kit/      # Cross-agent MCP/skill/hook registration library
 configs/         # Sample / reference agent configurations
