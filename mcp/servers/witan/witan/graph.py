@@ -27,6 +27,20 @@ _STORAGE_VERSION_MISMATCH_MARKERS = ("stamped at internal schema", "reads only")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
+class OmnigraphConflict(RuntimeError):
+    """An optimistic-concurrency (Lance manifest version) write conflict that the
+    caller asked to surface instead of retry.
+
+    omnigraph serializes local writes with our advisory flock, but on shared
+    http(s)/s3 stores that lock is skipped and two writers racing the same
+    manifest version make one commit fail with a "stale view" / "manifest table
+    version" error. ``_execute`` normally masks that by re-running the same
+    mutation — fine for an idempotent upsert, WRONG for a compare-and-swap claim
+    where the retry would blindly re-apply the claim over whoever won the race.
+    A caller passing ``surface_conflict=True`` gets this exception instead so it
+    can re-read and decide (see ``task_claim``)."""
+
+
 def _is_storage_version_mismatch(msg: str) -> bool:
     lowered = msg.lower()
     return all(marker in lowered for marker in _STORAGE_VERSION_MISMATCH_MARKERS)
@@ -95,6 +109,8 @@ class OmnigraphClient:
         query_file: str,
         query_name: str,
         params: dict,
+        *,
+        surface_conflict: bool = False,
     ) -> None:
         """Run a named mutation query.
 
@@ -102,6 +118,11 @@ class OmnigraphClient:
         return rewritten params (e.g. with secrets redacted) that are what
         actually get persisted. It sees the query name and full params, so it is
         the single point that covers every node type's write.
+
+        ``surface_conflict``: raise :class:`OmnigraphConflict` on an
+        optimistic-concurrency conflict instead of transparently retrying the
+        write. Callers implementing a compare-and-swap (e.g. ``task_claim``) need
+        this so a lost race is detectable rather than silently clobbered.
         """
         if self.guard is not None:
             params = self.guard(query_name, params)
@@ -112,6 +133,7 @@ class OmnigraphClient:
             query_name,
             "--params",
             json.dumps(params),
+            surface_conflict=surface_conflict,
         )
 
     def apply_schema(self, schema_path) -> str:
@@ -132,12 +154,24 @@ class OmnigraphClient:
 
     # ── Internals ─────────────────────────────────────────────────
 
-    def _run(self, subcommand: str, *args: str) -> str:
+    def _run(self, subcommand: str, *args: str, surface_conflict: bool = False) -> str:
         quiet = ["--quiet"] if subcommand in _WRITE_SUBCOMMANDS else []
         cmd = [self._binary, subcommand, "--store", self.graph_uri, *quiet, *args]
-        return self._execute(cmd, subcommand, is_write=subcommand in _WRITE_SUBCOMMANDS)
+        return self._execute(
+            cmd,
+            subcommand,
+            is_write=subcommand in _WRITE_SUBCOMMANDS,
+            surface_conflict=surface_conflict,
+        )
 
-    def _execute(self, cmd: list[str], label: str, *, is_write: bool) -> str:
+    def _execute(
+        self,
+        cmd: list[str],
+        label: str,
+        *,
+        is_write: bool,
+        surface_conflict: bool = False,
+    ) -> str:
         """Run an omnigraph CLI command under the write lock (for writes) with the
         retry/repair loop for optimistic-concurrency conflicts."""
         env = dict(os.environ)
@@ -160,6 +194,10 @@ class OmnigraphClient:
                 err = result.stderr
                 if _is_storage_version_mismatch(err):
                     raise RuntimeError(_friendly_storage_error(err)) from None
+                if surface_conflict and any(m in err for m in _RETRYABLE):
+                    # A compare-and-swap caller wants to lose the race, not
+                    # re-apply its write over the winner. Surface immediately.
+                    raise OmnigraphConflict(err.strip()) from None
                 if attempt + 1 < _MAX_ATTEMPTS:
                     if any(m in err for m in _NEEDS_REPAIR):
                         self._repair(env)

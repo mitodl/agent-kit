@@ -218,3 +218,77 @@ def test_expired_lease_is_reclaimable(server, monkeypatch):
     assert c["claimed"] is True
     assert c["stole"] is False
     assert server.task_get(t["slug"])["assignee"] == "agentB"
+
+
+# ── Best-effort CAS: conflict detection & post-write verification ───────
+
+
+@requires_omnigraph
+def test_claim_conflict_reports_lost_race_without_clobber(server, monkeypatch):
+    """agentA reads the task as open, but a rival (agentB) commits its claim in
+    the race window and agentA's write surfaces an OCC conflict. agentA must
+    report ``lost_race`` and leave agentB's claim intact — not blindly re-apply."""
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    t = server.task_create(title="contended", description="x")
+    real_change = srv.client.change
+    calls = {"n": 0}
+
+    def flaky_change(*args, surface_conflict=False, **kwargs):
+        if surface_conflict and calls["n"] == 0:
+            calls["n"] += 1
+            # rival wins the race: its claim lands first, then ours conflicts
+            srv._update_task(
+                t["slug"],
+                {
+                    "status": "in_progress",
+                    "assignee": "agentB",
+                    "claimed_at": srv._now_iso(),
+                },
+            )
+            raise graph_mod.OmnigraphConflict("stale view")
+        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
+
+    monkeypatch.setattr(srv.client, "change", flaky_change)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+    assert res["claimed"] is False
+    assert res["reason"] == "lost_race"
+    assert res["held_by"] == "agentB"
+    # the losing claim did not overwrite the winner
+    assert server.task_get(t["slug"])["assignee"] == "agentB"
+
+
+@requires_omnigraph
+def test_claim_post_write_verification_catches_last_writer(server, monkeypatch):
+    """Our claim write succeeds, but a rival commits *after* it (last-write-wins
+    with no store CAS). Post-write verification must detect that we no longer
+    hold the task and report ``lost_race`` rather than a false success."""
+    from witan import server as srv
+
+    t = server.task_create(title="clobbered", description="x")
+    real_change = srv.client.change
+    calls = {"n": 0}
+
+    def clobber_after(*args, surface_conflict=False, **kwargs):
+        result = real_change(*args, surface_conflict=surface_conflict, **kwargs)
+        if surface_conflict and calls["n"] == 0:
+            calls["n"] += 1
+            # rival's claim lands immediately after ours committed
+            srv._update_task(
+                t["slug"],
+                {
+                    "status": "in_progress",
+                    "assignee": "agentB",
+                    "claimed_at": srv._now_iso(),
+                },
+            )
+        return result
+
+    monkeypatch.setattr(srv.client, "change", clobber_after)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+    assert res["claimed"] is False
+    assert res["reason"] == "lost_race"
+    assert res["held_by"] == "agentB"

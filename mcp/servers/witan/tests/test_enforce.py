@@ -178,7 +178,7 @@ def test_change_applies_guard_before_persist(monkeypatch, tmp_path):
 
     captured = {}
 
-    def fake_run(subcommand, *args):
+    def fake_run(subcommand, *args, **kwargs):
         captured["args"] = args
         return ""
 
@@ -196,7 +196,7 @@ def test_change_guard_block_prevents_persist(monkeypatch, tmp_path):
 
     called = False
 
-    def fake_run(subcommand, *args):
+    def fake_run(subcommand, *args, **kwargs):
         nonlocal called
         called = True
         return ""
