@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.3.0] - 2026-07-08
+
+### Added
+
+- **Manifest composition**: a top-level `include = [ref, ...]` list
+  (local path or remote `https://`/`git+` URI) merges other manifests in
+  depth-first, left-to-right order, with the including manifest's own
+  tables merged in last — local always wins on a same-key collision.
+  Reference cycles raise a `ManifestError` naming the cycle. A
+  `[profiles.<name>]` may also carry its own `include`, selecting *all* of
+  the referenced manifest's entries into that profile (bypassing its own
+  profile slicing, if any), unioned with `inherits`/explicit key lists.
+- **Zero-argument `apply`/`validate`**: `MANIFEST` is now optional —
+  omitting it resolves one from the global config (a repo-local
+  `agent-config.toml` at the repo root, then the longest matching
+  `[[scope]] match_prefix`, then `default_manifest`), printing which
+  source won (e.g. `resolved manifest from scope prefix '~/code/mit'`).
+  That source's profiles/write-scope travel with it, still overridable by
+  `--profile`/`--scope`.
+
 ## [0.2.1] - 2026-07-08
 
 ### Changed

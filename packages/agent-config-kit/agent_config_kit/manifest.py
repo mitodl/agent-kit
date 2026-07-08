@@ -161,6 +161,161 @@ def _resolve_relative_paths(
             )
 
 
+def _materialize_ref(ref: str, manifest_dir: Path, cache_dir: Path) -> Path:
+    """Resolve an ``include`` ref to a concrete local path — M5 (relative to
+    the *including* manifest's own directory) for a local path, or a
+    ``fetch_remote`` fetch for a remote ``https://``/``git+`` URI."""
+    if is_remote_uri(ref):
+        try:
+            return fetch_remote(ref, cache_dir)
+        except FetchError as exc:
+            raise ManifestError(f"include {ref!r}: {exc}") from exc
+    candidate = Path(ref)
+    resolved = candidate if candidate.is_absolute() else manifest_dir / candidate
+    return resolved.resolve()
+
+
+def _raw_hook_identity(hook: dict) -> str:
+    """``prune.hook_identity``, but operating on a still-raw hook dict (no
+    ``Hook`` model built yet) so includes can be merged before Pydantic ever
+    sees the data — mirrors ``DeclarativeHook``'s ``kind`` default."""
+    if hook.get("kind", "declarative") == "plugin":
+        return f"plugin:{Path(hook['entry_path']).name}"
+    return f"declarative:{hook.get('event')}:{hook.get('command')}"
+
+
+def _merge_hooks(base_hooks: list, overlay_hooks: list) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for hook in base_hooks:
+        merged[_raw_hook_identity(hook)] = hook
+    for hook in overlay_hooks:
+        merged[_raw_hook_identity(hook)] = hook
+    return list(merged.values())
+
+
+_MERGE_TABLE_KEYS = ("mcp_servers", "lsp_servers", "skills", "profiles")
+
+
+def _merge_manifest_data(base: dict, overlay: dict) -> dict:
+    """Merge ``overlay``'s tables on top of ``base``'s — C2, local/overlay
+    wins on key collision (spec §5.1 step 3, §5.3). Used both to fold
+    ``include`` refs left-to-right into an accumulator and to merge that
+    accumulator with the including manifest's own tables last.
+
+    ``profiles`` merges exactly like the other dict-of-tables keys: an
+    overlay profile of the same name replaces the base's *wholesale*, it is
+    not itself deep-merged (spec §5.1 step 3) — a plain ``dict.update``
+    already gives that. ``options``/``include`` are never carried across
+    this merge — only the file that directly declares ``[options]`` uses
+    its own (an included manifest's ``[options]`` never leaks into whatever
+    includes it); ``include`` is consumed by ``_load_raw_manifest`` before
+    it ever reaches here.
+
+    Any OTHER (unrecognized) top-level key is carried through as a plain
+    overlay-wins-else-base scalar rather than dropped, so a typo'd key
+    (e.g. ``mcp_server`` for ``mcp_servers``) still reaches Pydantic's
+    ``extra="forbid"`` on the final merged manifest instead of silently
+    vanishing into the include machinery."""
+    merged: dict = {}
+    for key in set(base) | set(overlay):
+        if key in _MERGE_TABLE_KEYS:
+            table = dict(base.get(key) or {})
+            table.update(overlay.get(key) or {})
+            if table:
+                merged[key] = table
+        elif key == "hooks":
+            hooks = _merge_hooks(base.get("hooks") or [], overlay.get("hooks") or [])
+            if hooks:
+                merged["hooks"] = hooks
+        else:
+            merged[key] = overlay[key] if key in overlay else base[key]
+    return merged
+
+
+def _process_profile_includes(
+    data: dict, manifest_dir: Path, cache_dir: Path, chain: list[str]
+) -> None:
+    """Per-profile ``include`` (spec §5.2): each referenced manifest's
+    entries are merged into this file's own pool (``setdefault`` — never
+    displacing something this file already declares itself) and *all* of
+    its entries — its own profile slicing, if any, is bypassed, not
+    composed with (spec §5.2 clarification) — are selected into this
+    profile, unioned with its explicit key lists."""
+    for name, profile in (data.get("profiles") or {}).items():
+        if not isinstance(profile, dict):
+            continue
+        refs = profile.pop("include", None)
+        if not refs:
+            continue
+        if not isinstance(refs, list):
+            raise ManifestError(f"profiles.{name}.include must be a list of refs")
+        for ref in refs:
+            included_path = _materialize_ref(ref, manifest_dir, cache_dir)
+            included = _load_raw_manifest(included_path, cache_dir, chain)
+            for table_key in ("skills", "mcp_servers", "lsp_servers"):
+                own_table = data.setdefault(table_key, {})
+                selection = profile.setdefault(table_key, [])
+                for key, value in (included.get(table_key) or {}).items():
+                    own_table.setdefault(key, value)
+                    if key not in selection:
+                        selection.append(key)
+            own_hooks = data.setdefault("hooks", [])
+            own_identities = {_raw_hook_identity(h) for h in own_hooks}
+            selection = profile.setdefault("hooks", [])
+            for hook in included.get("hooks") or []:
+                identity = _raw_hook_identity(hook)
+                if identity not in own_identities:
+                    own_hooks.append(hook)
+                    own_identities.add(identity)
+                if identity not in selection:
+                    selection.append(identity)
+
+
+def _load_raw_manifest(path: Path, cache_dir: Path, chain: list[str]) -> dict:
+    """Read+parse one manifest file, resolve its own M5 paths/remote skill
+    sources, fold in its per-profile includes, then recursively fold in its
+    top-level ``include`` refs (depth-first, left-to-right, each including
+    manifest's own tables merged last — spec §5.1). Returns a plain dict in
+    the same shape ``load_manifest`` has always worked with; the caller
+    (``load_manifest`` for the root, this function for an include) is none
+    the wiser whether any composition happened."""
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ManifestError(f"{path}: could not read manifest file: {exc}") from exc
+
+    canonical = str(path.resolve())
+    if canonical in chain:
+        cycle = " -> ".join([*chain, canonical])
+        raise ManifestError(f"include cycle detected: {cycle}")
+    chain = [*chain, canonical]
+
+    try:
+        data = tomllib.loads(raw_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ManifestError(f"{path}: invalid TOML: {exc}") from exc
+
+    manifest_dir = path.parent
+    _resolve_relative_paths(data, manifest_dir, path, cache_dir)
+    _process_profile_includes(data, manifest_dir, cache_dir, chain)
+
+    include_refs = data.pop("include", None) or []
+    if not isinstance(include_refs, list):
+        raise ManifestError(f"{path}: include must be a list of refs")
+
+    merged: dict = {}
+    for ref in include_refs:
+        if not isinstance(ref, str):
+            raise ManifestError(f"{path}: include entries must be strings, got {ref!r}")
+        included_path = _materialize_ref(ref, manifest_dir, cache_dir)
+        included_data = _load_raw_manifest(included_path, cache_dir, chain)
+        merged = _merge_manifest_data(merged, included_data)
+
+    merged = _merge_manifest_data(merged, data)
+    merged["options"] = data.get("options", {})
+    return merged
+
+
 def _build_skill_sources(
     skills: dict[str, Any], manifest_path: Path
 ) -> list[SkillSource]:
@@ -336,20 +491,9 @@ def default_cache_dir(manifest_path: Path) -> Path:
 
 def load_manifest(path: Path, *, cache_dir: Path | None = None) -> Manifest:
     path = Path(path)
-
-    try:
-        raw_text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ManifestError(f"{path}: could not read manifest file: {exc}") from exc
-
-    try:
-        data = tomllib.loads(raw_text)
-    except tomllib.TOMLDecodeError as exc:
-        raise ManifestError(f"{path}: invalid TOML: {exc}") from exc
-
-    manifest_dir = path.parent
     resolved_cache_dir = cache_dir if cache_dir is not None else default_cache_dir(path)
-    _resolve_relative_paths(data, manifest_dir, path, resolved_cache_dir)
+
+    data = _load_raw_manifest(path, resolved_cache_dir, [])
 
     options_data = data.pop("options", {})
     try:

@@ -135,6 +135,47 @@ entry_path = "git+https://github.com/org/repo.git@v1.0.0#subdirectory=extensions
   client dependency here, by design (no new dependency on the base
   package).
 
+#### Composition: `include`
+
+A top-level `include = [ref, ...]` list pulls in other manifests — each a
+local path (resolved relative to the *including* manifest's own directory,
+same as `skill_md_path`/`entry_path`) or a remote `https://`/`git+` URI
+(reusing the machinery above; `git+...#subdirectory=path/to/manifest.toml`
+for a manifest living in a repo subdirectory):
+
+```toml
+# agent-config.toml
+include = ["../shared/base.toml", "https://example.com/bundles/frontend.toml"]
+
+[mcp_servers.witan]
+kind = "stdio"
+command = "uvx"
+```
+
+Includes are merged depth-first, left-to-right, and the including
+manifest's own tables are merged in *last* — local always wins on a same-key
+collision (a repeated `[mcp_servers.witan]`, a repeated skill/hook, two
+`[profiles.<name>]` tables of the same name — the local one replaces the
+included one wholesale, it isn't itself deep-merged). A reference cycle
+(`a.toml` includes `b.toml` includes `a.toml`) raises a `ManifestError`
+naming the cycle. An included manifest's own `[options]` is never inherited
+— only the file you actually pass to `apply`/`validate` supplies `[options]`.
+
+`[profiles.<name>]` may also carry its own `include` — the referenced
+manifest is merged into the entry pool *and all of its entries* (its own
+profile slicing, if it has one, is bypassed — there's no `URL#profile_name`
+fragment syntax) are selected into that profile, unioned with any explicit
+`skills`/`mcp_servers`/`hooks`/`lsp_servers` lists:
+
+```toml
+[profiles.frontend]
+include = ["https://example.com/bundles/frontend.toml"]
+```
+
+This is the one concession toward "one-manifest-per-profile" — an
+independently-versioned, remote role bundle can be dropped into a profile by
+URL without re-listing its entries one by one.
+
 ### `agent-kit apply`
 
 Applies a manifest's MCP servers, hooks, and skills to one or more platforms:
