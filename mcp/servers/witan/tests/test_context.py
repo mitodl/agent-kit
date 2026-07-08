@@ -280,3 +280,59 @@ def test_inject_context_truncation_counts_are_honest(tmp_path, monkeypatch):
     assert "showing the top 5" in text
     # exactly 5 task bullets rendered
     assert text.count("(slug: `tk-") == 5
+
+
+# ── PR #85 hardening: hook must never raise ──────────────────────────────────
+
+
+def test_detect_repo_survives_missing_git(monkeypatch):
+    from witan import context as ctx
+
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+    def _boom(*a, **k):
+        raise FileNotFoundError("git not installed")
+
+    monkeypatch.setattr(ctx.subprocess, "check_output", _boom)
+    # FileNotFoundError (OSError) must degrade to None, not propagate.
+    assert ctx._detect_repo() is None
+
+
+def test_cwd_or_dot_falls_back_on_oserror(monkeypatch):
+    from pathlib import Path
+
+    from witan import context as ctx
+
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+    def _boom():
+        raise OSError("cwd deleted")
+
+    monkeypatch.setattr(Path, "cwd", staticmethod(_boom))
+    assert ctx._cwd_or_dot() == "."
+
+
+def test_cached_repo_and_branch_disabled_skips_branch(monkeypatch):
+    from witan import context as ctx
+
+    # WITAN_REPO="" disables detection → repo None → branch detection skipped.
+    monkeypatch.setenv("WITAN_REPO", "")
+
+    def _fail_branch():
+        raise AssertionError("branch detection should be skipped when no repo")
+
+    monkeypatch.setattr(ctx, "_current_branch", _fail_branch)
+    assert ctx._cached_repo_and_branch() == (None, None)
+
+
+def test_project_session_lines_no_phase_no_crash():
+    from witan import context as ctx
+
+    proj = {"slug": "wp-x"}  # no "phase" key
+    n = ctx._STALE_SESSION_THRESHOLD
+    rows = [{"summary": "s", "ended_at": "t"} for _ in range(n + 1)]
+    lines = ctx._project_session_lines(_FakeSessClient(rows), proj)
+    # summary line present, but no staleness nudge (and no "None" in output)
+    assert any(ln.startswith("  Last session") for ln in lines)
+    assert all("sessions in" not in ln for ln in lines)

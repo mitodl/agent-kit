@@ -38,8 +38,10 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
     Builds the same output as ``workflow-context-inject.sh`` without the
     checkout-relative QUERIES_DIR assumption.
     """
-    repo, branch = _cached_repo_and_branch()
     try:
+        # Kept inside the try so the hook still degrades to "" on the off chance
+        # any of this raises — the module contract is that it never does.
+        repo, branch = _cached_repo_and_branch()
         client = OmnigraphClient(graph_uri, queries_dir, token)
 
         # Unscoped tasks (no repo) are always relevant regardless of cwd.
@@ -190,12 +192,13 @@ def _project_session_lines(client: OmnigraphClient, project: dict) -> list[str]:
         out.append(f"  Last session ({state}): {summary}")
 
     phase = project.get("phase")
-    in_phase = sum(1 for s in sessions if s.get("phase") == phase)
-    if in_phase >= _STALE_SESSION_THRESHOLD:
-        out.append(
-            f"  ⚠ {in_phase} sessions in `{phase}` — if this phase is done, call "
-            "`workflow_project_advance` (or `workflow_project_complete`)."
-        )
+    if phase:
+        in_phase = sum(1 for s in sessions if s.get("phase") == phase)
+        if in_phase >= _STALE_SESSION_THRESHOLD:
+            out.append(
+                f"  ⚠ {in_phase} sessions in `{phase}` — if this phase is done, "
+                "call `workflow_project_advance` (or `workflow_project_complete`)."
+            )
     return out
 
 
@@ -207,12 +210,15 @@ def _cached_repo_and_branch() -> tuple[str | None, str | None]:
     error falls through to (or returns) live values and never raises. When
     ``WITAN_REPO`` is set, detection needs no git at all, so the cache is skipped.
     """
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
+    project_dir = _cwd_or_dot()
 
     # WITAN_REPO short-circuits git — nothing to amortize, and it can differ from
     # what a dir-keyed cache holds, so don't consult/write the cache in that mode.
+    # Skip branch detection when there's no repo (e.g. WITAN_REPO=""): a branch
+    # is only used to join CodeBranch, so it's wasted git work without a repo.
     if os.environ.get("WITAN_REPO") is not None:
-        return _detect_repo(), _current_branch()
+        repo = _detect_repo()
+        return repo, (_current_branch() if repo else None)
 
     digest = hashlib.sha1(project_dir.encode()).hexdigest()[:16]
     cache_file = session_state.session_state_dir() / f"witan-repo-{digest}.json"
@@ -234,6 +240,18 @@ def _cached_repo_and_branch() -> tuple[str | None, str | None]:
     return repo, branch
 
 
+def _cwd_or_dot() -> str:
+    """``$CLAUDE_PROJECT_DIR`` or the cwd, degrading to ``"."`` — ``Path.cwd()``
+    itself raises ``OSError`` if the working directory was deleted."""
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    if project_dir:
+        return project_dir
+    try:
+        return str(Path.cwd())
+    except OSError:
+        return "."
+
+
 def _current_branch() -> str | None:
     try:
         return repo_module.current_branch()
@@ -252,14 +270,16 @@ def _detect_repo() -> str | None:
     if witan_repo is not None:
         return witan_repo or None  # "" → disabled; non-empty → use as-is
 
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
+    project_dir = _cwd_or_dot()
     try:
         raw = subprocess.check_output(
             ["git", "-C", project_dir, "remote", "get-url", "origin"],
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, OSError):
+        # OSError covers a missing git binary (FileNotFoundError) so this hook
+        # helper degrades to "no repo" instead of crashing the prompt hook.
         return None
     if not raw:
         return None
