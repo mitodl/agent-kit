@@ -20,7 +20,7 @@ from fastmcp import FastMCP
 from . import config as cfg_module
 from . import repo as repo_module
 from . import scan
-from .graph import OmnigraphClient, _is_storage_version_mismatch
+from .graph import OmnigraphClient, OmnigraphConflict, _is_storage_version_mismatch
 
 # ── Startup ───────────────────────────────────────────────────────
 
@@ -193,6 +193,12 @@ def _now_iso() -> str:
 # re-claimed is treated as abandoned (the holder likely crashed) and becomes
 # reclaimable. Holders renew by calling ``task_claim`` again.
 _CLAIM_LEASE_SECONDS = 3600
+
+# Bounded re-tries for the best-effort CAS claim loop: on each surfaced
+# optimistic-concurrency conflict we re-read and either bail (a rival won) or
+# re-attempt the claim. Small, since a claim conflicting this many times in a row
+# without a rival taking it is pathological.
+_CLAIM_MAX_ATTEMPTS = 3
 
 
 def _lease_expired(claimed_at: str | None) -> bool:
@@ -2147,11 +2153,17 @@ def _unblock_dependents(repo: str | None) -> None:
             _update_task(r["slug"], {"status": "open"})
 
 
-def _update_task(slug: str, changes: dict) -> dict | None:
+def _update_task(
+    slug: str, changes: dict, *, surface_conflict: bool = False
+) -> dict | None:
     """Read a task, merge ``changes`` over its mutable fields, write it back.
 
     Mirrors the read-merge-write pattern documented for ``update_memory`` so we
     avoid per-field update queries. Returns the updated node or ``None``.
+
+    ``surface_conflict`` propagates to the write so a compare-and-swap caller
+    (``task_claim``) sees an :class:`~witan.graph.OmnigraphConflict` on a lost
+    optimistic-concurrency race instead of the write being silently retried.
     """
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
@@ -2177,7 +2189,9 @@ def _update_task(slug: str, changes: dict) -> dict | None:
         "claimed_at": changes.get("claimed_at", current.get("claimed_at")),
         "updated_at": _now_iso(),
     }
-    client.change("mutations.gq", "update_task", merged)
+    client.change(
+        "mutations.gq", "update_task", merged, surface_conflict=surface_conflict
+    )
     return client.read("read.gq", "get_task", {"slug": slug})[0]
 
 
@@ -2459,6 +2473,15 @@ def task_claim(
     (see ``task_ready``); re-calling renews it. Pass ``force`` to steal a live
     claim.
 
+    BEST-EFFORT CAS — omnigraph 0.8.x exposes no conditional-write primitive, so
+    the claim write cannot be made atomic at the store. Instead we surface the
+    Lance optimistic-concurrency conflict (rather than masking it with a retry)
+    and re-read + post-write-verify ownership, so a lost race reports
+    ``{"claimed": false, "reason": "lost_race", "held_by": …}`` instead of
+    silently clobbering the winner. The lease is the backstop for the residual
+    simultaneous-post-read case. True atomic CAS awaits an upstream omnigraph
+    conditional-write feature — see docs/adr/0003.
+
     Parameters
     ----------
     slug:
@@ -2470,11 +2493,11 @@ def task_claim(
     force:
         Steal the task even if another holder's lease is still valid.
     """
-    # Advisory, not atomic: read-check-write, so two agents racing the same
-    # instant can both succeed (last write wins). The lease + held-by check make
-    # accidental double-work unlikely, not impossible; a true lock needs
-    # store-level compare-and-swap. On success also upserts a CodeBranch for the
-    # checkout's repo+branch and links it WorksOn this task (best-effort).
+    # Best-effort CAS, not a hard lock: omnigraph has no conditional-write, so we
+    # surface OCC conflicts and post-write-verify ownership rather than trusting
+    # last-write-wins (see docs/adr/0003 and the claim loop below). On success
+    # also upserts a CodeBranch for the checkout's repo+branch and links it
+    # WorksOn this task (best-effort).
     holder = assignee or cfg.author
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
@@ -2507,7 +2530,53 @@ def task_claim(
         }
 
     now = _now_iso()
-    _update_task(slug, {"status": "in_progress", "assignee": holder, "claimed_at": now})
+    claim = {"status": "in_progress", "assignee": holder, "claimed_at": now}
+    # omnigraph has no conditional-write (CAS) primitive, so on each surfaced
+    # optimistic-concurrency conflict we re-read and either bail (a rival won) or
+    # re-attempt the claim. surface_conflict stays on for every attempt — a
+    # consecutive conflict must never fall back to the blind-retry path, which
+    # would re-apply the claim over whoever committed in the meantime.
+    for attempt in range(_CLAIM_MAX_ATTEMPTS):
+        try:
+            _update_task(slug, claim, surface_conflict=True)
+            break
+        except OmnigraphConflict:
+            # A concurrent writer committed between our read and our write.
+            rows = client.read("read.gq", "get_task", {"slug": slug})
+            fresh = rows[0] if rows else {}
+            rival = fresh.get("assignee")
+            if (
+                fresh.get("status") == "in_progress"
+                and rival
+                and rival != holder
+                and not _lease_expired(fresh.get("claimed_at"))
+                and not force
+            ):
+                return {
+                    "slug": slug,
+                    "claimed": False,
+                    "reason": "lost_race",
+                    "held_by": rival,
+                    "claimed_at": fresh.get("claimed_at"),
+                }
+            # The conflict was unrelated (or the rival's lease has lapsed) —
+            # retry the claim now that the manifest has advanced.
+            if attempt + 1 == _CLAIM_MAX_ATTEMPTS:
+                raise
+
+    # Post-write verification: with no store-level CAS, a rival's claim could
+    # still have landed last. Re-read and confirm we actually hold it before
+    # reporting success, so at most one caller ever sees claimed=True.
+    rows = client.read("read.gq", "get_task", {"slug": slug})
+    winner = rows[0].get("assignee") if rows else None
+    if winner != holder and not force:
+        return {
+            "slug": slug,
+            "claimed": False,
+            "reason": "lost_race",
+            "held_by": winner,
+            "claimed_at": rows[0].get("claimed_at") if rows else None,
+        }
     _track_code_branch(repo_module.detect(), task_slug=slug)
     return {
         "slug": slug,
