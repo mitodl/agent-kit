@@ -1,0 +1,8 @@
+// Minimal stub node for the policy CI fixture. The Cedar policy engine binds to
+// graph ids + branches, not schema content, so a one-node schema is enough to
+// materialize the three representative graphs (memory / code_example / bridge)
+// that policy validate + policy test run against. NOT the production schema —
+// that lives in ../schema/schema.pg and witan-code's code-schema.pg.
+node Node {
+  slug: String @key
+}

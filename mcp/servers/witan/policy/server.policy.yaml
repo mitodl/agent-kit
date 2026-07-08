@@ -1,0 +1,44 @@
+# witan v1 Cedar policy — server-level (applies_to: [cluster]).
+#
+# The only server-scoped action is `graph_list` (bound to
+# Omnigraph::Server::"root"). Everyone who can authenticate may enumerate the
+# graphs they might have access to; per-graph read/write is gated by the
+# per-graph bundles (memory / code-graph / bridge). Server-scoped rules take no
+# branch_scope.
+#
+# Model reminder (omnigraph docs/user/operations/policy.md): the policy model is
+# allow-only — every rule is a permit, anything ungranted is denied by default.
+# There is no `deny` key. Actor identity is resolved server-side from the matched
+# bearer token, never from a client-supplied header/param/body.
+#
+# GROUP MEMBERSHIP IS TEMPLATED. The `act-*` ids below are illustrative. In the
+# deployed cluster, ol-infrastructure populates `witan-users` from the Keycloak
+# group/role claim (one act-<sub> per authenticated human) and the two service
+# accounts from Vault-provisioned tokens. Keep the group NAMES identical across
+# the bundle files — only the membership lists are templated.
+#
+# See policy/README.md § "Non-human actors" for witan-ci (code-graph data
+# pipeline) vs witan-service (the MCP service's own schema-owner account).
+version: 1
+
+groups:
+  # All authenticated human users (populated from the Keycloak witan-users claim).
+  witan-users: [act-alice, act-bob]
+  # Code-graph data pipeline.
+  witan-ci: [act-svc-witan-ci]
+  # The MCP service's own account (schema owner); enumerates graphs to migrate.
+  witan-service: [act-svc-witan]
+
+rules:
+  - id: users-can-list-graphs
+    allow:
+      actors: { group: witan-users }
+      actions: [graph_list]
+  - id: ci-can-list-graphs
+    allow:
+      actors: { group: witan-ci }
+      actions: [graph_list]
+  - id: service-can-list-graphs
+    allow:
+      actors: { group: witan-service }
+      actions: [graph_list]

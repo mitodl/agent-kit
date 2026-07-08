@@ -1,0 +1,61 @@
+# witan v1 Cedar policy — Layer-2.5 cross-repo bridge graph (applies_to: [bridge]).
+#
+# The bridge store (_bridge.omni) links SOA repos by shared contract keys
+# (env_var / endpoint / package / service). It is DERIVED, not authored: it is
+# (re)built by the code-graph indexer, so humans read it but only svc-witan-ci
+# writes its content. Single-branch/flat, like the memory graph. Its schema, like
+# every graph's, is applied by the witan MCP service (witan-service /
+# act-svc-witan) — see policy/README.md § "Non-human actors".
+#
+# Group membership is templated by ol-infrastructure — see server.policy.yaml.
+version: 1
+
+groups:
+  witan-users: [act-alice, act-bob]
+  # Code-graph data pipeline: (re)builds the bridge content.
+  witan-ci: [act-svc-witan-ci]
+  # The witan MCP service's own account: owns the bridge schema/migrations.
+  witan-service: [act-svc-witan]
+
+# The bridge is flat/single-branch, but we still declare its store `main`
+# protected so that schema_apply can be scoped to `protected` (the uniform
+# invariant: schema always targets protected main, every graph). Without this
+# list, `target_branch_scope: protected` would match nothing; and a bare
+# `target_branch_scope: any` would silently permit schema applies on arbitrary
+# branches the moment anyone introduced branching here.
+protected_branches: [main]
+
+rules:
+  - id: users-read-bridge
+    allow:
+      actors: { group: witan-users }
+      actions: [read, export]
+      branch_scope: any
+  - id: users-invoke-bridge
+    allow:
+      actors: { group: witan-users }
+      actions: [invoke_query]
+  # CI reads the existing bridge to compute diffs before it rewrites it.
+  - id: ci-read-bridge
+    allow:
+      actors: { group: witan-ci }
+      actions: [read, export]
+      branch_scope: any
+  # Only CI writes the bridge content — it is a derived cross-repo projection.
+  - id: ci-write-bridge
+    allow:
+      actors: { group: witan-ci }
+      actions: [change]
+      branch_scope: any
+  # The service reads the bridge to decide whether a migration is needed, then
+  # applies schema — its default responsibility, not CI's.
+  - id: service-read-bridge
+    allow:
+      actors: { group: witan-service }
+      actions: [read, export]
+      branch_scope: any
+  - id: service-schema-bridge
+    allow:
+      actors: { group: witan-service }
+      actions: [schema_apply]
+      target_branch_scope: protected

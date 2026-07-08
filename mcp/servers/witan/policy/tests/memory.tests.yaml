@@ -1,0 +1,48 @@
+# Declarative policy tests for the Layer-1 shared work/knowledge graph bundle.
+# Run: omnigraph policy test --cluster policy --graph memory \
+#        --tests policy/tests/memory.tests.yaml
+version: 1
+cases:
+  - id: user-reads-memory
+    actor: act-alice
+    action: read
+    branch: main
+    expect: allow
+  - id: user-invokes-memory
+    actor: act-alice
+    action: invoke_query
+    expect: allow
+  # Flat shared graph — humans write the (single) main branch directly.
+  - id: user-writes-memory-main
+    actor: act-alice
+    action: change
+    branch: main
+    expect: allow
+  # Schema migrations are owned by the MCP service (witan-service), not users
+  # and not the code-graph CI pipeline.
+  - id: user-cannot-schema-apply-memory
+    actor: act-bob
+    action: schema_apply
+    target_branch: main
+    expect: deny
+  - id: service-reads-memory
+    actor: act-svc-witan
+    action: read
+    branch: main
+    expect: allow
+  - id: service-schema-applies-memory
+    actor: act-svc-witan
+    action: schema_apply
+    target_branch: main
+    expect: allow
+  # The code-graph CI pipeline has no role on the work graph at all.
+  - id: ci-has-no-memory-access
+    actor: act-svc-witan-ci
+    action: read
+    branch: main
+    expect: deny
+  - id: stranger-cannot-read-memory
+    actor: act-nobody
+    action: read
+    branch: main
+    expect: deny

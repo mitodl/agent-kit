@@ -1,0 +1,65 @@
+# witan v1 Cedar policy — Layer-1 shared work/knowledge graph (applies_to: [memory]).
+#
+# The memory graph holds Memory / Task / Workflow* / CodeBranch nodes. It is a
+# FLAT, single-branch, team-shared graph: every witan user reads and writes it.
+#
+# IMPORTANT — no per-node-type granularity is possible. omnigraph Cedar's finest
+# scope is graph + branch; "Per-type and per-row authority is the query-layer's
+# job" and is not implemented server-side (per
+# tk-witan-v1-cedar-policy-bundle-team-repo-scoped-re-77655e's spike findings).
+# So do NOT attempt "Memory yes, Task no" rules here — they are not expressible.
+# Any witan-user who can change this graph can change every node kind in it.
+#
+# Because the graph is single-branch, writes land on the store's main branch;
+# `change` is therefore granted with branch_scope: any (an `unprotected`-only
+# grant would deny all writes).
+#
+# There is NO witan-ci actor on this graph — witan-ci is a code-graph data
+# pipeline and has no role in the work graph. Schema definition/migration is
+# owned by the witan MCP service itself (witan-service / act-svc-witan) as a
+# default, service-owned operation applied on boot — not a per-user permission
+# and not the reindex pipeline. See policy/README.md § "Non-human actors".
+#
+# Group membership is templated by ol-infrastructure — see server.policy.yaml.
+version: 1
+
+groups:
+  witan-users: [act-alice, act-bob]
+  # The witan MCP service's own account. Owns schema/migrations across graphs.
+  witan-service: [act-svc-witan]
+
+# Flat/single-branch, but store `main` is declared protected so schema_apply is
+# scoped to `protected` — the same uniform invariant as the code and bridge
+# graphs (schema always targets protected main). See bridge.policy.yaml for the
+# rationale on why this beats a bare `target_branch_scope: any`.
+protected_branches: [main]
+
+rules:
+  - id: users-read-memory
+    allow:
+      actors: { group: witan-users }
+      actions: [read, export]
+      branch_scope: any
+  - id: users-invoke-memory
+    allow:
+      actors: { group: witan-users }
+      actions: [invoke_query]
+  - id: users-write-memory
+    allow:
+      actors: { group: witan-users }
+      actions: [change]
+      branch_scope: any
+  # The MCP service applies the memory schema/migrations as a default op; it
+  # reads current state to decide whether a migration is needed.
+  # NOTE: `omnigraph repair`/`optimize`/`cleanup` are direct-storage-only and
+  # CANNOT be Cedar-gated — restrict those with AWS IAM on the bucket instead.
+  - id: service-read-memory
+    allow:
+      actors: { group: witan-service }
+      actions: [read, export]
+      branch_scope: any
+  - id: service-schema-memory
+    allow:
+      actors: { group: witan-service }
+      actions: [schema_apply]
+      target_branch_scope: protected
