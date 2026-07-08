@@ -157,23 +157,12 @@ def test_inject_context_survives_missing_code_branch_schema(tmp_path, monkeypatc
 # ── B1: latest session handoff summary on resume ─────────────────────────────
 
 
-class _FakeSessClient:
-    def __init__(self, rows=None, raises=False):
-        self._rows = rows or []
-        self._raises = raises
-
-    def read(self, *args, **kwargs):
-        if self._raises:
-            raise RuntimeError("boom")
-        return self._rows
-
-
-def test_project_session_lines_summary_and_isolation():
+def test_project_session_lines_summary():
     from witan import context as ctx
 
     proj = {"slug": "wp-x", "phase": "spec"}
-    # query orders by started_at asc → the LAST row is newest; summary is
-    # truncated to its first line.
+    # sessions arrive ordered by started_at asc → the LAST row is newest; summary
+    # is truncated to its first line.
     rows = [
         {"summary": "old work", "ended_at": "t1", "phase": "spec"},
         {
@@ -182,23 +171,21 @@ def test_project_session_lines_summary_and_isolation():
             "phase": "spec",
         },
     ]
-    lines = ctx._project_session_lines(_FakeSessClient(rows), proj)
+    lines = ctx._project_session_lines(rows, proj)
     assert lines[0] == "  Last session (ended): newest work"
     # an open session (no ended_at) is flagged as such
     lines_open = ctx._project_session_lines(
-        _FakeSessClient([{"summary": "wip", "ended_at": None, "phase": "spec"}]), proj
+        [{"summary": "wip", "ended_at": None, "phase": "spec"}], proj
     )
     assert lines_open[0] == "  Last session (still open): wip"
     # no sessions / empty summary → no summary line
-    assert ctx._project_session_lines(_FakeSessClient([]), proj) == []
+    assert ctx._project_session_lines([], proj) == []
     assert (
         ctx._project_session_lines(
-            _FakeSessClient([{"summary": "", "ended_at": "t", "phase": "spec"}]), proj
+            [{"summary": "", "ended_at": "t", "phase": "spec"}], proj
         )
         == []
     )
-    # a failing read never raises — it degrades to [] so the block survives
-    assert ctx._project_session_lines(_FakeSessClient(raises=True), proj) == []
 
 
 def test_project_session_lines_staleness_nudge():
@@ -209,7 +196,7 @@ def test_project_session_lines_staleness_nudge():
     stale = [
         {"summary": "", "ended_at": "t", "phase": "implementation"} for _ in range(n)
     ]
-    lines = ctx._project_session_lines(_FakeSessClient(stale), proj)
+    lines = ctx._project_session_lines(stale, proj)
     assert any("sessions in `implementation`" in ln for ln in lines)
 
     # one below threshold → no nudge
@@ -218,15 +205,13 @@ def test_project_session_lines_staleness_nudge():
         for _ in range(n - 1)
     ]
     assert all(
-        "sessions in" not in ln
-        for ln in ctx._project_session_lines(_FakeSessClient(fresh), proj)
+        "sessions in" not in ln for ln in ctx._project_session_lines(fresh, proj)
     )
 
     # sessions in a DIFFERENT phase than the project's don't count toward staleness
     other = [{"summary": "", "ended_at": "t", "phase": "spec"} for _ in range(n + 2)]
     assert all(
-        "sessions in" not in ln
-        for ln in ctx._project_session_lines(_FakeSessClient(other), proj)
+        "sessions in" not in ln for ln in ctx._project_session_lines(other, proj)
     )
 
 
@@ -333,7 +318,7 @@ def test_project_session_lines_no_phase_no_crash():
     proj = {"slug": "wp-x"}  # no "phase" key
     n = ctx._STALE_SESSION_THRESHOLD
     rows = [{"summary": "s", "ended_at": "t"} for _ in range(n + 1)]
-    lines = ctx._project_session_lines(_FakeSessClient(rows), proj)
+    lines = ctx._project_session_lines(rows, proj)
     # summary line present, but no staleness nudge (and no "None" in output)
     assert any(ln.startswith("  Last session") for ln in lines)
     assert all("sessions in" not in ln for ln in lines)

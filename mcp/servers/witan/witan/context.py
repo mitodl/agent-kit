@@ -126,7 +126,11 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
 
         client = OmnigraphClient(graph_uri, queries_dir, token)
 
-        # Unscoped tasks (no repo) are always relevant regardless of cwd.
+        # One read returns every Task (the "list_unscoped_tasks" query is an
+        # all-tasks scan). Derive both the unscoped and the repo-scoped sets from
+        # it rather than issuing a second list_tasks_by_repo read — each omnigraph
+        # read is ~1-2s of fixed scan overhead regardless of row count, so fewer
+        # reads is the win, not narrower results.
         all_rows = client.read("read.gq", "list_unscoped_tasks", {})
         unscoped = [r for r in all_rows if not r.get("repo")]
 
@@ -139,11 +143,19 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
                 {"status": "active"},
             )
             projects = [p for p in projects if repo in (p.get("repos") or [])]
-            repo_tasks = client.read("read.gq", "list_tasks_by_repo", {"repo": repo})
+            repo_tasks = [r for r in all_rows if r.get("repo") == repo]
 
-        # Merge, deduplicating unscoped tasks already returned by repo query.
+        # Unscoped (no repo) and repo-scoped sets are disjoint; the dedup is just
+        # belt-and-suspenders.
         seen = {t["slug"] for t in repo_tasks}
         tasks = repo_tasks + [t for t in unscoped if t["slug"] not in seen]
+
+        # Every session in one read, grouped by project — one omnigraph call for
+        # the resume/staleness lines instead of one per shown project.
+        sessions_by_project: dict[str, list[dict]] = {}
+        if projects:
+            for s in client.read("read.gq", "list_all_sessions", {}):
+                sessions_by_project.setdefault(s.get("project_slug"), []).append(s)
     except Exception:  # noqa: BLE001
         return ""
 
@@ -184,7 +196,9 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
             lines.append(f"  Phase: {p['phase']}")
             if p.get("github_issue"):
                 lines.append(f"  Issue: {p['github_issue']}")
-            lines.extend(_project_session_lines(client, p))
+            lines.extend(
+                _project_session_lines(sessions_by_project.get(p["slug"], []), p)
+            )
         lines += [
             "",
             "If this session is contributing to one of the projects above, call",
@@ -251,28 +265,23 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
 _STALE_SESSION_THRESHOLD = 4
 
 
-def _project_session_lines(client: OmnigraphClient, project: dict) -> list[str]:
-    """Continuity + staleness lines for one project, from a single sessions read.
+def _project_session_lines(sessions: list[dict], project: dict) -> list[str]:
+    """Continuity + staleness lines for one project from its sessions.
 
-    Returns up to two lines: the latest session's handoff summary (the artifact
-    written by ``workflow_session_end`` that is otherwise invisible on resume)
-    and a staleness nudge when many sessions have accrued in the current phase
-    without advancing. Isolated and fault-tolerant: any failure (including a
-    store without the session query) yields ``[]`` so a broken session read can
-    never blank the projects/tasks context that already works.
+    ``sessions`` is this project's slice of the single all-sessions read, ordered
+    by ``started_at`` asc. Returns up to two lines: the latest session's handoff
+    summary (the artifact written by ``workflow_session_end`` that is otherwise
+    invisible on resume) and a staleness nudge when many sessions have accrued in
+    the current phase without advancing. Pure and fault-tolerant: an empty list
+    yields ``[]`` so a missing/failed sessions read can never blank the
+    projects/tasks context that already works.
     """
-    try:
-        sessions = client.read(
-            "read.gq", "list_sessions_by_project", {"project_slug": project["slug"]}
-        )
-    except Exception:  # noqa: BLE001
-        return []
     if not sessions:
         return []
 
     out: list[str] = []
 
-    latest = sessions[-1]  # query orders by started_at asc → last is newest
+    latest = sessions[-1]  # ordered by started_at asc → last is newest
     summary_lines = (latest.get("summary") or "").strip().splitlines()
     summary = summary_lines[0][:200] if summary_lines else ""
     if summary:
