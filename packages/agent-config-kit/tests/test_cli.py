@@ -1,9 +1,15 @@
 import importlib
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+requires_git = pytest.mark.skipif(
+    shutil.which("git") is None, reason="git binary not on PATH"
+)
 
 
 def _write_manifest(tmp_path: Path, text: str) -> Path:
@@ -985,3 +991,299 @@ def test_config_init_wizard_skips_everything_when_all_answers_are_blank(
     from agent_config_kit.config import GlobalConfig, load_global_config
 
     assert load_global_config(config_path) == GlobalConfig()
+
+
+def _write_skill(repo: Path, rel_dir: str, *, name: str | None = None) -> Path:
+    skill_dir = repo / rel_dir
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_md = skill_dir / "SKILL.md"
+    frontmatter = f"---\nname: {name}\ndescription: test\n---\n" if name else ""
+    skill_md.write_text(f"{frontmatter}# {rel_dir}\n")
+    return skill_md
+
+
+def test_manifest_init_writes_skills_table_from_frontmatter_names(tmp_path):
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    _write_skill(
+        repo, "skills/python/cyclopts-cli-scripts", name="cyclopts-cli-scripts"
+    )
+    _write_skill(repo, "skills/process/dependency-pruning", name="dependency-pruning")
+
+    _run_ok(app, ["manifest", "init", str(repo)])
+
+    manifest_path = repo / "agent-config.toml"
+    text = manifest_path.read_text()
+    assert "[skills]" in text
+    assert (
+        'cyclopts-cli-scripts = "skills/python/cyclopts-cli-scripts/SKILL.md"' in text
+    )
+    assert 'dependency-pruning = "skills/process/dependency-pruning/SKILL.md"' in text
+
+    from agent_config_kit.manifest import load_manifest
+
+    loaded = load_manifest(manifest_path)
+    assert {s.name for s in loaded.bundle.skills} == {
+        "cyclopts-cli-scripts",
+        "dependency-pruning",
+    }
+
+
+def test_manifest_init_falls_back_to_directory_name_without_frontmatter(tmp_path):
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    _write_skill(repo, "skills/no-frontmatter")
+
+    _run_ok(app, ["manifest", "init", str(repo)])
+
+    text = (repo / "agent-config.toml").read_text()
+    assert 'no-frontmatter = "skills/no-frontmatter/SKILL.md"' in text
+
+
+def test_manifest_init_skips_vendor_and_dot_directories(tmp_path):
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    _write_skill(repo, "skills/real-skill", name="real-skill")
+    _write_skill(repo, "node_modules/some-pkg/skills/fake", name="fake")
+    _write_skill(repo, ".venv/lib/site-packages/fake2", name="fake2")
+    _write_skill(repo, ".claude/worktrees/other/skills/fake3", name="fake3")
+
+    _run_ok(app, ["manifest", "init", str(repo)])
+
+    from agent_config_kit.manifest import load_manifest
+
+    loaded = load_manifest(repo / "agent-config.toml")
+    assert {s.name for s in loaded.bundle.skills} == {"real-skill"}
+
+
+def test_manifest_init_exits_2_on_duplicate_derived_name(tmp_path, capsys):
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    _write_skill(repo, "skills/a", name="dup")
+    _write_skill(repo, "skills/b", name="dup")
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["manifest", "init", str(repo)])
+
+    assert exc_info.value.code == 2
+    assert "duplicate skill name" in capsys.readouterr().out
+    assert not (repo / "agent-config.toml").is_file()
+
+
+def test_manifest_init_exits_2_on_invalid_derived_name(tmp_path, capsys):
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    _write_skill(repo, "skills/Not_Valid", name="Not_Valid")
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["manifest", "init", str(repo)])
+
+    assert exc_info.value.code == 2
+    assert "not a valid Agent Skills name" in capsys.readouterr().out
+
+
+def test_manifest_init_exits_2_on_derived_name_over_64_chars(tmp_path, capsys):
+    """SKILL_NAME_PATTERN alone doesn't bound length -- SkillSource's own
+    validator additionally requires 1-64 chars (Agent Skills spec), so a
+    manifest generated without that same check could write a name that
+    passes manifest init but fails the very first `load_manifest`."""
+    from agent_config_kit.cli import app
+
+    too_long = "a-" * 32 + "a"  # 65 chars, still matches SKILL_NAME_PATTERN
+    assert len(too_long) == 65
+    repo = tmp_path / "repo"
+    _write_skill(repo, f"skills/{too_long}", name=too_long)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["manifest", "init", str(repo)])
+
+    assert exc_info.value.code == 2
+    assert "not a valid Agent Skills name" in capsys.readouterr().out
+    assert not (repo / "agent-config.toml").is_file()
+
+
+def test_manifest_init_refuses_to_overwrite_without_force(tmp_path, capsys):
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "agent-config.toml").write_text("# existing\n")
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["manifest", "init", str(repo)])
+
+    assert exc_info.value.code == 1
+    assert "already exists" in capsys.readouterr().out
+    assert (repo / "agent-config.toml").read_text() == "# existing\n"
+
+
+def test_manifest_init_force_overwrites_existing_file(tmp_path):
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    _write_skill(repo, "skills/real-skill", name="real-skill")
+    (repo / "agent-config.toml").write_text("# existing\n")
+
+    _run_ok(app, ["manifest", "init", str(repo), "--force"])
+
+    assert "real-skill" in (repo / "agent-config.toml").read_text()
+
+
+def test_manifest_init_reports_and_writes_empty_skills_table_when_none_found(
+    tmp_path, capsys
+):
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    _run_ok(app, ["manifest", "init", str(repo)])
+
+    assert "no SKILL.md files found" in capsys.readouterr().out
+    assert "[skills]" in (repo / "agent-config.toml").read_text()
+
+
+def test_manifest_init_writes_paths_relative_to_output_not_repo(tmp_path):
+    """A skill path in the generated manifest must resolve via manifest.py's
+    own M5 rule (relative to the *manifest file's* directory) — so when
+    ``--output`` places the manifest outside ``repo``, the written path must
+    still be correct relative to the output location, not ``repo``."""
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    _write_skill(repo, "skills/real-skill", name="real-skill")
+    output = tmp_path / "elsewhere" / "agent-config.toml"
+
+    _run_ok(app, ["manifest", "init", str(repo), "--output", str(output)])
+
+    from agent_config_kit.manifest import load_manifest
+
+    loaded = load_manifest(output)
+    [skill] = loaded.bundle.skills
+    assert skill.name == "real-skill"
+    assert skill.skill_md_path.resolve() == repo / "skills" / "real-skill" / "SKILL.md"
+
+
+def test_manifest_init_defaults_to_git_repo_root(tmp_path, monkeypatch):
+    import subprocess
+
+    from agent_config_kit.cli import app
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    _write_skill(repo, "skills/real-skill", name="real-skill")
+    nested = repo / "some" / "nested" / "dir"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+
+    _run_ok(app, ["manifest", "init"])
+
+    manifest_path = repo / "agent-config.toml"
+    assert manifest_path.is_file()
+    assert "real-skill" in manifest_path.read_text()
+
+
+def _init_git_manifest_repo(path: Path, *, subdirectory: str) -> str:
+    """A git repo with a manifest at ``<subdirectory>/agent-config.toml``
+    that references a skill by a path relative to *that* manifest — the
+    fixture used to prove a ``git+`` ``MANIFEST`` URI clones the whole repo
+    (not just the one manifest file), so the manifest's own relative
+    ``skill_md_path`` still resolves against its location inside the
+    checkout, same as a local manifest (spec M5). Returns the resulting
+    ``git+file://...#subdirectory=...`` URI."""
+    manifest_dir = path / subdirectory
+    (manifest_dir / "skills" / "remote-skill").mkdir(parents=True)
+    (manifest_dir / "skills" / "remote-skill" / "SKILL.md").write_text(
+        "---\nname: remote-skill\ndescription: test\n---\n"
+    )
+    (manifest_dir / "agent-config.toml").write_text(
+        '[skills]\nremote-skill = "skills/remote-skill/SKILL.md"\n'
+    )
+    subprocess.run(["git", "init", "--quiet"], cwd=path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "commit", "--quiet", "-m", "init"], cwd=path, check=True)
+    return f"git+file://{path}#subdirectory={subdirectory}/agent-config.toml"
+
+
+@requires_git
+def test_apply_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch):
+    """A `git+` URI passed directly as MANIFEST (not via the global config's
+    default_manifest/[[org]]/[[scope]] indirection) must itself be fetched
+    and applied — regression test for a bug where cyclopts' `Path` argument
+    coercion collapsed the URI's `scheme://` into `scheme:/` before
+    `_resolve_manifest_arg` ever saw it, so an explicit remote MANIFEST
+    silently failed to parse as a URI at all."""
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    source = tmp_path / "source"
+    uri = _init_git_manifest_repo(source, subdirectory="platform-eng")
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    monkeypatch.chdir(consumer)
+
+    _run_ok(
+        app,
+        [
+            "apply",
+            uri,
+            "--platform",
+            "claude",
+            "--scope",
+            "project",
+            "--cache-dir",
+            str(tmp_path / "cache"),
+        ],
+    )
+
+    assert (consumer / ".claude" / "skills" / "remote-skill" / "SKILL.md").is_file()
+
+
+@requires_git
+def test_validate_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    source = tmp_path / "source"
+    uri = _init_git_manifest_repo(source, subdirectory="platform-eng")
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    monkeypatch.chdir(consumer)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(
+            [
+                "validate",
+                uri,
+                "--platform",
+                "claude",
+                "--scope",
+                "project",
+                "--cache-dir",
+                str(tmp_path / "cache"),
+            ]
+        )
+
+    # exit 1: the skill is missing on disk (never applied) -- proves the
+    # remote manifest was actually fetched and read, not silently skipped.
+    assert exc_info.value.code == 1
+
+
+@requires_git
+def test_profiles_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    source = tmp_path / "source"
+    uri = _init_git_manifest_repo(source, subdirectory="platform-eng")
+
+    _run_ok(app, ["profiles", uri, "--cache-dir", str(tmp_path / "cache")])
