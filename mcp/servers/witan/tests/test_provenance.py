@@ -22,12 +22,12 @@ def test_session_produced_memory(server, tmp_path, monkeypatch):
     )
 
     # Default flat list (no per-session breakdown).
-    prov = server.project_memories(proj["slug"])
+    prov = server.workflow_project_memories(proj["slug"])
     assert mem["slug"] in {m["slug"] for m in prov["memories"]}
     assert prov["by_session"] == {}
 
     # Opt-in grouping adds the per-session breakdown.
-    grouped = server.project_memories(proj["slug"], group_by_session=True)
+    grouped = server.workflow_project_memories(proj["slug"], group_by_session=True)
     assert sess["session_slug"] in grouped["by_session"]
     assert mem["slug"] in {
         m["slug"] for m in grouped["by_session"][sess["session_slug"]]
@@ -40,7 +40,7 @@ def test_store_without_active_session_is_fine(server, monkeypatch):
     mem = server.memory_store(kind="pattern", title="p", content="no session here")
     assert mem["slug"].startswith("pat-")
     # No session → no provenance, but the project walk still works and is empty.
-    assert server.project_memories("wp-none")["memories"] == []
+    assert server.workflow_project_memories("wp-none")["memories"] == []
 
 
 @requires_omnigraph
@@ -48,7 +48,7 @@ def test_informed_memory_in_project_walk(server):
     proj = server.workflow_project_create(title="inf", description="informed test")
     mem = server.memory_store(kind="project_fact", title="f", content="a fact")
     server.workflow_project_link_memory(proj["slug"], mem["slug"])
-    prov = server.project_memories(proj["slug"])
+    prov = server.workflow_project_memories(proj["slug"])
     assert mem["slug"] in {m["slug"] for m in prov["memories"]}
 
 

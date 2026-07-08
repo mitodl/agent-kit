@@ -283,7 +283,7 @@ def test_mine_trace_without_proposals_returns_material(server):
     server.workflow_session_end(sess["session_slug"], summary="learned a thing")
     done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
 
-    material = server.mine_trace(done["trace_slug"])
+    material = server.workflow_trace_mine(done["trace_slug"])
     assert material["trace"]["slug"] == done["trace_slug"]
     assert [s["slug"] for s in material["sessions"]] == [sess["session_slug"]]
 
@@ -294,7 +294,7 @@ def test_mine_trace_with_proposals_creates_memories_and_links_project(server):
     done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
     trace_slug = done["trace_slug"]
 
-    created = server.mine_trace(
+    created = server.workflow_trace_mine(
         trace_slug,
         patterns=[{"title": "a pattern", "content": "do X because Y"}],
         lessons=[{"title": "a lesson", "content": "watch out for Z"}],
@@ -307,7 +307,9 @@ def test_mine_trace_with_proposals_creates_memories_and_links_project(server):
     assert tr["patterns_slug"] == created["created_patterns"]
     assert tr["lessons_slug"] == created["created_lessons"]
 
-    informed = {m["slug"] for m in server.project_memories(proj["slug"])["memories"]}
+    informed = {
+        m["slug"] for m in server.workflow_project_memories(proj["slug"])["memories"]
+    }
     assert informed == {*created["created_patterns"], *created["created_lessons"]}
 
 
@@ -317,7 +319,7 @@ def test_mine_trace_bare_dict_proposal_is_coerced(server):
     proj = server.workflow_project_create(title="mine bare dict", description="d")
     done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
 
-    created = server.mine_trace(
+    created = server.workflow_trace_mine(
         done["trace_slug"],
         patterns={"title": "a pattern", "content": "do X because Y"},
     )
@@ -331,4 +333,6 @@ def test_mine_trace_rejects_proposal_missing_required_keys(server):
     done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
 
     with pytest.raises(ValueError, match="title.*content"):
-        server.mine_trace(done["trace_slug"], patterns=[{"title": "no content"}])
+        server.workflow_trace_mine(
+            done["trace_slug"], patterns=[{"title": "no content"}]
+        )

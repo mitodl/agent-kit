@@ -74,10 +74,10 @@ def test_project_facts_and_patterns(server):
         kind="pattern", title="ruff", content="lint with ruff", language="python"
     )
 
-    facts = server.memory_get_project_facts()
+    facts = server.memory_list(kind="project_fact")
     assert any(f["title"] == "vault" for f in facts)
 
-    patterns = server.memory_list_patterns(language="python")
+    patterns = server.memory_list(kind="pattern", language="python")
     assert any(p["title"] == "ruff" for p in patterns)
     # the project_fact must not appear among patterns
     assert all(p["title"] != "vault" for p in patterns)
