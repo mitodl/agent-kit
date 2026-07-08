@@ -82,7 +82,11 @@ skills = ["cyclopts-cli-scripts"]
 
 Table/field names mirror the Python model field names exactly
 (`kind`, `command`, `args`, `env`, `event`, `entry_path`, ...) — see
-`docs/design/agent-config-kit-cli-spec.md` for the full schema and rationale.
+`docs/design/agent-config-kit-cli-spec.md` for the full schema and
+rationale, and `docs/design/agent-config-kit-profiles-composition-spec.md`
+for profiles, `include`, the global config file, and directory-prefix/org
+scoping (everything from here through "Precedence & resolution order"
+below).
 
 `[profiles.<name>]` tables (spec §4) each list a subset of entry keys drawn
 from the manifest's own `[mcp_servers]`/`[skills]`/`[hooks]`/`[lsp_servers]`
@@ -273,3 +277,72 @@ agent-kit config init --force    # overwrite an existing config file
 ```
 
 Refuses to overwrite an existing file unless `--force` is given.
+
+#### Global config schema
+
+```toml
+# ~/.config/agent-config-kit/config.toml
+
+default_manifest = "~/dotfiles/agent-config.toml"   # last-resort fallback
+default_profiles = ["universal"]                    # used with default_manifest
+
+[[org]]
+name = "mitodl"                       # matched against the git remote's GitHub owner
+manifest = "~/code/mit/org-bundle.toml"   # local path or remote https://.git+ URI
+profiles = ["platform-eng"]
+
+[[scope]]
+match_prefix = "~/code/mit"           # longest match wins; directory-boundary matched
+manifest = "~/code/mit/org-bundle.toml"
+profiles = ["platform-eng"]
+write_scope = "project"               # "global" | "project" — default: "project"
+```
+
+- `[[org]]` entries are matched against the *current repo's* `git remote
+  get-url origin` (or another remote if there's no `origin`) — see
+  `agent-kit apply` above. `name` is matched case-insensitively.
+- `[[scope]]` entries are matched against the CWD by directory-component
+  prefix (`~/code/mit` matches `~/code/mit/foo` but not
+  `~/code/mit-backup`), longest prefix wins. Unlike a manifest's own
+  `[options].scope` (default `"global"`), a `[[scope]]` entry's
+  `write_scope` defaults to `"project"` — prefix-routed applies are
+  expected to materialize into whichever repo you're standing in, not the
+  agent's global config location.
+- Both `manifest` fields accept anything `include`/`skill_md_path` does — a
+  local path (`~` expanded) or a remote `https://`/`git+` URI, fetched the
+  same way.
+
+### Precedence & resolution order
+
+Two separate precedence chains are in play, and it's worth keeping them
+distinct:
+
+**Which `MANIFEST`** (only relevant when it's omitted — an explicit
+positional argument always wins outright):
+
+```
+explicit MANIFEST argument
+  → repo-local agent-config.toml (at the git repo root)
+    → [[org]] match (git remote's GitHub owner)
+      → [[scope]] match (longest match_prefix)
+        → default_manifest
+```
+
+First hit wins; that source's `profiles`/`write_scope` travel with it
+(`repo-local` has no opinion of its own on either) but are still overridden
+by `--profile`/`--scope` if given.
+
+**Within a resolved manifest**, once loaded (`include` folding, then
+profile selection, then CLI overrides):
+
+```
+included manifests (depth-first, left→right)
+  → including manifest's own entries
+    → selected profile(s) (--profile, or [options] default_profiles)
+      → CLI flags (--platform, --scope)
+```
+
+A same-keyed entry always resolves in favor of whatever's later/more local
+in this chain — an included manifest never overrides the manifest that
+included it, and a profile only *filters* which already-merged entries
+apply, it never introduces new ones of its own.

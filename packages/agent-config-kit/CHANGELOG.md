@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.3.2] - 2026-07-08
+
+### Fixed
+
+- **`--prune` state-file identity for a shared/resolved manifest**
+  (O-STATE): a manifest resolved via `[[org]]`/`[[scope]]`/
+  `default_manifest` typically lives outside the repo it's applied
+  into — a shared bundle referenced from many repos. The previous
+  manifest-adjacent `<manifest>.lock.json` default meant every repo
+  applying that same shared manifest with `--scope project` silently
+  shared (and clobbered) one state file, corrupting what `--prune`
+  believed it had safely written to each repo's own project-scope
+  targets. `apply --prune` now defaults to a repo-scoped
+  `<repo>/.agent-config-kit-state.json` whenever the effective write
+  scope is `project` and the resolved manifest isn't already inside the
+  repo being applied into; a manifest that already lives in the repo (an
+  explicit local path, or the repo-local zero-arg case) is unaffected.
+- Rich console markup was silently swallowing literal `[[org]]`/
+  `[[scope]]` in the "no MANIFEST given" zero-arg error message (`[...]`
+  is markup syntax) — properly escaped now.
+
+### Added
+
+- **Precedence/layering documentation**: README sections for the global
+  config file's full `[[org]]`/`[[scope]]` schema and a "Precedence &
+  resolution order" summary covering both which-manifest resolution (§7.2)
+  and within-manifest layering (§5.3). Spec §9's open questions (O-DEFAULT,
+  O-INSTR, O-MEM, O-STATE, O-PRIORITY) are all resolved and documented in
+  place rather than left open.
+- Integration tests (`tests/test_integration.py`) exercising the full
+  feature set together through the CLI: profile stacking with `inherits`
+  + top-level `include`, include-cycle errors surfacing cleanly, zero-arg
+  apply resolving via org/prefix/default with project-scope
+  materialization, per-profile `include`, and the O-STATE fix above.
+
 ## [0.3.1] - 2026-07-08
 
 ### Added

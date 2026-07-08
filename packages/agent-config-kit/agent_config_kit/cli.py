@@ -43,7 +43,7 @@ from .prune import (
     write_state,
 )
 from .registry import detect_installed_platforms, known_platforms
-from .resolve import resolve_zero_arg_manifest
+from .resolve import find_repo_root, resolve_zero_arg_manifest
 
 app = cyclopts.App(
     name="agent-kit",
@@ -315,12 +315,35 @@ def _resolve_manifest_arg(
         console.print(
             "[red]no MANIFEST given and none could be resolved from the "
             "global config (no repo-local agent-config.toml, no matching "
-            "[[org]] on the git remote, no matching [[scope]] prefix, and "
-            "no default_manifest set — see `agent-kit config init`)[/red]"
+            r"\[\[org]] on the git remote, no matching \[\[scope]] prefix, "
+            "and no default_manifest set — see `agent-kit config init`)[/red]"
         )
         raise SystemExit(2)
     console.print(f"resolved manifest from {resolved.source}")
     return resolved.path, resolved.profiles, resolved.write_scope
+
+
+def _default_prune_state_path(manifest_path: Path, scope: Scope) -> Path:
+    """O-STATE (spec §9): a manifest resolved via ``[[org]]``/``[[scope]]``/
+    ``default_manifest`` typically lives OUTSIDE the repo it's being
+    applied into — that's the point, a shared bundle referenced from many
+    repos. ``default_state_path``'s usual manifest-adjacent
+    ``<manifest>.lock.json`` would then be a single state file shared (and
+    clobbered) across every repo applying that same manifest, corrupting
+    what ``--prune`` believes it safely wrote to each repo's own
+    project-scope targets. Redirect to a repo-scoped state file whenever
+    the effective write scope is ``project`` and the manifest isn't
+    already inside the repo being applied into — a manifest that already
+    lives in the repo (an explicit local path, or the repo-local zero-arg
+    case) keeps the original, unaffected default. A ``global``-scope
+    apply's target is the same single location regardless of which repo
+    you ran it from, so its state should stay shared too — this
+    redirection is intentionally ``project``-only."""
+    if scope == Scope.PROJECT:
+        repo_root = find_repo_root(Path.cwd())
+        if repo_root is not None and repo_root not in manifest_path.resolve().parents:
+            return repo_root / ".agent-config-kit-state.json"
+    return default_state_path(manifest_path)
 
 
 def _report(results: dict[str, InstallResult], *, dry_run: bool) -> bool:
@@ -421,7 +444,9 @@ def apply_command(
             platforms if platforms is not None else detect_installed_platforms()
         )
         state_path = (
-            state_file if state_file is not None else default_state_path(manifest_path)
+            state_file
+            if state_file is not None
+            else _default_prune_state_path(manifest_path, resolved_scope)
         )
         states = load_state(state_path)
         results: dict[str, InstallResult] = {}
