@@ -135,8 +135,11 @@ workflow_project_complete(
 ```
 
 This creates a `WorkflowTrace` — the immutable corpus record — and marks the
-project `completed`. The trace includes all sessions, their phases, tools used,
-files changed, and the outcome narrative.
+project `completed`. The trace node aggregates the project's `session_count`,
+the distinct `phases` its sessions traversed, the total `duration` (hours), and
+the `outcome` narrative (plus title/description/repos/tags). Per-session detail
+like tools used and files changed lives on the individual `WorkflowSession`
+nodes, not on the aggregate trace.
 
 ## Listing Projects
 
@@ -168,12 +171,17 @@ workflow_project_list(status="completed")   # list finished projects
 Fetch a specific trace:
 
 ```
-# Use workflow_project_get to get the project, then construct trace slug as wt-{project_slug}
+workflow_trace_get(slug="wp-add-vault-k8s-auth-a3f912")   # accepts the wp- or wt- slug
 ```
 
-Traces record: phases traversed, session count, total duration, tools used per
-session, files changed, and the outcome narrative. These are the inputs for
-extracting reusable patterns and generating new skills.
+`workflow_trace_get` accepts either the project slug (`wp-…`) or the trace slug
+(`wt-…`) — no need to hand-construct `wt-{project_slug}` — and returns `None`
+until the project has been completed. `workflow_trace_list` is the discovery
+path across many traces.
+
+Traces record: phases traversed, session count, total duration, and the outcome
+narrative (tools-used/files-changed are per-session, not on the trace). These
+are the inputs for extracting reusable patterns and generating new skills.
 
 ## Linking Memories to Projects
 

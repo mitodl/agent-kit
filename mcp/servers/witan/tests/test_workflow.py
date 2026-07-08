@@ -43,6 +43,23 @@ def test_project_lifecycle_and_trace(server):
     again = server.workflow_project_complete(proj["slug"], outcome="delivered")
     assert again["existed"] is True
 
+    # workflow_trace_get resolves by either the wt- trace slug or the wp- slug.
+    by_wt = server.workflow_trace_get(f"wt-{proj['slug']}")
+    by_wp = server.workflow_trace_get(proj["slug"])
+    assert by_wt is not None
+    assert by_wt == by_wp
+    assert by_wt["outcome"] == "delivered"
+    assert by_wt["session_count"] == 1
+    assert "implementation" in (by_wt.get("phases") or [])
+
+
+@requires_omnigraph
+def test_trace_get_missing_returns_none(server):
+    # A project with no completion has no trace yet.
+    proj = server.workflow_project_create(title="incomplete", description="d")
+    assert server.workflow_trace_get(proj["slug"]) is None
+    assert server.workflow_trace_get("wt-does-not-exist") is None
+
 
 @requires_omnigraph
 def test_project_status_resume_view(server):
