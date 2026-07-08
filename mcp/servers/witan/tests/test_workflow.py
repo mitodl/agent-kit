@@ -82,6 +82,28 @@ def test_project_status_missing_returns_none(server):
 
 
 @requires_omnigraph
+def test_project_status_respects_external_blocker(server):
+    # A task blocked by one OUTSIDE the project must not show as ready — the
+    # status view delegates to task_ready, which fetches the external blocker
+    # rather than treating an out-of-project blocker as closed.
+    proj = server.workflow_project_create(title="ext blocker", description="d")
+    gate = server.task_create(title="external gate", description="x")  # unscoped, open
+    blocked = server.task_create(
+        title="waits on external",
+        description="x",
+        project_slug=proj["slug"],
+        blocked_by=[gate["slug"]],
+    )
+    st = server.workflow_project_status(proj["slug"])
+    assert st["ready_tasks"] == []
+    assert st["counts"]["ready"] == 0
+
+    server.task_close(gate["slug"])
+    st2 = server.workflow_project_status(proj["slug"])
+    assert [t["slug"] for t in st2["ready_tasks"]] == [blocked["slug"]]
+
+
+@requires_omnigraph
 def test_project_status_no_sessions(server):
     proj = server.workflow_project_create(title="fresh", description="d")
     st = server.workflow_project_status(proj["slug"])

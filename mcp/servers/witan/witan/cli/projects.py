@@ -153,7 +153,7 @@ def project_status(
     *,
     json: Annotated[bool, cyclopts.Parameter(name="--json")] = False,
 ) -> None:
-    """ "What should I do next" — phase, ready tasks, last session, blockers.
+    """Resume view — phase, ready tasks, last session, blockers ("what next").
 
     The single-call resume view for a project. Pass ``--json`` for the raw
     ``workflow_project_status`` payload.
@@ -188,9 +188,10 @@ def project_status(
     ls = st["last_session"]
     if ls:
         state = "still open" if ls["open"] else f"ended {ls['ended_at']}"
-        # Free-text summary: truncate first, then escape, so slicing can't strip a
-        # closing tag and a literal "[bug]" isn't parsed as Rich markup.
-        summary = escape((ls.get("summary") or "(no summary)")[:250])
+        # Free-text summary: collapse whitespace (multi-line summaries) and
+        # truncate, then escape — so a literal "[bug]" isn't parsed as Rich
+        # markup and slicing can't strip a closing tag.
+        summary = escape(" ".join((ls.get("summary") or "(no summary)").split())[:250])
         console.print(f"\n  [blue]last session[/blue] ({state}): {summary}")
     else:
         console.print("\n  [dim]no sessions yet[/dim]")

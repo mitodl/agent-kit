@@ -1382,8 +1382,11 @@ def workflow_project_status(slug: str) -> dict | None:
     p = rows[0]
 
     tasks = client.read("read.gq", "list_tasks_by_project", {"project_slug": slug})
-    ready = readiness.filter_ready(tasks)
     open_tasks = sum(1 for t in tasks if t.get("status") != "closed")
+    # Delegate to task_ready (not readiness.filter_ready) so the "same rule as
+    # task_ready" promise is literal: it fetches out-of-project blockers instead
+    # of treating a blocker absent from this project's task set as closed.
+    ready = task_ready(project_slug=slug, limit=100)
 
     return {
         "project": {
