@@ -1,4 +1,8 @@
-# 4. Optional task phase tag + per-phase ready-work rollup
+# 4. Optional task `phase` field + per-phase ready-work rollup
+
+> "Phase tag" is used loosely in the tracking task title; the decision below is a
+> typed, optional `phase` **enum field** on `Task` (not a free-form tag) — see
+> the Alternatives section for why a field beats a tag value.
 
 - Status: Proposed (design; implementation deferred)
 - Date: 2026-07-08
@@ -147,7 +151,8 @@ schema/tool change.
 
 ## Rollout
 
-Design accepted here; implementation is a follow-up task (schema field +
+Design **proposed** here (Status: Proposed — acceptance pending review);
+implementation is a follow-up task (schema field +
 `insert_task`/`task_create`/`task_update`/`task_ready` params + CLI flags +
 migration note + tests for the null-phase-default and phase-narrowing paths).
 The context-hook "prefer current phase" presentation is a separate, later slice.
