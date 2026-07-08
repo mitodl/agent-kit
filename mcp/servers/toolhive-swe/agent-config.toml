@@ -1,0 +1,33 @@
+# agent-config.toml — declarative install of the ToolHive SWE remote MCP
+# servers via agent-config-kit's `ac-kit` CLI.
+#
+# ToolHive SWE has no local process to build or run — this manifest just
+# registers three remote, Streamable HTTP servers (one per environment tier)
+# across every detected agent platform. Auth is Keycloak OAuth 2.1: the first
+# call to each server opens a browser consent flow, so there is no token or
+# API key to set here.
+#
+# Usage (from this directory):
+#   uv tool install 'agent-config-kit[cli]'
+#   ac-kit apply agent-config.toml            # register on every detected platform
+#   ac-kit apply agent-config.toml --dry-run   # preview without writing
+#   ac-kit validate agent-config.toml          # check for drift
+#
+# Only want one or two tiers? Delete the [mcp_servers.*] table(s) you don't
+# need before running `ac-kit apply` — each tier is a separate OAuth prompt
+# and you likely only have Keycloak access to some of them.
+
+[mcp_servers.toolhive-swe-ci]
+kind = "remote"
+url = "https://toolhive-swe.ci.ol.mit.edu/mcp"
+transport = "http"
+
+[mcp_servers.toolhive-swe-qa]
+kind = "remote"
+url = "https://toolhive-swe.qa.ol.mit.edu/mcp"
+transport = "http"
+
+[mcp_servers.toolhive-swe-prod]
+kind = "remote"
+url = "https://toolhive-swe.ol.mit.edu/mcp"
+transport = "http"
