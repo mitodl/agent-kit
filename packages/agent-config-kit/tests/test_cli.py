@@ -179,12 +179,13 @@ def test_apply_exits_1_when_a_platform_skips_a_target(tmp_path, monkeypatch, cap
 
 
 def test_apply_cli_scope_overrides_manifest_scope(tmp_path, monkeypatch):
-    """Passing --scope project should be accepted even though the current
-    registry only populates global ScopeTargets (apply() itself already
-    no-ops when a platform has no target for that scope)."""
+    """Passing --scope project routes claude's mcp target to the
+    project-scoped .mcp.json (relative to CWD, i.e. the repo root ac-kit is
+    run from) instead of the manifest's own [options] scope = "global"."""
     from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.chdir(tmp_path)
     manifest = _write_manifest(
         tmp_path,
         """
@@ -200,6 +201,12 @@ def test_apply_cli_scope_overrides_manifest_scope(tmp_path, monkeypatch):
     _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--scope", "project"])
 
     assert not (tmp_path / ".claude.json").exists()
+    assert (
+        json.loads((tmp_path / ".mcp.json").read_text())["mcpServers"]["witan"][
+            "command"
+        ]
+        == "uvx"
+    )
 
 
 def test_validate_exits_0_and_no_drift_when_already_applied(
@@ -511,3 +518,121 @@ def test_apply_then_validate_then_prune_full_lifecycle(tmp_path, monkeypatch):
     assert "scratch" not in cfg["mcpServers"]
 
     _run_ok(app, ["validate", str(one_server), "--platform", "claude"])
+
+
+def test_config_init_writes_all_commented_starter_at_default_location(
+    tmp_path, monkeypatch
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    _run_ok(app, ["config", "init"])
+
+    config_path = tmp_path / ".config" / "agent-config-kit" / "config.toml"
+    text = config_path.read_text()
+    assert "# default_manifest" in text
+    assert "# [[org]]" in text
+    assert "# [[scope]]" in text
+
+    from agent_config_kit.config import GlobalConfig, load_global_config
+
+    assert load_global_config(config_path) == GlobalConfig()
+
+
+def test_config_init_respects_explicit_config_flag(tmp_path):
+    from agent_config_kit.cli import app
+
+    config_path = tmp_path / "custom" / "config.toml"
+
+    _run_ok(app, ["config", "init", "--config", str(config_path)])
+
+    assert config_path.is_file()
+
+
+def test_config_init_refuses_to_overwrite_without_force(tmp_path, capsys):
+    from agent_config_kit.cli import app
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("default_manifest = 'existing'\n")
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["config", "init", "--config", str(config_path)])
+
+    assert exc_info.value.code == 1
+    assert "already exists" in capsys.readouterr().out
+    assert config_path.read_text() == "default_manifest = 'existing'\n"
+
+
+def test_config_init_force_overwrites_existing_file(tmp_path):
+    from agent_config_kit.cli import app
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("default_manifest = 'existing'\n")
+
+    _run_ok(app, ["config", "init", "--config", str(config_path), "--force"])
+
+    assert "existing" not in config_path.read_text()
+
+
+def test_config_init_wizard_writes_supplied_values_and_comments_out_the_rest(
+    tmp_path, monkeypatch
+):
+    """The wizard fills in what the user answers and leaves the rest as the
+    same commented-out example the non-interactive path writes."""
+    import agent_config_kit.cli as cli_module
+    from agent_config_kit.cli import app
+
+    answers = iter(["~/dotfiles/agent-config.toml", "universal,frontend"])
+    # add-org? -> yes; add-another-org? -> no; add-scope? -> no
+    yes_no = iter([True, False, False])
+    org_answers = iter(["mitodl", "https://cfg.mitodl.org/agent-config.toml"])
+
+    monkeypatch.setattr(cli_module, "_ask", lambda prompt, **kw: next(answers))
+    monkeypatch.setattr(cli_module, "_ask_yes_no", lambda prompt, **kw: next(yes_no))
+    monkeypatch.setattr(cli_module, "_ask_required", lambda prompt: next(org_answers))
+    monkeypatch.setattr(
+        cli_module,
+        "_ask_list",
+        lambda prompt: next(answers).split(",") if "Default profiles" in prompt else [],
+    )
+
+    config_path = tmp_path / "config.toml"
+    _run_ok(app, ["config", "init", "--config", str(config_path), "--wizard"])
+
+    text = config_path.read_text()
+    assert 'default_manifest = "~/dotfiles/agent-config.toml"' in text
+    assert 'default_profiles = ["universal", "frontend"]' in text
+    assert "[[org]]" in text
+    assert 'name     = "mitodl"' in text
+    assert 'manifest = "https://cfg.mitodl.org/agent-config.toml"' in text
+    assert "# [[org]]" not in text  # real entry written, not the commented example
+    assert "# [[scope]]" in text  # no scope entries added -> stays commented
+
+    from agent_config_kit.config import load_global_config
+
+    loaded = load_global_config(config_path)
+    assert loaded.default_manifest == str(
+        Path.home() / "dotfiles" / "agent-config.toml"
+    )
+    assert loaded.org[0].name == "mitodl"
+
+
+def test_config_init_wizard_skips_everything_when_all_answers_are_blank(
+    tmp_path, monkeypatch
+):
+    import agent_config_kit.cli as cli_module
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(cli_module, "_ask", lambda prompt, **kw: "")
+    monkeypatch.setattr(cli_module, "_ask_list", lambda prompt: [])
+    monkeypatch.setattr(cli_module, "_ask_yes_no", lambda prompt, **kw: False)
+
+    config_path = tmp_path / "config.toml"
+    _run_ok(app, ["config", "init", "--config", str(config_path), "--wizard"])
+
+    from agent_config_kit.config import GlobalConfig, load_global_config
+
+    assert load_global_config(config_path) == GlobalConfig()

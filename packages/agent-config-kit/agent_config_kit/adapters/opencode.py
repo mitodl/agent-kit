@@ -16,6 +16,8 @@ correcting what the design spec had flagged as "TBD":
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..models import McpServer, RemoteServer, StdioServer
 
 
@@ -38,3 +40,11 @@ def serialize_mcp(server: McpServer) -> dict:
         data["timeout"] = round(server.timeout_seconds * 1000)
 
     return data
+
+
+def skill_dest_dirs(primary: Path) -> list[Path]:
+    """``primary`` is ``.opencode/skill`` (registry.py); also write
+    ``.opencode/skills`` since the survey behind pf-native-per-agent-skill-
+    config-directory-hierarch-40bff8 found both singular and plural in use
+    across OpenCode versions."""
+    return [primary, primary.with_name("skills")]

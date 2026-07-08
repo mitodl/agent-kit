@@ -67,9 +67,8 @@ command = "witan inject-context"
 kind = "plugin"
 entry_path = "extensions/pi/witan.ts"   # resolved relative to this file
 
-[[skills]]
-name = "witan-task"
-skill_md_path = "skills/witan-task/SKILL.md"   # resolved relative to this file
+[skills]
+witan-task = "skills/witan-task/SKILL.md"   # resolved relative to this file
 ```
 
 Table/field names mirror the Python model field names exactly
@@ -92,9 +91,8 @@ local, manifest-relative path — fetched and cached automatically, no
 pre-cloning required:
 
 ```toml
-[[skills]]
-name = "remote-skill"
-skill_md_path = "https://raw.githubusercontent.com/org/repo/main/skills/remote-skill/SKILL.md"
+[skills]
+remote-skill = "https://raw.githubusercontent.com/org/repo/main/skills/remote-skill/SKILL.md"
 
 [[hooks]]
 kind = "plugin"
@@ -167,3 +165,19 @@ reconcile.
 
 Exit codes: `0` no drift, `1` drift (or an unreadable target) found, `2` the
 manifest failed to load.
+
+### `ac-kit config init`
+
+Bootstraps the global config file (`${XDG_CONFIG_HOME:-~/.config}/agent-config-kit/config.toml`,
+overridable with `--config` or `AC_KIT_CONFIG`) — see
+`docs/design/agent-config-kit-profiles-composition-spec.md` §7 for the full
+schema this file drives (per-org and per-directory-prefix default manifests
+for zero-arg `apply`).
+
+```bash
+ac-kit config init            # writes every key as a commented-out example
+ac-kit config init --wizard   # interactively prompt for values instead
+ac-kit config init --force    # overwrite an existing config file
+```
+
+Refuses to overwrite an existing file unless `--force` is given.

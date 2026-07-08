@@ -94,16 +94,87 @@ def test_load_manifest_resolves_skill_md_path_relative_to_manifest_dir(tmp_path)
         tmp_path,
         "agent-config.toml",
         """
-        [[skills]]
-        name = "witan-task"
-        skill_md_path = "skills/witan-task/SKILL.md"
+        [skills]
+        witan-task = "skills/witan-task/SKILL.md"
         """,
     )
 
     result = load_manifest(manifest)
 
     skill = result.bundle.skills[0]
+    assert skill.name == "witan-task"
     assert skill.skill_md_path == tmp_path / "skills" / "witan-task" / "SKILL.md"
+
+
+def test_load_manifest_resolves_skill_md_path_from_inline_table_form(tmp_path):
+    (tmp_path / "skills" / "witan-task").mkdir(parents=True)
+    (tmp_path / "skills" / "witan-task" / "SKILL.md").write_text("# skill")
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [skills]
+        witan-task = { skill_md_path = "skills/witan-task/SKILL.md" }
+        """,
+    )
+
+    result = load_manifest(manifest)
+
+    skill = result.bundle.skills[0]
+    assert skill.name == "witan-task"
+    assert skill.skill_md_path == tmp_path / "skills" / "witan-task" / "SKILL.md"
+
+
+def test_load_manifest_skill_table_form_requires_skill_md_path_key(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [skills]
+        witan-task = { some_future_field = "x" }
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="skills.witan-task.*skill_md_path"):
+        load_manifest(manifest)
+
+
+def test_load_manifest_skill_entry_must_be_string_or_table(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [skills]
+        witan-task = 123
+        """,
+    )
+
+    with pytest.raises(ManifestError, match="skills.witan-task"):
+        load_manifest(manifest)
+
+
+def test_load_manifest_accepts_inline_array_of_tables_hooks(tmp_path):
+    """F2: `hooks = [ {..}, {..} ]` must parse identically to the
+    `[[hooks]]` array-of-tables header form — TOML produces the same
+    list-of-dicts either way, so no model change is needed, just coverage."""
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        hooks = [
+          { kind = "declarative", event = "stop", command = "witan session-checkpoint" },
+          { kind = "plugin", entry_path = "extensions/pi/witan.ts" },
+        ]
+        """,
+    )
+    (tmp_path / "extensions" / "pi").mkdir(parents=True)
+    (tmp_path / "extensions" / "pi" / "witan.ts").write_text("// stub")
+
+    result = load_manifest(manifest)
+
+    assert len(result.bundle.hooks) == 2
+    assert isinstance(result.bundle.hooks[0], DeclarativeHook)
+    assert isinstance(result.bundle.hooks[1], PluginRegistration)
 
 
 def test_load_manifest_non_string_entry_path_raises_manifest_error(tmp_path):
@@ -126,9 +197,8 @@ def test_load_manifest_non_string_skill_md_path_raises_manifest_error(tmp_path):
         tmp_path,
         "agent-config.toml",
         """
-        [[skills]]
-        name = "witan-task"
-        skill_md_path = 123
+        [skills]
+        witan-task = { skill_md_path = 123 }
         """,
     )
 
@@ -153,9 +223,8 @@ def test_load_manifest_fetches_remote_skill_md_path(tmp_path, monkeypatch):
         tmp_path,
         "agent-config.toml",
         """
-        [[skills]]
-        name = "witan-task"
-        skill_md_path = "https://raw.githubusercontent.com/org/repo/main/SKILL.md"
+        [skills]
+        witan-task = "https://raw.githubusercontent.com/org/repo/main/SKILL.md"
         """,
     )
 
@@ -208,9 +277,8 @@ def test_load_manifest_respects_explicit_cache_dir(tmp_path, monkeypatch):
         tmp_path,
         "agent-config.toml",
         """
-        [[skills]]
-        name = "witan-task"
-        skill_md_path = "https://example.com/SKILL.md"
+        [skills]
+        witan-task = "https://example.com/SKILL.md"
         """,
     )
     custom_cache = tmp_path / "custom-cache"
@@ -232,13 +300,12 @@ def test_load_manifest_wraps_fetch_error_as_manifest_error(tmp_path, monkeypatch
         tmp_path,
         "agent-config.toml",
         """
-        [[skills]]
-        name = "witan-task"
-        skill_md_path = "https://example.com/does-not-exist.md"
+        [skills]
+        witan-task = "https://example.com/does-not-exist.md"
         """,
     )
 
-    with pytest.raises(ManifestError, match="skill_md_path.*404"):
+    with pytest.raises(ManifestError, match="skills.witan-task.*404"):
         load_manifest(manifest)
 
 
@@ -250,9 +317,8 @@ def test_load_manifest_leaves_absolute_paths_unchanged(tmp_path):
         tmp_path,
         "agent-config.toml",
         f"""
-        [[skills]]
-        name = "witan-task"
-        skill_md_path = "{skill_md.as_posix()}"
+        [skills]
+        witan-task = "{skill_md.as_posix()}"
         """,
     )
 
@@ -294,6 +360,37 @@ def test_load_manifest_bad_discriminator_raises_manifest_error(tmp_path):
     )
 
     with pytest.raises(ManifestError):
+        load_manifest(manifest)
+
+
+def test_load_manifest_old_skills_array_form_raises_manifest_error(tmp_path):
+    """The dropped [[skills]] array-of-tables form must fail with a clear
+    ManifestError, not an AttributeError from calling .items() on a list
+    (PR #76 review)."""
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        [[skills]]
+        name = "witan-task"
+        skill_md_path = "skills/witan-task/SKILL.md"
+        """,
+    )
+
+    with pytest.raises(ManifestError, match=r"\[skills\] must be a table"):
+        load_manifest(manifest)
+
+
+def test_load_manifest_non_table_skills_value_raises_manifest_error(tmp_path):
+    manifest = _write(
+        tmp_path,
+        "agent-config.toml",
+        """
+        skills = "not-a-table"
+        """,
+    )
+
+    with pytest.raises(ManifestError, match=r"\[skills\] must be a table"):
         load_manifest(manifest)
 
 

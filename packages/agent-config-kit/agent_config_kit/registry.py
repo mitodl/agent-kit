@@ -33,7 +33,14 @@ def _registry() -> dict[str, AgentPlatform]:
                 **{
                     "global": ScopeTarget(
                         path=Path.home() / ".claude.json", key_path=("mcpServers",)
-                    )
+                    ),
+                    # .mcp.json is Claude Code's project-root, checked-in MCP
+                    # config (distinct from the per-user ~/.claude.json) —
+                    # confirmed in pf-native-per-agent-skill-config-directory-
+                    # hierarch-40bff8.
+                    "project": ScopeTarget(
+                        path=Path(".mcp.json"), key_path=("mcpServers",)
+                    ),
                 }
             ),
             mcp_serialize=claude_adapter.serialize_mcp,
@@ -42,13 +49,20 @@ def _registry() -> dict[str, AgentPlatform]:
                     "global": ScopeTarget(
                         path=Path.home() / ".claude" / "settings.json",
                         key_path=("hooks",),
-                    )
+                    ),
+                    "project": ScopeTarget(
+                        path=Path(".claude") / "settings.json",
+                        key_path=("hooks",),
+                    ),
                 }
             ),
             hooks_merge=claude_adapter.merge_hooks,
             hooks_remove=claude_adapter.remove_hooks,
             skills=CapabilityScope(
-                **{"global": ScopeTarget(path=Path.home() / ".claude" / "skills")}
+                **{
+                    "global": ScopeTarget(path=Path.home() / ".claude" / "skills"),
+                    "project": ScopeTarget(path=Path(".claude") / "skills"),
+                }
             ),
         ),
         "pi": AgentPlatform(
@@ -59,7 +73,16 @@ def _registry() -> dict[str, AgentPlatform]:
                     "global": ScopeTarget(
                         path=Path.home() / ".pi" / "agent" / "mcp.json",
                         key_path=("mcpServers",),
-                    )
+                    ),
+                    # Pi's project-root config file, unverified beyond the
+                    # D-INV survey (pf-native-per-agent-skill-config-
+                    # directory-hierarch-40bff8 notes project MCP paths are
+                    # cwd-only but doesn't pin an exact filename) — confirm
+                    # against an installed Pi version before relying on this.
+                    "project": ScopeTarget(
+                        path=Path(".pi") / "settings.json",
+                        key_path=("mcpServers",),
+                    ),
                 }
             ),
             mcp_conditional_on=(
@@ -71,11 +94,17 @@ def _registry() -> dict[str, AgentPlatform]:
                 **{
                     "global": ScopeTarget(
                         path=Path.home() / ".pi" / "agent" / "extensions"
-                    )
+                    ),
+                    "project": ScopeTarget(path=Path(".pi") / "extensions"),
                 }
             ),
             skills=CapabilityScope(
-                **{"global": ScopeTarget(path=Path.home() / ".pi" / "agent" / "skills")}
+                **{
+                    "global": ScopeTarget(
+                        path=Path.home() / ".pi" / "agent" / "skills"
+                    ),
+                    "project": ScopeTarget(path=Path(".pi") / "skills"),
+                }
             ),
             skill_dest_dirs=pi_adapter.skill_dest_dirs,
         ),
@@ -86,10 +115,22 @@ def _registry() -> dict[str, AgentPlatform]:
                 **{
                     "global": ScopeTarget(
                         path=vscode_user_dir() / "mcp.json", key_path=("servers",)
-                    )
+                    ),
+                    # .vscode/mcp.json is VS Code's workspace-scoped MCP
+                    # config, distinct from the per-user file above.
+                    "project": ScopeTarget(
+                        path=Path(".vscode") / "mcp.json", key_path=("servers",)
+                    ),
                 }
             ),
             mcp_serialize=copilot_adapter.serialize_mcp,
+            # No global skills target: per pf-native-per-agent-skill-config-
+            # directory-hierarch-40bff8, Copilot's first-class SKILL.md
+            # discovery is workspace-scoped only (.github/skills et al.),
+            # with no equivalent per-user global directory surveyed.
+            skills=CapabilityScope(
+                **{"project": ScopeTarget(path=Path(".github") / "skills")}
+            ),
         ),
         "opencode": AgentPlatform(
             name="OpenCode",
@@ -99,10 +140,26 @@ def _registry() -> dict[str, AgentPlatform]:
                     "global": ScopeTarget(
                         path=Path.home() / ".config" / "opencode" / "config.json",
                         key_path=("mcp",),
-                    )
+                    ),
+                    # OpenCode's project-root config file — unverified exact
+                    # filename beyond the D-INV survey, same caveat as the
+                    # global path's own docstring; confirm during
+                    # implementation of a real OpenCode integration test.
+                    "project": ScopeTarget(
+                        path=Path("opencode.json"), key_path=("mcp",)
+                    ),
                 }
             ),
             mcp_serialize=opencode_adapter.serialize_mcp,
+            # OpenCode's own skill-directory naming is version-ambiguous
+            # (pf-native-per-agent-skill-config-directory-hierarch-40bff8
+            # notes both ".opencode/skill" and ".opencode/skills" as seen) —
+            # write to both rather than guess wrong, mirroring Pi's
+            # dual-dest-dir precedent (skill_dest_dirs).
+            skills=CapabilityScope(
+                **{"project": ScopeTarget(path=Path(".opencode") / "skill")}
+            ),
+            skill_dest_dirs=opencode_adapter.skill_dest_dirs,
         ),
     }
 
