@@ -55,9 +55,19 @@ def session_checkpoint() -> None:
 
     Reads the state file written by ``workflow_session_start`` and records an
     end timestamp via ``update_workflow_session_end``. No-op when the file is
-    absent — always exits 0 and never blocks.
+    absent — always exits 0 and never blocks. Also opportunistically triggers a
+    throttled background store compaction (see below).
     """
     from .. import context as ctx_module
+    from .. import maintenance
 
     cfg = cfg_module.load()
     ctx_module.session_checkpoint(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
+
+    # Keep the store compacted so query latency doesn't re-bloat. Runs at most
+    # once per WITAN_OPTIMIZE_INTERVAL and detaches, so the Stop hook returns
+    # immediately; best-effort, never fails the hook.
+    try:
+        maintenance.spawn_background_optimize(cfg.graph_uri)
+    except Exception:  # noqa: BLE001 — maintenance must never fail the Stop hook
+        pass

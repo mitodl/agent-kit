@@ -67,6 +67,7 @@ export WITAN_AUTHOR="Your Name"
 | `WITAN_AUTHOR` | No | `$USER` | Attribution on every insert |
 | `WITAN_REPO` | No | — | Repo slug override (bypasses git detection) |
 | `WITAN_SCAN_ENABLED` | No | `true` | Write-path secret/PII scanning; set to `false` to opt out — see [Write-path content scanning](docs/write-path-scanning.md) |
+| `WITAN_OPTIMIZE_INTERVAL` | No | `86400` | Throttle window (seconds) for the Stop hook's opportunistic background store compaction; `0` disables it |
 
 ## MCP Tools
 
@@ -208,6 +209,8 @@ or `uv tool install` the package to get it on `PATH`):
 | `scan test <text>` | Dry-run active detectors against an ad-hoc string; prints findings (never the matched text) |
 | `scan rules` | List active write-path scan detectors, their category, source, and enforcement mode |
 | `inject-context [--debug]` | The UserPromptSubmit hook body; `--debug` prints detection/read diagnostics to stderr (repo, branch, graph reads, counts, swallowed-failure reasons) to explain a blank block |
+| `optimize [--store URI]` | Compact the store's Lance fragments (non-destructive) so query latency doesn't bloat; safe to run on a cron/systemd-timer |
+| `cleanup [--keep N] [--older-than 7d] --yes` | Reclaim disk by GC-ing old Lance versions (destructive; requires `--yes`) |
 | `serve` | Start the MCP server (memory + code tools when witan-code is installed) |
 
 `run` claims the task (`in_progress` + your author), then hands the terminal to
