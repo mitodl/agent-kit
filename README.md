@@ -48,6 +48,11 @@ profile installs the whole catalog.
 Run `ac-kit apply --scope project` instead of the default `global` scope to
 register servers/skills in the current project only rather than user-wide.
 
+This registers the [`witan`](./mcp/servers/witan/README.md) and
+[`witan-code`](./mcp/servers/witan-code/README.md) MCP servers —
+team-wide shared memory/task tracking and a tree-sitter code graph,
+respectively — alongside the skill catalog.
+
 See [`skills/`](./skills/README.md) for the full skill catalog and
 [`packages/agent-config-kit/README.md`](./packages/agent-config-kit/README.md)
 for the full manifest schema, remote skill/hook sources, and profile
@@ -55,7 +60,9 @@ composition.
 
 ### Setting up an MCP server
 
-See [`mcp/`](./mcp/README.md) for per-server install scripts and configuration snippets.
+See [`mcp/`](./mcp/README.md) for per-server install scripts and configuration
+snippets, including [`witan`](./mcp/servers/witan/README.md) and
+[`witan-code`](./mcp/servers/witan-code/README.md).
 
 ### Using a custom agent
 
