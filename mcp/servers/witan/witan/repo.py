@@ -110,6 +110,8 @@ def git_remote_url(start: Path) -> str | None:
     if url := _git_remote_get_url(start, "origin"):
         return url
     for name in _git_remote_names(start):
+        if name == "origin":
+            continue  # already tried above — don't spawn a redundant git call
         if url := _git_remote_get_url(start, name):
             return url
     return None
@@ -174,9 +176,21 @@ def _parse_remote(git_config: Path) -> str | None:
     if parser.has_option('remote "origin"', "url"):
         return _normalise(parser.get('remote "origin"', "url"))
 
-    for section in parser.sections():
-        if section.startswith("remote ") and parser.has_option(section, "url"):
-            return _normalise(parser.get(section, "url"))
+    # Match ``git_remote_url``'s fallback order: git lists remotes sorted by
+    # name, so sort the candidate sections by remote name too. Otherwise the
+    # two paths could pick different remotes (config-file order vs git's sorted
+    # order), defeating the point of keeping them aligned.
+    candidates = sorted(
+        (
+            (m.group(1), section)
+            for section in parser.sections()
+            if (m := re.fullmatch(r'remote "(.+)"', section))
+            and parser.has_option(section, "url")
+        ),
+        key=lambda pair: pair[0],
+    )
+    if candidates:
+        return _normalise(parser.get(candidates[0][1], "url"))
 
     return None
 

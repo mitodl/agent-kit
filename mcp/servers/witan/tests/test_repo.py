@@ -177,3 +177,15 @@ def test_parse_remote_falls_back_to_first_remote(tmp_path):
     cfg = tmp_path / "config"
     cfg.write_text('[remote "fork"]\n\turl = git@github.com:mitodl/via-config.git\n')
     assert repo._parse_remote(cfg) == "https://github.com/mitodl/via-config"
+
+
+def test_parse_remote_fallback_sorted_matches_git_order(tmp_path):
+    """With multiple non-origin remotes, the config-parse fallback picks the
+    alphabetically-first remote — matching `git remote`'s sorted order, so both
+    detection paths agree regardless of section order in the file."""
+    cfg = tmp_path / "config"
+    cfg.write_text(
+        '[remote "zeta"]\n\turl = git@github.com:mitodl/zeta.git\n'
+        '[remote "alpha"]\n\turl = git@github.com:mitodl/alpha.git\n'
+    )
+    assert repo._parse_remote(cfg) == "https://github.com/mitodl/alpha"
