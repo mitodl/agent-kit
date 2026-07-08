@@ -8,6 +8,11 @@ cases:
     action: read
     branch: main
     expect: allow
+  - id: user-exports-bridge
+    actor: act-alice
+    action: export
+    branch: main
+    expect: allow
   - id: user-invokes-bridge
     actor: act-alice
     action: invoke_query
@@ -34,6 +39,12 @@ cases:
     action: schema_apply
     target_branch: main
     expect: deny
+  # The service reads the bridge before migrating it.
+  - id: service-reads-bridge
+    actor: act-svc-witan
+    action: read
+    branch: main
+    expect: allow
   - id: service-schema-applies-bridge
     actor: act-svc-witan
     action: schema_apply

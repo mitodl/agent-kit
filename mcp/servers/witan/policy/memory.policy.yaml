@@ -28,6 +28,12 @@ groups:
   # The witan MCP service's own account. Owns schema/migrations across graphs.
   witan-service: [act-svc-witan]
 
+# Flat/single-branch, but store `main` is declared protected so schema_apply is
+# scoped to `protected` — the same uniform invariant as the code and bridge
+# graphs (schema always targets protected main). See bridge.policy.yaml for the
+# rationale on why this beats a bare `target_branch_scope: any`.
+protected_branches: [main]
+
 rules:
   - id: users-read-memory
     allow:
@@ -56,4 +62,4 @@ rules:
     allow:
       actors: { group: witan-service }
       actions: [schema_apply]
-      target_branch_scope: any
+      target_branch_scope: protected

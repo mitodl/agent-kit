@@ -14,6 +14,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# Structural lint of EVERY bundle, server.policy.yaml included. omnigraph's
+# `policy validate` below only covers the per-graph bundles; this is the only
+# gate the server bundle gets (see README § "Server-level bundle").
+echo "==> linting bundle structure"
+uv run python lint_bundles.py ./*.policy.yaml
+
 if ! command -v omnigraph >/dev/null 2>&1; then
   echo "error: omnigraph not on PATH — install it first (see this script's header)" >&2
   exit 127

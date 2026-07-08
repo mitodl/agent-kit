@@ -17,6 +17,14 @@ groups:
   # The witan MCP service's own account: owns the bridge schema/migrations.
   witan-service: [act-svc-witan]
 
+# The bridge is flat/single-branch, but we still declare its store `main`
+# protected so that schema_apply can be scoped to `protected` (the uniform
+# invariant: schema always targets protected main, every graph). Without this
+# list, `target_branch_scope: protected` would match nothing; and a bare
+# `target_branch_scope: any` would silently permit schema applies on arbitrary
+# branches the moment anyone introduced branching here.
+protected_branches: [main]
+
 rules:
   - id: users-read-bridge
     allow:
@@ -39,9 +47,15 @@ rules:
       actors: { group: witan-ci }
       actions: [change]
       branch_scope: any
-  # Schema/migrations are the MCP service's default responsibility, not CI's.
+  # The service reads the bridge to decide whether a migration is needed, then
+  # applies schema — its default responsibility, not CI's.
+  - id: service-read-bridge
+    allow:
+      actors: { group: witan-service }
+      actions: [read, export]
+      branch_scope: any
   - id: service-schema-bridge
     allow:
       actors: { group: witan-service }
       actions: [schema_apply]
-      target_branch_scope: any
+      target_branch_scope: protected

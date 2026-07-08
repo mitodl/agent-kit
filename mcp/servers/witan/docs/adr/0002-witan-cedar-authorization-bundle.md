@@ -81,13 +81,18 @@ Vault-provisioned tokens for the two service accounts), not committed.
   read-only for users; `witan-ci` writes the content; `witan-service` owns the
   schema.
 
-### D3 — Server-level `graph_list` is a deploy-time bundle, not CI-harnessed
+### D3 — Server-level `graph_list` is a deploy-time bundle, structurally linted
 
 `server.policy.yaml` (`graph_list`, `applies_to: [cluster]`) grants graph
 enumeration to all three groups. Because the 0.8.1 offline CLI has no server-scope
-validation path, it is applied and enforced by `omnigraph-server` at
-boot/runtime and excluded from `check.sh`; `tests/server.tests.yaml` records the
-intended decisions for when upstream adds a server-scope harness.
+*semantic*-validation path (`policy validate`/`test` load under the per-graph
+engine), it is applied and enforced by `omnigraph-server` at boot/runtime rather
+than exercised by `policy test`. It is still gated in CI: `lint_bundles.py`
+structurally checks it every run (group references, action names, scope/action
+compatibility, allow-only), so a group-name typo or YAML error — which would
+otherwise deny all users `graph_list` at runtime — fails the build.
+`tests/server.tests.yaml` records the intended decisions for when upstream adds a
+server-scope semantic harness.
 
 ### D4 — Maintenance is gated by IAM, not Cedar
 
@@ -98,11 +103,13 @@ AWS IAM on the backing bucket. There is no `svc-witan-admin` Cedar principal.
 
 ### D5 — CI validates and unit-tests the bundle against the real binary
 
-`policy/check.sh` converges a fixture cluster (`policy/cluster.yaml`, stub
-graphs `memory`/`code_example`/`bridge`) and runs `omnigraph policy validate`
-plus 36 declarative `policy test` cases across the three per-graph bundles. It
-runs as the `witan (Cedar policy bundle)` job in `witan-tests.yml`. The fixture
-is a test harness; the deployed cluster.yaml is templated by ol-infrastructure.
+`policy/check.sh` (1) runs `lint_bundles.py` — a structural lint of all four
+bundles including the server bundle; (2) converges a fixture cluster
+(`policy/cluster.yaml`, stub graphs `memory`/`code_example`/`bridge`) and runs
+`omnigraph policy validate`; (3) runs 38 declarative `policy test` cases across
+the three per-graph bundles. It runs as the `witan (Cedar policy bundle)` job in
+`witan-tests.yml`. The fixture is a test harness; the deployed cluster.yaml is
+templated by ol-infrastructure.
 
 ## Consequences
 

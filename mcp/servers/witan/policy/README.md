@@ -103,10 +103,14 @@ Two distinct non-human identities, deliberately kept separate:
 uv run python -c "from witan.setup import install_omnigraph; install_omnigraph(dry_run=False)"
 export PATH="$HOME/.local/bin:$PATH"
 
-./policy/check.sh          # converge fixture, validate 3 bundles, run 24 test cases
+./policy/check.sh          # lint all 4 bundles, validate 3, run 38 test cases
 ```
 
-`check.sh` runs in CI as the `witan (Cedar policy bundle)` job in
+`check.sh` does three things: (1) `lint_bundles.py` — a structural lint of
+**every** bundle including `server.policy.yaml` (group references resolve,
+actions are known, scopes match their actions, allow-only); (2) `policy
+validate` on the three per-graph bundles; (3) `policy test` — 38 declarative
+allow/deny cases. It runs in CI as the `witan (Cedar policy bundle)` job in
 `.github/workflows/witan-tests.yml`. `cluster.yaml` here is a **CI test
 harness**, not the deployed config — it wires the bundles onto three stub graphs
 (`memory`, `code_example`, `bridge`) so `policy validate`/`policy test` have
@@ -122,9 +126,12 @@ bundle and (b) fans a `[cluster]`-scoped bundle onto every graph, tripping the
 "one bundle per graph scope" selector. There is no offline CLI path to validate
 a server-scoped bundle in this version. `server.policy.yaml` is therefore kept
 as a deploy-time artifact (applied by ol-infrastructure's cluster.yaml,
-enforced by `omnigraph-server` at boot/runtime) but excluded from `check.sh`.
-`tests/server.tests.yaml` documents the intended decisions for when a
-server-scope validation path lands upstream.
+enforced by `omnigraph-server` at boot/runtime) and excluded from `policy
+validate`/`policy test`. It is **not** unguarded, though: `lint_bundles.py`
+structurally checks it on every run — catching group-name typos, unknown
+actions, and YAML errors that would otherwise deny all users `graph_list` at
+runtime. `tests/server.tests.yaml` documents the intended allow/deny decisions
+for when a server-scope semantic-validation path lands upstream.
 
 ## Deploying (ol-infrastructure)
 
