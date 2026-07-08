@@ -19,8 +19,10 @@ if ! command -v omnigraph >/dev/null 2>&1; then
   exit 127
 fi
 
-# Fresh state each run — the __cluster/ working dir is git-ignored.
-rm -rf __cluster
+# Fresh state each run — the __cluster/ and graphs/ working dirs are git-ignored.
+# graphs/ holds the .omni stores `cluster apply` materializes; remove both so
+# every run is hermetic.
+rm -rf __cluster graphs
 
 echo "==> converging fixture cluster"
 omnigraph cluster import --config . >/dev/null

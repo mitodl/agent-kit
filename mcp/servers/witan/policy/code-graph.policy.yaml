@@ -48,18 +48,32 @@ rules:
       actors: { group: witan-users }
       actions: [branch_create, branch_delete]
       target_branch_scope: unprotected
-  # svc-witan-ci owns the protected main index: reindex-on-merge, deliberate
-  # promotion of a WIP branch, and schema migrations. `change` scopes on the
-  # source branch (branch_scope); branch ops scope on the destination
-  # (target_branch_scope) — keep them in separate rules so each action gets the
-  # scope kind it actually reads.
+  # svc-witan-ci owns the protected main index: reads current state to diff,
+  # reindex-on-merge, deliberate promotion of a WIP branch, and schema
+  # migrations. `change` scopes on the source branch (branch_scope); branch ops
+  # scope on the destination (target_branch_scope) — keep them in separate rules
+  # so each action gets the scope kind it actually reads.
+  - id: ci-read-any-branch
+    allow:
+      actors: { group: witan-ci }
+      actions: [read, export]
+      branch_scope: any
   - id: ci-write-any-branch
     allow:
       actors: { group: witan-ci }
       actions: [change]
       branch_scope: any
-  - id: ci-manage-any-branch
+  # Promotion into protected main: merge + schema_apply only. NOT branch_delete —
+  # CI must never delete the protected main index.
+  - id: ci-promote-to-main
     allow:
       actors: { group: witan-ci }
-      actions: [branch_create, branch_delete, branch_merge, schema_apply]
-      target_branch_scope: any
+      actions: [branch_merge, schema_apply]
+      target_branch_scope: protected
+  # WIP-branch lifecycle (staging a merge, reaping stale branches) stays on
+  # unprotected branches.
+  - id: ci-manage-wip-branches
+    allow:
+      actors: { group: witan-ci }
+      actions: [branch_create, branch_delete]
+      target_branch_scope: unprotected

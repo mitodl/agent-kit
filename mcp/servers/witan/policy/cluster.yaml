@@ -3,8 +3,9 @@
 # This is NOT the deployed cluster config. It exists so `omnigraph policy
 # validate` and `omnigraph policy test` can run in CI (see
 # .github/workflows/witan-tests.yml, job: witan-policy) against representative
-# graph ids without standing up real stores. It wires the four production bundle
-# files (server/memory/code-graph/bridge .policy.yaml) onto three stub graphs:
+# graph ids without standing up real stores. It wires the three per-graph
+# production bundle files (memory/code-graph/bridge .policy.yaml) onto three stub
+# graphs (the server bundle is deploy-time only — see the policies: note below):
 #
 #   memory        — Layer-1 shared work/knowledge graph
 #   code_example  — one representative Layer-2 per-repo code graph

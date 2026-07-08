@@ -37,6 +37,12 @@ rules:
       actors: { group: witan-users }
       actions: [change]
       branch_scope: any
+  # CI reads current state to diff / migrate before it writes.
+  - id: ci-read-memory
+    allow:
+      actors: { group: witan-ci }
+      actions: [read, export]
+      branch_scope: any
   - id: ci-write-memory
     allow:
       actors: { group: witan-ci }

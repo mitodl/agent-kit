@@ -18,6 +18,11 @@ cases:
     action: change
     branch: main
     expect: deny
+  - id: ci-reads-bridge
+    actor: act-svc-witan-ci
+    action: read
+    branch: main
+    expect: allow
   - id: ci-writes-bridge
     actor: act-svc-witan-ci
     action: change

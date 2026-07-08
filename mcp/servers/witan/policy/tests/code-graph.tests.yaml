@@ -50,6 +50,16 @@ cases:
     expect: deny
 
   # svc-witan-ci: owns the protected main index.
+  - id: ci-reads-main
+    actor: act-svc-witan-ci
+    action: read
+    branch: main
+    expect: allow
+  - id: ci-reads-wip
+    actor: act-svc-witan-ci
+    action: read
+    branch: feature-x
+    expect: allow
   - id: ci-writes-main
     actor: act-svc-witan-ci
     action: change
@@ -65,6 +75,17 @@ cases:
     action: schema_apply
     target_branch: main
     expect: allow
+  # CI reaps stale WIP branches but must NEVER delete the protected main index.
+  - id: ci-deletes-wip
+    actor: act-svc-witan-ci
+    action: branch_delete
+    target_branch: feature-x
+    expect: allow
+  - id: ci-cannot-delete-main
+    actor: act-svc-witan-ci
+    action: branch_delete
+    target_branch: main
+    expect: deny
 
   # Unknown actor: default-deny.
   - id: stranger-cannot-read

@@ -27,7 +27,7 @@ groups:
   witan-ci: [act-svc-witan-ci]
 
 rules:
-  - id: all-actors-can-list-graphs
+  - id: users-can-list-graphs
     allow:
       actors: { group: witan-users }
       actions: [graph_list]

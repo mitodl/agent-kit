@@ -24,6 +24,11 @@ cases:
     action: schema_apply
     target_branch: main
     expect: deny
+  - id: ci-reads-memory
+    actor: act-svc-witan-ci
+    action: read
+    branch: main
+    expect: allow
   - id: ci-schema-applies-memory
     actor: act-svc-witan-ci
     action: schema_apply

@@ -22,6 +22,12 @@ rules:
     allow:
       actors: { group: witan-users }
       actions: [invoke_query]
+  # CI reads the existing bridge to compute diffs before it rewrites it.
+  - id: ci-read-bridge
+    allow:
+      actors: { group: witan-ci }
+      actions: [read, export]
+      branch_scope: any
   # Only CI writes the bridge — it is a derived cross-repo projection.
   - id: ci-write-bridge
     allow:
