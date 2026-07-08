@@ -107,6 +107,7 @@ See [`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](./witan/sk
 | `workflow_project_get_blockers` | Return all projects currently blocking the given project |
 | `workflow_session_start` | Link the current agent session to a project; writes a state file for the Stop hook |
 | `workflow_session_end` | Close the session with a summary, tools used, and files changed |
+| `workflow_trace_get` | Fetch a completed project's corpus `WorkflowTrace` by its `wt-`/`wp-` slug |
 
 ### Task Tracking Tools
 

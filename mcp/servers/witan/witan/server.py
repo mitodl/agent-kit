@@ -1821,6 +1821,33 @@ def workflow_trace_list(
     return rows[:limit]
 
 
+@mcp.tool
+def workflow_trace_get(slug: str) -> dict | None:
+    """
+    Retrieve a single corpus WorkflowTrace by slug.
+
+    Slug handling is simple: a slug already starting with ``wt-`` is used as-is;
+    **any other** slug is prefixed with ``wt-``. So the trace slug
+    (``wt-<project-slug>``) and the project slug (``wp-<project-slug>``, which
+    becomes ``wt-wp-<project-slug>``) both resolve to the same trace, and callers
+    never have to hand-construct the ``wt-`` slug (the fragile step the
+    ``witan-project-tracker`` skill used to instruct). Returns the full trace
+    node (title/description/outcome, ``session_count``, ``phases``, ``duration``,
+    and any mined ``lessons_slug``/``patterns_slug``) or ``None`` if no trace
+    exists — a project only has a trace once ``workflow_project_complete`` has
+    sealed it.
+
+    Parameters
+    ----------
+    slug:
+        The ``wt-`` trace slug, or the ``wp-`` project slug it was minted from
+        (anything not already ``wt-``-prefixed gets the prefix added).
+    """
+    trace_slug = slug if slug.startswith("wt-") else f"wt-{slug}"
+    rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
+    return rows[0] if rows else None
+
+
 def _annotate_trace(
     trace_slug: str,
     lessons_slug: list[str] | None = None,
