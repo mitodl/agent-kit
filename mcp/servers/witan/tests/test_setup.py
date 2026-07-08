@@ -77,8 +77,8 @@ def test_witan_bundle_registers_witan_mcp_server_and_hooks(tmp_path, monkeypatch
     ]
     assert inject and checkpoint
     # Both prompt-path hooks carry a timeout so a hung git/graph can't stall.
-    assert inject[0]["timeout"] == 5
-    assert checkpoint[0]["timeout"] == 5
+    assert inject[0]["timeout"] == 15
+    assert checkpoint[0]["timeout"] == 15
 
 
 def test_witan_bundle_includes_pi_extensions_as_plugin_hooks(tmp_path):

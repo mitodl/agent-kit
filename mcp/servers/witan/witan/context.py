@@ -28,6 +28,59 @@ from .graph import OmnigraphClient
 # prompts instead. Short TTL so a branch switch is picked up almost immediately.
 _REPO_CACHE_TTL = 5.0
 
+# Each omnigraph read is a full store scan (~1-2s on a large graph), and the hook
+# issues several per prompt — so a burst of prompts (e.g. picking a skill via a
+# `/` command) can each pay multiple seconds and blow the hook timeout. Cache the
+# *rendered* block on disk with a short TTL so only the first prompt in a window
+# pays the cost; the rest read one small file. The content is advisory, so a few
+# seconds of staleness is fine. Override with WITAN_CONTEXT_TTL (seconds; 0
+# disables).
+_OUTPUT_CACHE_TTL = 30.0
+
+
+def _output_cache_ttl() -> float:
+    raw = os.environ.get("WITAN_CONTEXT_TTL")
+    if raw is None:
+        return _OUTPUT_CACHE_TTL
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _OUTPUT_CACHE_TTL
+
+
+def _output_cache_file(graph_uri: str, repo: str | None, branch: str | None) -> Path:
+    key = f"{graph_uri}|{repo}|{branch}"
+    digest = hashlib.sha1(key.encode()).hexdigest()[:16]
+    return session_state.session_state_dir() / f"witan-ctx-{digest}.json"
+
+
+def _read_output_cache(
+    graph_uri: str, repo: str | None, branch: str | None
+) -> str | None:
+    ttl = _output_cache_ttl()
+    if ttl <= 0:
+        return None
+    try:
+        data = json.loads(_output_cache_file(graph_uri, repo, branch).read_text())
+        if time.time() - data["stamp"] < ttl:
+            return data["output"]
+    except Exception:  # noqa: BLE001 — missing/corrupt/stale cache → recompute
+        return None
+    return None
+
+
+def _write_output_cache(
+    graph_uri: str, repo: str | None, branch: str | None, output: str
+) -> None:
+    if _output_cache_ttl() <= 0:
+        return
+    try:
+        _output_cache_file(graph_uri, repo, branch).write_text(
+            json.dumps({"stamp": time.time(), "output": output})
+        )
+    except OSError:
+        pass
+
 
 # ── Context injection (UserPromptSubmit hook) ─────────────────────────────────
 
@@ -42,6 +95,12 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
         # Kept inside the try so the hook still degrades to "" on the off chance
         # any of this raises — the module contract is that it never does.
         repo, branch = _cached_repo_and_branch()
+
+        # Serve a recently-rendered block without touching the graph at all.
+        cached = _read_output_cache(graph_uri, repo, branch)
+        if cached is not None:
+            return cached
+
         client = OmnigraphClient(graph_uri, queries_dir, token)
 
         # Unscoped tasks (no repo) are always relevant regardless of cwd.
@@ -152,10 +211,16 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
         ]
 
     if not lines:
-        return ""
-    if projects:
-        lines.append("If this is unrelated work, ignore the above.")
-    return "\n".join(lines)
+        output = ""
+    else:
+        if projects:
+            lines.append("If this is unrelated work, ignore the above.")
+        output = "\n".join(lines)
+
+    # Cache the freshly rendered block (including an empty one) so the next
+    # prompt in this window skips the graph reads entirely.
+    _write_output_cache(graph_uri, repo, branch, output)
+    return output
 
 
 # A project sitting through this many sessions in the same phase without
