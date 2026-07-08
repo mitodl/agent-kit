@@ -7,6 +7,7 @@ from typing import Annotated
 
 import cyclopts
 from rich.markup import escape
+from rich.prompt import Prompt
 from rich.table import Table
 
 from .. import config as cfg_module
@@ -316,13 +317,14 @@ def project_run(
         return
 
     console.print(f"\n[bold]{len(selected)} projects selected.[/bold]")
-    console.print("  [c] Consolidate into one agent session")
-    console.print("  [s] Run sequentially (one agent per project)")
+    console.print("  [1] Consolidate: one agent session covering all projects")
+    console.print("  [2] Sequential: a separate agent invocation per project")
     try:
-        mode = input("Choice [c/s]: ").strip().lower()
+        choice = Prompt.ask("Choice", choices=["1", "2"], default="1")
     except (EOFError, KeyboardInterrupt):
         console.print("\n[yellow]Cancelled.[/yellow]")
         raise SystemExit(0)
+    mode = "c" if choice == "1" else "s"
 
     if mode == "c":
         prompts = []
@@ -331,12 +333,9 @@ def project_run(
             prompts.append(_project_run_prompt(p, p_tasks))
         merged = _merge_prompts(prompts, "project")
         _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
-    elif mode == "s":
+    else:
         for p in selected:
             console.print(f"\n[bold]── {p['slug']}: {p.get('title', '')} ──[/bold]")
             _run_project_slug(
                 p["slug"], cfg=cfg, agent=agent, model=model, dry_run=dry_run
             )
-    else:
-        console.print("[red]Invalid choice. Aborting.[/red]")
-        raise SystemExit(1)
