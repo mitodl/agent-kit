@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import cyclopts
+from rich.prompt import Prompt
 from rich.table import Table
 
 from .. import config as cfg_module
@@ -297,13 +298,14 @@ def task_run(
         return
 
     console.print(f"\n[bold]{len(selected)} tasks selected.[/bold]")
-    console.print("  [c] Consolidate into one agent session")
-    console.print("  [s] Run sequentially (one agent per task)")
+    console.print("  [1] Consolidate: one agent session covering all tasks")
+    console.print("  [2] Sequential: a separate agent invocation per task")
     try:
-        mode = input("Choice [c/s]: ").strip().lower()
+        choice = Prompt.ask("Choice", choices=["1", "2"], default="1", console=console)
     except (EOFError, KeyboardInterrupt):
         console.print("\n[yellow]Cancelled.[/yellow]")
         raise SystemExit(0)
+    mode = "c" if choice == "1" else "s"
 
     if mode == "c":
         claimable = list(selected)
@@ -324,7 +326,7 @@ def task_run(
             raise SystemExit(1)
         merged = _merge_prompts([_run_prompt(t) for t in claimable], "task")
         _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
-    elif mode == "s":
+    else:
         for t in selected:
             console.print(f"\n[bold]── {t['slug']}: {t.get('title', '')} ──[/bold]")
             _run_task_slug(
@@ -335,6 +337,3 @@ def task_run(
                 claim=claim,
                 dry_run=dry_run,
             )
-    else:
-        console.print("[red]Invalid choice. Aborting.[/red]")
-        raise SystemExit(1)
