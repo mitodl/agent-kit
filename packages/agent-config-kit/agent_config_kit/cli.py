@@ -10,6 +10,8 @@ clear message instead of a bare traceback from deep inside cyclopts/rich.
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -31,7 +33,7 @@ from .diff import Drift
 from .diff import diff as diff_bundle
 from .fetch import FetchError
 from .manifest import ManifestError, load_manifest, resolve_profile
-from .models import Scope
+from .models import SKILL_NAME_PATTERN, Scope
 from .plan import InstallResult
 from .plan import apply as apply_bundle
 from .plan import apply_all as apply_all_bundle
@@ -59,20 +61,36 @@ config_app = cyclopts.App(
 )
 app.command(config_app)
 
+manifest_app = cyclopts.App(
+    name="manifest", help="Generate and inspect manifest files."
+)
+app.command(manifest_app)
+
 
 _CONFIG_TEMPLATE_COMMENTS = {
-    "default_manifest": '# default_manifest = "~/dotfiles/agent-config.toml"',
+    "default_manifest": (
+        "# default_manifest is a local path or a remote https:// /git+ URI, e.g.\n"
+        '# default_manifest = "~/dotfiles/agent-config.toml"\n'
+        '# default_manifest = "https://raw.githubusercontent.com/'
+        'your-org/dotfiles/main/agent-config.toml"'
+    ),
     "default_profiles": '# default_profiles = ["universal"]',
     "org": (
         "# [[org]]                                       # match github.com/<name>/*\n"
         '# name     = "mitodl"\n'
-        '# manifest = "https://cfg.mitodl.org/agent-config.toml"\n'
-        '# profiles = ["platform-eng"]'
+        '# manifest = "https://raw.githubusercontent.com/mitodl/agent-config/main/agent-config.toml"\n'
+        '# profiles = ["platform-eng"]\n'
+        "#\n"
+        "# manifest also accepts a git+ URI, for a manifest that lives in a\n"
+        "# subdirectory of a larger repo (or that `include`s skills/manifests\n"
+        "# alongside it that need the full checkout, not just one file):\n"
+        '# manifest = "git+https://github.com/mitodl/agent-config-bundles.git'
+        '@main#subdirectory=platform-eng/agent-config.toml"'
     ),
     "scope": (
         "# [[scope]]                                      # directory-prefix routing\n"
         '# match_prefix = "~/code/mit"\n'
-        '# manifest     = "https://cfg.mitodl.org/agent-config.toml"\n'
+        '# manifest     = "https://raw.githubusercontent.com/mitodl/agent-config/main/agent-config.toml"\n'
         '# profiles     = ["platform-eng"]\n'
         '# write_scope  = "project"                        # "global" | "project" (default: "project")'
     ),
@@ -251,6 +269,143 @@ def config_init_command(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_render_config_toml(**values), encoding="utf-8")
     console.print(f"wrote {path}")
+
+
+_MANIFEST_INIT_SKIP_DIRS = {
+    "node_modules",
+    "__pycache__",
+    "venv",
+    "dist",
+    "build",
+    "site-packages",
+}
+_FRONTMATTER_NAME_RE = re.compile(
+    r'^name:\s*["\']?([^"\'\n]+?)["\']?\s*$', re.MULTILINE
+)
+
+
+def _find_skill_md_files(repo_root: Path) -> list[Path]:
+    """Walk ``repo_root`` for ``SKILL.md`` files, pruning dot-directories
+    (``.git``, ``.venv``, a `.claude/worktrees` checkout, ...) and common
+    vendor directories so a package's own installed dependencies/duplicate
+    worktrees don't get picked up alongside the repo's real skills."""
+    found = []
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if not d.startswith(".") and d not in _MANIFEST_INIT_SKIP_DIRS
+        ]
+        if "SKILL.md" in filenames:
+            found.append(Path(dirpath) / "SKILL.md")
+    return sorted(found)
+
+
+def _frontmatter_name(skill_md: Path) -> str | None:
+    """The Agent Skills spec's frontmatter ``name`` field, if present —
+    preferred over the directory name since it's what actually governs the
+    installed skill's identity (models.SkillSource's own ``name``, not
+    ``skill_md_path``, drives the on-disk directory name at apply time)."""
+    text = skill_md.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return None
+    end = text.find("\n---", 3)
+    if end == -1:
+        return None
+    if match := _FRONTMATTER_NAME_RE.search(text[3:end]):
+        return match.group(1).strip()
+    return None
+
+
+def _skill_entries(
+    skill_md_paths: list[Path], manifest_dir: Path
+) -> list[tuple[str, str]]:
+    """``(name, manifest-relative skill_md_path)`` pairs, sorted by name.
+    Fails fast (rather than silently mangling or overwriting) on a name that
+    doesn't satisfy the Agent Skills spec's slug constraints, or on two
+    ``SKILL.md`` files that derive the same name — both are cases the
+    generated manifest could not represent correctly anyway."""
+    by_name: dict[str, Path] = {}
+    for skill_md in skill_md_paths:
+        name = _frontmatter_name(skill_md) or skill_md.parent.name
+        if not SKILL_NAME_PATTERN.fullmatch(name):
+            console.print(
+                f"[red]{skill_md}: derived skill name {name!r} is not a valid "
+                "Agent Skills name (lowercase alphanumeric segments separated "
+                "by single hyphens) — fix its SKILL.md 'name' frontmatter or "
+                "its directory name[/red]"
+            )
+            raise SystemExit(2)
+        if name in by_name and by_name[name] != skill_md:
+            console.print(
+                f"[red]duplicate skill name {name!r}: {by_name[name]} and "
+                f"{skill_md} — rename one (its SKILL.md 'name' frontmatter "
+                "or its directory)[/red]"
+            )
+            raise SystemExit(2)
+        by_name[name] = skill_md
+    return sorted(
+        (name, Path(os.path.relpath(path, manifest_dir)).as_posix())
+        for name, path in by_name.items()
+    )
+
+
+def _render_manifest_toml(skills: list[tuple[str, str]]) -> str:
+    lines = [
+        "# agent-config.toml",
+        "# Generated by `agent-kit manifest init` — every SKILL.md found under",
+        "# the target repo, keyed by its frontmatter 'name' (falling back to",
+        "# its parent directory name). Review names/paths, then add",
+        "# [mcp_servers]/[[hooks]]/[profiles] by hand as needed — see",
+        "# docs/design/agent-config-kit-cli-spec.md for the full schema.",
+        "",
+        "[skills]",
+    ]
+    for name, rel_path in skills:
+        lines.append(f"{name} = {_toml_value(rel_path)}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+@manifest_app.command(name="init")
+def manifest_init_command(
+    repo: Path | None = None, *, output: Path | None = None, force: bool = False
+) -> None:
+    """Walk a repo for ``SKILL.md`` files and generate a manifest's
+    ``[skills]`` table from what it finds.
+
+    Parameters
+    ----------
+    repo
+        Directory to walk for ``SKILL.md`` files. Defaults to the current
+        git repo's root (walking up from the CWD for a ``.git``), or the CWD
+        itself if it's not inside a repo.
+    output
+        Where to write the manifest. Defaults to ``agent-config.toml`` at
+        ``repo``'s root. Each skill's path is written relative to this
+        file's own directory (spec M5), not ``repo``.
+    force
+        Overwrite an existing manifest file instead of refusing.
+    """
+    repo_root = (
+        repo if repo is not None else (find_repo_root(Path.cwd()) or Path.cwd())
+    ).resolve()
+    output_path = (
+        output if output is not None else repo_root / "agent-config.toml"
+    ).resolve()
+
+    if output_path.is_file() and not force:
+        console.print(
+            f"[red]{output_path} already exists (use --force to overwrite)[/red]"
+        )
+        raise SystemExit(1)
+
+    entries = _skill_entries(_find_skill_md_files(repo_root), output_path.parent)
+    if not entries:
+        console.print(f"[yellow]no SKILL.md files found under {repo_root}[/yellow]")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(_render_manifest_toml(entries), encoding="utf-8")
+    console.print(f"wrote {output_path} ({len(entries)} skill(s))")
 
 
 def _resolve_platforms(

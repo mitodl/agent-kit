@@ -180,6 +180,38 @@ This is the one concession toward "one-manifest-per-profile" — an
 independently-versioned, remote role bundle can be dropped into a profile by
 URL without re-listing its entries one by one.
 
+### `agent-kit manifest init`
+
+Bootstraps a manifest's `[skills]` table by walking a repo for `SKILL.md`
+files, instead of hand-writing each entry:
+
+```bash
+agent-kit manifest init                    # walks the current git repo's root
+agent-kit manifest init path/to/repo
+agent-kit manifest init --output bundles/agent-config.toml
+agent-kit manifest init --force            # overwrite an existing manifest
+```
+
+`REPO` defaults to the current git repo's root (found by walking up from the
+CWD for a `.git`), or the CWD itself if it's not inside a repo. Each skill's
+name is taken from its `SKILL.md` frontmatter `name` field, falling back to
+its parent directory's name when there's no frontmatter (or no `name` in
+it); `--output` defaults to `agent-config.toml` at `REPO`'s root, and each
+skill's path is written relative to *that file's* own directory (M5), not
+`REPO` — so `--output` can point somewhere else entirely (a shared bundle
+repo checked out alongside this one) and the paths still resolve correctly.
+Directories that start with `.` (`.git`, `.venv`, a `.claude/worktrees`
+checkout, ...) and common vendor directories (`node_modules`,
+`__pycache__`, `site-packages`, `dist`, `build`, ...) are skipped during the
+walk. Only `[skills]` is generated — add `[mcp_servers]`/`[[hooks]]`/
+`[profiles]` by hand afterward.
+
+Refuses to overwrite an existing manifest unless `--force` is given; exits
+`2` if two `SKILL.md` files derive the same name, or if a derived name
+doesn't satisfy the Agent Skills spec's slug constraints (lowercase
+alphanumeric segments separated by single hyphens) — fix the offending
+`SKILL.md`'s `name` frontmatter or its directory name and re-run.
+
 ### `agent-kit apply`
 
 Applies a manifest's MCP servers, hooks, and skills to one or more platforms:
@@ -288,7 +320,7 @@ default_profiles = ["universal"]                    # used with default_manifest
 
 [[org]]
 name = "mitodl"                       # matched against the git remote's GitHub owner
-manifest = "~/code/mit/org-bundle.toml"   # local path or remote https://.git+ URI
+manifest = "https://raw.githubusercontent.com/mitodl/agent-config/main/agent-config.toml"
 profiles = ["platform-eng"]
 
 [[scope]]
@@ -310,7 +342,17 @@ write_scope = "project"               # "global" | "project" — default: "proje
   agent's global config location.
 - Both `manifest` fields accept anything `include`/`skill_md_path` does — a
   local path (`~` expanded) or a remote `https://`/`git+` URI, fetched the
-  same way.
+  same way. A plain `https://` URI (e.g. `raw.githubusercontent.com/<org>/
+  <repo>/<ref>/agent-config.toml`) fetches a single file; a
+  `git+https://github.com/<org>/<repo>.git@<ref>#subdirectory=<path>` URI
+  clones the repo and resolves a manifest living in a subdirectory —
+  useful when that same repo also carries the skills the manifest
+  references, so one clone covers both (see "Remote skill/hook sources"
+  above).
+- `agent-kit config init` writes this file with every key as a
+  commented-out example using these same GitHub URI forms — uncomment and
+  edit, or run `agent-kit config init --wizard` to fill in values
+  interactively.
 
 ### Precedence & resolution order
 
