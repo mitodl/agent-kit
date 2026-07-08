@@ -48,6 +48,31 @@ def _output_cache_ttl() -> float:
         return _OUTPUT_CACHE_TTL
 
 
+def _atomic_write_private(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically and privately; never raises.
+
+    The hook runs as concurrent fresh processes (a ``/``-command burst fires it
+    repeatedly), so a plain ``write_text`` could let one process read a half-
+    written file. Writing a process-unique temp file and ``os.replace``-ing it in
+    means a reader always sees either the old or the new *complete* file. The
+    temp file is created ``0600`` (umask-independent) because the cached block
+    contains project/task titles and lives in a shared temp dir.
+    """
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, text.encode())
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _output_cache_file(graph_uri: str, repo: str | None, branch: str | None) -> Path:
     key = f"{graph_uri}|{repo}|{branch}"
     digest = hashlib.sha1(key.encode()).hexdigest()[:16]
@@ -74,12 +99,10 @@ def _write_output_cache(
 ) -> None:
     if _output_cache_ttl() <= 0:
         return
-    try:
-        _output_cache_file(graph_uri, repo, branch).write_text(
-            json.dumps({"stamp": time.time(), "output": output})
-        )
-    except OSError:
-        pass
+    _atomic_write_private(
+        _output_cache_file(graph_uri, repo, branch),
+        json.dumps({"stamp": time.time(), "output": output}),
+    )
 
 
 # ── Context injection (UserPromptSubmit hook) ─────────────────────────────────
@@ -296,12 +319,9 @@ def _cached_repo_and_branch() -> tuple[str | None, str | None]:
 
     repo = _detect_repo()
     branch = _current_branch() if repo else None
-    try:
-        cache_file.write_text(
-            json.dumps({"stamp": time.time(), "repo": repo, "branch": branch})
-        )
-    except OSError:
-        pass
+    _atomic_write_private(
+        cache_file, json.dumps({"stamp": time.time(), "repo": repo, "branch": branch})
+    )
     return repo, branch
 
 
