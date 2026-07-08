@@ -50,6 +50,14 @@ just a string that resolves in the code graph via `code_find_definition` /
 `get_symbol`. This keeps the team-synced memory graph independent of any
 machine's local code index.
 
+## Documentation
+
+- [User guide](docs/USER_GUIDE.md) — task-oriented walkthrough: install,
+  first index, definition/caller/impact queries, cross-repo bridge basics,
+  troubleshooting.
+- [CLI reference](docs/CLI_REFERENCE.md) — every `witan-code` command with
+  its full flag table and an example invocation.
+
 ## Cross-repo context bridge (Layer 2.5)
 
 The per-repo graph stops at a repo boundary, but service-oriented architectures

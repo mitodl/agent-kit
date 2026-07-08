@@ -1473,8 +1473,8 @@ wheels = [
 ]
 
 [[package]]
-name = "witan"
-version = "0.1.0"
+name = "witan-council"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "agent-config-kit" },

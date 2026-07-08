@@ -6,6 +6,12 @@ project/repo facts, lessons, and agent context. Exposed over MCP so every
 agent platform (pi, Claude Desktop, GitHub Copilot) can read and write without
 platform-specific code.
 
+## Documentation
+
+See the [User Guide](docs/USER_GUIDE.md) for a task-oriented walkthrough
+(install, setup, day-to-day loop, operating modes, troubleshooting) and the
+[CLI Reference](docs/CLI_REFERENCE.md) for the full `witan` command surface.
+
 ## Quick Start
 
 `witan setup` installs the omnigraph binary, copies hooks/skills, and wires the
