@@ -167,36 +167,66 @@ class _FakeSessClient:
         return self._rows
 
 
-def test_latest_session_line_formats_and_isolates():
+def test_project_session_lines_summary_and_isolation():
     from witan import context as ctx
 
+    proj = {"slug": "wp-x", "phase": "spec"}
     # query orders by started_at asc → the LAST row is newest; summary is
     # truncated to its first line.
     rows = [
-        {"summary": "old work", "ended_at": "t1"},
-        {"summary": "newest work\nsecond line ignored", "ended_at": "t2"},
+        {"summary": "old work", "ended_at": "t1", "phase": "spec"},
+        {
+            "summary": "newest work\nsecond line ignored",
+            "ended_at": "t2",
+            "phase": "spec",
+        },
     ]
-    assert (
-        ctx._latest_session_line(_FakeSessClient(rows), "wp-x")
-        == "  Last session (ended): newest work"
-    )
+    lines = ctx._project_session_lines(_FakeSessClient(rows), proj)
+    assert lines[0] == "  Last session (ended): newest work"
     # an open session (no ended_at) is flagged as such
-    assert (
-        ctx._latest_session_line(
-            _FakeSessClient([{"summary": "wip", "ended_at": None}]), "wp-x"
-        )
-        == "  Last session (still open): wip"
+    lines_open = ctx._project_session_lines(
+        _FakeSessClient([{"summary": "wip", "ended_at": None, "phase": "spec"}]), proj
     )
-    # no sessions / empty summary → no line
-    assert ctx._latest_session_line(_FakeSessClient([]), "wp-x") is None
+    assert lines_open[0] == "  Last session (still open): wip"
+    # no sessions / empty summary → no summary line
+    assert ctx._project_session_lines(_FakeSessClient([]), proj) == []
     assert (
-        ctx._latest_session_line(
-            _FakeSessClient([{"summary": "", "ended_at": "t"}]), "wp-x"
+        ctx._project_session_lines(
+            _FakeSessClient([{"summary": "", "ended_at": "t", "phase": "spec"}]), proj
         )
-        is None
+        == []
     )
-    # a failing read never raises — it degrades to None so the block survives
-    assert ctx._latest_session_line(_FakeSessClient(raises=True), "wp-x") is None
+    # a failing read never raises — it degrades to [] so the block survives
+    assert ctx._project_session_lines(_FakeSessClient(raises=True), proj) == []
+
+
+def test_project_session_lines_staleness_nudge():
+    from witan import context as ctx
+
+    proj = {"slug": "wp-x", "phase": "implementation"}
+    n = ctx._STALE_SESSION_THRESHOLD
+    stale = [
+        {"summary": "", "ended_at": "t", "phase": "implementation"} for _ in range(n)
+    ]
+    lines = ctx._project_session_lines(_FakeSessClient(stale), proj)
+    assert any("sessions in `implementation`" in ln for ln in lines)
+
+    # one below threshold → no nudge
+    fresh = [
+        {"summary": "", "ended_at": "t", "phase": "implementation"}
+        for _ in range(n - 1)
+    ]
+    assert all(
+        "sessions in" not in ln
+        for ln in ctx._project_session_lines(_FakeSessClient(fresh), proj)
+    )
+
+    # sessions in a DIFFERENT phase than the project's don't count toward staleness
+    other = [{"summary": "", "ended_at": "t", "phase": "spec"} for _ in range(n + 2)]
+    assert all(
+        "sessions in" not in ln
+        for ln in ctx._project_session_lines(_FakeSessClient(other), proj)
+    )
 
 
 @requires_omnigraph
@@ -225,3 +255,28 @@ def test_inject_context_surfaces_last_session_summary(tmp_path, monkeypatch):
     text = ctx_module.inject_context(str(store), queries_dir, None)
     assert "## Active Workflow Projects" in text
     assert "Last session (ended): left the helper half-wired" in text
+
+
+# ── A2: honest truncation counts ─────────────────────────────────────────────
+
+
+@requires_omnigraph
+def test_inject_context_truncation_counts_are_honest(tmp_path, monkeypatch):
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-trunc"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    for i in range(6):
+        _unwrap(srv.task_create)(title=f"task {i}", description="x")
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    # header reports the true total AND flags that only the top 5 are shown
+    assert "6 task(s) are ready" in text
+    assert "showing the top 5" in text
+    # exactly 5 task bullets rendered
+    assert text.count("(slug: `tk-") == 5

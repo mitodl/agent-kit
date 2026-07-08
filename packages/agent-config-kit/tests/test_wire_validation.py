@@ -33,6 +33,39 @@ def test_claude_hook_merge_output_is_schema_valid():
     HookMatcher.model_validate(settings["hooks"]["Stop"][0])
 
 
+def test_claude_hook_merge_serializes_and_refreshes_timeout():
+    settings: dict = {}
+    claude.merge_hooks(
+        settings,
+        [
+            DeclarativeHook(
+                event=HookEvent.USER_PROMPT_SUBMIT,
+                command="witan inject-context",
+                timeout_seconds=5,
+            )
+        ],
+    )
+    entry = settings["hooks"]["UserPromptSubmit"][0]
+    HookMatcher.model_validate(entry)  # timeout must stay schema-valid
+    assert entry["hooks"][0]["timeout"] == 5
+
+    # Re-applying the same command must not duplicate it, and a changed timeout
+    # is refreshed in place (so re-running setup applies it to existing installs).
+    claude.merge_hooks(
+        settings,
+        [
+            DeclarativeHook(
+                event=HookEvent.USER_PROMPT_SUBMIT,
+                command="witan inject-context",
+                timeout_seconds=8,
+            )
+        ],
+    )
+    ups = settings["hooks"]["UserPromptSubmit"]
+    assert len(ups) == 1
+    assert ups[0]["hooks"][0]["timeout"] == 8
+
+
 def test_copilot_serialized_mcp_entry_is_schema_valid():
     CopilotMcpServer.model_validate(copilot.serialize_mcp(_STDIO))
 

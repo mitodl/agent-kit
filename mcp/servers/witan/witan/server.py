@@ -881,6 +881,7 @@ def _store_memory(
     # session that no longer exists in the store would raise — swallow it so a
     # provenance failure never blocks the memory write.
     active = _active_session_slug()
+    session_linked = False
     if active:
         try:
             client.change(
@@ -889,10 +890,27 @@ def _store_memory(
                 {"from": active, "to": slug},
             )
             _invalidate_edge_index()  # SessionProduced feeds corroboration
+            session_linked = True
         except RuntimeError:
             pass
 
-    return {"slug": slug, "kind": kind, "repo": detected_repo}
+    result = {
+        "slug": slug,
+        "kind": kind,
+        "repo": detected_repo,
+        "session_linked": session_linked,
+    }
+    # Surface the silent provenance gap: with no active session, the memory is
+    # stored but not linked to the project's session history or completion trace.
+    # A one-line nudge lets the agent react (call workflow_session_start) instead
+    # of losing the link without noticing.
+    if active is None:
+        result["note"] = (
+            "Stored without an active workflow session, so it is not linked to a "
+            "project (no SessionProduced provenance). Call workflow_session_start "
+            "first if this memory should roll up to the project's history."
+        )
+    return result
 
 
 @mcp.tool
@@ -1226,6 +1244,41 @@ def _track_code_branch(
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 WorkflowStatus = Literal["active", "completed", "abandoned"]
 
+_PHASE_ORDER = {"discovery": 0, "spec": 1, "implementation": 2, "delivery": 3}
+
+
+def _advance_advisory(prev_phase: str | None, new_phase: str) -> str | None:
+    """A soft, non-blocking note when a phase transition is unusual.
+
+    Advancing is intentionally unconstrained (backward, skip-ahead, and
+    complete-from-discovery are all permitted), but an unusual transition is
+    indistinguishable from a mistake without a signal. Returns a one-line
+    advisory for a backward or skip-ahead move (or a no-op re-advance), else
+    ``None`` for the normal forward-by-one step.
+    """
+    if prev_phase == new_phase:
+        return f"Already in the '{new_phase}' phase — no change."
+    prev_i = _PHASE_ORDER.get(prev_phase or "")
+    new_i = _PHASE_ORDER.get(new_phase)
+    if prev_i is None or new_i is None:
+        return None
+    if new_i < prev_i:
+        return (
+            f"Moved backward ({prev_phase} → {new_phase}). Allowed, but unusual — "
+            "confirm this is intentional."
+        )
+    if new_i > prev_i + 1:
+        skipped = sorted(
+            (ph for ph, i in _PHASE_ORDER.items() if prev_i < i < new_i),
+            key=lambda ph: _PHASE_ORDER[ph],
+        )
+        return (
+            f"Skipped ahead ({prev_phase} → {new_phase}), bypassing "
+            f"{', '.join(skipped)}. Allowed, but unusual."
+        )
+    return None
+
+
 # Session-state path lives in ``session_state`` (shared with the Stop hook so
 # the writer and reader can't diverge under a custom TMPDIR).
 _STATE_FILE_PREFIX = session_state.STATE_FILE_PREFIX
@@ -1481,13 +1534,22 @@ def workflow_project_advance(
         URL of the GitHub PR if one has been opened.
     """
     now = _now_iso()
+    before = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    prev_phase = before[0].get("phase") if before else None
+
     client.change(
         "mutations.gq",
         "update_workflow_project_phase",
         {"slug": slug, "phase": phase, "github_pr": github_pr, "updated_at": now},
     )
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
-    return rows[0] if rows else {"slug": slug, "phase": phase}
+    result = rows[0] if rows else {"slug": slug, "phase": phase}
+
+    # Soft validation: flag an unusual transition without blocking it.
+    advisory = _advance_advisory(prev_phase, phase)
+    if advisory:
+        result["advisory"] = advisory
+    return result
 
 
 @mcp.tool
