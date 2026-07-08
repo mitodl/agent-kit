@@ -54,38 +54,48 @@ write).
 
 ## When to Use Each Tool
 
-### `memory_get_project_facts` — load context at session start
+### `recall` — load context (the default read)
 
-Call this **first** whenever you start working in a repository you haven't
-used in this session:
-
-```python
-memory_get_project_facts()
-```
-
-Returns all structural facts for the current repo: architecture, deployment
-topology, testing conventions, known dependencies, environment quirks. Read
-these before writing code, choosing a library, or making deployment decisions.
-
-### `memory_list_patterns` — check conventions before writing code
-
-Before implementing something non-trivial, check what patterns the team has
-already documented:
+Call this **first** whenever you start work in a repository or need to know what
+the team has learned about something. `recall` composes every other memory read
+— BM25 search, graph expansion along typed edges, topic and provenance siblings,
+superseded-pruning, and re-ranking — and degrades to a plain search when the
+graph has no edges yet.
 
 ```python
-memory_list_patterns()                          # all patterns in this repo
-memory_list_patterns(language="python")         # filtered by language
+recall(query="vault secrets injection")        # by topic
+recall(query="rate limiting", kind="pattern")   # filter by kind
+recall(symbol_id="…::Service.run")              # seed from a code symbol
+recall(task="tk-…")                             # seed from a task
+recall(topic="uv")                              # seed from a topic
 ```
 
-### `memory_search` — find relevant context by topic
+Seed with any combination of `query`, `symbol_id`, `task`, and `topic`; widen
+with `hops=2`. Reach for a narrower read only for a specific need:
 
-When you need to know if the team has encountered something similar before:
+| Want | Call |
+|------|------|
+| Contextual load / "what do we know about X" | `recall` (default) |
+| One memory by slug | `memory_get` |
+| Browse all of one kind (no query) | `memory_list(kind=…)` |
+| Plain BM25, no graph expansion | `memory_search` |
+| A known memory's neighbours, by edge kind | `memory_neighbors` |
+| Everything tagged to a topic (cross-repo) | `topic_get` |
+| Memories + code for a contract key | `memory_for_contract` |
+| Memories/tasks for a code symbol | `symbol_context` |
+| The code symbols a memory concerns | `memory_symbols` |
+| Memories a project produced | `workflow_project_memories` |
+
+### `memory_list` — browse a kind without a query
 
 ```python
-memory_search("vault secrets injection")
-memory_search("database migration rollback strategy")
-memory_search("rate limiting approach", kind="pattern")
+memory_list(kind="project_fact")                # structural facts, this repo
+memory_list(kind="pattern", language="python")  # conventions before coding
 ```
+
+Scoping: auto-detects the current repo; pass `repo=""` for all repos. With no
+repo detected and none passed it returns slim records (slug, kind, title, tags —
+no content); `memory_get` a slug for its full content.
 
 ### `memory_store` — record something worth remembering
 
@@ -141,8 +151,8 @@ memory_store(
 
 When a memory is about a specific function or class, attach the code-graph
 **symbol id** so it can be found from the code later. Get the id from the
-`witan-code` tools — `code_find_definition` / `code_search_symbol`
-return it in the `slug` field, of the form `repo#path::Qualified.Name`:
+`witan-code` tools — `code_find_definition` / `code_search_symbol` return it in
+the `symbol_id` field, of the form `<repo>#<path/to/file.py>::<QualifiedName>`:
 
 ```python
 memory_store(
@@ -154,9 +164,10 @@ memory_store(
 ```
 
 To go the other way — "what lessons or tasks concern this symbol?" — call
-`context_for_symbol(symbol_id)` before editing it. It returns the memories and
-tasks whose `symbol_refs` include that id. (Requires the witan-code
-server; symbol ids are soft references, so a stale one simply resolves to nothing.)
+`symbol_context(symbol_id)` before editing it. It returns the memories and tasks
+whose `symbol_refs` include that id. The forward direction — "what code does this
+memory concern?" — is `memory_symbols(slug)`. (Both require the witan-code server;
+symbol ids are soft references, so a stale one simply resolves to nothing.)
 
 ## Quality Guidelines
 
@@ -166,13 +177,40 @@ server; symbol ids are soft references, so a stale one simply resolves to nothin
   config conventions" are two memories, not one.
 - **Don't store transient state.** Session-specific observations that won't
   be useful after the current task ends don't belong in the graph.
-- **Check before storing.** Run `memory_search` first. If a similar memory
-  already exists, consider whether to update it instead of creating a
+- **Check before storing.** Run `recall` first. If a similar memory already
+  exists, consider whether to link or supersede it instead of creating a
   duplicate.
+- **Set `confidence`** (0.0–1.0) when you have a strong or weak signal about how
+  much to trust a memory — it feeds the recall re-rank. Omit it for the default.
+
+## Linking & Organizing Memories
+
+Memories are a graph. Connect them with `memory_link(from_slug, to_slug, kind)`:
+
+- `supersedes` — `from` (newer) replaces `to` (older); `to` is hidden from
+  default reads.
+- `refines` — `from` sharpens `to` without replacing it.
+- `applies_to` — a pattern/lesson (`from`) applies in the context of a
+  project_fact (`to`).
+- `contradicts` — the two conflict; surfaced for review, never hidden.
+- `related_to` — soft association.
+- `tagged` — `from` is about a Topic (`to` is a `tp-…` slug or a `name:kind`
+  spec like `uv:topic` or `DATABASE_URL:contract`, auto-created).
+
+Tags you pass to `memory_store` are also dual-written as `topic` Topics, so two
+memories sharing a tag are one hop apart. Explore the graph with
+`memory_neighbors(slug)` (a memory's links by kind) and `topic_get("uv:topic")`
+(everything tagged to a topic, across repos).
 
 ## Updating an Existing Memory
 
-Use `memory_get` to fetch the current content, decide what to change, then
-`memory_store` a corrected version. There is no in-place update or `Supersedes`
-tool yet, so for a superseded (rather than simply wrong) memory, store the new
-version and reference the old slug in its content for now.
+To correct a simply-wrong memory, `memory_store` the fixed version. To replace an
+outdated one, store the new version then link it:
+
+```python
+new = memory_store(kind="lesson", title="…", content="…")
+memory_link(from_slug=new["slug"], to_slug="les-old-…", kind="supersedes")
+```
+
+The old memory is hidden from default `memory_search`/`recall` results but
+preserved — pass `include_superseded=True` to see it.

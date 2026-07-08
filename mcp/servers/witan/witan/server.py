@@ -105,14 +105,40 @@ def _topic_schema_present() -> bool:
 mcp = FastMCP(
     "witan",
     instructions=(
-        "Team-wide, shared, persistent memory and work-coordination graph. "
-        "PREFER storing durable, shareable knowledge here — project facts, "
-        "patterns, lessons, decisions, and hand-off context — over your private "
+        "Team-wide, shared, persistent memory and work-coordination graph. PREFER "
+        "storing durable, shareable knowledge here — project facts, patterns, "
+        "lessons, decisions, and hand-off context — over your private "
         "built-in/session memory, so other agents, future sessions, and teammates "
-        "can find it. At the start of work in a repository, load context with "
-        "memory_get_project_facts and memory_list_patterns; record what you learn "
-        "with memory_store. Also tracks workflow projects, sessions, and tasks. "
-        "Memories and tasks are scoped to repositories."
+        "can find it. Record what you learn with memory_store. Also tracks "
+        "workflow projects, sessions, and tasks.\n\n"
+        "Loading context: call recall(query=…) — it composes every memory read "
+        "(BM25 + graph expansion + superseded-pruning + re-ranking) and degrades "
+        "to a plain search when the graph has no edges. Seed it with symbol_id, "
+        "task, or topic instead of/along with query. Reach for a narrower read "
+        "only for a specific need:\n"
+        '  recall           — default; contextual load / "what do we know about X"\n'
+        "  memory_get       — one memory by slug\n"
+        "  memory_list      — browse all of one kind (no query); optional language\n"
+        "  memory_search    — plain BM25, no graph expansion\n"
+        "  memory_neighbors — a known memory's neighbours, by edge kind\n"
+        "  topic_get        — everything tagged to a topic (cross-repo)\n"
+        "  memory_for_contract — memories + code for a contract key\n"
+        "  symbol_context   — memories/tasks for a code symbol\n"
+        "  memory_symbols   — the code symbols a memory concerns\n"
+        "  workflow_project_memories — memories a project produced\n\n"
+        "Repo scoping: every tool auto-detects the current repo from .git/config. "
+        "Pass repo (a canonical URI like https://github.com/mitodl/ol-django) to "
+        'override it, or repo="" to operate across all repos. When a list tool '
+        "detects no repo and none is passed, it returns slim records (slug, kind, "
+        "title, tags — no content); memory_get a slug for the full memory.\n\n"
+        "Updating memory: to replace an outdated memory, store the new one then "
+        'memory_link(from_slug=<new>, to_slug=<old>, kind="supersedes") — the old '
+        "one is hidden from default reads but kept (include_superseded=True to "
+        "see it).\n\n"
+        "Errors: a lookup that finds nothing returns null/empty, never raises; an "
+        "invalid-but-well-formed mutation (self-link, self-block, claim "
+        "contention) returns a status object with a reason; only malformed input "
+        "raises."
     ),
 )
 
@@ -699,23 +725,16 @@ def memory_search(
     include_superseded: bool = False,
 ) -> list[dict]:
     """
-    Search agent memories by text.
+    Plain BM25 text search over memories (no graph expansion — for that use
+    ``recall``).
 
-    Returns the top-20 matching memories ranked by BM25 relevance. The search
-    is automatically scoped to the current git repository unless ``repo`` or
-    ``WITAN_REPO`` overrides it.
-
-    Memories that have been superseded by a newer one (via a ``Supersedes`` edge —
-    see ``memory_link``) are hidden by default. Pass ``include_superseded=True`` to
-    surface them.
+    Returns the top-20 memories ranked by BM25 relevance. Superseded memories are
+    hidden unless ``include_superseded=True``.
 
     Parameters
     ----------
     query:
         Free-text search query. Searched against ``content``.
-    repo:
-        Canonical repo URI (e.g. ``https://github.com/mitodl/ol-django``).
-        Auto-detected from ``.git/config`` if omitted.
     kind:
         Optional filter: ``pattern``, ``project_fact``, ``lesson``,
         or ``agent_context``.
@@ -743,12 +762,16 @@ def memory_search(
 def memory_list(
     kind: MemoryKind | None = None,
     repo: str | None = None,
+    language: str | None = None,
 ) -> list[dict]:
     """
-    List memories (no search), optionally filtered by kind and/or repo.
+    List memories (no search), optionally filtered by kind, repo, and/or language.
 
-    Use to browse stored memories of a given kind — e.g. all ``lesson`` or
-    ``pattern`` memories — without a search query. Ordered most-recent first.
+    Browse stored memories without a search query — e.g. all ``lesson`` or
+    ``pattern`` memories. Ordered most-recent first. To load context prefer
+    ``recall``; use this for a plain kind-scoped listing (e.g.
+    ``memory_list(kind="project_fact")`` at session start, or
+    ``memory_list(kind="pattern", language="python")`` before writing code).
 
     Parameters
     ----------
@@ -756,25 +779,41 @@ def memory_list(
         Optional filter: ``pattern``, ``project_fact``, ``lesson``, or
         ``agent_context``. Omit to list all kinds.
     repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
-        Pass an empty string to list across all repos (full content included).
-        When no repo is detected and ``repo`` is omitted, returns slim records
-        (slug, kind, title, tags — no content) for unscoped memories so you
-        can scan and call ``memory_get`` on the ones you need.
+        Repo scoping — see instructions. With no repo detected and none passed,
+        returns slim records (slug, kind, title, tags — no content) for unscoped
+        memories; ``memory_get`` a slug for its full content.
+    language:
+        Optional post-filter by ``language`` (e.g. ``python``); applies to the
+        full-content results, not the slim unscoped listing.
     """
     detected = repo_module.detect(override=repo)
 
+    def _by_language(rows: list[dict]) -> list[dict]:
+        if not language:
+            return rows
+        return [
+            r for r in rows if (r.get("language") or "").lower() == language.lower()
+        ]
+
     if detected and kind:
-        return client.read(
-            "read.gq", "list_memories_by_repo_kind", {"repo": detected, "kind": kind}
+        return _by_language(
+            client.read(
+                "read.gq",
+                "list_memories_by_repo_kind",
+                {"repo": detected, "kind": kind},
+            )
         )
     if detected:
-        return client.read("read.gq", "list_memories_by_repo", {"repo": detected})
+        return _by_language(
+            client.read("read.gq", "list_memories_by_repo", {"repo": detected})
+        )
     if repo == "":
         # Explicit all-repos opt-in — return full content.
         if kind:
-            return client.read("read.gq", "list_memories_by_kind", {"kind": kind})
-        return client.read("read.gq", "list_memories", {})
+            return _by_language(
+                client.read("read.gq", "list_memories_by_kind", {"kind": kind})
+            )
+        return _by_language(client.read("read.gq", "list_memories", {}))
     # No repo detected and no explicit override: return slim records for
     # unscoped memories (repo=null) only. Caller can memory_get any slug it needs.
     # Use unbounded queries so repo-scoped memories don't push unscoped ones out
@@ -802,7 +841,7 @@ def _store_memory(
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
 ) -> dict:
-    """Create a Memory node — shared by memory_store and mine_trace."""
+    """Create a Memory node — shared by memory_store and workflow_trace_mine."""
     if isinstance(tags, str):
         tags = [tags]
     if isinstance(symbol_refs, str):
@@ -892,7 +931,7 @@ def memory_store(
         Full text of the memory. Be specific: include the what, why, and any
         examples. This is the primary search target.
     repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
+        Repo scoping — see instructions.
     language:
         Programming language (for ``pattern`` kind). e.g. ``python``, ``typescript``.
     category:
@@ -904,13 +943,12 @@ def memory_store(
     tags:
         Optional list of free-form tags for grouping.
     symbol_refs:
-        Optional code-graph symbol ids (``repo#path::Name``) this memory concerns,
-        e.g. the function a lesson is about. Resolved against the witan-code
-        store; stored as a soft reference (no hard cross-store edge).
+        Optional code-graph symbol ids (``<repo>#<path/to/file.py>::<Name>``,
+        from the witan-code tools' ``symbol_id`` field) this memory concerns,
+        e.g. the function a lesson is about. Stored as a soft reference.
     confidence:
         Optional author/agent trust in this memory, 0.0–1.0. Feeds the search
-        re-rank; omitted (null) memories use the configured default
-        (``WITAN_RANK_DEFAULT_CONF``, default 0.6).
+        re-rank; omitted memories use the configured default.
     """
     return _store_memory(
         kind,
@@ -946,70 +984,6 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
     if include_topics:
         node["topics"] = client.read("read.gq", "topics_for_memory", {"slug": slug})
     return node
-
-
-@mcp.tool
-def memory_get_project_facts(repo: str | None = None) -> list[dict]:
-    """
-    Return all project facts for a repository.
-
-    Use this at the start of a session in an unfamiliar codebase to load
-    structural context: architecture, deployment topology, testing conventions,
-    known dependencies and quirks.
-
-    Parameters
-    ----------
-    repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
-        Pass an empty string to list project facts across all repos (full content).
-        When no repo is detected and ``repo`` is omitted, returns slim records
-        (slug, kind, title, tags — no content) for unscoped facts only.
-    """
-    detected = repo_module.detect(override=repo)
-    if detected:
-        return client.read("read.gq", "get_project_facts", {"repo": detected})
-    if repo == "":
-        return client.read("read.gq", "project_facts_all", {})
-    # No repo detected: return slim unscoped project facts so the agent can
-    # select which to fetch in full via memory_get.
-    all_rows = client.read("read.gq", "project_facts_all", {})
-    unscoped = [r for r in all_rows if not r.get("repo")]
-    return [_slim_memory(r) for r in unscoped]
-
-
-@mcp.tool
-def memory_list_patterns(
-    repo: str | None = None,
-    language: str | None = None,
-) -> list[dict]:
-    """
-    List coding patterns, optionally scoped to a repo and/or language.
-
-    Use before writing code in a familiar service to check what conventions
-    the team has documented. When both ``repo`` and ``language`` are provided,
-    the server fetches by ``repo`` and post-filters by ``language`` in Python
-    (avoiding combinatorial query variants).
-
-    Parameters
-    ----------
-    repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
-    language:
-        Optional language filter applied after fetching. e.g. ``python``.
-    """
-    detected = repo_module.detect(override=repo)
-
-    if detected:
-        rows = client.read("read.gq", "patterns_by_repo", {"repo": detected})
-    else:
-        rows = client.read("read.gq", "patterns_all", {})
-
-    if language:
-        rows = [
-            r for r in rows if (r.get("language") or "").lower() == language.lower()
-        ]
-
-    return rows
 
 
 @mcp.tool
@@ -1580,7 +1554,9 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
 
 
 @mcp.tool
-def project_memories(project_slug: str, group_by_session: bool = False) -> dict:
+def workflow_project_memories(
+    project_slug: str, group_by_session: bool = False
+) -> dict:
     """
     "What did we learn during project X" — the provenance walk.
 
@@ -1682,7 +1658,7 @@ def _annotate_trace(
         patterns_slug = [patterns_slug]
     rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
     if not rows:
-        raise ValueError(f"no trace {trace_slug!r}")
+        return {"slug": trace_slug, "error": "no such trace"}
     trace = rows[0]
 
     merged_lessons = list(
@@ -1717,7 +1693,7 @@ def workflow_trace_annotate(
     """
     Append lesson/pattern memory slugs to an existing WorkflowTrace.
 
-    Lets an agent (or ``mine_trace``) record which Memory nodes a completed
+    Lets an agent (or ``workflow_trace_mine``) record which Memory nodes a completed
     project's trace produced without re-running ``workflow_project_complete``
     (traces are otherwise immutable after creation). Unions with whatever is
     already recorded, so it's safe to call repeatedly as more lessons/patterns
@@ -1738,7 +1714,7 @@ def workflow_trace_annotate(
 
 
 @mcp.tool
-def mine_trace(
+def workflow_trace_mine(
     trace_slug: str,
     patterns: list[dict] | None = None,
     lessons: list[dict] | None = None,
@@ -1780,7 +1756,7 @@ def mine_trace(
     """
     rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
     if not rows:
-        raise ValueError(f"no trace {trace_slug!r}")
+        return {"slug": trace_slug, "error": "no such trace"}
     trace = rows[0]
 
     if isinstance(patterns, dict):
@@ -1853,6 +1829,10 @@ def workflow_project_block(slug: str, blocks_slug: str) -> dict:
     """
     Declare that one project must complete before another can begin.
 
+    Project-level sequencing — coarse ordering between whole projects. For
+    fine-grained ordering between individual tasks use ``task_link(kind="blocks")``;
+    the two are deliberately separate (Project vs Task nodes).
+
     Adds a ``ProjectBlocks`` graph edge (``slug`` → ``blocks_slug``) and
     appends ``slug`` to ``blocks_slug.blocked_by`` so the ready-work check
     in ``workflow_project_list`` can filter without traversing edges.
@@ -1865,7 +1845,12 @@ def workflow_project_block(slug: str, blocks_slug: str) -> dict:
         The ``wp-`` slug of the project being *blocked*.
     """
     if slug == blocks_slug:
-        raise ValueError("A project cannot block itself.")
+        return {
+            "blocker": slug,
+            "blocked": blocks_slug,
+            "linked": False,
+            "reason": "a project cannot block itself",
+        }
     now = _now_iso()
     client.change(
         "mutations.gq", "link_project_blocks", {"from": slug, "to": blocks_slug}
@@ -1883,7 +1868,7 @@ def workflow_project_block(slug: str, blocks_slug: str) -> dict:
                     "updated_at": now,
                 },
             )
-    return {"blocker": slug, "blocked": blocks_slug}
+    return {"blocker": slug, "blocked": blocks_slug, "linked": True}
 
 
 @mcp.tool
@@ -2004,7 +1989,7 @@ def workflow_session_start(
     phase:
         The phase this session is working in.
     repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
+        Repo scoping — see instructions.
     tags:
         Optional tags.
     """
@@ -2228,7 +2213,7 @@ def task_create(
     priority:
         ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering.
     repo:
-        Canonical repo URI. Auto-detected from ``.git/config`` if omitted.
+        Repo scoping — see instructions.
     project_slug:
         ``wp-`` slug of the WorkflowProject this task rolls up to.
     parent:
@@ -2322,7 +2307,7 @@ def task_list(
     Parameters
     ----------
     repo:
-        Canonical repo URI. Auto-detected if omitted.
+        Repo scoping — see instructions.
     status:
         ``open`` | ``in_progress`` | ``blocked`` | ``closed``.
     project_slug:
@@ -2466,25 +2451,13 @@ def task_claim(
     """
     Claim a task for work: set it ``in_progress`` under ``assignee`` with a lease.
 
-    This is the coordination primitive for parallel/multi-user agents — call it
-    before starting a ready task so others see it is taken. Returns
-    ``{"claimed": true, ...}`` on success, or ``{"claimed": false, "reason": ...}``
-    when the task is closed, still blocked, or actively held by someone else.
-
-    ADVISORY ONLY — this is a read-check-write, not an atomic lock. Two agents
-    racing the *exact same instant* can both succeed (last write wins); the lease
-    and held-by check make accidental double-work unlikely, not impossible. A true
-    atomic claim needs store-level compare-and-swap (tracked separately).
-
-    The claim carries a lease (``claimed_at``); if the holder goes ``in_progress``
-    and never closes/releases, the task becomes reclaimable after the lease lapses
-    (see ``task_ready``). Re-calling ``task_claim`` renews the lease.
-
-    On success, also upserts a ``CodeBranch`` for the current checkout's
-    repo+branch and links it ``WorksOn`` this task (schema.pg § Code
-    Branches) — so "which branch carries task X" is a one-hop query.
-    Best-effort: silently skipped with no repo/branch context (e.g. detached
-    HEAD, no git repo), never fails the claim.
+    The coordination primitive for parallel/multi-user agents — call it before
+    starting a ready task so others see it is taken. Returns ``{"claimed": true,
+    …}`` on success, or ``{"claimed": false, "reason": …}`` when the task is
+    closed, still blocked, or held by someone else. The lease (``claimed_at``)
+    expires if the holder never closes/releases, making the task reclaimable
+    (see ``task_ready``); re-calling renews it. Pass ``force`` to steal a live
+    claim.
 
     Parameters
     ----------
@@ -2497,6 +2470,11 @@ def task_claim(
     force:
         Steal the task even if another holder's lease is still valid.
     """
+    # Advisory, not atomic: read-check-write, so two agents racing the same
+    # instant can both succeed (last write wins). The lease + held-by check make
+    # accidental double-work unlikely, not impossible; a true lock needs
+    # store-level compare-and-swap. On success also upserts a CodeBranch for the
+    # checkout's repo+branch and links it WorksOn this task (best-effort).
     holder = assignee or cfg.author
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
@@ -2595,7 +2573,7 @@ def task_ready(
     Parameters
     ----------
     repo:
-        Canonical repo URI. Auto-detected if omitted.
+        Repo scoping — see instructions.
     project_slug:
         Restrict to a single WorkflowProject.
     assignee:
@@ -2656,7 +2634,10 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
 
     The meaning of ``from``/``to`` depends on ``kind``:
     - ``blocks``          — ``from`` is the blocker, ``to`` is the blocked task.
+      This is the only way to set a task's ``blocked_by`` after creation
+      (``task_update`` does not).
     - ``parent``          — ``from`` is the parent/epic, ``to`` is the child.
+      Sets the same edge as ``task_update(parent=…)``; prefer ``task_update``.
     - ``discovered_from`` — ``from`` is the new task, ``to`` is the source it came from.
     - ``addresses``       — ``from`` is the task, ``to`` is a Memory slug it addresses.
 
@@ -2693,22 +2674,17 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
 
 
 @mcp.tool
-def context_for_symbol(symbol_id: str) -> dict:
+def symbol_context(symbol_id: str) -> dict:
     """
-    Find the work-coordination context attached to a code-graph symbol.
+    Memories and tasks attached to a code symbol (direction: symbol → work).
 
-    This is the reverse of the soft references stored by ``memory_store(symbol_refs=...)``
-    and ``task_create(symbol_refs=...)``: given a Layer-2 symbol id, it returns the
-    Layer-1 memories and tasks whose ``symbol_refs`` include it — e.g. "what lessons and
-    open tasks concern this function?". Use it after locating a symbol with the
-    witan-code ``code_*`` tools to pull the relevant knowledge before editing it.
+    The reverse of ``memory_symbols``: given a symbol id, returns the memories and
+    tasks whose ``symbol_refs`` include it — "what lessons and open tasks concern
+    this function?". Call it after locating a symbol with the witan-code ``code_*``
+    tools, before editing.
 
-    Parameters
-    ----------
-    symbol_id:
-        A code-graph symbol id of the form ``repo#path/file.py::Qualified.Name``.
-        The ``repo`` prefix (everything before ``#``) scopes the lookup; if the id
-        carries no ``#`` the current repo is used.
+    ``symbol_id`` has the form ``<repo>#<path/to/file.py>::<QualifiedName>``; the
+    repo prefix scopes the lookup, or the current repo when the id has no ``#``.
     """
     return _context_for_symbol(symbol_id)
 
@@ -2811,16 +2787,13 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
 
 
 @mcp.tool
-def memory_symbol_context(slug: str) -> dict:
+def memory_symbols(slug: str) -> dict:
     """
-    The forward direction of ``symbol_refs``: given a memory, what code does it
-    concern?
+    Code symbols a memory concerns (direction: memory → symbols).
 
-    Returns each of the memory's ``symbol_refs`` and — when witan-code is
-    reachable — enriches it with the live definition. Degrades to the raw ref
-    strings when witan-code is not installed (read-time cross-store fan-out in
-    Python, never a hard edge). The reverse direction ("which memories concern
-    this symbol") stays ``context_for_symbol``.
+    The reverse of ``symbol_context``: returns each of the memory's ``symbol_refs``,
+    enriched with the live definition when witan-code is reachable, or the raw ref
+    strings otherwise.
     """
     node = memory_get(slug)
     if node is None:
@@ -2885,7 +2858,7 @@ def recall(
     Graph-aware contextual recall — the composition of every other memory tool.
 
     Seeds from any combination of ``query`` (BM25), ``symbol_id``
-    (``context_for_symbol``), ``task`` (memories it Addresses + memories sharing
+    (``symbol_context``), ``task`` (memories it Addresses + memories sharing
     its symbol_refs), and ``topic`` (memories tagged to it). Expands ``hops``
     (default 1, capped at 2) along AppliesTo/RelatedTo edges, topic siblings, and
     provenance siblings; prunes superseded memories (unless

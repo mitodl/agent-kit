@@ -62,14 +62,14 @@ def test_memory_symbol_context_degrades_to_raw_refs(server):
         severity="warning",
         symbol_refs=[ref],
     )
-    out = server.memory_symbol_context(m["slug"])
+    out = server.memory_symbols(m["slug"])
     assert [s["symbol_ref"] for s in out["symbols"]] == [ref]
     assert "definition" not in out["symbols"][0]  # no witan-code → raw ref only
 
 
 @requires_omnigraph
 def test_memory_symbol_context_missing_memory(server):
-    assert server.memory_symbol_context("pat-nope")["symbols"] == []
+    assert server.memory_symbols("pat-nope")["symbols"] == []
 
 
 @requires_omnigraph
@@ -83,7 +83,7 @@ def test_memory_symbol_context_skips_non_symbol_refs(server):
         severity="info",
         symbol_refs=["not-a-symbol-id", "https://github.com/x/y#a.py::Z"],
     )
-    out = server.memory_symbol_context(m["slug"])
+    out = server.memory_symbols(m["slug"])
     refs = [s["symbol_ref"] for s in out["symbols"]]
     assert refs == ["not-a-symbol-id", "https://github.com/x/y#a.py::Z"]
     assert all("definition" not in s for s in out["symbols"])  # witan-code absent

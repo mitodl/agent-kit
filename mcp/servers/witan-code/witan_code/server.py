@@ -20,13 +20,33 @@ cfg = cfg_module.load()
 mcp = FastMCP(
     "witan-code",
     instructions=(
-        "Tree-sitter code graph. Resolve symbol definitions, callers, references, "
-        "and call-impact across one or many repositories. Pass `repo` to scope a "
-        "lookup to a single repo's store; omit it to use the current repo, or to "
-        "fan out across every indexed repo when not inside one. Symbol ids are "
-        "`repo#path::QualifiedName` and compose with witan memory via soft "
-        "references. Calls/References edges are heuristic (syntactic name "
-        "resolution), not a precise call graph."
+        "Tree-sitter code graph across one or many repositories: resolve symbol "
+        "definitions, callers, references, and change-impact, and trace cross-repo "
+        "contracts (env vars, endpoints, packages, services).\n\n"
+        "Symbol ids have the form `<repo>#<path/to/file.py>::<QualifiedName>` "
+        "(a whole module is `<repo>#<path/to/file.py>::<module>`). Name-based "
+        "tools return this id in the `symbol_id` field; pass it straight back to "
+        "the id-routed tools (code_find_references / code_callers / code_impact / "
+        "code_cross_repo_impact). Symbol ids compose with witan memory via soft "
+        "references.\n\n"
+        "Repo scoping: tools auto-detect the current repo from `.git/config`. Pass "
+        "`repo` (a canonical URI like `https://github.com/mitodl/ol-django`) to "
+        "scope to one repo, or omit it when outside any repo to fan out across "
+        "every indexed repo.\n\n"
+        "Branch semantics: name-routed tools (code_find_definition, "
+        "code_search_symbol, code_symbols_in_file) accept `branch`. The default "
+        "follows the current checkout's branch ONLY when querying the current "
+        "detected repo; when you pass `repo` for a different repo and omit "
+        "`branch`, you read that store's default (main) view — pass `branch` "
+        "explicitly to target another view. Id-routed tools (code_find_references "
+        "/ callers / impact / cross_repo_impact) take no `branch`: `symbol_id` "
+        "does not encode a branch, so they read the default view of the id's "
+        "repo store.\n\n"
+        "min_precision (`heuristic` default | `precise`) on the interface and "
+        "cross-repo tools: `precise` keeps only edges also confirmed by a "
+        "canonical-symbol join, suppressing false positives.\n\n"
+        "Calls/References edges are heuristic (syntactic name resolution), not a "
+        "precise call graph; code_find_references includes code_callers."
     ),
 )
 
@@ -222,6 +242,17 @@ def _fan_out(clients: list[OmnigraphClient], fn) -> list[dict]:
     return out
 
 
+def _as_symbol_id(rows: list[dict]) -> list[dict]:
+    """Rename the identifier field `slug` → `symbol_id` on returned Symbol rows.
+
+    Queries project the Symbol's identifier as `slug`, but every tool that
+    consumes an id names its parameter `symbol_id`. Renaming at the output
+    boundary makes the value round-trip under one name (definition → references)
+    without changing the stored field or the internal traversal code.
+    """
+    return [{"symbol_id" if k == "slug" else k: v for k, v in r.items()} for r in rows]
+
+
 def _file_id(path: str, repo: str) -> str:
     """Build the CodeFile id (`repo#relpath`) for a repo-relative or abs path."""
     base = repo_module.root() or Path.cwd()
@@ -248,19 +279,19 @@ def code_find_definition(
     Find symbol definitions whose name or qualified name matches ``name``.
 
     Returns matching symbols (function, method, class, module, …) with their
-    file, line range, signature, docstring, and ``repo`` of origin.
+    ``symbol_id``, file, line range, signature, docstring, and ``repo`` of
+    origin. Feed a returned ``symbol_id`` to code_find_references / code_callers
+    / code_impact.
 
     Parameters
     ----------
     name:
         Bare name (``run``) or qualified name (``Service.run``).
-    repo:
-        Canonical repo URI to scope to. Omit to use the current repo, or to
-        search across every indexed repo when not inside one.
     branch:
-        Git branch whose indexed view to query (e.g. another agent's
-        in-flight branch). Defaults to the current checkout's branch when
-        querying the current repo, else the store's main view.
+        Git branch whose indexed view to query (e.g. another agent's in-flight
+        branch). Defaults to the checkout's branch when querying the current
+        repo; when ``repo`` names a different repo and ``branch`` is omitted,
+        reads that store's default (main) view.
     """
 
     def _query(client: OmnigraphClient) -> list[dict]:
@@ -269,7 +300,7 @@ def code_find_definition(
         )
         return rows or client.read("code_read.gq", "find_by_name", {"name": name})
 
-    return _fan_out(_resolve_clients(repo, branch), _query)
+    return _as_symbol_id(_fan_out(_resolve_clients(repo, branch), _query))
 
 
 @mcp.tool
@@ -277,13 +308,8 @@ def code_find_references(symbol_id: str) -> list[dict]:
     """
     Find symbols that reference or call ``symbol_id`` (incoming edges).
 
-    HEURISTIC: References/Calls are derived from syntactic name resolution and
-    may be incomplete or include false positives.
-
-    Parameters
-    ----------
-    symbol_id:
-        Full symbol id ``repo#path::QualifiedName`` (routes to its repo's store).
+    Supersets code_callers (references includes calls); use code_callers when
+    you want calls only. Heuristic — may miss or over-report.
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
@@ -291,7 +317,7 @@ def code_find_references(symbol_id: str) -> list[dict]:
     refs = client.read("code_read.gq", "referencers", {"id": symbol_id})
     callers = client.read("code_read.gq", "callers", {"id": symbol_id})
     seen = {r["slug"] for r in refs}
-    return refs + [c for c in callers if c["slug"] not in seen]
+    return _as_symbol_id(refs + [c for c in callers if c["slug"] not in seen])
 
 
 @mcp.tool
@@ -299,17 +325,13 @@ def code_callers(symbol_id: str) -> list[dict]:
     """
     Find symbols that call ``symbol_id`` (incoming Calls edges).
 
-    HEURISTIC name-resolution based; not a precise call graph.
-
-    Parameters
-    ----------
-    symbol_id:
-        Full symbol id ``repo#path::QualifiedName`` (routes to its repo's store).
+    Heuristic name-resolution based; not a precise call graph. For calls plus
+    other references use code_find_references.
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
         return []
-    return client.read("code_read.gq", "callers", {"id": symbol_id})
+    return _as_symbol_id(client.read("code_read.gq", "callers", {"id": symbol_id}))
 
 
 @mcp.tool
@@ -317,14 +339,12 @@ def code_impact(symbol_id: str, max_depth: int = 5, max_nodes: int = 200) -> dic
     """
     Estimate change impact: the transitive set of callers of ``symbol_id``.
 
-    Performs a breadth-first traversal over Calls edges in Python, capping at
-    ``max_depth`` levels and ``max_nodes`` total. Returns the reached symbols
-    and whether the traversal was truncated. HEURISTIC — see code_callers.
+    Performs a breadth-first traversal over Calls edges, capping at ``max_depth``
+    levels and ``max_nodes`` total. Returns the reached symbols and whether the
+    traversal was truncated. Heuristic — see code_callers.
 
     Parameters
     ----------
-    symbol_id:
-        Full symbol id ``repo#path::QualifiedName``.
     max_depth:
         Maximum BFS depth (default 5).
     max_nodes:
@@ -367,7 +387,7 @@ def code_impact(symbol_id: str, max_depth: int = 5, max_nodes: int = 200) -> dic
 
     return {
         "root": symbol_id,
-        "impacted": list(visited.values()),
+        "impacted": _as_symbol_id(list(visited.values())),
         "truncated": truncated,
     }
 
@@ -393,8 +413,10 @@ def code_symbols_in_file(path: str, repo: str | None = None) -> list[dict]:
     client = _client_for_repo(slug)
     if client is None:
         return []
-    return client.read(
-        "code_read.gq", "symbols_in_file", {"file_id": _file_id(path, slug)}
+    return _as_symbol_id(
+        client.read(
+            "code_read.gq", "symbols_in_file", {"file_id": _file_id(path, slug)}
+        )
     )
 
 
@@ -421,9 +443,9 @@ def code_search_symbol(
     """
     Full-text/substring search over symbol qualified names (BM25-ranked).
 
-    Use to locate a symbol when you only remember part of its name. Results carry
-    their ``repo`` of origin. BM25 ranking is per-store; cross-repo fan-out
-    concatenates each store's ranked results.
+    Use to locate a symbol when you only remember part of its name. Each result
+    carries its ``symbol_id`` and ``repo`` of origin. BM25 ranking is per-store;
+    cross-repo fan-out concatenates each store's ranked results.
 
     Parameters
     ----------
@@ -434,13 +456,10 @@ def code_search_symbol(
         ``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,
         or ``key``. Pass e.g. ``kind="function"`` to exclude the many YAML
         ``key`` symbols when searching for code.
-    repo:
-        Canonical repo URI to scope to. Omit to use the current repo, or to
-        search across every indexed repo when not inside one.
     branch:
-        Git branch whose indexed view to query (e.g. another agent's
-        in-flight branch). Defaults to the current checkout's branch when
-        querying the current repo, else the store's main view.
+        Git branch whose indexed view to query. Defaults to the checkout's
+        branch when querying the current repo; when ``repo`` names a different
+        repo and ``branch`` is omitted, reads that store's default (main) view.
     """
 
     def _query(client: OmnigraphClient) -> list[dict]:
@@ -450,7 +469,7 @@ def code_search_symbol(
             )
         return client.read("code_read.gq", "search_symbols", {"query": query})
 
-    return _fan_out(_resolve_clients(repo, branch), _query)
+    return _as_symbol_id(_fan_out(_resolve_clients(repo, branch), _query))
 
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]
@@ -495,11 +514,7 @@ def code_interface_providers(
         The contract value. For ``endpoint`` a raw path is accepted and
         normalized (path params collapse to ``{}``).
     min_precision:
-        Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
-        ``heuristic`` preserves prior behavior (every binding this tool has
-        always returned). ``precise`` keeps only bindings whose
-        (kind, key_norm) is also covered by a Stage-2 canonical-symbol join
-        (see ``code_precise_edges``).
+        ``heuristic`` (default) | ``precise`` — see server instructions.
     """
     return _bindings_by_role(kind, key, "provider", min_precision)
 
@@ -521,11 +536,7 @@ def code_interface_consumers(
     key:
         The contract value (``endpoint`` paths are normalized).
     min_precision:
-        Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
-        ``heuristic`` preserves prior behavior (every binding this tool has
-        always returned). ``precise`` keeps only bindings whose
-        (kind, key_norm) is also covered by a Stage-2 canonical-symbol join
-        (see ``code_precise_edges``).
+        ``heuristic`` (default) | ``precise`` — see server instructions.
     """
     return _bindings_by_role(kind, key, "consumer", min_precision)
 
@@ -563,15 +574,8 @@ def code_cross_repo_impact(
 
     Parameters
     ----------
-    symbol_id:
-        Full symbol id ``repo#path::QualifiedName``.
     min_precision:
-        Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
-        ``heuristic`` preserves prior behavior (every cross-repo binding this
-        tool has always returned). ``precise`` keeps only an ``other``
-        binding when a Stage-2 edge links ``own_repo`` and that binding's
-        repo specifically for that (kind, key_norm) — not merely because
-        some unrelated repo pair happens to resolve it precisely.
+        ``heuristic`` (default) | ``precise`` — see server instructions.
     """
     empty = {"symbol_id": symbol_id, "bindings": [], "cross_repo": []}
     own_repo = symbol_id.split("#", 1)[0]
@@ -614,29 +618,22 @@ def code_cross_repo_impact(
 @mcp.tool
 def code_precise_edges(repo: str | None = None) -> list[dict]:
     """
-    Stage-2 cross-repo edges resolved by canonical symbol string (docs/SYMBOL_TABLE.md).
+    Precise cross-repo edges resolved by canonical symbol string.
 
     Joins every repo's unresolved external-symbol references against other
-    repos' exported symbols — the SCIP-style read-time join, distinct from
-    the coarser (kind, key_norm) heuristic grouping ``code_interface_*`` use.
-    Each edge carries ``match_count`` (how many providers this reference
-    joined to) and ``ambiguous_version`` (true when more than one provider
-    survives version disambiguation — see SYMBOL_FORMAT.md decision 1);
-    filter to ``preferred`` edges to narrow a fan-out to its best candidate(s)
-    — usually one winner, but still more than one when ``ambiguous_version``
-    is also true (e.g. two repos both export ``main``), since Stage 2 never
-    silently guesses a single winner in that case. A reference with no
-    precise match at all shows up in ``code_unresolved_symbols`` instead —
-    fall back to the heuristic ``code_interface_consumers``/
-    ``code_interface_providers`` tools for those.
+    repos' exported symbols — a read-time join, distinct from the coarser
+    (kind, key_norm) heuristic grouping ``code_interface_*`` use. Each edge
+    carries ``match_count`` (how many providers a reference joined to) and
+    ``ambiguous_version`` (true when more than one provider survives version
+    disambiguation); filter to ``preferred`` edges to narrow a fan-out to its
+    best candidate(s). A reference with no precise match shows up in
+    ``code_unresolved_symbols`` instead.
 
     Parameters
     ----------
     repo:
         Keep only edges whose consumer OR provider is this repo. Omit to see
-        every precise edge in the bridge store. When this matches the
-        checkout's own repo, the read is scoped to its overlay branch (if
-        any) — see ``_bridge_client``.
+        every precise edge in the bridge store.
     """
     client = _bridge_client(repo=repo)
     if client is None:
@@ -653,22 +650,20 @@ def code_precise_edges(repo: str | None = None) -> list[dict]:
 @mcp.tool
 def code_unresolved_symbols(repo: str | None = None) -> list[dict]:
     """
-    External symbol references with no Stage-2 precise match (docs/SYMBOL_TABLE.md).
+    External symbol references with no precise cross-repo match.
 
     Surfaces indexing-coverage gaps: a repo consumes a contract (env var,
-    package, endpoint, service) that no indexed repo's symbol table
-    currently exports — either the provider repo isn't indexed yet, or the
-    reference genuinely has no provider in this SOA. These still get a
-    heuristic-tier chance via ``code_interface_consumers``/``_providers``;
-    this tool is for finding what's NOT precisely resolved.
+    package, endpoint, service) that no indexed repo currently exports —
+    either the provider repo isn't indexed yet, or the reference genuinely has
+    no provider in this SOA. These still get a heuristic-tier chance via
+    ``code_interface_consumers``/``_providers``; this tool finds what's NOT
+    precisely resolved.
 
     Parameters
     ----------
     repo:
-        Keep only unresolved references from this consumer repo. Omit to
-        see every unresolved reference in the bridge store. When this
-        matches the checkout's own repo, the read is scoped to its overlay
-        branch (if any) — see ``_bridge_client``.
+        Keep only unresolved references from this consumer repo. Omit to see
+        every unresolved reference in the bridge store.
     """
     client = _bridge_client(repo=repo)
     if client is None:
@@ -697,11 +692,7 @@ def code_interface_search(
     kind:
         Optional filter to one kind.
     min_precision:
-        Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
-        ``heuristic`` preserves prior behavior (every match this tool has
-        always returned). ``precise`` keeps only matches whose
-        (kind, key_norm) is also covered by a Stage-2 canonical-symbol join
-        (see ``code_precise_edges``).
+        ``heuristic`` (default) | ``precise`` — see server instructions.
     """
     client = _bridge_client()
     if client is None:

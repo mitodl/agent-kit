@@ -123,7 +123,7 @@ To add a dependency, hierarchy, or provenance link to existing tasks, use
 For a task scoped to specific code, attach code-graph **symbol ids** via
 `symbol_refs` so the work is discoverable from the code. Get ids from the
 `witan-code` tools — `code_find_definition` / `code_search_symbol`
-return them in the `slug` field (`repo#path::Qualified.Name`):
+return them in the `symbol_id` field (`<repo>#<path/to/file.py>::<QualifiedName>`):
 
 ```
 task_create(
@@ -133,5 +133,5 @@ task_create(
 )
 ```
 
-`context_for_symbol(symbol_id)` lists the tasks and memories attached to a
+`symbol_context(symbol_id)` lists the tasks and memories attached to a
 symbol — call it before editing that code to surface related open work.
