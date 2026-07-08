@@ -18,22 +18,29 @@ cases:
     action: change
     branch: main
     expect: allow
-  # Schema migrations are CI/admin-only.
+  # Schema migrations are owned by the MCP service (witan-service), not users
+  # and not the code-graph CI pipeline.
   - id: user-cannot-schema-apply-memory
     actor: act-bob
     action: schema_apply
     target_branch: main
     expect: deny
-  - id: ci-reads-memory
-    actor: act-svc-witan-ci
+  - id: service-reads-memory
+    actor: act-svc-witan
     action: read
     branch: main
     expect: allow
-  - id: ci-schema-applies-memory
-    actor: act-svc-witan-ci
+  - id: service-schema-applies-memory
+    actor: act-svc-witan
     action: schema_apply
     target_branch: main
     expect: allow
+  # The code-graph CI pipeline has no role on the work graph at all.
+  - id: ci-has-no-memory-access
+    actor: act-svc-witan-ci
+    action: read
+    branch: main
+    expect: deny
   - id: stranger-cannot-read-memory
     actor: act-nobody
     action: read

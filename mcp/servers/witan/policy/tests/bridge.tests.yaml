@@ -28,6 +28,17 @@ cases:
     action: change
     branch: main
     expect: allow
+  # Schema is the MCP service's job — CI writes content but cannot redefine schema.
+  - id: ci-cannot-schema-apply-bridge
+    actor: act-svc-witan-ci
+    action: schema_apply
+    target_branch: main
+    expect: deny
+  - id: service-schema-applies-bridge
+    actor: act-svc-witan
+    action: schema_apply
+    target_branch: main
+    expect: allow
   - id: stranger-cannot-read-bridge
     actor: act-nobody
     action: read

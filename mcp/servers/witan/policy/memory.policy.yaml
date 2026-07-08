@@ -12,15 +12,21 @@
 #
 # Because the graph is single-branch, writes land on the store's main branch;
 # `change` is therefore granted with branch_scope: any (an `unprotected`-only
-# grant would deny all writes). Schema migrations are deliberate ops, restricted
-# to the CI/admin actor.
+# grant would deny all writes).
+#
+# There is NO witan-ci actor on this graph — witan-ci is a code-graph data
+# pipeline and has no role in the work graph. Schema definition/migration is
+# owned by the witan MCP service itself (witan-service / act-svc-witan) as a
+# default, service-owned operation applied on boot — not a per-user permission
+# and not the reindex pipeline. See policy/README.md § "Non-human actors".
 #
 # Group membership is templated by ol-infrastructure — see server.policy.yaml.
 version: 1
 
 groups:
   witan-users: [act-alice, act-bob]
-  witan-ci: [act-svc-witan-ci]
+  # The witan MCP service's own account. Owns schema/migrations across graphs.
+  witan-service: [act-svc-witan]
 
 rules:
   - id: users-read-memory
@@ -37,22 +43,17 @@ rules:
       actors: { group: witan-users }
       actions: [change]
       branch_scope: any
-  # CI reads current state to diff / migrate before it writes.
-  - id: ci-read-memory
-    allow:
-      actors: { group: witan-ci }
-      actions: [read, export]
-      branch_scope: any
-  - id: ci-write-memory
-    allow:
-      actors: { group: witan-ci }
-      actions: [change]
-      branch_scope: any
-  # Schema migrations (schema_apply) are deliberate, CI/admin-only operations.
+  # The MCP service applies the memory schema/migrations as a default op; it
+  # reads current state to decide whether a migration is needed.
   # NOTE: `omnigraph repair`/`optimize`/`cleanup` are direct-storage-only and
   # CANNOT be Cedar-gated — restrict those with AWS IAM on the bucket instead.
-  - id: ci-schema-apply-memory
+  - id: service-read-memory
     allow:
-      actors: { group: witan-ci }
+      actors: { group: witan-service }
+      actions: [read, export]
+      branch_scope: any
+  - id: service-schema-memory
+    allow:
+      actors: { group: witan-service }
       actions: [schema_apply]
       target_branch_scope: any

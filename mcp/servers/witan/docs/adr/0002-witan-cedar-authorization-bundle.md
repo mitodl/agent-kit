@@ -45,31 +45,46 @@ Confirmed against omnigraph `docs/user/operations/policy.md`, the
 
 ## Decision
 
-### D1 — Two groups over per-user actors
+### D1 — Three groups: per-user humans + two distinct service accounts
 
-`witan-users` (one `act-<sub>` per authenticated human, from the Keycloak claim)
-and `witan-ci` (`act-svc-witan-ci`, the single legitimate non-human actor).
+- `witan-users` — one `act-<sub>` per authenticated human, from the Keycloak claim.
+- `witan-ci` (`act-svc-witan-ci`) — the code-graph **data** pipeline
+  (reindex-on-merge + WIP-branch lifecycle).
+- `witan-service` (`act-svc-witan`) — the witan MCP service's **own** account.
+  Schema definition/migration is a default, service-owned operation: the service
+  applies the appropriate schema on every graph (`schema_apply`) as part of its
+  boot/ownership duties. This is deliberately **not** the reindex pipeline and
+  **not** a per-user permission — separating it keeps the pipeline unable to
+  redefine schema, and keeps schema ownership in one place (the service) rather
+  than smeared across a "CI" catch-all.
+
 Group **names** are stable and identical across bundles; **membership** is
-templated by ol-infrastructure from Keycloak claims, not committed.
+templated by ol-infrastructure (Keycloak claims for `witan-users`,
+Vault-provisioned tokens for the two service accounts), not committed.
 
 ### D2 — One bundle per graph scope, mapped to the layer topology
 
 - **`memory.policy.yaml` → `[memory]`** (Layer 1, flat shared work graph):
-  users read/export/change/invoke_query on the single main branch; `schema_apply`
-  is `witan-ci`-only. No per-node-type rules — not expressible.
+  users read/export/change/invoke_query on the single main branch; `witan-service`
+  owns read + `schema_apply`. `witan-ci` has **no** role here (it is a code-graph
+  actor). No per-node-type rules — not expressible.
 - **`code-graph.policy.yaml` → every per-repo code-graph id** (Layer 2): the
   repo's default git branch maps to store `main` = `protected`; all other git
   branches are `unprotected` WIP. Users read/invoke anywhere and change / create /
-  delete only `unprotected` branches; `witan-ci` owns `change`, `branch_merge`,
-  and `schema_apply` into protected `main`. WIP reindexes are isolated;
-  promotion into `main` is deliberate and CI-owned.
+  delete only `unprotected` branches; `witan-ci` owns `read`/`change` and
+  `branch_merge` into protected `main` plus the unprotected WIP-branch lifecycle
+  (but **not** `branch_delete` on `main` and **not** `schema_apply`);
+  `witan-service` owns read + `schema_apply` on `main`. WIP reindexes are
+  isolated; promotion into `main` is deliberate and CI-owned; schema stays
+  service-owned.
 - **`bridge.policy.yaml` → `[bridge]`** (Layer 2.5, derived cross-repo bridge):
-  read-only for users; `witan-ci`-written.
+  read-only for users; `witan-ci` writes the content; `witan-service` owns the
+  schema.
 
 ### D3 — Server-level `graph_list` is a deploy-time bundle, not CI-harnessed
 
 `server.policy.yaml` (`graph_list`, `applies_to: [cluster]`) grants graph
-enumeration to both groups. Because the 0.8.1 offline CLI has no server-scope
+enumeration to all three groups. Because the 0.8.1 offline CLI has no server-scope
 validation path, it is applied and enforced by `omnigraph-server` at
 boot/runtime and excluded from `check.sh`; `tests/server.tests.yaml` records the
 intended decisions for when upstream adds a server-scope harness.
@@ -78,12 +93,14 @@ intended decisions for when upstream adds a server-scope harness.
 
 `repair`/`optimize`/`cleanup` cannot be Cedar-gated. Access is restricted with
 AWS IAM on the backing bucket. There is no `svc-witan-admin` Cedar principal.
+(Schema application — `schema_apply` — *is* Cedar-gateable and is owned by
+`witan-service`; only the storage-maintenance ops fall to IAM.)
 
 ### D5 — CI validates and unit-tests the bundle against the real binary
 
 `policy/check.sh` converges a fixture cluster (`policy/cluster.yaml`, stub
 graphs `memory`/`code_example`/`bridge`) and runs `omnigraph policy validate`
-plus 24 declarative `policy test` cases across the three per-graph bundles. It
+plus 36 declarative `policy test` cases across the three per-graph bundles. It
 runs as the `witan (Cedar policy bundle)` job in `witan-tests.yml`. The fixture
 is a test harness; the deployed cluster.yaml is templated by ol-infrastructure.
 

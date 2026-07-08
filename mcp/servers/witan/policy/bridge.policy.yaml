@@ -3,14 +3,19 @@
 # The bridge store (_bridge.omni) links SOA repos by shared contract keys
 # (env_var / endpoint / package / service). It is DERIVED, not authored: it is
 # (re)built by the code-graph indexer, so humans read it but only svc-witan-ci
-# writes it. Single-branch/flat, like the memory graph.
+# writes its content. Single-branch/flat, like the memory graph. Its schema, like
+# every graph's, is applied by the witan MCP service (witan-service /
+# act-svc-witan) — see policy/README.md § "Non-human actors".
 #
 # Group membership is templated by ol-infrastructure — see server.policy.yaml.
 version: 1
 
 groups:
   witan-users: [act-alice, act-bob]
+  # Code-graph data pipeline: (re)builds the bridge content.
   witan-ci: [act-svc-witan-ci]
+  # The witan MCP service's own account: owns the bridge schema/migrations.
+  witan-service: [act-svc-witan]
 
 rules:
   - id: users-read-bridge
@@ -28,14 +33,15 @@ rules:
       actors: { group: witan-ci }
       actions: [read, export]
       branch_scope: any
-  # Only CI writes the bridge — it is a derived cross-repo projection.
+  # Only CI writes the bridge content — it is a derived cross-repo projection.
   - id: ci-write-bridge
     allow:
       actors: { group: witan-ci }
       actions: [change]
       branch_scope: any
-  - id: ci-schema-apply-bridge
+  # Schema/migrations are the MCP service's default responsibility, not CI's.
+  - id: service-schema-bridge
     allow:
-      actors: { group: witan-ci }
+      actors: { group: witan-service }
       actions: [schema_apply]
       target_branch_scope: any

@@ -37,28 +37,50 @@ crate — the constraints that shaped this bundle:
 
 ## Actors and groups
 
-Two groups, expressed as collections of **per-user** actors (per
+Three groups. Humans are **per-user** actors (per
 `tk-design-keycloak-jwt-omnigraph-per-user-actor-tok-728f0c` — identity is
-per-user, not per-team):
+per-user, not per-team); the two non-human actors are single service accounts:
 
-| Group         | Members                                            |
-| ------------- | -------------------------------------------------- |
-| `witan-users` | one `act-<sub>` per authenticated human (Keycloak) |
-| `witan-ci`    | `act-svc-witan-ci` — the one non-human/shared actor |
+| Group           | Members                                            | Role |
+| --------------- | -------------------------------------------------- | ---- |
+| `witan-users`   | one `act-<sub>` per authenticated human (Keycloak) | interactive read/write |
+| `witan-ci`      | `act-svc-witan-ci`                                  | code-graph **data** pipeline |
+| `witan-service` | `act-svc-witan`                                     | the MCP service's own account: **schema** owner |
 
 The `act-*` ids committed here are **illustrative fixtures**. In the deployed
-cluster, ol-infrastructure templates the real membership from Keycloak claims.
-Keep the group **names** identical across all four bundle files — only the
+cluster, ol-infrastructure templates the real membership from Keycloak claims
+(for `witan-users`) and Vault-provisioned service tokens (for the two service
+accounts). Keep the group **names** identical across bundle files — only the
 membership lists are templated.
+
+### Non-human actors
+
+Two distinct non-human identities, deliberately kept separate:
+
+- **`witan-ci` (`act-svc-witan-ci`) — the code-graph data pipeline.** Owns the
+  canonical `main` index for each repo: reindex-on-merge (`change` any branch,
+  `branch_merge` into protected `main`) and the WIP-branch lifecycle
+  (`branch_create`/`branch_delete` on unprotected branches — the stale-branch
+  reaper). It **cannot** delete protected `main` and **cannot** apply schema. It
+  has **no** access to the memory graph. Its enforcement is in place ahead of
+  the pipeline itself, which is a separate task
+  (`tk-branch-cedar-gating-stale-code-graph-branch-reap-0c621c`).
+- **`witan-service` (`act-svc-witan`) — the MCP service's own account.** Schema
+  definition and migration is a **default, service-owned operation**: the witan
+  MCP service applies the appropriate schema/migrations on every graph
+  (`schema_apply`) as part of its normal boot/ownership duties — it is not a
+  per-user permission and not the reindex pipeline. It gets `read` to decide
+  whether a migration is needed, and `schema_apply`; nothing else. (`omnigraph
+  repair`/`optimize`/`cleanup` remain outside Cedar entirely → AWS IAM.)
 
 ## The bundles
 
 | File                     | applies_to        | Grants                                                                                       |
 | ------------------------ | ----------------- | -------------------------------------------------------------------------------------------- |
-| `memory.policy.yaml`     | `[memory]`        | users: read/export/change/invoke on the flat shared work graph. CI: schema_apply.            |
-| `code-graph.policy.yaml` | per-repo graph ids | users: read/invoke anywhere, change + branch ops on **unprotected** (WIP) branches only. CI: change/merge/schema_apply on protected `main`. |
-| `bridge.policy.yaml`     | `[bridge]`        | users: read/export/invoke. CI: change/schema_apply (the bridge is CI-derived).               |
-| `server.policy.yaml`     | `[cluster]`       | users + CI: graph_list. *(Not in the CI harness — see below.)*                               |
+| `memory.policy.yaml`     | `[memory]`        | users: read/export/change/invoke on the flat shared work graph. service: read + schema_apply. (no CI)  |
+| `code-graph.policy.yaml` | per-repo graph ids | users: read/invoke anywhere, change + branch ops on **unprotected** (WIP) branches only. CI: read/change + merge into protected `main` + WIP branch lifecycle. service: read + schema_apply. |
+| `bridge.policy.yaml`     | `[bridge]`        | users: read/export/invoke. CI: read + change (bridge content). service: schema_apply.        |
+| `server.policy.yaml`     | `[cluster]`       | users: graph_list. *(Not in the CI harness — see below.)*                                    |
 
 ### Layer topology → graph mapping
 

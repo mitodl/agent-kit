@@ -70,11 +70,12 @@ cases:
     action: branch_merge
     target_branch: main
     expect: allow
-  - id: ci-schema-applies-main
+  # Schema is the MCP service's job — the reindex pipeline cannot redefine it.
+  - id: ci-cannot-schema-apply-main
     actor: act-svc-witan-ci
     action: schema_apply
     target_branch: main
-    expect: allow
+    expect: deny
   # CI reaps stale WIP branches but must NEVER delete the protected main index.
   - id: ci-deletes-wip
     actor: act-svc-witan-ci
@@ -84,6 +85,24 @@ cases:
   - id: ci-cannot-delete-main
     actor: act-svc-witan-ci
     action: branch_delete
+    target_branch: main
+    expect: deny
+
+  # witan-service: owns the code-graph schema on protected main.
+  - id: service-reads-code
+    actor: act-svc-witan
+    action: read
+    branch: main
+    expect: allow
+  - id: service-schema-applies-main
+    actor: act-svc-witan
+    action: schema_apply
+    target_branch: main
+    expect: allow
+  # The service owns schema, not data — it cannot merge WIP into main.
+  - id: service-cannot-merge-to-main
+    actor: act-svc-witan
+    action: branch_merge
     target_branch: main
     expect: deny
 

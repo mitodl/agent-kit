@@ -13,18 +13,21 @@
 #
 # GROUP MEMBERSHIP IS TEMPLATED. The `act-*` ids below are illustrative. In the
 # deployed cluster, ol-infrastructure populates `witan-users` from the Keycloak
-# group/role claim (one act-<sub> per authenticated human) and `witan-ci` with
-# the single non-human service actor. Keep the group NAMES identical across all
-# four bundle files — only the membership lists are templated.
+# group/role claim (one act-<sub> per authenticated human) and the two service
+# accounts from Vault-provisioned tokens. Keep the group NAMES identical across
+# the bundle files — only the membership lists are templated.
+#
+# See policy/README.md § "Non-human actors" for witan-ci (code-graph data
+# pipeline) vs witan-service (the MCP service's own schema-owner account).
 version: 1
 
 groups:
   # All authenticated human users (populated from the Keycloak witan-users claim).
   witan-users: [act-alice, act-bob]
-  # The one legitimate non-human/shared actor: main-branch code-graph writes,
-  # bridge writes, and schema applies. See
-  # tk-design-keycloak-jwt-omnigraph-per-user-actor-tok-728f0c.
+  # Code-graph data pipeline.
   witan-ci: [act-svc-witan-ci]
+  # The MCP service's own account (schema owner); enumerates graphs to migrate.
+  witan-service: [act-svc-witan]
 
 rules:
   - id: users-can-list-graphs
@@ -34,4 +37,8 @@ rules:
   - id: ci-can-list-graphs
     allow:
       actors: { group: witan-ci }
+      actions: [graph_list]
+  - id: service-can-list-graphs
+    allow:
+      actors: { group: witan-service }
       actions: [graph_list]
