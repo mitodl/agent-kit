@@ -25,7 +25,7 @@ endpoint or routing header):
 ## Quick Start
 
 Registration is declarative, via [`agent-config-kit`](../../../packages/agent-config-kit/README.md)'s
-`ac-kit` CLI and the [`agent-config.toml`](./agent-config.toml) manifest in this
+`agent-kit` CLI and the [`agent-config.toml`](./agent-config.toml) manifest in this
 directory — there is no install script.
 
 ```bash
@@ -33,33 +33,33 @@ directory — there is no install script.
 uv tool install 'agent-config-kit[cli]'
 
 # From this directory — registers all three tiers, on every agent platform
-# ac-kit detects on your machine (Claude Code, Pi, GitHub Copilot, OpenCode):
-ac-kit apply agent-config.toml
+# agent-kit detects on your machine (Claude Code, Pi, GitHub Copilot, OpenCode):
+agent-kit apply agent-config.toml
 
 # Preview without writing anything:
-ac-kit apply agent-config.toml --dry-run
+agent-kit apply agent-config.toml --dry-run
 
 # Target just one platform:
-ac-kit apply agent-config.toml --platform claude
+agent-kit apply agent-config.toml --platform claude
 
 # Check for drift against what's on disk (e.g. after a manual edit):
-ac-kit validate agent-config.toml
+agent-kit validate agent-config.toml
 ```
 
-`ac-kit apply` registers at **global** scope by default (available from any
+`agent-kit apply` registers at **global** scope by default (available from any
 repo / directory you work in, not just this project) — see the manifest's
 `[options]` if you want to change that. On first use of each server, your
 agent opens a browser for the Keycloak OAuth consent flow (once per tier).
 For Claude Code, run `/mcp` (or `claude mcp list`) to confirm the connections
 and authenticate.
 
-**Claude Desktop** isn't one of `ac-kit`'s managed platforms (it reads a
+**Claude Desktop** isn't one of `agent-kit`'s managed platforms (it reads a
 separate `claude_desktop_config.json`, not Claude Code's `~/.claude.json`) —
 merge [`config/claude.json`](./config/claude.json) into it by hand.
 
 > Only want one or two tiers? Delete the corresponding
 > `[mcp_servers.toolhive-swe-*]` table(s) from `agent-config.toml` before
-> running `ac-kit apply` — each tier is a separate OAuth prompt and you
+> running `agent-kit apply` — each tier is a separate OAuth prompt and you
 > likely only have Keycloak access to some of them.
 
 > Remote MCP over Streamable HTTP with OAuth requires a recent agent version.
@@ -79,9 +79,9 @@ merge [`config/claude.json`](./config/claude.json) into it by hand.
   only the public per-tier endpoint URLs. Authentication is handled entirely
   by the Keycloak OAuth flow.
 - `agent-config.toml`'s `[options] scope` defaults to `global`; pass
-  `--scope project` to `ac-kit apply` to share via a project-local config
+  `--scope project` to `agent-kit apply` to share via a project-local config
   (e.g. `.mcp.json`) instead.
 - To remove a server, delete its table from `agent-config.toml` and re-run
-  `ac-kit apply --prune` (or remove it by hand: `claude mcp remove
+  `agent-kit apply --prune` (or remove it by hand: `claude mcp remove
   toolhive-swe-ci`, edit `~/.pi/agent/mcp.json`, etc., matching however you
   installed it).

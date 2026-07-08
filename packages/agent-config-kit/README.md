@@ -21,12 +21,12 @@ apply_all(bundle)
 
 See `docs/design/agent-config-kit-spec.md` in this repo for the full design.
 
-## CLI (`ac-kit`)
+## CLI (`agent-kit`)
 
 A project without its own Python tooling (a plain Node repo, a
 shell-scripted dotfiles setup, a CI job) can drive the same
 `RegistrationBundle`/`apply` machinery declaratively via a TOML manifest and
-the `ac-kit` console script, gated behind the `cli` extra:
+the `agent-kit` console script, gated behind the `cli` extra:
 
 ```bash
 uv tool install 'agent-config-kit[cli]'
@@ -68,12 +68,31 @@ kind = "plugin"
 entry_path = "extensions/pi/witan.ts"   # resolved relative to this file
 
 [skills]
-witan-task = "skills/witan-task/SKILL.md"   # resolved relative to this file
+validate-before-commit = "skills/validate-before-commit/SKILL.md"   # resolved relative to this file
+cyclopts-cli-scripts   = "skills/cyclopts-cli-scripts/SKILL.md"
+
+[profiles.universal]
+mcp_servers = ["witan"]
+skills = ["validate-before-commit"]
+
+[profiles.python]
+inherits = ["universal"]           # unions this profile's entries with its parents'
+skills = ["cyclopts-cli-scripts"]
 ```
 
 Table/field names mirror the Python model field names exactly
 (`kind`, `command`, `args`, `env`, `event`, `entry_path`, ...) — see
 `docs/design/agent-config-kit-cli-spec.md` for the full schema and rationale.
+
+`[profiles.<name>]` tables (spec §4) each list a subset of entry keys drawn
+from the manifest's own `[mcp_servers]`/`[skills]`/`[hooks]`/`[lsp_servers]`
+tables, plus an optional `inherits` list of other profile names to union
+with first. `agent-kit apply --profile <name>` (repeatable) resolves the
+named profile(s), expanding `inherits` transitively; `[options]
+default_profiles` sets the zero-flag default. Selecting no profile at all
+(the default with neither flag nor `default_profiles` set) applies the
+manifest's full, unfiltered bundle — profiles are opt-in filters, not
+gates.
 
 Skills follow the [Agent Skills specification](https://agentskills.io/specification):
 `skill_md_path` must point to a file literally named `SKILL.md`, and its
@@ -107,7 +126,7 @@ entry_path = "git+https://github.com/org/repo.git@v1.0.0#subdirectory=extensions
   branch/tag/commit) shallow-clones the repo and resolves the subdirectory —
   use this for a skill that needs its full directory.
 - Fetched sources are cached under `.agent-config-kit-cache/` next to the
-  manifest by default (override with `ac-kit apply/validate --cache-dir`, or
+  manifest by default (override with `agent-kit apply/validate --cache-dir`, or
   `load_manifest(path, cache_dir=...)` from Python). Every `apply`/`validate`
   re-fetches; HTTP(S) uses a conditional GET so an unchanged remote is a
   cheap 304, and a transient network failure falls back to the last good
@@ -116,14 +135,15 @@ entry_path = "git+https://github.com/org/repo.git@v1.0.0#subdirectory=extensions
   client dependency here, by design (no new dependency on the base
   package).
 
-### `ac-kit apply`
+### `agent-kit apply`
 
 Applies a manifest's MCP servers, hooks, and skills to one or more platforms:
 
 ```bash
-ac-kit apply agent-config.toml
-ac-kit apply agent-config.toml --platform claude --platform pi
-ac-kit apply agent-config.toml --scope project --dry-run
+agent-kit apply agent-config.toml
+agent-kit apply agent-config.toml --platform claude --platform pi
+agent-kit apply agent-config.toml --scope project --dry-run
+agent-kit apply agent-config.toml --profile python
 ```
 
 - `--platform NAME` (repeatable) overrides the manifest's
@@ -131,6 +151,10 @@ ac-kit apply agent-config.toml --scope project --dry-run
   targeted.
 - `--scope global|project` overrides the manifest's `[options].scope` for
   this run.
+- `--profile NAME` (repeatable) selects one or more `[profiles.*]` entries,
+  unioning their entries and expanding `inherits`; overrides the manifest's
+  `[options].default_profiles`. Neither given applies the manifest's full,
+  unfiltered bundle.
 - `--dry-run` reports what would be written/removed without touching disk.
 - `--prune` also removes entries a *previous* `apply --prune` of this same
   manifest wrote but that have since been dropped from it (e.g. a deleted
@@ -146,15 +170,15 @@ ac-kit apply agent-config.toml --scope project --dry-run
 Exit codes: `0` success, `1` a platform's target couldn't be parsed as JSON,
 `2` the manifest failed to load.
 
-### `ac-kit validate`
+### `agent-kit validate`
 
 Reports drift between a manifest and each platform's on-disk config, without
 writing anything — useful in CI to catch configuration that's fallen out of
 sync:
 
 ```bash
-ac-kit validate agent-config.toml
-ac-kit validate agent-config.toml --platform claude
+agent-kit validate agent-config.toml
+agent-kit validate agent-config.toml --platform claude
 ```
 
 Missing MCP servers/hooks, mismatched MCP server values, and missing skill/
@@ -166,7 +190,22 @@ reconcile.
 Exit codes: `0` no drift, `1` drift (or an unreadable target) found, `2` the
 manifest failed to load.
 
-### `ac-kit config init`
+### `agent-kit profiles`
+
+Lists a manifest's `[profiles.*]` entries and each one's resolved entry
+counts (after expanding `inherits`), without applying anything:
+
+```bash
+agent-kit profiles agent-config.toml
+```
+
+Prints a table of profile name, `inherits`, and the resolved
+`mcp_servers`/`skills`/`hooks`/`lsp_servers` counts. Prints a short message
+instead if the manifest defines no profiles.
+
+Exit codes: `0` success, `2` the manifest failed to load.
+
+### `agent-kit config init`
 
 Bootstraps the global config file (`${XDG_CONFIG_HOME:-~/.config}/agent-config-kit/config.toml`,
 overridable with `--config` or `AC_KIT_CONFIG`) — see
@@ -175,9 +214,9 @@ schema this file drives (per-org and per-directory-prefix default manifests
 for zero-arg `apply`).
 
 ```bash
-ac-kit config init            # writes every key as a commented-out example
-ac-kit config init --wizard   # interactively prompt for values instead
-ac-kit config init --force    # overwrite an existing config file
+agent-kit config init            # writes every key as a commented-out example
+agent-kit config init --wizard   # interactively prompt for values instead
+agent-kit config init --force    # overwrite an existing config file
 ```
 
 Refuses to overwrite an existing file unless `--force` is given.

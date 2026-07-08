@@ -28,7 +28,7 @@ def test_cli_help_smoke(capsys):
         app(["--help"])
 
     assert exc_info.value.code == 0
-    assert "ac-kit" in capsys.readouterr().out.lower()
+    assert "agent-kit" in capsys.readouterr().out.lower()
 
 
 def test_cli_without_extra_exits_with_friendly_message(monkeypatch, capsys):
@@ -180,7 +180,7 @@ def test_apply_exits_1_when_a_platform_skips_a_target(tmp_path, monkeypatch, cap
 
 def test_apply_cli_scope_overrides_manifest_scope(tmp_path, monkeypatch):
     """Passing --scope project routes claude's mcp target to the
-    project-scoped .mcp.json (relative to CWD, i.e. the repo root ac-kit is
+    project-scoped .mcp.json (relative to CWD, i.e. the repo root agent-kit is
     run from) instead of the manifest's own [options] scope = "global"."""
     from agent_config_kit.cli import app
 

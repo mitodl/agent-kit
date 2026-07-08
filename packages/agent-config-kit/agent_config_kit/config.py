@@ -1,5 +1,5 @@
 """The user-level global config file (``~/.config/agent-config-kit/config.toml``)
-that drives zero-argument ``ac-kit apply`` resolution — spec §7, decision S1.
+that drives zero-argument ``agent-kit apply`` resolution — spec §7, decision S1.
 
 This module is the config model + loader only. Resolving *which* manifest a
 given repo/CWD should use from this config (explicit flags -> repo-local

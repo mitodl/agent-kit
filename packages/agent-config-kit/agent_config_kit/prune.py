@@ -1,4 +1,4 @@
-"""Prune/uninstall support for ``ac-kit apply --prune``.
+"""Prune/uninstall support for ``agent-kit apply --prune``.
 
 ``apply()``/``apply_all()`` are pure additive-merge (``plan.py``'s module
 docstring) — nothing removes a previously written entry when it drops out of

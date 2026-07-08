@@ -1,8 +1,8 @@
 # Skills
 
 Reusable skills installed via [`agent-config-kit`](../packages/agent-config-kit/README.md)
-(`ac-kit`) — see the repo-level [Quick Start](../README.md#quick-start) for
-installing `ac-kit` and applying [`agent-config.toml`](../agent-config.toml).
+(`agent-kit`) — see the repo-level [Quick Start](../README.md#quick-start) for
+installing `agent-kit` and applying [`agent-config.toml`](../agent-config.toml).
 
 Skills are organized by **category**. Each skill lives in
 `skills/<category>/<skill-name>/SKILL.md` and carries YAML frontmatter with
@@ -61,5 +61,5 @@ Skills are organized by **category**. Each skill lives in
    ```
 
 3. Add the skill to your category's `README.md` table and to the **All Skills** table above.
-4. Register it in [`agent-config.toml`](../agent-config.toml)'s `[skills]` table (and the relevant `[profiles.*]` entry) so `ac-kit apply` picks it up.
+4. Register it in [`agent-config.toml`](../agent-config.toml)'s `[skills]` table (and the relevant `[profiles.*]` entry) so `agent-kit apply` picks it up.
 5. Open a PR — see the repo-level [CONTRIBUTING](../README.md#contributing) guide.
