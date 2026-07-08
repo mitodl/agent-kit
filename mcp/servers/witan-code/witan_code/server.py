@@ -34,9 +34,14 @@ mcp = FastMCP(
         "scope to one repo, or omit it when outside any repo to fan out across "
         "every indexed repo.\n\n"
         "Branch semantics: name-routed tools (code_find_definition, "
-        "code_search_symbol, code_symbols_in_file) accept `branch` and default to "
-        "the current checkout's branch; id-routed tools read the store the "
-        "`symbol_id` belongs to, so the branch is implied by the id's origin.\n\n"
+        "code_search_symbol, code_symbols_in_file) accept `branch`. The default "
+        "follows the current checkout's branch ONLY when querying the current "
+        "detected repo; when you pass `repo` for a different repo and omit "
+        "`branch`, you read that store's default (main) view — pass `branch` "
+        "explicitly to target another view. Id-routed tools (code_find_references "
+        "/ callers / impact / cross_repo_impact) take no `branch`: `symbol_id` "
+        "does not encode a branch, so they read the default view of the id's "
+        "repo store.\n\n"
         "min_precision (`heuristic` default | `precise`) on the interface and "
         "cross-repo tools: `precise` keeps only edges also confirmed by a "
         "canonical-symbol join, suppressing false positives.\n\n"
@@ -284,7 +289,9 @@ def code_find_definition(
         Bare name (``run``) or qualified name (``Service.run``).
     branch:
         Git branch whose indexed view to query (e.g. another agent's in-flight
-        branch). Defaults to the current checkout's branch.
+        branch). Defaults to the checkout's branch when querying the current
+        repo; when ``repo`` names a different repo and ``branch`` is omitted,
+        reads that store's default (main) view.
     """
 
     def _query(client: OmnigraphClient) -> list[dict]:
@@ -450,8 +457,9 @@ def code_search_symbol(
         or ``key``. Pass e.g. ``kind="function"`` to exclude the many YAML
         ``key`` symbols when searching for code.
     branch:
-        Git branch whose indexed view to query. Defaults to the current
-        checkout's branch.
+        Git branch whose indexed view to query. Defaults to the checkout's
+        branch when querying the current repo; when ``repo`` names a different
+        repo and ``branch`` is omitted, reads that store's default (main) view.
     """
 
     def _query(client: OmnigraphClient) -> list[dict]:

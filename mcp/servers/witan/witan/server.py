@@ -1756,7 +1756,7 @@ def workflow_trace_mine(
     """
     rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
     if not rows:
-        return {"trace_slug": trace_slug, "error": "no such trace"}
+        return {"slug": trace_slug, "error": "no such trace"}
     trace = rows[0]
 
     if isinstance(patterns, dict):
@@ -1868,7 +1868,7 @@ def workflow_project_block(slug: str, blocks_slug: str) -> dict:
                     "updated_at": now,
                 },
             )
-    return {"blocker": slug, "blocked": blocks_slug}
+    return {"blocker": slug, "blocked": blocks_slug, "linked": True}
 
 
 @mcp.tool

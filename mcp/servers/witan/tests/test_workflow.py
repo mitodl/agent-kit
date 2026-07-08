@@ -129,6 +129,12 @@ def test_project_block_and_unblock(server):
     res = server.workflow_project_block(upstream["slug"], downstream["slug"])
     assert res["blocker"] == upstream["slug"]
     assert res["blocked"] == downstream["slug"]
+    assert res["linked"] is True  # success flag present on both paths (C8)
+
+    # self-block soft-fails with linked=False rather than raising (C8).
+    selfblock = server.workflow_project_block(upstream["slug"], upstream["slug"])
+    assert selfblock["linked"] is False
+    assert "reason" in selfblock
 
     got = server.workflow_project_get(downstream["slug"])
     assert upstream["slug"] in (got.get("blocked_by") or [])
@@ -336,3 +342,15 @@ def test_mine_trace_rejects_proposal_missing_required_keys(server):
         server.workflow_trace_mine(
             done["trace_slug"], patterns=[{"title": "no content"}]
         )
+
+
+@requires_omnigraph
+def test_missing_trace_returns_consistent_shape(server):
+    """Both trace tools return {"slug": ..., "error": ...} for a missing trace (C8)."""
+    mined = server.workflow_trace_mine("wt-does-not-exist")
+    annotated = server.workflow_trace_annotate(
+        "wt-does-not-exist", lessons_slug=["les-x"]
+    )
+    for res in (mined, annotated):
+        assert res["slug"] == "wt-does-not-exist"
+        assert res["error"] == "no such trace"
