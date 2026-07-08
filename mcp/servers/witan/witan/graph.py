@@ -136,6 +136,46 @@ class OmnigraphClient:
             surface_conflict=surface_conflict,
         )
 
+    def optimize(self) -> str:
+        """Compact small Lance fragments across every table (non-destructive).
+
+        Every witan write appends a new tiny Lance fragment + manifest version;
+        an un-compacted store bloats until *opening* it dominates query latency
+        (a fixed per-query cost regardless of rows). ``omnigraph optimize``
+        collapses the fragments. It takes the store's write lock and can run for
+        tens of seconds on a bloated store, so callers must throttle it and keep
+        it off the prompt path (see ``witan.maintenance``). Runs under the same
+        per-store write lock + retry/repair loop as a mutation.
+        """
+        cmd = [self._binary, "optimize", "--store", self.graph_uri, "--quiet"]
+        return self._execute(cmd, "optimize", is_write=True)
+
+    def cleanup(self, *, keep: int | None = None, older_than: str | None = None) -> str:
+        """Reclaim disk by removing old Lance versions (**destructive**).
+
+        ``optimize`` compacts fragments but leaves old versions behind, so disk
+        stays large until they are GC'd. ``cleanup`` removes them, keeping the
+        most recent ``keep`` versions per table and/or those newer than
+        ``older_than`` (a Go-style duration like ``7d``). At least one bound must
+        be given (omnigraph requires it). ``--confirm`` is passed so it actually
+        runs. Local-store only in practice; runs under the write lock.
+        """
+        if keep is None and older_than is None:
+            raise ValueError("cleanup requires keep and/or older_than")
+        cmd = [
+            self._binary,
+            "cleanup",
+            "--store",
+            self.graph_uri,
+            "--confirm",
+            "--quiet",
+        ]
+        if keep is not None:
+            cmd += ["--keep", str(keep)]
+        if older_than is not None:
+            cmd += ["--older-than", older_than]
+        return self._execute(cmd, "cleanup", is_write=True)
+
     def apply_schema(self, schema_path) -> str:
         """Apply a schema file to the store (idempotent). Returns CLI stdout.
 
