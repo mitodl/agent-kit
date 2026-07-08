@@ -6,6 +6,8 @@ omnigraph binary are exercised end-to-end. Tests are skipped when the binary
 is not on PATH.
 """
 
+import asyncio
+import inspect
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,14 +28,36 @@ def _unwrap(tool):
     return getattr(tool, "fn", tool)
 
 
+class _NoElicitCtx:
+    """A stand-in Context whose ``elicit`` always errors — simulates a client
+    without elicitation support, so async tools fall back to their default
+    (non-interactive) behavior. Tests that exercise elicitation pass their own
+    fake ctx via ``ctx=...`` instead."""
+
+    async def elicit(self, *args, **kwargs):
+        raise RuntimeError("elicitation unsupported in tests")
+
+
 class _Tools:
-    """Attribute proxy that returns unwrapped, directly-callable tools."""
+    """Attribute proxy that returns unwrapped, directly-callable tools.
+
+    Async tools (those taking a ``ctx: Context``) are run to completion via
+    ``asyncio.run`` with a no-elicit ctx injected, so the 50+ existing sync call
+    sites keep working unchanged and get today's non-interactive behavior."""
 
     def __init__(self, module):
         self._module = module
 
     def __getattr__(self, name):
-        return _unwrap(getattr(self._module, name))
+        fn = _unwrap(getattr(self._module, name))
+        if inspect.iscoroutinefunction(fn):
+
+            def runner(*args, **kwargs):
+                kwargs.setdefault("ctx", _NoElicitCtx())
+                return asyncio.run(fn(*args, **kwargs))
+
+            return runner
+        return fn
 
 
 @pytest.fixture
