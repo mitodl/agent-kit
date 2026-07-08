@@ -336,3 +336,84 @@ def test_project_session_lines_no_phase_no_crash():
     # summary line present, but no staleness nudge (and no "None" in output)
     assert any(ln.startswith("  Last session") for ln in lines)
     assert all("sessions in" not in ln for ln in lines)
+
+
+# ── inject-context output cache (hotfix for slow prompt-path reads) ───────────
+
+
+@requires_omnigraph
+def test_inject_context_output_is_cached(tmp_path, monkeypatch):
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-cache"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    # Isolate the on-disk cache to this test.
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    _unwrap(srv.task_create)(title="first task", description="x")
+    first = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "first task" in first
+
+    # A new task created after the first render must NOT appear until the cache
+    # expires — proves the second call served from cache without hitting the graph.
+    _unwrap(srv.task_create)(title="second task", description="x")
+    cached = ctx_module.inject_context(str(store), queries_dir, None)
+    assert cached == first
+    assert "second task" not in cached
+
+
+@requires_omnigraph
+def test_inject_context_cache_disabled_by_zero_ttl(tmp_path, monkeypatch):
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-cache-off"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    _unwrap(srv.task_create)(title="alpha", description="x")
+    ctx_module.inject_context(str(store), queries_dir, None)
+    _unwrap(srv.task_create)(title="bravo", description="x")
+    # TTL=0 disables the cache → fresh render includes the new task.
+    fresh = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "bravo" in fresh
+
+
+@requires_omnigraph
+def test_output_cache_file_is_private_and_atomic(tmp_path, monkeypatch):
+    import stat
+
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-priv"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+    _unwrap(srv.task_create)(title="private task", description="x")
+    ctx_module.inject_context(str(store), queries_dir, None)
+
+    cache_files = list(tmp_path.glob("witan-ctx-*.json"))
+    assert cache_files, "cache file should have been written"
+    assert stat.S_IMODE(cache_files[0].stat().st_mode) == 0o600
+    # atomic replace leaves no process-unique temp file behind
+    assert not list(tmp_path.glob("witan-ctx-*.tmp"))

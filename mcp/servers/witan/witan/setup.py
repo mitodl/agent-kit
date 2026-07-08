@@ -46,17 +46,20 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     pi_ext_dir = pkg_dir / "extensions" / "pi"
     # These hooks run on the prompt/stop critical path and do git + graph I/O, so
     # they carry a timeout: a hung git or graph read must degrade to no context,
-    # never stall the agent. Matches Pi's 5s cap on the equivalent extension.
+    # never stall the agent. The first prompt in a cache window does several
+    # full-store reads, which on a large graph can take ~10s — 15s gives that
+    # cold path headroom to finish (and populate the on-disk cache) instead of
+    # being killed, which would leave the cache empty and every prompt cold.
     hooks: list[Hook] = [
         DeclarativeHook(
             event=HookEvent.USER_PROMPT_SUBMIT,
             command="witan inject-context",
-            timeout_seconds=5,
+            timeout_seconds=15,
         ),
         DeclarativeHook(
             event=HookEvent.STOP,
             command="witan session-checkpoint",
-            timeout_seconds=5,
+            timeout_seconds=15,
         ),
     ]
     if pi_ext_dir.is_dir():
