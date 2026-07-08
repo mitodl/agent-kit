@@ -26,9 +26,10 @@ except ImportError as exc:
     )
     raise SystemExit(1) from exc
 
-from .config import resolve_config_path
+from .config import load_global_config, resolve_config_path
 from .diff import Drift
 from .diff import diff as diff_bundle
+from .fetch import FetchError
 from .manifest import ManifestError, load_manifest, resolve_profile
 from .models import Scope
 from .plan import InstallResult
@@ -42,6 +43,7 @@ from .prune import (
     write_state,
 )
 from .registry import detect_installed_platforms, known_platforms
+from .resolve import resolve_zero_arg_manifest
 
 app = cyclopts.App(
     name="agent-kit",
@@ -270,14 +272,51 @@ def _resolve_platforms(
 
 
 def _resolve_profiles(
-    manifest_default_profiles: list[str], cli_profiles: list[str] | None
+    manifest_default_profiles: list[str],
+    cli_profiles: list[str] | None,
+    source_profiles: list[str] | None = None,
 ) -> list[str]:
-    """CLI ``--profile`` wins over the manifest's ``[options].default_profiles``
-    (spec §4.4/§7.2: "explicit beats declarative", same precedent as
-    ``_resolve_platforms``). Neither given -> ``[]``, which ``resolve_profile``
-    treats as "apply the whole manifest" (profiles are opt-in filters, not
-    gates — O-DEFAULT)."""
-    return list(cli_profiles) if cli_profiles else list(manifest_default_profiles)
+    """CLI ``--profile`` wins over whatever resolved the manifest itself
+    (``source_profiles`` — an ``[[org]]``/``[[scope]]``/``default_profiles``
+    match from a zero-arg resolution, spec §7.2's "profile is taken from the
+    same source"), which in turn wins over the manifest's own
+    ``[options].default_profiles`` (spec §4.4: "explicit beats declarative",
+    same precedent as ``_resolve_platforms``). None given -> ``[]``, which
+    ``resolve_profile`` treats as "apply the whole manifest" (profiles are
+    opt-in filters, not gates — O-DEFAULT)."""
+    if cli_profiles:
+        return list(cli_profiles)
+    if source_profiles:
+        return list(source_profiles)
+    return list(manifest_default_profiles)
+
+
+def _resolve_manifest_arg(
+    manifest: Path | None, *, cache_dir: Path | None
+) -> tuple[Path, list[str] | None, Scope | None]:
+    """``MANIFEST`` given explicitly -> use it as-is (no profile/scope
+    override from this step). Otherwise resolve it from the global config
+    per O2 (``resolve.py``), printing which source won so the "magic" a
+    zero-arg apply performs is legible (spec §7.2)."""
+    if manifest is not None:
+        return manifest, None, None
+
+    config = load_global_config()
+    try:
+        resolved = resolve_zero_arg_manifest(Path.cwd(), config)
+    except FetchError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(2) from exc
+    if resolved is None:
+        console.print(
+            "[red]no MANIFEST given and none could be resolved from the "
+            "global config (no repo-local agent-config.toml, no matching "
+            "[[scope]] prefix, and no default_manifest set — see `agent-kit "
+            "config init`)[/red]"
+        )
+        raise SystemExit(2)
+    console.print(f"resolved manifest from {resolved.source}")
+    return resolved.path, resolved.profiles, resolved.write_scope
 
 
 def _report(results: dict[str, InstallResult], *, dry_run: bool) -> bool:
@@ -301,7 +340,7 @@ def _report(results: dict[str, InstallResult], *, dry_run: bool) -> bool:
 
 @app.command(name="apply")
 def apply_command(
-    manifest: Path,
+    manifest: Path | None = None,
     *,
     scope: Scope | None = None,
     platform: list[str] | None = None,
@@ -317,7 +356,12 @@ def apply_command(
     Parameters
     ----------
     manifest
-        Path to the manifest TOML file.
+        Path to the manifest TOML file. Omit it to resolve one from the
+        global config (spec §7.2): a repo-local ``agent-config.toml`` at the
+        repo root, then the longest matching ``[[scope]] match_prefix``,
+        then ``default_manifest`` — whichever hits first also supplies its
+        default profiles/write scope, still overridable by
+        ``--profile``/``--scope``.
     scope
         Overrides the manifest's ``[options].scope`` for this run.
     platform
@@ -345,16 +389,26 @@ def apply_command(
         and cached. Defaults to ``.agent-config-kit-cache`` next to the
         manifest.
     """
+    manifest_path, source_profiles, source_write_scope = _resolve_manifest_arg(
+        manifest, cache_dir=cache_dir
+    )
     try:
-        loaded = load_manifest(manifest, cache_dir=cache_dir)
+        loaded = load_manifest(manifest_path, cache_dir=cache_dir)
         bundle = resolve_profile(
-            loaded, _resolve_profiles(loaded.options.default_profiles, profile)
+            loaded,
+            _resolve_profiles(
+                loaded.options.default_profiles, profile, source_profiles
+            ),
         )
     except ManifestError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
 
-    resolved_scope = scope if scope is not None else loaded.options.scope
+    resolved_scope = scope
+    if resolved_scope is None:
+        resolved_scope = source_write_scope
+    if resolved_scope is None:
+        resolved_scope = loaded.options.scope
     platforms = _resolve_platforms(loaded.options.platforms, platform)
 
     if prune:
@@ -362,7 +416,7 @@ def apply_command(
             platforms if platforms is not None else detect_installed_platforms()
         )
         state_path = (
-            state_file if state_file is not None else default_state_path(manifest)
+            state_file if state_file is not None else default_state_path(manifest_path)
         )
         states = load_state(state_path)
         results: dict[str, InstallResult] = {}
@@ -384,7 +438,7 @@ def apply_command(
             if not result.skipped:
                 states[name] = current_state
         if not dry_run:
-            write_state(state_path, manifest, states)
+            write_state(state_path, manifest_path, states)
     elif platforms is not None:
         results = {
             name: apply_bundle(name, bundle, scope=resolved_scope, dry_run=dry_run)
@@ -419,7 +473,7 @@ def _report_drift(drifts: dict[str, Drift]) -> bool:
 
 @app.command(name="validate")
 def validate_command(
-    manifest: Path,
+    manifest: Path | None = None,
     *,
     scope: Scope | None = None,
     platform: list[str] | None = None,
@@ -432,7 +486,8 @@ def validate_command(
     Parameters
     ----------
     manifest
-        Path to the manifest TOML file.
+        Path to the manifest TOML file. Omit it to resolve one from the
+        global config, same as ``apply`` (spec §7.2).
     scope
         Overrides the manifest's ``[options].scope`` for this run.
     platform
@@ -447,16 +502,26 @@ def validate_command(
         and cached. Defaults to ``.agent-config-kit-cache`` next to the
         manifest.
     """
+    manifest_path, source_profiles, source_write_scope = _resolve_manifest_arg(
+        manifest, cache_dir=cache_dir
+    )
     try:
-        loaded = load_manifest(manifest, cache_dir=cache_dir)
+        loaded = load_manifest(manifest_path, cache_dir=cache_dir)
         bundle = resolve_profile(
-            loaded, _resolve_profiles(loaded.options.default_profiles, profile)
+            loaded,
+            _resolve_profiles(
+                loaded.options.default_profiles, profile, source_profiles
+            ),
         )
     except ManifestError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
 
-    resolved_scope = scope if scope is not None else loaded.options.scope
+    resolved_scope = scope
+    if resolved_scope is None:
+        resolved_scope = source_write_scope
+    if resolved_scope is None:
+        resolved_scope = loaded.options.scope
     platforms = _resolve_platforms(loaded.options.platforms, platform)
     if platforms is None:
         platforms = detect_installed_platforms()
