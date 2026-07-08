@@ -145,13 +145,21 @@ def _task_show(slug: str) -> None:
     )
     for label, key in (
         ("repo", "repo"),
-        ("project", "project_slug"),
         ("parent", "parent_slug"),
         ("assignee", "assignee"),
         ("reference", "external_uri"),
     ):
         if t.get(key):
             console.print(f"  {label}: {t[key]}")
+    if t.get("project_slug"):
+        project = _fn(s.workflow_project_get)(t["project_slug"])
+        if project:
+            console.print(
+                f"  project: {project['slug']} — {project.get('title', '')} "
+                f"[{project.get('phase', '')}]"
+            )
+        else:
+            console.print(f"  project: {t['project_slug']}")
     if t.get("symbol_refs"):
         console.print(f"  code symbols: {', '.join(t['symbol_refs'])}")
     console.print(f"\n{t.get('description') or '(no description)'}\n")
