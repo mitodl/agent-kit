@@ -165,3 +165,19 @@ reconcile.
 
 Exit codes: `0` no drift, `1` drift (or an unreadable target) found, `2` the
 manifest failed to load.
+
+### `ac-kit config init`
+
+Bootstraps the global config file (`${XDG_CONFIG_HOME:-~/.config}/agent-config-kit/config.toml`,
+overridable with `--config` or `AC_KIT_CONFIG`) — see
+`docs/design/agent-config-kit-profiles-composition-spec.md` §7 for the full
+schema this file drives (per-org and per-directory-prefix default manifests
+for zero-arg `apply`).
+
+```bash
+ac-kit config init            # writes every key as a commented-out example
+ac-kit config init --wizard   # interactively prompt for values instead
+ac-kit config init --force    # overwrite an existing config file
+```
+
+Refuses to overwrite an existing file unless `--force` is given.

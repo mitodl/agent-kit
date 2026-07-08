@@ -64,8 +64,11 @@ def default_config_path() -> Path:
     return base / "agent-config-kit" / "config.toml"
 
 
-def _resolve_config_path(explicit: Path | None) -> Path:
-    """``--config`` (``explicit``) beats ``AC_KIT_CONFIG`` beats the XDG default."""
+def resolve_config_path(explicit: Path | None) -> Path:
+    """``--config`` (``explicit``) beats ``AC_KIT_CONFIG`` beats the XDG
+    default. Public — the CLI's ``config init`` command (cli.py) resolves the
+    same path this way so it writes exactly where ``load_global_config``
+    would read from."""
     if explicit is not None:
         return explicit
     if env_path := os.environ.get("AC_KIT_CONFIG"):
@@ -108,7 +111,7 @@ def load_global_config(path: Path | None = None) -> GlobalConfig:
     """Load the global config file. A missing file is a valid, empty config
     (never an error) — zero-arg ``apply`` just falls through to whatever the
     next resolution step in O2's order finds."""
-    resolved = _resolve_config_path(path)
+    resolved = resolve_config_path(path)
     if not resolved.is_file():
         return GlobalConfig()
 

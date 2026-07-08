@@ -308,6 +308,29 @@ Loaded by a new `config.py` (`load_global_config()`), XDG-aware, absent-file =
 empty config (never an error — zero-arg apply just falls through to "no
 manifest resolved" with a clear message). Wrapped errors like `ManifestError`.
 
+### 7.1a `ac-kit config init`
+
+Since the whole point of the global config is to make zero-arg `apply` "just
+work" without the user hand-writing TOML from memory, `ac-kit config init`
+bootstraps it: `ac-kit config init [--config PATH] [--force] [--wizard]`.
+
+- **Non-interactive (default):** writes every key in §7.1's schema as a
+  commented-out example — a self-documenting starting point the user edits
+  by hand. The file this writes is valid, empty TOML (all lines are
+  comments), so it round-trips through `load_global_config()` as
+  `GlobalConfig()` unchanged.
+- **`--wizard`:** prompts (via `rich.prompt`) for `default_manifest`,
+  `default_profiles`, then loops offering to add `[[org]]` and `[[scope]]`
+  entries one at a time. Whatever the user supplies is written as a real,
+  uncommented entry; anything skipped falls back to the same commented
+  example the non-interactive path writes — so the wizard's output is
+  always a strict superset of "at least as much guidance as `init` alone".
+- Refuses to overwrite an existing file unless `--force` is given.
+- Resolves its target path exactly like `load_global_config()` does
+  (`--config` → `AC_KIT_CONFIG` → the XDG default) via a shared
+  `resolve_config_path()`, so `init` always writes where a later
+  zero-arg `apply` will actually look.
+
 ### 7.2 Zero-arg `apply` (O2)
 
 `ac-kit apply` with no `MANIFEST` resolves per O2's order: explicit flags →

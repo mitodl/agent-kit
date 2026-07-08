@@ -9,12 +9,14 @@ clear message instead of a bare traceback from deep inside cyclopts/rich.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 try:
     import cyclopts
     from rich.console import Console
+    from rich.prompt import Confirm, Prompt
     from rich.table import Table
 except ImportError as exc:
     sys.stderr.write(
@@ -24,6 +26,7 @@ except ImportError as exc:
     )
     raise SystemExit(1) from exc
 
+from .config import resolve_config_path
 from .diff import Drift
 from .diff import diff as diff_bundle
 from .manifest import ManifestError, load_manifest
@@ -48,6 +51,204 @@ app = cyclopts.App(
     ),
 )
 console = Console()
+
+config_app = cyclopts.App(
+    name="config", help="Manage the global ac-kit config file (spec §7)."
+)
+app.command(config_app)
+
+
+_CONFIG_TEMPLATE_COMMENTS = {
+    "default_manifest": '# default_manifest = "~/dotfiles/agent-config.toml"',
+    "default_profiles": '# default_profiles = ["universal"]',
+    "org": (
+        "# [[org]]                                       # match github.com/<name>/*\n"
+        '# name     = "mitodl"\n'
+        '# manifest = "https://cfg.mitodl.org/agent-config.toml"\n'
+        '# profiles = ["platform-eng"]'
+    ),
+    "scope": (
+        "# [[scope]]                                      # directory-prefix routing\n"
+        '# match_prefix = "~/code/mit"\n'
+        '# manifest     = "https://cfg.mitodl.org/agent-config.toml"\n'
+        '# profiles     = ["platform-eng"]\n'
+        '# write_scope  = "project"                        # "global" | "project" (default: "project")'
+    ),
+}
+
+
+def _toml_value(value: object) -> str:
+    """Render a Python str/list[str] as a TOML literal. Every value this CLI
+    ever writes is a plain string or a list of plain strings (manifest
+    paths/URIs, profile names) — never anything with TOML-only escaping
+    needs, so JSON's string/array syntax (a subset of TOML's) is sufficient
+    without pulling in a TOML-writer dependency."""
+    return json.dumps(value)
+
+
+def _render_config_toml(
+    *,
+    default_manifest: str | None,
+    default_profiles: list[str],
+    orgs: list[dict],
+    scopes: list[dict],
+) -> str:
+    """Render the global config file: real values for whatever was supplied
+    (wizard answers), a commented-out example for whatever wasn't — so the
+    file is always a usable *and* self-documenting starting point (spec §7.1)."""
+    lines = [
+        "# agent-config-kit global config.",
+        "# See docs/design/agent-config-kit-profiles-composition-spec.md §7 for",
+        "# the full schema. Every key below is optional.",
+        "",
+    ]
+
+    lines.append(
+        f"default_manifest = {_toml_value(default_manifest)}"
+        if default_manifest
+        else _CONFIG_TEMPLATE_COMMENTS["default_manifest"]
+    )
+    lines.append(
+        f"default_profiles = {_toml_value(default_profiles)}"
+        if default_profiles
+        else _CONFIG_TEMPLATE_COMMENTS["default_profiles"]
+    )
+    lines.append("")
+
+    if orgs:
+        for org in orgs:
+            lines.append("[[org]]")
+            lines.append(f"name     = {_toml_value(org['name'])}")
+            lines.append(f"manifest = {_toml_value(org['manifest'])}")
+            if org.get("profiles"):
+                lines.append(f"profiles = {_toml_value(org['profiles'])}")
+            lines.append("")
+    else:
+        lines.append(_CONFIG_TEMPLATE_COMMENTS["org"])
+        lines.append("")
+
+    if scopes:
+        for scope in scopes:
+            lines.append("[[scope]]")
+            lines.append(f"match_prefix = {_toml_value(scope['match_prefix'])}")
+            lines.append(f"manifest     = {_toml_value(scope['manifest'])}")
+            if scope.get("profiles"):
+                lines.append(f"profiles     = {_toml_value(scope['profiles'])}")
+            if scope.get("write_scope") and scope["write_scope"] != "project":
+                lines.append(f"write_scope  = {_toml_value(scope['write_scope'])}")
+            lines.append("")
+    else:
+        lines.append(_CONFIG_TEMPLATE_COMMENTS["scope"])
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _ask(prompt: str, *, default: str = "") -> str:
+    return Prompt.ask(prompt, default=default, console=console).strip()
+
+
+def _ask_required(prompt: str) -> str:
+    while not (value := _ask(prompt)):
+        console.print("[red]a value is required[/red]")
+    return value
+
+
+def _ask_list(prompt: str) -> list[str]:
+    raw = _ask(f"{prompt} (comma-separated)")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _ask_yes_no(prompt: str, *, default: bool = False) -> bool:
+    return Confirm.ask(prompt, default=default, console=console)
+
+
+def _ask_write_scope(prompt: str) -> str:
+    return Prompt.ask(
+        prompt, choices=["project", "global"], default="project", console=console
+    )
+
+
+def _run_config_wizard() -> dict:
+    console.print(
+        "[bold]ac-kit config init --wizard[/bold] — press Enter to skip any "
+        "optional value.\n"
+    )
+
+    default_manifest = _ask(
+        "Default manifest path or URL (last-resort fallback for zero-arg apply)"
+    )
+    default_profiles = _ask_list("Default profiles")
+
+    orgs = []
+    while _ask_yes_no(
+        "Add a GitHub org -> manifest mapping (auto-applied when ac-kit runs "
+        "in a freshly cloned repo under that org)?"
+    ):
+        orgs.append(
+            {
+                "name": _ask_required("  org name (matches github.com/<name>/*)"),
+                "manifest": _ask_required("  manifest path or URL"),
+                "profiles": _ask_list("  profiles"),
+            }
+        )
+
+    scopes = []
+    while _ask_yes_no("Add a directory-prefix -> manifest mapping?"):
+        scopes.append(
+            {
+                "match_prefix": _ask_required("  directory prefix (e.g. ~/code/mit)"),
+                "manifest": _ask_required("  manifest path or URL"),
+                "profiles": _ask_list("  profiles"),
+                "write_scope": _ask_write_scope("  write scope"),
+            }
+        )
+
+    return {
+        "default_manifest": default_manifest or None,
+        "default_profiles": default_profiles,
+        "orgs": orgs,
+        "scopes": scopes,
+    }
+
+
+@config_app.command(name="init")
+def config_init_command(
+    *, config: Path | None = None, force: bool = False, wizard: bool = False
+) -> None:
+    """Bootstrap the global config file.
+
+    Parameters
+    ----------
+    config
+        Where to write the file. Defaults to the same location
+        ``load_global_config()`` resolves: the ``AC_KIT_CONFIG`` environment
+        variable, then ``${XDG_CONFIG_HOME:-~/.config}/agent-config-kit/config.toml``.
+    force
+        Overwrite an existing config file instead of refusing.
+    wizard
+        Interactively prompt for values instead of writing an all-commented
+        starter file.
+    """
+    path = resolve_config_path(config)
+    if path.is_file() and not force:
+        console.print(f"[red]{path} already exists (use --force to overwrite)[/red]")
+        raise SystemExit(1)
+
+    values = (
+        _run_config_wizard()
+        if wizard
+        else {
+            "default_manifest": None,
+            "default_profiles": [],
+            "orgs": [],
+            "scopes": [],
+        }
+    )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_render_config_toml(**values))
+    console.print(f"wrote {path}")
 
 
 def _resolve_platforms(
