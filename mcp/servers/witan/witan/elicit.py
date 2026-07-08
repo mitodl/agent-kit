@@ -53,6 +53,6 @@ async def text(ctx: Context | None, message: str, *, default: str) -> str:
         result = await ctx.elicit(message, response_type=str)
     except Exception:  # noqa: BLE001
         return default
-    if isinstance(result, AcceptedElicitation) and result.data:
-        return result.data
+    if isinstance(result, AcceptedElicitation) and (result.data or "").strip():
+        return result.data.strip()
     return default

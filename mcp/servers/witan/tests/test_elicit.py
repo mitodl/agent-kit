@@ -208,4 +208,19 @@ def test_text_no_ctx_error_or_empty_returns_default():
     assert asyncio.run(elicit.text(None, "q?", default="d")) == "d"
     assert asyncio.run(elicit.text(_RaiseCtx(), "q?", default="d")) == "d"
     assert asyncio.run(elicit.text(_AcceptCtx(""), "q?", default="d")) == "d"
-    assert asyncio.run(elicit.text(_AcceptCtx("real"), "q?", default="d")) == "real"
+    # whitespace-only is treated as empty → default; a real value is stripped
+    assert asyncio.run(elicit.text(_AcceptCtx("   "), "q?", default="d")) == "d"
+    assert asyncio.run(elicit.text(_AcceptCtx("  real  "), "q?", default="d")) == "real"
+
+
+def test_cli_fn_runs_async_tools():
+    # The CLI calls tools directly (no MCP client); _fn must run coroutine tools
+    # to completion so `witan task claim` etc. get a dict, not a coroutine.
+    from witan.cli._common import _fn
+
+    async def _atool(x, ctx=None):
+        return {"x": x, "ctx": ctx}
+
+    assert _fn(_atool)(5) == {"x": 5, "ctx": None}
+    # a plain sync callable passes through unchanged
+    assert _fn(lambda y: y * 2)(3) == 6
