@@ -292,3 +292,43 @@ def test_claim_post_write_verification_catches_last_writer(server, monkeypatch):
     assert res["claimed"] is False
     assert res["reason"] == "lost_race"
     assert res["held_by"] == "agentB"
+
+
+@requires_omnigraph
+def test_claim_consecutive_conflicts_stay_surfaced_no_clobber(server, monkeypatch):
+    """Two OCC conflicts in a row must both stay on the surfaced path — the
+    retry after the first conflict must NOT fall back to the blind-retry loop,
+    which could clobber a rival that commits during the second attempt."""
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    t = server.task_create(title="twice-contended", description="x")
+    real_change = srv.client.change
+    calls = {"n": 0}
+
+    def flaky_change(*args, surface_conflict=False, **kwargs):
+        if surface_conflict and calls["n"] < 2:
+            i = calls["n"]
+            calls["n"] += 1
+            if i == 1:
+                # on the second attempt a rival wins before our write conflicts
+                srv._update_task(
+                    t["slug"],
+                    {
+                        "status": "in_progress",
+                        "assignee": "agentB",
+                        "claimed_at": srv._now_iso(),
+                    },
+                )
+            raise graph_mod.OmnigraphConflict("stale view")
+        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
+
+    monkeypatch.setattr(srv.client, "change", flaky_change)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+    assert res["claimed"] is False
+    assert res["reason"] == "lost_race"
+    assert res["held_by"] == "agentB"
+    # both conflicts were surfaced (never fell through to a blind-retry write)
+    assert calls["n"] == 2
+    assert server.task_get(t["slug"])["assignee"] == "agentB"

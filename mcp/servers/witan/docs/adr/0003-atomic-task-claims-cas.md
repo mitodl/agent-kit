@@ -58,7 +58,9 @@ upstream conditional-write feature — built from three parts:
    live (non-lease-expired) claim, it returns
    `{"claimed": false, "reason": "lost_race", "held_by": ...}`. If the
    conflicting write was unrelated (or the rival's lease has since lapsed), it
-   applies the claim normally.
+   retries the claim — in a bounded loop that keeps `surface_conflict=True` for
+   every attempt, so a *consecutive* conflict is handled the same way and never
+   falls back to the blind-retry path that would clobber a new winner.
 
 3. **Post-write ownership verification.** Because the last writer still wins
    with no store CAS, after writing the claim `task_claim` re-reads and confirms

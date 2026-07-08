@@ -194,6 +194,12 @@ def _now_iso() -> str:
 # reclaimable. Holders renew by calling ``task_claim`` again.
 _CLAIM_LEASE_SECONDS = 3600
 
+# Bounded re-tries for the best-effort CAS claim loop: on each surfaced
+# optimistic-concurrency conflict we re-read and either bail (a rival won) or
+# re-attempt the claim. Small, since a claim conflicting this many times in a row
+# without a rival taking it is pathological.
+_CLAIM_MAX_ATTEMPTS = 3
+
 
 def _lease_expired(claimed_at: str | None) -> bool:
     """True when an advisory claim's lease has elapsed (or there is no claim)."""
@@ -2525,33 +2531,38 @@ def task_claim(
 
     now = _now_iso()
     claim = {"status": "in_progress", "assignee": holder, "claimed_at": now}
-    try:
-        _update_task(slug, claim, surface_conflict=True)
-    except OmnigraphConflict:
-        # A concurrent writer committed between our read and our write. omnigraph
-        # has no conditional-write (CAS) primitive, so we cannot make the write
-        # atomic — but we can refuse to blindly re-apply it over whoever won.
-        # Re-read and decide.
-        rows = client.read("read.gq", "get_task", {"slug": slug})
-        fresh = rows[0] if rows else {}
-        rival = fresh.get("assignee")
-        if (
-            fresh.get("status") == "in_progress"
-            and rival
-            and rival != holder
-            and not _lease_expired(fresh.get("claimed_at"))
-            and not force
-        ):
-            return {
-                "slug": slug,
-                "claimed": False,
-                "reason": "lost_race",
-                "held_by": rival,
-                "claimed_at": fresh.get("claimed_at"),
-            }
-        # The conflicting write was unrelated (or the rival's lease has lapsed);
-        # apply our claim now that the manifest has advanced.
-        _update_task(slug, claim)
+    # omnigraph has no conditional-write (CAS) primitive, so on each surfaced
+    # optimistic-concurrency conflict we re-read and either bail (a rival won) or
+    # re-attempt the claim. surface_conflict stays on for every attempt — a
+    # consecutive conflict must never fall back to the blind-retry path, which
+    # would re-apply the claim over whoever committed in the meantime.
+    for attempt in range(_CLAIM_MAX_ATTEMPTS):
+        try:
+            _update_task(slug, claim, surface_conflict=True)
+            break
+        except OmnigraphConflict:
+            # A concurrent writer committed between our read and our write.
+            rows = client.read("read.gq", "get_task", {"slug": slug})
+            fresh = rows[0] if rows else {}
+            rival = fresh.get("assignee")
+            if (
+                fresh.get("status") == "in_progress"
+                and rival
+                and rival != holder
+                and not _lease_expired(fresh.get("claimed_at"))
+                and not force
+            ):
+                return {
+                    "slug": slug,
+                    "claimed": False,
+                    "reason": "lost_race",
+                    "held_by": rival,
+                    "claimed_at": fresh.get("claimed_at"),
+                }
+            # The conflict was unrelated (or the rival's lease has lapsed) —
+            # retry the claim now that the manifest has advanced.
+            if attempt + 1 == _CLAIM_MAX_ATTEMPTS:
+                raise
 
     # Post-write verification: with no store-level CAS, a rival's claim could
     # still have landed last. Re-read and confirm we actually hold it before
