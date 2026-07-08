@@ -148,3 +148,32 @@ def test_detect_tolerates_multivalued_fetch(tmp_path, monkeypatch):
         check=True,
     )
     assert repo.detect() == "https://github.com/mitodl/ol-data-platform"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_detect_falls_back_to_first_remote_when_no_origin(tmp_path, monkeypatch):
+    """A repo whose only remote is not named ``origin`` still gets context."""
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    monkeypatch.chdir(tmp_path)
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "remote", "add", "upstream", "git@github.com:mitodl/upstreamed.git")
+    assert repo.detect() == "https://github.com/mitodl/upstreamed"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_detect_prefers_origin_over_other_remotes(tmp_path, monkeypatch):
+    """When both exist, ``origin`` still wins over a differently-named remote."""
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    monkeypatch.chdir(tmp_path)
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "remote", "add", "upstream", "git@github.com:other/fork.git")
+    _git(tmp_path, "remote", "add", "origin", "git@github.com:mitodl/canonical.git")
+    assert repo.detect() == "https://github.com/mitodl/canonical"
+
+
+def test_parse_remote_falls_back_to_first_remote(tmp_path):
+    """The git-binary-unavailable path (.git/config parse) also falls back
+    past ``origin`` to the first remote carrying a url."""
+    cfg = tmp_path / "config"
+    cfg.write_text('[remote "fork"]\n\turl = git@github.com:mitodl/via-config.git\n')
+    assert repo._parse_remote(cfg) == "https://github.com/mitodl/via-config"

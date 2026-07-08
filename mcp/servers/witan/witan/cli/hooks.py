@@ -9,14 +9,23 @@ from ._common import app
 
 
 @app.command(name="inject-context")
-def inject_context() -> None:
+def inject_context(*, debug: bool = False) -> None:
     """Print workflow context for the UserPromptSubmit hook.
 
     Emits active WorkflowProjects and ready Tasks for the current git repo to
     stdout. Designed to be called by ``~/.claude/hooks/workflow-context-inject.sh``
     — always exits 0 and never blocks even when the graph is missing or the repo
     is not in git.
+
+    Parameters
+    ----------
+    debug: Print detection/read diagnostics (repo, branch, graph reads, counts,
+        and the reason for any swallowed failure) to stderr. stdout still carries
+        only the injected block, so ``witan inject-context --debug`` is safe to
+        run by hand to see why the block is blank.
     """
+    import sys
+
     from .. import context as ctx_module
 
     cfg = cfg_module.load()
@@ -26,8 +35,16 @@ def inject_context() -> None:
         else None
     )
     if graph_path is not None and not graph_path.exists():
+        if debug:
+            print(
+                f"[witan inject-context] graph file does not exist: {graph_path} "
+                "(run `witan setup` / `install.sh`?)",
+                file=sys.stderr,
+            )
         return
-    text = ctx_module.inject_context(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
+    text = ctx_module.inject_context(
+        cfg.graph_uri, cfg.queries_dir, cfg.graph_token, debug=debug
+    )
     if text:
         print(text)
 

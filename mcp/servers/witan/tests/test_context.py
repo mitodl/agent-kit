@@ -273,6 +273,7 @@ def test_inject_context_truncation_counts_are_honest(tmp_path, monkeypatch):
 
 def test_detect_repo_survives_missing_git(monkeypatch):
     from witan import context as ctx
+    from witan import repo as repo_module
 
     monkeypatch.delenv("WITAN_REPO", raising=False)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
@@ -280,9 +281,50 @@ def test_detect_repo_survives_missing_git(monkeypatch):
     def _boom(*a, **k):
         raise FileNotFoundError("git not installed")
 
-    monkeypatch.setattr(ctx.subprocess, "check_output", _boom)
-    # FileNotFoundError (OSError) must degrade to None, not propagate.
+    # _detect_repo now shares repo.git_remote_url, which drives subprocess.run;
+    # a missing git binary (OSError) must degrade to None, not propagate.
+    monkeypatch.setattr(repo_module.subprocess, "run", _boom)
     assert ctx._detect_repo() is None
+
+
+@requires_omnigraph
+def test_inject_context_debug_reports_to_stderr(tmp_path, monkeypatch, capsys):
+    """--debug prints detection/read diagnostics to stderr, leaving stdout
+    (the injected block) untouched."""
+    from witan import context as ctx_module
+
+    repo = "https://github.com/test/ctx-debug"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    text = ctx_module.inject_context(str(store), queries_dir, None, debug=True)
+    captured = capsys.readouterr()
+    assert "[witan inject-context]" in captured.err
+    assert "detected repo=" in captured.err
+    # The returned block itself must not carry the diagnostics.
+    assert "[witan inject-context]" not in text
+
+
+def test_inject_context_debug_surfaces_failure_reason(monkeypatch, capsys):
+    """A broken graph read is swallowed (returns "") but --debug prints why."""
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/broken")
+
+    def _boom(*a, **k):
+        raise RuntimeError("graph is on fire")
+
+    # OmnigraphClient construction/reads happen inside the main try — force a
+    # failure and assert the swallow is annotated on stderr.
+    monkeypatch.setattr(ctx_module, "OmnigraphClient", _boom)
+    monkeypatch.setattr(ctx_module, "_read_output_cache", lambda *a, **k: None)
+
+    out = ctx_module.inject_context("nonexistent", None, None, debug=True)
+    captured = capsys.readouterr()
+    assert out == ""
+    assert "FAILED building context" in captured.err
+    assert "graph is on fire" in captured.err
 
 
 def test_cwd_or_dot_falls_back_on_oserror(monkeypatch):

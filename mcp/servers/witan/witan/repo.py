@@ -18,7 +18,9 @@ def detect(override: str | None = None) -> str | None:
       1. ``override`` parameter — a non-empty value is used as-is; an explicit
          empty string means "no repo scope" (callers use this for all-repos)
       2. ``WITAN_REPO`` environment variable
-      3. ``origin`` remote URL from the nearest ``.git/config``
+      3. the ``origin`` remote URL from the nearest ``.git/config``, else the
+         first remote of any name (a repo cloned/added under a different remote
+         name still gets context)
       4. ``None`` — no repo context available
     """
     if override is not None:
@@ -36,14 +38,22 @@ def detect(override: str | None = None) -> str | None:
     # (where .git is a file) and tolerates multi-valued keys (e.g. several
     # `fetch =` lines) that configparser rejects. Fall back to parsing
     # .git/config directly when the git binary is unavailable.
-    if url := _git_origin(cwd):
+    if url := git_remote_url(cwd):
         return _normalise(url)
 
     git_config_path = _find_git_config(cwd)
     if git_config_path is None:
         return None
 
-    return _parse_origin(git_config_path)
+    return _parse_remote(git_config_path)
+
+
+def normalise(url: str) -> str:
+    """Public alias for the canonical-URI normaliser (see ``_normalise``).
+
+    Exposed so the context hook can share one normalisation path with
+    ``detect`` instead of reimplementing it and drifting."""
+    return _normalise(url)
 
 
 def current_branch(start: Path | None = None) -> str | None:
@@ -88,11 +98,28 @@ def current_branch(start: Path | None = None) -> str | None:
     return branch if branch and branch != "HEAD" else None
 
 
-def _git_origin(start: Path) -> str | None:
-    """Resolve the ``origin`` remote URL via git itself."""
+def git_remote_url(start: Path) -> str | None:
+    """Resolve a remote URL via git itself: ``origin`` if present, else the
+    first remote of any name.
+
+    Falling back past ``origin`` means a checkout whose canonical remote is
+    named ``upstream``/``fork``/etc. (or a single differently-named remote)
+    still yields repo context instead of silently getting none. Returns the
+    raw URL; callers normalise it. Fault-tolerant: no git binary or no remote
+    → ``None``."""
+    if url := _git_remote_get_url(start, "origin"):
+        return url
+    for name in _git_remote_names(start):
+        if url := _git_remote_get_url(start, name):
+            return url
+    return None
+
+
+def _git_remote_get_url(start: Path, name: str) -> str | None:
+    """Raw URL of remote ``name`` via ``git remote get-url``, or ``None``."""
     try:
         result = subprocess.run(
-            ["git", "-C", str(start), "remote", "get-url", "origin"],
+            ["git", "-C", str(start), "remote", "get-url", name],
             capture_output=True,
             text=True,
             check=False,
@@ -104,6 +131,22 @@ def _git_origin(start: Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def _git_remote_names(start: Path) -> list[str]:
+    """Names of configured remotes (in git's stable, sorted order), or ``[]``."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(start), "remote"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def _find_git_config(start: Path) -> Path | None:
     """Walk up from ``start`` until a .git/config is found."""
     for directory in [start, *start.parents]:
@@ -113,12 +156,14 @@ def _find_git_config(start: Path) -> Path | None:
     return None
 
 
-def _parse_origin(git_config: Path) -> str | None:
+def _parse_remote(git_config: Path) -> str | None:
     """
-    Parse .git/config and return the normalised ``origin`` remote URL.
+    Parse .git/config and return the normalised remote URL: ``origin`` if it
+    has a url, else the first ``remote "…"`` section that does.
 
-    Uses configparser; falls back to None if the file is malformed or
-    ``remote "origin"`` is absent.
+    Uses configparser; falls back to None if the file is malformed or no
+    remote section carries a url. Mirrors ``git_remote_url``'s origin-first,
+    then-any-remote order for the git-binary-unavailable path.
     """
     parser = configparser.RawConfigParser()
     try:
@@ -126,11 +171,14 @@ def _parse_origin(git_config: Path) -> str | None:
     except configparser.Error:
         return None
 
-    section = 'remote "origin"'
-    if not parser.has_option(section, "url"):
-        return None
+    if parser.has_option('remote "origin"', "url"):
+        return _normalise(parser.get('remote "origin"', "url"))
 
-    return _normalise(parser.get(section, "url"))
+    for section in parser.sections():
+        if section.startswith("remote ") and parser.has_option(section, "url"):
+            return _normalise(parser.get(section, "url"))
+
+    return None
 
 
 def _normalise(url: str) -> str:

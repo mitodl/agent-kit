@@ -201,6 +201,7 @@ or `uv tool install` the package to get it on `PATH`):
 | `code repos` | Repositories with a code graph indexed (requires witan-code) |
 | `scan test <text>` | Dry-run active detectors against an ad-hoc string; prints findings (never the matched text) |
 | `scan rules` | List active write-path scan detectors, their category, source, and enforcement mode |
+| `inject-context [--debug]` | The UserPromptSubmit hook body; `--debug` prints detection/read diagnostics to stderr (repo, branch, graph reads, counts, swallowed-failure reasons) to explain a blank block |
 | `serve` | Start the MCP server (memory + code tools when witan-code is installed) |
 
 `run` claims the task (`in_progress` + your author), then hands the terminal to
