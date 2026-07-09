@@ -55,16 +55,19 @@ agent-kit profiles agent-config.toml                # list profiles + entry coun
 layout — pick the profile matching your specialty (`python`,
 `infrastructure`, `containers`, `dagster`, `process`, ...) to install the
 `universal` baseline plus just the skills relevant to your work. Selecting no
-profile installs the whole catalog.
+profile installs the whole catalog, including the `toolhive-swe` MCP
+servers below — they aren't part of any profile, so a `--profile` run
+skips them.
 
 Run `agent-kit apply agent-config.toml --scope project` instead of the default
 `global` scope to register servers/skills in the current project only
 rather than user-wide.
 
-This registers the [`witan`](./mcp/servers/witan/README.md) and
-[`witan-code`](./mcp/servers/witan-code/README.md) MCP servers —
-team-wide shared memory/task tracking and a tree-sitter code graph,
-respectively — alongside the skill catalog.
+This registers the skill catalog plus the [`toolhive-swe`](./mcp/servers/toolhive-swe/README.md)
+remote MCP server (one entry per environment tier). It does **not** register
+[`witan`](./mcp/servers/witan/README.md) or [`witan-code`](./mcp/servers/witan-code/README.md) —
+those own their own registration lifecycle via `witan setup` (see their
+READMEs), so they aren't duplicated in this manifest.
 
 See [`skills/`](./skills/README.md) for the full skill catalog and
 [`packages/agent-config-kit/README.md`](./packages/agent-config-kit/README.md)
