@@ -292,6 +292,36 @@ def test_reindex_offer_never_crosses_repos(tmp_path, monkeypatch):
     assert not store_module.store_for_repo(current_repo, srv.cfg).exists()
 
 
+@requires_stack
+def test_reindex_offer_degrades_on_indexing_failure(tmp_path, monkeypatch):
+    """An accepted offer whose indexing blows up must degrade to the same
+    shaped-empty result as a decline, not propagate the exception."""
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code import server as srv
+
+    repo = "https://github.com/test/cg-reindex-failure"
+    monkeypatch.setenv("WITAN_REPO", repo)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "svc.py").write_text(SAMPLE)
+    monkeypatch.chdir(src)
+    srv._git_context.clear()
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("indexing blew up")
+
+    monkeypatch.setattr(indexer, "index_path", _boom)
+
+    symbol_id = f"{repo}#svc.py::helper"
+    assert _fn(srv.code_find_references)(symbol_id, ctx=_AcceptCtx(True)) == []
+    assert _fn(srv.code_interface_consumers)("env_var", "X", ctx=_AcceptCtx(True)) == []
+
+
 # ── Opportunity 3: code_find_definition disambiguates multi-repo matches ─────
 
 RA = "https://github.com/test/def-repo-a"

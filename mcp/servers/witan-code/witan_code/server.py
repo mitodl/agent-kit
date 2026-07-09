@@ -1,3 +1,4 @@
+import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -238,7 +239,11 @@ async def _confirm_and_reindex(
     )
     if not ok:
         return None
-    indexer.index_path(repo_module.root() or Path.cwd(), force=False, config=cfg)
+    target = repo_module.root() or Path.cwd()
+    try:
+        await asyncio.to_thread(indexer.index_path, target, force=False, config=cfg)
+    except Exception:  # noqa: BLE001 — indexing failure degrades like a missing store
+        return None
     return _client_for_repo(repo)
 
 
@@ -258,7 +263,11 @@ async def _confirm_and_reindex_bridge(ctx: Context | None) -> OmnigraphClient | 
     )
     if not ok:
         return None
-    indexer.index_path(repo_module.root() or Path.cwd(), force=False, config=cfg)
+    target = repo_module.root() or Path.cwd()
+    try:
+        await asyncio.to_thread(indexer.index_path, target, force=False, config=cfg)
+    except Exception:  # noqa: BLE001 — indexing failure degrades like a missing store
+        return None
     return _bridge_client()
 
 
