@@ -1,5 +1,7 @@
 # witan-code
 
+> "witan" is pronounced `WIT-ən` (/ˈwɪtən/) — rhymes with "written" minus the r.
+
 A tree-sitter-based **code graph** MCP server (Layer 2) for coding agents,
 backed by [Omnigraph](https://github.com/ModernRelay/omnigraph). It indexes a
 repository's symbols (functions, methods, classes, modules) and their
@@ -194,7 +196,18 @@ wires both servers together via `uvx --from … --with …`. See the
 
 To use witan-code **standalone** (code graph only, no memory/task tools):
 
-**From the published git repo:**
+**From PyPI:**
+
+```bash
+# One-shot (uvx):
+uvx --from witan-code witan-code index
+
+# Persistent CLI install:
+uv tool install witan-code
+witan-code index
+```
+
+**From the published git repo** (to track pre-release/unreleased code):
 
 ```bash
 # One-shot (uvx):

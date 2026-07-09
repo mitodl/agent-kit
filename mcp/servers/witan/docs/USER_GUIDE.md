@@ -54,6 +54,14 @@ Two install shapes, depending on whether your agent platform needs the
   hooks/extensions shell out to `witan` directly):
 
   ```bash
+  uv tool install witan-council
+  witan setup --agent claude   # or: pi | all
+  ```
+
+  To track pre-release/unreleased code instead of the latest PyPI release,
+  install from the git repo directly:
+
+  ```bash
   uv tool install git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan
   witan setup --agent claude   # or: pi | all
   ```
@@ -63,14 +71,18 @@ Two install shapes, depending on whether your agent platform needs the
   installed:
 
   ```bash
+  uvx --from witan-council witan setup --agent copilot   # or: opencode | kilo
+  ```
+
+  Same pre-release option here — swap in the `git+…` source:
+
+  ```bash
   uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan \
       witan setup --agent copilot   # or: opencode | kilo
   ```
 
-Once published, `uv tool install witan-council` / `uvx --from witan-council
-witan …` work the same way, without the `git+…` source. See the main
-[README](../README.md#quick-start) for the manual-wiring fallback
-(`./install.sh` + hand-editing agent MCP config).
+See the main [README](../README.md#quick-start) for the manual-wiring
+fallback (`./install.sh` + hand-editing agent MCP config).
 
 ## First-run setup
 
@@ -196,8 +208,9 @@ different repos/orgs at different stores (e.g. work vs. personal) — see the
 - **`witan: command not found` in a hook.** Claude Code/Pi hooks and
   extensions call the `witan` binary directly — it must be on `PATH` for the
   user those hooks run as. `witan setup` warns explicitly if it can't find
-  `witan` on `PATH` when you run it; install with
-  `uv tool install git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan`.
+  `witan` on `PATH` when you run it; install with `uv tool install
+  witan-council` (or, for pre-release code, `uv tool install
+  git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan`).
 - **`omnigraph` binary missing.** `witan setup` downloads it to
   `~/.local/bin/omnigraph`; if that directory isn't on `PATH`, both the CLI
   and MCP server will fail to reach the graph. Re-run `witan setup` after an

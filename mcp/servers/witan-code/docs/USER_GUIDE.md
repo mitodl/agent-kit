@@ -63,6 +63,18 @@ To use witan-code **standalone** (code graph only, no memory/task tools):
 
 ```bash
 # One-shot:
+uvx --from witan-code witan-code index
+
+# Persistent CLI install:
+uv tool install witan-code
+witan-code index
+```
+
+To track pre-release/unreleased code instead of the latest PyPI release,
+install from the git repo directly:
+
+```bash
+# One-shot:
 uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code \
     witan-code index
 
