@@ -52,10 +52,10 @@ machine's local code index.
 
 ## Documentation
 
-- [User guide](docs/USER_GUIDE.md) — task-oriented walkthrough: install,
+- [User guide](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/docs/USER_GUIDE.md) — task-oriented walkthrough: install,
   first index, definition/caller/impact queries, cross-repo bridge basics,
   troubleshooting.
-- [CLI reference](docs/CLI_REFERENCE.md) — every `witan-code` command with
+- [CLI reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/docs/CLI_REFERENCE.md) — every `witan-code` command with
   its full flag table and an example invocation.
 
 ## Cross-repo context bridge (Layer 2.5)

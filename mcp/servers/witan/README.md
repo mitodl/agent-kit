@@ -8,9 +8,10 @@ platform-specific code.
 
 ## Documentation
 
-See the [User Guide](docs/USER_GUIDE.md) for a task-oriented walkthrough
-(install, setup, day-to-day loop, operating modes, troubleshooting) and the
-[CLI Reference](docs/CLI_REFERENCE.md) for the full `witan` command surface.
+See the [User Guide](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/USER_GUIDE.md)
+for a task-oriented walkthrough (install, setup, day-to-day loop, operating
+modes, troubleshooting) and the [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md)
+for the full `witan` command surface.
 
 ## Quick Start
 
