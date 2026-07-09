@@ -117,9 +117,9 @@ practice this is usually the *largest* bucket. Don't skip it just because
 **`mergeable` can be `"UNKNOWN"`.** GitHub computes mergeability lazily in the
 background; a PR that was just pushed to, or hasn't been polled recently, can
 show `UNKNOWN` even with no real conflict. `classify-prs.sh` surfaces this as
-`blocked_reason: "unknown_pending_recompute"` — re-run `pr-detail.sh` on that
-PR (or just `gh pr view`) after a few seconds before assuming it's actually
-blocked.
+`blocked_reason: "unknown_pending_recompute"` — re-run `scripts/pr-detail.sh`
+on that PR (or just `gh pr view`) after a few seconds before assuming it's
+actually blocked.
 
 **`feedback_likely_addressed` is a heuristic, not a verdict.** For
 `has_review_comments` and `changes_requested`, the classifier compares the
@@ -142,6 +142,11 @@ table above (most actionable first), each PR as one row:
 |----|-------|------|
 | [#4902](https://github.com/mitodl/ol-infrastructure/pull/4902) | Add Pulumi program for ol-analytics-api K8s deployment | ol-infrastructure |
 
+### 🚧 Approved but blocked (3)
+| PR | Reason |
+|----|--------|
+| [#4693](...) | unknown_pending_recompute — re-check mergeability |
+
 ### 🔴 Changes requested (4)
 ...
 
@@ -153,11 +158,6 @@ table above (most actionable first), each PR as one row:
 
 ### 🆕 Needs first-pass review (1)
 ...
-
-### 🚧 Approved but blocked (3)
-| PR | Reason |
-|----|--------|
-| [#4693](...) | unknown_pending_recompute — re-check mergeability |
 
 ### 📝 Draft (2)
 ...

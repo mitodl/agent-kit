@@ -12,7 +12,7 @@ author="@me"
 positional=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --author) author="$2"; shift 2 ;;
+    --author) [[ $# -ge 2 ]] || usage; author="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) positional+=("$1"); shift ;;
   esac

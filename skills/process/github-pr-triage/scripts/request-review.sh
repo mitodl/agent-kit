@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     copilot|claude|all) target="$1"; shift ;;
     --force) force=true; shift ;;
-    --claude-trigger) claude_trigger="$2"; shift 2 ;;
+    --claude-trigger) [[ $# -ge 2 ]] || usage; claude_trigger="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) usage ;;
   esac

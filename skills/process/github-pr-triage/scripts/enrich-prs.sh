@@ -24,10 +24,10 @@ while IFS=$'\t' read -r repo number; do
     "${script_dir}/pr-detail.sh" "$repo" "$number" 2>"${tmp_dir}/${i}.err" \
       | jq --arg repo "$repo" '. + {repo: $repo}' > "${tmp_dir}/${i}.json"
   } &
-  while [[ "$(jobs -r -p | wc -l)" -ge "$max_parallel" ]]; do wait -n; done
+  while [[ "$(jobs -r -p | wc -l)" -ge "$max_parallel" ]]; do wait -n || true; done
 done < <(jq -r '.[] | [.repository.nameWithOwner, .number] | @tsv' "$fetched")
 
-wait
+wait || true
 
 find "$tmp_dir" -name '*.json' -empty -delete
 if compgen -G "${tmp_dir}/*.json" > /dev/null; then

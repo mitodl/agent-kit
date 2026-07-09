@@ -17,10 +17,18 @@ if [[ $# -lt 1 ]]; then
 fi
 
 jq '
+  # Report order the SKILL doc promises ("most actionable first") - group_by
+  # sorts its groups lexically by key, which does not match this, so the
+  # final sort re-orders by this explicit priority instead.
+  def bucket_order: [
+    "approved_ready_to_merge", "approved_blocked", "changes_requested",
+    "has_review_comments", "awaiting_review", "needs_first_pass_review", "draft"
+  ];
   def has_review_state($s): (.latestReviews // []) | any(.state == $s);
   def checks_failing:
     (.statusCheckRollup // []) | any(
-      (.conclusion // "") | ascii_upcase | IN("FAILURE", "TIMED_OUT", "CANCELLED")
+      ((.conclusion // "") | ascii_upcase | IN("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"))
+      or ((.state // "") | ascii_upcase | IN("FAILURE", "ERROR"))
     );
   def blocked_reason:
     if .mergeable == "CONFLICTING" then "merge_conflict"
@@ -67,5 +75,5 @@ jq '
         )
       }) | sort_by(.updatedAt))
     })
-  | sort_by(.bucket)
+  | sort_by(. as $g | bucket_order | index($g.bucket))
 ' "$1"
