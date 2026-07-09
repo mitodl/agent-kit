@@ -135,6 +135,16 @@ for skill in witan-memory witan-workflow witan-task witan-project-tracker; do
 done
 ```
 
+If you set this up with older tooling (or an older `witan setup`) and still see
+Pi's name-collision warning at startup, you have stale duplicates left over in
+`~/.agents/skills/` — remove them:
+
+```bash
+for skill in witan-memory witan-workflow witan-task witan-project-tracker; do
+  rm -rf ~/.agents/skills/"$skill"
+done
+```
+
 ### 4. Code-graph indexer CLI — required for the hooks to run at all
 
 The codegraph hooks are bare `witan-code` commands (no `uvx` fallback, same

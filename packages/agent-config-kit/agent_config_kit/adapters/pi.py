@@ -4,7 +4,7 @@ adapters/_wire/pi_mcp.py).
 
 Skills install only to Pi's own skills dir (~/.pi/agent/skills/), not also to
 the shared cross-agent pool (~/.agents/skills/): Pi already natively unions
-both directories when discovering skills (its own docs.md "Locations"
+both directories when discovering skills (its own docs/skills.md "Locations"
 section), so writing the same skill into both is pure duplication — Pi finds
 the name twice and logs a spurious "skill collision" warning on every
 startup. A single dest dir is correct and sufficient.
