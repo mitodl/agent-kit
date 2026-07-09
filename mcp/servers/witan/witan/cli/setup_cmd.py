@@ -157,7 +157,7 @@ def setup(
         bundle.hooks.extend(code_bundle.hooks)
         bundle.skills.extend(code_bundle.skills)
 
-        if not dry_run and not _witan_code_mounted():
+        if not dry_run and shutil.which("witan") and not _witan_code_mounted():
             console.print(
                 "[yellow]Warning:[/yellow] `witan code` isn't available from "
                 "the `witan` on PATH, so the hooks just registered "

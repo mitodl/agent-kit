@@ -146,6 +146,27 @@ def test_no_warning_when_witan_code_is_mounted(
     assert "isn't available" not in capsys.readouterr().out
 
 
+def test_no_subcommand_warning_when_witan_itself_is_missing(
+    tmp_path, monkeypatch, capsys
+):
+    """Only the existing "witan not on PATH" warning should print in this
+    case — not also the "witan code isn't available" one. _witan_code_mounted()
+    returns False when witan is missing too, so without the `shutil.which
+    ("witan")` guard this fired both warnings side by side, each recommending
+    a different (redundant) `uv tool install` command."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr("witan.setup.install_omnigraph", lambda dry_run: None)
+    monkeypatch.setattr("witan.setup.install_default_config", lambda dry_run: None)
+    monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: None)
+    _install_fake_witan_code(monkeypatch, tmp_path)
+
+    setup_cmd.setup(dry_run=False)
+
+    out = capsys.readouterr().out
+    assert "witan not on PATH" in out
+    assert "isn't available" not in out  # the "witan code …" warning
+
+
 def test_witan_code_mounted_false_when_witan_not_on_path(monkeypatch):
     monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: None)
     assert setup_cmd._witan_code_mounted() is False
