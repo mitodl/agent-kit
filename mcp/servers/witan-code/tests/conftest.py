@@ -23,6 +23,12 @@ requires_stack = pytest.mark.skipif(
     reason="requires omnigraph binary and tree-sitter grammars",
 )
 
+# Narrower than requires_stack: maintenance (optimize/cleanup) exercises the
+# omnigraph binary directly and has no tree-sitter involvement.
+requires_omnigraph = pytest.mark.skipif(
+    not omnigraph_available, reason="requires omnigraph binary"
+)
+
 SAMPLE = """\
 class Service:
     def run(self):

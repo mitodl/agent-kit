@@ -7,6 +7,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
+    "agent-config-kit>=0.1,<1",
     "fastmcp>=3.4.2,<4",
     "cyclopts>=4,<5",
     "tree-sitter>=0.26,<0.27",
@@ -40,8 +41,13 @@ testpaths = ["tests"]
 [tool.hatch.build.targets.wheel]
 packages = ["witan_code"]
 
-# witan_code/queries/, witan_code/schema/, and witan_code/queries_ts/ are
-# discovered automatically via packages = ["witan_code"]. The omnigraph
-# binary is no longer build-time-bundled — `witan-code setup` fetches it at
-# install/runtime instead (see witan_code/setup.py) — so there is no
+# witan_code/queries/, witan_code/schema/, witan_code/queries_ts/,
+# witan_code/skills/, and witan_code/extensions/ are all discovered
+# automatically via packages = ["witan_code"] — including for a
+# `uvx --from git+...` install, so `witan-code setup` can bundle them via
+# agent_config_kit without any build-time bundling step. Hooks are bare CLI
+# commands (session-init, reindex-hook, inject-context, checkpoint in
+# witan_code/cli.py) rather than wrapper scripts, so there's no
+# witan_code/hooks/ to bundle either. The omnigraph binary itself is fetched
+# at install/runtime instead (see witan_code/setup.py) — so there is no
 # witan_code/_bin/ to force-include.

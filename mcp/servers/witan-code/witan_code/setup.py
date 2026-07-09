@@ -1,7 +1,11 @@
-"""Runtime install of the omnigraph binary for standalone witan-code use.
+"""Witan-code's registration bundle, plus the omnigraph binary installer.
 
-Copied from witan/witan/setup.py (queries_dir/dest logic unchanged) so the
-two Layer packages stay independent — no cross-package imports, matching
+Per-agent MCP/skill/hook installation itself lives in ``agent_config_kit``
+(``apply``/``apply_all``) — this module only builds witan-code's own
+``RegistrationBundle`` and keeps the omnigraph binary distribution logic.
+
+The bundle-building shape is copied from witan/witan/setup.py so the two
+Layer packages stay independent — no cross-package imports, matching
 OmnigraphClient's own docstring in graph.py. ``_OMNIGRAPH_VERSION`` here is
 kept in lockstep with witan's copy by the omnigraph-version customManager in
 renovate.json — a single Renovate PR bumps both.
@@ -15,11 +19,96 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+from agent_config_kit import (
+    DeclarativeHook,
+    Hook,
+    HookEvent,
+    PluginRegistration,
+    RegistrationBundle,
+    SkillSource,
+    StdioServer,
+)
+
+_WITAN_CODE_ARGS = [
+    "--from",
+    "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code",
+    "witan-code",
+    "serve",
+]
+
 _OMNIGRAPH_VERSION = "0.8.0"
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
     ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
 }
+
+
+def witan_code_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
+    """Build witan-code's ``RegistrationBundle``: MCP server, skill, hooks.
+
+    Independent of ``witan``'s own bundle (``witan.setup.witan_bundle``) — a
+    witan-code-only install (no witan) still gets the skill, hooks, and Pi
+    extension via standalone ``witan-code setup``. When both packages are
+    installed together and witan-code is importable, ``witan setup`` also
+    folds this bundle in automatically (see ``witan.cli.setup_cmd``), so a
+    single ``witan setup`` covers both; running ``witan-code setup``
+    separately afterwards is harmless (each `apply()` call is an idempotent
+    read-merge-write) but not required in that case.
+    """
+    skills_dir = pkg_dir / "skills"
+    skills = (
+        [
+            SkillSource(name=d.name, skill_md_path=d / "SKILL.md")
+            for d in sorted(skills_dir.iterdir())
+            if (d / "SKILL.md").exists()
+        ]
+        if skills_dir.is_dir()
+        else []
+    )
+
+    pi_ext_dir = pkg_dir / "extensions" / "pi"
+    # Bare CLI commands, no wrapper script — portable everywhere `witan-code`
+    # installs (Windows included, where bash/setsid don't exist), matching
+    # witan's own `witan inject-context`/`session-checkpoint` hooks. The
+    # prompt-path timeouts mirror witan's: a hung git or store read must
+    # degrade to no context/no compaction, never stall the agent.
+    hooks: list[Hook] = [
+        DeclarativeHook(
+            event=HookEvent.SESSION_START,
+            command="witan-code session-init",
+        ),
+        DeclarativeHook(
+            event=HookEvent.POST_TOOL_USE,
+            matcher="Edit|Write",
+            command="witan-code reindex-hook",
+        ),
+        DeclarativeHook(
+            event=HookEvent.USER_PROMPT_SUBMIT,
+            command="witan-code inject-context",
+            timeout_seconds=15,
+        ),
+        DeclarativeHook(
+            event=HookEvent.STOP,
+            command="witan-code checkpoint",
+            timeout_seconds=15,
+        ),
+    ]
+    if pi_ext_dir.is_dir():
+        hooks.extend(
+            PluginRegistration(entry_path=f)
+            for f in sorted(pi_ext_dir.iterdir())
+            if f.suffix == ".ts"
+        )
+
+    return RegistrationBundle(
+        mcp_servers={
+            "witan-code": StdioServer(
+                command="uvx", args=_WITAN_CODE_ARGS, env={"WITAN_AUTHOR": author}
+            )
+        },
+        skills=skills,
+        hooks=hooks,
+    )
 
 
 def install_omnigraph(dry_run: bool = False) -> None:
