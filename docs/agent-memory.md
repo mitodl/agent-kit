@@ -124,9 +124,9 @@ ln -sf "$REPO/configs/pi/extensions/workflow-context.ts" ~/.pi/agent/extensions/
 `witan setup` installs the bundled Witan skills automatically. For local
 development from a checkout, symlink the bundled skill directories directly
 into each agent's own skills dir. Pi natively unions its own
-`~/.pi/agent/skills/` with `~/.agents/skills/` when discovering skills, so
-symlinking into both would duplicate the skill and trigger Pi's own
-name-collision warning — symlink into `~/.pi/agent/skills/` only:
+`~/.pi/agent/skills/` with `~/.agents/skills/` when discovering skills; do not
+symlink into both, and if you previously installed copies under
+`~/.agents/skills/`, delete them to avoid Pi's name-collision warning:
 
 ```bash
 for skill in witan-memory witan-workflow witan-task witan-project-tracker; do
