@@ -1,10 +1,8 @@
-"""``agent-kit`` console script — gated behind the ``cli`` extra.
+"""``agent-kit`` console script.
 
-The base ``agent_config_kit`` package stays importable with only ``pydantic``
-as a dependency (spec D3); this module is the only place ``cyclopts``/``rich``
-are imported, and ``agent_config_kit/__init__.py`` never imports it. Running
-the console script without the ``cli`` extra installed fails fast here with a
-clear message instead of a bare traceback from deep inside cyclopts/rich.
+Business logic (manifest loading, platform adapters, apply/diff/prune) lives
+in the ``agent-config-kit`` library dependency; this package is the CLI
+surface plus the bundled ``witan``/``witan-code`` MCP servers.
 """
 
 from __future__ import annotations
@@ -12,41 +10,32 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from pathlib import Path
 
-try:
-    import cyclopts
-    from rich.console import Console
-    from rich.prompt import Confirm, Prompt
-    from rich.table import Table
-except ImportError as exc:
-    sys.stderr.write(
-        "agent-kit: the CLI requires the `cli` extra.\n"
-        "Install it with: pip install 'agent-config-kit[cli]'\n"
-        "(or: uv tool install 'agent-config-kit[cli]')\n"
-    )
-    raise SystemExit(1) from exc
+import cyclopts
+from rich.console import Console
+from rich.prompt import Confirm, Prompt
+from rich.table import Table
 
-from .config import load_global_config, resolve_config_path
-from .diff import Drift
-from .diff import diff as diff_bundle
-from .fetch import FetchError, fetch_remote, is_remote_uri
-from .installers import ConflictingPathError
-from .manifest import ManifestError, load_manifest, resolve_profile
-from .models import SKILL_NAME_PATTERN, Scope
-from .plan import InstallResult
-from .plan import apply as apply_bundle
-from .plan import apply_all as apply_all_bundle
-from .prune import (
+from agent_config_kit.config import load_global_config, resolve_config_path
+from agent_config_kit.diff import Drift
+from agent_config_kit.diff import diff as diff_bundle
+from agent_config_kit.fetch import FetchError, fetch_remote, is_remote_uri
+from agent_config_kit.installers import ConflictingPathError
+from agent_config_kit.manifest import ManifestError, load_manifest, resolve_profile
+from agent_config_kit.models import SKILL_NAME_PATTERN, Scope
+from agent_config_kit.plan import InstallResult
+from agent_config_kit.plan import apply as apply_bundle
+from agent_config_kit.plan import apply_all as apply_all_bundle
+from agent_config_kit.prune import (
     PlatformState,
     apply_with_prune,
     default_state_path,
     load_state,
     write_state,
 )
-from .registry import detect_installed_platforms, known_platforms
-from .resolve import (
+from agent_config_kit.registry import detect_installed_platforms, known_platforms
+from agent_config_kit.resolve import (
     default_manifest_cache_dir,
     find_repo_root,
     resolve_zero_arg_manifest,

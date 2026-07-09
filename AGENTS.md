@@ -5,8 +5,9 @@
 A shared toolkit of AI agent utilities for the mitodl team: reusable skills,
 custom agent definitions, MCP server configurations, and sample agent configs.
 The primary artifact is a catalog of `SKILL.md` files, plus MCP server
-registrations, installed declaratively via
-[`agent-config-kit`](./packages/agent-config-kit/README.md) (`agent-kit`) and
+registrations, installed declaratively via the
+[`agent-kit`](./packages/agent-kit/README.md) CLI (built on the
+[`agent-config-kit`](./packages/agent-config-kit/README.md) library) and
 this repo's [`agent-config.toml`](./agent-config.toml) manifest.
 
 ## Repository Layout
@@ -25,7 +26,8 @@ mcp/             # MCP server install helpers and config snippets
   servers/witan-code/    # Tree-sitter code-graph MCP server (Python)
   servers/toolhive-swe/  # ToolHive SWE MCP config (per-tier: ci/qa/prod)
 packages/        # Standalone, independently-versioned Python libraries
-  agent-config-kit/      # Cross-agent MCP/skill/hook registration library
+  agent-config-kit/      # Cross-agent MCP/skill/hook registration library (no CLI)
+  agent-kit/             # The agent-kit CLI, bundled with witan + witan-code
 configs/         # Sample / reference agent configurations
 docs/            # Design docs and implementation specs
 ```
@@ -49,7 +51,7 @@ prek install
 
 | Command | Purpose |
 |---------|---------|
-| `uv tool install 'agent-config-kit[cli]'` | Install the `agent-kit` CLI |
+| `uv tool install agent-kit` | Install the `agent-kit` CLI |
 | `agent-kit apply agent-config.toml` | Install all MCP servers/skills into every detected platform |
 | `agent-kit apply agent-config.toml --profile <name>` | Install just one profile's skills (+ `universal`) |
 | `agent-kit validate agent-config.toml` | Check for drift between the manifest and on-disk config |
@@ -88,6 +90,7 @@ See [`skills/workflow/creating-skills/SKILL.md`](./skills/workflow/creating-skil
 - MD013 (line length) and MD033 (inline HTML) are disabled in markdownlint; long lines in code blocks are fine.
 - `witan` MCP servers use `uv` exclusively — never `pip` directly.
 - Skills are distributed as ZIPs on GitHub releases (tagged `v*`) — the publish workflow handles this automatically.
+- Each publishable package (`agent-config-kit`, `mcp/servers/witan`, `mcp/servers/witan-code`, `packages/agent-kit`) carries a `[tool.bumpversion]` config — bump a release with `cd <package-dir> && uvx bump-my-version@1.4.1 bump patch|minor|major`, then commit and push to `main`; each package's `publish-*.yml` workflow tests, builds, publishes to PyPI, and tags the release automatically whenever its `pyproject.toml` version line changes. `packages/agent-kit`'s `dependencies` on `agent-config-kit`/`witan-council`/`witan-code` are open-ended floors (no upper bound), so a new release of any of the three is picked up by a fresh install without `agent-kit` itself needing a release.
 
 ## Further Reading
 

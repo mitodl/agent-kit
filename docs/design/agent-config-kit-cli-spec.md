@@ -4,6 +4,13 @@ Project: `wp-cross-agent-coding-agent-config-management-libra-5593b0`
 Phase: implementation
 Status: design only — nothing here is implemented yet.
 
+> **Superseded (packaging only):** M4's `cli` extra
+> (`agent-config-kit[cli]`) was later extracted into its own package,
+> `packages/agent-kit/`, which depends on `agent-config-kit` rather than
+> bundling `cyclopts`/`rich` behind an extra of it — see
+> `packages/agent-kit/README.md`. The manifest format, command surface, and
+> every decision below (M1-M8) are otherwise still accurate.
+
 Answers `tk-spec-manifest-file-format-cli-command-surface-fo-ccd46a`, the
 single unblocking task for the `cli` extra epic
 (`tk-add-manifest-driven-cli-to-agent-config-kit-cli--8772d0`). Builds on the

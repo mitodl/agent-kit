@@ -11,23 +11,30 @@ custom agent definitions, MCP server install helpers, and sample configurations.
 ├── custom-agents/             # Custom agent definitions for GitHub Copilot and Claude Code
 ├── mcp/                       # Install helpers and configuration for common MCP servers
 ├── configs/                   # Sample / reference agent configurations
-├── packages/agent-config-kit/ # agent-kit — the CLI that installs the skills/MCP servers declared below
+├── packages/agent-config-kit/ # Library: manifest/apply/diff/prune machinery, no CLI
+├── packages/agent-kit/        # The agent-kit CLI, bundled with witan + witan-code
 └── agent-config.toml          # This repo's own manifest for agent-kit
 ```
 
 ## Quick Start
 
-Setup for this repo's own MCP servers and skills is driven by
-[`agent-config-kit`](./packages/agent-config-kit/README.md) (`agent-kit`) and the
-manifest at [`agent-config.toml`](./agent-config.toml) — a single declarative
-file that installs MCP servers, skills, and hooks into whichever coding-agent
+Setup for this repo's own MCP servers and skills is driven by the
+[`agent-kit`](./packages/agent-kit/README.md) CLI and the manifest at
+[`agent-config.toml`](./agent-config.toml) — a single declarative file that
+installs MCP servers, skills, and hooks into whichever coding-agent
 platforms it detects (Claude Code, Pi, GitHub Copilot, OpenCode, ...).
 
 ### Installing `agent-kit`
 
 ```bash
-uv tool install 'agent-config-kit[cli]'
+uv tool install agent-kit
 ```
+
+This also pulls in the [`witan`](./mcp/servers/witan/README.md) and
+[`witan-code`](./mcp/servers/witan-code/README.md) MCP servers — `agent-kit`
+depends on all three, along with the
+[`agent-config-kit`](./packages/agent-config-kit/README.md) library its CLI
+is built on.
 
 ### Applying this repo's manifest
 
@@ -55,7 +62,7 @@ team-wide shared memory/task tracking and a tree-sitter code graph,
 respectively — alongside the skill catalog.
 
 See [`skills/`](./skills/README.md) for the full skill catalog and
-[`packages/agent-config-kit/README.md`](./packages/agent-config-kit/README.md)
+[`packages/agent-kit/README.md`](./packages/agent-kit/README.md)
 for the full manifest schema, remote skill/hook sources, and profile
 composition.
 

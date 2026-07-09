@@ -53,6 +53,15 @@ testpaths = ["tests"]
 [tool.hatch.build.targets.wheel]
 packages = ["witan_code"]
 
+[tool.bumpversion]
+current_version = "0.2.0"
+allow_dirty = true
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
 # witan_code/queries/, witan_code/schema/, witan_code/queries_ts/,
 # witan_code/skills/, and witan_code/extensions/ are all discovered
 # automatically via packages = ["witan_code"] — including for a

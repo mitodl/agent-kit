@@ -1,5 +1,5 @@
 # agent-config.toml — declarative install of the ToolHive SWE remote MCP
-# servers via agent-config-kit's `agent-kit` CLI.
+# servers via the `agent-kit` CLI.
 #
 # ToolHive SWE has no local process to build or run — this manifest just
 # registers three remote, Streamable HTTP servers (one per environment tier)
@@ -8,7 +8,7 @@
 # API key to set here.
 #
 # Usage (from this directory):
-#   uv tool install 'agent-config-kit[cli]'
+#   uv tool install agent-kit
 #   agent-kit apply agent-config.toml            # register on every detected platform
 #   agent-kit apply agent-config.toml --dry-run   # preview without writing
 #   agent-kit validate agent-config.toml          # check for drift

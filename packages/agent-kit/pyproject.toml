@@ -1,0 +1,58 @@
+[project]
+name = "agent-kit"
+version = "0.1.0"
+description = "The agent-kit CLI (manifest-driven MCP/skill/hook registration), bundled with the witan and witan-code MCP servers"
+readme = "README.md"
+license = "BSD-3-Clause"
+requires-python = ">=3.11"
+keywords = ["mcp", "agent", "coding-agent", "cli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "agent-config-kit>=0.4.0",
+    "cyclopts>=4,<5",
+    "rich>=13",
+    "witan-council>=0.2.0",
+    "witan-code>=0.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mitodl/agent-kit"
+Repository = "https://github.com/mitodl/agent-kit"
+Documentation = "https://github.com/mitodl/agent-kit/blob/main/packages/agent-kit/README.md"
+Issues = "https://github.com/mitodl/agent-kit/issues"
+
+[project.scripts]
+agent-kit = "agent_kit.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+# Until a sibling package's local version bump has actually been published
+# to PyPI, consume it as an editable workspace path dependency so `uv sync`
+# / CI can resolve ahead of publish (same pattern as mcp/servers/witan).
+agent-config-kit = { path = "../agent-config-kit", editable = true }
+witan-council = { path = "../../mcp/servers/witan", editable = true }
+witan-code = { path = "../../mcp/servers/witan-code", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_kit"]
+
+[tool.bumpversion]
+current_version = "0.1.0"
+allow_dirty = true
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[dependency-groups]
+test = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
