@@ -34,7 +34,7 @@ Action scripts (used only after explicit per-PR confirmation — see Phase 5):
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/request-copilot-review.sh` | Request a GitHub Copilot first-pass review |
+| `scripts/request-review.sh` | Request a first-pass review from Copilot and/or Claude; refuses drafts and PRs that already have review activity |
 | `scripts/merge-pr.sh` | Merge an approved, green PR and delete its branch |
 
 ---
@@ -178,9 +178,11 @@ Confirm before mutating anything **per PR or per clearly-scoped batch** — see
 [references/action-playbook.md](references/action-playbook.md) for the exact
 commands, confirmation phrasing, and edge cases for each bucket. Summary:
 
-- **`needs_first_pass_review`** — request Copilot review
-  (`scripts/request-copilot-review.sh`) and/or run this session's built-in
-  `/review <pr-url>` to have Claude leave its own first-pass review.
+- **`needs_first_pass_review`** — request a bot review with
+  `scripts/request-review.sh <repo> <number> [copilot|claude|all]` (default
+  `all`; it self-guards against drafts and PRs that already have review
+  activity), and/or run this session's built-in `/review <pr-url>` to have
+  Claude leave its own first-pass review directly.
 - **`approved_ready_to_merge`** — confirm per PR, then
   `scripts/merge-pr.sh <repo> <number> [merge|squash|rebase]`. Never batch-merge
   without the user seeing the specific list first.

@@ -10,27 +10,44 @@ Show the list, then act.
 
 ## `needs_first_pass_review` — kick off a first pass
 
-Two independent options; either or both, per the user's preference:
-
-**Request GitHub Copilot as a reviewer:**
+`scripts/request-review.sh` is the single entry point for this bucket. It
+re-checks the PR itself before doing anything (via `pr-detail.sh`) and refuses
+to act on a draft, or on a PR that already has a submitted review or a pending
+requested reviewer — so it's safe to run over an entire
+`needs_first_pass_review` batch without re-pinging PRs that moved on between
+classification and action:
 
 ```bash
-./skills/process/github-pr-triage/scripts/request-copilot-review.sh mitodl/agent-kit 90
+./skills/process/github-pr-triage/scripts/request-review.sh mitodl/agent-kit 90            # both bots (default)
+./skills/process/github-pr-triage/scripts/request-review.sh mitodl/agent-kit 90 copilot     # Copilot only
+./skills/process/github-pr-triage/scripts/request-review.sh mitodl/agent-kit 90 claude      # Claude only
+./skills/process/github-pr-triage/scripts/request-review.sh mitodl/agent-kit 90 --force     # override the safety guard
 ```
 
-This calls `POST /repos/{owner}/{repo}/pulls/{number}/requested_reviewers`
+**Copilot mode** calls `POST /repos/{owner}/{repo}/pulls/{number}/requested_reviewers`
 with `reviewers[]=copilot-pull-request-reviewer[bot]`. Requires the repo to
-have Copilot code review enabled (org/repo setting) — a 422 usually means it
-isn't. Copilot then posts its review as a normal `COMMENTED`-state review
-within a minute or two; it does not block on this call.
+have Copilot code review enabled (org/repo setting) — a failure here usually
+means it isn't. Copilot then posts its review as a normal `COMMENTED`-state
+review within a minute or two; the script does not block waiting for it.
 
-**Have Claude do the first pass directly:** invoke this session's built-in
-`/review <pr-url>` (not `/code-review`, which reviews your *working* diff).
-This posts Claude's own review as a PR comment/review, giving the same kind of
-first-pass coverage as Copilot without depending on org Copilot settings. Good
-default when Copilot isn't enabled on a repo, or when the user explicitly asked
-for "a Claude review" (they said "usually copilot, but maybe claude" — ask
-which they want if unclear, or just do both).
+**Claude mode** posts a PR comment (default body: `"@claude review this PR"`,
+override with `--claude-trigger "..."`) rather than calling a reviewer-request
+API — there is no Copilot-style "add Claude as a requested reviewer"
+endpoint. This only produces an actual review if the target repo has a Claude
+GitHub Action installed and configured to react to PR comments (e.g.
+`anthropics/claude-code-action` on the `issue_comment` event). **As of this
+writing, no mitodl repo has that workflow installed** (checked via
+`gh search code "claude-code-action" --owner mitodl`) — so in this org, Claude
+mode currently posts a comment nobody/nothing responds to. Prefer the
+in-session alternative instead: invoke this session's built-in `/review
+<pr-url>` (not `/code-review`, which reviews your *working* diff) to have
+Claude leave its own first-pass review directly, with no dependency on repo
+configuration. Re-check for an installed Claude Action before relying on
+comment-trigger mode — if the user's org adds one later, this script needs no
+changes.
+
+Ask which bot(s) the user wants if unclear (they said "usually copilot, but
+maybe claude"); default to `all` when they haven't expressed a preference.
 
 Do **not** request a human reviewer on the user's behalf unless they name one —
 that's a social action with more weight than a bot request.
