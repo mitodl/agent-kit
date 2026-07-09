@@ -55,7 +55,9 @@ agent-kit profiles agent-config.toml                # list profiles + entry coun
 layout — pick the profile matching your specialty (`python`,
 `infrastructure`, `containers`, `dagster`, `process`, ...) to install the
 `universal` baseline plus just the skills relevant to your work. Selecting no
-profile installs the whole catalog.
+profile installs the whole catalog, including the `toolhive-swe` MCP
+servers below — they aren't part of any profile, so a `--profile` run
+skips them.
 
 Run `agent-kit apply agent-config.toml --scope project` instead of the default
 `global` scope to register servers/skills in the current project only

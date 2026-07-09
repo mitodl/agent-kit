@@ -35,17 +35,17 @@
 [mcp_servers.toolhive-swe-ci]
 kind = "remote"
 url = "https://toolhive-swe.ci.ol.mit.edu/mcp"
-transport = "http"
+transport = "streamable-http"
 
 [mcp_servers.toolhive-swe-qa]
 kind = "remote"
 url = "https://toolhive-swe.qa.ol.mit.edu/mcp"
-transport = "http"
+transport = "streamable-http"
 
 [mcp_servers.toolhive-swe-prod]
 kind = "remote"
 url = "https://toolhive-swe.ol.mit.edu/mcp"
-transport = "http"
+transport = "streamable-http"
 
 [skills]
 create-ol-github-issue          = "skills/process/create-ol-github-issue/SKILL.md"
