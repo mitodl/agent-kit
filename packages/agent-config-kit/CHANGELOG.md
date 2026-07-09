@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.3.5] - 2026-07-09
+
+### Fixed
+
+- **Pi adapter no longer dual-writes skills into `~/.agents/skills/`**:
+  Pi already natively unions `~/.pi/agent/skills/` and `~/.agents/skills/`
+  when discovering skills (its own `docs/skills.md` "Locations" section),
+  warning and keeping only the first match on any name collision.
+  Installing every skill into both directories guaranteed a duplicate
+  name and a spurious "skill collision" warning on every Pi startup.
+  Pi skills now install only to `~/.pi/agent/skills/`, matching how every
+  other platform in the registry has a single dedicated skills dir;
+  OpenCode's genuinely-necessary dual-dir write (singular/plural
+  directory-name ambiguity) is untouched. `AgentPlatform.skill_dest_dirs`
+  is now unset for Pi's registry entry (`skill_dest_dirs` remains
+  available for platforms that do need it).
+
 ## [0.3.4] - 2026-07-08
 
 ### Added
