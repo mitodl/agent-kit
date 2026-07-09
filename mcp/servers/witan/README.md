@@ -178,6 +178,24 @@ trail, and how to write a plugin, and
 [ADR 0001](docs/adr/0001-write-path-content-scanning.md) for the design
 rationale.
 
+## Migrating or merging stores
+
+Moving a store to a new machine, merging two machines' local stores, or
+moving a local store onto the shared multi-tenant server — same command in
+all three cases:
+
+```bash
+witan migrate merge <source> [--target <target>] [--dry-run]
+```
+
+Reconciles slug collisions newest-record-wins (by timestamp) rather than
+`omnigraph load --mode merge`'s raw last-loaded-wins overwrite, and is
+repeatable — re-running against an already-merged target loads nothing new.
+Never `mv`/copy a store directly (Lance embeds absolute paths). See
+[`docs/migration-runbook.md`](docs/migration-runbook.md) for the full
+procedure and what was verified about `--mode merge`'s actual collision
+behavior.
+
 ## Tests
 
 Integration tests spin up throwaway omnigraph graphs and exercise the real query

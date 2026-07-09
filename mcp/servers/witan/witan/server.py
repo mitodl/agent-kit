@@ -554,6 +554,212 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
     }
 
 
+# ── Cross-store merge (docs/migration-runbook.md) ──────────────────
+
+# `omnigraph load --mode merge` overwrites unconditionally on a slug `@key`
+# collision (last-loaded-file wins) — verified empirically, see the migration
+# runbook. It has no notion of "newer" data. The fields below are, per node
+# type, the ones that actually change on every write — reconciliation prefers
+# them, falling back down the tuple when a row predates that field or the
+# type has no `updated_at` at all (WorkflowSession/WorkflowTrace/Topic).
+_RECONCILE_TS_FIELDS: dict[str, tuple[str, ...]] = {
+    "Memory": ("updated_at", "created_at"),
+    "WorkflowProject": ("updated_at", "created_at"),
+    "Task": ("updated_at", "created_at"),
+    "CodeBranch": ("updated_at", "created_at"),
+    "WorkflowSession": ("ended_at", "started_at"),
+    "WorkflowTrace": ("created_at",),
+    "Topic": ("created_at",),
+}
+
+
+def _reconcile_timestamp(row_type: str, data: dict) -> str | None:
+    """The best available comparison timestamp for a row, or ``None`` if it has
+    none of its type's candidate fields set (an in-progress WorkflowSession
+    with no ``ended_at`` falls back to ``started_at``, not to nothing)."""
+    for field in _RECONCILE_TS_FIELDS.get(row_type, ("updated_at", "created_at")):
+        value = data.get(field)
+        if value:
+            return value
+    return None
+
+
+def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
+    """Split an ``omnigraph export`` JSONL file into node rows keyed by
+    ``(type, slug)`` and a plain list of edge rows (no ``slug``, so not
+    reconciled — they pass through the merge as exported)."""
+    nodes: dict[tuple[str, str], dict] = {}
+    edges: list[dict] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            slug = (row.get("data") or {}).get("slug")
+            if slug:
+                nodes[(row["type"], slug)] = row
+            else:
+                edges.append(row)
+    return nodes, edges
+
+
+def merge_store(
+    source: str, *, target: str | None = None, dry_run: bool = False
+) -> dict:
+    """Merge another store's data into this store, newest-record-wins on slug
+    collisions.
+
+    Implements the runbook's export → reconcile → ``load --mode merge`` path
+    (docs/migration-runbook.md): for every node that exists in both stores
+    (matched on ``(type, slug)``), keeps whichever has the newer comparison
+    timestamp (``_RECONCILE_TS_FIELDS``) instead of relying on
+    ``omnigraph load --mode merge``'s raw last-loaded-wins overwrite, which
+    ignores content entirely. Rows only in ``source`` are always added; rows
+    only in the target are left untouched. Edge rows have no slug and are not
+    reconciled — they pass through unchanged in the same load.
+
+    Repeatable by construction: re-running against the same source and an
+    already-merged target loads nothing new (every source row loses
+    reconciliation to its own already-applied, equal-or-newer copy) — safe to
+    run on a schedule or after every session rather than as a one-shot.
+
+    Parameters
+    ----------
+    source:
+        Store URI to merge from (local path, ``s3://``, or ``file://``).
+    target:
+        Store URI to merge into. Defaults to the configured store.
+    dry_run:
+        Compute and return the reconciliation decisions without loading
+        anything.
+
+    Returns counts (``added``/``updated``/``kept_target``) and the full
+    per-``(type, slug)`` decision list, plus (when not a dry run)
+    ``rows_loaded`` and the raw ``load`` output.
+    """
+    target = target or client.graph_uri
+    binary = client._binary
+
+    local_lock = None
+    try:
+        if not target.startswith(("http://", "https://", "s3://")):
+            local_lock = _acquire_store_lock(target)
+
+        with tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp:
+            tmp_path = Path(tmp)
+            source_file = tmp_path / "source.jsonl"
+            target_file = tmp_path / "target.jsonl"
+
+            with open(source_file, "w", encoding="utf-8") as f:
+                _run_omnigraph(
+                    [binary, "export", "--store", source],
+                    label="export (source)",
+                    stdout=f,
+                )
+            with open(target_file, "w", encoding="utf-8") as f:
+                _run_omnigraph(
+                    [binary, "export", "--store", target],
+                    label="export (target)",
+                    stdout=f,
+                )
+
+            source_nodes, source_edges = _parse_export(source_file)
+            target_nodes, _ = _parse_export(target_file)
+
+            decisions = []
+            winners: list[dict] = []
+            for (row_type, slug), row in source_nodes.items():
+                existing = target_nodes.get((row_type, slug))
+                if existing is None:
+                    decisions.append(
+                        {"type": row_type, "slug": slug, "decision": "added"}
+                    )
+                    winners.append(row)
+                    continue
+                src_ts = _reconcile_timestamp(row_type, row["data"])
+                dst_ts = _reconcile_timestamp(row_type, existing["data"])
+                if src_ts is not None and (dst_ts is None or src_ts > dst_ts):
+                    decisions.append(
+                        {
+                            "type": row_type,
+                            "slug": slug,
+                            "decision": "updated",
+                            "source_ts": src_ts,
+                            "target_ts": dst_ts,
+                        }
+                    )
+                    winners.append(row)
+                else:
+                    decisions.append(
+                        {
+                            "type": row_type,
+                            "slug": slug,
+                            "decision": "kept-target",
+                            "source_ts": src_ts,
+                            "target_ts": dst_ts,
+                        }
+                    )
+
+            counts = {
+                "added": sum(1 for d in decisions if d["decision"] == "added"),
+                "updated": sum(1 for d in decisions if d["decision"] == "updated"),
+                "kept_target": sum(
+                    1 for d in decisions if d["decision"] == "kept-target"
+                ),
+            }
+
+            if dry_run:
+                return {
+                    "dry_run": True,
+                    "target": target,
+                    "decisions": decisions,
+                    **counts,
+                }
+
+            to_load = winners + source_edges
+            if not to_load:
+                return {
+                    "merged": True,
+                    "target": target,
+                    "decisions": decisions,
+                    "rows_loaded": 0,
+                    **counts,
+                }
+
+            reconciled_file = tmp_path / "reconciled.jsonl"
+            with open(reconciled_file, "w", encoding="utf-8") as f:
+                for row in to_load:
+                    f.write(json.dumps(row) + "\n")
+
+            load_out = _run_omnigraph(
+                [
+                    binary,
+                    "load",
+                    "--store",
+                    target,
+                    "--data",
+                    str(reconciled_file),
+                    "--mode",
+                    "merge",
+                ],
+                label="load (reconciled)",
+            )
+    finally:
+        if local_lock is not None:
+            fcntl.flock(local_lock.fileno(), fcntl.LOCK_UN)
+            local_lock.close()
+
+    return {
+        "merged": True,
+        "target": target,
+        "decisions": decisions,
+        "rows_loaded": len(to_load),
+        "output": load_out.strip(),
+        **counts,
+    }
+
+
 # ── Composite re-rank (spec §7) ───────────────────────────────────
 
 

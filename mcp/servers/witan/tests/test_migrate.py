@@ -2,7 +2,42 @@
 
 import subprocess
 
-from .conftest import requires_omnigraph
+from .conftest import SCHEMA, requires_omnigraph
+
+
+def _init_store(path):
+    subprocess.run(
+        ["omnigraph", "init", "--schema", str(SCHEMA), str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return str(path)
+
+
+def _insert_memory(
+    client, *, slug, content, updated_at, created_at="2026-01-01T00:00:00Z"
+):
+    client.change(
+        "mutations.gq",
+        "insert_memory",
+        {
+            "slug": slug,
+            "kind": "lesson",
+            "title": "collide",
+            "content": content,
+            "repo": None,
+            "language": None,
+            "category": None,
+            "severity": None,
+            "author": "pytest",
+            "tags": None,
+            "symbol_refs": None,
+            "confidence": None,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        },
+    )
 
 
 def _old_schema_store(tmp_path):
@@ -103,3 +138,108 @@ def test_find_pre_upgrade_binary_skips_the_current_one():
 
     current = shutil.which("omnigraph")
     assert srv._find_pre_upgrade_binary(current) is None
+
+
+@requires_omnigraph
+def test_merge_adds_a_row_only_present_in_source(server, tmp_path):
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-only-in-source-aaaaaa",
+        content="hi",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+
+    result = srv.merge_store(source.graph_uri)
+
+    assert (result["added"], result["updated"], result["kept_target"]) == (1, 0, 0)
+    assert result["rows_loaded"] == 1
+    rows = srv.client.read(
+        "read.gq", "get_memory", {"slug": "mem-only-in-source-aaaaaa"}
+    )
+    assert rows and rows[0]["content"] == "hi"
+
+
+@requires_omnigraph
+def test_merge_newer_source_row_wins_and_rerun_is_a_noop(server, tmp_path):
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    slug = "mem-collide-bbbbbb"
+    _insert_memory(
+        srv.client, slug=slug, content="old", updated_at="2026-01-01T00:00:00Z"
+    )
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(source, slug=slug, content="new", updated_at="2026-06-01T00:00:00Z")
+
+    result = srv.merge_store(source.graph_uri)
+    assert (result["added"], result["updated"], result["kept_target"]) == (0, 1, 0)
+    rows = srv.client.read("read.gq", "get_memory", {"slug": slug})
+    assert rows[0]["content"] == "new"
+
+    # Repeatable: source's row no longer strictly beats what's now in the
+    # target (same timestamp, already applied), so a second run loads nothing
+    # and the content is untouched.
+    result2 = srv.merge_store(source.graph_uri)
+    assert (result2["added"], result2["updated"], result2["kept_target"]) == (0, 0, 1)
+    assert result2["rows_loaded"] == 0
+    rows = srv.client.read("read.gq", "get_memory", {"slug": slug})
+    assert rows[0]["content"] == "new"
+
+
+@requires_omnigraph
+def test_merge_older_source_row_is_dropped(server, tmp_path):
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    slug = "mem-collide-cccccc"
+    _insert_memory(
+        srv.client, slug=slug, content="current", updated_at="2026-06-01T00:00:00Z"
+    )
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source, slug=slug, content="stale", updated_at="2026-01-01T00:00:00Z"
+    )
+
+    result = srv.merge_store(source.graph_uri)
+    assert (result["added"], result["updated"], result["kept_target"]) == (0, 0, 1)
+    assert result["rows_loaded"] == 0
+    rows = srv.client.read("read.gq", "get_memory", {"slug": slug})
+    assert rows[0]["content"] == "current"
+
+
+@requires_omnigraph
+def test_merge_dry_run_writes_nothing(server, tmp_path):
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-dry-run-dddddd",
+        content="hi",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+
+    result = srv.merge_store(source.graph_uri, dry_run=True)
+    assert result["dry_run"] is True
+    assert result["added"] == 1
+    rows = srv.client.read("read.gq", "get_memory", {"slug": "mem-dry-run-dddddd"})
+    assert rows == []
