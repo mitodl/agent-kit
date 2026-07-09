@@ -13,3 +13,4 @@ Workflow skills for interacting with external services and developer processes
 | [`dependency-updates`](./dependency-updates/SKILL.md) | Triage and apply Renovate dependency updates safely across Python, JS/TS, Helm, Apt, and database ecosystems |
 | [`dependency-pruning`](./dependency-pruning/SKILL.md) | Audit dependencies to find unused ones to remove and underused ones to vendor or rewrite |
 | [`github-issue-triage`](./github-issue-triage/SKILL.md) | Audit open GitHub issues to identify stale, completed, or superseded items using parallel codebase cross-referencing |
+| [`github-pr-triage`](./github-pr-triage/SKILL.md) | Categorize open PRs across an org by required action (needs first-pass review, has feedback, approved & ready to merge) and optionally act on them |
