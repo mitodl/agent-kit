@@ -254,7 +254,7 @@ def test_prune_idempotent_and_leaves_others():
     settings = _settings_with(
         {
             "UserPromptSubmit": ["witan inject-context"],
-            "PostToolUse": ["bash ~/.claude/hooks/codegraph-reindex.sh"],
+            "PostToolUse": ["witan-code reindex-hook"],
         }
     )
     assert setup.prune_legacy_hook_entries(settings) is False

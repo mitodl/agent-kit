@@ -116,13 +116,13 @@ def test_witan_code_bundle_registers_mcp_server_and_hooks(tmp_path, monkeypatch)
         h
         for e in settings["hooks"]["SessionStart"]
         for h in e["hooks"]
-        if "codegraph-session-init.sh" in h["command"]
+        if h["command"] == "witan-code session-init"
     ]
     reindex = [
         h
         for e in settings["hooks"]["PostToolUse"]
         for h in e["hooks"]
-        if "codegraph-reindex.sh" in h["command"]
+        if h["command"] == "witan-code reindex-hook"
     ]
     context = [
         h

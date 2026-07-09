@@ -63,20 +63,21 @@ def witan_code_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     )
 
     pi_ext_dir = pkg_dir / "extensions" / "pi"
+    # Bare CLI commands, no wrapper script — portable everywhere `witan-code`
+    # installs (Windows included, where bash/setsid don't exist), matching
+    # witan's own `witan inject-context`/`session-checkpoint` hooks. The
+    # prompt-path timeouts mirror witan's: a hung git or store read must
+    # degrade to no context/no compaction, never stall the agent.
     hooks: list[Hook] = [
         DeclarativeHook(
             event=HookEvent.SESSION_START,
-            command="bash ~/.claude/hooks/codegraph-session-init.sh",
+            command="witan-code session-init",
         ),
         DeclarativeHook(
             event=HookEvent.POST_TOOL_USE,
             matcher="Edit|Write",
-            command="bash ~/.claude/hooks/codegraph-reindex.sh",
+            command="witan-code reindex-hook",
         ),
-        # Bare CLI commands (no wrapper script needed) — the timeout mirrors
-        # witan's own inject-context/session-checkpoint hooks: a hung git or
-        # store read must degrade to no context/no compaction, never stall
-        # the agent.
         DeclarativeHook(
             event=HookEvent.USER_PROMPT_SUBMIT,
             command="witan-code inject-context",

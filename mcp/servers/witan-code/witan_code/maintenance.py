@@ -15,7 +15,7 @@ dominates query latency, the same failure mode witan's own store hit (#98).
 ``omnigraph optimize`` collapses the fragments (non-destructive); ``cleanup``
 GCs old versions to reclaim disk (destructive).
 
-The Stop hook (``codegraph-checkpoint.sh``) calls
+The ``Stop`` hook (``witan-code checkpoint``) calls
 :func:`spawn_background_optimize` for whichever stores exist in the current
 repo — at most once per interval each, detached so the hook returns
 immediately. There is also a ``witan-code optimize`` / ``witan-code cleanup``
@@ -32,6 +32,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+from ._detach import popen_detached
 
 # Opportunistic optimize runs at most once per this window per store. Optimize
 # takes the store's write lock and is ~tens of seconds on a bloated store, so
@@ -116,12 +118,11 @@ def spawn_background_optimize(store: str | Path, now: float | None = None) -> bo
         return False
     _mark_run(store, time.time() if now is None else now)
     try:
-        subprocess.Popen(  # noqa: S603 — fixed argv, no shell
+        popen_detached(
             [sys.executable, "-m", "witan_code", "optimize", "--store", str(store)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
             env=dict(os.environ),
         )
         return True

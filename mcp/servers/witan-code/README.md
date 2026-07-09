@@ -261,7 +261,7 @@ symlink alternative:
 | `WITAN_CODE_DIR` | `~/.local/share/witan/code` | directory of per-repo `<slug>.omni` stores |
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
-| `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `codegraph-checkpoint.sh`'s opportunistic store compaction; `0` disables it |
+| `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
 
 The store URI for a repo is `<dir>/<sanitized-slug>.omni`, where the slug's `/`
 and `:` are replaced with `_`. The shared cross-repo bridge lives alongside them
@@ -320,8 +320,15 @@ that repo's bridge branch overlay instead of `main` — see
   packages, deployed repos — behind it). Defaults to a repos-only view;
   `--kind` filters to one contract kind and `--repo` keeps only links touching
   a matching repo.
+- `session-init` — seed/refresh the whole repo's code graph in the background
+  (see [Hooks](#hooks)); registered as the `SessionStart` hook, not usually
+  run by hand.
+- `reindex-hook` — incrementally reindex the file named in stdin's hook JSON
+  (see [Hooks](#hooks)); registered as the `PostToolUse` hook, not usually
+  run by hand.
 - `inject-context` — print the `UserPromptSubmit` status block (see
-  [Hooks](#hooks)); called by `codegraph-context.sh`, not usually run by hand.
+  [Hooks](#hooks)); registered as the `UserPromptSubmit` hook, not usually
+  run by hand.
 - `optimize [--store PATH] [--bridge]` — compact a store's Lance fragments
   (non-destructive; see [Store compaction](#store-compaction)). Defaults to
   the current repo's store; `--bridge` targets the shared bridge store
@@ -330,8 +337,8 @@ that repo's bridge branch overlay instead of `main` — see
   reclaim disk by GC'ing old Lance versions (**destructive**; requires
   `--yes`).
 - `checkpoint` — opportunistically compact the current repo's store and the
-  bridge store if due (see [Hooks](#hooks)); called by
-  `codegraph-checkpoint.sh`, not usually run by hand.
+  bridge store if due (see [Hooks](#hooks)); registered as the `Stop` hook,
+  not usually run by hand.
 
 Both print a summary: files scanned/indexed/skipped, symbols, edges, errors. A
 parse failure on one file logs to stderr and continues.
@@ -346,7 +353,7 @@ mode witan's own store hit (PR #98; see
 mechanisms keep this in check, mirroring that module (deliberately duplicated
 — no cross-package import):
 
-- **Opportunistic**: the `codegraph-checkpoint.sh` Stop hook spawns a
+- **Opportunistic**: the `witan-code checkpoint` Stop hook spawns a
   throttled, detached `witan-code optimize` for the current repo's store and
   the shared bridge store, at most once per `WITAN_CODE_OPTIMIZE_INTERVAL`
   (default daily; `0` disables) each — see [Hooks](#hooks).
@@ -368,40 +375,43 @@ equivalent path for your agent.
 
 ## Hooks
 
-Four hooks — installed automatically by `witan-code setup` (see
-[Install](#install)), or manually per
-[configs/hooks/README.md](../../../configs/hooks/README.md) — make the code
-graph self-managing with no manual step, self-announcing, and
-self-compacting. A Pi equivalent of all four lives in one extension,
+Four hooks — all bare `witan-code` CLI commands, no wrapper scripts, so
+they're portable to any platform witan-code installs on (Windows included —
+no bash/setsid dependency). Installed automatically by `witan-code setup`
+(see [Install](#install)), or registered manually per
+[configs/hooks/README.md](../../../configs/hooks/README.md). A Pi equivalent
+of all four lives in one extension,
 [`witan_code/extensions/pi/codegraph.ts`](witan_code/extensions/pi/codegraph.ts)
 (see [configs/pi/README.md](../../../configs/pi/README.md)):
 
-- **`codegraph-session-init.sh`** (`SessionStart`) — seeds/refreshes the whole
+- **`witan-code session-init`** (`SessionStart`) — seeds/refreshes the whole
   repo in the background on session start (first run builds the full index;
-  later runs re-hash and skip unchanged files). Detached and non-blocking;
-  never delays session start. A per-repo lock (keyed on the sanitized project
-  path, `${TMPDIR:-/tmp}/codegraph-init-<path-with-/-as-_>.lock`) prevents
-  overlapping sessions from indexing at once.
-- **`codegraph-reindex.sh`** (`PostToolUse`, matcher `Edit|Write`) —
-  incrementally re-indexes a single changed source file. Best-effort and
-  non-blocking — always exits 0 and silences output, so a missing binary or
-  parse failure never interrupts the agent.
-- **`codegraph-context.sh`** (`UserPromptSubmit`) — prints a short status
+  later runs re-hash and skip unchanged files). Detaches a background child
+  and returns immediately; never delays session start. A per-repo lock
+  (keyed on the sanitized project path,
+  `${TMPDIR:-/tmp}/codegraph-init-<path-with-/-as-_>.lock`, released by the
+  detached child when it finishes) prevents overlapping sessions from
+  indexing at once.
+- **`witan-code reindex-hook`** (`PostToolUse`, matcher `Edit|Write`) — reads
+  the tool payload from stdin and incrementally re-indexes the changed file
+  in the foreground (fast — one file). Best-effort — a missing/malformed
+  payload or parse failure is a silent no-op, never interrupting the agent.
+- **`witan-code inject-context`** (`UserPromptSubmit`) — prints a short status
   block: whether the current repo is indexed (file count, last-updated time),
-  or that a background index from `codegraph-session-init.sh` is still
-  running (checking the same lock path above), plus a nudge to prefer
-  `code_*` tools over grep. Independent of `witan`'s own `inject-context` hook
-  (no cross-package coupling) — register it alone for a witan-code-only
-  install. Backed by `witan-code inject-context`; silent when the repo has
-  neither a store nor an index in flight.
-- **`codegraph-checkpoint.sh`** (`Stop`) — spawns a throttled, detached
+  or that a background index from `session-init` is still running (checking
+  the same lock path above), plus a nudge to prefer `code_*` tools over grep.
+  Independent of `witan`'s own `inject-context` hook (no cross-package
+  coupling) — register it alone for a witan-code-only install. Prints
+  nothing when the repo has neither a store nor an index in flight.
+- **`witan-code checkpoint`** (`Stop`) — spawns a throttled, detached
   `witan-code optimize` for the current repo's store and the shared bridge
   store if either is due (see [Store compaction](#store-compaction)).
   Independent of `witan`'s own `session-checkpoint` hook (no cross-package
   coupling). Best-effort and non-blocking.
 
-Manual install: symlink each to `~/.claude/hooks/` and register under the
-matching event in `settings.json` (see the linked README for the exact JSON).
+Manual install: register the bare commands directly under the matching event
+in `settings.json` (see the linked README for the exact JSON) — there are no
+scripts to symlink.
 
 ## Incremental indexing
 

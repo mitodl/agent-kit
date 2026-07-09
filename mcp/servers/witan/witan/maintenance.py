@@ -25,6 +25,7 @@ import sys
 import time
 
 from . import session_state
+from ._detach import popen_detached
 
 # Opportunistic optimize runs at most once per this window. Optimize takes the
 # store's write lock and is ~tens of seconds on a bloated store, so daily is a
@@ -104,12 +105,11 @@ def spawn_background_optimize(graph_uri: str, now: float | None = None) -> bool:
         return False
     _mark_run(graph_uri, time.time() if now is None else now)
     try:
-        subprocess.Popen(  # noqa: S603 — fixed argv, no shell
+        popen_detached(
             [sys.executable, "-m", "witan", "optimize", "--store", graph_uri],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
             env=dict(os.environ),
         )
         return True

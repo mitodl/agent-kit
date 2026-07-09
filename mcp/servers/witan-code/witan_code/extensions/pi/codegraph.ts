@@ -94,7 +94,8 @@ export default function codegraphExtension(pi: ExtensionAPI): void {
 		if (p && existsSync(p)) runInBackground(["index", p]);
 	});
 
-	// Report code-graph readiness before each turn (mirrors codegraph-context.sh).
+	// Report code-graph readiness before each turn (mirrors the Claude
+	// `witan-code inject-context` UserPromptSubmit hook).
 	pi.on("before_agent_start", async (event: any, ctx: any) => {
 		try {
 			const r = spawnSync("witan-code", ["inject-context"], {
@@ -110,10 +111,10 @@ export default function codegraphExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	// Opportunistically compact the store(s) on session end (mirrors
-	// codegraph-checkpoint.sh). Detached and non-blocking, like session_start's
-	// index — session_shutdown fires before teardown, not after, so this must
-	// not wait on the child process.
+	// Opportunistically compact the store(s) on session end (mirrors the
+	// Claude `witan-code checkpoint` Stop hook). Detached and non-blocking,
+	// like session_start's index — session_shutdown fires before teardown,
+	// not after, so this must not wait on the child process.
 	pi.on("session_shutdown", async (_event, ctx: any) => {
 		if (inGitRepo(ctx?.cwd)) runInBackground(["checkpoint"], ctx.cwd);
 	});

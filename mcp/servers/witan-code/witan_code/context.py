@@ -20,11 +20,11 @@ from . import config as cfg_module
 from . import repo as repo_module
 from .cli import _code_store_stats, _dir_stats
 
-# Matches the lock directory codegraph-session-init.sh creates around a
-# background SessionStart index, so this hook can report "indexing in
-# progress" instead of a misleadingly empty/stale store. Keyed on the
-# sanitized project directory (not a hash) so both the bash hook and this
-# module can compute it independently without sharing a hashing scheme.
+# Matches the lock directory hooks.session_init() creates around a background
+# SessionStart index, so this hook can report "indexing in progress" instead
+# of a misleadingly empty/stale store. Keyed on the sanitized project
+# directory (not a hash) so it's trivially reproducible from either side
+# without sharing mutable state.
 _LOCK_PREFIX = "codegraph-init-"
 
 
@@ -43,7 +43,7 @@ def _lock_path(project_dir: Path) -> Path:
 
 
 def indexing_in_progress() -> bool:
-    """Whether codegraph-session-init.sh's background index is still running."""
+    """Whether hooks.session_init()'s background index is still running."""
     return _lock_path(_project_dir()).is_dir()
 
 

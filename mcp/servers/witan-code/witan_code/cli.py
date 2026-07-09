@@ -261,9 +261,9 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
 def inject_context_cmd() -> None:
     """Print a short code-graph status block for the UserPromptSubmit hook.
 
-    Designed to be called by ``~/.claude/hooks/codegraph-context.sh`` —
-    always exits 0 and prints nothing when there's no store or in-flight index
-    for the current repo.
+    Registered as the bare ``UserPromptSubmit`` hook command; always exits 0
+    and prints nothing when there's no store or in-flight index for the
+    current repo.
     """
     from . import context as context_module
 
@@ -381,8 +381,8 @@ def checkpoint() -> None:
     repo's store and the shared bridge store, each at most once per
     ``WITAN_CODE_OPTIMIZE_INTERVAL``, if either exists and is due. Best-effort
     and non-blocking: always exits 0 and never raises, so a maintenance
-    failure can't fail the Stop hook. Designed to be called by
-    ``~/.claude/hooks/codegraph-checkpoint.sh``, not usually run by hand.
+    failure can't fail the Stop hook. Registered as the bare ``Stop`` hook
+    command; not usually run by hand.
     """
     from . import config as cfg_module
     from . import maintenance as maintenance_module
@@ -402,6 +402,53 @@ def checkpoint() -> None:
             cfg_module.bridge_store_path(cfg.code_dir)
         )
     except Exception:  # noqa: BLE001 — maintenance must never fail the hook
+        pass
+
+
+@app.command(name="session-init")
+def session_init_cmd() -> None:
+    """Seed/refresh the whole repo's code graph in the background (SessionStart hook).
+
+    Detached and non-blocking — returns immediately regardless of repo size.
+    A per-repo lock (shared with ``inject-context``'s "indexing in progress"
+    check) prevents overlapping sessions from indexing at once. Registered as
+    the bare ``SessionStart`` hook command; not usually run by hand.
+    """
+    from . import hooks as hooks_module
+
+    try:
+        hooks_module.session_init()
+    except Exception:  # noqa: BLE001 — must never fail the hook
+        pass
+
+
+@app.command(name="_index-and-unlock", show=False)
+def _index_and_unlock_cmd(target: Path, lock: Path) -> None:
+    """Internal — run only by the detached child ``session-init`` spawns."""
+    from . import hooks as hooks_module
+
+    hooks_module.index_and_unlock(target, lock)
+
+
+@app.command(name="reindex-hook")
+def reindex_hook_cmd() -> None:
+    """Incrementally reindex the file named in stdin's hook JSON (PostToolUse hook).
+
+    Reads the Claude Code hook payload from stdin, extracts
+    ``tool_input.file_path`` (or ``path``/``filename``), and reindexes it if
+    it exists and is a known source type — foreground and fast (one file), so
+    the agent sees the change land immediately. Best-effort: a missing or
+    malformed payload is a silent no-op. Registered as the bare
+    ``PostToolUse`` (matcher ``Edit|Write``) hook command; not usually run by
+    hand.
+    """
+    import sys
+
+    from . import hooks as hooks_module
+
+    try:
+        hooks_module.reindex_hook(sys.stdin.read())
+    except Exception:  # noqa: BLE001 — must never fail the hook
         pass
 
 
@@ -433,7 +480,8 @@ def setup(
     """Install witan-code for one or all supported coding agents.
 
     Installs the omnigraph binary to ~/.local/bin/, copies the bundled skill
-    and hooks/Pi-extension to the agent's config directories, and merges the
+    and Pi extension to the agent's config directories, registers the four
+    hooks (bare CLI commands — no wrapper scripts to copy), and merges the
     witan-code MCP server entry into the agent's config file. Independent of
     `witan setup` — running both is fine (each only touches its own entries);
     running just this one is enough for a witan-code-only install.
@@ -455,7 +503,6 @@ def setup(
         detect_installed_platforms,
         known_platforms,
     )
-    from agent_config_kit.installers import install_files
 
     from .setup import install_omnigraph, witan_code_bundle
 
@@ -484,18 +531,6 @@ def setup(
             print(f"\n{_AGENT_NAMES.get(name, name)} — not detected, skipping")
     else:
         _report_setup(agent, apply(agent, bundle, dry_run=dry_run), dry_run=dry_run)
-
-    if agent in ("claude", "all"):
-        # The two script-based hooks (SessionStart, PostToolUse) — a generic
-        # file-copy, not part of the JSON-config hook entries `apply()` just
-        # registered (those only reference the installed path by name).
-        install_files(
-            pkg_dir / "hooks",
-            Path.home() / ".claude" / "hooks",
-            suffix=".sh",
-            dry_run=dry_run,
-            executable=True,
-        )
 
     if dry_run:
         print("\n(dry-run — no files written)")

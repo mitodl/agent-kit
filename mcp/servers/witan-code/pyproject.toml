@@ -42,9 +42,12 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 # witan_code/queries/, witan_code/schema/, witan_code/queries_ts/,
-# witan_code/skills/, witan_code/hooks/, and witan_code/extensions/ are all
-# discovered automatically via packages = ["witan_code"] — including for a
+# witan_code/skills/, and witan_code/extensions/ are all discovered
+# automatically via packages = ["witan_code"] — including for a
 # `uvx --from git+...` install, so `witan-code setup` can bundle them via
-# agent_config_kit without any build-time bundling step. The omnigraph binary
-# itself is fetched at install/runtime instead (see witan_code/setup.py) — so
-# there is no witan_code/_bin/ to force-include.
+# agent_config_kit without any build-time bundling step. Hooks are bare CLI
+# commands (session-init, reindex-hook, inject-context, checkpoint in
+# witan_code/cli.py) rather than wrapper scripts, so there's no
+# witan_code/hooks/ to bundle either. The omnigraph binary itself is fetched
+# at install/runtime instead (see witan_code/setup.py) — so there is no
+# witan_code/_bin/ to force-include.

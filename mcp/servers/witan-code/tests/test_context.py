@@ -1,4 +1,4 @@
-"""Unit tests for the codegraph-context.sh UserPromptSubmit hook backend.
+"""Unit tests for the `witan-code inject-context` UserPromptSubmit hook backend.
 
 No omnigraph binary required: store-stats lookup is monkeypatched since these
 tests exercise context.py's own orchestration (repo detection, lock-file
