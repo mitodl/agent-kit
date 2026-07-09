@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "witan-council-v*"
+  workflow_call:
 
 permissions:
   contents: read
@@ -49,6 +50,10 @@ jobs:
       - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
 
       - name: Check tag matches pyproject.toml version
+        # Only meaningful for a direct tag push — a workflow_call from
+        # tag-release.yml just created this tag from the pyproject.toml
+        # version, so there's nothing to cross-check.
+        if: github.event_name == 'push'
         run: |
           tag_version="${GITHUB_REF_NAME#witan-council-v}"
           pkg_version="$(uv run --no-project python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
