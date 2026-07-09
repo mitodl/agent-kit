@@ -60,6 +60,7 @@ dependency-updates              = "skills/process/dependency-updates/SKILL.md"
 docker-uv-image-builds          = "skills/containers/docker-uv-image-builds/SKILL.md"
 generate-standup                = "skills/process/generate-standup/SKILL.md"
 github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
+github-pr-triage                = "skills/process/github-pr-triage/SKILL.md"
 pulumi-modify-existing          = "skills/infrastructure/pulumi-modify-existing/SKILL.md"
 screenshot-pr                   = "skills/process/screenshot-pr/SKILL.md"
 uv-python-workflow               = "skills/python/uv-python-workflow/SKILL.md"
@@ -95,5 +96,6 @@ skills = [
     "dependency-pruning",
     "dependency-updates",
     "github-issue-triage",
+    "github-pr-triage",
     "screenshot-pr",
 ]
