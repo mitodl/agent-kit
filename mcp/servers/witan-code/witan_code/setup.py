@@ -14,6 +14,8 @@ renovate.json — a single Renovate PR bumps both.
 from __future__ import annotations
 
 import platform
+import re
+import subprocess
 import tarfile
 import tempfile
 import urllib.request
@@ -41,6 +43,30 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
     ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
 }
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+
+
+def _installed_version(dest: Path) -> str | None:
+    """Return ``dest``'s reported version, or ``None`` if absent/unreadable.
+
+    A hung, corrupted, or non-executable binary must degrade to "unknown
+    version" (triggering a re-download) rather than crash `setup` —
+    ``subprocess.TimeoutExpired`` is a ``SubprocessError``, not an
+    ``OSError``, so both need catching, and a non-zero exit means the
+    output isn't trustworthy version text even if something printed.
+    """
+    if not dest.exists():
+        return None
+    try:
+        result = subprocess.run(
+            [str(dest), "--version"], capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    match = _VERSION_RE.search(result.stdout + result.stderr)
+    return match.group(0) if match else None
 
 
 def witan_code_bundle(
@@ -124,8 +150,9 @@ def witan_code_bundle(
 def install_omnigraph(dry_run: bool = False) -> None:
     """Fetch the pinned omnigraph release into ``~/.local/bin/``.
 
-    Always re-downloads rather than skipping when a binary is already
-    present, so re-running always converges on the current pin.
+    Skips the download when a binary is already present and reports the
+    pinned version via ``--version``, so re-running always converges on the
+    current pin without refetching an already-correct binary.
     """
     local_bin = Path.home() / ".local" / "bin"
     dest = local_bin / "omnigraph"
@@ -136,6 +163,12 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
     from rich.console import Console
 
     console = Console()
+
+    if _installed_version(dest) == _OMNIGRAPH_VERSION:
+        console.print(
+            f"  [dim]omnigraph[/dim] — {dest} already at v{_OMNIGRAPH_VERSION}, skipping"
+        )
+        return
 
     key = (platform.system().lower(), platform.machine().lower())
     asset = _OMNIGRAPH_ASSETS.get(key)

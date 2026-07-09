@@ -94,6 +94,68 @@ def test_install_omnigraph_downloads_and_extracts(tmp_path, monkeypatch):
     assert dest.stat().st_mode & 0o111  # executable
 
 
+def _write_fake_binary(dest: Path, version: str) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(f"#!/bin/sh\necho 'omnigraph {version}'\n")
+    dest.chmod(0o755)
+
+
+def test_install_omnigraph_skips_when_version_matches(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _write_fake_binary(_dest(tmp_path), setup._OMNIGRAPH_VERSION)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("hit network")),
+    )
+
+    setup.install_omnigraph(dry_run=False)
+
+    assert (
+        _dest(tmp_path).read_text()
+        == f"#!/bin/sh\necho 'omnigraph {setup._OMNIGRAPH_VERSION}'\n"
+    )
+
+
+def test_install_omnigraph_redownloads_when_version_differs(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(setup.platform, "machine", lambda: "x86_64")
+    _write_fake_binary(_dest(tmp_path), "0.1.0")
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: _FakeResponse(_fake_release_tarball(b"#!/bin/sh\necho fake")),
+    )
+
+    setup.install_omnigraph(dry_run=False)
+
+    assert _dest(tmp_path).read_bytes() == b"#!/bin/sh\necho fake"
+
+
+def test_installed_version_none_on_timeout(tmp_path, monkeypatch):
+    import subprocess
+
+    dest = _dest(tmp_path)
+    _write_fake_binary(dest, setup._OMNIGRAPH_VERSION)
+    monkeypatch.setattr(
+        setup.subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(cmd=str(dest), timeout=10)
+        ),
+    )
+
+    assert setup._installed_version(dest) is None
+
+
+def test_installed_version_none_on_nonzero_exit(tmp_path):
+    dest = _dest(tmp_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(f"#!/bin/sh\necho 'omnigraph {setup._OMNIGRAPH_VERSION}'\nexit 1\n")
+    dest.chmod(0o755)
+
+    assert setup._installed_version(dest) is None
+
+
 # ── registration bundle ───────────────────────────────────────────────────────
 
 

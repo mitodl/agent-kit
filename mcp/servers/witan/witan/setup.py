@@ -9,6 +9,8 @@ which is witan-specific and out of agent-config-kit's scope.
 from __future__ import annotations
 
 import platform
+import re
+import subprocess
 from pathlib import Path
 
 from agent_config_kit import (
@@ -136,18 +138,41 @@ def prune_legacy_hook_entries(settings: dict) -> bool:
 # Witan's own binary-distribution concern — explicitly out of agent-config-kit's
 # scope (spec §3).
 #
-# No build-time bundling — `witan setup` always fetches the pinned release
-# directly, so every install/re-run converges on the same version instead of
-# a build hook and this module silently drifting apart (see the identical
-# constant in witan-code/witan_code/setup.py, kept in lockstep by the
-# omnigraph-version customManager in renovate.json — a single Renovate PR
-# bumps both).
+# No build-time bundling — `witan setup` fetches the pinned release directly,
+# so every install/re-run converges on the same version instead of a build
+# hook and this module silently drifting apart (see the identical constant in
+# witan-code/witan_code/setup.py, kept in lockstep by the omnigraph-version
+# customManager in renovate.json — a single Renovate PR bumps both).
 
 _OMNIGRAPH_VERSION = "0.8.1"
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
     ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
 }
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+
+
+def _installed_version(dest: Path) -> str | None:
+    """Return ``dest``'s reported version, or ``None`` if absent/unreadable.
+
+    A hung, corrupted, or non-executable binary must degrade to "unknown
+    version" (triggering a re-download) rather than crash `setup` —
+    ``subprocess.TimeoutExpired`` is a ``SubprocessError``, not an
+    ``OSError``, so both need catching, and a non-zero exit means the
+    output isn't trustworthy version text even if something printed.
+    """
+    if not dest.exists():
+        return None
+    try:
+        result = subprocess.run(
+            [str(dest), "--version"], capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    match = _VERSION_RE.search(result.stdout + result.stderr)
+    return match.group(0) if match else None
 
 
 def _download_omnigraph(dest: Path, dry_run: bool) -> None:
@@ -158,6 +183,12 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
     from rich.console import Console
 
     console = Console()
+
+    if _installed_version(dest) == _OMNIGRAPH_VERSION:
+        console.print(
+            f"  [dim]omnigraph[/dim] — {dest} already at v{_OMNIGRAPH_VERSION}, skipping"
+        )
+        return
 
     key = (platform.system().lower(), platform.machine().lower())
     asset = _OMNIGRAPH_ASSETS.get(key)
@@ -247,11 +278,11 @@ def install_default_config(dry_run: bool) -> None:
 def install_omnigraph(dry_run: bool) -> None:
     """Fetch the pinned omnigraph release into ``~/.local/bin/``.
 
-    Always re-downloads rather than skipping when a binary is already
-    present — `witan setup`'s own docstring promises "re-run after every
-    upgrade to refresh installed files," and always converging on the
-    current pin is what prevents a machine being stuck on a stale binary
-    (the exact failure mode a build-time-only bundle produced before).
+    Skips the download when a binary is already present and reports the
+    pinned version via ``--version`` — re-running `witan setup` still
+    converges on the current pin (the exact failure mode a build-time-only
+    bundle produced before), it just doesn't refetch an already-correct
+    binary over the network every time.
     """
     local_bin = Path.home() / ".local" / "bin"
     dest = local_bin / "omnigraph"
