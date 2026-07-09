@@ -1,8 +1,11 @@
 [project]
 name = "witan-code"
-version = "0.1.0"
+version = "0.2.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
+readme = "README.md"
+license = "BSD-3-Clause"
 requires-python = ">=3.11"
+keywords = ["mcp", "agent", "code-graph", "tree-sitter", "static-analysis", "coding-agent"]
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
@@ -26,6 +29,12 @@ dependencies = [
     "pyyaml>=6,<7",
     "rich>=13",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mitodl/agent-kit/tree/main/mcp/servers/witan-code"
+Repository = "https://github.com/mitodl/agent-kit"
+Documentation = "https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/README.md"
+Issues = "https://github.com/mitodl/agent-kit/issues"
 
 [project.scripts]
 witan-code = "witan_code.cli:cli"

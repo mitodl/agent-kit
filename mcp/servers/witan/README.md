@@ -1,10 +1,20 @@
 # witan
 
+> Pronounced `WIT-ən` (/ˈwɪtən/) — rhymes with "written" minus the r. From
+> Old English *witan*, the king's council of advisors.
+
 A team-wide shared knowledge graph for coding agents, backed by
 [Omnigraph](https://github.com/ModernRelay/omnigraph). Stores coding patterns,
 project/repo facts, lessons, and agent context. Exposed over MCP so every
 agent platform (pi, Claude Desktop, GitHub Copilot) can read and write without
 platform-specific code.
+
+## Documentation
+
+See the [User Guide](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/USER_GUIDE.md)
+for a task-oriented walkthrough (install, setup, day-to-day loop, operating
+modes, troubleshooting) and the [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md)
+for the full `witan` command surface.
 
 ## Quick Start
 
@@ -34,7 +44,9 @@ Install `witan-code` alongside it with `--with` so its `witan code …` hooks
 work too (omit `--with` for a witan-only install):
 
 ```bash
-# Install the CLI from the published git repo …
+# Install the latest release from PyPI …
+uv tool install --with witan-code witan-council
+# … or, to track pre-release/unreleased code, from the git repo directly:
 uv tool install --with git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code \
     git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan
 # … or editable from a local checkout, at the repo root:
@@ -48,7 +60,9 @@ witan setup --agent claude   # or: pi | all
 Kilo), whose server runs via `uvx`, so no install is needed:
 
 ```bash
-# From the published git repo …
+# From PyPI …
+uvx --from witan-council witan setup --agent copilot   # or: opencode | kilo
+# … or, to track pre-release/unreleased code, from the git repo directly:
 uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan \
     witan setup --agent copilot   # or: opencode | kilo
 # … or from a local checkout, at the repo root:

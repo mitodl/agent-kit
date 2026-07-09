@@ -1,5 +1,7 @@
 # witan-code
 
+> "witan" is pronounced `WIT-ən` (/ˈwɪtən/) — rhymes with "written" minus the r.
+
 A tree-sitter-based **code graph** MCP server (Layer 2) for coding agents,
 backed by [Omnigraph](https://github.com/ModernRelay/omnigraph). It indexes a
 repository's symbols (functions, methods, classes, modules) and their
@@ -49,6 +51,14 @@ in a `symbolRefs`-style field. There is **no hard cross-store edge**: the id is
 just a string that resolves in the code graph via `code_find_definition` /
 `get_symbol`. This keeps the team-synced memory graph independent of any
 machine's local code index.
+
+## Documentation
+
+- [User guide](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/docs/USER_GUIDE.md) — task-oriented walkthrough: install,
+  first index, definition/caller/impact queries, cross-repo bridge basics,
+  troubleshooting.
+- [CLI reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/docs/CLI_REFERENCE.md) — every `witan-code` command with
+  its full flag table and an example invocation.
 
 ## Cross-repo context bridge (Layer 2.5)
 
@@ -186,7 +196,18 @@ wires both servers together via `uvx --from … --with …`. See the
 
 To use witan-code **standalone** (code graph only, no memory/task tools):
 
-**From the published git repo:**
+**From PyPI:**
+
+```bash
+# One-shot (uvx):
+uvx --from witan-code witan-code index
+
+# Persistent CLI install:
+uv tool install witan-code
+witan-code index
+```
+
+**From the published git repo** (to track pre-release/unreleased code):
 
 ```bash
 # One-shot (uvx):
