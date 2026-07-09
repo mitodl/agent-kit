@@ -8,7 +8,7 @@ from agent_config_kit.models import (
     SkillSource,
     StdioServer,
 )
-from agent_config_kit.plan import RegistrationBundle, apply
+from agent_config_kit.plan import RegistrationBundle, Scope, apply
 from agent_config_kit.prune import (
     PlatformState,
     apply_with_prune,
@@ -133,10 +133,8 @@ def test_apply_with_prune_removes_dropped_skill_dirs(tmp_path, monkeypatch):
     skill_md.write_text("# skill")
     skill = SkillSource(name="my-skill", skill_md_path=skill_md)
     apply("pi", _bundle(mcp_servers={}, skills=[skill]))
-    dest_claude_style = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
-    dest_agents = tmp_path / ".agents" / "skills" / "my-skill"
-    assert dest_claude_style.is_dir()
-    assert dest_agents.is_dir()
+    dest = tmp_path / ".pi" / "agent" / "skills" / "my-skill"
+    assert dest.is_dir()
     previous = PlatformState(skills=["my-skill/SKILL.md"])
 
     result, current_state = apply_with_prune(
@@ -144,10 +142,40 @@ def test_apply_with_prune_removes_dropped_skill_dirs(tmp_path, monkeypatch):
     )
 
     # every file gone -> the now-empty skill dir itself is cleaned up too
-    assert not dest_claude_style.exists()
-    assert not dest_agents.exists()
-    assert dest_claude_style / "SKILL.md" in result.removed
-    assert dest_agents / "SKILL.md" in result.removed
+    assert not dest.exists()
+    assert dest / "SKILL.md" in result.removed
+    assert current_state.skills == []
+
+
+def test_apply_with_prune_removes_dropped_skill_dirs_from_all_dest_dirs(
+    tmp_path, monkeypatch
+):
+    """OpenCode writes each skill to both the singular and plural dir
+    spelling (skill_dest_dirs) — prune must remove it from both."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    skill_md = tmp_path / "src" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("# skill")
+    skill = SkillSource(name="my-skill", skill_md_path=skill_md)
+    apply("opencode", _bundle(mcp_servers={}, skills=[skill]), scope=Scope.PROJECT)
+    dest_singular = tmp_path / ".opencode" / "skill" / "my-skill"
+    dest_plural = tmp_path / ".opencode" / "skills" / "my-skill"
+    assert dest_singular.is_dir()
+    assert dest_plural.is_dir()
+    previous = PlatformState(skills=["my-skill/SKILL.md"])
+
+    result, current_state = apply_with_prune(
+        "opencode",
+        _bundle(mcp_servers={}, skills=[]),
+        previous,
+        scope=Scope.PROJECT,
+    )
+
+    assert not dest_singular.exists()
+    assert not dest_plural.exists()
+    assert Path(".opencode") / "skill" / "my-skill" / "SKILL.md" in result.removed
+    assert Path(".opencode") / "skills" / "my-skill" / "SKILL.md" in result.removed
     assert current_state.skills == []
 
 
