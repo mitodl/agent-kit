@@ -1,6 +1,7 @@
 """Tests for the schema/data migration commands."""
 
 import subprocess
+from pathlib import Path
 
 from .conftest import SCHEMA, requires_omnigraph
 
@@ -243,3 +244,90 @@ def test_merge_dry_run_writes_nothing(server, tmp_path):
     assert result["added"] == 1
     rows = srv.client.read("read.gq", "get_memory", {"slug": "mem-dry-run-dddddd"})
     assert rows == []
+
+
+@requires_omnigraph
+def test_merge_strips_file_uri_prefix(server, tmp_path):
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-file-uri-eeeeee",
+        content="hi",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+
+    # Both source and target passed as explicit file:// URIs, as omnigraph's
+    # own --store accepts — must resolve to the same plain paths OmnigraphClient
+    # uses everywhere else, not a bogus relative "file:" directory.
+    result = srv.merge_store(
+        f"file://{source.graph_uri}", target=f"file://{srv.client.graph_uri}"
+    )
+
+    assert result["added"] == 1
+    rows = srv.client.read("read.gq", "get_memory", {"slug": "mem-file-uri-eeeeee"})
+    assert rows and rows[0]["content"] == "hi"
+    assert not (Path.cwd() / "file:").exists()
+
+
+@requires_omnigraph
+def test_merge_auto_creates_missing_local_target(server, tmp_path):
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-new-target-ffffff",
+        content="hi",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+
+    new_target = tmp_path / "brand-new-target.omni"
+    assert not new_target.exists()
+
+    result = srv.merge_store(source.graph_uri, target=str(new_target))
+
+    assert new_target.exists()
+    assert result["added"] == 1
+    target_client = graph_mod.OmnigraphClient(
+        str(new_target), cfg_mod.load().queries_dir
+    )
+    rows = target_client.read(
+        "read.gq", "get_memory", {"slug": "mem-new-target-ffffff"}
+    )
+    assert rows and rows[0]["content"] == "hi"
+
+
+def test_parse_export_raises_on_corrupted_json_line(tmp_path):
+    from witan import server as srv
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text("not json at all\n")
+    try:
+        srv._parse_export(bad)
+    except RuntimeError as exc:
+        assert "not valid JSON" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for a corrupted export line")
+
+
+def test_parse_export_raises_on_missing_type_field(tmp_path):
+    from witan import server as srv
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('{"data": {"slug": "mem-x-aaaaaa"}}\n')
+    try:
+        srv._parse_export(bad)
+    except RuntimeError as exc:
+        assert "missing a 'type'" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for a row missing 'type'")

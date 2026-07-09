@@ -166,7 +166,8 @@ def merge(
     source:
         Store URI to merge from (local path, ``s3://``, or ``file://``).
     target:
-        Store URI to merge into. Defaults to the configured store.
+        Store URI to merge into. Defaults to the configured store. Created
+        automatically if it's a local path that doesn't exist yet.
     dry_run:
         Preview the reconciliation decision for every colliding slug without
         writing anything.

@@ -587,7 +587,12 @@ def _reconcile_timestamp(row_type: str, data: dict) -> str | None:
 def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
     """Split an ``omnigraph export`` JSONL file into node rows keyed by
     ``(type, slug)`` and a plain list of edge rows (no ``slug``, so not
-    reconciled — they pass through the merge as exported)."""
+    reconciled — they pass through the merge as exported).
+
+    An export is an external boundary (another process's output, not
+    necessarily produced by this run), so a malformed line raises a clear
+    ``RuntimeError`` naming the offending line rather than a raw
+    ``JSONDecodeError``/``KeyError`` mid-reconciliation."""
     nodes: dict[tuple[str, str], dict] = {}
     edges: list[dict] = []
     with open(path, encoding="utf-8") as f:
@@ -595,10 +600,18 @@ def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
             line = line.strip()
             if not line:
                 continue
-            row = json.loads(line)
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"{path}: corrupted export line, not valid JSON: {line!r}"
+                ) from exc
+            row_type = row.get("type")
+            if not row_type:
+                raise RuntimeError(f"{path}: export row missing a 'type': {row!r}")
             slug = (row.get("data") or {}).get("slug")
             if slug:
-                nodes[(row["type"], slug)] = row
+                nodes[(row_type, slug)] = row
             else:
                 edges.append(row)
     return nodes, edges
@@ -629,7 +642,11 @@ def merge_store(
     source:
         Store URI to merge from (local path, ``s3://``, or ``file://``).
     target:
-        Store URI to merge into. Defaults to the configured store.
+        Store URI to merge into. Defaults to the configured store. Created
+        (schema-applied, empty) automatically if it's a local path that
+        doesn't exist yet — same as ``witan serve``/``witan <cmd>`` on a
+        fresh machine; no-op for a remote ``s3://``/``http(s)://`` target,
+        which is assumed to already exist.
     dry_run:
         Compute and return the reconciliation decisions without loading
         anything.
@@ -638,7 +655,18 @@ def merge_store(
     per-``(type, slug)`` decision list, plus (when not a dry run)
     ``rows_loaded`` and the raw ``load`` output.
     """
+    # `_acquire_store_lock`/`_ensure_graph` build filesystem `Path`s directly
+    # from the URI and don't strip a URI scheme — same convention as the rest
+    # of witan (`OmnigraphClient`, `_ensure_graph`), where a local store is
+    # always a plain path and only http(s)/s3 count as "remote". `omnigraph`
+    # itself accepts an explicit `file://` for `--store`, so callers may
+    # reasonably pass one; strip it before it reaches any local Path logic.
+    if source.startswith("file://"):
+        source = source[len("file://") :]
     target = target or client.graph_uri
+    if target.startswith("file://"):
+        target = target[len("file://") :]
+    _ensure_graph(target)
     binary = client._binary
 
     local_lock = None

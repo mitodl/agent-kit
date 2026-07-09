@@ -81,10 +81,16 @@ witan migrate merge ~/.local/share/witan/graph.omni --target s3://witan-shared/g
 witan migrate merge machine-a.omni --target combined.omni
 witan migrate merge machine-b.omni --target combined.omni
 
-# machine migration: same command, target starts empty
-witan init --schema mcp/servers/witan/schema/schema.pg new-machine.omni
+# machine migration: same command, target starts empty — a missing local
+# target is created and schema-applied automatically, no separate init step
 witan migrate merge old-machine.omni --target new-machine.omni
 ```
+
+`source`/`target` accept a plain local path, `s3://`, or an explicit
+`file://` local URI (stripped to a plain path before use, same as everywhere
+else in witan — only `s3://`/`http(s)://` count as "remote"). A missing
+local `target` is auto-created; a missing remote `target` is assumed to
+already exist and is left alone (same as `witan serve` on a fresh machine).
 
 Reconciliation only applies to nodes (anything with a `slug`) — edge rows
 (`Tagged`, `ParentOf`, ...) have no slug and pass through the same load
