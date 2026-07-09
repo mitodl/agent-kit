@@ -405,17 +405,102 @@ def checkpoint() -> None:
         pass
 
 
+_AGENT_NAMES = {
+    "claude": "Claude Code",
+    "pi": "Pi",
+    "copilot": "GitHub Copilot",
+    "opencode": "OpenCode",
+}
+AgentName = Literal["claude", "pi", "copilot", "opencode", "all"]
+
+
+def _report_setup(name: str, result, *, dry_run: bool) -> None:
+    print(f"\n{_AGENT_NAMES.get(name, name)}")
+    for path in result.planned:
+        tag = " (dry-run)" if dry_run else ""
+        print(f"  -> {path}{tag}")
+    for path, reason in result.skipped:
+        print(f"  skip {path} — {reason}")
+
+
 @app.command
-def setup(*, dry_run: bool = False) -> None:
-    """Install the omnigraph binary to ~/.local/bin/ for standalone witan-code use.
+def setup(
+    *,
+    agent: AgentName = "claude",
+    author: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Install witan-code for one or all supported coding agents.
 
-    Only needed when running witan-code without witan already installed —
-    `witan setup` installs the same binary to the same place. Re-run after an
-    omnigraph version bump to refresh it.
+    Installs the omnigraph binary to ~/.local/bin/, copies the bundled skill
+    and hooks/Pi-extension to the agent's config directories, and merges the
+    witan-code MCP server entry into the agent's config file. Independent of
+    `witan setup` — running both is fine (each only touches its own entries);
+    running just this one is enough for a witan-code-only install.
+
+    Re-run after every upgrade to refresh installed files.
+
+    Parameters
+    ----------
+    agent: Target agent — claude | pi | copilot | opencode | all.
+    author: Name written to graph nodes (default: git config user.name or $USER).
+    dry_run: Print what would happen without writing anything.
     """
-    from .setup import install_omnigraph
+    import os
+    import subprocess
 
-    install_omnigraph(dry_run=dry_run)
+    from agent_config_kit import (
+        apply,
+        apply_all,
+        detect_installed_platforms,
+        known_platforms,
+    )
+    from agent_config_kit.installers import install_files
+
+    from .setup import install_omnigraph, witan_code_bundle
+
+    pkg_dir = Path(__file__).parent
+
+    if author is None:
+        try:
+            author = subprocess.check_output(
+                ["git", "config", "user.name"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            author = ""
+        author = author or os.environ.get("USER", "unknown")
+
+    print("omnigraph binary")
+    install_omnigraph(dry_run)
+
+    bundle = witan_code_bundle(pkg_dir, author)
+
+    if agent == "all":
+        for name, result in apply_all(bundle, dry_run=dry_run).items():
+            _report_setup(name, result, dry_run=dry_run)
+        for name in sorted(set(known_platforms()) - set(detect_installed_platforms())):
+            print(f"\n{_AGENT_NAMES.get(name, name)} — not detected, skipping")
+    else:
+        _report_setup(agent, apply(agent, bundle, dry_run=dry_run), dry_run=dry_run)
+
+    if agent in ("claude", "all"):
+        # The two script-based hooks (SessionStart, PostToolUse) — a generic
+        # file-copy, not part of the JSON-config hook entries `apply()` just
+        # registered (those only reference the installed path by name).
+        install_files(
+            pkg_dir / "hooks",
+            Path.home() / ".claude" / "hooks",
+            suffix=".sh",
+            dry_run=dry_run,
+            executable=True,
+        )
+
+    if dry_run:
+        print("\n(dry-run — no files written)")
+    else:
+        print("\nDone. Restart your agent(s) to pick up the new MCP server and hooks.")
 
 
 def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:

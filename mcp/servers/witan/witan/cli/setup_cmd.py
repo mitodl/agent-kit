@@ -51,7 +51,12 @@ def setup(
     Installs the omnigraph binary to ``~/.local/bin/``, writes a starter
     ``config.toml`` if one doesn't exist yet, copies bundled skills and
     hooks/extensions to the agent's config directories, and merges the witan
-    MCP server entry into the agent's config file.
+    MCP server entry into the agent's config file. When witan-code is also
+    installed (importable in this environment — e.g. via ``--with`` in the
+    MCP server's uvx invocation), its skill/hooks/MCP entry are folded into
+    the same install pass, so a single ``witan setup`` covers both packages;
+    otherwise install it separately with ``witan-code setup`` (or the mounted
+    ``witan code setup``).
 
     Re-run after every upgrade to refresh installed files.
 
@@ -94,6 +99,37 @@ def setup(
 
     bundle = su.witan_bundle(pkg_dir, author)
 
+    # When witan-code is installed alongside witan (e.g. via `--with` in the
+    # MCP server's uvx invocation), fold its bundle in too, so one `witan
+    # setup` installs both packages' skill/hooks/MCP entries — the same
+    # optional-import pattern already used to mount `witan code …` and the
+    # code_* MCP tools (cli/__init__.py). Standalone `witan-code setup` (or
+    # the mounted `witan code setup`) still works on its own; this just saves
+    # a second invocation when both are present. No cross-package import of
+    # witan-code's *logic* — only its bundle-building entry point.
+    code_pkg_dir: Path | None = None
+    try:
+        import witan_code
+        from witan_code.setup import witan_code_bundle
+    except ImportError:
+        pass
+    else:
+        code_pkg_dir = Path(witan_code.__file__).parent
+        code_bundle = witan_code_bundle(code_pkg_dir, author)
+        bundle.mcp_servers.update(code_bundle.mcp_servers)
+        bundle.hooks.extend(code_bundle.hooks)
+        bundle.skills.extend(code_bundle.skills)
+
+        if not shutil.which("witan-code") and not dry_run:
+            console.print(
+                "[yellow]Warning:[/yellow] witan-code not on PATH. "
+                "Hooks calling [bold]witan-code inject-context[/bold]/"
+                "[bold]checkpoint[/bold] will fail until:\n"
+                "  [bold]uv tool install "
+                "git+https://github.com/mitodl/agent-kit"
+                "#subdirectory=mcp/servers/witan-code[/bold]"
+            )
+
     if agent == "all":
         for name, result in apply_all(bundle, dry_run=dry_run).items():
             _report(name, result, dry_run=dry_run)
@@ -114,6 +150,14 @@ def setup(
             dry_run=dry_run,
             executable=True,
         )
+        if code_pkg_dir is not None:
+            install_files(
+                code_pkg_dir / "hooks",
+                Path.home() / ".claude" / "hooks",
+                suffix=".sh",
+                dry_run=dry_run,
+                executable=True,
+            )
 
         # Heal config drift: an older docs flow registered the workflow hooks as
         # `bash ~/.claude/hooks/workflow-*.sh` wrappers, which now coexist with

@@ -17,8 +17,12 @@ The omnigraph binary step always downloads the release pinned by
 GitHub releases into `~/.local/bin/omnigraph` — there is no build-time
 bundling, so re-running `witan setup` is also how you pick up an omnigraph
 version bump (a Renovate PR bumps the pin; see `renovate.json`'s
-`omnigraph-version` customManager). `witan-code`, if installed standalone
-(without `witan`), has its own equivalent `witan-code setup` — see its
+`omnigraph-version` customManager). When `witan-code` is also installed
+(importable in this environment — e.g. via the `--with` in the MCP server's
+`uvx` invocation), `witan setup` folds its skill/hooks/MCP entry into the same
+install pass, so one `witan setup` covers both packages. Installed standalone
+(without `witan`), `witan-code` has its own equivalent `witan-code setup` (or
+the mounted `witan code setup`) — see its
 [README](../witan-code/README.md#install).
 
 **With persistent CLI** — required for **Claude Code** and **Pi** (and `--agent all`),

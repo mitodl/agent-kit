@@ -209,17 +209,28 @@ uvx --from . witan-code index path/to/file.py   # single file/subpath
 uv run witan-code index
 ```
 
-**Standalone omnigraph binary install:** witan-code needs the `omnigraph` CLI
-on `PATH`. If `witan` is also installed, its own `witan setup` already put it
-there and nothing further is needed. Running witan-code truly standalone
-(no `witan`), run `witan-code setup` once:
+**Full standalone install:** `witan-code setup` installs everything a
+witan-code-only deployment needs — the `omnigraph` binary, the `/witan-code`
+skill, all four hooks (or the Pi extension), and the MCP server entry — for
+one agent or all detected ones:
 
 ```bash
-witan-code setup            # fetches the pinned omnigraph release to ~/.local/bin/
-witan-code setup --dry-run  # preview without writing
+witan-code setup                    # Claude Code (default)
+witan-code setup --agent pi         # Pi
+witan-code setup --agent all        # every detected agent
+witan-code setup --dry-run          # preview without writing
+witan-code setup --author "Jane Doe"  # attribution (default: git config user.name)
 ```
 
-This downloads the release pinned by `_OMNIGRAPH_VERSION` in
+Independent of `witan setup` — running both is fine (each only ever touches
+its own hook/skill entries; see [Hooks](#hooks) and [Skill](#skill)). If
+`witan` is *also* installed, its own `witan setup` already fetched the
+`omnigraph` binary and nothing further is needed there, but `witan-code
+setup` still has to run separately to install witan-code's own skill/hooks/Pi
+extension — `witan setup` does not reach into witan-code's bundle (no
+cross-package coupling).
+
+This downloads the omnigraph release pinned by `_OMNIGRAPH_VERSION` in
 [`witan_code/setup.py`](./witan_code/setup.py) — the same pin `witan`'s own
 `setup.py` uses, kept in lockstep by Renovate (see the repo-root
 `renovate.json`'s `omnigraph-version` customManager, which bumps both files
@@ -234,8 +245,10 @@ latest upstream release directly if missing, independent of the
 `witan-code setup`/`_OMNIGRAPH_VERSION` pin) and prints a hint; it is not
 required when installing via uvx/uv.
 
-To add witan-code as a standalone MCP server (without the witan memory/task
-tools), copy the appropriate snippet from `config/` into your agent's config:
+**Manual / unsupported-agent install:** for an agent `witan-code setup`
+doesn't cover, copy the appropriate MCP snippet from `config/` into your
+agent's config, and see [Hooks](#hooks)/[Skill](#skill) for the manual
+symlink alternative:
 
 - pi: `config/pi.json` → `~/.pi/agent/mcp.json`
 - Claude: `config/claude.json` → `claude_desktop_config.json`
@@ -347,16 +360,21 @@ mechanisms keep this in check, mirroring that module (deliberately duplicated
 
 [`witan_code/skills/witan-code/SKILL.md`](witan_code/skills/witan-code/SKILL.md)
 is a `/witan-code` entry point covering tool selection (vs. grep/Explore), a
-quick tool reference, and linking symbol ids into witan tasks/memories. Unlike
-witan's own skills, `witan-code setup` does not yet install it automatically
-(witan-code has no `agent_config_kit` bundling step) — for now, symlink or
-copy it into `~/.claude/skills/witan-code/`.
+quick tool reference, and linking symbol ids into witan tasks/memories.
+Installed automatically by `witan-code setup` (to `~/.claude/skills/`, or
+both `~/.pi/agent/skills/` and `~/.agents/skills/` under `--agent pi`); to
+install it manually instead, symlink or copy the directory into the
+equivalent path for your agent.
 
 ## Hooks
 
-Four hooks (see [configs/hooks/README.md](../../../configs/hooks/README.md)
-for install/registration) make the code graph self-managing with no manual
-step, self-announcing, and self-compacting:
+Four hooks — installed automatically by `witan-code setup` (see
+[Install](#install)), or manually per
+[configs/hooks/README.md](../../../configs/hooks/README.md) — make the code
+graph self-managing with no manual step, self-announcing, and
+self-compacting. A Pi equivalent of all four lives in one extension,
+[`witan_code/extensions/pi/codegraph.ts`](witan_code/extensions/pi/codegraph.ts)
+(see [configs/pi/README.md](../../../configs/pi/README.md)):
 
 - **`codegraph-session-init.sh`** (`SessionStart`) — seeds/refreshes the whole
   repo in the background on session start (first run builds the full index;
@@ -382,8 +400,8 @@ step, self-announcing, and self-compacting:
   Independent of `witan`'s own `session-checkpoint` hook (no cross-package
   coupling). Best-effort and non-blocking.
 
-Install: symlink each to `~/.claude/hooks/` and register under the matching
-event in `settings.json` (see the linked README for the exact JSON).
+Manual install: symlink each to `~/.claude/hooks/` and register under the
+matching event in `settings.json` (see the linked README for the exact JSON).
 
 ## Incremental indexing
 

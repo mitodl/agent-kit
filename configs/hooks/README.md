@@ -2,6 +2,13 @@
 
 Six Claude Code hooks that wire the trackers into every session.
 
+The four codegraph hooks below are also installed automatically by
+`witan-code setup` (see
+[../../mcp/servers/witan-code/README.md#install](../../mcp/servers/witan-code/README.md#install)),
+which additionally registers the MCP server and skill in one step. The manual
+symlink install below is for the two workflow hooks (installed via
+`witan setup`) or a full-repo-checkout dev loop.
+
 ## Installation
 
 ```bash
@@ -116,8 +123,9 @@ sessions from indexing at once. Skips non-git directories and injects no context
 
 Together with `codegraph-reindex.sh` (below) this makes the code graph
 self-managing: SessionStart covers the whole repo, PostToolUse keeps live edits
-fresh. (Pi has no hook system, so under Pi the initial seed stays manual —
-`witan-code index .`.)
+fresh. Pi has no Claude-style hooks, but all four codegraph hooks (including
+this one) are mirrored via its extension-events API — see
+[configs/pi/README.md](../pi/README.md).
 
 ### `codegraph-reindex.sh` (PostToolUse, matcher `Edit|Write`)
 
