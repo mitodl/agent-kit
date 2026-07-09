@@ -584,6 +584,32 @@ def _reconcile_timestamp(row_type: str, data: dict) -> str | None:
     return None
 
 
+def _parse_ts(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 timestamp for comparison, or ``None`` if absent/unparsable.
+
+    Two stores' timestamps aren't guaranteed to share a textual format (``Z``
+    vs. ``+00:00``, or genuinely different offsets) — comparing the raw
+    strings sorts wrong across those (e.g. ``"...T23:30:00-05:00"`` — later in
+    UTC — sorts *before* ``"...T00:00:00Z"`` the next calendar day
+    lexicographically). Parsed values are normalized to naive UTC so any two
+    are always comparable — ``datetime`` raises on comparing an aware value
+    against a naive one, and omnigraph's own export already strips the offset
+    from what witan writes (aware, ``+00:00``) down to a naive string, so
+    aware/naive comparison isn't a hypothetical here. An unparsable value
+    degrades to ``None`` (treated as "no usable timestamp") rather than
+    raising, since a malformed value shouldn't crash a merge — it just can't
+    win a comparison."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
 def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
     """Split an ``omnigraph export`` JSONL file into node rows keyed by
     ``(type, slug)`` and a plain list of edge rows (no ``slug``, so not
@@ -707,7 +733,9 @@ def merge_store(
                     continue
                 src_ts = _reconcile_timestamp(row_type, row["data"])
                 dst_ts = _reconcile_timestamp(row_type, existing["data"])
-                if src_ts is not None and (dst_ts is None or src_ts > dst_ts):
+                src_dt = _parse_ts(src_ts)
+                dst_dt = _parse_ts(dst_ts)
+                if src_dt is not None and (dst_dt is None or src_dt > dst_dt):
                     decisions.append(
                         {
                             "type": row_type,

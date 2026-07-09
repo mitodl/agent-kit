@@ -56,14 +56,17 @@ witan migrate merge <source> [--target <target>] [--dry-run]
 ```
 
 `source`/`target` are store URIs (local path, `s3://`, or `file://`); `target`
-defaults to your currently configured store. This wraps the same
-export/init/load sequence but adds the one thing raw `omnigraph load --mode
-merge` doesn't have: a **reconciliation strategy**. For every node present in
-both stores (matched on type + slug), it keeps whichever has the newer
-timestamp (`updated_at`, falling back through the fields in
-`_RECONCILE_TS_FIELDS`, `witan/server.py`) instead of blindly taking whichever
-file happened to load last. Rows that only exist in one side are always kept;
-rows the target already has at an equal-or-newer version are left alone.
+defaults to your currently configured store. It exports both sides,
+auto-creating a missing *local* `target` first (schema-applied, empty — same
+as `witan serve` on a fresh machine; a missing *remote* `target` is assumed to
+already exist and is left for the export step to fail against, not silently
+created), then adds the one thing raw `omnigraph load --mode merge` doesn't
+have: a **reconciliation strategy**. For every node present in both stores
+(matched on type + slug), it keeps whichever has the newer timestamp
+(`updated_at`, falling back through the fields in `_RECONCILE_TS_FIELDS`,
+`witan/server.py`) instead of blindly taking whichever file happened to load
+last. Rows that only exist in one side are always kept; rows the target
+already has at an equal-or-newer version are left alone.
 
 This makes it **repeatable**: run it again with the same source against an
 already-merged target and it loads nothing (every source row loses

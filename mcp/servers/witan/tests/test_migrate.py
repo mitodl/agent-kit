@@ -331,3 +331,38 @@ def test_parse_export_raises_on_missing_type_field(tmp_path):
         assert "missing a 'type'" in str(exc)
     else:
         raise AssertionError("expected RuntimeError for a row missing 'type'")
+
+
+def test_parse_ts_handles_missing_and_unparsable_values():
+    from witan import server as srv
+
+    assert srv._parse_ts(None) is None
+    assert srv._parse_ts("") is None
+    assert srv._parse_ts("not a timestamp") is None
+
+
+def test_parse_ts_orders_mixed_offset_formats_correctly():
+    """Raw string comparison sorts these two backwards: '...T23:30:00-05:00'
+    (2026-01-02T04:30:00 UTC) is lexicographically *less* than
+    '...T00:00:00Z' (2026-01-02T00:00:00 UTC, actually 4.5 hours earlier),
+    because the date digit '1' < '2' dominates the comparison. Parsing to a
+    real datetime is the only way to get the ordering right."""
+    from witan import server as srv
+
+    later_with_offset = srv._parse_ts("2026-01-01T23:30:00-05:00")
+    earlier_utc = srv._parse_ts("2026-01-02T00:00:00Z")
+
+    assert "2026-01-01T23:30:00-05:00" < "2026-01-02T00:00:00Z"  # wrong as strings
+    assert later_with_offset > earlier_utc  # correct once parsed
+
+
+def test_parse_ts_compares_naive_and_aware_without_raising():
+    """omnigraph's own export strips the offset witan writes down to a naive
+    string — an aware value must still compare against a naive one without
+    datetime's usual TypeError."""
+    from witan import server as srv
+
+    naive = srv._parse_ts("2026-01-01T12:00:00")
+    aware_same_instant = srv._parse_ts("2026-01-01T12:00:00+00:00")
+
+    assert naive == aware_same_instant
