@@ -1,18 +1,28 @@
-# agent-config.toml — declarative install of this repo's own MCP servers
-# (witan, witan-code) and skill catalog (skills/**) via agent-config-kit's
-# `agent-kit` CLI, for consumers that don't want to write Python.
+# agent-config.toml — declarative install of this repo's skill catalog
+# (skills/**) and the ToolHive SWE remote MCP servers, via
+# agent-config-kit's `agent-kit` CLI, for consumers that don't want to
+# write Python.
 #
-# Skills owned by witan itself (mcp/servers/witan/witan/skills/) are
-# installed by `witan setup`, not this manifest — witan owns its own
-# registration lifecycle.
+# witan and witan-code are NOT registered here — `witan setup` (see
+# mcp/servers/witan/README.md) owns its own MCP registration and skill
+# installation lifecycle; registering it a second time from this manifest
+# would just duplicate that.
+#
+# ToolHive SWE has no local process to build or run — it's just three
+# remote, Streamable HTTP servers (one per environment tier). Auth is
+# Keycloak OAuth 2.1: the first call to each server opens a browser
+# consent flow, so there is no token or API key to set here. Only want
+# one or two tiers? Delete the [mcp_servers.toolhive-swe-*] table(s) you
+# don't need before running `agent-kit apply` — each tier is a separate
+# OAuth prompt and you likely only have Keycloak access to some of them.
 #
 # Profiles mirror the skills/ category layout (see AGENTS.md) so a
-# consumer picks up the MCP servers plus just the skills relevant to their
-# work, instead of the whole catalog. `universal` (validate-before-commit,
-# creating-skills, create-ol-pull-request, plus both MCP servers) is what
-# every other profile inherits — it's the baseline useful regardless of
-# specialty. Selecting no profile installs everything (profiles are
-# opt-in filters, not gates).
+# consumer picks up just the skills relevant to their work, instead of
+# the whole catalog. `universal` (validate-before-commit, creating-skills,
+# create-ol-pull-request) is what every other profile inherits — it's the
+# baseline useful regardless of specialty. Selecting no profile installs
+# everything, including the ToolHive SWE tiers (profiles are opt-in
+# filters, not gates).
 #
 # Usage (from the repo root):
 #   uv tool install 'agent-config-kit[cli]'
@@ -21,32 +31,21 @@
 #   agent-kit apply agent-config.toml --dry-run          # preview without writing
 #   agent-kit validate agent-config.toml                 # check for drift
 #   agent-kit profiles agent-config.toml                 # list profiles + entry counts
-#
-# WITAN_AUTHOR is optional and defaults to your git config user.name or $USER.
 
-[mcp_servers.witan]
-kind = "stdio"
-command = "uvx"
-args = [
-    "--from",
-    "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan",
-    "--with",
-    "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code",
-    "witan",
-    "serve",
-]
-env = { WITAN_AUTHOR = "<your-name>" }
+[mcp_servers.toolhive-swe-ci]
+kind = "remote"
+url = "https://toolhive-swe.ci.ol.mit.edu/mcp"
+transport = "http"
 
-[mcp_servers.witan-code]
-kind = "stdio"
-command = "uvx"
-args = [
-    "--from",
-    "git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code",
-    "witan-code",
-    "serve",
-]
-env = { WITAN_AUTHOR = "<your-name>" }
+[mcp_servers.toolhive-swe-qa]
+kind = "remote"
+url = "https://toolhive-swe.qa.ol.mit.edu/mcp"
+transport = "http"
+
+[mcp_servers.toolhive-swe-prod]
+kind = "remote"
+url = "https://toolhive-swe.ol.mit.edu/mcp"
+transport = "http"
 
 [skills]
 create-ol-github-issue          = "skills/process/create-ol-github-issue/SKILL.md"
@@ -68,7 +67,6 @@ validate-before-commit          = "skills/workflow/validate-before-commit/SKILL.
 vault-k8s-auth                  = "skills/infrastructure/vault-k8s-auth/SKILL.md"
 
 [profiles.universal]
-mcp_servers = ["witan", "witan-code"]
 skills = [
     "validate-before-commit",
     "creating-skills",

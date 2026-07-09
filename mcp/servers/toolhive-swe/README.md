@@ -25,15 +25,17 @@ endpoint or routing header):
 ## Quick Start
 
 Registration is declarative, via [`agent-config-kit`](../../../packages/agent-config-kit/README.md)'s
-`agent-kit` CLI and the [`agent-config.toml`](./agent-config.toml) manifest in this
-directory — there is no install script.
+`agent-kit` CLI and the repo-root [`agent-config.toml`](../../../agent-config.toml)
+manifest — the three tiers are registered there alongside this repo's skill
+catalog; there is no separate manifest or install script for this server.
 
 ```bash
 # One-time: install the CLI
 uv tool install 'agent-config-kit[cli]'
 
-# From this directory — registers all three tiers, on every agent platform
-# agent-kit detects on your machine (Claude Code, Pi, GitHub Copilot, OpenCode):
+# From the repo root — registers all three tiers (plus the skill catalog),
+# on every agent platform agent-kit detects on your machine (Claude Code,
+# Pi, GitHub Copilot, OpenCode):
 agent-kit apply agent-config.toml
 
 # Preview without writing anything:
@@ -58,9 +60,10 @@ separate `claude_desktop_config.json`, not Claude Code's `~/.claude.json`) —
 merge [`config/claude.json`](./config/claude.json) into it by hand.
 
 > Only want one or two tiers? Delete the corresponding
-> `[mcp_servers.toolhive-swe-*]` table(s) from `agent-config.toml` before
-> running `agent-kit apply` — each tier is a separate OAuth prompt and you
-> likely only have Keycloak access to some of them.
+> `[mcp_servers.toolhive-swe-*]` table(s) from the repo-root `agent-config.toml`
+> before running `agent-kit apply` — each tier is a separate OAuth prompt and
+> you likely only have Keycloak access to some of them. Selecting a
+> `--profile` also skips them, since they aren't part of any profile.
 
 > Remote MCP over Streamable HTTP with OAuth requires a recent agent version.
 > If your client doesn't support remote HTTP transport, upgrade it first.
