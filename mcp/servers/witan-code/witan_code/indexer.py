@@ -641,18 +641,20 @@ def _walk_defs(
     parsed: ParsedFile,
     captures: list[tuple[str, object]],
 ) -> None:
-    # Map each captured definition-name node key → (kind, name_text). Quoted
-    # string-literal labels (HCL block labels) strip their surrounding quotes;
-    # no other language's captured name legitimately has them.
+    # Map each captured definition-name node key → (kind, name_text). HCL's
+    # captured name is the block's `string_lit` label node (quotes included,
+    # since the label isn't a direct child otherwise reachable — see
+    # queries_ts/hcl.scm); strip the quotes there only. No other language
+    # captures a string_lit as its name, so this can't affect them.
     name_nodes: dict[tuple, tuple[str, str]] = {}
     for cap_name, node in captures:
         if cap_name.startswith("symbol."):
             kind = spec.kinds.get(cap_name.split(".", 1)[1])
             if kind:
-                name_nodes[_node_key(node)] = (
-                    kind,
-                    _node_text(node, raw).strip("\"'"),
-                )
+                text = _node_text(node, raw)
+                if spec.name == "hcl" and _kind(node) == "string_lit":
+                    text = text.strip("\"'")
+                name_nodes[_node_key(node)] = (kind, text)
 
     def enclosing_def(node):
         cur = _parent(node)

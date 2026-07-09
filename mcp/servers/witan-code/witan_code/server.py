@@ -522,6 +522,9 @@ SymbolKind = Literal[
     "type",
     "enum",
     "key",
+    "table",
+    "cte",
+    "block",
 ]
 
 
@@ -546,8 +549,8 @@ def code_search_symbol(
     kind:
         Optional filter to a single symbol kind: ``function``, ``method``,
         ``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,
-        or ``key``. Pass e.g. ``kind="function"`` to exclude the many YAML
-        ``key`` symbols when searching for code.
+        ``key``, ``table``, ``cte``, or ``block``. Pass e.g. ``kind="function"``
+        to exclude the many YAML ``key`` symbols when searching for code.
     branch:
         Git branch whose indexed view to query. Defaults to the checkout's
         branch when querying the current repo; when ``repo`` names a different
