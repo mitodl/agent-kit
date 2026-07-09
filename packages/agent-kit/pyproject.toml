@@ -1,6 +1,6 @@
 [project]
 name = "ol-agent-kit"
-version = "0.1.0"
+version = "0.1.1"
 description = "Meta-package: installs the full mitodl agent-kit toolkit (agent-config-kit's agent-kit CLI + witan + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -21,6 +21,15 @@ Repository = "https://github.com/mitodl/agent-kit"
 Documentation = "https://github.com/mitodl/agent-kit/blob/main/packages/agent-kit/README.md"
 Issues = "https://github.com/mitodl/agent-kit/issues"
 
+[project.scripts]
+# Re-exposed from the dependencies below so `uv tool install ol-agent-kit`
+# has executables to shim — a package with no [project.scripts] of its own
+# has nothing for `uv tool install` to expose, even with entry-point-bearing
+# dependencies pulled in alongside it.
+agent-kit = "agent_config_kit.cli:main"
+witan = "witan.cli:main"
+witan-code = "witan_code.cli:cli"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -37,7 +46,7 @@ witan-code = { path = "../../mcp/servers/witan-code", editable = true }
 packages = ["agent_kit"]
 
 [tool.bumpversion]
-current_version = "0.1.0"
+current_version = "0.1.1"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
