@@ -35,7 +35,10 @@ else
 fi
 
 # Per-repo lock dir (atomic mkdir) so overlapping sessions don't index at once.
-LOCK="${TMPDIR:-/tmp}/codegraph-init-$(printf '%s' "$PROJECT_DIR" | cksum | cut -d' ' -f1).lock"
+# Keyed on the sanitized project path (not a hash) so codegraph-context.sh can
+# independently recompute the same path in Python to report "indexing in
+# progress" without sharing a hashing scheme across languages.
+LOCK="${TMPDIR:-/tmp}/codegraph-init-${PROJECT_DIR//\//_}.lock"
 
 # Detach and build/refresh in the background, returning immediately. Prefer
 # setsid (Linux) for a clean new session; fall back to a plain background job +

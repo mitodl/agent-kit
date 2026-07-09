@@ -14,6 +14,22 @@ graph.
 > hook, and the indexer CLI, run straight from your checkout): see
 > [Local Development Setup](../../../docs/agent-memory.md#local-development-setup).
 
+## When to use this vs. grep / the `Explore` agent
+
+Reach for `code_*` tools when the question is **structural**, not textual:
+exact symbol definitions, who calls/references a symbol (and transitively —
+change-impact / blast radius before an edit), what a file defines, or which
+other repo provides/consumes a shared contract (env var, endpoint, package,
+service). Grep still wins for literal string/comment searches and one-off text
+matches — it finds *text*; this finds **symbols and their relationships**,
+including things grep structurally cannot answer (a function's transitive
+callers, or which service consumes an endpoint another service serves). See
+the `/witan-code` skill for a full tool-selection guide and reference table.
+
+`Calls`/`References`/`Imports`/`Inherits` edges are heuristic (syntactic name
+resolution, not a true call graph) — see
+[Heuristic edges](#heuristic-edges-important) below.
+
 ## Two-layer composition
 
 | Layer | Server | Stores | Scope | Synced |
@@ -232,6 +248,7 @@ tools), copy the appropriate snippet from `config/` into your agent's config:
 | `WITAN_CODE_DIR` | `~/.local/share/witan/code` | directory of per-repo `<slug>.omni` stores |
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
+| `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `codegraph-checkpoint.sh`'s opportunistic store compaction; `0` disables it |
 
 The store URI for a repo is `<dir>/<sanitized-slug>.omni`, where the slug's `/`
 and `:` are replaced with `_`. The shared cross-repo bridge lives alongside them
@@ -290,19 +307,83 @@ that repo's bridge branch overlay instead of `main` — see
   packages, deployed repos — behind it). Defaults to a repos-only view;
   `--kind` filters to one contract kind and `--repo` keeps only links touching
   a matching repo.
+- `inject-context` — print the `UserPromptSubmit` status block (see
+  [Hooks](#hooks)); called by `codegraph-context.sh`, not usually run by hand.
+- `optimize [--store PATH] [--bridge]` — compact a store's Lance fragments
+  (non-destructive; see [Store compaction](#store-compaction)). Defaults to
+  the current repo's store; `--bridge` targets the shared bridge store
+  instead.
+- `cleanup [--store PATH] [--bridge] [--keep N] [--older-than DUR] --yes` —
+  reclaim disk by GC'ing old Lance versions (**destructive**; requires
+  `--yes`).
+- `checkpoint` — opportunistically compact the current repo's store and the
+  bridge store if due (see [Hooks](#hooks)); called by
+  `codegraph-checkpoint.sh`, not usually run by hand.
 
 Both print a summary: files scanned/indexed/skipped, symbols, edges, errors. A
 parse failure on one file logs to stderr and continues.
 
-## Reindex hook
+## Store compaction
 
-`configs/hooks/codegraph-reindex.sh` is a `PostToolUse` hook (matcher
-`Edit|Write`) that incrementally re-indexes a single changed source file. It is
-best-effort and non-blocking — it always exits 0 and silences output, so a
-missing binary or parse failure never interrupts the agent.
+Every `load()`/`mutate()` call (indexing) appends a new tiny Lance fragment +
+manifest version to a store; left uncompacted, it bloats until *opening* the
+store dominates query latency, regardless of row count — the same failure
+mode witan's own store hit (PR #98; see
+[`witan/witan/maintenance.py`](../witan/witan/maintenance.py)). Two
+mechanisms keep this in check, mirroring that module (deliberately duplicated
+— no cross-package import):
 
-Install: symlink to `~/.claude/hooks/codegraph-reindex.sh` and register under
-`hooks.PostToolUse` with matcher `Edit|Write`.
+- **Opportunistic**: the `codegraph-checkpoint.sh` Stop hook spawns a
+  throttled, detached `witan-code optimize` for the current repo's store and
+  the shared bridge store, at most once per `WITAN_CODE_OPTIMIZE_INTERVAL`
+  (default daily; `0` disables) each — see [Hooks](#hooks).
+- **Scheduled**: `witan-code optimize [--store PATH | --bridge]` /
+  `witan-code cleanup --yes` for cron/systemd-timer driven maintenance on a
+  busy store. `optimize` is non-destructive and safe to run repeatedly;
+  `cleanup` GCs old Lance versions to reclaim disk and is destructive, so it
+  requires `--yes`.
+
+## Skill
+
+[`witan_code/skills/witan-code/SKILL.md`](witan_code/skills/witan-code/SKILL.md)
+is a `/witan-code` entry point covering tool selection (vs. grep/Explore), a
+quick tool reference, and linking symbol ids into witan tasks/memories. Unlike
+witan's own skills, `witan-code setup` does not yet install it automatically
+(witan-code has no `agent_config_kit` bundling step) — for now, symlink or
+copy it into `~/.claude/skills/witan-code/`.
+
+## Hooks
+
+Four hooks (see [configs/hooks/README.md](../../../configs/hooks/README.md)
+for install/registration) make the code graph self-managing with no manual
+step, self-announcing, and self-compacting:
+
+- **`codegraph-session-init.sh`** (`SessionStart`) — seeds/refreshes the whole
+  repo in the background on session start (first run builds the full index;
+  later runs re-hash and skip unchanged files). Detached and non-blocking;
+  never delays session start. A per-repo lock (keyed on the sanitized project
+  path, `${TMPDIR:-/tmp}/codegraph-init-<path-with-/-as-_>.lock`) prevents
+  overlapping sessions from indexing at once.
+- **`codegraph-reindex.sh`** (`PostToolUse`, matcher `Edit|Write`) —
+  incrementally re-indexes a single changed source file. Best-effort and
+  non-blocking — always exits 0 and silences output, so a missing binary or
+  parse failure never interrupts the agent.
+- **`codegraph-context.sh`** (`UserPromptSubmit`) — prints a short status
+  block: whether the current repo is indexed (file count, last-updated time),
+  or that a background index from `codegraph-session-init.sh` is still
+  running (checking the same lock path above), plus a nudge to prefer
+  `code_*` tools over grep. Independent of `witan`'s own `inject-context` hook
+  (no cross-package coupling) — register it alone for a witan-code-only
+  install. Backed by `witan-code inject-context`; silent when the repo has
+  neither a store nor an index in flight.
+- **`codegraph-checkpoint.sh`** (`Stop`) — spawns a throttled, detached
+  `witan-code optimize` for the current repo's store and the shared bridge
+  store if either is due (see [Store compaction](#store-compaction)).
+  Independent of `witan`'s own `session-checkpoint` hook (no cross-package
+  coupling). Best-effort and non-blocking.
+
+Install: symlink each to `~/.claude/hooks/` and register under the matching
+event in `settings.json` (see the linked README for the exact JSON).
 
 ## Incremental indexing
 

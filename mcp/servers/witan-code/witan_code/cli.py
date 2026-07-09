@@ -257,12 +257,152 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
     console.print(table)
 
 
+@app.command(name="inject-context")
+def inject_context_cmd() -> None:
+    """Print a short code-graph status block for the UserPromptSubmit hook.
+
+    Designed to be called by ``~/.claude/hooks/codegraph-context.sh`` —
+    always exits 0 and prints nothing when there's no store or in-flight index
+    for the current repo.
+    """
+    from . import context as context_module
+
+    text = context_module.inject_context()
+    if text:
+        print(text)
+
+
 @app.command
 def serve() -> None:
     """Run the code-graph MCP server standalone (code_* tools only)."""
     from .server import mcp
 
     mcp.run()
+
+
+def _resolve_store(store: str | None, *, bridge: bool = False) -> Path | None:
+    """Resolve a store path — explicit, the shared bridge, or the current
+    repo's — printing and returning ``None`` if it doesn't exist yet (nothing
+    to compact). Expands ``~`` in an explicit path so ``--store ~/…`` isn't
+    treated as missing.
+    """
+    from . import config as cfg_module
+    from . import repo as repo_module
+
+    cfg = cfg_module.load()
+    if store is not None:
+        path = Path(store).expanduser()
+    elif bridge:
+        path = cfg_module.bridge_store_path(cfg.code_dir)
+    else:
+        slug = repo_module.detect()
+        if slug is None:
+            print("No repo detected — pass --store PATH or --bridge.")
+            return None
+        path = cfg_module.store_path(slug, cfg.code_dir)
+    if not path.exists():
+        print(f"No store at {path} — nothing to do.")
+        return None
+    return path
+
+
+def _maintenance_client(store: Path):
+    from . import config as cfg_module
+    from .graph import OmnigraphClient
+
+    return OmnigraphClient(str(store), cfg_module.load().queries_dir)
+
+
+@app.command
+def optimize(*, store: str | None = None, bridge: bool = False) -> None:
+    """Compact a code-graph store's Lance fragments (non-destructive).
+
+    Collapses the many tiny fragments that accrue from every index/reindex so
+    opening the store stays cheap. Safe to run repeatedly; takes the store's
+    write lock.
+
+    Parameters
+    ----------
+    store: Store path to optimize (default: the current repo's store).
+    bridge: Optimize the shared cross-repo bridge store instead.
+    """
+    path = _resolve_store(store, bridge=bridge)
+    if path is None:
+        return
+    print(f"Optimizing {path} …")
+    _maintenance_client(path).optimize()
+    print("Optimized. (run `witan-code cleanup` to reclaim disk)")
+
+
+@app.command
+def cleanup(
+    *,
+    store: str | None = None,
+    bridge: bool = False,
+    keep: int = 10,
+    older_than: str | None = None,
+    yes: bool = False,
+) -> None:
+    """Remove old Lance versions from a code-graph store (**destructive**).
+
+    ``optimize`` compacts fragments but leaves old versions behind; this GCs
+    them, keeping the most recent ``keep`` versions per table (and/or those
+    newer than ``older_than``). Irreversible, so it requires ``--yes``.
+
+    Parameters
+    ----------
+    store: Store path to clean (default: the current repo's store).
+    bridge: Clean the shared cross-repo bridge store instead.
+    keep: Number of recent versions to keep per table.
+    older_than: Also keep versions newer than this Go-style duration (e.g. 7d).
+    yes: Confirm the destructive operation (required to actually run).
+    """
+    path = _resolve_store(store, bridge=bridge)
+    if path is None:
+        return
+    if not yes:
+        print(
+            f"cleanup is destructive — would keep the {keep} most recent "
+            f"version(s) per table"
+            + (f" and anything newer than {older_than}" if older_than else "")
+            + f" in {path}.\nRe-run with --yes to proceed."
+        )
+        return
+    print(f"Cleaning up {path} (keep={keep}) …")
+    _maintenance_client(path).cleanup(keep=keep, older_than=older_than)
+    print("Cleaned up.")
+
+
+@app.command
+def checkpoint() -> None:
+    """Opportunistically compact the current repo's store(s) (Stop hook).
+
+    Spawns a throttled, detached ``witan-code optimize`` for the current
+    repo's store and the shared bridge store, each at most once per
+    ``WITAN_CODE_OPTIMIZE_INTERVAL``, if either exists and is due. Best-effort
+    and non-blocking: always exits 0 and never raises, so a maintenance
+    failure can't fail the Stop hook. Designed to be called by
+    ``~/.claude/hooks/codegraph-checkpoint.sh``, not usually run by hand.
+    """
+    from . import config as cfg_module
+    from . import maintenance as maintenance_module
+    from . import repo as repo_module
+
+    cfg = cfg_module.load()
+    slug = repo_module.detect()
+    if slug is not None:
+        try:
+            maintenance_module.spawn_background_optimize(
+                cfg_module.store_path(slug, cfg.code_dir)
+            )
+        except Exception:  # noqa: BLE001 — maintenance must never fail the hook
+            pass
+    try:
+        maintenance_module.spawn_background_optimize(
+            cfg_module.bridge_store_path(cfg.code_dir)
+        )
+    except Exception:  # noqa: BLE001 — maintenance must never fail the hook
+        pass
 
 
 @app.command

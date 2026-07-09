@@ -1,6 +1,6 @@
 # Workflow & Code-Graph Hooks
 
-Four Claude Code hooks that wire the trackers into every session.
+Six Claude Code hooks that wire the trackers into every session.
 
 ## Installation
 
@@ -10,6 +10,8 @@ ln -sf "$(pwd)/workflow-context-inject.sh"     ~/.claude/hooks/
 ln -sf "$(pwd)/workflow-session-checkpoint.sh" ~/.claude/hooks/
 ln -sf "$(pwd)/codegraph-session-init.sh"      ~/.claude/hooks/
 ln -sf "$(pwd)/codegraph-reindex.sh"           ~/.claude/hooks/
+ln -sf "$(pwd)/codegraph-context.sh"           ~/.claude/hooks/
+ln -sf "$(pwd)/codegraph-checkpoint.sh"        ~/.claude/hooks/
 ```
 
 Run from the `configs/hooks/` directory, or adjust the symlink target to an
@@ -31,6 +33,10 @@ Add a `hooks` key to your `~/.claude/settings.json`:
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/workflow-context-inject.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/codegraph-context.sh"
           }
         ]
       }
@@ -42,6 +48,10 @@ Add a `hooks` key to your `~/.claude/settings.json`:
           {
             "type": "command",
             "command": "bash ~/.claude/hooks/workflow-session-checkpoint.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/codegraph-checkpoint.sh"
           }
         ]
       }
@@ -121,6 +131,31 @@ Prefers the `witan-code` CLI on `PATH`
 (`uv tool install --editable mcp/servers/witan-code`); otherwise falls
 back to `uvx --from <local package>`.
 
+### `codegraph-context.sh` (UserPromptSubmit)
+
+Runs before every prompt, independent of `workflow-context-inject.sh` (no
+cross-package coupling — see `mcp/servers/witan-code/witan_code/graph.py`).
+Reports whether the current repo has a Layer-2 code graph: if indexed, its
+file count and last-updated time, plus a nudge to prefer `code_*` tools over
+grep for symbol lookups, call graphs, and impact analysis; if
+`codegraph-session-init.sh`'s background index is still running, says so
+instead of silently returning partial/empty results. Exits silently when the
+repo has neither a store nor an index in flight.
+
+### `codegraph-checkpoint.sh` (Stop)
+
+Runs when Claude Code stops, independent of `workflow-session-checkpoint.sh`
+(no cross-package coupling). Every witan-code write (the `SessionStart` full
+index, the `PostToolUse` single-file reindex) appends a tiny Lance fragment +
+manifest version, and an un-compacted store bloats until *opening* it
+dominates query latency — the same failure mode witan's own store hit (#98).
+This spawns a throttled, detached `witan-code optimize` (at most once per
+`WITAN_CODE_OPTIMIZE_INTERVAL`, default daily; 0 disables) for the current
+repo's store and the shared cross-repo bridge store, if either exists and is
+due. Best-effort and non-blocking — always exits 0 and silences all output,
+so a missing binary or a bloated store taking tens of seconds to compact
+never delays the Stop hook itself (the compaction runs detached).
+
 ## Environment Variables
 
 The workflow hooks respect the same variables as the witan server;
@@ -131,5 +166,6 @@ the codegraph hook uses the witan-code variables:
 | `WITAN_MEMORY_URI` | `~/.local/share/witan/graph.omni` | Graph location (workflow hooks) |
 | `WITAN_MEMORY_TOKEN` | (empty) | Bearer token for http:// mode |
 | `WITAN_CODE_DIR` | `~/.local/share/witan/code` | Per-repo code-store directory (codegraph hook) |
+| `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | Throttle window in seconds for opportunistic store compaction; `0` disables |
 | `CLAUDE_SESSION_ID` | (set by Claude Code) | Session UUID for state file keying |
 | `CLAUDE_PROJECT_DIR` | `$(pwd)` | Project root for git remote detection |

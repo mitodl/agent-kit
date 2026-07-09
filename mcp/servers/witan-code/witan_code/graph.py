@@ -13,7 +13,7 @@ from pathlib import Path
 # We serialize writes with a per-store advisory lock (prevention) and, as a
 # safety net, retry transient "stale view" conflicts and `omnigraph repair`
 # stores already in the drifted state.
-_WRITE_SUBCOMMANDS = {"mutate", "load"}
+_WRITE_SUBCOMMANDS = {"mutate", "load", "optimize", "cleanup"}
 _RETRYABLE = ("stale view", "manifest table version", "refresh and retry")
 _NEEDS_REPAIR = ("ahead of manifest", "omnigraph repair")
 _MAX_ATTEMPTS = 8
@@ -108,6 +108,38 @@ class OmnigraphClient:
         finally:
             Path(tmp).unlink(missing_ok=True)
 
+    def optimize(self) -> str:
+        """Compact small Lance fragments across every table (non-destructive).
+
+        Every load()/mutate() appends a new tiny Lance fragment + manifest
+        version; an un-compacted store bloats until *opening* it dominates
+        query latency (a fixed per-query cost regardless of rows) — the same
+        failure mode witan's own store hit (#98). ``omnigraph optimize``
+        collapses the fragments. It takes the store's write lock and can run
+        for tens of seconds on a bloated store, so callers must throttle it
+        and keep it off the indexing hot path (see ``witan_code.maintenance``).
+        """
+        return self._run("optimize")
+
+    def cleanup(self, *, keep: int | None = None, older_than: str | None = None) -> str:
+        """Reclaim disk by removing old Lance versions (**destructive**).
+
+        ``optimize`` compacts fragments but leaves old versions behind, so disk
+        stays large until they are GC'd. ``cleanup`` removes them, keeping the
+        most recent ``keep`` versions per table and/or those newer than
+        ``older_than`` (a Go-style duration like ``7d``). At least one bound
+        must be given (omnigraph requires it). ``--confirm`` is passed so it
+        actually runs.
+        """
+        if keep is None and older_than is None:
+            raise ValueError("cleanup requires keep and/or older_than")
+        args = ["--confirm"]
+        if keep is not None:
+            args += ["--keep", str(keep)]
+        if older_than is not None:
+            args += ["--older-than", older_than]
+        return self._run("cleanup", *args)
+
     # ── Internals ─────────────────────────────────────────────────
 
     # ── Branch operations ─────────────────────────────────────────
@@ -145,7 +177,9 @@ class OmnigraphClient:
     # ── Internals ─────────────────────────────────────────────────
 
     def _branch_args(self, subcommand: str) -> list[str]:
-        if self.branch is None or subcommand == "branch":
+        # optimize/cleanup compact the whole store (every branch), not a
+        # single one, so they never take --branch even on a branched client.
+        if self.branch is None or subcommand in ("branch", "optimize", "cleanup"):
             return []
         if subcommand == "load":
             return ["--branch", self.branch, "--from", "main"]
