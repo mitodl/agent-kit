@@ -2,16 +2,20 @@
 
 Six Claude Code hooks that wire the trackers into every session: two
 workflow hooks (bash scripts, `witan setup`-installed) and four code-graph
-hooks (bare `witan-code` CLI commands — no scripts, portable to any platform
-`witan-code` installs on, including Windows).
+hooks (bare CLI commands — no scripts, portable to any platform installs on,
+including Windows).
 
 Both sets are installed automatically: `witan setup` for the workflow hooks
-(and, when witan-code is also importable, the code-graph hooks too — see
+(and, when witan-code is also importable, the code-graph hooks too — as
+`witan code <command>`, so only `witan` needs to be on `PATH`; see
 [../../mcp/servers/witan/README.md#quick-start](../../mcp/servers/witan/README.md#quick-start)),
-or `witan-code setup` on its own for a witan-code-only install (see
+or `witan-code setup` on its own for a witan-code-only install (as
+`witan-code <command>`; see
 [../../mcp/servers/witan-code/README.md#install](../../mcp/servers/witan-code/README.md#install)).
-The manual install below is for the two workflow hook *scripts* specifically,
-or a full-repo-checkout dev loop; the code-graph hooks have no scripts to
+The JSON below shows the standalone `witan-code …` form — substitute
+`witan code …` if you registered them via `witan setup` instead. The manual
+install below is for the two workflow hook *scripts* specifically, or a
+full-repo-checkout dev loop; the code-graph hooks have no scripts to
 symlink — register the bare commands directly (see below).
 
 ## Installation (workflow hooks)

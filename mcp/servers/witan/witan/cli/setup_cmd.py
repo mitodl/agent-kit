@@ -39,6 +39,32 @@ def _report(name: str, result: InstallResult, *, dry_run: bool) -> None:
         console.print(f"  [yellow]skip[/yellow] {path} — {reason}")
 
 
+def _witan_code_mounted() -> bool:
+    """Whether the `witan` binary actually on PATH has `witan code` mounted.
+
+    Checked by invoking it directly rather than trusting "witan_code is
+    importable in this process" alone: `witan setup` can run inside a
+    different environment than the persistent `witan` binary hooks will
+    later invoke (e.g. an ephemeral ``uvx --from witan --with witan-code
+    witan setup`` versus a plain ``uv tool install witan`` with no
+    ``--with``) — only actually running the installed binary tells us
+    whether *that one* has the subcommand.
+    """
+    witan_bin = shutil.which("witan")
+    if witan_bin is None:
+        return False
+    try:
+        result = subprocess.run(
+            [witan_bin, "code", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 @app.command
 def setup(
     *,
@@ -53,10 +79,12 @@ def setup(
     hooks/extensions to the agent's config directories, and merges the witan
     MCP server entry into the agent's config file. When witan-code is also
     installed (importable in this environment — e.g. via ``--with`` in the
-    MCP server's uvx invocation), its skill/hooks/MCP entry are folded into
-    the same install pass, so a single ``witan setup`` covers both packages;
-    otherwise install it separately with ``witan-code setup`` (or the mounted
-    ``witan code setup``).
+    MCP server's uvx invocation), its skill and hooks (registered as
+    ``witan code …``, not a separate ``witan-code`` binary) are folded into
+    the same install pass — no separate MCP entry, since ``witan serve``
+    already mounts witan-code's tools in-process. A single ``witan setup``
+    then covers both packages; otherwise install witan-code separately with
+    ``witan-code setup`` (or the mounted ``witan code setup``).
 
     Re-run after every upgrade to refresh installed files.
 
@@ -101,13 +129,23 @@ def setup(
 
     # When witan-code is installed alongside witan (e.g. via `--with` in the
     # MCP server's uvx invocation), fold its bundle in too, so one `witan
-    # setup` installs both packages' skill/hooks/MCP entries — the same
+    # setup` installs both packages' skill/hooks entries — the same
     # optional-import pattern already used to mount `witan code …` and the
     # code_* MCP tools (cli/__init__.py). Standalone `witan-code setup` (or
     # the mounted `witan code setup`) still works on its own; this just saves
     # a second invocation when both are present. No cross-package import of
     # witan-code's *logic* — only its bundle-building entry point.
-    code_pkg_dir: Path | None = None
+    #
+    # Hooks register as `witan code …` (not `witan-code …`) here, so only
+    # `witan` needs to be on PATH — not a second, separately installed
+    # `witan-code` binary — as long as *that* `witan` was itself installed
+    # with witan-code bundled in (`uv tool install --with .../witan-code
+    # .../witan`; see the README's Quick Start). The MCP server entry is
+    # skipped entirely: `witan serve` already mounts witan-code's code_*
+    # tools in-process (cli/__init__.py's `serve` command) whenever
+    # witan-code is importable — the same condition gating this whole
+    # branch — so a second, standalone `witan-code` MCP server would just be
+    # a redundant duplicate process exposing the same tools twice.
     try:
         import witan_code
         from witan_code.setup import witan_code_bundle
@@ -115,19 +153,22 @@ def setup(
         pass
     else:
         code_pkg_dir = Path(witan_code.__file__).parent
-        code_bundle = witan_code_bundle(code_pkg_dir, author)
-        bundle.mcp_servers.update(code_bundle.mcp_servers)
+        code_bundle = witan_code_bundle(code_pkg_dir, author, binary="witan code")
         bundle.hooks.extend(code_bundle.hooks)
         bundle.skills.extend(code_bundle.skills)
 
-        if not shutil.which("witan-code") and not dry_run:
+        if not dry_run and shutil.which("witan") and not _witan_code_mounted():
             console.print(
-                "[yellow]Warning:[/yellow] witan-code not on PATH. "
-                "Hooks calling [bold]witan-code inject-context[/bold]/"
-                "[bold]checkpoint[/bold] will fail until:\n"
-                "  [bold]uv tool install "
+                "[yellow]Warning:[/yellow] `witan code` isn't available from "
+                "the `witan` on PATH, so the hooks just registered "
+                "([bold]witan code inject-context[/bold]/[bold]checkpoint[/bold]/"
+                "[bold]session-init[/bold]/[bold]reindex-hook[/bold]) will "
+                "fail until that `witan` has witan-code bundled in:\n"
+                "  [bold]uv tool install --with "
                 "git+https://github.com/mitodl/agent-kit"
-                "#subdirectory=mcp/servers/witan-code[/bold]"
+                "#subdirectory=mcp/servers/witan-code "
+                "git+https://github.com/mitodl/agent-kit"
+                "#subdirectory=mcp/servers/witan[/bold]"
             )
 
     if agent == "all":
@@ -142,7 +183,9 @@ def setup(
 
     if agent in ("claude", "all"):
         # Witan's own hook shell scripts — a generic file-copy, not part of the
-        # JSON-config hook entries registered above.
+        # JSON-config hook entries registered above. witan-code has no
+        # equivalent: its hooks are all bare CLI commands (witan_code/hooks.py),
+        # with nothing to copy.
         install_files(
             pkg_dir / "hooks",
             Path.home() / ".claude" / "hooks",
@@ -150,14 +193,6 @@ def setup(
             dry_run=dry_run,
             executable=True,
         )
-        if code_pkg_dir is not None:
-            install_files(
-                code_pkg_dir / "hooks",
-                Path.home() / ".claude" / "hooks",
-                suffix=".sh",
-                dry_run=dry_run,
-                executable=True,
-            )
 
         # Heal config drift: an older docs flow registered the workflow hooks as
         # `bash ~/.claude/hooks/workflow-*.sh` wrappers, which now coexist with

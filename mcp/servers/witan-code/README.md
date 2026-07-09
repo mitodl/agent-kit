@@ -223,14 +223,17 @@ witan-code setup --author "Jane Doe"  # attribution (default: git config user.na
 ```
 
 If `witan` is *also* installed and witan-code is importable in that same
-environment (e.g. via the `--with` in the MCP server's `uvx` invocation),
-`witan setup` folds this same bundle in automatically — one `witan setup`
-then covers both packages' skill/hooks/MCP entries, and a separate
-`witan-code setup` isn't required (though re-running it afterwards is
-harmless — `apply()` is an idempotent read-merge-write). Run `witan-code
-setup` on its own for a witan-code-only install, or when witan-code isn't
-importable from witan's environment. See [Hooks](#hooks) and
-[Skill](#skill).
+environment (e.g. via the `--with` in the `uv tool install`/MCP server's
+`uvx` invocation), `witan setup` folds this same bundle in automatically —
+skill and hooks (registered as `witan code …`, so only `witan` needs to be on
+`PATH`), but **not** a second MCP server entry, since `witan serve` already
+mounts witan-code's tools in-process. One `witan setup` then covers both
+packages, and a separate `witan-code setup` isn't required (though re-running
+it afterwards is harmless — `apply()` is an idempotent read-merge-write, and
+it *will* add its own standalone MCP entry/`witan-code …` hooks alongside
+witan's). Run `witan-code setup` on its own for a witan-code-only install, or
+when witan-code isn't importable from witan's environment. See
+[Hooks](#hooks) and [Skill](#skill).
 
 This downloads the omnigraph release pinned by `_OMNIGRAPH_VERSION` in
 [`witan_code/setup.py`](./witan_code/setup.py) — the same pin `witan`'s own
@@ -377,12 +380,14 @@ equivalent path for your agent.
 
 ## Hooks
 
-Four hooks — all bare `witan-code` CLI commands, no wrapper scripts, so
-they're portable to any platform witan-code installs on (Windows included —
-no bash/setsid dependency). Installed automatically by `witan-code setup`
-(see [Install](#install)), or registered manually per
-[configs/hooks/README.md](../../../configs/hooks/README.md). A Pi equivalent
-of all four lives in one extension,
+Four hooks — all bare CLI commands, no wrapper scripts, so they're portable
+to any platform witan-code installs on (Windows included — no bash/setsid
+dependency). Named `witan-code <command>` below (standalone install via
+`witan-code setup`); when `witan setup` folds this bundle in instead (see
+[Install](#install)), they register as `witan code <command>` so only
+`witan` needs to be on `PATH`. Register manually per
+[configs/hooks/README.md](../../../configs/hooks/README.md) for either form.
+A Pi equivalent of all four lives in one extension,
 [`witan_code/extensions/pi/codegraph.ts`](witan_code/extensions/pi/codegraph.ts)
 (see [configs/pi/README.md](../../../configs/pi/README.md)):
 

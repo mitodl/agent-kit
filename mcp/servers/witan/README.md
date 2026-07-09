@@ -18,21 +18,27 @@ GitHub releases into `~/.local/bin/omnigraph` — there is no build-time
 bundling, so re-running `witan setup` is also how you pick up an omnigraph
 version bump (a Renovate PR bumps the pin; see `renovate.json`'s
 `omnigraph-version` customManager). When `witan-code` is also installed
-(importable in this environment — e.g. via the `--with` in the MCP server's
-`uvx` invocation), `witan setup` folds its skill/hooks/MCP entry into the same
-install pass, so one `witan setup` covers both packages. Installed standalone
-(without `witan`), `witan-code` has its own equivalent `witan-code setup` (or
-the mounted `witan code setup`) — see its
+(importable in this environment — e.g. via the `--with` in the `uv tool
+install`/MCP server's `uvx` invocation below), `witan setup` folds its skill
+and hooks into the same install pass — registered as `witan code …`, so the
+hooks only need `witan` on `PATH`, not a separate `witan-code` binary — and
+skips a separate MCP entry, since `witan serve` already mounts witan-code's
+tools in-process. One `witan setup` then covers both packages. Installed
+standalone (without `witan`), `witan-code` has its own equivalent `witan-code
+setup` (or the mounted `witan code setup`) — see its
 [README](../witan-code/README.md#install).
 
 **With persistent CLI** — required for **Claude Code** and **Pi** (and `--agent all`),
-whose hooks/extensions call the `witan` command directly, so it must stay on your `PATH`:
+whose hooks/extensions call the `witan` command directly, so it must stay on your `PATH`.
+Install `witan-code` alongside it with `--with` so its `witan code …` hooks
+work too (omit `--with` for a witan-only install):
 
 ```bash
 # Install the CLI from the published git repo …
-uv tool install git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan
+uv tool install --with git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code \
+    git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan
 # … or editable from a local checkout, at the repo root:
-uv tool install --editable mcp/servers/witan
+uv tool install --editable --with ./mcp/servers/witan-code mcp/servers/witan
 
 # then run setup:
 witan setup --agent claude   # or: pi | all

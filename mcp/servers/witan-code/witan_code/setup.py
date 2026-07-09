@@ -43,7 +43,9 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 }
 
 
-def witan_code_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
+def witan_code_bundle(
+    pkg_dir: Path, author: str, *, binary: str = "witan-code"
+) -> RegistrationBundle:
     """Build witan-code's ``RegistrationBundle``: MCP server, skill, hooks.
 
     Independent of ``witan``'s own bundle (``witan.setup.witan_bundle``) — a
@@ -54,6 +56,14 @@ def witan_code_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     single ``witan setup`` covers both; running ``witan-code setup``
     separately afterwards is harmless (each `apply()` call is an idempotent
     read-merge-write) but not required in that case.
+
+    Parameters
+    ----------
+    binary: The command name hook entries invoke — ``"witan-code"`` for a
+        standalone install (this function's default), or ``"witan code"``
+        when ``witan.cli.setup_cmd`` folds this bundle into witan's own (the
+        hooks then only need `witan` — with witan-code bundled in via
+        ``--with`` — on PATH, not a separately installed `witan-code`).
     """
     skills_dir = pkg_dir / "skills"
     skills = (
@@ -67,7 +77,7 @@ def witan_code_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     )
 
     pi_ext_dir = pkg_dir / "extensions" / "pi"
-    # Bare CLI commands, no wrapper script — portable everywhere `witan-code`
+    # Bare CLI commands, no wrapper script — portable everywhere `binary`
     # installs (Windows included, where bash/setsid don't exist), matching
     # witan's own `witan inject-context`/`session-checkpoint` hooks. The
     # prompt-path timeouts mirror witan's: a hung git or store read must
@@ -75,21 +85,21 @@ def witan_code_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     hooks: list[Hook] = [
         DeclarativeHook(
             event=HookEvent.SESSION_START,
-            command="witan-code session-init",
+            command=f"{binary} session-init",
         ),
         DeclarativeHook(
             event=HookEvent.POST_TOOL_USE,
             matcher="Edit|Write",
-            command="witan-code reindex-hook",
+            command=f"{binary} reindex-hook",
         ),
         DeclarativeHook(
             event=HookEvent.USER_PROMPT_SUBMIT,
-            command="witan-code inject-context",
+            command=f"{binary} inject-context",
             timeout_seconds=15,
         ),
         DeclarativeHook(
             event=HookEvent.STOP,
-            command="witan-code checkpoint",
+            command=f"{binary} checkpoint",
             timeout_seconds=15,
         ),
     ]

@@ -142,6 +142,24 @@ def test_witan_code_bundle_registers_mcp_server_and_hooks(tmp_path, monkeypatch)
     assert checkpoint[0]["timeout"] == 15
 
 
+def test_witan_code_bundle_honors_binary_override(tmp_path):
+    """witan.cli.setup_cmd passes binary="witan code" when folding this
+    bundle into witan's own, so hooks only need `witan` on PATH — not a
+    separately installed `witan-code` binary."""
+    pkg_dir = tmp_path / "pkg"
+    pkg_dir.mkdir()
+
+    bundle = setup.witan_code_bundle(pkg_dir, "tester", binary="witan code")
+
+    commands = {h.command for h in bundle.hooks if hasattr(h, "command")}
+    assert commands == {
+        "witan code session-init",
+        "witan code reindex-hook",
+        "witan code inject-context",
+        "witan code checkpoint",
+    }
+
+
 def test_witan_code_bundle_includes_pi_extensions_as_plugin_hooks(tmp_path):
     pkg_dir = tmp_path / "pkg"
     ext_dir = pkg_dir / "extensions" / "pi"
