@@ -25,7 +25,7 @@ node Symbol {
     file_id: String @index
     name: String @index
     qualified_name: String @index
-    kind: enum(function, method, class, module, variable, interface, type, enum, key) @index
+    kind: enum(function, method, class, module, variable, interface, type, enum, key, table, cte, block) @index
     start_line: I32
     end_line: I32
     signature: String?
