@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.3.6] - 2026-07-09
+
+### Fixed
+
+- **`apply` no longer crashes with a raw `FileExistsError` on a conflicting
+  skill/hook destination path**: `install_skills`/`install_files`/the
+  plugin-hook writer all called `dest.mkdir(parents=True, exist_ok=True)`,
+  which only suppresses the error when the existing path is already a real
+  directory. A stale symlink (often dangling, e.g. left behind by an older
+  symlink-based skill install) or plain file occupying that path crashed
+  `apply` with a bare traceback instead of a usable error. `apply` now
+  raises a clear message identifying the conflicting path, and a new
+  `agent-kit apply --force` flag replaces it and proceeds.
+
 ## [0.3.5] - 2026-07-09
 
 ### Fixed

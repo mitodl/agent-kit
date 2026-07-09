@@ -1,6 +1,6 @@
 [project]
 name = "agent-config-kit"
-version = "0.3.5"
+version = "0.3.6"
 description = "Unified MCP server, skill, and hook registration across coding-agent platforms"
 license = "BSD-3-Clause"
 requires-python = ">=3.11"
