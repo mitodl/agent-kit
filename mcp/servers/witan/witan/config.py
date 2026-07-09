@@ -141,11 +141,12 @@ class ScanConfig(BaseModel):
     turn it off), unlike the ``WITAN_EMBED_ENABLED`` opt-in precedent this
     package originally followed.
 
-    ``enabled_detectors``/``disabled_detectors``/``plugins``/``allowlist`` accept
-    a TOML list or a comma-separated string (env-var ergonomics). An empty
-    ``enabled_detectors`` means "every registered detector is active"; naming any
-    detector switches to an explicit allowlist. ``disabled_detectors`` always
-    wins over ``enabled_detectors``.
+    ``enabled_detectors``/``disabled_detectors``/``plugins``/``allowlist``/
+    ``allowlist_hashes`` accept a TOML list or a comma-separated string
+    (env-var ergonomics). An empty ``enabled_detectors`` means "every
+    registered detector is active"; naming any detector switches to an
+    explicit allowlist. ``disabled_detectors`` always wins over
+    ``enabled_detectors``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -167,8 +168,18 @@ class ScanConfig(BaseModel):
 
     allowlist: list[str] = Field(default_factory=list)
     """Regexes whose matches are downgraded to audit-only (false-positive
-    suppression). The full allowlist engine is a separate task; this is the
-    config surface it will read."""
+    suppression). Tested against each finding's own matched span with
+    ``re.fullmatch`` — see ``witan/scan/allowlist.py``."""
+
+    allowlist_hashes: list[str] = Field(default_factory=list)
+    """Salted SHA-256 digests (hex) of specific approved values, downgraded to
+    audit-only like ``allowlist`` but without ever putting the plaintext value
+    in config. Requires ``allowlist_salt``; a digest is computed as
+    ``sha256(allowlist_salt + matched_span).hexdigest()``."""
+
+    allowlist_salt: str = ""
+    """Salt for ``allowlist_hashes``. Empty means the hash allowlist is
+    inert — set a deployment-specific value before relying on it."""
 
     on_scanner_error: Literal["block", "warn"] = "block"
     """What to do when a scanner itself raises. Fail-closed by default so a
@@ -179,6 +190,7 @@ class ScanConfig(BaseModel):
         "disabled_detectors",
         "plugins",
         "allowlist",
+        "allowlist_hashes",
         mode="before",
     )
     @classmethod
@@ -191,6 +203,19 @@ class ScanConfig(BaseModel):
         items = v.split(",") if isinstance(v, str) else _to_list(v)
         return [s.strip() for s in items if s.strip()]
 
+    @field_validator("allowlist")
+    @classmethod
+    def _validate_allowlist_regexes(cls, v: list[str]) -> list[str]:
+        """Fail loudly at load time for a bad pattern — matches the ADR's
+        "misconfigured policy fails loudly" invariant, and means
+        :func:`witan.scan.allowlist.compile_allowlist` never has to."""
+        for pattern in v:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid allowlist regex {pattern!r}: {exc}") from exc
+        return v
+
 
 _SCAN_FIELDS = {
     "enabled": "WITAN_SCAN_ENABLED",
@@ -200,6 +225,8 @@ _SCAN_FIELDS = {
     "disabled_detectors": "WITAN_SCAN_DISABLED_DETECTORS",
     "plugins": "WITAN_SCAN_PLUGINS",
     "allowlist": "WITAN_SCAN_ALLOWLIST",
+    "allowlist_hashes": "WITAN_SCAN_ALLOWLIST_HASHES",
+    "allowlist_salt": "WITAN_SCAN_ALLOWLIST_SALT",
     "on_scanner_error": "WITAN_SCAN_ON_ERROR",
 }
 
@@ -330,7 +357,9 @@ def default_config_toml() -> str:
 # enabled_detectors = []       # empty = every registered detector is active
 # disabled_detectors = []      # detector names to turn off; wins over enabled_detectors
 # plugins = []                 # dotted "module:Attr" paths to extra scanners
-# allowlist = []               # reserved for false-positive suppression; not yet enforced
+# allowlist = []               # regexes matched against a finding's own span; downgrades to audit-only
+# allowlist_hashes = []        # salted sha256(allowlist_salt + span) digests of approved values
+# allowlist_salt = ""          # required for allowlist_hashes to take effect
 # on_scanner_error = "{scan.on_scanner_error}"       # block | warn
 """
 

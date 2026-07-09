@@ -13,6 +13,7 @@ import logging
 
 from ..config import ScanAction, ScanConfig
 from . import audit
+from .allowlist import compile_allowlist, suppression_reason
 from .models import Finding, ScannerError
 from .redact import flag_redacted, redact_spans
 from .registry import ScannerRegistry
@@ -63,6 +64,7 @@ class WriteGuard:
     def __init__(self, config: ScanConfig, registry: ScannerRegistry) -> None:
         self._config = config
         self._registry = registry
+        self._allowlist = compile_allowlist(config.allowlist)
 
     def __call__(self, query_name: str, params: dict) -> dict:
         entry = FIELD_MAP.get(query_name)
@@ -76,7 +78,13 @@ class WriteGuard:
         # not) is known before it's recorded — otherwise a block in field B
         # would leave field A's redact/warn findings audited as having
         # happened, when in fact nothing about this write was ever persisted.
-        per_field: list[tuple[str, str, list[tuple[Finding, ScanAction]]]] = []
+        # A suppressed finding's action is downgraded to "warn" up front, so
+        # it can never contribute to `blocked` or `redactions` below —
+        # allowlisting always wins over the category/per-finding policy.
+        # Each resolved tuple is (finding, action, suppressed_by).
+        per_field: list[
+            tuple[str, str, list[tuple[Finding, ScanAction, str | None]]]
+        ] = []
         blocked: list[tuple[str, Finding]] = []
         for field in fields:
             value = params.get(field)
@@ -85,14 +93,18 @@ class WriteGuard:
             findings = self._scan(value, field, node_type)
             if not findings:
                 continue
-            resolved = [(f, f.action or self._action_for(f.category)) for f in findings]
+            resolved: list[tuple[Finding, ScanAction, str | None]] = []
+            for f in findings:
+                reason = suppression_reason(f, value, self._config, self._allowlist)
+                action = "warn" if reason else f.action or self._action_for(f.category)
+                resolved.append((f, action, reason))
             per_field.append((field, value, resolved))
-            blocked.extend((field, f) for f, a in resolved if a == "block")
+            blocked.extend((field, f) for f, a, _ in resolved if a == "block")
 
         write_blocked = bool(blocked)
         redactions: dict[str, str] = {}
         for field, value, resolved in per_field:
-            for finding, action in resolved:
+            for finding, action, reason in resolved:
                 audit.emit(
                     query_name=query_name,
                     node_type=node_type,
@@ -101,9 +113,10 @@ class WriteGuard:
                     finding=finding,
                     action=action,
                     write_blocked=write_blocked,
+                    suppressed_by=reason,
                 )
             if not write_blocked:
-                to_redact = [f for f, a in resolved if a == "redact"]
+                to_redact = [f for f, a, _ in resolved if a == "redact"]
                 if to_redact:
                     redactions[field] = redact_spans(value, to_redact)
 

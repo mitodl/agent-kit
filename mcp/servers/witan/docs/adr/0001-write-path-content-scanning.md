@@ -151,10 +151,15 @@ dependency; it is exposed as an optional plugin (decision spike
 
 ### False-positive management
 
-Per-repo/per-field allowlist regexes in `[scan]`, an inline pragma to permit a
-specific value (e.g. a trailing `witan: allow-secret` marker), and a salted
-value-hash allowlist (never plaintext). Suppressed findings downgrade to
-audit-only.
+Three mechanisms, all downgrading a finding to audit-only (never block/redact,
+still exactly one audit event, tagged `suppressed`/`suppressed_by`): allowlist
+regexes in `[scan]` matched against the finding's own span (not the whole
+field, so a known-good value can't hide an unrelated real secret); an inline
+pragma to permit a specific value (`witan: allow-secret`, or
+`witan: allow-secret:<detector>` scoped to one detector); and a salted
+value-hash allowlist (`allowlist_hashes` + `allowlist_salt`, never plaintext).
+Implemented in `witan/scan/allowlist.py`; see `docs/write-path-scanning.md`
+for usage.
 
 ## Options considered
 

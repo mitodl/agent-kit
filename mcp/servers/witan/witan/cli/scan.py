@@ -12,6 +12,7 @@ from rich.table import Table
 
 from .. import config as cfg_module
 from ..scan import ScannerRegistry, redact_spans
+from ..scan.allowlist import compile_allowlist, suppression_reason
 from ._common import app, console
 
 scan_app = cyclopts.App(
@@ -60,11 +61,23 @@ def test(
         console.print("[green]No findings.[/green]")
         return
 
+    allowlist = compile_allowlist(cfg.allowlist)
+    reasons = {f: suppression_reason(f, text, cfg, allowlist) for f in findings}
+
     table = Table(title="Findings", header_style="bold")
-    for col in ("detector", "category", "severity", "span", "action", "preview"):
+    for col in (
+        "detector",
+        "category",
+        "severity",
+        "span",
+        "action",
+        "suppressed",
+        "preview",
+    ):
         table.add_column(col)
     for f in findings:
-        mode = _mode_for(cfg, f.category, f.action)
+        reason = reasons[f]
+        mode = "warn" if reason else _mode_for(cfg, f.category, f.action)
         table.add_row(
             f.detector,
             f.category,
@@ -73,15 +86,25 @@ def test(
             f"[{_MODE_STYLE.get(mode, '')}]{mode}[/{_MODE_STYLE.get(mode, '')}]"
             if _MODE_STYLE.get(mode)
             else mode,
+            f"[dim]{reason}[/dim]" if reason else "",
             f.preview,
         )
     console.print(table)
-    console.print(f"\n[dim]Redacted preview:[/dim] {redact_spans(text, findings)}")
 
-    blocking = [f for f in findings if _mode_for(cfg, f.category, f.action) == "block"]
+    unsuppressed = [f for f in findings if reasons[f] is None]
+    console.print(f"\n[dim]Redacted preview:[/dim] {redact_spans(text, unsuppressed)}")
+
+    blocking = [
+        f for f in unsuppressed if _mode_for(cfg, f.category, f.action) == "block"
+    ]
     if blocking:
         console.print(
             f"\n[bold red]{len(blocking)} finding(s) would block this write.[/bold red]"
+        )
+    suppressed_count = len(findings) - len(unsuppressed)
+    if suppressed_count:
+        console.print(
+            f"[dim]{suppressed_count} finding(s) allowlisted — downgraded to audit-only.[/dim]"
         )
 
 
