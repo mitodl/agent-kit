@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.2.0"
+version = "0.2.1"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -13,7 +13,14 @@ dependencies = [
     "agent-config-kit>=0.1,<1",
     "fastmcp>=3.4.2,<4",
     "cyclopts>=4,<5",
-    "tree-sitter>=0.26,<0.27",
+    # Pinned to 0.25.x: tree-sitter 0.26.0 has a use-after-free in its pyo3 Node
+    # binding that segfaults (exit 139) under the heavy .parent()/.children()
+    # churn _walk_defs does on real-world-sized files — deterministically on the
+    # 2nd-3rd parse in one process, so `witan-code index` on any real repo hard-
+    # crashes. 0.25.0/0.25.1/0.25.2 are all crash-free with the same ABI-15
+    # grammar wheels (0.24 rejects them: needs ABI 15 => ts>=0.24). Do NOT bump
+    # to 0.26 until upstream fixes this. See tk-critical-indexer-segfaults.
+    "tree-sitter>=0.25,<0.26",
     # Individual grammar wheels (not tree-sitter-language-pack): each returns a
     # standalone tree_sitter.Language usable with tree_sitter.Parser/Query. Pins
     # are tight on purpose — a grammar major can bump the ABI / binding (see the
@@ -54,7 +61,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 [tool.bumpversion]
-current_version = "0.2.0"
+current_version = "0.2.1"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
