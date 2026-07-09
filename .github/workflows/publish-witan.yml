@@ -50,10 +50,12 @@ jobs:
       - uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
 
       - name: Check tag matches pyproject.toml version
-        # Only meaningful for a direct tag push — a workflow_call from
-        # tag-release.yml just created this tag from the pyproject.toml
-        # version, so there's nothing to cross-check.
-        if: github.event_name == 'push'
+        # Only meaningful for a direct tag push. A workflow_call from
+        # tag-release.yml runs in the context of the push-to-main event that
+        # triggered the whole run, so github.event_name is still 'push' here
+        # too (GITHUB_REF_NAME is 'main', not the tag) — github.ref_type is
+        # the only reliable signal that this run's ref is actually a tag.
+        if: github.ref_type == 'tag'
         run: |
           tag_version="${GITHUB_REF_NAME#witan-council-v}"
           pkg_version="$(uv run --no-project python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
