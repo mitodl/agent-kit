@@ -19,7 +19,8 @@ dependencies = [
     # 2nd-3rd parse in one process, so `witan-code index` on any real repo hard-
     # crashes. 0.25.0/0.25.1/0.25.2 are all crash-free with the same ABI-15
     # grammar wheels (0.24 rejects them: needs ABI 15 => ts>=0.24). Do NOT bump
-    # to 0.26 until upstream fixes this. See tk-critical-indexer-segfaults.
+    # to 0.26 until upstream fixes this. See tk-critical-indexer-segfaults and
+    # https://github.com/tree-sitter/py-tree-sitter/issues/472 (upstream report).
     "tree-sitter>=0.25,<0.26",
     # Individual grammar wheels (not tree-sitter-language-pack): each returns a
     # standalone tree_sitter.Language usable with tree_sitter.Parser/Query. Pins
