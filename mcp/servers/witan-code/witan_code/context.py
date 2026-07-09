@@ -29,7 +29,11 @@ _LOCK_PREFIX = "codegraph-init-"
 
 
 def _project_dir() -> Path:
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+    try:
+        cwd = os.getcwd()
+    except OSError:  # e.g. the cwd was deleted out from under this process
+        cwd = "/"
+    return Path(os.environ.get("CLAUDE_PROJECT_DIR", cwd))
 
 
 def _lock_path(project_dir: Path) -> Path:
@@ -68,11 +72,15 @@ def inject_context() -> str:
         )
 
     repo_uri, file_count = _code_store_stats(store)
-    _, last_indexed = _dir_stats(store)
+    try:
+        _, last_indexed = _dir_stats(store)
+        freshness = f", last updated {last_indexed}"
+    except OSError:  # e.g. a file vanished mid-walk — degrade, don't blank the block
+        freshness = ""
     lines = [
         "## Code Graph",
         "",
-        f"`{repo_uri}` is indexed: {file_count} files, last updated {last_indexed}.",
+        f"`{repo_uri}` is indexed: {file_count} files{freshness}.",
     ]
     if in_progress:
         lines.append("A background reindex is currently running.")

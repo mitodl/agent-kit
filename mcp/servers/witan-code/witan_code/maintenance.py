@@ -54,7 +54,7 @@ def optimize_interval() -> float:
 
 
 def _stamp_file(store: str | Path) -> Path:
-    digest = hashlib.sha1(str(store).encode()).hexdigest()[:16]
+    digest = hashlib.sha256(str(store).encode()).hexdigest()[:16]
     return Path(tempfile.gettempdir()) / f"witan-code-optimize-{digest}.json"
 
 
