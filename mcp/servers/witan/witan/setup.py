@@ -143,7 +143,7 @@ def prune_legacy_hook_entries(settings: dict) -> bool:
 # omnigraph-version customManager in renovate.json — a single Renovate PR
 # bumps both).
 
-_OMNIGRAPH_VERSION = "0.8.0"
+_OMNIGRAPH_VERSION = "0.8.1"
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
     ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
