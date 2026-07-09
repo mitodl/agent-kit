@@ -12,6 +12,7 @@ custom agent definitions, MCP server install helpers, and sample configurations.
 ├── mcp/                       # Install helpers and configuration for common MCP servers
 ├── configs/                   # Sample / reference agent configurations
 ├── packages/agent-config-kit/ # agent-kit — the CLI that installs the skills/MCP servers declared below
+├── packages/agent-kit/        # PyPI meta-package (ol-agent-kit): agent-config-kit[cli] + witan + witan-code
 └── agent-config.toml          # This repo's own manifest for agent-kit
 ```
 
@@ -27,6 +28,17 @@ platforms it detects (Claude Code, Pi, GitHub Copilot, OpenCode, ...).
 
 ```bash
 uv tool install 'agent-config-kit[cli]'
+```
+
+To also pull in the [`witan`](./mcp/servers/witan/README.md) and
+[`witan-code`](./mcp/servers/witan-code/README.md) MCP servers in one shot,
+install the [`ol-agent-kit`](./packages/agent-kit/README.md) meta-package
+instead — it depends on all three and carries no code of its own (`agent-kit`
+was already taken on PyPI, hence the `ol-` prefix on this one; the console
+script is still `agent-kit` either way):
+
+```bash
+uv tool install ol-agent-kit
 ```
 
 ### Applying this repo's manifest

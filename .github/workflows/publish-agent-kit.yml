@@ -1,4 +1,4 @@
-name: Publish agent-kit to PyPI
+name: Publish ol-agent-kit to PyPI
 
 on:
   push:
@@ -35,7 +35,7 @@ jobs:
         run: |
           version="$(uv run --no-project python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=agent-kit-v$version" >> "$GITHUB_OUTPUT"
+          echo "tag=ol-agent-kit-v$version" >> "$GITHUB_OUTPUT"
 
       - name: Check for a new version
         id: check

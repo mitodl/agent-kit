@@ -26,6 +26,7 @@ mcp/             # MCP server install helpers and config snippets
   servers/toolhive-swe/  # ToolHive SWE MCP config (per-tier: ci/qa/prod)
 packages/        # Standalone, independently-versioned Python libraries
   agent-config-kit/      # Cross-agent MCP/skill/hook registration library
+  agent-kit/              # PyPI meta-package (ol-agent-kit): agent-config-kit[cli] + witan + witan-code
 configs/         # Sample / reference agent configurations
 docs/            # Design docs and implementation specs
 ```
@@ -88,6 +89,7 @@ See [`skills/workflow/creating-skills/SKILL.md`](./skills/workflow/creating-skil
 - MD013 (line length) and MD033 (inline HTML) are disabled in markdownlint; long lines in code blocks are fine.
 - `witan` MCP servers use `uv` exclusively — never `pip` directly.
 - Skills are distributed as ZIPs on GitHub releases (tagged `v*`) — the publish workflow handles this automatically.
+- Each publishable package (`agent-config-kit`, `mcp/servers/witan`, `mcp/servers/witan-code`, `packages/agent-kit`) carries a `[tool.bumpversion]` config — bump a release with `cd <package-dir> && uvx bump-my-version@1.4.1 bump patch|minor|major`, then commit and push to `main`; each package's `publish-*.yml` workflow tests, builds, publishes to PyPI, and tags the release automatically whenever its `pyproject.toml` version line changes. `packages/agent-kit`'s `dependencies` on `agent-config-kit[cli]`/`witan-council`/`witan-code` are open-ended floors (no upper bound), so a new release of any of the three is picked up by a fresh install without `ol-agent-kit` itself needing a release.
 
 ## Further Reading
 
