@@ -48,8 +48,12 @@ def witan_code_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
 
     Independent of ``witan``'s own bundle (``witan.setup.witan_bundle``) — a
     witan-code-only install (no witan) still gets the skill, hooks, and Pi
-    extension. When both are installed together, run both ``witan setup`` and
-    ``witan-code setup``; each only ever touches its own hook/skill entries.
+    extension via standalone ``witan-code setup``. When both packages are
+    installed together and witan-code is importable, ``witan setup`` also
+    folds this bundle in automatically (see ``witan.cli.setup_cmd``), so a
+    single ``witan setup`` covers both; running ``witan-code setup``
+    separately afterwards is harmless (each `apply()` call is an idempotent
+    read-merge-write) but not required in that case.
     """
     skills_dir = pkg_dir / "skills"
     skills = (

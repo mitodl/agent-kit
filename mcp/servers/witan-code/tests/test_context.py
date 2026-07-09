@@ -13,8 +13,7 @@ from witan_code import context
 def _lock(tmp_path, monkeypatch, project_dir):
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
-    sanitized = str(project_dir).replace("/", "_")
-    return tmp_path / f"codegraph-init-{sanitized}.lock"
+    return context._lock_path(project_dir)
 
 
 def test_inject_context_empty_without_repo(tmp_path, monkeypatch):
@@ -84,6 +83,26 @@ def test_inject_context_notes_in_progress_alongside_existing_store(
     text = context.inject_context()
 
     assert "background reindex is currently running" in text
+
+
+def test_lock_path_does_not_collide_on_sanitization(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+
+    a = context._lock_path(Path("/tmp/a/b"))
+    b = context._lock_path(Path("/tmp/a_b"))
+
+    assert a != b  # a naive "/" -> "_" replace would collide these
+
+
+def test_lock_path_name_is_bounded_regardless_of_project_dir_length(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    long_dir = Path("/" + ("deeply-nested-directory-" * 20) + "/checkout")
+
+    lock = context._lock_path(long_dir)
+
+    assert len(lock.name) < 255  # well under common filesystem filename limits
 
 
 def test_indexing_in_progress_matches_sanitized_project_dir(tmp_path, monkeypatch):

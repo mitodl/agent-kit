@@ -265,11 +265,16 @@ def inject_context_cmd() -> None:
     and prints nothing when there's no store or in-flight index for the
     current repo.
     """
+    import sys
+
     from . import context as context_module
 
-    text = context_module.inject_context()
+    try:
+        text = context_module.inject_context()
+    except Exception:  # noqa: BLE001 — must never fail the hook
+        return
     if text:
-        print(text)
+        sys.stdout.write(text)  # inject_context() already ends with "\n"
 
 
 @app.command

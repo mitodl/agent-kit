@@ -222,13 +222,15 @@ witan-code setup --dry-run          # preview without writing
 witan-code setup --author "Jane Doe"  # attribution (default: git config user.name)
 ```
 
-Independent of `witan setup` — running both is fine (each only ever touches
-its own hook/skill entries; see [Hooks](#hooks) and [Skill](#skill)). If
-`witan` is *also* installed, its own `witan setup` already fetched the
-`omnigraph` binary and nothing further is needed there, but `witan-code
-setup` still has to run separately to install witan-code's own skill/hooks/Pi
-extension — `witan setup` does not reach into witan-code's bundle (no
-cross-package coupling).
+If `witan` is *also* installed and witan-code is importable in that same
+environment (e.g. via the `--with` in the MCP server's `uvx` invocation),
+`witan setup` folds this same bundle in automatically — one `witan setup`
+then covers both packages' skill/hooks/MCP entries, and a separate
+`witan-code setup` isn't required (though re-running it afterwards is
+harmless — `apply()` is an idempotent read-merge-write). Run `witan-code
+setup` on its own for a witan-code-only install, or when witan-code isn't
+importable from witan's environment. See [Hooks](#hooks) and
+[Skill](#skill).
 
 This downloads the omnigraph release pinned by `_OMNIGRAPH_VERSION` in
 [`witan_code/setup.py`](./witan_code/setup.py) — the same pin `witan`'s own
@@ -388,10 +390,11 @@ of all four lives in one extension,
   repo in the background on session start (first run builds the full index;
   later runs re-hash and skip unchanged files). Detaches a background child
   and returns immediately; never delays session start. A per-repo lock
-  (keyed on the sanitized project path,
-  `${TMPDIR:-/tmp}/codegraph-init-<path-with-/-as-_>.lock`, released by the
-  detached child when it finishes) prevents overlapping sessions from
-  indexing at once.
+  (`${TMPDIR:-/tmp}/codegraph-init-<sha256(project_dir)[:16]>.lock`, released
+  by the detached child when it finishes) prevents overlapping sessions from
+  indexing at once — hashed rather than a sanitized path so two distinct
+  paths can't collide on the same lock and a long checkout path can't exceed
+  a filesystem's filename length limit.
 - **`witan-code reindex-hook`** (`PostToolUse`, matcher `Edit|Write`) — reads
   the tool payload from stdin and incrementally re-indexes the changed file
   in the foreground (fast — one file). Best-effort — a missing/malformed

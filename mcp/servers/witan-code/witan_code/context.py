@@ -13,6 +13,7 @@ comes back.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -22,10 +23,16 @@ from .cli import _code_store_stats, _dir_stats
 
 # Matches the lock directory hooks.session_init() creates around a background
 # SessionStart index, so this hook can report "indexing in progress" instead
-# of a misleadingly empty/stale store. Keyed on the sanitized project
-# directory (not a hash) so it's trivially reproducible from either side
-# without sharing mutable state.
+# of a misleadingly empty/stale store. Keyed on a hash of the project
+# directory (not the raw sanitized path) so two distinct paths can't collide
+# on the same lock file (e.g. "/tmp/a/b" and "/tmp/a_b" both sanitizing to
+# "_tmp_a_b") and so a deep/long checkout path can't blow past a filesystem's
+# filename length limit and silently fail the `mkdir`.
 _LOCK_PREFIX = "codegraph-init-"
+
+
+def _lock_digest(project_dir: Path) -> str:
+    return hashlib.sha256(str(project_dir).encode()).hexdigest()[:16]
 
 
 def _project_dir() -> Path:
@@ -38,8 +45,7 @@ def _project_dir() -> Path:
 
 def _lock_path(project_dir: Path) -> Path:
     tmp = Path(os.environ.get("TMPDIR", "/tmp"))
-    sanitized = str(project_dir).replace("/", "_")
-    return tmp / f"{_LOCK_PREFIX}{sanitized}.lock"
+    return tmp / f"{_LOCK_PREFIX}{_lock_digest(project_dir)}.lock"
 
 
 def indexing_in_progress() -> bool:

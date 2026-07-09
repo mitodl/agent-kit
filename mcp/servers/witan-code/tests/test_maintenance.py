@@ -219,7 +219,6 @@ def test_resolve_store_defaults_to_current_repo(tmp_path, monkeypatch):
     assert cli_module._resolve_store(None) == store
 
 
-@requires_omnigraph
 def test_checkpoint_spawns_for_repo_and_bridge_stores(tmp_path, monkeypatch):
     from witan_code import cli as cli_module
     from witan_code import config as cfg_module
