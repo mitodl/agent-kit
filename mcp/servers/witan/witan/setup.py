@@ -153,14 +153,23 @@ _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 
 def _installed_version(dest: Path) -> str | None:
-    """Return ``dest``'s reported version, or ``None`` if absent/unreadable."""
+    """Return ``dest``'s reported version, or ``None`` if absent/unreadable.
+
+    A hung, corrupted, or non-executable binary must degrade to "unknown
+    version" (triggering a re-download) rather than crash `setup` —
+    ``subprocess.TimeoutExpired`` is a ``SubprocessError``, not an
+    ``OSError``, so both need catching, and a non-zero exit means the
+    output isn't trustworthy version text even if something printed.
+    """
     if not dest.exists():
         return None
     try:
         result = subprocess.run(
             [str(dest), "--version"], capture_output=True, text=True, timeout=10
         )
-    except OSError:
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
         return None
     match = _VERSION_RE.search(result.stdout + result.stderr)
     return match.group(0) if match else None

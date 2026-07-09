@@ -131,6 +131,31 @@ def test_install_omnigraph_redownloads_when_version_differs(tmp_path, monkeypatc
     assert _dest(tmp_path).read_bytes() == b"#!/bin/sh\necho fake"
 
 
+def test_installed_version_none_on_timeout(tmp_path, monkeypatch):
+    import subprocess
+
+    dest = _dest(tmp_path)
+    _write_fake_binary(dest, setup._OMNIGRAPH_VERSION)
+    monkeypatch.setattr(
+        setup.subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(cmd=str(dest), timeout=10)
+        ),
+    )
+
+    assert setup._installed_version(dest) is None
+
+
+def test_installed_version_none_on_nonzero_exit(tmp_path):
+    dest = _dest(tmp_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(f"#!/bin/sh\necho 'omnigraph {setup._OMNIGRAPH_VERSION}'\nexit 1\n")
+    dest.chmod(0o755)
+
+    assert setup._installed_version(dest) is None
+
+
 # ── registration bundle ───────────────────────────────────────────────────────
 
 
