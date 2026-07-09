@@ -36,7 +36,7 @@ _WITAN_CODE_ARGS = [
     "serve",
 ]
 
-_OMNIGRAPH_VERSION = "0.8.0"
+_OMNIGRAPH_VERSION = "0.8.1"
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
     ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
