@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.3.7] - 2026-07-09
+
+### Fixed
+
+- **`agent-config-kit-v0.3.6`'s publish job failed CI**: a test for the
+  conflicting-path error message asserted on an unwrapped substring, but
+  `rich` wraps long lines to its default 80-column width, and CI's longer
+  `tmp_path` pushed the printed path past that width, splitting `my-skill`
+  across a line break. `0.3.6` never published to PyPI. No functional
+  change from `0.3.6` — this release exists solely to get a green publish.
+
 ## [0.3.6] - 2026-07-09
 
 ### Fixed
