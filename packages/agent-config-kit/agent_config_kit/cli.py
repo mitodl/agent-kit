@@ -32,6 +32,7 @@ from .config import load_global_config, resolve_config_path
 from .diff import Drift
 from .diff import diff as diff_bundle
 from .fetch import FetchError, fetch_remote, is_remote_uri
+from .installers import ConflictingPathError
 from .manifest import ManifestError, load_manifest, resolve_profile
 from .models import SKILL_NAME_PATTERN, Scope
 from .plan import InstallResult
@@ -558,6 +559,7 @@ def apply_command(
     profile: list[str] | None = None,
     dry_run: bool = False,
     prune: bool = False,
+    force: bool = False,
     state_file: Path | None = None,
     cache_dir: Path | None = None,
 ) -> None:
@@ -597,6 +599,11 @@ def apply_command(
         a plain ``apply`` never removes anything, and a manifest with no
         prior recorded state (e.g. its first-ever ``--prune`` run) prunes
         nothing rather than guessing.
+    force
+        Replace a destination path that already exists but isn't a plain
+        directory — typically a stale (often dangling) symlink left behind
+        by an older symlink-based install — instead of failing. Without
+        this, ``apply`` refuses to touch such a path.
     state_file
         Where to read/write the prune state file. Defaults to
         ``<manifest>.lock.json``. Ignored unless ``--prune`` is given.
@@ -631,43 +638,52 @@ def apply_command(
         resolved_scope = loaded.options.scope
     platforms = _resolve_platforms(loaded.options.platforms, platform)
 
-    if prune:
-        target_platforms = (
-            platforms if platforms is not None else detect_installed_platforms()
-        )
-        state_path = (
-            state_file
-            if state_file is not None
-            else _default_prune_state_path(manifest_path, resolved_scope)
-        )
-        states = load_state(state_path)
-        results: dict[str, InstallResult] = {}
-        for name in target_platforms:
-            result, current_state = apply_with_prune(
-                name,
-                bundle,
-                states.get(name, PlatformState()),
-                scope=resolved_scope,
-                dry_run=dry_run,
+    try:
+        if prune:
+            target_platforms = (
+                platforms if platforms is not None else detect_installed_platforms()
             )
-            results[name] = result
-            # A skipped target (e.g. unreadable JSON) means apply() didn't
-            # actually write anything for this platform this run — recording
-            # "current_state" as if it had would claim ownership over
-            # entries never actually applied, so a later prune could remove
-            # something this run never truly wrote. Leave the platform's
-            # last-known-good state untouched instead.
-            if not result.skipped:
-                states[name] = current_state
-        if not dry_run:
-            write_state(state_path, manifest_path, states)
-    elif platforms is not None:
-        results = {
-            name: apply_bundle(name, bundle, scope=resolved_scope, dry_run=dry_run)
-            for name in platforms
-        }
-    else:
-        results = apply_all_bundle(bundle, scope=resolved_scope, dry_run=dry_run)
+            state_path = (
+                state_file
+                if state_file is not None
+                else _default_prune_state_path(manifest_path, resolved_scope)
+            )
+            states = load_state(state_path)
+            results: dict[str, InstallResult] = {}
+            for name in target_platforms:
+                result, current_state = apply_with_prune(
+                    name,
+                    bundle,
+                    states.get(name, PlatformState()),
+                    scope=resolved_scope,
+                    dry_run=dry_run,
+                    force=force,
+                )
+                results[name] = result
+                # A skipped target (e.g. unreadable JSON) means apply() didn't
+                # actually write anything for this platform this run — recording
+                # "current_state" as if it had would claim ownership over
+                # entries never actually applied, so a later prune could remove
+                # something this run never truly wrote. Leave the platform's
+                # last-known-good state untouched instead.
+                if not result.skipped:
+                    states[name] = current_state
+            if not dry_run:
+                write_state(state_path, manifest_path, states)
+        elif platforms is not None:
+            results = {
+                name: apply_bundle(
+                    name, bundle, scope=resolved_scope, dry_run=dry_run, force=force
+                )
+                for name in platforms
+            }
+        else:
+            results = apply_all_bundle(
+                bundle, scope=resolved_scope, dry_run=dry_run, force=force
+            )
+    except ConflictingPathError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(2) from exc
 
     if _report(results, dry_run=dry_run):
         raise SystemExit(1)

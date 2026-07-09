@@ -268,12 +268,13 @@ def apply_with_prune(
     *,
     scope: Scope = Scope.GLOBAL,
     dry_run: bool = False,
+    force: bool = False,
 ) -> tuple[InstallResult, PlatformState]:
     """Apply the manifest, then remove exactly the entries ``previous``
     recorded that are no longer in ``bundle``. Returns the usual
     ``InstallResult`` (with ``removed`` populated) plus the ``PlatformState``
     to persist for this platform going forward."""
-    result = apply(platform_name, bundle, scope=scope, dry_run=dry_run)
+    result = apply(platform_name, bundle, scope=scope, dry_run=dry_run, force=force)
     platform = registry.get_platform(platform_name)
     current = _bundle_platform_state(bundle)
 

@@ -115,6 +115,60 @@ def test_apply_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
     assert "planned" in capsys.readouterr().out.lower()
 
 
+def test_apply_exits_2_on_dangling_symlink_at_skill_dest(tmp_path, monkeypatch, capsys):
+    """A stale (e.g. from an older symlink-based install) dangling symlink
+    occupying a skill's destination directory must surface as a clear
+    ``apply`` failure, not a raw FileExistsError traceback."""
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    skill_dir = tmp_path / "skills" / "my-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# my-skill")
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [skills]
+        my-skill = "skills/my-skill/SKILL.md"
+        """,
+    )
+    dest_dir = tmp_path / ".claude" / "skills"
+    dest_dir.mkdir(parents=True)
+    (dest_dir / "my-skill").symlink_to(tmp_path / "nonexistent-target")
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["apply", str(manifest), "--platform", "claude"])
+
+    assert exc_info.value.code == 2
+    assert "my-skill" in capsys.readouterr().out
+
+
+def test_apply_force_replaces_dangling_symlink_at_skill_dest(
+    tmp_path, monkeypatch, capsys
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    skill_dir = tmp_path / "skills" / "my-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# my-skill")
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [skills]
+        my-skill = "skills/my-skill/SKILL.md"
+        """,
+    )
+    dest_dir = tmp_path / ".claude" / "skills"
+    dest_dir.mkdir(parents=True)
+    (dest_dir / "my-skill").symlink_to(tmp_path / "nonexistent-target")
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--force"])
+
+    assert (dest_dir / "my-skill" / "SKILL.md").read_text() == "# my-skill"
+    assert not (dest_dir / "my-skill").is_symlink()
+
+
 def test_apply_cli_platform_overrides_manifest_platforms(tmp_path, monkeypatch):
     from agent_config_kit.cli import app
 
