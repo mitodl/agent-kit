@@ -374,9 +374,8 @@ mechanisms keep this in check, mirroring that module (deliberately duplicated
 is a `/witan-code` entry point covering tool selection (vs. grep/Explore), a
 quick tool reference, and linking symbol ids into witan tasks/memories.
 Installed automatically by `witan-code setup` (to `~/.claude/skills/`, or
-both `~/.pi/agent/skills/` and `~/.agents/skills/` under `--agent pi`); to
-install it manually instead, symlink or copy the directory into the
-equivalent path for your agent.
+`~/.pi/agent/skills/` under `--agent pi`); to install it manually instead,
+symlink or copy the directory into the equivalent path for your agent.
 
 ## Hooks
 

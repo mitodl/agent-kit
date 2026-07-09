@@ -211,7 +211,11 @@ def test_apply_pi_copies_plugin_hooks_into_extensions_dir(tmp_path, monkeypatch)
     assert dest.read_text() == "// stub"
 
 
-def test_apply_pi_installs_skills_to_both_dest_dirs(tmp_path, monkeypatch):
+def test_apply_pi_installs_skills_only_to_its_own_dir(tmp_path, monkeypatch):
+    """Pi natively unions ~/.pi/agent/skills/ and ~/.agents/skills/ when
+    discovering skills, so agent-config-kit must not also write into
+    ~/.agents/skills/ — that would duplicate the skill and trigger Pi's own
+    name-collision warning on every startup."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     skill_md = tmp_path / "src" / "SKILL.md"
     skill_md.parent.mkdir(parents=True)
@@ -220,7 +224,7 @@ def test_apply_pi_installs_skills_to_both_dest_dirs(tmp_path, monkeypatch):
     apply("pi", _bundle(skills=[SkillSource(name="my-skill", skill_md_path=skill_md)]))
 
     assert (tmp_path / ".pi" / "agent" / "skills" / "my-skill" / "SKILL.md").exists()
-    assert (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").exists()
+    assert not (tmp_path / ".agents" / "skills" / "my-skill" / "SKILL.md").exists()
 
 
 def test_apply_copilot_registers_mcp_server_under_servers_key_as_stdio(

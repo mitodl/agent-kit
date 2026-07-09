@@ -122,14 +122,26 @@ ln -sf "$REPO/configs/pi/extensions/workflow-context.ts" ~/.pi/agent/extensions/
 ### 3. Skills — both agents
 
 `witan setup` installs the bundled Witan skills automatically. For local
-development from a checkout, symlink the bundled skill directories into the
-shared `~/.agents/skills/` catalog, then into each agent:
+development from a checkout, symlink the bundled skill directories directly
+into each agent's own skills dir. Pi natively unions its own
+`~/.pi/agent/skills/` with `~/.agents/skills/` when discovering skills; do not
+symlink into both, and if you previously installed copies under
+`~/.agents/skills/`, delete them to avoid Pi's name-collision warning:
 
 ```bash
 for skill in witan-memory witan-workflow witan-task witan-project-tracker; do
-  ln -sfn "$REPO/mcp/servers/witan/witan/skills/$skill" ~/.agents/skills/"$skill"
-  ln -sfn "../../.agents/skills/$skill"    ~/.claude/skills/"$skill"
-  ln -sfn "../../../.agents/skills/$skill" ~/.pi/agent/skills/"$skill"
+  ln -sfn "$REPO/mcp/servers/witan/witan/skills/$skill" ~/.claude/skills/"$skill"
+  ln -sfn "$REPO/mcp/servers/witan/witan/skills/$skill" ~/.pi/agent/skills/"$skill"
+done
+```
+
+If you set this up with older tooling (or an older `witan setup`) and still see
+Pi's name-collision warning at startup, you have stale duplicates left over in
+`~/.agents/skills/` — remove them:
+
+```bash
+for skill in witan-memory witan-workflow witan-task witan-project-tracker; do
+  rm -rf ~/.agents/skills/"$skill"
 done
 ```
 
