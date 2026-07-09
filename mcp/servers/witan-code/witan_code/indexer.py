@@ -39,9 +39,19 @@ class LanguageSpec:
     name: str
     extensions: tuple[str, ...]
     grammar: str
-    scm: str
+    # None = no hand-written query: bootstrap from the grammar wheel's own
+    # bundled `tags.scm` (see _translate_tags_captures) instead of a file in
+    # queries_ts/. Only viable for grammars that ship one (most of the
+    # tree-sitter org's own; not community/config grammars like sql/hcl/yaml).
+    scm: str | None
     # capture prefix "symbol.<kind>" → Symbol kind
     kinds: dict[str, str]
+    # Node kinds that scope nesting/qualified-name resolution (_walk_defs).
+    # PER-LANGUAGE, not shared: node-type-name strings collide across
+    # unrelated grammars (Python's statement suite is also called "block",
+    # which is what HCL calls its resource/variable/… blocks) with very
+    # different nesting semantics, so a single global set is unsafe.
+    def_node_types: frozenset[str]
 
 
 # All JS/TS variants use the `tsx` grammar (a superset of TS, JS, and JSX): the
@@ -55,6 +65,20 @@ _TS_KINDS = {
     "enum": "enum",
 }
 
+_TS_DEF_NODE_TYPES = frozenset(
+    {
+        "function_declaration",
+        "generator_function_declaration",
+        "class_declaration",
+        "method_definition",
+        "public_field_definition",  # class arrow methods
+        "interface_declaration",
+        "type_alias_declaration",
+        "enum_declaration",
+        "variable_declarator",
+    }
+)
+
 _LANGUAGES: tuple[LanguageSpec, ...] = (
     LanguageSpec(
         name="python",
@@ -62,6 +86,7 @@ _LANGUAGES: tuple[LanguageSpec, ...] = (
         grammar="python",
         scm="python.scm",
         kinds={"function": "function", "class": "class"},
+        def_node_types=frozenset({"function_definition", "class_definition"}),
     ),
     LanguageSpec(
         name="typescript",
@@ -69,6 +94,7 @@ _LANGUAGES: tuple[LanguageSpec, ...] = (
         grammar="tsx",
         scm="typescript.scm",
         kinds=_TS_KINDS,
+        def_node_types=_TS_DEF_NODE_TYPES,
     ),
     LanguageSpec(
         name="javascript",
@@ -76,6 +102,7 @@ _LANGUAGES: tuple[LanguageSpec, ...] = (
         grammar="tsx",
         scm="typescript.scm",
         kinds=_TS_KINDS,
+        def_node_types=_TS_DEF_NODE_TYPES,
     ),
     LanguageSpec(
         name="bash",
@@ -83,6 +110,7 @@ _LANGUAGES: tuple[LanguageSpec, ...] = (
         grammar="bash",
         scm="bash.scm",
         kinds={"function": "function"},
+        def_node_types=frozenset({"function_definition"}),
     ),
     LanguageSpec(
         name="yaml",
@@ -90,6 +118,35 @@ _LANGUAGES: tuple[LanguageSpec, ...] = (
         grammar="yaml",
         scm="yaml.scm",
         kinds={"key": "key"},
+        def_node_types=frozenset({"block_mapping_pair"}),
+    ),
+    LanguageSpec(
+        name="go",
+        extensions=(".go",),
+        grammar="go",
+        scm=None,  # bootstrapped from tree_sitter_go's bundled tags.scm
+        kinds={"function": "function", "method": "method", "type": "type"},
+        def_node_types=frozenset(
+            {"function_declaration", "method_declaration", "type_spec"}
+        ),
+    ),
+    LanguageSpec(
+        name="sql",
+        extensions=(".sql",),
+        grammar="sql",
+        scm="sql.scm",
+        kinds={"table": "table", "function": "function", "cte": "cte"},
+        def_node_types=frozenset(
+            {"create_table", "create_view", "create_function", "cte"}
+        ),
+    ),
+    LanguageSpec(
+        name="hcl",
+        extensions=(".hcl", ".tf"),
+        grammar="hcl",
+        scm="hcl.scm",
+        kinds={"block": "block"},
+        def_node_types=frozenset({"block"}),
     ),
 )
 
@@ -105,6 +162,9 @@ _GRAMMAR_MODULES: dict[str, tuple[str, str]] = {
     "tsx": ("tree_sitter_typescript", "language_tsx"),
     "bash": ("tree_sitter_bash", "language"),
     "yaml": ("tree_sitter_yaml", "language"),
+    "go": ("tree_sitter_go", "language"),
+    "sql": ("tree_sitter_sql", "language"),
+    "hcl": ("tree_sitter_hcl", "language"),
 }
 
 
@@ -530,7 +590,7 @@ def _parse_file(
 
     # Definition nodes (functions/classes/methods/…): walk the tree so we can
     # compute lexical qualified names and Contains nesting.
-    def_capture_nodes = _query_captures(language, spec.scm, root)
+    def_capture_nodes = _query_captures(language, spec, root)
 
     _walk_defs(root, raw, spec, file_id, module, parsed, def_capture_nodes)
 
@@ -572,22 +632,6 @@ def _symbol_at_line(parsed: ParsedFile, line: int | None) -> str | None:
     return parsed.symbols[0].id if parsed.symbols else None
 
 
-_DEF_NODE_TYPES = {
-    "function_definition",  # python, bash
-    "class_definition",
-    "function_declaration",
-    "generator_function_declaration",
-    "class_declaration",
-    "method_definition",
-    "public_field_definition",  # class arrow methods
-    "interface_declaration",
-    "type_alias_declaration",
-    "enum_declaration",
-    "variable_declarator",
-    "block_mapping_pair",  # yaml keys (dotted qualified paths)
-}
-
-
 def _walk_defs(
     root,
     raw: bytes,
@@ -597,18 +641,23 @@ def _walk_defs(
     parsed: ParsedFile,
     captures: list[tuple[str, object]],
 ) -> None:
-    # Map each captured definition-name node key → (kind, name_text).
+    # Map each captured definition-name node key → (kind, name_text). Quoted
+    # string-literal labels (HCL block labels) strip their surrounding quotes;
+    # no other language's captured name legitimately has them.
     name_nodes: dict[tuple, tuple[str, str]] = {}
     for cap_name, node in captures:
         if cap_name.startswith("symbol."):
             kind = spec.kinds.get(cap_name.split(".", 1)[1])
             if kind:
-                name_nodes[_node_key(node)] = (kind, _node_text(node, raw))
+                name_nodes[_node_key(node)] = (
+                    kind,
+                    _node_text(node, raw).strip("\"'"),
+                )
 
     def enclosing_def(node):
         cur = _parent(node)
         while cur is not None:
-            if _kind(cur) in _DEF_NODE_TYPES:
+            if _kind(cur) in spec.def_node_types:
                 return cur
             cur = _parent(cur)
         return None
@@ -644,7 +693,7 @@ def _walk_defs(
         if not cap_name.startswith("symbol."):
             continue
         def_node = _parent(node)
-        while def_node is not None and _kind(def_node) not in _DEF_NODE_TYPES:
+        while def_node is not None and _kind(def_node) not in spec.def_node_types:
             def_node = _parent(def_node)
         if def_node is None:
             continue
@@ -714,10 +763,16 @@ def _class_bases(def_node, raw: bytes, captures) -> list[str]:
 # ── tree-sitter helpers ───────────────────────────────────────────
 
 
-def _query_captures(language, scm_file: str, root) -> list[tuple[str, object]]:
+def _query_captures(language, spec: LanguageSpec, root) -> list[tuple[str, object]]:
     from tree_sitter import Query
 
-    scm = (_QUERIES_TS_DIR / scm_file).read_text()
+    if spec.scm is not None:
+        scm = (_QUERIES_TS_DIR / spec.scm).read_text()
+        bootstrapped = False
+    else:
+        scm = _tags_query_text(spec)
+        bootstrapped = True
+
     try:
         query = Query(language, scm)
     except Exception:  # noqa: BLE001 — fall back to Language.query
@@ -740,7 +795,75 @@ def _query_captures(language, scm_file: str, root) -> list[tuple[str, object]]:
     else:
         for node, cap_name in raw:
             out.append((cap_name, node))
+    return _translate_tags_captures(out) if bootstrapped else out
+
+
+def _tags_query_text(spec: LanguageSpec) -> str:
+    """Query text for a language with no hand-written queries_ts/*.scm.
+
+    Bootstrapped from the grammar wheel's own bundled ``tags.scm`` — the
+    standard tree-sitter "code navigation" query convention (captures
+    ``@definition.<kind>`` / ``@name`` / ``@reference.call``), shipped as
+    package data and exposed as ``TAGS_QUERY`` by most tree-sitter-org
+    grammars (see docs/LANGUAGE_SUPPORT.md). Not every grammar ships one —
+    notably config/declarative grammars (sql, hcl, yaml, dockerfile) don't,
+    so those still need a hand-written queries_ts/*.scm like python.scm.
+    """
+    module_name, _ = _GRAMMAR_MODULES[spec.grammar]
+    module = importlib.import_module(module_name)
+    tags_query = getattr(module, "TAGS_QUERY", None)
+    if tags_query is None:
+        raise ValueError(
+            f"{spec.name}: no queries_ts/{spec.name}.scm and grammar module "
+            f"{module_name!r} bundles no TAGS_QUERY — write a hand-written "
+            f"query file instead of leaving LanguageSpec.scm=None"
+        )
+    return tags_query
+
+
+def _translate_tags_captures(
+    captures: list[tuple[str, object]],
+) -> list[tuple[str, object]]:
+    """Adapt the standard tags.scm convention onto witan's own captures.
+
+    tags.scm wraps a name: ``(function_definition name: (identifier) @name)
+    @definition.function`` — the kind lives on the outer definition/reference
+    node, while ``@name`` sits on the identifier itself. witan's own
+    hand-written queries instead put the kind directly on the identifier
+    (``@symbol.function`` / ``@call.name``), which is what ``_walk_defs``
+    expects. Reattach each ``@name`` node to its smallest enclosing
+    ``@definition.*``/``@reference.call`` wrapper to bridge the two.
+
+    A ``@name`` node with no enclosing wrapper (e.g. tags.scm's bare
+    top-level `@name` on imports/package clauses/var decls) is dropped —
+    those aren't modeled as witan Symbols today.
+    """
+    name_nodes = [node for cap, node in captures if cap == "name"]
+    wrappers: list[tuple[str, object]] = []
+    for cap, node in captures:
+        if cap.startswith("definition."):
+            wrappers.append((f"symbol.{cap.split('.', 1)[1]}", node))
+        elif cap == "reference.call":
+            wrappers.append(("call.name", node))
+
+    out: list[tuple[str, object]] = []
+    for name_node in name_nodes:
+        best: tuple[str, int] | None = None
+        for cap_name, wrapper in wrappers:
+            if not _contains(wrapper, name_node):
+                continue
+            size = _end_byte(wrapper) - _start_byte(wrapper)
+            if best is None or size < best[1]:
+                best = (cap_name, size)
+        if best is not None:
+            out.append((best[0], name_node))
     return out
+
+
+def _contains(container, node) -> bool:
+    return _start_byte(container) <= _start_byte(node) and _end_byte(node) <= _end_byte(
+        container
+    )
 
 
 def _a(obj, name, *args):

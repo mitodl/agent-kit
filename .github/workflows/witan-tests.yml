@@ -90,5 +90,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --group test
 
+      - name: Install omnigraph binary
+        # requires_stack-marked indexer tests (test_indexer.py, test_languages.py,
+        # …) are silently skipped without it — see tests/conftest.py.
+        run: uv run python -c "from witan_code.setup import install_omnigraph; install_omnigraph(dry_run=False)"
+
       - name: Run tests
         run: uv run pytest -v

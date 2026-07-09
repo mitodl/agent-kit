@@ -2,7 +2,10 @@
 
 Tests index a small source tree into a throwaway per-repo store and exercise the
 real omnigraph queries (including edge traversal) and the tree-sitter indexer.
-Skipped when the omnigraph binary or tree-sitter grammars are unavailable.
+Skipped when the omnigraph binary is unavailable. Tree-sitter grammars are
+always available — they're pinned project dependencies (individual
+tree-sitter-<lang> wheels, not the optional tree-sitter-language-pack), not an
+optional extra — so there's nothing to gate on there.
 """
 
 import shutil
@@ -11,16 +14,9 @@ import pytest
 
 omnigraph_available = shutil.which("omnigraph") is not None
 
-try:
-    import tree_sitter_language_pack  # noqa: F401
-
-    treesitter_available = True
-except Exception:  # pragma: no cover - environment dependent
-    treesitter_available = False
-
 requires_stack = pytest.mark.skipif(
-    not (omnigraph_available and treesitter_available),
-    reason="requires omnigraph binary and tree-sitter grammars",
+    not omnigraph_available,
+    reason="requires omnigraph binary",
 )
 
 # Narrower than requires_stack: maintenance (optimize/cleanup) exercises the
