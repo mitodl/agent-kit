@@ -90,6 +90,29 @@ def test_no_pragma_is_not_suppressed():
     assert suppression_reason(finding, text, _cfg(), []) is None
 
 
+def test_pragma_mid_text_does_not_suppress():
+    """The pragma must be anchored to the end of the value — a mid-text
+    occurrence (e.g. a memory that quotes/describes this feature) must not
+    accidentally suppress an unrelated finding later in the same value."""
+    text = "witan: allow-secret is how you suppress a finding. AKIA123 leaked here"
+    finding = _finding(text, "AKIA123")
+    assert suppression_reason(finding, text, _cfg(), []) is None
+
+
+def test_multiple_trailing_scoped_pragmas():
+    text = "leaked AKIA123 and ghp_abc witan: allow-secret:aws_key witan: allow-secret:github_token"
+    aws = _finding(text, "AKIA123", detector="aws_key")
+    gh = _finding(text, "ghp_abc", detector="github_token")
+    assert suppression_reason(aws, text, _cfg(), []) == "pragma"
+    assert suppression_reason(gh, text, _cfg(), []) == "pragma"
+
+
+def test_scoped_pragma_detector_match_is_case_insensitive():
+    text = "here AKIA123 witan: allow-secret:AWS_KEY"
+    finding = _finding(text, "AKIA123", detector="aws_key")
+    assert suppression_reason(finding, text, _cfg(), []) == "pragma"
+
+
 # ── hash allowlist ───────────────────────────────────────────────────────────
 
 

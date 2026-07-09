@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from . import repo as repo_module
 
 _QUERIES_DIR = Path(__file__).parent.parent / "queries"
 _DEFAULT_GRAPH_URI = Path.home() / ".local" / "share" / "witan" / "graph.omni"
@@ -175,7 +176,9 @@ class ScanConfig(BaseModel):
     """Salted SHA-256 digests (hex) of specific approved values, downgraded to
     audit-only like ``allowlist`` but without ever putting the plaintext value
     in config. Requires ``allowlist_salt``; a digest is computed as
-    ``sha256(allowlist_salt + matched_span).hexdigest()``."""
+    ``sha256(allowlist_salt + matched_span).hexdigest()``. Normalized to
+    lowercase at load time — ``hexdigest()`` is always lowercase, so an
+    operator-typed uppercase digest would otherwise silently never match."""
 
     allowlist_salt: str = ""
     """Salt for ``allowlist_hashes``. Empty means the hash allowlist is
@@ -190,17 +193,23 @@ class ScanConfig(BaseModel):
     Sourced *only* from ``[scan.overlay."<repo-uri>"]`` TOML tables —
     deliberately no ``WITAN_SCAN_*`` env-var form (ADR 0001 amendment,
     2026-07-09): scan policy must stay admin-owned, and env vars are exactly
-    the surface a write's own process could control. Validated eagerly by
-    :func:`load_scan_config`; applied per write by :meth:`for_repo`, which
-    only ever overrides enforcement fields (actions, detector allow/deny,
-    allowlists, ``on_scanner_error``) — never ``overlay`` itself."""
+    the surface a write's own process could control. Keys are canonicalized
+    with :func:`_canonical_repo` (scheme, ``.git``/trailing-slash, casing) so
+    a TOML key and the write's own ``repo`` param that refer to the same repo
+    in different spellings still match — see :meth:`for_repo`. Validated
+    eagerly by :func:`load_scan_config`; applied per write by
+    :meth:`for_repo`, which only ever overrides enforcement fields (actions,
+    detector allow/deny, allowlists, ``on_scanner_error``) — never
+    ``overlay`` itself."""
 
     def for_repo(self, repo: str | None) -> "ScanConfig":
         """The effective policy for a write tagged with ``repo`` — the base
         config with any matching ``overlay`` table applied on top. No match
         (including ``repo=None``) returns ``self`` unchanged, so this is a
         no-op for every deployment that doesn't configure an overlay."""
-        overrides = self.overlay.get(repo) if repo else None
+        if not repo or not self.overlay:
+            return self
+        overrides = self.overlay.get(_canonical_repo(repo))
         if not overrides:
             return self
         return self.model_copy(update=overrides)
@@ -235,6 +244,42 @@ class ScanConfig(BaseModel):
             except re.error as exc:
                 raise ValueError(f"invalid allowlist regex {pattern!r}: {exc}") from exc
         return v
+
+    @field_validator("allowlist_hashes")
+    @classmethod
+    def _normalize_hashes(cls, v: list[str]) -> list[str]:
+        """``hashlib.sha256(...).hexdigest()`` is always lowercase; normalize
+        so an operator-typed uppercase digest still matches."""
+        return [h.lower() for h in v]
+
+    @field_validator("overlay")
+    @classmethod
+    def _normalize_overlay_keys(
+        cls, v: dict[str, dict[str, object]]
+    ) -> dict[str, dict[str, object]]:
+        normalized: dict[str, dict[str, object]] = {}
+        for key, overrides in v.items():
+            if not key:
+                raise ValueError("[scan.overlay] repo key must not be empty.")
+            normalized[_canonical_repo(key)] = overrides
+        return normalized
+
+
+def _canonical_repo(value: str) -> str:
+    """Canonicalize a repo string for ``[scan.overlay]`` matching.
+
+    A superset of :func:`witan.repo.normalise` (scheme, ``.git`` suffix,
+    trailing slash): also folds a schemeless ``host/org/repo`` form to the
+    same shape ``normalise`` alone would leave untouched (its regexes require
+    an explicit scheme or an SSH ``user@host:`` prefix to recognize input),
+    and lowercases the result. Scoped to this module deliberately — the
+    shared ``witan.repo`` canonicalizer preserves case for its other callers'
+    exact-match graph joins; scan-overlay matching has no such join to keep
+    consistent with, and GitHub repo paths are themselves case-insensitive.
+    """
+    if "://" not in value and "@" not in value:
+        value = f"https://{value}"
+    return repo_module.normalise(value).lower()
 
 
 _SCAN_FIELDS = {
@@ -317,15 +362,14 @@ def load_scan_config() -> ScanConfig:
             raw[field] = file_scan[field]
             sources[field] = f"[scan].{field} in config.toml"
 
+    if overlay:
+        _validate_overlay(raw, overlay)
+        raw["overlay"] = overlay
+
     try:
-        cfg = ScanConfig(**raw)
+        return ScanConfig(**raw)
     except ValidationError as exc:
         raise _scan_config_error(exc, sources) from exc
-
-    if not overlay:
-        return cfg
-    _validate_overlay(raw, overlay)
-    return cfg.model_copy(update={"overlay": overlay})
 
 
 def default_config_toml() -> str:

@@ -98,9 +98,13 @@ class WriteGuard:
         node_type, fields = entry
         slug = params.get("slug")
         config = self._config.for_repo(_repo_of(params))
+        # Compare values, not identity: an overlay that matched but didn't
+        # touch `allowlist` (e.g. it only overrides secret_action) still
+        # returns a *new* ScanConfig from for_repo(), and recompiling the
+        # same patterns on every such write would be pure waste.
         allowlist = (
             self._allowlist
-            if config is self._config
+            if config.allowlist == self._config.allowlist
             else compile_allowlist(config.allowlist)
         )
 

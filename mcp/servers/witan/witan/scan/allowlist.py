@@ -10,10 +10,12 @@ category's policy would otherwise have done:
   not the whole field value — is tested against each pattern with
   ``re.fullmatch``, so a pattern for one known-good value can't suppress a
   different, longer secret merely because it contains a familiar substring.
-- **Inline pragma**: a trailing ``witan: allow-secret`` (or ``witan:
-  allow-secret:<detector>`` to scope it to one detector) marker anywhere in
-  the field's full value — an author's explicit "I know, ship it anyway" for
-  this one write.
+- **Inline pragma**: one or more ``witan: allow-secret`` (or ``witan:
+  allow-secret:<detector>`` to scope it to one detector) markers at the very
+  *end* of the field's value — an author's explicit "I know, ship it anyway"
+  for this one write. Anchored to the tail deliberately: an unanchored search
+  would let the phrase suppress scanning just by appearing anywhere, e.g. in
+  a memory that quotes this very docstring.
 - **Hash allowlist** (``config.allowlist_hashes``): the matched span, salted
   with ``config.allowlist_salt`` and SHA-256'd, checked against a list of
   approved digests — approve a specific known value (e.g. a fixture
@@ -31,9 +33,11 @@ from .models import Finding
 
 SuppressionReason = Literal["regex", "pragma", "hash"]
 
-_PRAGMA_RE = re.compile(
-    r"witan:\s*allow-secret(?::(?P<detector>[\w-]+))?", re.IGNORECASE
-)
+_PRAGMA_TOKEN = r"witan:\s*allow-secret(?::(?P<detector>[\w-]+))?"
+_PRAGMA_RE = re.compile(_PRAGMA_TOKEN, re.IGNORECASE)
+# One or more tokens, back-to-back, ending exactly at the string's end — the
+# tail, not a `finditer` over the whole value (see module docstring).
+_PRAGMA_TAIL_RE = re.compile(rf"(?:{_PRAGMA_TOKEN}\s*)+$", re.IGNORECASE)
 
 
 def compile_allowlist(patterns: list[str]) -> list[re.Pattern[str]]:
@@ -47,9 +51,12 @@ def compile_allowlist(patterns: list[str]) -> list[re.Pattern[str]]:
 
 
 def _pragma_suppresses(field_value: str, detector: str) -> bool:
-    for m in _PRAGMA_RE.finditer(field_value):
+    tail = _PRAGMA_TAIL_RE.search(field_value)
+    if tail is None:
+        return False
+    for m in _PRAGMA_RE.finditer(tail.group()):
         scope = m.group("detector")
-        if scope is None or scope == detector:
+        if scope is None or scope.lower() == detector.lower():
             return True
     return False
 

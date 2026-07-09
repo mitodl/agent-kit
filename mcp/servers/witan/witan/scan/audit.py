@@ -41,13 +41,16 @@ _OUTCOME_FOR_ACTION: dict[ScanAction, AuditOutcome] = {
 class AuditEvent(BaseModel):
     """One scan finding's disposition on a single write. Secret-free.
 
-    ``action`` is the policy resolved for this specific finding (what its
-    category/override says to do, before any allowlist downgrade). ``outcome``
-    is what actually happened to the *write* — always ``"blocked"`` when any
-    finding on the write (this one or another field's) caused a block, since
-    nothing is persisted in that case regardless of what any individual
-    finding's own action was; ``"suppressed"`` when an allowlist mechanism
-    downgraded it to audit-only, in which case ``suppressed_by`` names how.
+    ``action`` is the *effective* action applied to this finding on this
+    write — already downgraded to ``"warn"`` when an allowlist mechanism
+    suppressed it, so it reflects what happened, not the category/override
+    policy that would otherwise apply (that policy is reconstructable from
+    ``ScanConfig`` if needed; it's not duplicated here). ``outcome`` is what
+    actually happened to the *write* — always ``"blocked"`` when any finding
+    on the write (this one or another field's) caused a block, since nothing
+    is persisted in that case regardless of what any individual finding's own
+    action was; ``"suppressed"`` when an allowlist mechanism downgraded this
+    finding to audit-only, in which case ``suppressed_by`` names how.
     """
 
     model_config = ConfigDict(frozen=True)
