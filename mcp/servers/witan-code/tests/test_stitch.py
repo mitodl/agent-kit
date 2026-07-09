@@ -6,6 +6,9 @@ verify the full path through indexing, the bridge store, the MCP tools, and
 the CLI.
 """
 
+import asyncio
+import inspect
+
 from witan_code.stitch import PreciseEdge, resolve
 
 from .conftest import requires_stack
@@ -311,7 +314,15 @@ B_OPENAPI = (
 
 
 def _fn(tool):
-    return getattr(tool, "fn", tool)
+    """Unwrap + run a (possibly async) FastMCP tool directly, as the CLI does."""
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
 
 
 @requires_stack

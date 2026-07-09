@@ -1,5 +1,8 @@
 """Cross-repo symbol resolution: scope by repo, route by symbol id, fan out."""
 
+import asyncio
+import inspect
+
 from .conftest import requires_stack
 
 PY_A = """\
@@ -25,7 +28,15 @@ RB = "https://github.com/test/repo-b"
 
 
 def _fn(tool):
-    return getattr(tool, "fn", tool)
+    """Unwrap + run a (possibly async) FastMCP tool directly, as the CLI does."""
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
 
 
 @requires_stack

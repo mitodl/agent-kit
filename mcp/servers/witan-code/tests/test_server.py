@@ -1,10 +1,28 @@
 """End-to-end tests for the codegraph MCP tools."""
 
+import asyncio
+import inspect
+
 from .conftest import requires_stack
 
 
 def _fn(tool):
-    return getattr(tool, "fn", tool)
+    """Unwrap a FastMCP-decorated tool to a directly-callable function.
+
+    Tools that gained MCP elicitation are ``async def`` (they take a
+    ``ctx: Context`` FastMCP injects). Calls in this file invoke tools
+    directly, not through an MCP client, so run a coroutine tool to
+    completion via ``asyncio.run`` — with no ctx it falls back to its
+    non-interactive default, matching pre-elicitation behavior.
+    """
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
 
 
 @requires_stack
