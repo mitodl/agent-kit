@@ -107,6 +107,29 @@ def test_slug_absent_is_none(caplog):
     assert event.slug is None
 
 
+def test_suppressed_finding_emits_suppressed_outcome(caplog):
+    caplog.set_level(logging.INFO, logger="witan.scan.audit")
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIA")], allowlist=["AKIA"])
+    guard("insert_memory", {"slug": "mem-6", "title": "t", "content": "AKIA here"})
+
+    [record] = caplog.records
+    event = AuditEvent(**record.scan_audit)
+    assert event.outcome == "suppressed"
+    assert event.suppressed_by == "regex"
+    assert event.action == "warn"
+
+
+def test_non_suppressed_finding_has_no_suppressed_by(caplog):
+    caplog.set_level(logging.INFO, logger="witan.scan.audit")
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")])
+    guard("insert_memory", {"slug": "mem-7", "title": "t", "content": "a@b.com"})
+
+    [record] = caplog.records
+    event = AuditEvent(**record.scan_audit)
+    assert event.suppressed_by is None
+    assert event.outcome == "redacted"
+
+
 def test_block_in_one_field_marks_redact_in_another_field_as_blocked_too(caplog):
     """A write is all-or-nothing: if any field blocks, nothing is persisted,
     so every finding on the write must audit as "blocked" — not just the one
