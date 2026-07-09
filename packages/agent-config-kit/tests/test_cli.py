@@ -140,7 +140,12 @@ def test_apply_exits_2_on_dangling_symlink_at_skill_dest(tmp_path, monkeypatch, 
         app(["apply", str(manifest), "--platform", "claude"])
 
     assert exc_info.value.code == 2
-    assert "my-skill" in capsys.readouterr().out
+    # rich wraps long lines to the console width, which can split "my-skill"
+    # across a line break depending on tmp_path's length — strip newlines
+    # before matching so the assertion doesn't depend on that width.
+    out = capsys.readouterr().out.replace("\n", "")
+    assert "my-skill" in out
+    assert "already exists" in out
 
 
 def test_apply_force_replaces_dangling_symlink_at_skill_dest(
