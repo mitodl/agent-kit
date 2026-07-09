@@ -24,13 +24,13 @@ endpoint or routing header):
 
 ## Quick Start
 
-Registration is declarative, via the [`agent-kit`](../../../packages/agent-kit/README.md)
-CLI and the [`agent-config.toml`](./agent-config.toml) manifest in this
+Registration is declarative, via [`agent-config-kit`](../../../packages/agent-config-kit/README.md)'s
+`agent-kit` CLI and the [`agent-config.toml`](./agent-config.toml) manifest in this
 directory — there is no install script.
 
 ```bash
 # One-time: install the CLI
-uv tool install agent-kit
+uv tool install 'agent-config-kit[cli]'
 
 # From this directory — registers all three tiers, on every agent platform
 # agent-kit detects on your machine (Claude Code, Pi, GitHub Copilot, OpenCode):

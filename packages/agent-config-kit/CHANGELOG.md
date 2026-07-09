@@ -6,19 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [0.4.0] - 2026-07-09
-
-### Changed
-
-- **Breaking: the `agent-kit` CLI has moved to the separate `agent-kit`
-  PyPI package.** `agent_config_kit/cli.py` and its `cli` extra
-  (`pip install agent-config-kit[cli]`) are gone; `agent-config-kit` is now
-  the manifest/apply/diff/prune library only (`pydantic` as its sole
-  dependency), with no console script. Install `agent-kit` instead — it
-  depends on this library plus `cyclopts`/`rich` plus the `witan` and
-  `witan-code` MCP servers, so `uv tool install agent-kit` replaces
-  `uv tool install 'agent-config-kit[cli]'`. No backwards-compat shim.
-
 ## [0.3.7] - 2026-07-09
 
 ### Fixed

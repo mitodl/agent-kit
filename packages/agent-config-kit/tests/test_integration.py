@@ -36,7 +36,7 @@ def _add_remote(path: Path, name: str, url: str) -> None:
 def test_profile_stacking_with_inherits_and_include_end_to_end(tmp_path, monkeypatch):
     """A profile that both `inherits` another profile and pulls in a shared
     bundle via top-level `include` resolves to the union of all three."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     _write(
@@ -86,7 +86,7 @@ def test_profile_stacking_with_inherits_and_include_end_to_end(tmp_path, monkeyp
 
 
 def test_include_cycle_surfaces_as_clean_cli_error(tmp_path, monkeypatch, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     _write(tmp_path / "a.toml", 'include = ["b.toml"]\n')
@@ -106,7 +106,7 @@ def test_zero_arg_apply_resolves_via_org_match_and_writes_project_scope(
     the repo's git remote, with no MANIFEST argument and no repo-local
     agent-config.toml — the full O2 step-3 path, materializing into the
     repo's own project-scope target (not the agent's global config)."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
@@ -155,7 +155,7 @@ def test_zero_arg_apply_resolves_via_directory_prefix_when_org_does_not_match(
 ):
     """No repo-local manifest, no `[[org]]` match (a non-github remote) ->
     falls through to the longest matching `[[scope]] match_prefix`."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
@@ -193,7 +193,7 @@ def test_zero_arg_apply_resolves_via_directory_prefix_when_org_does_not_match(
 
 
 def test_zero_arg_apply_falls_back_to_default_manifest(tmp_path, monkeypatch, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
@@ -225,7 +225,7 @@ def test_zero_arg_apply_falls_back_to_default_manifest(tmp_path, monkeypatch, ca
 
 
 def test_per_profile_include_end_to_end_through_cli(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     (tmp_path / "skills" / "webapp-testing").mkdir(parents=True)
@@ -271,7 +271,7 @@ def test_prune_state_is_not_shared_across_repos_applying_the_same_org_manifest(
     [[org]] manifest with project write-scope must not clobber each
     other's `--prune` state — each repo tracks (and prunes) only what it
     wrote to itself."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)

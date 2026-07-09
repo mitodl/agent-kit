@@ -1,6 +1,8 @@
+import importlib
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,7 +28,7 @@ def _run_ok(app, args: list[str]) -> None:
 
 
 def test_cli_help_smoke(capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     with pytest.raises(SystemExit) as exc_info:
         app(["--help"])
@@ -35,8 +37,25 @@ def test_cli_help_smoke(capsys):
     assert "agent-kit" in capsys.readouterr().out.lower()
 
 
+def test_cli_without_extra_exits_with_friendly_message(monkeypatch, capsys):
+    """Importing agent_config_kit.cli without cyclopts installed must fail
+    fast with an actionable message, not a bare traceback."""
+    monkeypatch.setitem(sys.modules, "cyclopts", None)
+    sys.modules.pop("agent_config_kit.cli", None)
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            importlib.import_module("agent_config_kit.cli")
+        assert exc_info.value.code == 1
+        assert "cli" in capsys.readouterr().err.lower()
+    finally:
+        sys.modules.pop("agent_config_kit.cli", None)
+        monkeypatch.delitem(sys.modules, "cyclopts", raising=False)
+        importlib.import_module("agent_config_kit.cli")
+
+
 def test_apply_writes_mcp_server_for_explicit_platform(tmp_path, monkeypatch, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -59,7 +78,7 @@ def test_apply_writes_mcp_server_for_explicit_platform(tmp_path, monkeypatch, ca
 def test_apply_defaults_to_detected_platforms_when_none_given(
     tmp_path, monkeypatch, capsys
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -78,7 +97,7 @@ def test_apply_defaults_to_detected_platforms_when_none_given(
 
 
 def test_apply_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -100,7 +119,7 @@ def test_apply_exits_2_on_dangling_symlink_at_skill_dest(tmp_path, monkeypatch, 
     """A stale (e.g. from an older symlink-based install) dangling symlink
     occupying a skill's destination directory must surface as a clear
     ``apply`` failure, not a raw FileExistsError traceback."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     skill_dir = tmp_path / "skills" / "my-skill"
@@ -132,7 +151,7 @@ def test_apply_exits_2_on_dangling_symlink_at_skill_dest(tmp_path, monkeypatch, 
 def test_apply_force_replaces_dangling_symlink_at_skill_dest(
     tmp_path, monkeypatch, capsys
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     skill_dir = tmp_path / "skills" / "my-skill"
@@ -156,7 +175,7 @@ def test_apply_force_replaces_dangling_symlink_at_skill_dest(
 
 
 def test_apply_cli_platform_overrides_manifest_platforms(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     (tmp_path / ".pi").mkdir()
@@ -179,7 +198,7 @@ def test_apply_cli_platform_overrides_manifest_platforms(tmp_path, monkeypatch):
 
 
 def test_apply_unknown_platform_exits_2(tmp_path, monkeypatch, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(tmp_path, "")
@@ -192,7 +211,7 @@ def test_apply_unknown_platform_exits_2(tmp_path, monkeypatch, capsys):
 
 
 def test_apply_bad_manifest_exits_2(tmp_path, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     manifest = _write_manifest(tmp_path, "this is not [valid toml")
 
@@ -204,7 +223,7 @@ def test_apply_bad_manifest_exits_2(tmp_path, capsys):
 
 
 def test_apply_exits_1_when_a_platform_skips_a_target(tmp_path, monkeypatch, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     (tmp_path / ".claude.json").write_text("[1, 2, 3]")
@@ -228,7 +247,7 @@ def test_apply_cli_scope_overrides_manifest_scope(tmp_path, monkeypatch):
     """Passing --scope project routes claude's mcp target to the
     project-scoped .mcp.json (relative to CWD, i.e. the repo root agent-kit is
     run from) instead of the manifest's own [options] scope = "global"."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -261,7 +280,7 @@ def test_apply_zero_arg_resolves_repo_local_manifest(tmp_path, monkeypatch, caps
     global config needed."""
     import subprocess
 
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
@@ -293,7 +312,7 @@ def test_apply_zero_arg_resolves_repo_local_manifest(tmp_path, monkeypatch, caps
 def test_apply_zero_arg_falls_back_to_default_manifest_from_global_config(
     tmp_path, monkeypatch, capsys
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
@@ -333,7 +352,7 @@ def test_apply_zero_arg_falls_back_to_default_manifest_from_global_config(
 def test_apply_zero_arg_exits_2_with_no_manifest_and_no_config(
     tmp_path, monkeypatch, capsys
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
@@ -361,7 +380,7 @@ def test_apply_zero_arg_scope_match_with_no_profiles_overrides_manifest_default(
     resolution source (spec §7.2: "profile is taken from the same source"),
     so it must install the whole manifest rather than falling back to the
     manifest's own [options] default_profiles."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
@@ -410,7 +429,7 @@ def test_apply_zero_arg_passes_cache_dir_through_to_resolution(tmp_path, monkeyp
     config too, not just remote skill/hook sources inside an
     already-local manifest."""
     import agent_config_kit.resolve as resolve_module
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
@@ -454,7 +473,7 @@ def test_apply_zero_arg_passes_cache_dir_through_to_resolution(tmp_path, monkeyp
 def test_validate_exits_0_and_no_drift_when_already_applied(
     tmp_path, monkeypatch, capsys
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -473,7 +492,7 @@ def test_validate_exits_0_and_no_drift_when_already_applied(
 
 
 def test_validate_exits_1_when_manifest_not_yet_applied(tmp_path, monkeypatch, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -493,7 +512,7 @@ def test_validate_exits_1_when_manifest_not_yet_applied(tmp_path, monkeypatch, c
 
 
 def test_validate_exits_1_on_unreadable_target(tmp_path, monkeypatch, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     (tmp_path / ".claude.json").write_text("[1, 2, 3]")
@@ -516,7 +535,7 @@ def test_validate_exits_1_on_unreadable_target(tmp_path, monkeypatch, capsys):
 def test_validate_defaults_to_detected_platforms_when_none_given(
     tmp_path, monkeypatch, capsys
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -538,7 +557,7 @@ def test_validate_defaults_to_detected_platforms_when_none_given(
 
 
 def test_validate_bad_manifest_exits_2(tmp_path, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     manifest = _write_manifest(tmp_path, "this is not [valid toml")
 
@@ -550,7 +569,7 @@ def test_validate_bad_manifest_exits_2(tmp_path, capsys):
 
 
 def test_apply_prune_writes_state_file_next_to_manifest(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -571,7 +590,7 @@ def test_apply_prune_writes_state_file_next_to_manifest(tmp_path, monkeypatch):
 
 
 def test_apply_without_prune_never_writes_state_file(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -591,7 +610,7 @@ def test_apply_without_prune_never_writes_state_file(tmp_path, monkeypatch):
 def test_apply_prune_removes_server_dropped_from_manifest_on_second_run(
     tmp_path, monkeypatch
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -627,7 +646,7 @@ def test_apply_prune_removes_server_dropped_from_manifest_on_second_run(
 def test_apply_prune_dry_run_writes_neither_config_nor_state_file(
     tmp_path, monkeypatch
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -648,7 +667,7 @@ def test_apply_prune_dry_run_writes_neither_config_nor_state_file(
 
 
 def test_apply_prune_state_file_flag_overrides_default_path(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -685,7 +704,7 @@ def test_apply_prune_does_not_record_state_for_a_skipped_platform(
     applied — recording its state anyway would let a *later* prune remove
     entries it never truly wrote. The prior state (if any) must survive
     untouched instead."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -716,7 +735,7 @@ def test_apply_then_validate_then_prune_full_lifecycle(tmp_path, monkeypatch):
     as still-installed drift (validate never removes anything), then
     apply --prune to actually remove it, and confirm validate is clean
     again — all against a fake $HOME, no real config touched."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     two_servers = _write_manifest(
@@ -763,7 +782,7 @@ def test_apply_then_validate_then_prune_full_lifecycle(tmp_path, monkeypatch):
 
 
 def test_apply_with_profile_only_installs_selected_entries(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -793,7 +812,7 @@ def test_apply_with_profile_only_installs_selected_entries(tmp_path, monkeypatch
 
 
 def test_apply_profile_flag_overrides_manifest_default_profiles(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -826,7 +845,7 @@ def test_apply_profile_flag_overrides_manifest_default_profiles(tmp_path, monkey
 
 
 def test_apply_no_profile_flag_uses_manifest_default_profiles(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -856,7 +875,7 @@ def test_apply_no_profile_flag_uses_manifest_default_profiles(tmp_path, monkeypa
 
 
 def test_apply_unknown_profile_exits_2(tmp_path, monkeypatch, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     manifest = _write_manifest(
@@ -874,7 +893,7 @@ def test_apply_unknown_profile_exits_2(tmp_path, monkeypatch, capsys):
 
 
 def test_profiles_command_lists_profiles_with_resolved_counts(tmp_path, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     manifest = _write_manifest(
         tmp_path,
@@ -899,7 +918,7 @@ def test_profiles_command_lists_profiles_with_resolved_counts(tmp_path, capsys):
 
 
 def test_profiles_command_reports_no_profiles(tmp_path, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     manifest = _write_manifest(
         tmp_path,
@@ -918,7 +937,7 @@ def test_profiles_command_reports_no_profiles(tmp_path, capsys):
 def test_config_init_writes_all_commented_starter_at_default_location(
     tmp_path, monkeypatch
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AC_KIT_CONFIG", raising=False)
@@ -938,7 +957,7 @@ def test_config_init_writes_all_commented_starter_at_default_location(
 
 
 def test_config_init_respects_explicit_config_flag(tmp_path):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     config_path = tmp_path / "custom" / "config.toml"
 
@@ -948,7 +967,7 @@ def test_config_init_respects_explicit_config_flag(tmp_path):
 
 
 def test_config_init_refuses_to_overwrite_without_force(tmp_path, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     config_path = tmp_path / "config.toml"
     config_path.write_text("default_manifest = 'existing'\n")
@@ -962,7 +981,7 @@ def test_config_init_refuses_to_overwrite_without_force(tmp_path, capsys):
 
 
 def test_config_init_force_overwrites_existing_file(tmp_path):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     config_path = tmp_path / "config.toml"
     config_path.write_text("default_manifest = 'existing'\n")
@@ -977,8 +996,8 @@ def test_config_init_wizard_writes_supplied_values_and_comments_out_the_rest(
 ):
     """The wizard fills in what the user answers and leaves the rest as the
     same commented-out example the non-interactive path writes."""
-    import agent_kit.cli as cli_module
-    from agent_kit.cli import app
+    import agent_config_kit.cli as cli_module
+    from agent_config_kit.cli import app
 
     answers = iter(["~/dotfiles/agent-config.toml", "universal,frontend"])
     # add-org? -> yes; add-another-org? -> no; add-scope? -> no
@@ -1018,8 +1037,8 @@ def test_config_init_wizard_writes_supplied_values_and_comments_out_the_rest(
 def test_config_init_wizard_skips_everything_when_all_answers_are_blank(
     tmp_path, monkeypatch
 ):
-    import agent_kit.cli as cli_module
-    from agent_kit.cli import app
+    import agent_config_kit.cli as cli_module
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(cli_module, "_ask", lambda prompt, **kw: "")
     monkeypatch.setattr(cli_module, "_ask_list", lambda prompt: [])
@@ -1043,7 +1062,7 @@ def _write_skill(repo: Path, rel_dir: str, *, name: str | None = None) -> Path:
 
 
 def test_manifest_init_writes_skills_table_from_frontmatter_names(tmp_path):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     _write_skill(
@@ -1071,7 +1090,7 @@ def test_manifest_init_writes_skills_table_from_frontmatter_names(tmp_path):
 
 
 def test_manifest_init_falls_back_to_directory_name_without_frontmatter(tmp_path):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     _write_skill(repo, "skills/no-frontmatter")
@@ -1083,7 +1102,7 @@ def test_manifest_init_falls_back_to_directory_name_without_frontmatter(tmp_path
 
 
 def test_manifest_init_skips_vendor_and_dot_directories(tmp_path):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     _write_skill(repo, "skills/real-skill", name="real-skill")
@@ -1100,7 +1119,7 @@ def test_manifest_init_skips_vendor_and_dot_directories(tmp_path):
 
 
 def test_manifest_init_exits_2_on_duplicate_derived_name(tmp_path, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     _write_skill(repo, "skills/a", name="dup")
@@ -1115,7 +1134,7 @@ def test_manifest_init_exits_2_on_duplicate_derived_name(tmp_path, capsys):
 
 
 def test_manifest_init_exits_2_on_invalid_derived_name(tmp_path, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     _write_skill(repo, "skills/Not_Valid", name="Not_Valid")
@@ -1132,7 +1151,7 @@ def test_manifest_init_exits_2_on_derived_name_over_64_chars(tmp_path, capsys):
     validator additionally requires 1-64 chars (Agent Skills spec), so a
     manifest generated without that same check could write a name that
     passes manifest init but fails the very first `load_manifest`."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     too_long = "a-" * 32 + "a"  # 65 chars, still matches SKILL_NAME_PATTERN
     assert len(too_long) == 65
@@ -1148,7 +1167,7 @@ def test_manifest_init_exits_2_on_derived_name_over_64_chars(tmp_path, capsys):
 
 
 def test_manifest_init_refuses_to_overwrite_without_force(tmp_path, capsys):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1163,7 +1182,7 @@ def test_manifest_init_refuses_to_overwrite_without_force(tmp_path, capsys):
 
 
 def test_manifest_init_force_overwrites_existing_file(tmp_path):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     _write_skill(repo, "skills/real-skill", name="real-skill")
@@ -1177,7 +1196,7 @@ def test_manifest_init_force_overwrites_existing_file(tmp_path):
 def test_manifest_init_reports_and_writes_empty_skills_table_when_none_found(
     tmp_path, capsys
 ):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1193,7 +1212,7 @@ def test_manifest_init_writes_paths_relative_to_output_not_repo(tmp_path):
     own M5 rule (relative to the *manifest file's* directory) — so when
     ``--output`` places the manifest outside ``repo``, the written path must
     still be correct relative to the output location, not ``repo``."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     _write_skill(repo, "skills/real-skill", name="real-skill")
@@ -1212,7 +1231,7 @@ def test_manifest_init_writes_paths_relative_to_output_not_repo(tmp_path):
 def test_manifest_init_defaults_to_git_repo_root(tmp_path, monkeypatch):
     import subprocess
 
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -1262,7 +1281,7 @@ def test_apply_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch
     coercion collapsed the URI's `scheme://` into `scheme:/` before
     `_resolve_manifest_arg` ever saw it, so an explicit remote MANIFEST
     silently failed to parse as a URI at all."""
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     source = tmp_path / "source"
@@ -1290,7 +1309,7 @@ def test_apply_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch
 
 @requires_git
 def test_validate_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     source = tmp_path / "source"
@@ -1320,7 +1339,7 @@ def test_validate_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypa
 
 @requires_git
 def test_profiles_accepts_an_explicit_remote_git_manifest_uri(tmp_path, monkeypatch):
-    from agent_kit.cli import app
+    from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     source = tmp_path / "source"

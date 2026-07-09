@@ -1,1 +1,1 @@
-"""The agent-kit CLI, bundled with the witan and witan-code MCP servers."""
+"""Meta-package that installs agent-config-kit, witan, and witan-code together."""

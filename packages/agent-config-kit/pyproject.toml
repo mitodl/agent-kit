@@ -1,6 +1,6 @@
 [project]
 name = "agent-config-kit"
-version = "0.4.0"
+version = "0.3.7"
 description = "Unified MCP server, skill, and hook registration across coding-agent platforms"
 license = "BSD-3-Clause"
 requires-python = ">=3.11"
@@ -11,6 +11,12 @@ dependencies = [
     "pydantic>=2,<3",
 ]
 
+[project.optional-dependencies]
+cli = ["cyclopts>=4,<5", "rich>=13"]
+
+[project.scripts]
+agent-kit = "agent_config_kit.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -19,7 +25,7 @@ build-backend = "hatchling.build"
 packages = ["agent_config_kit"]
 
 [tool.bumpversion]
-current_version = "0.4.0"
+current_version = "0.3.7"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
@@ -28,7 +34,7 @@ search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
 [dependency-groups]
-test = ["pytest>=8"]
+test = ["pytest>=8", "cyclopts>=4,<5", "rich>=13"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

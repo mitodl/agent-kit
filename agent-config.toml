@@ -1,6 +1,6 @@
 # agent-config.toml — declarative install of this repo's own MCP servers
-# (witan, witan-code) and skill catalog (skills/**) via the `agent-kit`
-# CLI, for consumers that don't want to write Python.
+# (witan, witan-code) and skill catalog (skills/**) via agent-config-kit's
+# `agent-kit` CLI, for consumers that don't want to write Python.
 #
 # Skills owned by witan itself (mcp/servers/witan/witan/skills/) are
 # installed by `witan setup`, not this manifest — witan owns its own
@@ -15,7 +15,7 @@
 # opt-in filters, not gates).
 #
 # Usage (from the repo root):
-#   uv tool install agent-kit
+#   uv tool install 'agent-config-kit[cli]'
 #   agent-kit apply agent-config.toml                    # everything, every platform
 #   agent-kit apply agent-config.toml --profile python   # just the python profile
 #   agent-kit apply agent-config.toml --dry-run          # preview without writing

@@ -1,18 +1,16 @@
 [project]
-name = "agent-kit"
+name = "ol-agent-kit"
 version = "0.1.0"
-description = "The agent-kit CLI (manifest-driven MCP/skill/hook registration), bundled with the witan and witan-code MCP servers"
+description = "Meta-package: installs the full mitodl agent-kit toolkit (agent-config-kit's agent-kit CLI + witan + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.11"
-keywords = ["mcp", "agent", "coding-agent", "cli"]
+keywords = ["mcp", "agent", "coding-agent", "meta-package"]
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "agent-config-kit>=0.4.0",
-    "cyclopts>=4,<5",
-    "rich>=13",
+    "agent-config-kit[cli]>=0.3.7",
     "witan-council>=0.2.0",
     "witan-code>=0.2.0",
 ]
@@ -22,9 +20,6 @@ Homepage = "https://github.com/mitodl/agent-kit"
 Repository = "https://github.com/mitodl/agent-kit"
 Documentation = "https://github.com/mitodl/agent-kit/blob/main/packages/agent-kit/README.md"
 Issues = "https://github.com/mitodl/agent-kit/issues"
-
-[project.scripts]
-agent-kit = "agent_kit.cli:main"
 
 [build-system]
 requires = ["hatchling"]
