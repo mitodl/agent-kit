@@ -5,10 +5,11 @@ from agent_config_kit.models import (
     DeclarativeHook,
     HookEvent,
     PluginRegistration,
+    Scope,
     SkillSource,
     StdioServer,
 )
-from agent_config_kit.plan import RegistrationBundle, Scope, apply
+from agent_config_kit.plan import RegistrationBundle, apply
 from agent_config_kit.prune import (
     PlatformState,
     apply_with_prune,
