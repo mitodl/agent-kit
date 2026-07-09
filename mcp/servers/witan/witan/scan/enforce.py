@@ -58,8 +58,33 @@ class WriteBlocked(RuntimeError):
         )
 
 
+def _repo_of(params: dict) -> str | None:
+    """The repo a write's overlay policy (``ScanConfig.for_repo``) keys on.
+
+    ``repo`` (a single value) covers most mutations; ``repos`` (a list, e.g.
+    ``insert_workflow_project``) uses the first entry — a project spanning
+    several repos gets one policy, not a per-field split that would need a
+    v2 overlay shape to express."""
+    repo = params.get("repo")
+    if isinstance(repo, str) and repo:
+        return repo
+    repos = params.get("repos")
+    if isinstance(repos, list) and repos and isinstance(repos[0], str):
+        return repos[0]
+    return None
+
+
 class WriteGuard:
-    """Scans and enforces on the free-text params of a single mutation."""
+    """Scans and enforces on the free-text params of a single mutation.
+
+    The detector set (:class:`~.registry.ScannerRegistry`) is fixed at
+    construction — rebuilding it per write (replugging entry points,
+    dotted-path imports) is out of scope for the v1 per-repo overlay.
+    Enforcement policy (actions, allowlists, ``on_scanner_error``) is *not*
+    fixed: it's resolved fresh per write via ``config.for_repo(repo)`` (ADR
+    0001 amendment, 2026-07-09), so an ``[scan.overlay]`` table takes effect
+    without rebuilding anything expensive.
+    """
 
     def __init__(self, config: ScanConfig, registry: ScannerRegistry) -> None:
         self._config = config
@@ -72,6 +97,12 @@ class WriteGuard:
             return params
         node_type, fields = entry
         slug = params.get("slug")
+        config = self._config.for_repo(_repo_of(params))
+        allowlist = (
+            self._allowlist
+            if config is self._config
+            else compile_allowlist(config.allowlist)
+        )
 
         # Resolve every field's findings to an action first, without emitting
         # audit events or mutating anything, so the write's fate (blocked or
@@ -90,13 +121,17 @@ class WriteGuard:
             value = params.get(field)
             if not isinstance(value, str) or not value:
                 continue
-            findings = self._scan(value, field, node_type)
+            findings = self._scan(value, field, node_type, config)
             if not findings:
                 continue
             resolved: list[tuple[Finding, ScanAction, str | None]] = []
             for f in findings:
-                reason = suppression_reason(f, value, self._config, self._allowlist)
-                action = "warn" if reason else f.action or self._action_for(f.category)
+                reason = suppression_reason(f, value, config, allowlist)
+                action = (
+                    "warn"
+                    if reason
+                    else f.action or self._action_for(f.category, config)
+                )
                 resolved.append((f, action, reason))
             per_field.append((field, value, resolved))
             blocked.extend((field, f) for f, a, _ in resolved if a == "block")
@@ -126,11 +161,13 @@ class WriteGuard:
             return flag_redacted({**params, **redactions})
         return params
 
-    def _scan(self, value: str, field: str, node_type: str) -> list[Finding]:
+    def _scan(
+        self, value: str, field: str, node_type: str, config: ScanConfig
+    ) -> list[Finding]:
         try:
             return self._registry.scan(value, field, node_type)
         except ScannerError as exc:
-            if self._config.on_scanner_error == "warn":
+            if config.on_scanner_error == "warn":
                 logger.warning(
                     "witan scan: scanner %r failed on %s.%s; allowing write "
                     "(on_scanner_error=warn)",
@@ -141,10 +178,8 @@ class WriteGuard:
                 return []
             raise  # fail-closed: the ScannerError aborts the write
 
-    def _action_for(self, category: str) -> ScanAction:
-        return (
-            self._config.pii_action if category == "pii" else self._config.secret_action
-        )
+    def _action_for(self, category: str, config: ScanConfig) -> ScanAction:
+        return config.pii_action if category == "pii" else config.secret_action
 
 
 def write_guard_from_config(config: ScanConfig) -> WriteGuard | None:

@@ -246,3 +246,65 @@ The redact-by-default PII path and fail-closed secret blocking make an
 enabled default low-friction; false positives are handled via the allow/deny
 detector lists, per-category mode, and the eventual allowlist engine, not by
 leaving the feature off. Everything else in D1–D4 is unchanged.
+
+## Amendment (2026-07-09): multi-tenant policy mechanism (resolves task `tk-multi-tenant-policy-control-admin-owned-scan-pol-1338d2`)
+
+D4 deferred "the detailed mechanism" for keeping `ScanConfig` admin-owned in a
+deployed multi-tenant server. Resolved as follows, grounded in the actual
+multi-user deployment design (ADR-0002 Cedar bundle; ADR-0004 Keycloak
+JWT/per-actor mapping, `witan-per-actor-client-wiring` branch — both in the
+sibling `wp-witan-multi-user-service-deployment-dcf6ee` project).
+
+### The base case is already authoritative — no client ever influences `ScanConfig`
+
+`server.py` loads `scan_cfg = cfg_module.load_scan_config()` once, at process
+import, from the deployment's own environment/`config.toml`. No MCP tool
+accepts a parameter that reaches `ScanConfig`, and per-request actor
+resolution (ADR-0004 D2/D3 — `derive_actor_id`, `ActorTokenResolver`,
+`_ActorScopedClient`) is a completely separate axis: it decides which
+omnigraph bearer token a write is proxied through, never which scan policy
+applies. So in the sanctioned deployed topology — one shared
+`streamable-http` witan-service process, `JWTVerifier`-authenticated,
+resolving per-actor omnigraph credentials server-side (ADR-0004 D1/D3) —
+`WITAN_SCAN_*` is already operator-controlled (Vault/K8s env for the one
+process) and structurally unreachable by any authenticated client. This holds
+**today**, with no new code: the "client controls `WITAN_SCAN_*`" risk D4
+flagged only materializes in a topology this project does not build — a
+per-user local witan process pointed directly at a shared remote store,
+bypassing the witan-service entirely. That bypass isn't a scan-policy gap to
+patch; it's a deployment-topology invariant to state and hold: **every write
+to a shared store must pass through the witan-service process**, because
+scanning (like everything else in `witan/scan/`) runs client-side in
+whichever process calls `OmnigraphClient.change()` — omnigraph itself has no
+content-scanning hook, and Cedar cannot express one (ADR-0002 D1: "no
+per-node-type / per-row authority... it is the query-layer's job and
+unimplemented" — content scanning *is* that query-layer job). Cedar's
+`witan-users` `change` grant on the memory graph (ADR-0002 D2) is safe under
+this invariant only because those users' requests are proxied through
+witan-service, not handed a standalone omnigraph credential to use directly.
+
+### Per-tenant/per-repo overlay: keyed by repo, not by actor
+
+Scan policy is a property of the content's governance domain (which
+org/repo/project it belongs to), not of who is writing — the whole point is
+that a policy applies uniformly regardless of which user triggers a write.
+`ScanConfig` gains a `for_repo(repo: str | None) -> ScanConfig` resolution:
+an optional `[scan.overlay."<repo-uri>"]` TOML table (operator-authored
+server config only — there is no env-var form, deliberately, since a
+per-repo table doesn't fit the flat `WITAN_SCAN_*` shape and env vars are
+exactly the surface D4 already excludes from client influence) overrides any
+subset of the base `ScanConfig` fields for writes tagged with that repo.
+`WriteGuard` resolves the effective config from `params.get("repo")` (or the
+first of `params.get("repos")` for `WorkflowProject`) before scanning — Layer
+1 (Memory/Task/WorkflowProject/…) is one flat shared graph (ADR-0002 D2), so
+"per-repo" is a property carried on each write's params, not a store
+boundary; no new graph state or admin API is needed for v1.
+
+### Non-goals for now
+
+Per-user or per-role policy overlays (as opposed to per-repo) are explicitly
+out of scope: they would let a user weaken policy for their own writes,
+which is exactly what D4 rules out. A future admin API to edit overlay policy
+at runtime (rather than redeploying `config.toml`) is deferred — filed as a
+follow-up once the multi-user project reaches a phase where an admin surface
+exists to hang it off.

@@ -595,6 +595,108 @@ def test_scan_config_is_frozen():
         sc.enabled = True
 
 
+# ── overlay (per-repo policy, ADR 0001 amendment 2026-07-09) ───────────────────
+
+
+def test_overlay_has_no_env_var_form(monkeypatch):
+    """Deliberate: overlay policy is admin-owned via TOML only — there must be
+    no WITAN_SCAN_OVERLAY* env var a client-controlled process could set."""
+    from witan.config import _SCAN_FIELDS
+
+    assert not any("OVERLAY" in v for v in _SCAN_FIELDS.values())
+
+
+def test_for_repo_with_no_overlay_returns_self():
+    from witan.config import ScanConfig
+
+    cfg = ScanConfig()
+    assert cfg.for_repo("github.com/example/repo") is cfg
+    assert cfg.for_repo(None) is cfg
+
+
+def test_for_repo_applies_matching_overlay():
+    from witan.config import ScanConfig
+
+    cfg = ScanConfig(overlay={"github.com/example/repo": {"secret_action": "warn"}})
+    effective = cfg.for_repo("github.com/example/repo")
+    assert effective.secret_action == "warn"
+    assert effective.pii_action == cfg.pii_action  # untouched fields carry over
+
+
+def test_for_repo_no_match_returns_base_unchanged():
+    from witan.config import ScanConfig
+
+    cfg = ScanConfig(overlay={"github.com/example/repo": {"secret_action": "warn"}})
+    assert cfg.for_repo("github.com/other/repo") is cfg
+
+
+def test_load_scan_config_reads_overlay_from_toml(monkeypatch, toml_file):
+    from witan.config import load_scan_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [scan.overlay."github.com/example/legacy"]
+            secret_action = "warn"
+            """
+        ),
+    )
+    cfg = load_scan_config()
+    assert cfg.for_repo("github.com/example/legacy").secret_action == "warn"
+    assert cfg.for_repo("github.com/other/repo").secret_action == "block"
+
+
+def test_load_scan_config_overlay_unknown_field_rejected(monkeypatch, toml_file):
+    from witan.config import load_scan_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [scan.overlay."github.com/example/legacy"]
+            not_a_real_field = "warn"
+            """
+        ),
+    )
+    with pytest.raises(ValueError, match="unknown setting"):
+        load_scan_config()
+
+
+def test_load_scan_config_overlay_invalid_value_rejected(monkeypatch, toml_file):
+    from witan.config import load_scan_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [scan.overlay."github.com/example/legacy"]
+            secret_action = "nuke"
+            """
+        ),
+    )
+    with pytest.raises(ValueError, match="is invalid"):
+        load_scan_config()
+
+
+def test_load_scan_config_overlay_not_a_table_rejected(monkeypatch, toml_file):
+    from witan.config import load_scan_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file('[scan]\noverlay = "nope"'))
+    with pytest.raises(ValueError, match=r"\[scan\.overlay\] must be a table"):
+        load_scan_config()
+
+
+def test_load_scan_config_overlay_entry_not_a_table_rejected(monkeypatch, toml_file):
+    from witan.config import load_scan_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG", toml_file('[scan.overlay]\n"github.com/x/y" = "nope"')
+    )
+    with pytest.raises(ValueError, match="must be a table"):
+        load_scan_config()
+
+
 def test_default_config_toml_is_valid_and_fully_commented():
     """Every setting ships commented out — loading it must change nothing."""
     import tomllib

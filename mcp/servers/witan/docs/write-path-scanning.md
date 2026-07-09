@@ -237,10 +237,30 @@ copy it as a starting point.
 
 ## Multi-tenant / deployed-server mode
 
-In a shared, multi-user deployment, `WITAN_SCAN_*` env vars and client-supplied
-TOML are not trustworthy — a client must not be able to weaken policy it is
-itself subject to. Authoritative, admin-owned policy sourcing and per-tenant
-overlays are a separate piece of work
-(`tk-multi-tenant-policy-control-admin-owned-scan-pol-1338d2`), tracked
-alongside the multi-user deployment project. Everything in this doc applies
-as-is to local, single-user witan today.
+`ScanConfig` is loaded once, at process import, from the deployment's own
+environment/`config.toml` — no MCP tool call can influence it, so in the
+sanctioned deployed topology (one shared `streamable-http` witan-service
+process; see ADR 0004 in the multi-user deployment project) scan policy is
+already admin-owned by construction. That invariant depends on every write to
+a shared store passing through the witan-service process — omnigraph itself
+has no content-scanning hook, and Cedar cannot express one (ADR 0002 §D1), so
+a write that reaches omnigraph-server by any other path skips scanning
+entirely.
+
+Per-repo policy overrides are supported via `[scan.overlay."<repo-uri>"]`
+tables in `config.toml` — deliberately **TOML-only, no `WITAN_SCAN_*`
+env-var form**, since env vars are exactly the surface a write's own process
+could otherwise control:
+
+```toml
+[scan.overlay."github.com/example/legacy-repo"]
+secret_action = "warn"   # rolling out scanning on a noisy repo before enforcing
+```
+
+Any `ScanConfig` field except `overlay` itself may be overridden. `WriteGuard`
+resolves the effective policy from the write's own `repo` (or the first entry
+of `repos`) param — see `ScanConfig.for_repo` in `witan/config.py` and the
+2026-07-09 amendment in [ADR 0001](adr/0001-write-path-content-scanning.md)
+for the full design rationale, including why the detector set itself (as
+opposed to enforcement policy) is not overlay-able in this version. Everything
+else in this doc applies as-is to local, single-user witan today.

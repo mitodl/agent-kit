@@ -185,6 +185,26 @@ class ScanConfig(BaseModel):
     """What to do when a scanner itself raises. Fail-closed by default so a
     broken detector cannot silently open the gate."""
 
+    overlay: dict[str, dict[str, object]] = Field(default_factory=dict)
+    """Per-repo enforcement overrides: ``{repo_uri: {field: value, ...}}``.
+    Sourced *only* from ``[scan.overlay."<repo-uri>"]`` TOML tables —
+    deliberately no ``WITAN_SCAN_*`` env-var form (ADR 0001 amendment,
+    2026-07-09): scan policy must stay admin-owned, and env vars are exactly
+    the surface a write's own process could control. Validated eagerly by
+    :func:`load_scan_config`; applied per write by :meth:`for_repo`, which
+    only ever overrides enforcement fields (actions, detector allow/deny,
+    allowlists, ``on_scanner_error``) — never ``overlay`` itself."""
+
+    def for_repo(self, repo: str | None) -> "ScanConfig":
+        """The effective policy for a write tagged with ``repo`` — the base
+        config with any matching ``overlay`` table applied on top. No match
+        (including ``repo=None``) returns ``self`` unchanged, so this is a
+        no-op for every deployment that doesn't configure an overlay."""
+        overrides = self.overlay.get(repo) if repo else None
+        if not overrides:
+            return self
+        return self.model_copy(update=overrides)
+
     @field_validator(
         "enabled_detectors",
         "disabled_detectors",
@@ -250,16 +270,41 @@ def _scan_config_error(exc: ValidationError, sources: dict[str, str]) -> ValueEr
     return ValueError(f"Invalid scan setting {source}: {err['msg']}")
 
 
+def _validate_overlay(base: dict[str, object], overlay: dict[str, object]) -> None:
+    """Fail loudly at load time if a ``[scan.overlay.<repo>]`` table names an
+    unknown setting or produces an invalid config — surfacing that on the
+    first write to the repo, deep inside ``WriteGuard``, would be far harder
+    to diagnose."""
+    known = set(ScanConfig.model_fields) - {"overlay"}
+    for repo, overrides in overlay.items():
+        if not isinstance(overrides, dict):
+            raise ValueError(f"[scan.overlay.{repo!r}] must be a table.")
+        bad = set(overrides) - known
+        if bad:
+            raise ValueError(
+                f"[scan.overlay.{repo!r}] has unknown setting(s): "
+                f"{', '.join(sorted(bad))}."
+            )
+        try:
+            ScanConfig(**{**base, **overrides})
+        except ValidationError as exc:
+            raise ValueError(f"[scan.overlay.{repo!r}] is invalid: {exc}") from exc
+
+
 def load_scan_config() -> ScanConfig:
     """Resolve ScanConfig from env > config.toml [scan] > constant defaults.
 
     Rejects unknown enforcement actions and non-boolean enable flags so a
     misconfigured policy fails loudly at startup rather than silently letting
-    writes through unscanned.
+    writes through unscanned. ``[scan.overlay]`` (per-repo overrides, see
+    ``ScanConfig.for_repo``) has no env-var form and is read from TOML only.
     """
     file_scan = _load_toml().get("scan", {})
     if not isinstance(file_scan, dict):
         raise ValueError("The 'scan' section in config must be a table.")
+    overlay = file_scan.get("overlay", {})
+    if not isinstance(overlay, dict):
+        raise ValueError("[scan.overlay] must be a table of repo -> settings.")
 
     raw: dict[str, object] = {}
     sources: dict[str, str] = {}
@@ -273,9 +318,14 @@ def load_scan_config() -> ScanConfig:
             sources[field] = f"[scan].{field} in config.toml"
 
     try:
-        return ScanConfig(**raw)
+        cfg = ScanConfig(**raw)
     except ValidationError as exc:
         raise _scan_config_error(exc, sources) from exc
+
+    if not overlay:
+        return cfg
+    _validate_overlay(raw, overlay)
+    return cfg.model_copy(update={"overlay": overlay})
 
 
 def default_config_toml() -> str:
@@ -361,6 +411,11 @@ def default_config_toml() -> str:
 # allowlist_hashes = []        # salted sha256(allowlist_salt + span) digests of approved values
 # allowlist_salt = ""          # required for allowlist_hashes to take effect
 # on_scanner_error = "{scan.on_scanner_error}"       # block | warn
+
+# Per-repo overrides (admin-owned; deliberately no WITAN_SCAN_* env-var form —
+# ADR 0001 amendment 2026-07-09). Any ScanConfig field except `overlay` itself.
+# [scan.overlay."github.com/example/legacy-repo"]
+# secret_action = "warn"        # rolling out scanning on a noisy repo first
 """
 
 
