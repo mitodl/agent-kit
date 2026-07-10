@@ -1,10 +1,20 @@
 # witan
 
+> Pronounced `WIT-ən` (/ˈwɪtən/) — rhymes with "written" minus the r. From
+> Old English *witan*, the king's council of advisors.
+
 A team-wide shared knowledge graph for coding agents, backed by
 [Omnigraph](https://github.com/ModernRelay/omnigraph). Stores coding patterns,
 project/repo facts, lessons, and agent context. Exposed over MCP so every
 agent platform (pi, Claude Desktop, GitHub Copilot) can read and write without
 platform-specific code.
+
+## Documentation
+
+See the [User Guide](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/USER_GUIDE.md)
+for a task-oriented walkthrough (install, setup, day-to-day loop, operating
+modes, troubleshooting) and the [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md)
+for the full `witan` command surface.
 
 ## Quick Start
 
@@ -17,18 +27,30 @@ The omnigraph binary step always downloads the release pinned by
 GitHub releases into `~/.local/bin/omnigraph` — there is no build-time
 bundling, so re-running `witan setup` is also how you pick up an omnigraph
 version bump (a Renovate PR bumps the pin; see `renovate.json`'s
-`omnigraph-version` customManager). `witan-code`, if installed standalone
-(without `witan`), has its own equivalent `witan-code setup` — see its
+`omnigraph-version` customManager). When `witan-code` is also installed
+(importable in this environment — e.g. via the `--with` in the `uv tool
+install`/MCP server's `uvx` invocation below), `witan setup` folds its skill
+and hooks into the same install pass — registered as `witan code …`, so the
+hooks only need `witan` on `PATH`, not a separate `witan-code` binary — and
+skips a separate MCP entry, since `witan serve` already mounts witan-code's
+tools in-process. One `witan setup` then covers both packages. Installed
+standalone (without `witan`), `witan-code` has its own equivalent `witan-code
+setup` (or the mounted `witan code setup`) — see its
 [README](../witan-code/README.md#install).
 
 **With persistent CLI** — required for **Claude Code** and **Pi** (and `--agent all`),
-whose hooks/extensions call the `witan` command directly, so it must stay on your `PATH`:
+whose hooks/extensions call the `witan` command directly, so it must stay on your `PATH`.
+Install `witan-code` alongside it with `--with` so its `witan code …` hooks
+work too (omit `--with` for a witan-only install):
 
 ```bash
-# Install the CLI from the published git repo …
-uv tool install git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan
+# Install the latest release from PyPI …
+uv tool install --with witan-code witan-council
+# … or, to track pre-release/unreleased code, from the git repo directly:
+uv tool install --with git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan-code \
+    git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan
 # … or editable from a local checkout, at the repo root:
-uv tool install --editable mcp/servers/witan
+uv tool install --editable --with ./mcp/servers/witan-code mcp/servers/witan
 
 # then run setup:
 witan setup --agent claude   # or: pi | all
@@ -38,7 +60,9 @@ witan setup --agent claude   # or: pi | all
 Kilo), whose server runs via `uvx`, so no install is needed:
 
 ```bash
-# From the published git repo …
+# From PyPI …
+uvx --from witan-council witan setup --agent copilot   # or: opencode | kilo
+# … or, to track pre-release/unreleased code, from the git repo directly:
 uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan \
     witan setup --agent copilot   # or: opencode | kilo
 # … or from a local checkout, at the repo root:
@@ -67,6 +91,7 @@ export WITAN_AUTHOR="Your Name"
 | `WITAN_AUTHOR` | No | `$USER` | Attribution on every insert |
 | `WITAN_REPO` | No | — | Repo slug override (bypasses git detection) |
 | `WITAN_SCAN_ENABLED` | No | `true` | Write-path secret/PII scanning; set to `false` to opt out — see [Write-path content scanning](docs/write-path-scanning.md) |
+| `WITAN_OPTIMIZE_INTERVAL` | No | `86400` | Throttle window (seconds) for the Stop hook's opportunistic background store compaction; `0` disables it |
 
 ## MCP Tools
 
@@ -107,6 +132,7 @@ See [`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](./witan/sk
 | `workflow_project_get_blockers` | Return all projects currently blocking the given project |
 | `workflow_session_start` | Link the current agent session to a project; writes a state file for the Stop hook |
 | `workflow_session_end` | Close the session with a summary, tools used, and files changed |
+| `workflow_trace_get` | Fetch a completed project's corpus `WorkflowTrace` by its `wt-`/`wp-` slug |
 
 ### Task Tracking Tools
 
@@ -172,6 +198,24 @@ trail, and how to write a plugin, and
 [ADR 0001](docs/adr/0001-write-path-content-scanning.md) for the design
 rationale.
 
+## Migrating or merging stores
+
+Moving a store to a new machine, merging two machines' local stores, or
+moving a local store onto the shared multi-tenant server — same command in
+all three cases:
+
+```bash
+witan migrate merge <source> [--target <target>] [--dry-run]
+```
+
+Reconciles slug collisions newest-record-wins (by timestamp) rather than
+`omnigraph load --mode merge`'s raw last-loaded-wins overwrite, and is
+repeatable — re-running against an already-merged target loads nothing new.
+Never `mv`/copy a store directly (Lance embeds absolute paths). See
+[`docs/migration-runbook.md`](docs/migration-runbook.md) for the full
+procedure and what was verified about `--mode merge`'s actual collision
+behavior.
+
 ## Tests
 
 Integration tests spin up throwaway omnigraph graphs and exercise the real query
@@ -190,17 +234,25 @@ or `uv tool install` the package to get it on `PATH`):
 | Command | Description |
 |---|---|
 | `setup [--agent claude\|pi\|…\|all]` | Install witan for one or all supported coding agents; also writes a starter `~/.config/witan/config.toml` if one doesn't exist yet |
-| `tasks [--ready] [--status …] [--project wp-…] [--all-repos]` | Tasks for the current repo; `--ready` = open with no open blockers |
+| `tasks [--ready] [--status …] [--project wp-…] [--all-repos]` | Tasks for the current repo (closed elided by default — pass `--status closed` to see them); `--ready` = open with no open blockers |
 | `task <tk-slug>` | One task's details, blockers, and sub-tasks |
 | `task create <title>` | Create a task from the CLI |
+| `task close\|claim\|release\|update\|link <tk-slug> …` | Drive task state transitions from the CLI |
 | `run <tk-slug> [--agent claude\|pi] [--dry-run]` | Claim a task and launch an agent to execute it |
 | `projects [--status …] [--all-repos]` | Workflow projects (default: active in this repo) |
 | `project <wp-slug>` | A project with its sessions, tasks, and corpus trace |
+| `project status <wp-slug> [--json]` | "What next" resume view — phase, ready tasks, last session, blockers |
+| `project tasks <wp-slug> [--status …] [--detail]` | A project's tasks; `--detail` expands each task's blockers and dependents |
 | `project create <title>` | Create a workflow project from the CLI |
+| `project advance\|complete\|block\|unblock <wp-slug> …` | Drive project phase/dependency transitions from the CLI |
+| `session start\|end\|list …` | Start/close a workflow session, or list a project's sessions |
 | `memory [QUERY] [--kind …]` | BM25 memory search, or (with no query) list memories |
 | `code repos` | Repositories with a code graph indexed (requires witan-code) |
 | `scan test <text>` | Dry-run active detectors against an ad-hoc string; prints findings (never the matched text) |
 | `scan rules` | List active write-path scan detectors, their category, source, and enforcement mode |
+| `inject-context [--debug]` | The UserPromptSubmit hook body; `--debug` prints detection/read diagnostics to stderr (repo, branch, graph reads, counts, swallowed-failure reasons) to explain a blank block |
+| `optimize [--store URI]` | Compact the store's Lance fragments (non-destructive) so query latency doesn't bloat; safe to run on a cron/systemd-timer |
+| `cleanup [--keep N] [--older-than 7d] --yes` | Reclaim disk by GC-ing old Lance versions (destructive; requires `--yes`) |
 | `serve` | Start the MCP server (memory + code tools when witan-code is installed) |
 
 `run` claims the task (`in_progress` + your author), then hands the terminal to

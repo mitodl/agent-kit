@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
-from .installers import install_skills
+from .installers import _ensure_dest_dir, install_skills
 from .jsonio import load_json_object, write_json
 from .models import (
     CapabilityScope,
@@ -98,6 +98,7 @@ def apply(
     *,
     scope: Scope = Scope.GLOBAL,
     dry_run: bool = False,
+    force: bool = False,
 ) -> InstallResult:
     platform = registry.get_platform(platform_name)
     result = InstallResult(platform=platform_name)
@@ -149,7 +150,7 @@ def apply(
                     dest = target.path / plugin.entry_path.name
                     result.planned.append(dest)
                     if not dry_run:
-                        target.path.mkdir(parents=True, exist_ok=True)
+                        _ensure_dest_dir(target.path, force=force)
                         shutil.copy2(plugin.entry_path, dest)
                         result.written.append(dest)
 
@@ -161,7 +162,7 @@ def apply(
                 if platform.skill_dest_dirs
                 else [target.path]
             )
-            dests = install_skills(bundle.skills, dest_dirs, dry_run)
+            dests = install_skills(bundle.skills, dest_dirs, dry_run, force=force)
             result.planned.extend(dests)
             if not dry_run:
                 result.written.extend(dests)
@@ -174,8 +175,9 @@ def apply_all(
     *,
     scope: Scope = Scope.GLOBAL,
     dry_run: bool = False,
+    force: bool = False,
 ) -> dict[str, InstallResult]:
     return {
-        name: apply(name, bundle, scope=scope, dry_run=dry_run)
+        name: apply(name, bundle, scope=scope, dry_run=dry_run, force=force)
         for name in registry.detect_installed_platforms()
     }

@@ -23,9 +23,11 @@ from .run_helpers import _run_task_slug
 # Import submodules to trigger @app.command / @*_app.command registrations.
 from . import graph  # noqa: F401
 from . import hooks  # noqa: F401
+from . import maintenance  # noqa: F401
 from . import memory  # noqa: F401
 from . import projects  # noqa: F401
 from . import scan  # noqa: F401
+from . import session  # noqa: F401
 from . import setup_cmd  # noqa: F401
 from . import tasks  # noqa: F401
 from . import traces  # noqa: F401

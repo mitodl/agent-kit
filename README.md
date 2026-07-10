@@ -12,6 +12,7 @@ custom agent definitions, MCP server install helpers, and sample configurations.
 ├── mcp/                       # Install helpers and configuration for common MCP servers
 ├── configs/                   # Sample / reference agent configurations
 ├── packages/agent-config-kit/ # agent-kit — the CLI that installs the skills/MCP servers declared below
+├── packages/agent-kit/        # PyPI meta-package (ol-agent-kit): agent-config-kit[cli] + witan + witan-code
 └── agent-config.toml          # This repo's own manifest for agent-kit
 ```
 
@@ -29,6 +30,17 @@ platforms it detects (Claude Code, Pi, GitHub Copilot, OpenCode, ...).
 uv tool install 'agent-config-kit[cli]'
 ```
 
+To also pull in the [`witan`](./mcp/servers/witan/README.md) and
+[`witan-code`](./mcp/servers/witan-code/README.md) MCP servers in one shot,
+install the [`ol-agent-kit`](./packages/agent-kit/README.md) meta-package
+instead — it depends on all three and carries no code of its own (`agent-kit`
+was already taken on PyPI, hence the `ol-` prefix on this one; the console
+script is still `agent-kit` either way):
+
+```bash
+uv tool install ol-agent-kit
+```
+
 ### Applying this repo's manifest
 
 ```bash
@@ -43,16 +55,19 @@ agent-kit profiles agent-config.toml                # list profiles + entry coun
 layout — pick the profile matching your specialty (`python`,
 `infrastructure`, `containers`, `dagster`, `process`, ...) to install the
 `universal` baseline plus just the skills relevant to your work. Selecting no
-profile installs the whole catalog.
+profile installs the whole catalog, including the `toolhive-swe` MCP
+servers below — they aren't part of any profile, so a `--profile` run
+skips them.
 
 Run `agent-kit apply agent-config.toml --scope project` instead of the default
 `global` scope to register servers/skills in the current project only
 rather than user-wide.
 
-This registers the [`witan`](./mcp/servers/witan/README.md) and
-[`witan-code`](./mcp/servers/witan-code/README.md) MCP servers —
-team-wide shared memory/task tracking and a tree-sitter code graph,
-respectively — alongside the skill catalog.
+This registers the skill catalog plus the [`toolhive-swe`](./mcp/servers/toolhive-swe/README.md)
+remote MCP server (one entry per environment tier). It does **not** register
+[`witan`](./mcp/servers/witan/README.md) or [`witan-code`](./mcp/servers/witan-code/README.md) —
+those own their own registration lifecycle via `witan setup` (see their
+READMEs), so they aren't duplicated in this manifest.
 
 See [`skills/`](./skills/README.md) for the full skill catalog and
 [`packages/agent-config-kit/README.md`](./packages/agent-config-kit/README.md)

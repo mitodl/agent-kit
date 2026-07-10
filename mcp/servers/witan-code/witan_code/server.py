@@ -1,12 +1,14 @@
+import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 
 from . import bridge_extractors
 from . import config as cfg_module
+from . import elicit
 from . import indexer
 from . import repo as repo_module
 from . import stitch
@@ -70,8 +72,6 @@ _BRANCH_CACHE_TTL = 30.0
 # call ``_git_context.clear()``).
 _git_context: dict[str, tuple[float, str | None]] = {}
 _GIT_CONTEXT_TTL = 2.0
-
-_NO_STORE_HINT = "No code graph yet. Run `witan code index` to build it."
 
 
 def _cached_git(key: str, fn) -> str | None:
@@ -220,6 +220,57 @@ def _bridge_client(repo: str | None = None) -> OmnigraphClient | None:
     return _client_for_path(store, _resolve_bridge_branch(store, repo))
 
 
+async def _confirm_and_reindex(
+    ctx: Context | None, repo: str
+) -> OmnigraphClient | None:
+    """Offer to index ``repo`` now if its store is missing AND it's the repo
+    we're actually sitting in (code_reindex has no way to index anything
+    else). Returns a fresh client on an accepted+successful index, else None
+    — callers must fall back to their existing shaped-empty return exactly as
+    before elicitation existed.
+    """
+    if repo != _cached_detect():
+        return None
+    ok = await elicit.confirm(
+        ctx,
+        f"No code graph indexed yet for {repo}. Index it now? "
+        "(may take a while on a large repo)",
+        default_when_unsupported=False,
+    )
+    if not ok:
+        return None
+    target = repo_module.root() or Path.cwd()
+    try:
+        await asyncio.to_thread(indexer.index_path, target, force=False, config=cfg)
+    except Exception:  # noqa: BLE001 — indexing failure degrades like a missing store
+        return None
+    return _client_for_repo(repo)
+
+
+async def _confirm_and_reindex_bridge(ctx: Context | None) -> OmnigraphClient | None:
+    """Offer to index the CURRENT repo when the shared cross-repo bridge store
+    doesn't exist at all yet (indexing any repo creates/populates it). Same
+    additive fallback contract as ``_confirm_and_reindex``.
+    """
+    repo = _cached_detect()
+    if repo is None:
+        return None
+    ok = await elicit.confirm(
+        ctx,
+        f"No cross-repo graph indexed yet. Index the current repo ({repo}) "
+        "now to start building it?",
+        default_when_unsupported=False,
+    )
+    if not ok:
+        return None
+    target = repo_module.root() or Path.cwd()
+    try:
+        await asyncio.to_thread(indexer.index_path, target, force=False, config=cfg)
+    except Exception:  # noqa: BLE001 — indexing failure degrades like a missing store
+        return None
+    return _bridge_client()
+
+
 def _fan_out(clients: list[OmnigraphClient], fn) -> list[dict]:
     """Run ``fn(client) -> list[dict]`` across clients in parallel threads.
 
@@ -272,8 +323,11 @@ def _file_id(path: str, repo: str) -> str:
 
 
 @mcp.tool
-def code_find_definition(
-    name: str, repo: str | None = None, branch: str | None = None
+async def code_find_definition(
+    name: str,
+    repo: str | None = None,
+    branch: str | None = None,
+    ctx: Context | None = None,
 ) -> list[dict]:
     """
     Find symbol definitions whose name or qualified name matches ``name``.
@@ -300,11 +354,28 @@ def code_find_definition(
         )
         return rows or client.read("code_read.gq", "find_by_name", {"name": name})
 
-    return _as_symbol_id(_fan_out(_resolve_clients(repo, branch), _query))
+    matches = _as_symbol_id(_fan_out(_resolve_clients(repo, branch), _query))
+
+    if repo is None:
+        repos = sorted({m["repo"] for m in matches if m.get("repo")})
+        if len(repos) > 1:
+            chosen = await elicit.choose_repo(
+                ctx,
+                f"'{name}' matches in {len(repos)} repos: {', '.join(repos)}. "
+                "Reply with one repo URI to narrow the results, or leave blank "
+                "to see every match.",
+                repos,
+            )
+            if chosen is not None:
+                matches = [m for m in matches if m.get("repo") == chosen]
+
+    return matches
 
 
 @mcp.tool
-def code_find_references(symbol_id: str) -> list[dict]:
+async def code_find_references(
+    symbol_id: str, ctx: Context | None = None
+) -> list[dict]:
     """
     Find symbols that reference or call ``symbol_id`` (incoming edges).
 
@@ -313,7 +384,9 @@ def code_find_references(symbol_id: str) -> list[dict]:
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
-        return []
+        client = await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0])
+        if client is None:
+            return []
     refs = client.read("code_read.gq", "referencers", {"id": symbol_id})
     callers = client.read("code_read.gq", "callers", {"id": symbol_id})
     seen = {r["slug"] for r in refs}
@@ -321,7 +394,7 @@ def code_find_references(symbol_id: str) -> list[dict]:
 
 
 @mcp.tool
-def code_callers(symbol_id: str) -> list[dict]:
+async def code_callers(symbol_id: str, ctx: Context | None = None) -> list[dict]:
     """
     Find symbols that call ``symbol_id`` (incoming Calls edges).
 
@@ -330,12 +403,19 @@ def code_callers(symbol_id: str) -> list[dict]:
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
-        return []
+        client = await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0])
+        if client is None:
+            return []
     return _as_symbol_id(client.read("code_read.gq", "callers", {"id": symbol_id}))
 
 
 @mcp.tool
-def code_impact(symbol_id: str, max_depth: int = 5, max_nodes: int = 200) -> dict:
+async def code_impact(
+    symbol_id: str,
+    max_depth: int = 5,
+    max_nodes: int = 200,
+    ctx: Context | None = None,
+) -> dict:
     """
     Estimate change impact: the transitive set of callers of ``symbol_id``.
 
@@ -351,7 +431,8 @@ def code_impact(symbol_id: str, max_depth: int = 5, max_nodes: int = 200) -> dic
         Cap on total symbols returned (default 200).
     """
     if _client_for_symbol(symbol_id) is None:
-        return {"root": symbol_id, "impacted": [], "truncated": False}
+        if await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0]) is None:
+            return {"root": symbol_id, "impacted": [], "truncated": False}
 
     visited: dict[str, dict] = {}
     frontier = [symbol_id]
@@ -393,7 +474,9 @@ def code_impact(symbol_id: str, max_depth: int = 5, max_nodes: int = 200) -> dic
 
 
 @mcp.tool
-def code_symbols_in_file(path: str, repo: str | None = None) -> list[dict]:
+async def code_symbols_in_file(
+    path: str, repo: str | None = None, ctx: Context | None = None
+) -> list[dict]:
     """
     List symbols defined in ``path`` (repo-relative or absolute).
 
@@ -409,10 +492,19 @@ def code_symbols_in_file(path: str, repo: str | None = None) -> list[dict]:
     """
     slug = repo or _cached_detect()
     if slug is None:
-        return []
+        slug = await elicit.text(
+            ctx,
+            "No repo detected for this file (not in a git repo, or no remote). "
+            "Enter its canonical repo URI (e.g. https://github.com/org/name):",
+            default="",
+        )
+        if not slug:
+            return []
     client = _client_for_repo(slug)
     if client is None:
-        return []
+        client = await _confirm_and_reindex(ctx, slug)
+        if client is None:
+            return []
     return _as_symbol_id(
         client.read(
             "code_read.gq", "symbols_in_file", {"file_id": _file_id(path, slug)}
@@ -430,6 +522,9 @@ SymbolKind = Literal[
     "type",
     "enum",
     "key",
+    "table",
+    "cte",
+    "block",
 ]
 
 
@@ -454,8 +549,8 @@ def code_search_symbol(
     kind:
         Optional filter to a single symbol kind: ``function``, ``method``,
         ``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,
-        or ``key``. Pass e.g. ``kind="function"`` to exclude the many YAML
-        ``key`` symbols when searching for code.
+        ``key``, ``table``, ``cte``, or ``block``. Pass e.g. ``kind="function"``
+        to exclude the many YAML ``key`` symbols when searching for code.
     branch:
         Git branch whose indexed view to query. Defaults to the checkout's
         branch when querying the current repo; when ``repo`` names a different
@@ -495,8 +590,11 @@ def _filter_by_precision(rows: list[dict], min_precision: str) -> list[dict]:
 
 
 @mcp.tool
-def code_interface_providers(
-    kind: BindingKind, key: str, min_precision: PrecisionTier = "heuristic"
+async def code_interface_providers(
+    kind: BindingKind,
+    key: str,
+    min_precision: PrecisionTier = "heuristic",
+    ctx: Context | None = None,
 ) -> list[dict]:
     """
     Find repos that PROVIDE a cross-repo contract ``key`` of ``kind``.
@@ -516,12 +614,15 @@ def code_interface_providers(
     min_precision:
         ``heuristic`` (default) | ``precise`` — see server instructions.
     """
-    return _bindings_by_role(kind, key, "provider", min_precision)
+    return await _bindings_by_role(kind, key, "provider", min_precision, ctx)
 
 
 @mcp.tool
-def code_interface_consumers(
-    kind: BindingKind, key: str, min_precision: PrecisionTier = "heuristic"
+async def code_interface_consumers(
+    kind: BindingKind,
+    key: str,
+    min_precision: PrecisionTier = "heuristic",
+    ctx: Context | None = None,
 ) -> list[dict]:
     """
     Find repos that CONSUME a cross-repo contract ``key`` of ``kind``.
@@ -538,15 +639,21 @@ def code_interface_consumers(
     min_precision:
         ``heuristic`` (default) | ``precise`` — see server instructions.
     """
-    return _bindings_by_role(kind, key, "consumer", min_precision)
+    return await _bindings_by_role(kind, key, "consumer", min_precision, ctx)
 
 
-def _bindings_by_role(
-    kind: str, key: str, role: str, min_precision: str = "heuristic"
+async def _bindings_by_role(
+    kind: str,
+    key: str,
+    role: str,
+    min_precision: str = "heuristic",
+    ctx: Context | None = None,
 ) -> list[dict]:
     client = _bridge_client()
     if client is None:
-        return []
+        client = await _confirm_and_reindex_bridge(ctx)
+        if client is None:
+            return []
     key_norm = bridge_extractors.normalize_key(kind, key)
     rows = client.read(
         "bridge.gq",
@@ -557,8 +664,10 @@ def _bindings_by_role(
 
 
 @mcp.tool
-def code_cross_repo_impact(
-    symbol_id: str, min_precision: PrecisionTier = "heuristic"
+async def code_cross_repo_impact(
+    symbol_id: str,
+    min_precision: PrecisionTier = "heuristic",
+    ctx: Context | None = None,
 ) -> dict:
     """
     Find the cross-repo surface of a symbol.
@@ -586,7 +695,9 @@ def code_cross_repo_impact(
     # own cwd when asking about a symbol in some other repo.
     client = _bridge_client(repo=own_repo)
     if client is None:
-        return empty
+        client = await _confirm_and_reindex_bridge(ctx)
+        if client is None:
+            return empty
 
     own = client.read("bridge.gq", "bindings_for_symbol", {"symbol_id": symbol_id})
     if not own:
@@ -616,7 +727,9 @@ def code_cross_repo_impact(
 
 
 @mcp.tool
-def code_precise_edges(repo: str | None = None) -> list[dict]:
+async def code_precise_edges(
+    repo: str | None = None, ctx: Context | None = None
+) -> list[dict]:
     """
     Precise cross-repo edges resolved by canonical symbol string.
 
@@ -637,7 +750,9 @@ def code_precise_edges(repo: str | None = None) -> list[dict]:
     """
     client = _bridge_client(repo=repo)
     if client is None:
-        return []
+        client = await _confirm_and_reindex_bridge(ctx)
+        if client is None:
+            return []
     rows = client.read("bridge.gq", "all_repo_symbols", {})
     edges, _ = stitch.resolve(rows)
     return [
@@ -648,7 +763,9 @@ def code_precise_edges(repo: str | None = None) -> list[dict]:
 
 
 @mcp.tool
-def code_unresolved_symbols(repo: str | None = None) -> list[dict]:
+async def code_unresolved_symbols(
+    repo: str | None = None, ctx: Context | None = None
+) -> list[dict]:
     """
     External symbol references with no precise cross-repo match.
 
@@ -667,17 +784,20 @@ def code_unresolved_symbols(repo: str | None = None) -> list[dict]:
     """
     client = _bridge_client(repo=repo)
     if client is None:
-        return []
+        client = await _confirm_and_reindex_bridge(ctx)
+        if client is None:
+            return []
     rows = client.read("bridge.gq", "all_repo_symbols", {})
     _, unresolved = stitch.resolve(rows)
     return [r for r in unresolved if repo is None or r["repo"] == repo]
 
 
 @mcp.tool
-def code_interface_search(
+async def code_interface_search(
     query: str,
     kind: BindingKind | None = None,
     min_precision: PrecisionTier = "heuristic",
+    ctx: Context | None = None,
 ) -> list[dict]:
     """
     BM25 search over cross-repo interface bindings (by normalized key).
@@ -696,7 +816,9 @@ def code_interface_search(
     """
     client = _bridge_client()
     if client is None:
-        return []
+        client = await _confirm_and_reindex_bridge(ctx)
+        if client is None:
+            return []
     if kind:
         rows = client.read(
             "bridge.gq", "search_bindings_by_kind", {"query": query, "kind": kind}

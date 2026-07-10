@@ -514,6 +514,20 @@ query list_sessions_by_project($project_slug: String) {
     order { $s.started_at asc }
 }
 
+// All sessions across every project, for the context hook to group by
+// project_slug in one read instead of one read per active project (each
+// omnigraph invocation is ~1-2s of fixed scan overhead regardless of rows).
+query list_all_sessions() {
+    match {
+        $s: WorkflowSession
+    }
+    return {
+        $s.slug, $s.project_slug, $s.phase, $s.summary,
+        $s.started_at, $s.ended_at
+    }
+    order { $s.started_at asc }
+}
+
 // Memories produced during a session (provenance walk). Edge predicate is the
 // type name lowercased with underscores stripped: `sessionproduced`.
 query session_produced_memories($session_slug: String) {

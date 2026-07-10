@@ -41,6 +41,32 @@ def _backfill_topics() -> None:
     )
 
 
+def _merge(source: str, target: str | None, dry_run: bool) -> None:
+    s = _srv()
+    try:
+        result = s.merge_store(source, target=target, dry_run=dry_run)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
+
+    if dry_run:
+        console.print(f"[yellow]Dry run[/yellow] against {result['target']}:")
+        for d in result["decisions"]:
+            console.print(f"  {d['decision']:12} {d['type']:16} {d['slug']}")
+        console.print(
+            f"{result['added']} to add, {result['updated']} to update, "
+            f"{result['kept_target']} kept (target already newer-or-equal)."
+        )
+        return
+
+    console.print(
+        f"[green]Merged[/green] {source} into {result['target']}: "
+        f"{result['added']} added, {result['updated']} updated, "
+        f"{result['kept_target']} kept (target already newer-or-equal), "
+        f"{result['rows_loaded']} rows loaded."
+    )
+
+
 def _migrate_storage(old_binary: str | None, yes: bool) -> None:
     s = _srv()
     store = s.client.graph_uri
@@ -116,6 +142,37 @@ def storage(
         Skip the confirmation prompt.
     """
     _migrate_storage(old_binary, yes)
+
+
+@migrate_app.command
+def merge(
+    source: str,
+    *,
+    target: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Merge another store's data into this store, newest-record-wins on collisions.
+
+    Implements docs/migration-runbook.md's export -> reconcile -> load
+    (--mode merge) path: for every node present in both stores (same type +
+    slug), keeps whichever has the newer timestamp instead of `omnigraph load
+    --mode merge`'s raw last-loaded-wins overwrite, which ignores content
+    entirely. Rows only in ``source`` are always added; rows only in the
+    target are left untouched. Repeatable — re-running against an
+    already-merged target loads nothing new.
+
+    Parameters
+    ----------
+    source:
+        Store URI to merge from (local path, ``s3://``, or ``file://``).
+    target:
+        Store URI to merge into. Defaults to the configured store. Created
+        automatically if it's a local path that doesn't exist yet.
+    dry_run:
+        Preview the reconciliation decision for every colliding slug without
+        writing anything.
+    """
+    _merge(source, target, dry_run)
 
 
 @migrate_app.command

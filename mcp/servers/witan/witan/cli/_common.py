@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import re
 from typing import Literal
 
@@ -13,7 +15,9 @@ from .. import repo as repo_module
 # Enum literals mirrored from witan.server — drive CLI argument validation.
 MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
 TaskType = Literal["bug", "feature", "task", "chore", "epic"]
+TaskStatus = Literal["open", "in_progress", "blocked", "closed"]
 TaskPriority = Literal["p0", "p1", "p2", "p3"]
+TaskLinkKind = Literal["blocks", "parent", "discovered_from", "addresses"]
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 
 app = cyclopts.App(
@@ -35,8 +39,22 @@ def _srv():
 
 
 def _fn(tool):
-    """Unwrap a FastMCP-decorated tool to its plain function."""
-    return getattr(tool, "fn", tool)
+    """Unwrap a FastMCP-decorated tool to a directly-callable function.
+
+    Tools that gained MCP elicitation are ``async def`` (they take a
+    ``ctx: Context`` FastMCP injects). The CLI calls them directly, not through
+    an MCP client, so wrap a coroutine tool to run to completion via
+    ``asyncio.run`` — with no ctx it falls back to its non-interactive default,
+    which is the right behavior for a plain ``witan …`` command.
+    """
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
 
 
 def _repo_arg(repo: str | None, all_repos: bool) -> str | None:

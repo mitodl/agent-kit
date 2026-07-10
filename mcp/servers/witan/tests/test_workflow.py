@@ -43,6 +43,23 @@ def test_project_lifecycle_and_trace(server):
     again = server.workflow_project_complete(proj["slug"], outcome="delivered")
     assert again["existed"] is True
 
+    # workflow_trace_get resolves by either the wt- trace slug or the wp- slug.
+    by_wt = server.workflow_trace_get(f"wt-{proj['slug']}")
+    by_wp = server.workflow_trace_get(proj["slug"])
+    assert by_wt is not None
+    assert by_wt == by_wp
+    assert by_wt["outcome"] == "delivered"
+    assert by_wt["session_count"] == 1
+    assert "implementation" in (by_wt.get("phases") or [])
+
+
+@requires_omnigraph
+def test_trace_get_missing_returns_none(server):
+    # A project with no completion has no trace yet.
+    proj = server.workflow_project_create(title="incomplete", description="d")
+    assert server.workflow_trace_get(proj["slug"]) is None
+    assert server.workflow_trace_get("wt-does-not-exist") is None
+
 
 @requires_omnigraph
 def test_project_status_resume_view(server):
@@ -108,6 +125,43 @@ def test_project_status_no_sessions(server):
     proj = server.workflow_project_create(title="fresh", description="d")
     st = server.workflow_project_status(proj["slug"])
     assert st["last_session"] is None
+
+
+@requires_omnigraph
+def test_advance_advisory_on_unusual_transitions(server):
+    p = server.workflow_project_create(title="adv", description="d", phase="discovery")
+    # normal forward step → no advisory
+    assert "advisory" not in server.workflow_project_advance(p["slug"], phase="spec")
+    # skip ahead spec → delivery (bypasses implementation)
+    skip = server.workflow_project_advance(p["slug"], phase="delivery")
+    assert "advisory" in skip and "Skipped ahead" in skip["advisory"]
+    assert "implementation" in skip["advisory"]
+    # backward delivery → discovery
+    back = server.workflow_project_advance(p["slug"], phase="discovery")
+    assert "advisory" in back and "backward" in back["advisory"].lower()
+    # no-op re-advance to the same phase
+    noop = server.workflow_project_advance(p["slug"], phase="discovery")
+    assert "advisory" in noop and "no change" in noop["advisory"].lower()
+
+
+@requires_omnigraph
+def test_memory_store_flags_missing_session(server):
+    r = server.memory_store(kind="lesson", title="t", content="c")
+    assert r["session_linked"] is False
+    assert "workflow_session_start" in r.get("note", "")
+
+
+@requires_omnigraph
+def test_memory_store_links_active_session(server, monkeypatch):
+    proj = server.workflow_project_create(title="p", description="d")
+    sid = "test-session-b2"
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+    server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="spec"
+    )
+    r = server.memory_store(kind="lesson", title="t", content="c")
+    assert r["session_linked"] is True
+    assert "note" not in r
 
 
 @requires_omnigraph

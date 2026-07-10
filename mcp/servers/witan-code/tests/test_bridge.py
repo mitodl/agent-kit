@@ -5,6 +5,9 @@ and in combination.  Integration tests (requiring omnigraph + tree-sitter) verif
 full indexing and store round-trips.
 """
 
+import asyncio
+import inspect
+
 import pytest
 
 from witan_code.bridge_extractors import (
@@ -342,7 +345,15 @@ B_OPENAPI = (
 
 
 def _fn(tool):
-    return getattr(tool, "fn", tool)
+    """Unwrap + run a (possibly async) FastMCP tool directly, as the CLI does."""
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
 
 
 def _index(srv, indexer, path):

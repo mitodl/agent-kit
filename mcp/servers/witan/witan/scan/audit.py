@@ -24,11 +24,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from ..config import ScanAction
+from .allowlist import SuppressionReason
 from .models import Category, Finding, Severity
 
 logger = logging.getLogger("witan.scan.audit")
 
-AuditOutcome = Literal["blocked", "redacted", "warned"]
+AuditOutcome = Literal["blocked", "redacted", "warned", "suppressed"]
 
 _OUTCOME_FOR_ACTION: dict[ScanAction, AuditOutcome] = {
     "block": "blocked",
@@ -40,11 +41,16 @@ _OUTCOME_FOR_ACTION: dict[ScanAction, AuditOutcome] = {
 class AuditEvent(BaseModel):
     """One scan finding's disposition on a single write. Secret-free.
 
-    ``action`` is the policy resolved for this specific finding (what its
-    category/override says to do). ``outcome`` is what actually happened to
-    the *write* — always ``"blocked"`` when any finding on the write (this
-    one or another field's) caused a block, since nothing is persisted in
-    that case regardless of what any individual finding's own action was.
+    ``action`` is the *effective* action applied to this finding on this
+    write — already downgraded to ``"warn"`` when an allowlist mechanism
+    suppressed it, so it reflects what happened, not the category/override
+    policy that would otherwise apply (that policy is reconstructable from
+    ``ScanConfig`` if needed; it's not duplicated here). ``outcome`` is what
+    actually happened to the *write* — always ``"blocked"`` when any finding
+    on the write (this one or another field's) caused a block, since nothing
+    is persisted in that case regardless of what any individual finding's own
+    action was; ``"suppressed"`` when an allowlist mechanism downgraded this
+    finding to audit-only, in which case ``suppressed_by`` names how.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -59,6 +65,7 @@ class AuditEvent(BaseModel):
     action: ScanAction
     outcome: AuditOutcome
     preview: str
+    suppressed_by: SuppressionReason | None = None
 
 
 def emit(
@@ -70,6 +77,7 @@ def emit(
     finding: Finding,
     action: ScanAction,
     write_blocked: bool = False,
+    suppressed_by: SuppressionReason | None = None,
 ) -> None:
     """Log one structured audit line for a single finding's disposition.
 
@@ -77,8 +85,18 @@ def emit(
     finding's own action — pass ``True`` for every finding on a write that
     ends up rejected, even ones whose own action resolved to redact/warn,
     since none of them were actually redacted/warned into the store.
+
+    ``suppressed_by`` takes precedence over ``write_blocked``/``action``: an
+    allowlisted finding never blocks or redacts (see ``WriteGuard``), so if
+    it's set the outcome is always ``"suppressed"``.
     """
-    outcome: AuditOutcome = "blocked" if write_blocked else _OUTCOME_FOR_ACTION[action]
+    outcome: AuditOutcome
+    if suppressed_by is not None:
+        outcome = "suppressed"
+    elif write_blocked:
+        outcome = "blocked"
+    else:
+        outcome = _OUTCOME_FOR_ACTION[action]
     event = AuditEvent(
         query_name=query_name,
         node_type=node_type,
@@ -90,6 +108,7 @@ def emit(
         action=action,
         outcome=outcome,
         preview=finding.preview,
+        suppressed_by=suppressed_by,
     )
     logger.info(
         "witan scan: %s %s on %s.%s (%s)",

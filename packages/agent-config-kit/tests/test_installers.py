@@ -1,6 +1,11 @@
 import pytest
 
-from agent_config_kit.installers import install_files, install_skills, skill_files
+from agent_config_kit.installers import (
+    ConflictingPathError,
+    install_files,
+    install_skills,
+    skill_files,
+)
 from agent_config_kit.models import SkillSource
 
 
@@ -80,6 +85,31 @@ def test_install_skills_copies_to_every_dest_dir(tmp_path):
 
     assert (dest_a / "my-skill" / "scripts" / "run.sh").exists()
     assert (dest_b / "my-skill" / "scripts" / "run.sh").exists()
+
+
+def test_install_skills_raises_on_dangling_symlink_at_dest(tmp_path):
+    """A leftover (e.g. from an older symlink-based install) dangling
+    symlink occupying a skill's destination directory must not surface as a
+    raw FileExistsError from deep inside pathlib."""
+    skill = _skill_with_supporting_files(tmp_path / "src")
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    (dest_dir / "my-skill").symlink_to(tmp_path / "nonexistent-target")
+
+    with pytest.raises(ConflictingPathError, match="my-skill"):
+        install_skills([skill], [dest_dir], dry_run=False)
+
+
+def test_install_skills_force_replaces_dangling_symlink_at_dest(tmp_path):
+    skill = _skill_with_supporting_files(tmp_path / "src")
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    (dest_dir / "my-skill").symlink_to(tmp_path / "nonexistent-target")
+
+    install_skills([skill], [dest_dir], dry_run=False, force=True)
+
+    assert (dest_dir / "my-skill" / "SKILL.md").is_file()
+    assert not (dest_dir / "my-skill").is_symlink()
 
 
 def test_install_skills_single_file_skill_still_works(tmp_path):

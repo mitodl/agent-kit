@@ -6,6 +6,9 @@ omnigraph/tree-sitter needed); integration tests verify min_precision
 end-to-end through the indexer, bridge store, build_graph, and MCP tools.
 """
 
+import asyncio
+import inspect
+
 import pytest
 
 from witan_code.edges import PRECISION_TIERS, TypedEdge, cross_repo_edges, precise_pairs
@@ -238,7 +241,15 @@ config:
 
 
 def _fn(tool):
-    return getattr(tool, "fn", tool)
+    """Unwrap + run a (possibly async) FastMCP tool directly, as the CLI does."""
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
 
 
 @requires_stack

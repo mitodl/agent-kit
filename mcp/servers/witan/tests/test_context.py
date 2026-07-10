@@ -30,8 +30,30 @@ def _git_repo(path):
     return path
 
 
+class _NoElicitCtx:
+    """A ctx whose elicit always errors, so async tools fall back to their
+    non-interactive default (mirrors conftest._NoElicitCtx)."""
+
+    async def elicit(self, *args, **kwargs):
+        raise RuntimeError("elicitation unsupported in tests")
+
+
 def _unwrap(tool):
-    return getattr(tool, "fn", tool)
+    """Return a directly-callable tool. Async tools (those taking ``ctx``) are
+    run to completion with a no-elicit ctx injected, so sync call sites keep
+    working and get today's non-interactive behavior."""
+    import asyncio
+    import inspect
+
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            kwargs.setdefault("ctx", _NoElicitCtx())
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
 
 
 def _setup(tmp_path, monkeypatch, repo):
@@ -156,47 +178,62 @@ def test_inject_context_survives_missing_code_branch_schema(tmp_path, monkeypatc
 # ── B1: latest session handoff summary on resume ─────────────────────────────
 
 
-class _FakeSessClient:
-    def __init__(self, rows=None, raises=False):
-        self._rows = rows or []
-        self._raises = raises
-
-    def read(self, *args, **kwargs):
-        if self._raises:
-            raise RuntimeError("boom")
-        return self._rows
-
-
-def test_latest_session_line_formats_and_isolates():
+def test_project_session_lines_summary():
     from witan import context as ctx
 
-    # query orders by started_at asc → the LAST row is newest; summary is
-    # truncated to its first line.
+    proj = {"slug": "wp-x", "phase": "spec"}
+    # sessions arrive ordered by started_at asc → the LAST row is newest; summary
+    # is truncated to its first line.
     rows = [
-        {"summary": "old work", "ended_at": "t1"},
-        {"summary": "newest work\nsecond line ignored", "ended_at": "t2"},
+        {"summary": "old work", "ended_at": "t1", "phase": "spec"},
+        {
+            "summary": "newest work\nsecond line ignored",
+            "ended_at": "t2",
+            "phase": "spec",
+        },
     ]
-    assert (
-        ctx._latest_session_line(_FakeSessClient(rows), "wp-x")
-        == "  Last session (ended): newest work"
-    )
+    lines = ctx._project_session_lines(rows, proj)
+    assert lines[0] == "  Last session (ended): newest work"
     # an open session (no ended_at) is flagged as such
-    assert (
-        ctx._latest_session_line(
-            _FakeSessClient([{"summary": "wip", "ended_at": None}]), "wp-x"
-        )
-        == "  Last session (still open): wip"
+    lines_open = ctx._project_session_lines(
+        [{"summary": "wip", "ended_at": None, "phase": "spec"}], proj
     )
-    # no sessions / empty summary → no line
-    assert ctx._latest_session_line(_FakeSessClient([]), "wp-x") is None
+    assert lines_open[0] == "  Last session (still open): wip"
+    # no sessions / empty summary → no summary line
+    assert ctx._project_session_lines([], proj) == []
     assert (
-        ctx._latest_session_line(
-            _FakeSessClient([{"summary": "", "ended_at": "t"}]), "wp-x"
+        ctx._project_session_lines(
+            [{"summary": "", "ended_at": "t", "phase": "spec"}], proj
         )
-        is None
+        == []
     )
-    # a failing read never raises — it degrades to None so the block survives
-    assert ctx._latest_session_line(_FakeSessClient(raises=True), "wp-x") is None
+
+
+def test_project_session_lines_staleness_nudge():
+    from witan import context as ctx
+
+    proj = {"slug": "wp-x", "phase": "implementation"}
+    n = ctx._STALE_SESSION_THRESHOLD
+    stale = [
+        {"summary": "", "ended_at": "t", "phase": "implementation"} for _ in range(n)
+    ]
+    lines = ctx._project_session_lines(stale, proj)
+    assert any("sessions in `implementation`" in ln for ln in lines)
+
+    # one below threshold → no nudge
+    fresh = [
+        {"summary": "", "ended_at": "t", "phase": "implementation"}
+        for _ in range(n - 1)
+    ]
+    assert all(
+        "sessions in" not in ln for ln in ctx._project_session_lines(fresh, proj)
+    )
+
+    # sessions in a DIFFERENT phase than the project's don't count toward staleness
+    other = [{"summary": "", "ended_at": "t", "phase": "spec"} for _ in range(n + 2)]
+    assert all(
+        "sessions in" not in ln for ln in ctx._project_session_lines(other, proj)
+    )
 
 
 @requires_omnigraph
@@ -225,3 +262,238 @@ def test_inject_context_surfaces_last_session_summary(tmp_path, monkeypatch):
     text = ctx_module.inject_context(str(store), queries_dir, None)
     assert "## Active Workflow Projects" in text
     assert "Last session (ended): left the helper half-wired" in text
+
+
+# ── A2: honest truncation counts ─────────────────────────────────────────────
+
+
+@requires_omnigraph
+def test_inject_context_truncation_counts_are_honest(tmp_path, monkeypatch):
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-trunc"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    for i in range(6):
+        _unwrap(srv.task_create)(title=f"task {i}", description="x")
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    # header reports the true total AND flags that only the top 5 are shown
+    assert "6 task(s) are ready" in text
+    assert "showing the top 5" in text
+    # exactly 5 task bullets rendered
+    assert text.count("(slug: `tk-") == 5
+
+
+# ── PR #85 hardening: hook must never raise ──────────────────────────────────
+
+
+def test_detect_repo_survives_missing_git(monkeypatch):
+    from witan import context as ctx
+    from witan import repo as repo_module
+
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+    def _boom(*a, **k):
+        raise FileNotFoundError("git not installed")
+
+    # _detect_repo now shares repo.git_remote_url, which drives subprocess.run;
+    # a missing git binary (OSError) must degrade to None, not propagate.
+    monkeypatch.setattr(repo_module.subprocess, "run", _boom)
+    assert ctx._detect_repo() is None
+
+
+@requires_omnigraph
+def test_inject_context_debug_reports_to_stderr(tmp_path, monkeypatch, capsys):
+    """--debug prints detection/read diagnostics to stderr, leaving stdout
+    (the injected block) untouched."""
+    from witan import context as ctx_module
+
+    repo = "https://github.com/test/ctx-debug"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    text = ctx_module.inject_context(str(store), queries_dir, None, debug=True)
+    captured = capsys.readouterr()
+    assert "[witan inject-context]" in captured.err
+    assert "detected repo=" in captured.err
+    # The returned block itself must not carry the diagnostics.
+    assert "[witan inject-context]" not in text
+
+
+def test_inject_context_debug_surfaces_failure_reason(monkeypatch, capsys):
+    """A broken graph read is swallowed (returns "") but --debug prints why."""
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/broken")
+
+    def _boom(*a, **k):
+        raise RuntimeError("graph is on fire")
+
+    # OmnigraphClient construction/reads happen inside the main try — force a
+    # failure and assert the swallow is annotated on stderr.
+    monkeypatch.setattr(ctx_module, "OmnigraphClient", _boom)
+    monkeypatch.setattr(ctx_module, "_read_output_cache", lambda *a, **k: None)
+
+    out = ctx_module.inject_context("nonexistent", None, None, debug=True)
+    captured = capsys.readouterr()
+    assert out == ""
+    assert "FAILED building context" in captured.err
+    assert "graph is on fire" in captured.err
+
+
+def test_cwd_or_dot_falls_back_on_oserror(monkeypatch):
+    from pathlib import Path
+
+    from witan import context as ctx
+
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+
+    def _boom():
+        raise OSError("cwd deleted")
+
+    monkeypatch.setattr(Path, "cwd", staticmethod(_boom))
+    assert ctx._cwd_or_dot() == "."
+
+
+def test_cached_repo_and_branch_disabled_skips_branch(monkeypatch):
+    from witan import context as ctx
+
+    # WITAN_REPO="" disables detection → repo None → branch detection skipped.
+    monkeypatch.setenv("WITAN_REPO", "")
+
+    def _fail_branch():
+        raise AssertionError("branch detection should be skipped when no repo")
+
+    monkeypatch.setattr(ctx, "_current_branch", _fail_branch)
+    assert ctx._cached_repo_and_branch() == (None, None)
+
+
+def test_project_session_lines_no_phase_no_crash():
+    from witan import context as ctx
+
+    proj = {"slug": "wp-x"}  # no "phase" key
+    n = ctx._STALE_SESSION_THRESHOLD
+    rows = [{"summary": "s", "ended_at": "t"} for _ in range(n + 1)]
+    lines = ctx._project_session_lines(rows, proj)
+    # summary line present, but no staleness nudge (and no "None" in output)
+    assert any(ln.startswith("  Last session") for ln in lines)
+    assert all("sessions in" not in ln for ln in lines)
+
+
+# ── inject-context output cache (hotfix for slow prompt-path reads) ───────────
+
+
+@requires_omnigraph
+def test_inject_context_output_is_cached(tmp_path, monkeypatch):
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-cache"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    # Isolate the on-disk cache to this test.
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    _unwrap(srv.task_create)(title="first task", description="x")
+    first = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "first task" in first
+
+    # A new task created after the first render must NOT appear until the cache
+    # expires — proves the second call served from cache without hitting the graph.
+    _unwrap(srv.task_create)(title="second task", description="x")
+    cached = ctx_module.inject_context(str(store), queries_dir, None)
+    assert cached == first
+    assert "second task" not in cached
+
+
+@requires_omnigraph
+def test_inject_context_cache_disabled_by_zero_ttl(tmp_path, monkeypatch):
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-cache-off"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    _unwrap(srv.task_create)(title="alpha", description="x")
+    ctx_module.inject_context(str(store), queries_dir, None)
+    _unwrap(srv.task_create)(title="bravo", description="x")
+    # TTL=0 disables the cache → fresh render includes the new task.
+    fresh = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "bravo" in fresh
+
+
+@requires_omnigraph
+def test_output_cache_file_is_private_and_atomic(tmp_path, monkeypatch):
+    import stat
+
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-priv"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+    _unwrap(srv.task_create)(title="private task", description="x")
+    ctx_module.inject_context(str(store), queries_dir, None)
+
+    cache_files = list(tmp_path.glob("witan-ctx-*.json"))
+    assert cache_files, "cache file should have been written"
+    assert stat.S_IMODE(cache_files[0].stat().st_mode) == 0o600
+    # atomic replace leaves no process-unique temp file behind
+    assert not list(tmp_path.glob("witan-ctx-*.tmp"))
+
+
+@requires_omnigraph
+def test_inject_context_survives_failing_sessions_read(tmp_path, monkeypatch):
+    """The batched list_all_sessions read is isolated: if it fails, the resume/
+    staleness lines drop but the projects + ready-tasks context still renders."""
+    from witan import context as ctx_module
+    from witan import server as srv
+    from witan.graph import OmnigraphClient
+
+    repo = "https://github.com/test/ctx-sessfail"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    _unwrap(srv.workflow_project_create)(title="proj", description="d", repos=[repo])
+    _unwrap(srv.task_create)(title="visible task", description="x")
+
+    orig_read = OmnigraphClient.read
+
+    def _read(self, query_file, query_name, params):
+        if query_name == "list_all_sessions":
+            raise RuntimeError("sessions query boom")
+        return orig_read(self, query_file, query_name, params)
+
+    monkeypatch.setattr(OmnigraphClient, "read", _read)
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "## Active Workflow Projects" in text
+    assert "## Ready Tasks" in text
+    assert "visible task" in text

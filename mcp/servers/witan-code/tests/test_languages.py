@@ -1,4 +1,4 @@
-"""Extraction coverage for TS/JS/JSX, bash, and yaml."""
+"""Extraction coverage for TS/JS/JSX, bash, yaml, go, sql, and hcl."""
 
 from .conftest import requires_stack
 
@@ -19,6 +19,21 @@ FILES = {
         "#!/usr/bin/env bash\nbuild() { compile; }\ndeploy() { build; push; }\n"
     ),
     "ci.yaml": ("name: ci\njobs:\n  build:\n    steps:\n      - run: make\n"),
+    "main.go": (
+        "package main\n\n"
+        "func helper() int { return 1 }\n\n"
+        "type Server struct{}\n\n"
+        "func (s *Server) Run() { helper() }\n"
+    ),
+    "model.sql": (
+        "CREATE TABLE foo (id INT);\n\n"
+        "with base as (select 1 as x), final as (select x from base)\n"
+        "select * from final;\n"
+    ),
+    "main.tf": (
+        'resource "aws_instance" "web" {\n  ami = "x"\n}\n\n'
+        'variable "app_name" {\n  type = string\n}\n'
+    ),
 }
 
 
@@ -40,7 +55,7 @@ def test_multilanguage_extraction(tmp_path, monkeypatch):
     cfg = cfg_mod.load()
     stats = indexer.index_path(src, config=cfg)
     assert stats.errors == 0
-    assert stats.indexed == 4
+    assert stats.indexed == len(FILES)
 
     client = OmnigraphClient(
         str(store_mod.store_for_repo(repo_mod.detect(), cfg)), cfg.queries_dir
@@ -84,3 +99,26 @@ def test_multilanguage_extraction(tmp_path, monkeypatch):
         "code_read.gq", "search_symbols_by_kind", {"query": "build", "kind": "function"}
     )
     assert funcs and all(r["kind"] == "function" for r in funcs)
+
+    # go: function/type/method via the generic TAGS_QUERY bootstrap adapter
+    # (no hand-written queries_ts/go.scm), plus a Calls edge Run -> helper.
+    assert "function" in kind_of("helper")
+    assert "type" in kind_of("Server")
+    assert "method" in kind_of("Run")
+    callers = client.read(
+        "code_read.gq", "find_by_qualified_name", {"qualified_name": "helper"}
+    )
+    helper_id = next(r["slug"] for r in callers if r["kind"] == "function")
+    callers_of_helper = client.read("code_read.gq", "callers", {"id": helper_id})
+    assert any(r["qualified_name"] == "Run" for r in callers_of_helper)
+
+    # sql: CREATE TABLE + CTEs (dbt-style models have no CREATE statement —
+    # CTEs are the only reliably navigable structure in those files).
+    assert "table" in kind_of("foo")
+    assert "cte" in kind_of("base")
+    assert "cte" in kind_of("final")
+
+    # hcl: labeled blocks keyed on their last (most specific) label, quotes
+    # stripped; unlabeled blocks aren't captured (tested via absence below).
+    assert "block" in kind_of("web")
+    assert "block" in kind_of("app_name")

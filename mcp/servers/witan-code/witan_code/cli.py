@@ -257,6 +257,26 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
     console.print(table)
 
 
+@app.command(name="inject-context")
+def inject_context_cmd() -> None:
+    """Print a short code-graph status block for the UserPromptSubmit hook.
+
+    Registered as the bare ``UserPromptSubmit`` hook command; always exits 0
+    and prints nothing when there's no store or in-flight index for the
+    current repo.
+    """
+    import sys
+
+    from . import context as context_module
+
+    try:
+        text = context_module.inject_context()
+    except Exception:  # noqa: BLE001 — must never fail the hook
+        return
+    if text:
+        sys.stdout.write(text)  # inject_context() already ends with "\n"
+
+
 @app.command
 def serve() -> None:
     """Run the code-graph MCP server standalone (code_* tools only)."""
@@ -265,17 +285,262 @@ def serve() -> None:
     mcp.run()
 
 
-@app.command
-def setup(*, dry_run: bool = False) -> None:
-    """Install the omnigraph binary to ~/.local/bin/ for standalone witan-code use.
-
-    Only needed when running witan-code without witan already installed —
-    `witan setup` installs the same binary to the same place. Re-run after an
-    omnigraph version bump to refresh it.
+def _resolve_store(store: str | None, *, bridge: bool = False) -> Path | None:
+    """Resolve a store path — explicit, the shared bridge, or the current
+    repo's — printing and returning ``None`` if it doesn't exist yet (nothing
+    to compact). Expands ``~`` in an explicit path so ``--store ~/…`` isn't
+    treated as missing.
     """
-    from .setup import install_omnigraph
+    from . import config as cfg_module
+    from . import repo as repo_module
 
-    install_omnigraph(dry_run=dry_run)
+    cfg = cfg_module.load()
+    if store is not None:
+        path = Path(store).expanduser()
+    elif bridge:
+        path = cfg_module.bridge_store_path(cfg.code_dir)
+    else:
+        slug = repo_module.detect()
+        if slug is None:
+            print("No repo detected — pass --store PATH or --bridge.")
+            return None
+        path = cfg_module.store_path(slug, cfg.code_dir)
+    if not path.exists():
+        print(f"No store at {path} — nothing to do.")
+        return None
+    return path
+
+
+def _maintenance_client(store: Path):
+    from . import config as cfg_module
+    from .graph import OmnigraphClient
+
+    return OmnigraphClient(str(store), cfg_module.load().queries_dir)
+
+
+@app.command
+def optimize(*, store: str | None = None, bridge: bool = False) -> None:
+    """Compact a code-graph store's Lance fragments (non-destructive).
+
+    Collapses the many tiny fragments that accrue from every index/reindex so
+    opening the store stays cheap. Safe to run repeatedly; takes the store's
+    write lock.
+
+    Parameters
+    ----------
+    store: Store path to optimize (default: the current repo's store).
+    bridge: Optimize the shared cross-repo bridge store instead.
+    """
+    path = _resolve_store(store, bridge=bridge)
+    if path is None:
+        return
+    print(f"Optimizing {path} …")
+    _maintenance_client(path).optimize()
+    print("Optimized. (run `witan-code cleanup` to reclaim disk)")
+
+
+@app.command
+def cleanup(
+    *,
+    store: str | None = None,
+    bridge: bool = False,
+    keep: int = 10,
+    older_than: str | None = None,
+    yes: bool = False,
+) -> None:
+    """Remove old Lance versions from a code-graph store (**destructive**).
+
+    ``optimize`` compacts fragments but leaves old versions behind; this GCs
+    them, keeping the most recent ``keep`` versions per table (and/or those
+    newer than ``older_than``). Irreversible, so it requires ``--yes``.
+
+    Parameters
+    ----------
+    store: Store path to clean (default: the current repo's store).
+    bridge: Clean the shared cross-repo bridge store instead.
+    keep: Number of recent versions to keep per table.
+    older_than: Also keep versions newer than this Go-style duration (e.g. 7d).
+    yes: Confirm the destructive operation (required to actually run).
+    """
+    path = _resolve_store(store, bridge=bridge)
+    if path is None:
+        return
+    if not yes:
+        print(
+            f"cleanup is destructive — would keep the {keep} most recent "
+            f"version(s) per table"
+            + (f" and anything newer than {older_than}" if older_than else "")
+            + f" in {path}.\nRe-run with --yes to proceed."
+        )
+        return
+    print(f"Cleaning up {path} (keep={keep}) …")
+    _maintenance_client(path).cleanup(keep=keep, older_than=older_than)
+    print("Cleaned up.")
+
+
+@app.command
+def checkpoint() -> None:
+    """Opportunistically compact the current repo's store(s) (Stop hook).
+
+    Spawns a throttled, detached ``witan-code optimize`` for the current
+    repo's store and the shared bridge store, each at most once per
+    ``WITAN_CODE_OPTIMIZE_INTERVAL``, if either exists and is due. Best-effort
+    and non-blocking: always exits 0 and never raises, so a maintenance
+    failure can't fail the Stop hook. Registered as the bare ``Stop`` hook
+    command; not usually run by hand.
+    """
+    from . import config as cfg_module
+    from . import maintenance as maintenance_module
+    from . import repo as repo_module
+
+    cfg = cfg_module.load()
+    slug = repo_module.detect()
+    if slug is not None:
+        try:
+            maintenance_module.spawn_background_optimize(
+                cfg_module.store_path(slug, cfg.code_dir)
+            )
+        except Exception:  # noqa: BLE001 — maintenance must never fail the hook
+            pass
+    try:
+        maintenance_module.spawn_background_optimize(
+            cfg_module.bridge_store_path(cfg.code_dir)
+        )
+    except Exception:  # noqa: BLE001 — maintenance must never fail the hook
+        pass
+
+
+@app.command(name="session-init")
+def session_init_cmd() -> None:
+    """Seed/refresh the whole repo's code graph in the background (SessionStart hook).
+
+    Detached and non-blocking — returns immediately regardless of repo size.
+    A per-repo lock (shared with ``inject-context``'s "indexing in progress"
+    check) prevents overlapping sessions from indexing at once. Registered as
+    the bare ``SessionStart`` hook command; not usually run by hand.
+    """
+    from . import hooks as hooks_module
+
+    try:
+        hooks_module.session_init()
+    except Exception:  # noqa: BLE001 — must never fail the hook
+        pass
+
+
+@app.command(name="_index-and-unlock", show=False)
+def _index_and_unlock_cmd(target: Path, lock: Path) -> None:
+    """Internal — run only by the detached child ``session-init`` spawns."""
+    from . import hooks as hooks_module
+
+    hooks_module.index_and_unlock(target, lock)
+
+
+@app.command(name="reindex-hook")
+def reindex_hook_cmd() -> None:
+    """Incrementally reindex the file named in stdin's hook JSON (PostToolUse hook).
+
+    Reads the Claude Code hook payload from stdin, extracts
+    ``tool_input.file_path`` (or ``path``/``filename``), and reindexes it if
+    it exists and is a known source type — foreground and fast (one file), so
+    the agent sees the change land immediately. Best-effort: a missing or
+    malformed payload is a silent no-op. Registered as the bare
+    ``PostToolUse`` (matcher ``Edit|Write``) hook command; not usually run by
+    hand.
+    """
+    import sys
+
+    from . import hooks as hooks_module
+
+    try:
+        hooks_module.reindex_hook(sys.stdin.read())
+    except Exception:  # noqa: BLE001 — must never fail the hook
+        pass
+
+
+_AGENT_NAMES = {
+    "claude": "Claude Code",
+    "pi": "Pi",
+    "copilot": "GitHub Copilot",
+    "opencode": "OpenCode",
+}
+AgentName = Literal["claude", "pi", "copilot", "opencode", "all"]
+
+
+def _report_setup(name: str, result, *, dry_run: bool) -> None:
+    print(f"\n{_AGENT_NAMES.get(name, name)}")
+    for path in result.planned:
+        tag = " (dry-run)" if dry_run else ""
+        print(f"  -> {path}{tag}")
+    for path, reason in result.skipped:
+        print(f"  skip {path} — {reason}")
+
+
+@app.command
+def setup(
+    *,
+    agent: AgentName = "claude",
+    author: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Install witan-code for one or all supported coding agents.
+
+    Installs the omnigraph binary to ~/.local/bin/, copies the bundled skill
+    and Pi extension to the agent's config directories, registers the four
+    hooks (bare CLI commands — no wrapper scripts to copy), and merges the
+    witan-code MCP server entry into the agent's config file. Independent of
+    `witan setup` — running both is fine (each only touches its own entries);
+    running just this one is enough for a witan-code-only install.
+
+    Re-run after every upgrade to refresh installed files.
+
+    Parameters
+    ----------
+    agent: Target agent — claude | pi | copilot | opencode | all.
+    author: Name written to graph nodes (default: git config user.name or $USER).
+    dry_run: Print what would happen without writing anything.
+    """
+    import os
+    import subprocess
+
+    from agent_config_kit import (
+        apply,
+        apply_all,
+        detect_installed_platforms,
+        known_platforms,
+    )
+
+    from .setup import install_omnigraph, witan_code_bundle
+
+    pkg_dir = Path(__file__).parent
+
+    if author is None:
+        try:
+            author = subprocess.check_output(
+                ["git", "config", "user.name"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            author = ""
+        author = author or os.environ.get("USER", "unknown")
+
+    print("omnigraph binary")
+    install_omnigraph(dry_run)
+
+    bundle = witan_code_bundle(pkg_dir, author)
+
+    if agent == "all":
+        for name, result in apply_all(bundle, dry_run=dry_run).items():
+            _report_setup(name, result, dry_run=dry_run)
+        for name in sorted(set(known_platforms()) - set(detect_installed_platforms())):
+            print(f"\n{_AGENT_NAMES.get(name, name)} — not detected, skipping")
+    else:
+        _report_setup(agent, apply(agent, bundle, dry_run=dry_run), dry_run=dry_run)
+
+    if dry_run:
+        print("\n(dry-run — no files written)")
+    else:
+        print("\nDone. Restart your agent(s) to pick up the new MCP server and hooks.")
 
 
 def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:

@@ -226,7 +226,7 @@ class AgentPlatform(BaseModel):
 
     skills: CapabilityScope | None = None
     skill_dest_dirs: Callable[[Path], list[Path]] | None = (
-        None  # e.g. Pi's dual dest dirs
+        None  # e.g. OpenCode's dual dest dirs (singular/plural ambiguity)
     )
 
     lsp: CapabilityScope | None = None

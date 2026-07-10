@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from . import repo as repo_module
 
 _QUERIES_DIR = Path(__file__).parent.parent / "queries"
 _DEFAULT_GRAPH_URI = Path.home() / ".local" / "share" / "witan" / "graph.omni"
@@ -196,11 +197,12 @@ class ScanConfig(BaseModel):
     turn it off), unlike the ``WITAN_EMBED_ENABLED`` opt-in precedent this
     package originally followed.
 
-    ``enabled_detectors``/``disabled_detectors``/``plugins``/``allowlist`` accept
-    a TOML list or a comma-separated string (env-var ergonomics). An empty
-    ``enabled_detectors`` means "every registered detector is active"; naming any
-    detector switches to an explicit allowlist. ``disabled_detectors`` always
-    wins over ``enabled_detectors``.
+    ``enabled_detectors``/``disabled_detectors``/``plugins``/``allowlist``/
+    ``allowlist_hashes`` accept a TOML list or a comma-separated string
+    (env-var ergonomics). An empty ``enabled_detectors`` means "every
+    registered detector is active"; naming any detector switches to an
+    explicit allowlist. ``disabled_detectors`` always wins over
+    ``enabled_detectors``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -222,18 +224,57 @@ class ScanConfig(BaseModel):
 
     allowlist: list[str] = Field(default_factory=list)
     """Regexes whose matches are downgraded to audit-only (false-positive
-    suppression). The full allowlist engine is a separate task; this is the
-    config surface it will read."""
+    suppression). Tested against each finding's own matched span with
+    ``re.fullmatch`` — see ``witan/scan/allowlist.py``."""
+
+    allowlist_hashes: list[str] = Field(default_factory=list)
+    """Salted SHA-256 digests (hex) of specific approved values, downgraded to
+    audit-only like ``allowlist`` but without ever putting the plaintext value
+    in config. Requires ``allowlist_salt``; a digest is computed as
+    ``sha256(allowlist_salt + matched_span).hexdigest()``. Normalized to
+    lowercase at load time — ``hexdigest()`` is always lowercase, so an
+    operator-typed uppercase digest would otherwise silently never match."""
+
+    allowlist_salt: str = ""
+    """Salt for ``allowlist_hashes``. Empty means the hash allowlist is
+    inert — set a deployment-specific value before relying on it."""
 
     on_scanner_error: Literal["block", "warn"] = "block"
     """What to do when a scanner itself raises. Fail-closed by default so a
     broken detector cannot silently open the gate."""
+
+    overlay: dict[str, dict[str, object]] = Field(default_factory=dict)
+    """Per-repo enforcement overrides: ``{repo_uri: {field: value, ...}}``.
+    Sourced *only* from ``[scan.overlay."<repo-uri>"]`` TOML tables —
+    deliberately no ``WITAN_SCAN_*`` env-var form (ADR 0001 amendment,
+    2026-07-09): scan policy must stay admin-owned, and env vars are exactly
+    the surface a write's own process could control. Keys are canonicalized
+    with :func:`_canonical_repo` (scheme, ``.git``/trailing-slash, casing) so
+    a TOML key and the write's own ``repo`` param that refer to the same repo
+    in different spellings still match — see :meth:`for_repo`. Validated
+    eagerly by :func:`load_scan_config`; applied per write by
+    :meth:`for_repo`, which only ever overrides enforcement fields (actions,
+    detector allow/deny, allowlists, ``on_scanner_error``) — never
+    ``overlay`` itself."""
+
+    def for_repo(self, repo: str | None) -> "ScanConfig":
+        """The effective policy for a write tagged with ``repo`` — the base
+        config with any matching ``overlay`` table applied on top. No match
+        (including ``repo=None``) returns ``self`` unchanged, so this is a
+        no-op for every deployment that doesn't configure an overlay."""
+        if not repo or not self.overlay:
+            return self
+        overrides = self.overlay.get(_canonical_repo(repo))
+        if not overrides:
+            return self
+        return self.model_copy(update=overrides)
 
     @field_validator(
         "enabled_detectors",
         "disabled_detectors",
         "plugins",
         "allowlist",
+        "allowlist_hashes",
         mode="before",
     )
     @classmethod
@@ -246,6 +287,55 @@ class ScanConfig(BaseModel):
         items = v.split(",") if isinstance(v, str) else _to_list(v)
         return [s.strip() for s in items if s.strip()]
 
+    @field_validator("allowlist")
+    @classmethod
+    def _validate_allowlist_regexes(cls, v: list[str]) -> list[str]:
+        """Fail loudly at load time for a bad pattern — matches the ADR's
+        "misconfigured policy fails loudly" invariant, and means
+        :func:`witan.scan.allowlist.compile_allowlist` never has to."""
+        for pattern in v:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid allowlist regex {pattern!r}: {exc}") from exc
+        return v
+
+    @field_validator("allowlist_hashes")
+    @classmethod
+    def _normalize_hashes(cls, v: list[str]) -> list[str]:
+        """``hashlib.sha256(...).hexdigest()`` is always lowercase; normalize
+        so an operator-typed uppercase digest still matches."""
+        return [h.lower() for h in v]
+
+    @field_validator("overlay")
+    @classmethod
+    def _normalize_overlay_keys(
+        cls, v: dict[str, dict[str, object]]
+    ) -> dict[str, dict[str, object]]:
+        normalized: dict[str, dict[str, object]] = {}
+        for key, overrides in v.items():
+            if not key:
+                raise ValueError("[scan.overlay] repo key must not be empty.")
+            normalized[_canonical_repo(key)] = overrides
+        return normalized
+
+
+def _canonical_repo(value: str) -> str:
+    """Canonicalize a repo string for ``[scan.overlay]`` matching.
+
+    A superset of :func:`witan.repo.normalise` (scheme, ``.git`` suffix,
+    trailing slash): also folds a schemeless ``host/org/repo`` form to the
+    same shape ``normalise`` alone would leave untouched (its regexes require
+    an explicit scheme or an SSH ``user@host:`` prefix to recognize input),
+    and lowercases the result. Scoped to this module deliberately — the
+    shared ``witan.repo`` canonicalizer preserves case for its other callers'
+    exact-match graph joins; scan-overlay matching has no such join to keep
+    consistent with, and GitHub repo paths are themselves case-insensitive.
+    """
+    if "://" not in value and "@" not in value:
+        value = f"https://{value}"
+    return repo_module.normalise(value).lower()
+
 
 _SCAN_FIELDS = {
     "enabled": "WITAN_SCAN_ENABLED",
@@ -255,6 +345,8 @@ _SCAN_FIELDS = {
     "disabled_detectors": "WITAN_SCAN_DISABLED_DETECTORS",
     "plugins": "WITAN_SCAN_PLUGINS",
     "allowlist": "WITAN_SCAN_ALLOWLIST",
+    "allowlist_hashes": "WITAN_SCAN_ALLOWLIST_HASHES",
+    "allowlist_salt": "WITAN_SCAN_ALLOWLIST_SALT",
     "on_scanner_error": "WITAN_SCAN_ON_ERROR",
 }
 
@@ -278,16 +370,41 @@ def _scan_config_error(exc: ValidationError, sources: dict[str, str]) -> ValueEr
     return ValueError(f"Invalid scan setting {source}: {err['msg']}")
 
 
+def _validate_overlay(base: dict[str, object], overlay: dict[str, object]) -> None:
+    """Fail loudly at load time if a ``[scan.overlay.<repo>]`` table names an
+    unknown setting or produces an invalid config — surfacing that on the
+    first write to the repo, deep inside ``WriteGuard``, would be far harder
+    to diagnose."""
+    known = set(ScanConfig.model_fields) - {"overlay"}
+    for repo, overrides in overlay.items():
+        if not isinstance(overrides, dict):
+            raise ValueError(f"[scan.overlay.{repo!r}] must be a table.")
+        bad = set(overrides) - known
+        if bad:
+            raise ValueError(
+                f"[scan.overlay.{repo!r}] has unknown setting(s): "
+                f"{', '.join(sorted(bad))}."
+            )
+        try:
+            ScanConfig(**{**base, **overrides})
+        except ValidationError as exc:
+            raise ValueError(f"[scan.overlay.{repo!r}] is invalid: {exc}") from exc
+
+
 def load_scan_config() -> ScanConfig:
     """Resolve ScanConfig from env > config.toml [scan] > constant defaults.
 
     Rejects unknown enforcement actions and non-boolean enable flags so a
     misconfigured policy fails loudly at startup rather than silently letting
-    writes through unscanned.
+    writes through unscanned. ``[scan.overlay]`` (per-repo overrides, see
+    ``ScanConfig.for_repo``) has no env-var form and is read from TOML only.
     """
     file_scan = _load_toml().get("scan", {})
     if not isinstance(file_scan, dict):
         raise ValueError("The 'scan' section in config must be a table.")
+    overlay = file_scan.get("overlay", {})
+    if not isinstance(overlay, dict):
+        raise ValueError("[scan.overlay] must be a table of repo -> settings.")
 
     raw: dict[str, object] = {}
     sources: dict[str, str] = {}
@@ -299,6 +416,10 @@ def load_scan_config() -> ScanConfig:
         elif field in file_scan:
             raw[field] = file_scan[field]
             sources[field] = f"[scan].{field} in config.toml"
+
+    if overlay:
+        _validate_overlay(raw, overlay)
+        raw["overlay"] = overlay
 
     try:
         return ScanConfig(**raw)
@@ -385,8 +506,15 @@ def default_config_toml() -> str:
 # enabled_detectors = []       # empty = every registered detector is active
 # disabled_detectors = []      # detector names to turn off; wins over enabled_detectors
 # plugins = []                 # dotted "module:Attr" paths to extra scanners
-# allowlist = []               # reserved for false-positive suppression; not yet enforced
+# allowlist = []               # regexes matched against a finding's own span; downgrades to audit-only
+# allowlist_hashes = []        # salted sha256(allowlist_salt + span) digests of approved values
+# allowlist_salt = ""          # required for allowlist_hashes to take effect
 # on_scanner_error = "{scan.on_scanner_error}"       # block | warn
+
+# Per-repo overrides (admin-owned; deliberately no WITAN_SCAN_* env-var form —
+# ADR 0001 amendment 2026-07-09). Any ScanConfig field except `overlay` itself.
+# [scan.overlay."github.com/example/legacy-repo"]
+# secret_action = "warn"        # rolling out scanning on a noisy repo first
 """
 
 

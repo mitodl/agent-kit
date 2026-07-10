@@ -1,5 +1,7 @@
 """Tests for branch-aware indexing: git branch → omnigraph branch mapping."""
 
+import asyncio
+import inspect
 import subprocess
 
 from witan_code import repo as repo_module
@@ -238,7 +240,15 @@ def test_bridge_overlay_includes_other_repos_main_bindings(tmp_path, monkeypatch
 
 
 def _fn(tool):
-    return getattr(tool, "fn", tool)
+    """Unwrap + run a (possibly async) FastMCP tool directly, as the CLI does."""
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
 
 
 # ── Git-context caching (server.py) ───────────────────────────────

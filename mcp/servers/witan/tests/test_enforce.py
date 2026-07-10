@@ -153,6 +153,81 @@ def test_per_finding_action_overrides_category_default():
         guard("insert_memory", {"title": "t", "content": "111-22-3333"})
 
 
+# ── allowlist suppression ────────────────────────────────────────────────────
+
+
+def test_regex_allowlisted_secret_is_not_blocked():
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIA")], allowlist=["AKIA"])
+    params = {"title": "t", "content": "here AKIA stays"}
+    assert guard("insert_memory", params) == params
+
+
+def test_pragma_allowlisted_secret_is_not_blocked():
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIA")])
+    params = {"title": "t", "content": "here AKIA witan: allow-secret"}
+    assert guard("insert_memory", params) == params
+
+
+def test_suppressed_pii_is_not_redacted():
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")], allowlist=["a@b\\.com"])
+    params = {"title": "t", "content": "mail a@b.com now"}
+    assert guard("insert_memory", params) == params
+
+
+def test_overlay_applies_repo_specific_policy():
+    """A repo with an overlay entry gets its own enforcement mode."""
+    guard = _guard(
+        [MatchScanner("aws_key", "secret", "AKIA")],
+        overlay={"github.com/example/legacy": {"secret_action": "warn"}},
+    )
+    params = {
+        "title": "t",
+        "content": "AKIA stays",
+        "repo": "github.com/example/legacy",
+    }
+    assert guard("insert_memory", params) == params
+
+
+def test_overlay_does_not_affect_unmatched_repo():
+    guard = _guard(
+        [MatchScanner("aws_key", "secret", "AKIA")],
+        overlay={"github.com/example/legacy": {"secret_action": "warn"}},
+    )
+    with pytest.raises(WriteBlocked):
+        guard(
+            "insert_memory",
+            {"title": "t", "content": "AKIA stays", "repo": "github.com/other/repo"},
+        )
+
+
+def test_overlay_keys_on_first_repos_entry():
+    """insert_workflow_project carries `repos` (a list), not `repo`."""
+    guard = _guard(
+        [MatchScanner("aws_key", "secret", "AKIA")],
+        overlay={"github.com/example/legacy": {"secret_action": "warn"}},
+    )
+    params = {
+        "title": "t",
+        "description": "AKIA stays",
+        "repos": ["github.com/example/legacy", "github.com/other/repo"],
+    }
+    assert guard("insert_workflow_project", params) == params
+
+
+def test_suppression_does_not_leak_across_unrelated_findings():
+    """Allowlisting one finding must not suppress a different, unrelated one
+    in the same write."""
+    guard = _guard(
+        [
+            MatchScanner("email", "pii", "a@b.com"),
+            MatchScanner("aws_key", "secret", "AKIA"),
+        ],
+        allowlist=["a@b\\.com"],
+    )
+    with pytest.raises(WriteBlocked):
+        guard("insert_memory", {"title": "t", "content": "a@b.com AKIA"})
+
+
 # ── on_scanner_error ─────────────────────────────────────────────────────────────
 
 

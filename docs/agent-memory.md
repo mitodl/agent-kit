@@ -102,24 +102,17 @@ which writes them into `~/.claude/settings.json` as the bare commands
 `witan inject-context`, so registering both makes the context block print
 twice. (`witan setup` prunes any such legacy entry on its next run.)
 
-The two **codegraph** hooks are not yet part of `witan setup`; symlink and
-register them manually:
-
-```bash
-mkdir -p ~/.claude/hooks
-ln -sf "$REPO/configs/hooks/codegraph-session-init.sh"      ~/.claude/hooks/
-ln -sf "$REPO/configs/hooks/codegraph-reindex.sh"           ~/.claude/hooks/
-```
-
-Register them in `~/.claude/settings.json` under `hooks` — `SessionStart` →
-codegraph-session-init (seeds/refreshes the whole code graph in the
-background), and `PostToolUse` (matcher `Edit|Write`) → codegraph-reindex
-(keeps edited files fresh). See
+The four **codegraph** hooks (`SessionStart` → session-init, `PostToolUse` →
+reindex-hook, `UserPromptSubmit` → inject-context, `Stop` → checkpoint) are
+bare `witan-code` CLI commands — no scripts to symlink. `witan-code setup`
+(standalone) or `witan setup` (when witan-code is also importable) registers
+them for you; to register manually instead, see
 [`configs/hooks/README.md`](../configs/hooks/README.md) for the exact JSON.
 
-**Pi** has no hooks but provides the equivalent via extension events. Symlink the
-mirror extensions into `~/.pi/agent/extensions/` (codegraph index/reindex and
-workflow context injection) — see [`configs/pi/README.md`](../configs/pi/README.md):
+**Pi** has no Claude-style hooks but provides the equivalent via extension
+events. Symlink the mirror extensions into `~/.pi/agent/extensions/`
+(codegraph — all four hooks in one extension — and workflow context
+injection) — see [`configs/pi/README.md`](../configs/pi/README.md):
 
 ```bash
 ln -sf "$REPO/configs/pi/extensions/codegraph.ts"        ~/.pi/agent/extensions/
@@ -129,21 +122,35 @@ ln -sf "$REPO/configs/pi/extensions/workflow-context.ts" ~/.pi/agent/extensions/
 ### 3. Skills — both agents
 
 `witan setup` installs the bundled Witan skills automatically. For local
-development from a checkout, symlink the bundled skill directories into the
-shared `~/.agents/skills/` catalog, then into each agent:
+development from a checkout, symlink the bundled skill directories directly
+into each agent's own skills dir. Pi natively unions its own
+`~/.pi/agent/skills/` with `~/.agents/skills/` when discovering skills; do not
+symlink into both, and if you previously installed copies under
+`~/.agents/skills/`, delete them to avoid Pi's name-collision warning:
 
 ```bash
 for skill in witan-memory witan-workflow witan-task witan-project-tracker; do
-  ln -sfn "$REPO/mcp/servers/witan/witan/skills/$skill" ~/.agents/skills/"$skill"
-  ln -sfn "../../.agents/skills/$skill"    ~/.claude/skills/"$skill"
-  ln -sfn "../../../.agents/skills/$skill" ~/.pi/agent/skills/"$skill"
+  ln -sfn "$REPO/mcp/servers/witan/witan/skills/$skill" ~/.claude/skills/"$skill"
+  ln -sfn "$REPO/mcp/servers/witan/witan/skills/$skill" ~/.pi/agent/skills/"$skill"
 done
 ```
 
-### 4. Code-graph indexer CLI — optional, faster hook path
+If you set this up with older tooling (or an older `witan setup`) and still see
+Pi's name-collision warning at startup, you have stale duplicates left over in
+`~/.agents/skills/` — remove them:
 
-Install the indexer on `PATH` so the `PostToolUse` hook uses its fast path and you
-can seed a repo manually. `--editable` keeps it pointed at the working tree:
+```bash
+for skill in witan-memory witan-workflow witan-task witan-project-tracker; do
+  rm -rf ~/.agents/skills/"$skill"
+done
+```
+
+### 4. Code-graph indexer CLI — required for the hooks to run at all
+
+The codegraph hooks are bare `witan-code` commands (no `uvx` fallback, same
+as witan's own `witan inject-context`/`session-checkpoint`), so `witan-code`
+must be on `PATH` for them to do anything. `--editable` keeps it pointed at
+the working tree:
 
 ```bash
 uv tool install --editable "$REPO/mcp/servers/witan-code"
@@ -151,14 +158,12 @@ uv tool install --editable "$REPO/mcp/servers/witan-code"
 
 With the `SessionStart` hook wired (step 2), the whole-repo seed and refresh happen
 automatically in the background — you don't need to run `index` by hand. To seed a
-repo immediately (or under Pi, which has no hooks), run it manually:
+repo immediately (or under Pi, which has no `SessionStart`-equivalent CLI
+requirement — its extension calls the CLI directly too), run it manually:
 
 ```bash
 witan-code index .   # inside the repo
 ```
-
-Without the CLI on `PATH`, the hooks fall back to `uvx --from <local pkg>` (correct,
-just slower).
 
 ### 5. Graph schema upkeep
 
@@ -1633,4 +1638,4 @@ Layer-1 `context_for_symbol(symbol_id)` tool returns every memory and task whose
 import-aware name resolution), suitable for agent navigation and impact hints,
 not a compiler-grade call graph. See that package's README for the indexer CLI,
 MCP tools (`code_find_definition`, `code_callers`, `code_impact`, …), and the
-`codegraph-reindex.sh` PostToolUse hook that keeps the graph fresh during a session.
+`witan-code reindex-hook` PostToolUse hook that keeps the graph fresh during a session.

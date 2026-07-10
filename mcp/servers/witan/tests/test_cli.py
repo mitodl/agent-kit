@@ -120,6 +120,281 @@ def test_task_create_with_parent(server, monkeypatch):
 
 
 @requires_omnigraph
+def test_project_advance_cli(server, monkeypatch):
+    """project advance moves a project to a new phase."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_advance
+
+    printed = _patch_server(monkeypatch, server)
+    proj = _fn(srv.workflow_project_create)(title="P", description="d", phase="spec")
+
+    project_advance(proj["slug"], phase="implementation")
+
+    combined = "\n".join(printed)
+    assert "Advanced" in combined
+    assert "implementation" in combined
+    fresh = _fn(srv.workflow_project_get)(proj["slug"])
+    assert fresh["phase"] == "implementation"
+
+
+@requires_omnigraph
+def test_project_advance_backward_shows_advisory(server, monkeypatch):
+    """A backward transition still commits from the CLI but surfaces the advisory."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_advance
+
+    printed = _patch_server(monkeypatch, server)
+    proj = _fn(srv.workflow_project_create)(
+        title="P", description="d", phase="implementation"
+    )
+
+    project_advance(proj["slug"], phase="spec")
+
+    combined = "\n".join(printed)
+    assert "note" in combined.lower() or "not advanced" in combined.lower()
+
+
+@requires_omnigraph
+def test_project_complete_cli(server, monkeypatch):
+    """project complete seals the project and reports a trace slug."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_complete
+
+    printed = _patch_server(monkeypatch, server)
+    proj = _fn(srv.workflow_project_create)(title="Done", description="d")
+
+    project_complete(proj["slug"], outcome="Shipped the whole thing end to end.")
+
+    combined = "\n".join(printed)
+    assert "Completed" in combined
+    assert f"wt-{proj['slug']}" in combined
+    fresh = _fn(srv.workflow_project_get)(proj["slug"])
+    assert fresh["status"] == "completed"
+
+
+@requires_omnigraph
+def test_project_block_and_unblock_cli(server, monkeypatch):
+    """project block/unblock manage a project dependency."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_block, project_unblock
+
+    printed = _patch_server(monkeypatch, server)
+    a = _fn(srv.workflow_project_create)(title="A", description="d")
+    b = _fn(srv.workflow_project_create)(title="B", description="d")
+
+    project_block(a["slug"], b["slug"])
+    assert a["slug"] in (
+        _fn(srv.workflow_project_get)(b["slug"]).get("blocked_by") or []
+    )
+
+    project_unblock(a["slug"], b["slug"])
+    assert a["slug"] not in (
+        _fn(srv.workflow_project_get)(b["slug"]).get("blocked_by") or []
+    )
+
+    combined = "\n".join(printed)
+    assert "Blocked" in combined
+    assert "Unblocked" in combined
+
+
+@requires_omnigraph
+def test_project_tasks_detail_cli(server, monkeypatch):
+    """project tasks --detail lists tasks and their blocker/dependent edges."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_tasks
+
+    printed = _patch_server(monkeypatch, server)
+    proj = _fn(srv.workflow_project_create)(title="Dep Project", description="d")
+    blocker = _fn(srv.task_create)(
+        title="the blocker", description="d", project_slug=proj["slug"]
+    )
+    blocked = _fn(srv.task_create)(
+        title="the blocked",
+        description="d",
+        project_slug=proj["slug"],
+        blocked_by=[blocker["slug"]],
+    )
+
+    project_tasks(proj["slug"], detail=True)
+
+    combined = "\n".join(printed)
+    assert blocker["slug"] in combined
+    assert blocked["slug"] in combined
+    assert "Dependencies" in combined
+    # the blocked task shows it is blocked by the blocker; the blocker shows it
+    # blocks the blocked task
+    assert "blocked by" in combined
+    assert "blocks" in combined
+
+
+@requires_omnigraph
+def test_project_tasks_no_detail_omits_dependency_section(server, monkeypatch):
+    """Without --detail, only the task table prints (no Dependencies section)."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_tasks
+
+    printed = _patch_server(monkeypatch, server)
+    proj = _fn(srv.workflow_project_create)(title="Flat Project", description="d")
+    _fn(srv.task_create)(title="lone task", description="d", project_slug=proj["slug"])
+
+    project_tasks(proj["slug"])
+
+    combined = "\n".join(printed)
+    assert "lone task" in combined
+    assert "Dependencies" not in combined
+
+
+@requires_omnigraph
+def test_task_close_cli(server, monkeypatch):
+    """task close sets a task closed with a resolution."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.tasks import task_close_cmd
+
+    printed = _patch_server(monkeypatch, server)
+    t = _fn(srv.task_create)(title="t", description="d")
+
+    task_close_cmd(t["slug"], resolution="did it")
+
+    combined = "\n".join(printed)
+    assert "Closed" in combined
+    assert _fn(srv.task_get)(t["slug"])["status"] == "closed"
+
+
+@requires_omnigraph
+def test_task_claim_and_release_cli(server, monkeypatch):
+    """task claim then release round-trips ownership."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.tasks import task_claim_cmd, task_release_cmd
+
+    printed = _patch_server(monkeypatch, server)
+    t = _fn(srv.task_create)(title="t", description="d")
+
+    task_claim_cmd(t["slug"], assignee="alice")
+    assert _fn(srv.task_get)(t["slug"])["assignee"] == "alice"
+
+    task_release_cmd(t["slug"], assignee="alice")
+    assert _fn(srv.task_get)(t["slug"])["status"] == "open"
+
+    combined = "\n".join(printed)
+    assert "Claimed" in combined
+    assert "Released" in combined
+
+
+@requires_omnigraph
+def test_task_update_cli(server, monkeypatch):
+    """task update changes mutable fields."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.tasks import task_update_cmd
+
+    printed = _patch_server(monkeypatch, server)
+    t = _fn(srv.task_create)(title="t", description="d", priority="p3")
+
+    task_update_cmd(t["slug"], priority="p0", status="in_progress")
+
+    combined = "\n".join(printed)
+    assert "Updated" in combined
+    fresh = _fn(srv.task_get)(t["slug"])
+    assert fresh["priority"] == "p0"
+    assert fresh["status"] == "in_progress"
+
+
+@requires_omnigraph
+def test_task_link_cli(server, monkeypatch):
+    """task link blocks establishes a blocked_by edge."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.tasks import task_link_cmd
+
+    printed = _patch_server(monkeypatch, server)
+    blocker = _fn(srv.task_create)(title="blocker", description="d")
+    blocked = _fn(srv.task_create)(title="blocked", description="d")
+
+    task_link_cmd(blocker["slug"], blocked["slug"], kind="blocks")
+
+    combined = "\n".join(printed)
+    assert "Linked" in combined
+    assert blocker["slug"] in (
+        _fn(srv.task_get)(blocked["slug"]).get("blocked_by") or []
+    )
+
+
+@requires_omnigraph
+def test_session_start_end_list_cli(server, monkeypatch):
+    """session start/end/list drive and inspect a project's sessions."""
+    from witan import server as srv
+    from witan.cli._common import _fn
+    from witan.cli.session import session_end, session_list, session_start
+
+    printed = _patch_server(monkeypatch, server)
+    proj = _fn(srv.workflow_project_create)(title="S", description="d")
+
+    session_start(proj["slug"], phase="implementation", session_id="cli-test-1")
+    started = "\n".join(printed)
+    assert "Started session" in started
+    # The ws- slug is echoed; pull it back out to end the session.
+    import re
+
+    m = re.search(r"ws-[\w-]+", started)
+    assert m
+    ws_slug = m.group(0)
+
+    session_end(ws_slug, summary="did the work, more to do")
+    session_list(proj["slug"])
+
+    combined = "\n".join(printed)
+    assert "Ended session" in combined
+    assert ws_slug in combined
+    assert "did the work" in combined
+
+
+def _table_column(table, header):
+    """Return a rich Table column's cell values by header name."""
+    for col in table.columns:
+        if col.header == header:
+            return list(col._cells)
+    return []
+
+
+@requires_omnigraph
+def test_tasks_elides_closed_by_default(server, monkeypatch):
+    """`witan tasks` hides closed tasks unless --status is given."""
+    from witan.cli import _common
+    from witan.cli._common import _fn
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common, "_server", server)
+    captured = []
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: captured.append(a[0]))
+
+    live = _fn(server.task_create)(title="live work", description="d")
+    done = _fn(server.task_create)(title="finished work", description="d")
+    _fn(server.task_close)(done["slug"])
+
+    tasks(all_repos=True)
+    table = next(c for c in captured if hasattr(c, "columns"))
+    slugs = _table_column(table, "slug")
+    assert live["slug"] in slugs
+    assert done["slug"] not in slugs
+
+    # --status closed surfaces the closed one (and only it)
+    captured.clear()
+    tasks(all_repos=True, status="closed")
+    table = next(c for c in captured if hasattr(c, "columns"))
+    slugs = _table_column(table, "slug")
+    assert done["slug"] in slugs
+    assert live["slug"] not in slugs
+
+
+@requires_omnigraph
 def test_graph_command_rich_output(server, monkeypatch):
     """witan graph prints projects and tasks without requiring HTML output."""
     from witan import server as srv

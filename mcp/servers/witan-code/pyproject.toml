@@ -1,15 +1,27 @@
 [project]
 name = "witan-code"
-version = "0.1.0"
+version = "0.2.1"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
+readme = "README.md"
+license = "BSD-3-Clause"
 requires-python = ">=3.11"
+keywords = ["mcp", "agent", "code-graph", "tree-sitter", "static-analysis", "coding-agent"]
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
+    "agent-config-kit>=0.1,<1",
     "fastmcp>=3.4.2,<4",
     "cyclopts>=4,<5",
-    "tree-sitter>=0.26,<0.27",
+    # Pinned to 0.25.x: tree-sitter 0.26.0 has a use-after-free in its pyo3 Node
+    # binding that segfaults (exit 139) under the heavy .parent()/.children()
+    # churn _walk_defs does on real-world-sized files — deterministically on the
+    # 2nd-3rd parse in one process, so `witan-code index` on any real repo hard-
+    # crashes. 0.25.0/0.25.1/0.25.2 are all crash-free with the same ABI-15
+    # grammar wheels (0.24 rejects them: needs ABI 15 => ts>=0.24). Do NOT bump
+    # to 0.26 until upstream fixes this. See tk-critical-indexer-segfaults and
+    # https://github.com/tree-sitter/py-tree-sitter/issues/472 (upstream report).
+    "tree-sitter>=0.25,<0.26",
     # Individual grammar wheels (not tree-sitter-language-pack): each returns a
     # standalone tree_sitter.Language usable with tree_sitter.Parser/Query. Pins
     # are tight on purpose — a grammar major can bump the ABI / binding (see the
@@ -19,9 +31,18 @@ dependencies = [
     "tree-sitter-typescript>=0.23,<0.24",
     "tree-sitter-bash>=0.25,<0.26",
     "tree-sitter-yaml>=0.7,<0.8",
+    "tree-sitter-sql>=0.3,<0.4",
+    "tree-sitter-hcl>=1.2,<1.3",
+    "tree-sitter-go>=0.25,<0.26",
     "pyyaml>=6,<7",
     "rich>=13",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mitodl/agent-kit/tree/main/mcp/servers/witan-code"
+Repository = "https://github.com/mitodl/agent-kit"
+Documentation = "https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/README.md"
+Issues = "https://github.com/mitodl/agent-kit/issues"
 
 [project.scripts]
 witan-code = "witan_code.cli:cli"
@@ -40,8 +61,22 @@ testpaths = ["tests"]
 [tool.hatch.build.targets.wheel]
 packages = ["witan_code"]
 
-# witan_code/queries/, witan_code/schema/, and witan_code/queries_ts/ are
-# discovered automatically via packages = ["witan_code"]. The omnigraph
-# binary is no longer build-time-bundled — `witan-code setup` fetches it at
-# install/runtime instead (see witan_code/setup.py) — so there is no
+[tool.bumpversion]
+current_version = "0.2.1"
+allow_dirty = true
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+# witan_code/queries/, witan_code/schema/, witan_code/queries_ts/,
+# witan_code/skills/, and witan_code/extensions/ are all discovered
+# automatically via packages = ["witan_code"] — including for a
+# `uvx --from git+...` install, so `witan-code setup` can bundle them via
+# agent_config_kit without any build-time bundling step. Hooks are bare CLI
+# commands (session-init, reindex-hook, inject-context, checkpoint in
+# witan_code/cli.py) rather than wrapper scripts, so there's no
+# witan_code/hooks/ to bundle either. The omnigraph binary itself is fetched
+# at install/runtime instead (see witan_code/setup.py) — so there is no
 # witan_code/_bin/ to force-include.

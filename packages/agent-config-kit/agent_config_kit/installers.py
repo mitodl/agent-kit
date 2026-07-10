@@ -13,6 +13,28 @@ from pathlib import Path
 from .models import SKILL_NAME_PATTERN, SkillSource
 
 
+class ConflictingPathError(Exception):
+    """Raised when a destination directory can't be created because
+    something already occupies that path that isn't a plain directory —
+    e.g. a leftover file or a symlink (often dangling, from an older
+    symlink-based install scheme). ``exist_ok=True`` on ``Path.mkdir``
+    doesn't help here: it only suppresses the error when the existing path
+    already resolves to a real directory."""
+
+
+def _ensure_dest_dir(path: Path, *, force: bool) -> None:
+    if path.is_dir():  # also true for a symlink resolving to a directory
+        return
+    if path.exists() or path.is_symlink():
+        if not force:
+            raise ConflictingPathError(
+                f"{path} already exists and is not a directory "
+                "(rerun with --force to replace it)"
+            )
+        path.unlink()
+    path.mkdir(parents=True, exist_ok=True)
+
+
 def skill_files(skill: SkillSource) -> list[Path]:
     """Every file belonging to a skill, relative to the skill's own
     directory — the full Agent Skills payload (``SKILL.md`` plus whatever
@@ -49,6 +71,8 @@ def install_skills(
     skills: list[SkillSource],
     dest_dirs: list[Path],
     dry_run: bool,
+    *,
+    force: bool = False,
 ) -> list[Path]:
     """Copy each skill's full directory into every dest dir (Pi needs two).
 
@@ -64,6 +88,11 @@ def install_skills(
     under ``dry_run``) — not just each skill's ``SKILL.md`` — so drift
     detection (``diff.py``) also catches a partially-installed skill missing
     one of its supporting files.
+
+    Raises ``ConflictingPathError`` if a skill's destination directory is
+    already occupied by something that isn't a directory (typically a
+    leftover — often dangling — symlink from an older symlink-based install)
+    unless ``force`` is set, in which case that path is removed first.
     """
     dests: list[Path] = []
     for skill in skills:
@@ -71,6 +100,8 @@ def install_skills(
         rel_files = skill_files(skill)
         for dest_base in dest_dirs:
             skill_dest_dir = dest_base / skill.name
+            if not dry_run:
+                _ensure_dest_dir(skill_dest_dir, force=force)
             for rel in rel_files:
                 dest = skill_dest_dir / rel
                 if not dry_run:
@@ -87,6 +118,7 @@ def install_files(
     suffix: str,
     dry_run: bool,
     executable: bool = False,
+    force: bool = False,
 ) -> list[Path]:
     """Copy every ``*suffix`` file in ``src_dir`` into ``dest_dir``."""
     if not src_dir.is_dir():
@@ -97,7 +129,7 @@ def install_files(
             continue
         dest = dest_dir / src_file.name
         if not dry_run:
-            dest_dir.mkdir(parents=True, exist_ok=True)
+            _ensure_dest_dir(dest_dir, force=force)
             shutil.copy2(src_file, dest)
             if executable:
                 dest.chmod(0o755)

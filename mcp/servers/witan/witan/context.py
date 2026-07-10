@@ -9,9 +9,13 @@ work regardless of whether witan was installed from a checkout or via uvx.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
+import sys
+import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,21 +24,134 @@ from . import repo as repo_module
 from . import session_state
 from .graph import OmnigraphClient
 
+# The context hook runs a fresh process on every prompt, so an in-process cache
+# (like witan-code's server-side ``_cached_git``) can't help it. A tiny on-disk
+# cache keyed by project dir amortizes the git subprocesses across a burst of
+# prompts instead. Short TTL so a branch switch is picked up almost immediately.
+_REPO_CACHE_TTL = 5.0
+
+# Each omnigraph read is a full store scan (~1-2s on a large graph), and the hook
+# issues several per prompt — so a burst of prompts (e.g. picking a skill via a
+# `/` command) can each pay multiple seconds and blow the hook timeout. Cache the
+# *rendered* block on disk with a short TTL so only the first prompt in a window
+# pays the cost; the rest read one small file. The content is advisory, so a few
+# seconds of staleness is fine. Override with WITAN_CONTEXT_TTL (seconds; 0
+# disables).
+_OUTPUT_CACHE_TTL = 30.0
+
+
+def _output_cache_ttl() -> float:
+    raw = os.environ.get("WITAN_CONTEXT_TTL")
+    if raw is None:
+        return _OUTPUT_CACHE_TTL
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _OUTPUT_CACHE_TTL
+
+
+def _atomic_write_private(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically and privately; never raises.
+
+    The hook runs as concurrent fresh processes (a ``/``-command burst fires it
+    repeatedly), so a plain ``write_text`` could let one process read a half-
+    written file. Writing a process-unique temp file and ``os.replace``-ing it in
+    means a reader always sees either the old or the new *complete* file. The
+    temp file is created ``0600`` (umask-independent) because the cached block
+    contains project/task titles and lives in a shared temp dir.
+    """
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, text.encode())
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _output_cache_file(graph_uri: str, repo: str | None, branch: str | None) -> Path:
+    key = f"{graph_uri}|{repo}|{branch}"
+    digest = hashlib.sha1(key.encode()).hexdigest()[:16]
+    return session_state.session_state_dir() / f"witan-ctx-{digest}.json"
+
+
+def _read_output_cache(
+    graph_uri: str, repo: str | None, branch: str | None
+) -> str | None:
+    ttl = _output_cache_ttl()
+    if ttl <= 0:
+        return None
+    try:
+        data = json.loads(_output_cache_file(graph_uri, repo, branch).read_text())
+        if time.time() - data["stamp"] < ttl:
+            return data["output"]
+    except Exception:  # noqa: BLE001 — missing/corrupt/stale cache → recompute
+        return None
+    return None
+
+
+def _write_output_cache(
+    graph_uri: str, repo: str | None, branch: str | None, output: str
+) -> None:
+    if _output_cache_ttl() <= 0:
+        return
+    _atomic_write_private(
+        _output_cache_file(graph_uri, repo, branch),
+        json.dumps({"stamp": time.time(), "output": output}),
+    )
+
 
 # ── Context injection (UserPromptSubmit hook) ─────────────────────────────────
 
 
-def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
+def _dbg(enabled: bool, msg: str) -> None:
+    """Print a diagnostic line to stderr when ``--debug`` is on.
+
+    stderr (not stdout) so it never contaminates the block the hook injects into
+    the prompt — the hook reads stdout only."""
+    if enabled:
+        print(f"[witan inject-context] {msg}", file=sys.stderr)
+
+
+def inject_context(
+    graph_uri: str, queries_dir: Path, token: str | None, debug: bool = False
+) -> str:
     """Return markdown context for active projects + ready tasks, or empty string.
 
     Builds the same output as ``workflow-context-inject.sh`` without the
     checkout-relative QUERIES_DIR assumption.
+
+    With ``debug=True`` the fault-tolerant swallows still return ``""`` (the hook
+    must never crash a prompt), but each one first reports *why* to stderr — a
+    broken graph, missing git, or empty result is otherwise indistinguishable
+    from "nothing to show".
     """
     try:
-        client = OmnigraphClient(graph_uri, queries_dir, token)
-        repo = _detect_repo()
+        # Kept inside the try so the hook still degrades to "" on the off chance
+        # any of this raises — the module contract is that it never does.
+        repo, branch = _cached_repo_and_branch()
+        _dbg(debug, f"detected repo={repo!r} branch={branch!r}")
+        _dbg(debug, f"graph_uri={graph_uri!r} output_cache_ttl={_output_cache_ttl()}s")
 
-        # Unscoped tasks (no repo) are always relevant regardless of cwd.
+        # Serve a recently-rendered block without touching the graph at all.
+        cached = _read_output_cache(graph_uri, repo, branch)
+        if cached is not None:
+            _dbg(debug, f"served from output cache ({len(cached)} chars)")
+            return cached
+
+        client = OmnigraphClient(graph_uri, queries_dir, token)
+
+        # The "list_unscoped_tasks" query is an all-tasks scan (capped at the
+        # query's own limit 10000). Derive both the unscoped and the repo-scoped
+        # sets from that one result rather than issuing a second
+        # list_tasks_by_repo read — each omnigraph read is fixed overhead
+        # regardless of row count, so fewer reads is the win, not narrower results.
         all_rows = client.read("read.gq", "list_unscoped_tasks", {})
         unscoped = [r for r in all_rows if not r.get("repo")]
 
@@ -47,43 +164,81 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
                 {"status": "active"},
             )
             projects = [p for p in projects if repo in (p.get("repos") or [])]
-            repo_tasks = client.read("read.gq", "list_tasks_by_repo", {"repo": repo})
+            repo_tasks = [r for r in all_rows if r.get("repo") == repo]
 
-        # Merge, deduplicating unscoped tasks already returned by repo query.
+        # Unscoped (no repo) and repo-scoped sets are disjoint; the dedup is just
+        # belt-and-suspenders.
         seen = {t["slug"] for t in repo_tasks}
         tasks = repo_tasks + [t for t in unscoped if t["slug"] not in seen]
+        _dbg(
+            debug,
+            f"graph reads OK: projects={len(projects)} "
+            f"repo_tasks={len(repo_tasks)} unscoped={len(unscoped)}",
+        )
     except Exception:  # noqa: BLE001
+        if debug:
+            _dbg(debug, "FAILED building context (returning empty block):")
+            traceback.print_exc(file=sys.stderr)
         return ""
+
+    # Isolated (like the CodeBranch read below): one read grouped by project
+    # replaces one read per shown project, but a failing/absent sessions query
+    # must still only drop the resume/staleness lines, never blank the
+    # projects/ready-tasks context. Sessions with no project_slug are skipped.
+    sessions_by_project: dict[str, list[dict]] = {}
+    if projects:
+        try:
+            for s in client.read("read.gq", "list_all_sessions", {}):
+                p_slug = s.get("project_slug")
+                if p_slug:
+                    sessions_by_project.setdefault(p_slug, []).append(s)
+        except Exception:  # noqa: BLE001
+            if debug:
+                _dbg(debug, "sessions read failed (skipping resume/staleness lines):")
+                traceback.print_exc(file=sys.stderr)
+            sessions_by_project = {}
 
     # Isolated from the block above: a CodeBranch query failing (e.g. an
     # existing store that hasn't run `witan migrate schema` since CodeBranch
     # was added) must never blank the projects/ready-tasks context that
     # already works.
     branch_tasks: list[dict] = []
-    if repo:
+    if repo and branch:
         try:
-            branch = repo_module.current_branch()
-            if branch:
-                branch_tasks = client.read(
-                    "read.gq",
-                    "code_branch_tasks",
-                    {"branch_slug": f"{repo}|{branch}"},
-                )
+            branch_tasks = client.read(
+                "read.gq",
+                "code_branch_tasks",
+                {"branch_slug": f"{repo}|{branch}"},
+            )
         except Exception:  # noqa: BLE001
+            if debug:
+                _dbg(
+                    debug,
+                    "code_branch_tasks read failed (run `witan migrate schema`?):",
+                )
+                traceback.print_exc(file=sys.stderr)
             branch_tasks = []
     open_branch_tasks = [t for t in branch_tasks if t.get("status") != "closed"]
 
     # Shared with ``task_ready`` so the injected list and the tool agree —
     # including the reclaim of ``in_progress`` tasks whose lease has lapsed.
     ready = readiness.filter_ready(tasks)
+    _dbg(
+        debug,
+        f"ready={len(ready)} open_branch_tasks={len(open_branch_tasks)} "
+        f"sessions_for={len(sessions_by_project)} project(s)",
+    )
 
     lines: list[str] = []
 
     if projects:
+        proj_header = f"This repository has {len(projects)} active tracked project(s)"
+        if len(projects) > 3:
+            proj_header += " — showing the first 3, run `witan projects` for all"
         lines += [
             "## Active Workflow Projects",
             "",
-            f"This repository has {len(projects)} active tracked project(s):",
+            f"{proj_header}:",
             "",
         ]
         for p in projects[:3]:
@@ -91,9 +246,9 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
             lines.append(f"  Phase: {p['phase']}")
             if p.get("github_issue"):
                 lines.append(f"  Issue: {p['github_issue']}")
-            session_line = _latest_session_line(client, p["slug"])
-            if session_line:
-                lines.append(session_line)
+            lines.extend(
+                _project_session_lines(sessions_by_project.get(p["slug"], []), p)
+            )
         lines += [
             "",
             "If this session is contributing to one of the projects above, call",
@@ -119,10 +274,15 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
         ]
 
     if ready:
+        ready_header = f"{len(ready)} task(s) are ready to work (no open blockers)"
+        if len(ready) > 5:
+            ready_header += (
+                " — showing the top 5 by priority, run `witan tasks` for all"
+            )
         lines += [
             "## Ready Tasks",
             "",
-            f"{len(ready)} task(s) are ready to work (no open blockers):",
+            f"{ready_header}:",
             "",
         ]
         for t in ready[:5]:
@@ -138,34 +298,112 @@ def inject_context(graph_uri: str, queries_dir: Path, token: str | None) -> str:
         ]
 
     if not lines:
-        return ""
-    if projects:
-        lines.append("If this is unrelated work, ignore the above.")
-    return "\n".join(lines)
+        output = ""
+    else:
+        if projects:
+            lines.append("If this is unrelated work, ignore the above.")
+        output = "\n".join(lines)
+
+    # Cache the freshly rendered block (including an empty one) so the next
+    # prompt in this window skips the graph reads entirely.
+    _write_output_cache(graph_uri, repo, branch, output)
+    _dbg(
+        debug,
+        f"rendered {len(output)} chars"
+        + ("" if output else " (empty — no projects, ready tasks, or branch tasks)"),
+    )
+    return output
 
 
-def _latest_session_line(client: OmnigraphClient, project_slug: str) -> str | None:
-    """One-line "where things stand" from the project's most recent session.
+# A project sitting through this many sessions in the same phase without
+# advancing is a soft signal that it may be stuck — nudge, don't block.
+_STALE_SESSION_THRESHOLD = 4
 
-    This is the handoff summary written by ``workflow_session_end`` — the single
-    most valuable continuity artifact, otherwise invisible on resume. Isolated
-    and fault-tolerant: any failure (including a store without the session query)
-    yields ``None`` so a broken session read can never blank the projects/tasks
-    context that already works.
+
+def _project_session_lines(sessions: list[dict], project: dict) -> list[str]:
+    """Continuity + staleness lines for one project from its sessions.
+
+    ``sessions`` is this project's slice of the single all-sessions read, ordered
+    by ``started_at`` asc. Returns up to two lines: the latest session's handoff
+    summary (the artifact written by ``workflow_session_end`` that is otherwise
+    invisible on resume) and a staleness nudge when many sessions have accrued in
+    the current phase without advancing. Pure and fault-tolerant: an empty list
+    yields ``[]`` so a missing/failed sessions read can never blank the
+    projects/tasks context that already works.
     """
-    try:
-        sessions = client.read(
-            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
-        )
-        if not sessions:
-            return None
-        latest = sessions[-1]  # query orders by started_at asc → last is newest
-        summary_lines = (latest.get("summary") or "").strip().splitlines()
-        summary = summary_lines[0][:200] if summary_lines else ""
-        if not summary:
-            return None
+    if not sessions:
+        return []
+
+    out: list[str] = []
+
+    latest = sessions[-1]  # ordered by started_at asc → last is newest
+    summary_lines = (latest.get("summary") or "").strip().splitlines()
+    summary = summary_lines[0][:200] if summary_lines else ""
+    if summary:
         state = "still open" if not latest.get("ended_at") else "ended"
-        return f"  Last session ({state}): {summary}"
+        out.append(f"  Last session ({state}): {summary}")
+
+    phase = project.get("phase")
+    if phase:
+        in_phase = sum(1 for s in sessions if s.get("phase") == phase)
+        if in_phase >= _STALE_SESSION_THRESHOLD:
+            out.append(
+                f"  ⚠ {in_phase} sessions in `{phase}` — if this phase is done, "
+                "call `workflow_project_advance` (or `workflow_project_complete`)."
+            )
+    return out
+
+
+def _cached_repo_and_branch() -> tuple[str | None, str | None]:
+    """``(repo, branch)`` for the current checkout, cached on disk with a short
+    TTL so the prompt hook doesn't spawn git on every prompt.
+
+    Fully fault-tolerant: a cache miss, unreadable/stale entry, or any detection
+    error falls through to (or returns) live values and never raises. When
+    ``WITAN_REPO`` is set, detection needs no git at all, so the cache is skipped.
+    """
+    project_dir = _cwd_or_dot()
+
+    # WITAN_REPO short-circuits git — nothing to amortize, and it can differ from
+    # what a dir-keyed cache holds, so don't consult/write the cache in that mode.
+    # Skip branch detection when there's no repo (e.g. WITAN_REPO=""): a branch
+    # is only used to join CodeBranch, so it's wasted git work without a repo.
+    if os.environ.get("WITAN_REPO") is not None:
+        repo = _detect_repo()
+        return repo, (_current_branch() if repo else None)
+
+    digest = hashlib.sha1(project_dir.encode()).hexdigest()[:16]
+    cache_file = session_state.session_state_dir() / f"witan-repo-{digest}.json"
+    try:
+        data = json.loads(cache_file.read_text())
+        if time.time() - data["stamp"] < _REPO_CACHE_TTL:
+            return data.get("repo"), data.get("branch")
+    except Exception:  # noqa: BLE001
+        pass
+
+    repo = _detect_repo()
+    branch = _current_branch() if repo else None
+    _atomic_write_private(
+        cache_file, json.dumps({"stamp": time.time(), "repo": repo, "branch": branch})
+    )
+    return repo, branch
+
+
+def _cwd_or_dot() -> str:
+    """``$CLAUDE_PROJECT_DIR`` or the cwd, degrading to ``"."`` — ``Path.cwd()``
+    itself raises ``OSError`` if the working directory was deleted."""
+    project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
+    if project_dir:
+        return project_dir
+    try:
+        return str(Path.cwd())
+    except OSError:
+        return "."
+
+
+def _current_branch() -> str | None:
+    try:
+        return repo_module.current_branch()
     except Exception:  # noqa: BLE001
         return None
 
@@ -174,30 +412,22 @@ def _detect_repo() -> str | None:
     """Detect canonical repo URI from WITAN_REPO, CLAUDE_PROJECT_DIR, or cwd.
 
     WITAN_REPO="" (explicitly set to empty string) suppresses detection entirely.
-    """
-    import re
 
+    Shares ``repo`` module's resolution (``origin`` first, then the first remote
+    of any name) and its normaliser, so the hook and ``repo.detect`` can't drift
+    — but keyed off ``CLAUDE_PROJECT_DIR``/cwd rather than ``Path.cwd()`` because
+    a persistent MCP server's cwd is not the session's checkout.
+    """
     witan_repo = os.environ.get("WITAN_REPO")
     if witan_repo is not None:
         return witan_repo or None  # "" → disabled; non-empty → use as-is
 
-    project_dir = os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
+    project_dir = _cwd_or_dot()
     try:
-        raw = subprocess.check_output(
-            ["git", "-C", project_dir, "remote", "get-url", "origin"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except subprocess.CalledProcessError:
+        raw = repo_module.git_remote_url(Path(project_dir))
+    except Exception:  # noqa: BLE001 — the prompt hook must never crash
         return None
-    if not raw:
-        return None
-    url = re.sub(r"\.git$", "", raw).rstrip("/")
-    if m := re.match(r"(?:ssh://)?[^@]+@([^:/]+)[:/](.+)", url):
-        return f"https://{m.group(1)}/{m.group(2)}"
-    if m := re.match(r"https?://(?:[^@/]+@)?([^/]+)/(.+)", url):
-        return f"https://{m.group(1)}/{m.group(2)}"
-    return url
+    return repo_module.normalise(raw) if raw else None
 
 
 # ── Session checkpoint (Stop hook) ────────────────────────────────────────────

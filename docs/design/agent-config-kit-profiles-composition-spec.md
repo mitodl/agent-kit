@@ -379,19 +379,44 @@ beyond what `fetch.py`/`git` credential helpers already provide.
 
 ## 9. Open questions
 
-- **O-DEFAULT** — profiles present, none selected: apply-all vs. require a
-  selection vs. honor `[options] default_profiles`. Lean: `default_profiles`
-  if set, else apply-all (profiles are opt-in filters).
-- **O-INSTR** — should a profile be able to scope `instructions`? v1: no.
-- **O-MEM** — org *membership* verification (vs. URL-only detection). Deferred
-  per O1; add behind an opt-in `[[org]] verify_membership = true` if a real
-  need appears.
-- **O-STATE** — prune state file (cli spec §5) is per-manifest; zero-arg /
-  org / prefix routing means one CWD may be applied from different manifests
-  over time. Define state-file identity for resolved-manifest applies (key by
-  resolved manifest hash + platform) before wiring `--prune` into zero-arg.
-- **O-PRIORITY** — sequencing (see §10) assumes format→profiles/includes→
-  config→scoping→org. Confirm before implementation.
+All resolved as of the full feature set landing (§10) — kept here with their
+resolutions rather than deleted, since each still explains a real design
+tradeoff a future reader might otherwise re-litigate.
+
+- **O-DEFAULT** — *resolved: `default_profiles` if set, else apply-all.*
+  `[options] default_profiles` is honored when no `--profile` is given;
+  with neither, the manifest's full unfiltered bundle applies — profiles
+  are opt-in filters, not gates. Implemented in
+  `manifest.resolve_profile`/`cli._resolve_profiles`.
+- **O-INSTR** — *resolved: no, v1.* `instructions` stays a profile-
+  independent scalar (`RegistrationBundle.instructions` is copied through
+  `resolve_profile` unchanged regardless of which profile is selected).
+  Revisit only if a real need for per-profile instructions appears.
+- **O-MEM** — *resolved: deferred, as proposed.* `resolve.detect_org` is
+  URL-only (parses the GitHub owner from the git remote) with no `gh
+  api`/auth call to verify actual org membership. No `verify_membership`
+  flag exists yet — add one behind an opt-in if a real need appears.
+- **O-STATE** — *resolved: state file identity follows the write TARGET,
+  not just the manifest.* A manifest resolved via `[[org]]`/`[[scope]]`/
+  `default_manifest` typically lives outside the repo it's applied into (a
+  shared bundle referenced from many repos) — `<manifest>.lock.json`'s
+  usual manifest-adjacent default would then be one state file shared (and
+  clobbered) across every repo applying it, corrupting what `--prune`
+  believes it safely wrote to each repo's own project-scope targets.
+  `cli._default_prune_state_path` redirects to `<repo>/.agent-config-kit-
+  state.json` whenever the effective write scope is `project` and the
+  resolved manifest isn't already inside the repo being applied into (an
+  explicit local path or the repo-local zero-arg case is already
+  repo-scoped and keeps the original default unchanged). A `global`-scope
+  apply's target is the same single location regardless of which repo you
+  ran it from, so its state intentionally stays shared — this redirection
+  is `project`-only. Not keyed by "resolved manifest hash + platform" as
+  originally proposed — keying by the actual write target turned out to be
+  the more direct fix for the failure mode this question was about.
+- **O-PRIORITY** — *resolved: confirmed.* Implementation followed exactly
+  this order — manifest format v2, then profiles/includes, then global
+  config + directory-prefix routing, then org-scoped apply, then this
+  docs/integration-tests pass.
 
 ## 10. Sequencing (tasks linked to the project)
 

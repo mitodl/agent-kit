@@ -1,5 +1,7 @@
 # witan-code
 
+> "witan" is pronounced `WIT-ən` (/ˈwɪtən/) — rhymes with "written" minus the r.
+
 A tree-sitter-based **code graph** MCP server (Layer 2) for coding agents,
 backed by [Omnigraph](https://github.com/ModernRelay/omnigraph). It indexes a
 repository's symbols (functions, methods, classes, modules) and their
@@ -13,6 +15,22 @@ graph.
 > **Wiring it into your agents locally** (MCP server, the `PostToolUse` reindex
 > hook, and the indexer CLI, run straight from your checkout): see
 > [Local Development Setup](../../../docs/agent-memory.md#local-development-setup).
+
+## When to use this vs. grep / the `Explore` agent
+
+Reach for `code_*` tools when the question is **structural**, not textual:
+exact symbol definitions, who calls/references a symbol (and transitively —
+change-impact / blast radius before an edit), what a file defines, or which
+other repo provides/consumes a shared contract (env var, endpoint, package,
+service). Grep still wins for literal string/comment searches and one-off text
+matches — it finds *text*; this finds **symbols and their relationships**,
+including things grep structurally cannot answer (a function's transitive
+callers, or which service consumes an endpoint another service serves). See
+the `/witan-code` skill for a full tool-selection guide and reference table.
+
+`Calls`/`References`/`Imports`/`Inherits` edges are heuristic (syntactic name
+resolution, not a true call graph) — see
+[Heuristic edges](#heuristic-edges-important) below.
 
 ## Two-layer composition
 
@@ -33,6 +51,14 @@ in a `symbolRefs`-style field. There is **no hard cross-store edge**: the id is
 just a string that resolves in the code graph via `code_find_definition` /
 `get_symbol`. This keeps the team-synced memory graph independent of any
 machine's local code index.
+
+## Documentation
+
+- [User guide](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/docs/USER_GUIDE.md) — task-oriented walkthrough: install,
+  first index, definition/caller/impact queries, cross-repo bridge basics,
+  troubleshooting.
+- [CLI reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/docs/CLI_REFERENCE.md) — every `witan-code` command with
+  its full flag table and an example invocation.
 
 ## Cross-repo context bridge (Layer 2.5)
 
@@ -170,7 +196,18 @@ wires both servers together via `uvx --from … --with …`. See the
 
 To use witan-code **standalone** (code graph only, no memory/task tools):
 
-**From the published git repo:**
+**From PyPI:**
+
+```bash
+# One-shot (uvx):
+uvx --from witan-code witan-code index
+
+# Persistent CLI install:
+uv tool install witan-code
+witan-code index
+```
+
+**From the published git repo** (to track pre-release/unreleased code):
 
 ```bash
 # One-shot (uvx):
@@ -193,17 +230,33 @@ uvx --from . witan-code index path/to/file.py   # single file/subpath
 uv run witan-code index
 ```
 
-**Standalone omnigraph binary install:** witan-code needs the `omnigraph` CLI
-on `PATH`. If `witan` is also installed, its own `witan setup` already put it
-there and nothing further is needed. Running witan-code truly standalone
-(no `witan`), run `witan-code setup` once:
+**Full standalone install:** `witan-code setup` installs everything a
+witan-code-only deployment needs — the `omnigraph` binary, the `/witan-code`
+skill, all four hooks (or the Pi extension), and the MCP server entry — for
+one agent or all detected ones:
 
 ```bash
-witan-code setup            # fetches the pinned omnigraph release to ~/.local/bin/
-witan-code setup --dry-run  # preview without writing
+witan-code setup                    # Claude Code (default)
+witan-code setup --agent pi         # Pi
+witan-code setup --agent all        # every detected agent
+witan-code setup --dry-run          # preview without writing
+witan-code setup --author "Jane Doe"  # attribution (default: git config user.name)
 ```
 
-This downloads the release pinned by `_OMNIGRAPH_VERSION` in
+If `witan` is *also* installed and witan-code is importable in that same
+environment (e.g. via the `--with` in the `uv tool install`/MCP server's
+`uvx` invocation), `witan setup` folds this same bundle in automatically —
+skill and hooks (registered as `witan code …`, so only `witan` needs to be on
+`PATH`), but **not** a second MCP server entry, since `witan serve` already
+mounts witan-code's tools in-process. One `witan setup` then covers both
+packages, and a separate `witan-code setup` isn't required (though re-running
+it afterwards is harmless — `apply()` is an idempotent read-merge-write, and
+it *will* add its own standalone MCP entry/`witan-code …` hooks alongside
+witan's). Run `witan-code setup` on its own for a witan-code-only install, or
+when witan-code isn't importable from witan's environment. See
+[Hooks](#hooks) and [Skill](#skill).
+
+This downloads the omnigraph release pinned by `_OMNIGRAPH_VERSION` in
 [`witan_code/setup.py`](./witan_code/setup.py) — the same pin `witan`'s own
 `setup.py` uses, kept in lockstep by Renovate (see the repo-root
 `renovate.json`'s `omnigraph-version` customManager, which bumps both files
@@ -218,8 +271,10 @@ latest upstream release directly if missing, independent of the
 `witan-code setup`/`_OMNIGRAPH_VERSION` pin) and prints a hint; it is not
 required when installing via uvx/uv.
 
-To add witan-code as a standalone MCP server (without the witan memory/task
-tools), copy the appropriate snippet from `config/` into your agent's config:
+**Manual / unsupported-agent install:** for an agent `witan-code setup`
+doesn't cover, copy the appropriate MCP snippet from `config/` into your
+agent's config, and see [Hooks](#hooks)/[Skill](#skill) for the manual
+symlink alternative:
 
 - pi: `config/pi.json` → `~/.pi/agent/mcp.json`
 - Claude: `config/claude.json` → `claude_desktop_config.json`
@@ -232,6 +287,7 @@ tools), copy the appropriate snippet from `config/` into your agent's config:
 | `WITAN_CODE_DIR` | `~/.local/share/witan/code` | directory of per-repo `<slug>.omni` stores |
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
+| `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
 
 The store URI for a repo is `<dir>/<sanitized-slug>.omni`, where the slug's `/`
 and `:` are replaced with `_`. The shared cross-repo bridge lives alongside them
@@ -290,19 +346,100 @@ that repo's bridge branch overlay instead of `main` — see
   packages, deployed repos — behind it). Defaults to a repos-only view;
   `--kind` filters to one contract kind and `--repo` keeps only links touching
   a matching repo.
+- `session-init` — seed/refresh the whole repo's code graph in the background
+  (see [Hooks](#hooks)); registered as the `SessionStart` hook, not usually
+  run by hand.
+- `reindex-hook` — incrementally reindex the file named in stdin's hook JSON
+  (see [Hooks](#hooks)); registered as the `PostToolUse` hook, not usually
+  run by hand.
+- `inject-context` — print the `UserPromptSubmit` status block (see
+  [Hooks](#hooks)); registered as the `UserPromptSubmit` hook, not usually
+  run by hand.
+- `optimize [--store PATH] [--bridge]` — compact a store's Lance fragments
+  (non-destructive; see [Store compaction](#store-compaction)). Defaults to
+  the current repo's store; `--bridge` targets the shared bridge store
+  instead.
+- `cleanup [--store PATH] [--bridge] [--keep N] [--older-than DUR] --yes` —
+  reclaim disk by GC'ing old Lance versions (**destructive**; requires
+  `--yes`).
+- `checkpoint` — opportunistically compact the current repo's store and the
+  bridge store if due (see [Hooks](#hooks)); registered as the `Stop` hook,
+  not usually run by hand.
 
 Both print a summary: files scanned/indexed/skipped, symbols, edges, errors. A
 parse failure on one file logs to stderr and continues.
 
-## Reindex hook
+## Store compaction
 
-`configs/hooks/codegraph-reindex.sh` is a `PostToolUse` hook (matcher
-`Edit|Write`) that incrementally re-indexes a single changed source file. It is
-best-effort and non-blocking — it always exits 0 and silences output, so a
-missing binary or parse failure never interrupts the agent.
+Every `load()`/`mutate()` call (indexing) appends a new tiny Lance fragment +
+manifest version to a store; left uncompacted, it bloats until *opening* the
+store dominates query latency, regardless of row count — the same failure
+mode witan's own store hit (PR #98; see
+[`witan/witan/maintenance.py`](../witan/witan/maintenance.py)). Two
+mechanisms keep this in check, mirroring that module (deliberately duplicated
+— no cross-package import):
 
-Install: symlink to `~/.claude/hooks/codegraph-reindex.sh` and register under
-`hooks.PostToolUse` with matcher `Edit|Write`.
+- **Opportunistic**: the `witan-code checkpoint` Stop hook spawns a
+  throttled, detached `witan-code optimize` for the current repo's store and
+  the shared bridge store, at most once per `WITAN_CODE_OPTIMIZE_INTERVAL`
+  (default daily; `0` disables) each — see [Hooks](#hooks).
+- **Scheduled**: `witan-code optimize [--store PATH | --bridge]` /
+  `witan-code cleanup --yes` for cron/systemd-timer driven maintenance on a
+  busy store. `optimize` is non-destructive and safe to run repeatedly;
+  `cleanup` GCs old Lance versions to reclaim disk and is destructive, so it
+  requires `--yes`.
+
+## Skill
+
+[`witan_code/skills/witan-code/SKILL.md`](witan_code/skills/witan-code/SKILL.md)
+is a `/witan-code` entry point covering tool selection (vs. grep/Explore), a
+quick tool reference, and linking symbol ids into witan tasks/memories.
+Installed automatically by `witan-code setup` (to `~/.claude/skills/`, or
+`~/.pi/agent/skills/` under `--agent pi`); to install it manually instead,
+symlink or copy the directory into the equivalent path for your agent.
+
+## Hooks
+
+Four hooks — all bare CLI commands, no wrapper scripts, so they're portable
+to any platform witan-code installs on (Windows included — no bash/setsid
+dependency). Named `witan-code <command>` below (standalone install via
+`witan-code setup`); when `witan setup` folds this bundle in instead (see
+[Install](#install)), they register as `witan code <command>` so only
+`witan` needs to be on `PATH`. Register manually per
+[configs/hooks/README.md](../../../configs/hooks/README.md) for either form.
+A Pi equivalent of all four lives in one extension,
+[`witan_code/extensions/pi/codegraph.ts`](witan_code/extensions/pi/codegraph.ts)
+(see [configs/pi/README.md](../../../configs/pi/README.md)):
+
+- **`witan-code session-init`** (`SessionStart`) — seeds/refreshes the whole
+  repo in the background on session start (first run builds the full index;
+  later runs re-hash and skip unchanged files). Detaches a background child
+  and returns immediately; never delays session start. A per-repo lock
+  (`${TMPDIR:-/tmp}/codegraph-init-<sha256(project_dir)[:16]>.lock`, released
+  by the detached child when it finishes) prevents overlapping sessions from
+  indexing at once — hashed rather than a sanitized path so two distinct
+  paths can't collide on the same lock and a long checkout path can't exceed
+  a filesystem's filename length limit.
+- **`witan-code reindex-hook`** (`PostToolUse`, matcher `Edit|Write`) — reads
+  the tool payload from stdin and incrementally re-indexes the changed file
+  in the foreground (fast — one file). Best-effort — a missing/malformed
+  payload or parse failure is a silent no-op, never interrupting the agent.
+- **`witan-code inject-context`** (`UserPromptSubmit`) — prints a short status
+  block: whether the current repo is indexed (file count, last-updated time),
+  or that a background index from `session-init` is still running (checking
+  the same lock path above), plus a nudge to prefer `code_*` tools over grep.
+  Independent of `witan`'s own `inject-context` hook (no cross-package
+  coupling) — register it alone for a witan-code-only install. Prints
+  nothing when the repo has neither a store nor an index in flight.
+- **`witan-code checkpoint`** (`Stop`) — spawns a throttled, detached
+  `witan-code optimize` for the current repo's store and the shared bridge
+  store if either is due (see [Store compaction](#store-compaction)).
+  Independent of `witan`'s own `session-checkpoint` hook (no cross-package
+  coupling). Best-effort and non-blocking.
+
+Manual install: register the bare commands directly under the matching event
+in `settings.json` (see the linked README for the exact JSON) — there are no
+scripts to symlink.
 
 ## Incremental indexing
 

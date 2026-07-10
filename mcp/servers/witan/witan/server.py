@@ -15,10 +15,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 
 from . import config as cfg_module
+from . import elicit
 from . import readiness
 from . import repo as repo_module
 from . import scan
@@ -576,6 +577,268 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
     }
 
 
+# ── Cross-store merge (docs/migration-runbook.md) ──────────────────
+
+# `omnigraph load --mode merge` overwrites unconditionally on a slug `@key`
+# collision (last-loaded-file wins) — verified empirically, see the migration
+# runbook. It has no notion of "newer" data. The fields below are, per node
+# type, the ones that actually change on every write — reconciliation prefers
+# them, falling back down the tuple when a row predates that field or the
+# type has no `updated_at` at all (WorkflowSession/WorkflowTrace/Topic).
+_RECONCILE_TS_FIELDS: dict[str, tuple[str, ...]] = {
+    "Memory": ("updated_at", "created_at"),
+    "WorkflowProject": ("updated_at", "created_at"),
+    "Task": ("updated_at", "created_at"),
+    "CodeBranch": ("updated_at", "created_at"),
+    "WorkflowSession": ("ended_at", "started_at"),
+    "WorkflowTrace": ("created_at",),
+    "Topic": ("created_at",),
+}
+
+
+def _reconcile_timestamp(row_type: str, data: dict) -> str | None:
+    """The best available comparison timestamp for a row, or ``None`` if it has
+    none of its type's candidate fields set (an in-progress WorkflowSession
+    with no ``ended_at`` falls back to ``started_at``, not to nothing)."""
+    for field in _RECONCILE_TS_FIELDS.get(row_type, ("updated_at", "created_at")):
+        value = data.get(field)
+        if value:
+            return value
+    return None
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 timestamp for comparison, or ``None`` if absent/unparsable.
+
+    Two stores' timestamps aren't guaranteed to share a textual format (``Z``
+    vs. ``+00:00``, or genuinely different offsets) — comparing the raw
+    strings sorts wrong across those (e.g. ``"...T23:30:00-05:00"`` — later in
+    UTC — sorts *before* ``"...T00:00:00Z"`` the next calendar day
+    lexicographically). Parsed values are normalized to naive UTC so any two
+    are always comparable — ``datetime`` raises on comparing an aware value
+    against a naive one, and omnigraph's own export already strips the offset
+    from what witan writes (aware, ``+00:00``) down to a naive string, so
+    aware/naive comparison isn't a hypothetical here. An unparsable value
+    degrades to ``None`` (treated as "no usable timestamp") rather than
+    raising, since a malformed value shouldn't crash a merge — it just can't
+    win a comparison."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
+    """Split an ``omnigraph export`` JSONL file into node rows keyed by
+    ``(type, slug)`` and a plain list of edge rows (no ``slug``, so not
+    reconciled — they pass through the merge as exported).
+
+    An export is an external boundary (another process's output, not
+    necessarily produced by this run), so a malformed line raises a clear
+    ``RuntimeError`` naming the offending line rather than a raw
+    ``JSONDecodeError``/``KeyError`` mid-reconciliation."""
+    nodes: dict[tuple[str, str], dict] = {}
+    edges: list[dict] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"{path}: corrupted export line, not valid JSON: {line!r}"
+                ) from exc
+            row_type = row.get("type")
+            if not row_type:
+                raise RuntimeError(f"{path}: export row missing a 'type': {row!r}")
+            slug = (row.get("data") or {}).get("slug")
+            if slug:
+                nodes[(row_type, slug)] = row
+            else:
+                edges.append(row)
+    return nodes, edges
+
+
+def merge_store(
+    source: str, *, target: str | None = None, dry_run: bool = False
+) -> dict:
+    """Merge another store's data into this store, newest-record-wins on slug
+    collisions.
+
+    Implements the runbook's export → reconcile → ``load --mode merge`` path
+    (docs/migration-runbook.md): for every node that exists in both stores
+    (matched on ``(type, slug)``), keeps whichever has the newer comparison
+    timestamp (``_RECONCILE_TS_FIELDS``) instead of relying on
+    ``omnigraph load --mode merge``'s raw last-loaded-wins overwrite, which
+    ignores content entirely. Rows only in ``source`` are always added; rows
+    only in the target are left untouched. Edge rows have no slug and are not
+    reconciled — they pass through unchanged in the same load.
+
+    Repeatable by construction: re-running against the same source and an
+    already-merged target loads nothing new (every source row loses
+    reconciliation to its own already-applied, equal-or-newer copy) — safe to
+    run on a schedule or after every session rather than as a one-shot.
+
+    Parameters
+    ----------
+    source:
+        Store URI to merge from (local path, ``s3://``, or ``file://``).
+    target:
+        Store URI to merge into. Defaults to the configured store. Created
+        (schema-applied, empty) automatically if it's a local path that
+        doesn't exist yet — same as ``witan serve``/``witan <cmd>`` on a
+        fresh machine; no-op for a remote ``s3://``/``http(s)://`` target,
+        which is assumed to already exist.
+    dry_run:
+        Compute and return the reconciliation decisions without loading
+        anything.
+
+    Returns counts (``added``/``updated``/``kept_target``) and the full
+    per-``(type, slug)`` decision list, plus (when not a dry run)
+    ``rows_loaded`` and the raw ``load`` output.
+    """
+    # `_acquire_store_lock`/`_ensure_graph` build filesystem `Path`s directly
+    # from the URI and don't strip a URI scheme — same convention as the rest
+    # of witan (`OmnigraphClient`, `_ensure_graph`), where a local store is
+    # always a plain path and only http(s)/s3 count as "remote". `omnigraph`
+    # itself accepts an explicit `file://` for `--store`, so callers may
+    # reasonably pass one; strip it before it reaches any local Path logic.
+    if source.startswith("file://"):
+        source = source[len("file://") :]
+    target = target or client.graph_uri
+    if target.startswith("file://"):
+        target = target[len("file://") :]
+    _ensure_graph(target)
+    binary = client._binary
+
+    local_lock = None
+    try:
+        if not target.startswith(("http://", "https://", "s3://")):
+            local_lock = _acquire_store_lock(target)
+
+        with tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp:
+            tmp_path = Path(tmp)
+            source_file = tmp_path / "source.jsonl"
+            target_file = tmp_path / "target.jsonl"
+
+            with open(source_file, "w", encoding="utf-8") as f:
+                _run_omnigraph(
+                    [binary, "export", "--store", source],
+                    label="export (source)",
+                    stdout=f,
+                )
+            with open(target_file, "w", encoding="utf-8") as f:
+                _run_omnigraph(
+                    [binary, "export", "--store", target],
+                    label="export (target)",
+                    stdout=f,
+                )
+
+            source_nodes, source_edges = _parse_export(source_file)
+            target_nodes, _ = _parse_export(target_file)
+
+            decisions = []
+            winners: list[dict] = []
+            for (row_type, slug), row in source_nodes.items():
+                existing = target_nodes.get((row_type, slug))
+                if existing is None:
+                    decisions.append(
+                        {"type": row_type, "slug": slug, "decision": "added"}
+                    )
+                    winners.append(row)
+                    continue
+                src_ts = _reconcile_timestamp(row_type, row["data"])
+                dst_ts = _reconcile_timestamp(row_type, existing["data"])
+                src_dt = _parse_ts(src_ts)
+                dst_dt = _parse_ts(dst_ts)
+                if src_dt is not None and (dst_dt is None or src_dt > dst_dt):
+                    decisions.append(
+                        {
+                            "type": row_type,
+                            "slug": slug,
+                            "decision": "updated",
+                            "source_ts": src_ts,
+                            "target_ts": dst_ts,
+                        }
+                    )
+                    winners.append(row)
+                else:
+                    decisions.append(
+                        {
+                            "type": row_type,
+                            "slug": slug,
+                            "decision": "kept-target",
+                            "source_ts": src_ts,
+                            "target_ts": dst_ts,
+                        }
+                    )
+
+            counts = {
+                "added": sum(1 for d in decisions if d["decision"] == "added"),
+                "updated": sum(1 for d in decisions if d["decision"] == "updated"),
+                "kept_target": sum(
+                    1 for d in decisions if d["decision"] == "kept-target"
+                ),
+            }
+
+            if dry_run:
+                return {
+                    "dry_run": True,
+                    "target": target,
+                    "decisions": decisions,
+                    **counts,
+                }
+
+            to_load = winners + source_edges
+            if not to_load:
+                return {
+                    "merged": True,
+                    "target": target,
+                    "decisions": decisions,
+                    "rows_loaded": 0,
+                    **counts,
+                }
+
+            reconciled_file = tmp_path / "reconciled.jsonl"
+            with open(reconciled_file, "w", encoding="utf-8") as f:
+                for row in to_load:
+                    f.write(json.dumps(row) + "\n")
+
+            load_out = _run_omnigraph(
+                [
+                    binary,
+                    "load",
+                    "--store",
+                    target,
+                    "--data",
+                    str(reconciled_file),
+                    "--mode",
+                    "merge",
+                ],
+                label="load (reconciled)",
+            )
+    finally:
+        if local_lock is not None:
+            fcntl.flock(local_lock.fileno(), fcntl.LOCK_UN)
+            local_lock.close()
+
+    return {
+        "merged": True,
+        "target": target,
+        "decisions": decisions,
+        "rows_loaded": len(to_load),
+        "output": load_out.strip(),
+        **counts,
+    }
+
+
 # ── Composite re-rank (spec §7) ───────────────────────────────────
 
 
@@ -904,6 +1167,7 @@ def _store_memory(
     # session that no longer exists in the store would raise — swallow it so a
     # provenance failure never blocks the memory write.
     active = _active_session_slug()
+    session_linked = False
     if active:
         try:
             client.change(
@@ -912,14 +1176,31 @@ def _store_memory(
                 {"from": active, "to": slug},
             )
             _invalidate_edge_index()  # SessionProduced feeds corroboration
+            session_linked = True
         except RuntimeError:
             pass
 
-    return {"slug": slug, "kind": kind, "repo": detected_repo}
+    result = {
+        "slug": slug,
+        "kind": kind,
+        "repo": detected_repo,
+        "session_linked": session_linked,
+    }
+    # Surface the silent provenance gap: with no active session, the memory is
+    # stored but not linked to the project's session history or completion trace.
+    # A one-line nudge lets the agent react (call workflow_session_start) instead
+    # of losing the link without noticing.
+    if active is None:
+        result["note"] = (
+            "Stored without an active workflow session, so it is not linked to a "
+            "project (no SessionProduced provenance). Call workflow_session_start "
+            "first if this memory should roll up to the project's history."
+        )
+    return result
 
 
 @mcp.tool
-def memory_store(
+async def memory_store(
     kind: MemoryKind,
     title: str,
     content: str,
@@ -930,6 +1211,7 @@ def memory_store(
     tags: list[str] | None = None,
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """
     Store a new memory in the shared graph.
@@ -971,6 +1253,10 @@ def memory_store(
         Optional author/agent trust in this memory, 0.0–1.0. Feeds the search
         re-rank; omitted memories use the configured default.
     """
+    # When no repo is known (not passed, and detection finds none), offer to
+    # scope it rather than silently persisting an unscoped node. Falls back to
+    # None (today's behavior) under automation / an unsupported client.
+    repo = await elicit.repo_or_detect(ctx, repo)
     return _store_memory(
         kind,
         title,
@@ -1008,7 +1294,9 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
 
 
 @mcp.tool
-def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
+async def memory_link(
+    from_slug: str, to_slug: str, kind: MemoryLinkKind, ctx: Context | None = None
+) -> dict:
     """
     Create a typed edge between two memories.
 
@@ -1075,6 +1363,23 @@ def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
             "kind": kind,
             "linked": False,
             "missing": missing,
+        }
+
+    # ``supersedes`` hides the older memory from default search — confirm that
+    # loss of visibility. Headless/unsupported clients proceed as before; only an
+    # explicit decline aborts. Other kinds don't hide anything, so no prompt.
+    if kind == "supersedes" and not await elicit.confirm(
+        ctx,
+        f"Superseding hides {to_slug} from default memory_search results "
+        f"(in favor of {from_slug}). Proceed?",
+        default_when_unsupported=True,
+    ):
+        return {
+            "from": from_slug,
+            "to": to_slug,
+            "kind": kind,
+            "linked": False,
+            "reason": "declined",
         }
 
     client.change(
@@ -1248,6 +1553,45 @@ def _track_code_branch(
 
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 WorkflowStatus = Literal["active", "completed", "abandoned"]
+
+_PHASE_ORDER = {"discovery": 0, "spec": 1, "implementation": 2, "delivery": 3}
+
+# Below this, a completion outcome is "thin" enough to offer to expand it before
+# it's sealed into the immutable corpus trace (workflow_project_complete).
+_THIN_OUTCOME_CHARS = 40
+
+
+def _advance_advisory(prev_phase: str | None, new_phase: str) -> str | None:
+    """A soft, non-blocking note when a phase transition is unusual.
+
+    Advancing is intentionally unconstrained (backward, skip-ahead, and
+    complete-from-discovery are all permitted), but an unusual transition is
+    indistinguishable from a mistake without a signal. Returns a one-line
+    advisory for a backward or skip-ahead move (or a no-op re-advance), else
+    ``None`` for the normal forward-by-one step.
+    """
+    if prev_phase == new_phase:
+        return f"Already in the '{new_phase}' phase — no change."
+    prev_i = _PHASE_ORDER.get(prev_phase or "")
+    new_i = _PHASE_ORDER.get(new_phase)
+    if prev_i is None or new_i is None:
+        return None
+    if new_i < prev_i:
+        return (
+            f"Moved backward ({prev_phase} → {new_phase}). Allowed, but unusual — "
+            "confirm this is intentional."
+        )
+    if new_i > prev_i + 1:
+        skipped = sorted(
+            (ph for ph, i in _PHASE_ORDER.items() if prev_i < i < new_i),
+            key=lambda ph: _PHASE_ORDER[ph],
+        )
+        return (
+            f"Skipped ahead ({prev_phase} → {new_phase}), bypassing "
+            f"{', '.join(skipped)}. Allowed, but unusual."
+        )
+    return None
+
 
 # Session-state path lives in ``session_state`` (shared with the Stop hook so
 # the writer and reader can't diverge under a custom TMPDIR).
@@ -1483,10 +1827,11 @@ def workflow_project_list(
 
 
 @mcp.tool
-def workflow_project_advance(
+async def workflow_project_advance(
     slug: str,
     phase: WorkflowPhase,
     github_pr: str | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """
     Advance a workflow project to the next phase.
@@ -1504,20 +1849,43 @@ def workflow_project_advance(
         URL of the GitHub PR if one has been opened.
     """
     now = _now_iso()
+    before = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    prev_phase = before[0].get("phase") if before else None
+    advisory = _advance_advisory(prev_phase, phase)
+
+    # A backward/skip transition (advisory set AND the phase actually changes) is
+    # confirmed before committing. Headless/unsupported clients proceed as before;
+    # only an explicit decline aborts, leaving the project untouched.
+    if (
+        advisory
+        and prev_phase != phase
+        and not await elicit.confirm(
+            ctx, f"{advisory} Proceed with the advance?", default_when_unsupported=True
+        )
+    ):
+        current = before[0] if before else {"slug": slug, "phase": prev_phase}
+        return {**current, "advisory": advisory, "advanced": False}
+
     client.change(
         "mutations.gq",
         "update_workflow_project_phase",
         {"slug": slug, "phase": phase, "github_pr": github_pr, "updated_at": now},
     )
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
-    return rows[0] if rows else {"slug": slug, "phase": phase}
+    result = rows[0] if rows else {"slug": slug, "phase": phase}
+
+    # Soft validation: flag an unusual transition without blocking it.
+    if advisory:
+        result["advisory"] = advisory
+    return result
 
 
 @mcp.tool
-def workflow_project_complete(
+async def workflow_project_complete(
     slug: str,
     outcome: str,
     github_pr: str | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """
     Mark a workflow project as completed and assemble its corpus trace.
@@ -1542,6 +1910,18 @@ def workflow_project_complete(
     existing = client.read("read.gq", "get_trace", {"slug": trace_slug})
     if existing:
         return {"project_slug": slug, "trace_slug": trace_slug, "existed": True}
+
+    # Completing seals an immutable corpus trace; a thin outcome makes a poor
+    # permanent record. When it's terse, offer to expand it. Headless/unsupported
+    # clients (or a decline) keep the provided outcome — nothing is blocked.
+    if len(outcome.strip()) < _THIN_OUTCOME_CHARS:
+        outcome = await elicit.text(
+            ctx,
+            f"Completing {slug} writes an immutable corpus trace. The current "
+            f"outcome is brief ({outcome!r}). Provide a fuller narrative of what "
+            "was delivered:",
+            default=outcome,
+        )
 
     client.change(
         "mutations.gq",
@@ -1724,6 +2104,33 @@ def workflow_trace_list(
         rows = [r for r in rows if r.get("author") == author]
 
     return rows[:limit]
+
+
+@mcp.tool
+def workflow_trace_get(slug: str) -> dict | None:
+    """
+    Retrieve a single corpus WorkflowTrace by slug.
+
+    Slug handling is simple: a slug already starting with ``wt-`` is used as-is;
+    **any other** slug is prefixed with ``wt-``. So the trace slug
+    (``wt-<project-slug>``) and the project slug (``wp-<project-slug>``, which
+    becomes ``wt-wp-<project-slug>``) both resolve to the same trace, and callers
+    never have to hand-construct the ``wt-`` slug (the fragile step the
+    ``witan-project-tracker`` skill used to instruct). Returns the full trace
+    node (title/description/outcome, ``session_count``, ``phases``, ``duration``,
+    and any mined ``lessons_slug``/``patterns_slug``) or ``None`` if no trace
+    exists — a project only has a trace once ``workflow_project_complete`` has
+    sealed it.
+
+    Parameters
+    ----------
+    slug:
+        The ``wt-`` trace slug, or the ``wp-`` project slug it was minted from
+        (anything not already ``wt-``-prefixed gets the prefix added).
+    """
+    trace_slug = slug if slug.startswith("wt-") else f"wt-{slug}"
+    rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
+    return rows[0] if rows else None
 
 
 def _annotate_trace(
@@ -2269,7 +2676,7 @@ def _update_task(
 
 
 @mcp.tool
-def task_create(
+async def task_create(
     title: str,
     description: str,
     type: TaskType = "task",
@@ -2282,6 +2689,7 @@ def task_create(
     external_uri: str | None = None,
     symbol_refs: list[str] | None = None,
     tags: list[str] | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """
     Create a task in the work-coordination graph.
@@ -2318,6 +2726,9 @@ def task_create(
     """
     now = _now_iso()
     slug = _make_slug("task", title)
+    # Offer to scope the task when nothing is detected; falls back to an
+    # unscoped task (today's behavior) under automation / an unsupported client.
+    repo = await elicit.repo_or_detect(ctx, repo)
     detected_repo = repo_module.detect(override=repo)
     # Only "blocked" if a blocker is not already closed — otherwise it's ready
     # now and would never be auto-unblocked.
@@ -2532,8 +2943,11 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
 
 
 @mcp.tool
-def task_claim(
-    slug: str, assignee: str | None = None, force: bool = False
+async def task_claim(
+    slug: str,
+    assignee: str | None = None,
+    force: bool = False,
+    ctx: Context | None = None,
 ) -> dict | None:
     """
     Claim a task for work: set it ``in_progress`` under ``assignee`` with a lease.
@@ -2594,13 +3008,24 @@ def task_claim(
     claimed_at = task.get("claimed_at")
     held = status == "in_progress" and current_holder and not _lease_expired(claimed_at)
     if held and current_holder != holder and not force:
-        return {
-            "slug": slug,
-            "claimed": False,
-            "reason": "held",
-            "held_by": current_holder,
-            "claimed_at": claimed_at,
-        }
+        # Offer to steal instead of a flat refusal. Headless/unsupported clients
+        # get the historical behavior (no steal); an explicit confirm proceeds as
+        # if ``force`` had been passed.
+        stole = await elicit.confirm(
+            ctx,
+            f"Task {slug} is held by {current_holder} (claimed {claimed_at}). "
+            "Steal the claim?",
+            default_when_unsupported=False,
+        )
+        if not stole:
+            return {
+                "slug": slug,
+                "claimed": False,
+                "reason": "held",
+                "held_by": current_holder,
+                "claimed_at": claimed_at,
+            }
+        force = True
 
     now = _now_iso()
     claim = {"status": "in_progress", "assignee": holder, "claimed_at": now}

@@ -52,23 +52,29 @@ def merge_hooks(settings: dict, hooks: list[DeclarativeHook]) -> None:
 
     for hook in hooks:
         event_name = _EVENT_NAMES[hook.event]
-        entry = {
-            "matcher": hook.matcher or "",
-            "hooks": [{"type": "command", "command": hook.command}],
-        }
+        command_hook: dict = {"type": "command", "command": hook.command}
+        # Claude Code's per-command hook object accepts an optional integer
+        # "timeout" (seconds); only emit it when set so hooks without one keep
+        # their current shape.
+        if hook.timeout_seconds is not None:
+            command_hook["timeout"] = hook.timeout_seconds
+        entry = {"matcher": hook.matcher or "", "hooks": [command_hook]}
         if not isinstance(hooks_section.get(event_name), list):
             hooks_section[event_name] = []
         existing = hooks_section[event_name]
-        already_present = any(
-            isinstance(e, dict)
-            and any(
-                isinstance(h, dict) and h.get("command") == hook.command
-                for h in e.get("hooks", [])
-                if isinstance(e.get("hooks"), list)
-            )
-            for e in existing
-        )
-        if not already_present:
+        # Dedup on command. If the command is already registered, refresh its
+        # timeout in place (so re-running setup applies a newly-added timeout to
+        # an existing install); otherwise append the new entry.
+        found = False
+        for e in existing:
+            if not isinstance(e, dict) or not isinstance(e.get("hooks"), list):
+                continue
+            for h in e["hooks"]:
+                if isinstance(h, dict) and h.get("command") == hook.command:
+                    found = True
+                    if hook.timeout_seconds is not None:
+                        h["timeout"] = hook.timeout_seconds
+        if not found:
             existing.append(entry)
 
 

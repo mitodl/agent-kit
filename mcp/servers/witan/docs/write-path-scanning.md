@@ -38,7 +38,9 @@ defaults below (see `ScanConfig` in `witan/config.py`).
 | `enabled_detectors` | `WITAN_SCAN_ENABLED_DETECTORS` | `[]` (all) | Explicit allowlist of detector names |
 | `disabled_detectors` | `WITAN_SCAN_DISABLED_DETECTORS` | `[]` | Detector names to switch off; always wins over `enabled_detectors` |
 | `plugins` | `WITAN_SCAN_PLUGINS` | `[]` | Dotted `module:Attr` paths to extra scanners (see below) |
-| `allowlist` | `WITAN_SCAN_ALLOWLIST` | `[]` | Reserved for false-positive suppression — config surface exists, enforcement is a follow-up (`tk-allowlist-false-positive-suppression-patterns-in-f3bdf4`); not yet read by the write path |
+| `allowlist` | `WITAN_SCAN_ALLOWLIST` | `[]` | Regexes tested against each finding's own matched span (`re.fullmatch`) — a hit downgrades that finding to audit-only |
+| `allowlist_hashes` | `WITAN_SCAN_ALLOWLIST_HASHES` | `[]` | Salted SHA-256 digests of specific approved values — a hit downgrades to audit-only, same as `allowlist`, without the plaintext ever appearing in config |
+| `allowlist_salt` | `WITAN_SCAN_ALLOWLIST_SALT` | `""` | Salt for `allowlist_hashes`. Empty means the hash allowlist is inert |
 | `on_scanner_error` | `WITAN_SCAN_ON_ERROR` | `block` | `block` (fail-closed) or `warn` if a scanner itself raises |
 
 List-shaped env vars accept a comma-separated string
@@ -91,6 +93,50 @@ Run `witan scan rules` to see exactly what's active in your environment (see
 below) rather than trusting this list to stay in sync — detectors can be
 added, and third-party plugins add more.
 
+## False-positive suppression (allowlisting)
+
+Three independent mechanisms downgrade a finding to **audit-only** — the
+value is written unchanged (never blocked or redacted) and the finding still
+emits exactly one audit event, with `outcome = "suppressed"` and
+`suppressed_by` naming which mechanism fired:
+
+1. **Regex allowlist** (`[scan] allowlist`) — each pattern is matched with
+   `re.fullmatch` against the finding's own matched span (not the whole
+   field), so a pattern for one known value can't suppress an unrelated,
+   longer secret that happens to contain it:
+
+   ```toml
+   [scan]
+   allowlist = ["AKIA[A-Z0-9]{16}EXAMPLE"]   # a documented fixture key
+   ```
+
+2. **Inline pragma** — a trailing marker in the authored text itself:
+   `witan: allow-secret` suppresses every finding in that value;
+   `witan: allow-secret:<detector>` scopes it to one detector. Use this when
+   an author knows a specific write is fine and wants to say so inline rather
+   than editing config:
+
+   ```
+   Run with API_KEY=AKIAIOSFODNN7EXAMPLE (docs fixture) witan: allow-secret:aws_access_key
+   ```
+
+3. **Hash allowlist** (`[scan] allowlist_hashes` + `allowlist_salt`) —
+   approve a specific value by its salted digest instead of its plaintext
+   pattern, so the approved value never appears in config:
+
+   ```bash
+   python3 -c "import hashlib; print(hashlib.sha256(('mysalt' + 'the-approved-value').encode()).hexdigest())"
+   ```
+
+   ```toml
+   [scan]
+   allowlist_salt = "mysalt"
+   allowlist_hashes = ["<digest from above>"]
+   ```
+
+`witan scan test` shows a `suppressed` column and a summary line so you can
+validate an allowlist entry before relying on it in production.
+
 ## `witan scan` — dry-run and introspection
 
 Validate policy or debug a false positive without writing anything:
@@ -122,16 +168,19 @@ category, its resolved enforcement mode, and its source (`built-in`,
 
 ## Audit trail
 
-Every finding — blocked, redacted, or warned — emits one structured log line
-via the standard `logging` module, on the `witan.scan.audit` logger
-(`witan/scan/audit.py`). Fields: `query_name`, `node_type`, `field`, `slug`
-(when the mutation has one), `detector`, `category`, `severity`, `action`,
-`outcome`, and `preview` — the matched value is never included, by
-construction (this is a hard invariant of `Finding.preview`, not an
-after-the-fact scrub). Point your log aggregator (Loki, CloudWatch, journald)
-at this logger to build dashboards or alerts on scan activity; there is
-deliberately no separate graph node or metrics sink for this yet, to avoid
-adding new sensitive-adjacent state to secure and retention-manage.
+Every finding — blocked, redacted, warned, or suppressed by an allowlist —
+emits one structured log line via the standard `logging` module, on the
+`witan.scan.audit` logger (`witan/scan/audit.py`). Fields: `query_name`,
+`node_type`, `field`, `slug` (when the mutation has one), `detector`,
+`category`, `severity`, `action`, `outcome` (`blocked` | `redacted` |
+`warned` | `suppressed`), `suppressed_by` (`regex` | `pragma` | `hash`, or
+`None`), and `preview` — the matched value is never included, by construction
+(this is a hard invariant of `Finding.preview`, not an after-the-fact scrub).
+Point your log aggregator (Loki, CloudWatch, journald) at this logger to
+build dashboards or alerts on scan activity — e.g. a spike in `suppressed`
+events is a signal an allowlist entry may be too broad; there is deliberately
+no separate graph node or metrics sink for this yet, to avoid adding new
+sensitive-adjacent state to secure and retention-manage.
 
 ## Writing a custom scanner plugin
 
@@ -188,10 +237,30 @@ copy it as a starting point.
 
 ## Multi-tenant / deployed-server mode
 
-In a shared, multi-user deployment, `WITAN_SCAN_*` env vars and client-supplied
-TOML are not trustworthy — a client must not be able to weaken policy it is
-itself subject to. Authoritative, admin-owned policy sourcing and per-tenant
-overlays are a separate piece of work
-(`tk-multi-tenant-policy-control-admin-owned-scan-pol-1338d2`), tracked
-alongside the multi-user deployment project. Everything in this doc applies
-as-is to local, single-user witan today.
+`ScanConfig` is loaded once, at process import, from the deployment's own
+environment/`config.toml` — no MCP tool call can influence it, so in the
+sanctioned deployed topology (one shared `streamable-http` witan-service
+process; see ADR 0004 in the multi-user deployment project) scan policy is
+already admin-owned by construction. That invariant depends on every write to
+a shared store passing through the witan-service process — omnigraph itself
+has no content-scanning hook, and Cedar cannot express one (ADR 0002 §D1), so
+a write that reaches omnigraph-server by any other path skips scanning
+entirely.
+
+Per-repo policy overrides are supported via `[scan.overlay."<repo-uri>"]`
+tables in `config.toml` — deliberately **TOML-only, no `WITAN_SCAN_*`
+env-var form**, since env vars are exactly the surface a write's own process
+could otherwise control:
+
+```toml
+[scan.overlay."github.com/example/legacy-repo"]
+secret_action = "warn"   # rolling out scanning on a noisy repo before enforcing
+```
+
+Any `ScanConfig` field except `overlay` itself may be overridden. `WriteGuard`
+resolves the effective policy from the write's own `repo` (or the first entry
+of `repos`) param — see `ScanConfig.for_repo` in `witan/config.py` and the
+2026-07-09 amendment in [ADR 0001](adr/0001-write-path-content-scanning.md)
+for the full design rationale, including why the detector set itself (as
+opposed to enforcement policy) is not overlay-able in this version. Everything
+else in this doc applies as-is to local, single-user witan today.

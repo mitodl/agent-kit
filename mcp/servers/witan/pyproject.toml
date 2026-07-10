@@ -1,8 +1,11 @@
 [project]
-name = "witan"
-version = "0.1.0"
+name = "witan-council"
+version = "0.2.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
+readme = "README.md"
+license = "BSD-3-Clause"
 requires-python = ">=3.11"
+keywords = ["mcp", "agent", "memory", "knowledge-graph", "task-tracking", "coding-agent"]
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
@@ -13,6 +16,12 @@ dependencies = [
     "pydantic>=2,<3",
     "agent-config-kit>=0.1,<1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mitodl/agent-kit/tree/main/mcp/servers/witan"
+Repository = "https://github.com/mitodl/agent-kit"
+Documentation = "https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/README.md"
+Issues = "https://github.com/mitodl/agent-kit/issues"
 
 [project.scripts]
 witan = "witan.cli:main"
@@ -39,6 +48,15 @@ packages = ["witan"]
 [tool.hatch.build.targets.wheel.force-include]
 "queries" = "queries"
 "schema" = "schema"
+
+[tool.bumpversion]
+current_version = "0.2.0"
+allow_dirty = true
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
 
 [dependency-groups]
 test = ["pytest>=8"]

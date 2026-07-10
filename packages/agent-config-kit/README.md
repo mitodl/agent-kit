@@ -82,7 +82,11 @@ skills = ["cyclopts-cli-scripts"]
 
 Table/field names mirror the Python model field names exactly
 (`kind`, `command`, `args`, `env`, `event`, `entry_path`, ...) — see
-`docs/design/agent-config-kit-cli-spec.md` for the full schema and rationale.
+`docs/design/agent-config-kit-cli-spec.md` for the full schema and
+rationale, and `docs/design/agent-config-kit-profiles-composition-spec.md`
+for profiles, `include`, the global config file, and directory-prefix/org
+scoping (everything from here through "Precedence & resolution order"
+below).
 
 `[profiles.<name>]` tables (spec §4) each list a subset of entry keys drawn
 from the manifest's own `[mcp_servers]`/`[skills]`/`[hooks]`/`[lsp_servers]`
@@ -135,6 +139,79 @@ entry_path = "git+https://github.com/org/repo.git@v1.0.0#subdirectory=extensions
   client dependency here, by design (no new dependency on the base
   package).
 
+#### Composition: `include`
+
+A top-level `include = [ref, ...]` list pulls in other manifests — each a
+local path (resolved relative to the *including* manifest's own directory,
+same as `skill_md_path`/`entry_path`) or a remote `https://`/`git+` URI
+(reusing the machinery above; `git+...#subdirectory=path/to/manifest.toml`
+for a manifest living in a repo subdirectory):
+
+```toml
+# agent-config.toml
+include = ["../shared/base.toml", "https://example.com/bundles/frontend.toml"]
+
+[mcp_servers.witan]
+kind = "stdio"
+command = "uvx"
+```
+
+Includes are merged depth-first, left-to-right, and the including
+manifest's own tables are merged in *last* — local always wins on a same-key
+collision (a repeated `[mcp_servers.witan]`, a repeated skill/hook, two
+`[profiles.<name>]` tables of the same name — the local one replaces the
+included one wholesale, it isn't itself deep-merged). A reference cycle
+(`a.toml` includes `b.toml` includes `a.toml`) raises a `ManifestError`
+naming the cycle. An included manifest's own `[options]` is never inherited
+— only the file you actually pass to `apply`/`validate` supplies `[options]`.
+
+`[profiles.<name>]` may also carry its own `include` — the referenced
+manifest is merged into the entry pool *and all of its entries* (its own
+profile slicing, if it has one, is bypassed — there's no `URL#profile_name`
+fragment syntax) are selected into that profile, unioned with any explicit
+`skills`/`mcp_servers`/`hooks`/`lsp_servers` lists:
+
+```toml
+[profiles.frontend]
+include = ["https://example.com/bundles/frontend.toml"]
+```
+
+This is the one concession toward "one-manifest-per-profile" — an
+independently-versioned, remote role bundle can be dropped into a profile by
+URL without re-listing its entries one by one.
+
+### `agent-kit manifest init`
+
+Bootstraps a manifest's `[skills]` table by walking a repo for `SKILL.md`
+files, instead of hand-writing each entry:
+
+```bash
+agent-kit manifest init                    # walks the current git repo's root
+agent-kit manifest init path/to/repo
+agent-kit manifest init --output bundles/agent-config.toml
+agent-kit manifest init --force            # overwrite an existing manifest
+```
+
+`REPO` defaults to the current git repo's root (found by walking up from the
+CWD for a `.git`), or the CWD itself if it's not inside a repo. Each skill's
+name is taken from its `SKILL.md` frontmatter `name` field, falling back to
+its parent directory's name when there's no frontmatter (or no `name` in
+it); `--output` defaults to `agent-config.toml` at `REPO`'s root, and each
+skill's path is written relative to *that file's* own directory (M5), not
+`REPO` — so `--output` can point somewhere else entirely (a shared bundle
+repo checked out alongside this one) and the paths still resolve correctly.
+Directories that start with `.` (`.git`, `.venv`, a `.claude/worktrees`
+checkout, ...) and common vendor directories (`node_modules`,
+`__pycache__`, `site-packages`, `dist`, `build`, ...) are skipped during the
+walk. Only `[skills]` is generated — add `[mcp_servers]`/`[[hooks]]`/
+`[profiles]` by hand afterward.
+
+Refuses to overwrite an existing manifest unless `--force` is given; exits
+`2` if two `SKILL.md` files derive the same name, or if a derived name
+doesn't satisfy the Agent Skills spec's slug constraints (lowercase
+alphanumeric segments separated by single hyphens) — fix the offending
+`SKILL.md`'s `name` frontmatter or its directory name and re-run.
+
 ### `agent-kit apply`
 
 Applies a manifest's MCP servers, hooks, and skills to one or more platforms:
@@ -144,7 +221,30 @@ agent-kit apply agent-config.toml
 agent-kit apply agent-config.toml --platform claude --platform pi
 agent-kit apply agent-config.toml --scope project --dry-run
 agent-kit apply agent-config.toml --profile python
+agent-kit apply "git+https://github.com/mitodl/agent-config-bundles.git@main#subdirectory=platform-eng/agent-config.toml"
 ```
+
+`MANIFEST` accepts anything `include`/`skill_md_path`/the global config's
+`manifest` fields do — a local path, or a remote `https://`/`git+` URI,
+fetched the same way (`--cache-dir` applies to this fetch too). A `git+`
+`MANIFEST` clones the *whole* repo, so the manifest's own relative
+`skill_md_path`/`entry_path`/`include` values still resolve against its
+location inside that checkout (M5), exactly as if it were a local manifest
+— there's no separate "discovery" step at apply time; `agent-kit manifest
+init` (above) is the only thing that walks a repo for `SKILL.md` files, and
+only when you explicitly ask it to.
+
+`MANIFEST` is also optional (`agent-kit apply` / `agent-kit validate` with
+no argument) — omitting it resolves one from the global config (`agent-kit
+config init`, see below), in order: a repo-local `agent-config.toml` at the
+repo root; an `[[org]]` match against the current repo's `origin` git
+remote (the GitHub owner parsed from the URL — no network call, no `gh`
+dependency, and not a check that you're actually a *member* of that org);
+the longest matching `[[scope]] match_prefix` against the CWD; then
+`default_manifest`. Whichever hits first also supplies its own default
+profiles/write scope (still overridable by `--profile`/`--scope`), and the
+resolved source is printed (e.g. `resolved manifest from org 'mitodl'`) so
+the zero-arg "magic" stays legible.
 
 - `--platform NAME` (repeatable) overrides the manifest's
   `[options.platforms]`; with neither given, every detected platform is
@@ -220,3 +320,82 @@ agent-kit config init --force    # overwrite an existing config file
 ```
 
 Refuses to overwrite an existing file unless `--force` is given.
+
+#### Global config schema
+
+```toml
+# ~/.config/agent-config-kit/config.toml
+
+default_manifest = "~/dotfiles/agent-config.toml"   # last-resort fallback
+default_profiles = ["universal"]                    # used with default_manifest
+
+[[org]]
+name = "mitodl"                       # matched against the git remote's GitHub owner
+manifest = "https://raw.githubusercontent.com/mitodl/agent-config/main/agent-config.toml"
+profiles = ["platform-eng"]
+
+[[scope]]
+match_prefix = "~/code/mit"           # longest match wins; directory-boundary matched
+manifest = "https://raw.githubusercontent.com/mitodl/agent-config/main/agent-config.toml"
+profiles = ["platform-eng"]
+write_scope = "project"               # "global" | "project" — default: "project"
+```
+
+- `[[org]]` entries are matched against the *current repo's* `git remote
+  get-url origin` (or another remote if there's no `origin`) — see
+  `agent-kit apply` above. `name` is matched case-insensitively.
+- `[[scope]]` entries are matched against the CWD by directory-component
+  prefix (`~/code/mit` matches `~/code/mit/foo` but not
+  `~/code/mit-backup`), longest prefix wins. Unlike a manifest's own
+  `[options].scope` (default `"global"`), a `[[scope]]` entry's
+  `write_scope` defaults to `"project"` — prefix-routed applies are
+  expected to materialize into whichever repo you're standing in, not the
+  agent's global config location.
+- Both `manifest` fields accept anything `include`/`skill_md_path` does — a
+  local path (`~` expanded) or a remote `https://`/`git+` URI, fetched the
+  same way. A plain `https://` URI (e.g. `raw.githubusercontent.com/<org>/
+  <repo>/<ref>/agent-config.toml`) fetches a single file; a
+  `git+https://github.com/<org>/<repo>.git@<ref>#subdirectory=<path>` URI
+  clones the repo and resolves a manifest living in a subdirectory —
+  useful when that same repo also carries the skills the manifest
+  references, so one clone covers both (see "Remote skill/hook sources"
+  above).
+- `agent-kit config init` writes this file with every key as a
+  commented-out example using these same GitHub URI forms — uncomment and
+  edit, or run `agent-kit config init --wizard` to fill in values
+  interactively.
+
+### Precedence & resolution order
+
+Two separate precedence chains are in play, and it's worth keeping them
+distinct:
+
+**Which `MANIFEST`** (only relevant when it's omitted — an explicit
+positional argument always wins outright):
+
+```
+explicit MANIFEST argument
+  → repo-local agent-config.toml (at the git repo root)
+    → [[org]] match (git remote's GitHub owner)
+      → [[scope]] match (longest match_prefix)
+        → default_manifest
+```
+
+First hit wins; that source's `profiles`/`write_scope` travel with it
+(`repo-local` has no opinion of its own on either) but are still overridden
+by `--profile`/`--scope` if given.
+
+**Within a resolved manifest**, once loaded (`include` folding, then
+profile selection, then CLI overrides):
+
+```
+included manifests (depth-first, left→right)
+  → including manifest's own entries
+    → selected profile(s) (--profile, or [options] default_profiles)
+      → CLI flags (--platform, --scope)
+```
+
+A same-keyed entry always resolves in favor of whatever's later/more local
+in this chain — an included manifest never overrides the manifest that
+included it, and a profile only *filters* which already-merged entries
+apply, it never introduces new ones of its own.

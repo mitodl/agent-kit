@@ -106,7 +106,6 @@ def _registry() -> dict[str, AgentPlatform]:
                     "project": ScopeTarget(path=Path(".pi") / "skills"),
                 }
             ),
-            skill_dest_dirs=pi_adapter.skill_dest_dirs,
         ),
         "copilot": AgentPlatform(
             name="GitHub Copilot",
@@ -154,8 +153,7 @@ def _registry() -> dict[str, AgentPlatform]:
             # OpenCode's own skill-directory naming is version-ambiguous
             # (pf-native-per-agent-skill-config-directory-hierarch-40bff8
             # notes both ".opencode/skill" and ".opencode/skills" as seen) —
-            # write to both rather than guess wrong, mirroring Pi's
-            # dual-dest-dir precedent (skill_dest_dirs).
+            # write to both rather than guess wrong (skill_dest_dirs).
             skills=CapabilityScope(
                 **{"project": ScopeTarget(path=Path(".opencode") / "skill")}
             ),

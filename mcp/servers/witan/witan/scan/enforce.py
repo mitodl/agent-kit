@@ -13,6 +13,7 @@ import logging
 
 from ..config import ScanAction, ScanConfig
 from . import audit
+from .allowlist import compile_allowlist, suppression_reason
 from .models import Finding, ScannerError
 from .redact import flag_redacted, redact_spans
 from .registry import ScannerRegistry
@@ -57,12 +58,38 @@ class WriteBlocked(RuntimeError):
         )
 
 
+def _repo_of(params: dict) -> str | None:
+    """The repo a write's overlay policy (``ScanConfig.for_repo``) keys on.
+
+    ``repo`` (a single value) covers most mutations; ``repos`` (a list, e.g.
+    ``insert_workflow_project``) uses the first entry — a project spanning
+    several repos gets one policy, not a per-field split that would need a
+    v2 overlay shape to express."""
+    repo = params.get("repo")
+    if isinstance(repo, str) and repo:
+        return repo
+    repos = params.get("repos")
+    if isinstance(repos, list) and repos and isinstance(repos[0], str):
+        return repos[0]
+    return None
+
+
 class WriteGuard:
-    """Scans and enforces on the free-text params of a single mutation."""
+    """Scans and enforces on the free-text params of a single mutation.
+
+    The detector set (:class:`~.registry.ScannerRegistry`) is fixed at
+    construction — rebuilding it per write (replugging entry points,
+    dotted-path imports) is out of scope for the v1 per-repo overlay.
+    Enforcement policy (actions, allowlists, ``on_scanner_error``) is *not*
+    fixed: it's resolved fresh per write via ``config.for_repo(repo)`` (ADR
+    0001 amendment, 2026-07-09), so an ``[scan.overlay]`` table takes effect
+    without rebuilding anything expensive.
+    """
 
     def __init__(self, config: ScanConfig, registry: ScannerRegistry) -> None:
         self._config = config
         self._registry = registry
+        self._allowlist = compile_allowlist(config.allowlist)
 
     def __call__(self, query_name: str, params: dict) -> dict:
         entry = FIELD_MAP.get(query_name)
@@ -70,29 +97,53 @@ class WriteGuard:
             return params
         node_type, fields = entry
         slug = params.get("slug")
+        config = self._config.for_repo(_repo_of(params))
+        # Compare values, not identity: an overlay that matched but didn't
+        # touch `allowlist` (e.g. it only overrides secret_action) still
+        # returns a *new* ScanConfig from for_repo(), and recompiling the
+        # same patterns on every such write would be pure waste.
+        allowlist = (
+            self._allowlist
+            if config.allowlist == self._config.allowlist
+            else compile_allowlist(config.allowlist)
+        )
 
         # Resolve every field's findings to an action first, without emitting
         # audit events or mutating anything, so the write's fate (blocked or
         # not) is known before it's recorded — otherwise a block in field B
         # would leave field A's redact/warn findings audited as having
         # happened, when in fact nothing about this write was ever persisted.
-        per_field: list[tuple[str, str, list[tuple[Finding, ScanAction]]]] = []
+        # A suppressed finding's action is downgraded to "warn" up front, so
+        # it can never contribute to `blocked` or `redactions` below —
+        # allowlisting always wins over the category/per-finding policy.
+        # Each resolved tuple is (finding, action, suppressed_by).
+        per_field: list[
+            tuple[str, str, list[tuple[Finding, ScanAction, str | None]]]
+        ] = []
         blocked: list[tuple[str, Finding]] = []
         for field in fields:
             value = params.get(field)
             if not isinstance(value, str) or not value:
                 continue
-            findings = self._scan(value, field, node_type)
+            findings = self._scan(value, field, node_type, config)
             if not findings:
                 continue
-            resolved = [(f, f.action or self._action_for(f.category)) for f in findings]
+            resolved: list[tuple[Finding, ScanAction, str | None]] = []
+            for f in findings:
+                reason = suppression_reason(f, value, config, allowlist)
+                action = (
+                    "warn"
+                    if reason
+                    else f.action or self._action_for(f.category, config)
+                )
+                resolved.append((f, action, reason))
             per_field.append((field, value, resolved))
-            blocked.extend((field, f) for f, a in resolved if a == "block")
+            blocked.extend((field, f) for f, a, _ in resolved if a == "block")
 
         write_blocked = bool(blocked)
         redactions: dict[str, str] = {}
         for field, value, resolved in per_field:
-            for finding, action in resolved:
+            for finding, action, reason in resolved:
                 audit.emit(
                     query_name=query_name,
                     node_type=node_type,
@@ -101,9 +152,10 @@ class WriteGuard:
                     finding=finding,
                     action=action,
                     write_blocked=write_blocked,
+                    suppressed_by=reason,
                 )
             if not write_blocked:
-                to_redact = [f for f, a in resolved if a == "redact"]
+                to_redact = [f for f, a, _ in resolved if a == "redact"]
                 if to_redact:
                     redactions[field] = redact_spans(value, to_redact)
 
@@ -113,11 +165,13 @@ class WriteGuard:
             return flag_redacted({**params, **redactions})
         return params
 
-    def _scan(self, value: str, field: str, node_type: str) -> list[Finding]:
+    def _scan(
+        self, value: str, field: str, node_type: str, config: ScanConfig
+    ) -> list[Finding]:
         try:
             return self._registry.scan(value, field, node_type)
         except ScannerError as exc:
-            if self._config.on_scanner_error == "warn":
+            if config.on_scanner_error == "warn":
                 logger.warning(
                     "witan scan: scanner %r failed on %s.%s; allowing write "
                     "(on_scanner_error=warn)",
@@ -128,10 +182,8 @@ class WriteGuard:
                 return []
             raise  # fail-closed: the ScannerError aborts the write
 
-    def _action_for(self, category: str) -> ScanAction:
-        return (
-            self._config.pii_action if category == "pii" else self._config.secret_action
-        )
+    def _action_for(self, category: str, config: ScanConfig) -> ScanAction:
+        return config.pii_action if category == "pii" else config.secret_action
 
 
 def write_guard_from_config(config: ScanConfig) -> WriteGuard | None:
