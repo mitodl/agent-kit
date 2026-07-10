@@ -40,6 +40,7 @@ Skills are organized by **category**. Each skill lives in
 | process | [`dependency-pruning`](./process/dependency-pruning/SKILL.md) | Audit dependencies to find unused ones to remove and underused ones to vendor or rewrite |
 | process | [`github-issue-triage`](./process/github-issue-triage/SKILL.md) | Audit open GitHub issues to identify stale, completed, or superseded items using parallel codebase cross-referencing |
 | process | [`github-pr-triage`](./process/github-pr-triage/SKILL.md) | Categorize open PRs across an org by required action (needs first-pass review, has feedback, approved & ready to merge) and optionally act on them |
+| process | [`address-pr-feedback`](./process/address-pr-feedback/SKILL.md) | Fetch, categorize, address, and resolve GitHub PR review feedback, with pagination for large/long-running PRs |
 
 ## Authoring a Skill
 
