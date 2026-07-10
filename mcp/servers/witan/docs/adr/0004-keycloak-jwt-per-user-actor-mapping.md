@@ -178,3 +178,44 @@ should live if witan's own Cedar bundle and ToolHive's authz framework would
 otherwise overlap) is tracked as a separate decision, not resolved here:
 `tk-revisit-adr-0004-adr-0009-per-user-identity-desi-e9005a`
 (project `wp-witan-multi-user-service-deployment-dcf6ee`).
+
+### Resolution (2026-07-10) — keep D1–D4 as designed; fix the ToolHive scenario, not the code
+
+`tk-revisit-adr-0004-adr-0009-per-user-identity-desi-e9005a` is resolved as:
+**adopt ToolHive's "External OIDC provider" scenario for `toolhive_witan`'s
+auth config; do not adopt ToolHive's Cedar authorizer or RFC 8693 token
+exchange; make no code change to D1–D4.**
+
+- **Identity propagation.** The "Forces" section's mistake was inferring a
+  platform limitation from `toolhive_swe`'s specific scenario
+  ("Embedded auth server" → upstream-token-swap). `toolhive_witan` doesn't
+  have to use that scenario. Configuring it instead with ToolHive's
+  "External OIDC provider" scenario makes ToolHive forward the client's
+  genuine Keycloak-issued JWT to the backend container unmodified — which is
+  exactly the input D1's `JWTVerifier(jwks_uri=..., issuer=..., audience=...)`
+  was already written to validate. This isn't an alternative to D1, it's the
+  ToolHive-side configuration that makes D1 deliverable through ToolHive
+  instead of requiring witan to somehow sit outside ToolHive's proxy path.
+  `derive_actor_id` and `ActorTokenResolver` (D2/D3) are unaffected — they
+  operate on the validated `sub` claim regardless of which scenario delivered
+  the JWT. **No changes needed to PR #84 or PR #90.**
+- **RFC 8693 Token Exchange — rejected for witan.** Token exchange re-mints a
+  token signed by ToolHive's own exchange service, which would make ToolHive
+  the identity boundary witan trusts instead of Keycloak directly — the
+  opposite of D1's explicit choice. It's a better fit for `toolhive_swe`-style
+  fan-out to third-party backends that need scope narrowing per tool, not for
+  witan, which wants the original per-user identity intact.
+- **ToolHive's Cedar authorizer (`cedarv1`) — not adopted.** It authorizes at
+  the MCP transport layer ("can this JWT call tool X at all") with no
+  knowledge of witan's domain model (repos, teams, node types). Witan's own
+  Cedar bundle (ADR-0002) already does finer-grained, data-aware authorization
+  and stays the single source of truth; running a second, coarser Cedar
+  policy alongside it would add a policy surface to keep in sync for no
+  proven benefit at v1. Revisit only if a concrete need for transport-layer
+  pre-filtering (e.g. rate-limiting a tool before it reaches witan at all)
+  shows up.
+- **Follow-up.** The ol-infrastructure side of this decision — configuring
+  `toolhive_witan`'s `MCPServer`/`VirtualMCPServer` with the "External OIDC
+  provider" scenario instead of copying `toolhive_swe`'s "Embedded auth
+  server" pattern — is recorded in ADR-0009's own resolution addendum and in
+  `tk-ol-infrastructure-toolhive-witan-pulumi-stack-e843b3`.
