@@ -118,7 +118,7 @@ def _resolve_client() -> OmnigraphClient:
     out to a subprocess per call, so reusing one across a user's requests
     (rather than rebuilding it every call) is worth the cache.
     """
-    if identity_cfg.oidc_issuer is None:
+    if not identity_cfg.oidc_issuer:
         return _default_client
     token = get_access_token()
     if token is None:
