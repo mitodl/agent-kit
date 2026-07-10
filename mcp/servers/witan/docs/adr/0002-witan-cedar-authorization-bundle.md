@@ -5,7 +5,7 @@
 - Deciders: witan platform owners
 - Tracking: task `tk-witan-v1-cedar-policy-bundle-team-repo-scoped-re-77655e`, project `wp-witan-multi-user-service-deployment-dcf6ee`
 - Supersedes: —
-- Related: ol-infrastructure `docs/adr/0009-deploy-witan-as-shared-multi-tenant-mcp-service.md`; `tk-design-keycloak-jwt-omnigraph-per-user-actor-tok-728f0c` (per-user actors); `tk-spike-validate-omnigraph-server-remote-write-ser-1a8058` (spike that mapped the omnigraph policy surface)
+- Related: ol-infrastructure `docs/adr/0009-deploy-witan-as-shared-multi-tenant-mcp-service.md`; `docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md` (how a request's `act-<sub>` and omnigraph bearer token are actually resolved); `tk-spike-validate-omnigraph-server-remote-write-ser-1a8058` (spike that mapped the omnigraph policy surface)
 
 ## Context
 

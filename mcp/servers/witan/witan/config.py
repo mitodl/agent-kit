@@ -124,6 +124,61 @@ def load_rank_config() -> RankConfig:
         raise _rank_config_error(exc, sources) from exc
 
 
+class IdentityConfig(BaseModel):
+    """Keycloak JWT → omnigraph per-user actor mapping (ADR 0004).
+
+    Sourced entirely from ``WITAN_OIDC_*``/``WITAN_ACTOR_TOKENS_FILE`` env
+    vars — this is deployment/ops config for the shared ``streamable-http``
+    service, not something an individual local user sets in config.toml.
+    ``oidc_issuer`` unset means the deployed-auth path is disabled entirely
+    (local ``stdio`` usage never sets it).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    oidc_issuer: str | None = None
+    """Keycloak realm issuer URL, e.g. https://sso.example.org/realms/ol-platform-engineering."""
+
+    oidc_audience: str | None = None
+    """Expected JWT audience claim for this witan deployment. Required when
+    oidc_issuer is set — an unchecked audience would accept a token minted
+    for a different client."""
+
+    actor_tokens_file: str | None = None
+    """Path to the {actor_id: token} JSON map — same artifact omnigraph-server
+    reads via OMNIGRAPH_SERVER_BEARER_TOKENS_FILE. Required when oidc_issuer
+    is set."""
+
+
+def load_identity_config() -> IdentityConfig:
+    """Resolve IdentityConfig from WITAN_OIDC_ISSUER / _AUDIENCE / WITAN_ACTOR_TOKENS_FILE.
+
+    Raises ValueError unless all three are set together, or none are — a
+    half-configured deployment should fail loudly at startup rather than
+    silently leave every request unauthenticated or unresolvable.
+    ``oidc_audience`` is not optional here even though JWTVerifier itself
+    treats a missing audience as "don't check": skipping audience validation
+    would accept a token minted for a different client/application (a token
+    substitution / confused-deputy risk), so witan requires it explicitly
+    whenever OIDC is enabled at all.
+    """
+    issuer = os.environ.get("WITAN_OIDC_ISSUER")
+    audience = os.environ.get("WITAN_OIDC_AUDIENCE")
+    tokens_file = os.environ.get("WITAN_ACTOR_TOKENS_FILE")
+    if not (bool(issuer) == bool(audience) == bool(tokens_file)):
+        raise ValueError(
+            "WITAN_OIDC_ISSUER, WITAN_OIDC_AUDIENCE, and WITAN_ACTOR_TOKENS_FILE "
+            "must be set together: "
+            f"WITAN_OIDC_ISSUER={issuer!r}, WITAN_OIDC_AUDIENCE={audience!r}, "
+            f"WITAN_ACTOR_TOKENS_FILE={tokens_file!r}."
+        )
+    return IdentityConfig(
+        oidc_issuer=issuer,
+        oidc_audience=audience,
+        actor_tokens_file=tokens_file,
+    )
+
+
 ScanAction = Literal["block", "redact", "warn"]
 """What to do when a scanner flags content on the write path (ADR 0001 §D3).
 

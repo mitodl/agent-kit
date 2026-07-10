@@ -37,9 +37,9 @@ crate — the constraints that shaped this bundle:
 
 ## Actors and groups
 
-Three groups. Humans are **per-user** actors (per
-`tk-design-keycloak-jwt-omnigraph-per-user-actor-tok-728f0c` — identity is
-per-user, not per-team); the two non-human actors are single service accounts:
+Three groups. Humans are **per-user** actors — identity is per-user, not
+per-team, per `docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md`; the two
+non-human actors are single service accounts:
 
 | Group           | Members                                            | Role |
 | --------------- | -------------------------------------------------- | ---- |

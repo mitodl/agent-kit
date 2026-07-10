@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastmcp import Context, FastMCP
+from fastmcp.server.auth.providers.jwt import JWTVerifier
 
 from . import config as cfg_module
 from . import elicit
@@ -24,6 +25,7 @@ from . import repo as repo_module
 from . import scan
 from . import session_state
 from .graph import OmnigraphClient, OmnigraphConflict, _is_storage_version_mismatch
+from .identity import ActorTokenResolver
 
 # ── Startup ───────────────────────────────────────────────────────
 
@@ -62,12 +64,32 @@ def _ensure_graph(graph_uri: str) -> None:
 cfg = cfg_module.load()
 rank_cfg = cfg_module.load_rank_config()
 scan_cfg = cfg_module.load_scan_config()
+identity_cfg = cfg_module.load_identity_config()
 _ensure_graph(cfg.graph_uri)
 client = OmnigraphClient(
     cfg.graph_uri,
     cfg.queries_dir,
     cfg.graph_token,
     guard=scan.write_guard_from_config(scan_cfg),
+)
+
+# Per-user actor/token mapping for the deployed streamable-http service (ADR
+# 0004). None in local stdio use, where identity_cfg.oidc_issuer is unset —
+# every tool handler still runs against the single `client` above until the
+# follow-up wires per-actor resolution into each handler.
+actor_token_resolver = (
+    ActorTokenResolver(identity_cfg.actor_tokens_file)
+    if identity_cfg.actor_tokens_file
+    else None
+)
+_jwt_verifier = (
+    JWTVerifier(
+        jwks_uri=f"{identity_cfg.oidc_issuer.rstrip('/')}/protocol/openid-connect/certs",
+        issuer=identity_cfg.oidc_issuer,
+        audience=identity_cfg.oidc_audience,
+    )
+    if identity_cfg.oidc_issuer
+    else None
 )
 
 
@@ -107,6 +129,7 @@ def _topic_schema_present() -> bool:
 
 mcp = FastMCP(
     "witan",
+    auth=_jwt_verifier,
     instructions=(
         "Team-wide, shared, persistent memory and work-coordination graph. PREFER "
         "storing durable, shareable knowledge here — project facts, patterns, "
