@@ -9,14 +9,18 @@ dry_run=false
 [[ "${1:-}" == "--dry-run" ]] && dry_run=true
 
 input="$(cat)"
-count="$(echo "$input" | jq 'length')"
+if [[ -z "$input" ]] || ! jq -e 'type == "array"' <<<"$input" >/dev/null 2>&1; then
+  echo "Error: input must be a non-empty JSON array of {thread_id, comment} objects" >&2
+  exit 1
+fi
+
+count="$(jq 'length' <<<"$input")"
 ok=0
 failed=0
 
-for i in $(seq 0 $((count - 1))); do
-  item="$(echo "$input" | jq ".[$i]")"
-  thread_id="$(echo "$item" | jq -r '.thread_id')"
-  comment="$(echo "$item" | jq -r '.comment // empty')"
+while IFS= read -r item; do
+  thread_id="$(jq -r '.thread_id' <<<"$item")"
+  comment="$(jq -r '.comment // empty' <<<"$item")"
 
   args=(--thread-id "$thread_id")
   [[ -n "$comment" ]] && args+=(--comment "$comment")
@@ -28,7 +32,7 @@ for i in $(seq 0 $((count - 1))); do
     echo "FAILED: ${thread_id}" >&2
     failed=$((failed + 1))
   fi
-done
+done < <(jq -c '.[]' <<<"$input")
 
 echo "Resolved ${ok}/${count} thread(s)$([[ $failed -gt 0 ]] && echo ", ${failed} failed")" >&2
 [[ "$failed" -eq 0 ]]

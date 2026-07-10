@@ -27,7 +27,7 @@ human instead of you.
 |--------|---------|
 | `scripts/fetch-feedback.sh` | Fetch review threads (paginated), discussion comments, and reviews in one JSON payload |
 | `scripts/resolve-thread.sh` | Reply to (optional) and resolve one review thread by GraphQL node ID |
-| `scripts/resolve-threads.sh` | Batch version: reads `[{"thread_id", "comment"}, ...]` from stdin |
+| `scripts/resolve-threads.sh` | Batch version: reads `[{"thread_id": "...", "comment": "..."}, ...]` from stdin |
 | `scripts/reply-comment.sh` | Post a top-level PR comment — for discussion-comment replies or a final summary |
 
 See [references/graphql-reference.md](references/graphql-reference.md) for
@@ -51,12 +51,17 @@ bundled with other git operations:
 
 Resolve two things before running anything, asking if either is unclear:
 
-1. **Which PR(s)?** A URL or `#N` in the message is unambiguous. Bare
-   "address PR feedback" with no number means the PR for the current branch —
-   confirm that's right if there's any chance the branch tracks the wrong PR.
-   A request spanning multiple PRs (a stack, or "all my open PRs") means
-   working through each one, one at a time — don't parallelize commits across
-   PRs that depend on each other.
+1. **Which PR(s)?** A URL or `#N` in the message is unambiguous — use it.
+   When none is given, use this session as context before asking: if you
+   opened or pushed to a PR earlier in this same conversation, that's almost
+   always the one meant (dogfooding a skill you just built, continuing work
+   you just pushed) — don't re-ask for something you already know. Otherwise
+   fall back to `gh pr view --json url,number` for the current branch's
+   tracked PR, and only ask the user if that's still ambiguous (no tracked
+   PR, or reason to think the branch points at the wrong one). A request
+   spanning multiple PRs (a stack, or "all my open PRs") means working
+   through each one, one at a time — don't parallelize commits across PRs
+   that depend on each other.
 2. **Report or act?** This skill is almost always invoked to *act* (fix code,
    reply, resolve) — that's what "address" means here, unlike
    [`github-pr-triage`](../github-pr-triage/SKILL.md) which defaults to

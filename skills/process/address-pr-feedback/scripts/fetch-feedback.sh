@@ -62,7 +62,7 @@ while :; do
     page="$(gh api graphql -f query="$query" -f owner="$owner" -f name="$name" -F number="$pr")"
   fi
 
-  nodes="$(echo "$page" | jq '.data.repository.pullRequest.reviewThreads.nodes')"
+  nodes="$(echo "$page" | jq '.data.repository.pullRequest.reviewThreads.nodes // []')"
   jq -n --argjson a "$(cat "$threads_file")" --argjson b "$nodes" '$a + $b' > "${threads_file}.tmp"
   mv "${threads_file}.tmp" "$threads_file"
 
