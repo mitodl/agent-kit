@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -48,9 +49,12 @@ _ADMISSION_CAP_MAX_DELAY = 4.0
 
 
 def _admission_cap_backoff(attempt: int) -> float:
-    return min(
-        _ADMISSION_CAP_BASE_DELAY * (2 ** (attempt - 1)), _ADMISSION_CAP_MAX_DELAY
-    )
+    """Exponential backoff with jitter — plain exponential backoff makes
+    concurrent retries from the same burst (the actual trigger case here)
+    retry in lockstep and re-collide on the cap; jitter breaks that up."""
+    delay = _ADMISSION_CAP_BASE_DELAY * (2 ** (attempt - 1))
+    jitter = random.uniform(0, 0.1 * delay)
+    return min(delay + jitter, _ADMISSION_CAP_MAX_DELAY)
 
 
 class OmnigraphConflict(RuntimeError):
@@ -260,9 +264,10 @@ class OmnigraphClient:
                 if result.returncode == 0:
                     return result.stdout
                 err = result.stderr
+                err_lower = err.lower()
                 if _is_storage_version_mismatch(err):
                     raise RuntimeError(_friendly_storage_error(err)) from None
-                if any(m in err for m in _ADMISSION_CAP_MARKERS):
+                if any(m in err_lower for m in _ADMISSION_CAP_MARKERS):
                     # Independent budget/backoff from the drift retries below —
                     # doesn't consume _MAX_ATTEMPTS and ignores surface_conflict.
                     admission_cap_attempt += 1
@@ -271,19 +276,19 @@ class OmnigraphClient:
                         continue
                     raise RuntimeError(
                         f"omnigraph {label} failed after "
-                        f"{_ADMISSION_CAP_MAX_ATTEMPTS} retries (actor "
+                        f"{_ADMISSION_CAP_MAX_ATTEMPTS} attempts (actor "
                         f"admission cap exceeded):\n{err.strip()}"
                     )
-                if surface_conflict and any(m in err for m in _RETRYABLE):
+                if surface_conflict and any(m in err_lower for m in _RETRYABLE):
                     # A compare-and-swap caller wants to lose the race, not
                     # re-apply its write over the winner. Surface immediately.
                     raise OmnigraphConflict(err.strip()) from None
                 attempt += 1
                 if attempt < _MAX_ATTEMPTS:
-                    if any(m in err for m in _NEEDS_REPAIR):
+                    if any(m in err_lower for m in _NEEDS_REPAIR):
                         self._repair(env)
                         continue
-                    if any(m in err for m in _RETRYABLE):
+                    if any(m in err_lower for m in _RETRYABLE):
                         time.sleep(0.05 * attempt)
                         continue
                 raise RuntimeError(

@@ -89,6 +89,17 @@ def test_conflict_is_retried_when_not_surfaced(monkeypatch):
 # ── Per-actor admission cap backoff (in-flight count + byte budget) ────
 
 
+def test_admission_cap_backoff_adds_bounded_jitter():
+    """Jitter breaks lockstep retries from a synchronized burst — bounded to
+    10% of the base delay, and the schedule still caps at max_delay."""
+    delay = graph_mod._ADMISSION_CAP_BASE_DELAY * (2 ** (3 - 1))  # attempt=3
+    for _ in range(50):
+        backoff = graph_mod._admission_cap_backoff(3)
+        assert delay <= backoff <= delay * 1.1
+
+    assert graph_mod._admission_cap_backoff(20) == graph_mod._ADMISSION_CAP_MAX_DELAY
+
+
 def test_inflight_cap_retries_then_succeeds(monkeypatch):
     client = _client(monkeypatch)
     calls = {"n": 0}
@@ -104,15 +115,14 @@ def test_inflight_cap_retries_then_succeeds(monkeypatch):
 
     monkeypatch.setattr(graph_mod.subprocess, "run", fake_run)
     monkeypatch.setattr(graph_mod.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(graph_mod.random, "uniform", lambda a, b: 0.0)  # no jitter
 
     out = client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
     assert out == "ok"
     assert calls["n"] == 3
-    # backoff, not a fixed delay
-    assert sleeps == [
-        graph_mod._admission_cap_backoff(1),
-        graph_mod._admission_cap_backoff(2),
-    ]
+    # concrete expected delays (base 0.25s, doubling), not derived from the
+    # implementation's own helper — an independent oracle on the schedule
+    assert sleeps == [0.25, 0.5]
 
 
 def test_byte_budget_exceeded_also_retries(monkeypatch):
