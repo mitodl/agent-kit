@@ -13,6 +13,7 @@ import subprocess
 from importlib import metadata
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 
 def _git_short_ref(path: Path) -> str | None:
@@ -24,7 +25,7 @@ def _git_short_ref(path: Path) -> str | None:
             timeout=2,
             check=False,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
     return result.stdout.strip() if result.returncode == 0 else None
 
@@ -51,9 +52,11 @@ def resolve_version(dist_name: str) -> str:
         return f"{version} ({vcs_info['commit_id'][:7]})"
 
     if direct_url.get("dir_info", {}).get("editable"):
-        source_path = Path(urlparse(direct_url.get("url", "")).path)
-        short_ref = _git_short_ref(source_path)
-        if short_ref:
-            return f"{version} ({short_ref})"
+        url = direct_url.get("url")
+        if url:
+            source_path = Path(url2pathname(urlparse(url).path))
+            short_ref = _git_short_ref(source_path)
+            if short_ref:
+                return f"{version} ({short_ref})"
 
     return version

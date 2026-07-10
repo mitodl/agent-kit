@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 import cyclopts
-from agent_config_kit import resolve_version
+from agent_config_kit.version import resolve_version
 
 from . import indexer
 

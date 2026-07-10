@@ -8,7 +8,7 @@ import re
 from typing import Literal
 
 import cyclopts
-from agent_config_kit import resolve_version
+from agent_config_kit.version import resolve_version
 from rich.console import Console
 
 from .. import repo as repo_module
