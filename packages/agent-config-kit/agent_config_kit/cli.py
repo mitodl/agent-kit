@@ -51,6 +51,7 @@ from .resolve import (
     find_repo_root,
     resolve_zero_arg_manifest,
 )
+from .version import resolve_version
 
 app = cyclopts.App(
     name="agent-kit",
@@ -58,6 +59,7 @@ app = cyclopts.App(
         "Apply and validate manifest-driven MCP server, skill, and hook "
         "registration across coding-agent platforms."
     ),
+    version=lambda: resolve_version("agent-config-kit"),
 )
 console = Console()
 

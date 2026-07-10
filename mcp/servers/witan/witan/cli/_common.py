@@ -8,6 +8,7 @@ import re
 from typing import Literal
 
 import cyclopts
+from agent_config_kit.version import resolve_version
 from rich.console import Console
 
 from .. import repo as repo_module
@@ -23,6 +24,7 @@ WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 app = cyclopts.App(
     name="witan",
     help="witan — agent memory, planning, and collaboration graph.",
+    version=lambda: resolve_version("witan-council"),
 )
 console = Console()
 

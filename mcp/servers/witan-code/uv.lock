@@ -10,14 +10,25 @@ resolution-markers = [
 
 [[package]]
 name = "agent-config-kit"
-version = "0.3.4"
-source = { registry = "https://pypi.org/simple" }
+version = "0.4.0"
+source = { editable = "../../../packages/agent-config-kit" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/82/e8/79b1344f1390333ff987ca4c78402a66621cc48b1a558f8813cbd5daa1c9/agent_config_kit-0.3.4.tar.gz", hash = "sha256:0d4febc71709976915524101a9e0b0977efba4e6015b97941818f17a1effd9d0", size = 94452, upload-time = "2026-07-08T23:06:36.802Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/37/c8802460a815003a9ff73b7b32b4c7b320b48ab4925044db891671a374ae/agent_config_kit-0.3.4-py3-none-any.whl", hash = "sha256:aa4e115819a7818de62160234e1f9f985e852d72d97d84607c8cc98cac4507c0", size = 54411, upload-time = "2026-07-08T23:06:35.489Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=4,<5" },
+    { name = "pydantic", specifier = ">=2,<3" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
+]
+provides-extras = ["cli"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "cyclopts", specifier = ">=4,<5" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "rich", specifier = ">=13" },
 ]
 
 [[package]]
@@ -1637,7 +1648,7 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "agent-config-kit" },
@@ -1662,7 +1673,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-config-kit", specifier = ">=0.1,<1" },
+    { name = "agent-config-kit", editable = "../../../packages/agent-config-kit" },
     { name = "cyclopts", specifier = ">=4,<5" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "pyyaml", specifier = ">=6,<7" },
