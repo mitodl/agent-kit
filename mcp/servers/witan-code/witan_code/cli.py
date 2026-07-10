@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import Literal
 
 import cyclopts
+from agent_config_kit import resolve_version
 
 from . import indexer
 
 app = cyclopts.App(
     name="witan-code",
     help="witan-code — tree-sitter code graph + cross-repo bridge.",
+    version=lambda: resolve_version("witan-code"),
 )
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]

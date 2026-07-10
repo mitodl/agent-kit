@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.2.0"
+version = "0.3.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -14,7 +14,7 @@ dependencies = [
     "cyclopts>=4,<5",
     "rich>=13",
     "pydantic>=2,<3",
-    "agent-config-kit>=0.1,<1",
+    "agent-config-kit>=0.4,<1",
 ]
 
 [project.urls]
@@ -31,8 +31,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-# Until agent-config-kit is published to PyPI, consume it as an editable
-# workspace path dependency.
+# Dev/CI use the in-repo workspace copy so this always tests against the
+# agent-config-kit version bumped alongside it — even before that version
+# has actually landed on PyPI. Published wheels only see the PyPI-range
+# dependency declared above.
 agent-config-kit = { path = "../../../packages/agent-config-kit", editable = true }
 
 [tool.hatch.build.targets.wheel]
@@ -50,7 +52,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.2.0"
+current_version = "0.3.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

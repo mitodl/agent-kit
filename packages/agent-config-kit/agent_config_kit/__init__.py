@@ -41,6 +41,7 @@ from .prune import (
     write_state,
 )
 from .registry import detect_installed_platforms, get_platform, known_platforms
+from .version import resolve_version
 
 __all__ = [
     "AgentPlatform",
@@ -85,6 +86,7 @@ __all__ = [
     "load_json_object",
     "load_manifest",
     "load_state",
+    "resolve_version",
     "write_json",
     "write_state",
 ]

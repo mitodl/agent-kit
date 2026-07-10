@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.4.0] - 2026-07-10
+
+### Added
+
+- **`resolve_version(dist_name)`**: resolves an installed distribution's
+  version via `importlib.metadata`, appending a git short ref when the
+  package is installed editable or directly from a VCS URL (`uvx --from
+  git+...`) — the plain version number alone doesn't pin down which commit
+  is actually running for those install modes. `witan`, `witan-code`, and
+  `agent-kit` now wire this into their cyclopts `App(version=...)` to back
+  a `--version` flag.
+
 ## [0.3.7] - 2026-07-09
 
 ### Fixed
