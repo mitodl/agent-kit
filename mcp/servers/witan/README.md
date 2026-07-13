@@ -235,8 +235,10 @@ Pass `--output-format json|toml|yaml` (default `txt`; env `WITAN_OUTPUT_FORMAT`)
 anywhere on the command line to get a machine-readable dump of a
 table-producing command's rows instead of the rich table — e.g.
 `witan tasks --all-repos --output-format json`. Covers `tasks`, `projects`,
-`memory`, `traces`, `scan test`, and `scan rules`; commands whose output isn't
-a flat table (`task <slug>`, `project <slug>`, `graph`, …) are unaffected.
+`memory`, `traces`, `scan test`, `scan rules`, and (when `witan-code` is
+installed) `code repos`, `code symbols`, and `code stitch`; commands whose
+output isn't a flat table (`task <slug>`, `project <slug>`, `graph`, …) are
+unaffected.
 
 | Command | Description |
 |---|---|

@@ -5,12 +5,13 @@ pyproject ``[project.scripts]``).
 """
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import cyclopts
 from agent_config_kit.version import resolve_version
 
 from . import indexer
+from .output import OutputFormat, dump_structured, get_output_format, set_output_format
 
 app = cyclopts.App(
     name="witan-code",
@@ -19,6 +20,36 @@ app = cyclopts.App(
 )
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]
+
+
+def _render_table(
+    *,
+    title: str,
+    columns: list[str],
+    rows: list[dict[str, object]],
+    no_wrap: set[str] | None = None,
+) -> None:
+    """Render ``rows`` as a rich table, or dump them per ``--output-format``."""
+    rows = [{k: ("" if v is None else v) for k, v in r.items()} for r in rows]
+
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_structured(rows, title, fmt)
+        return
+
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table(title=title, header_style="bold")
+    no_wrap = no_wrap or set()
+    for col in columns:
+        if col in no_wrap:
+            table.add_column(col, no_wrap=True)
+        else:
+            table.add_column(col, overflow="fold", no_wrap=False)
+    for row in rows:
+        table.add_row(*(str(row.get(col, "")) for col in columns))
+    Console().print(table)
 
 
 @app.command
@@ -122,7 +153,6 @@ def symbols(
         Filter to one symbol scheme (http/env/pkg/svc).
     """
     from rich.console import Console
-    from rich.table import Table
 
     from . import config as cfg_module
     from . import repo as repo_module
@@ -155,9 +185,7 @@ def symbols(
         console.print(f"[dim]No symbol table rows for {repo}.[/dim]")
         return
 
-    table = Table(title=f"Symbol table — {repo}", header_style="bold")
-    for col in ("role", "symbol", "kind", "refs", "conf", "where"):
-        table.add_column(col)
+    table_rows: list[dict[str, object]] = []
     for r in rows:
         conf = r.get("confidence")
         where = (
@@ -165,15 +193,21 @@ def symbols(
             if r.get("line")
             else (r.get("file") or "")
         )
-        table.add_row(
-            r.get("role", ""),
-            r.get("symbol", ""),
-            r.get("kind", ""),
-            str(r.get("n_refs", "")),
-            f"{conf:.2f}" if isinstance(conf, (int, float)) else "",
-            where,
+        table_rows.append(
+            {
+                "role": r.get("role", ""),
+                "symbol": r.get("symbol", ""),
+                "kind": r.get("kind", ""),
+                "refs": r.get("n_refs", ""),
+                "conf": round(float(conf), 2) if isinstance(conf, (int, float)) else "",
+                "where": where,
+            }
         )
-    console.print(table)
+    _render_table(
+        title=f"Symbol table — {repo}",
+        columns=["role", "symbol", "kind", "refs", "conf", "where"],
+        rows=table_rows,
+    )
 
 
 @app.command
@@ -194,7 +228,6 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
         exists in this SOA).
     """
     from rich.console import Console
-    from rich.table import Table
 
     from . import config as cfg_module
     from . import store as store_module
@@ -220,20 +253,23 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
         if not unresolved_rows:
             console.print("[dim]No unresolved external symbols.[/dim]")
             return
-        table = Table(title="Unresolved external symbols", header_style="bold")
-        for col in ("repo", "symbol", "kind", "refs"):
-            table.add_column(col)
+        table_rows: list[dict[str, object]] = []
         for r in sorted(
             unresolved_rows, key=lambda r: (r["repo"] or "", r["symbol"] or "")
         ):
-            n_refs = r.get("n_refs")
-            table.add_row(
-                r["repo"] or "",
-                r["symbol"] or "",
-                r["kind"] or "",
-                str(n_refs) if n_refs is not None else "",
+            table_rows.append(
+                {
+                    "repo": r["repo"] or "",
+                    "symbol": r["symbol"] or "",
+                    "kind": r["kind"] or "",
+                    "refs": r.get("n_refs"),
+                }
             )
-        console.print(table)
+        _render_table(
+            title="Unresolved external symbols",
+            columns=["repo", "symbol", "kind", "refs"],
+            rows=table_rows,
+        )
         return
 
     if repo is not None:
@@ -241,22 +277,25 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
     if not edges:
         console.print("[dim]No precise cross-repo edges.[/dim]")
         return
-    table = Table(title="Precise cross-repo edges (Stage 2)", header_style="bold")
-    for col in ("consumer", "provider", "kind", "matches", "preferred", "ambiguous"):
-        table.add_column(col)
-    for e in sorted(
-        edges,
-        key=lambda e: (e.consumer_repo or "", e.provider_repo or "", e.kind or ""),
-    ):
-        table.add_row(
-            e.consumer_repo or "",
-            e.provider_repo or "",
-            e.kind or "",
-            str(e.match_count),
-            "yes" if e.preferred else "",
-            "yes" if e.ambiguous_version else "",
+    table_rows = [
+        {
+            "consumer": e.consumer_repo or "",
+            "provider": e.provider_repo or "",
+            "kind": e.kind or "",
+            "matches": e.match_count,
+            "preferred": "yes" if e.preferred else "",
+            "ambiguous": "yes" if e.ambiguous_version else "",
+        }
+        for e in sorted(
+            edges,
+            key=lambda e: (e.consumer_repo or "", e.provider_repo or "", e.kind or ""),
         )
-    console.print(table)
+    ]
+    _render_table(
+        title="Precise cross-repo edges (Stage 2)",
+        columns=["consumer", "provider", "kind", "matches", "preferred", "ambiguous"],
+        rows=table_rows,
+    )
 
 
 @app.command(name="inject-context")
@@ -619,7 +658,6 @@ def branches(*, prune: bool = False) -> None:
 def repos() -> None:
     """List the repositories that have a code graph indexed."""
     from rich.console import Console
-    from rich.table import Table
 
     from . import config as cfg_module
 
@@ -638,18 +676,24 @@ def repos() -> None:
         console.print(f"[dim]No indexed repositories in {code_dir}.[/dim]")
         return
 
-    table = Table(title="Indexed repositories", header_style="bold")
-    _short_cols = {"files", "size", "last indexed"}
-    for col in ("repo", "files", "size", "last indexed"):
-        if col in _short_cols:
-            table.add_column(col, no_wrap=True)
-        else:
-            table.add_column(col, overflow="fold", no_wrap=False)
+    table_rows: list[dict[str, object]] = []
     for store in stores:
         repo_uri, file_count = _code_store_stats(store)
         size, mtime = _dir_stats(store)
-        table.add_row(repo_uri, file_count, _human_size(size), mtime)
-    console.print(table)
+        table_rows.append(
+            {
+                "repo": repo_uri,
+                "files": file_count,
+                "size": _human_size(size),
+                "last indexed": mtime,
+            }
+        )
+    _render_table(
+        title="Indexed repositories",
+        columns=["repo", "files", "size", "last indexed"],
+        rows=table_rows,
+        no_wrap={"files", "size", "last indexed"},
+    )
 
 
 def _code_store_stats(store: Path) -> tuple[str, str]:
@@ -716,8 +760,27 @@ def _human_size(n: int) -> str:
     return f"{size:.1f}GB"
 
 
+@app.meta.default
+def _launcher(
+    *tokens: Annotated[str, cyclopts.Parameter(show=False, allow_leading_hyphen=True)],
+    output_format: Annotated[
+        OutputFormat,
+        cyclopts.Parameter(name="--output-format", env_var="WITAN_OUTPUT_FORMAT"),
+    ] = "txt",
+) -> None:
+    """witan-code — tree-sitter code graph + cross-repo bridge.
+
+    Parameters
+    ----------
+    output_format: Output format for table commands. Commands: repos, symbols,
+        stitch. Values: txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.
+    """
+    set_output_format(output_format)
+    app(tokens)
+
+
 def cli() -> None:
-    app()
+    app.meta()
 
 
 if __name__ == "__main__":

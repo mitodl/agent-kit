@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import pytest
 
@@ -111,3 +113,19 @@ def test_launcher_defaults_to_txt(monkeypatch):
     cli_module._launcher("tasks")
 
     assert output_module.get_output_format() == "txt"
+
+
+def test_launcher_propagates_output_format_to_mounted_witan_code(monkeypatch):
+    import witan.cli as cli_module
+
+    calls = []
+    fake_pkg = types.ModuleType("witan_code")
+    fake_output = types.ModuleType("witan_code.output")
+    fake_output.set_output_format = calls.append
+    monkeypatch.setitem(sys.modules, "witan_code", fake_pkg)
+    monkeypatch.setitem(sys.modules, "witan_code.output", fake_output)
+    monkeypatch.setattr(cli_module, "app", lambda tokens: None)
+
+    cli_module._launcher("code", "repos", output_format="json")
+
+    assert calls == ["json"]

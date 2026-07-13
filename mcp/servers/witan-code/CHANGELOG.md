@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Added
+
+- **`witan-code --output-format`**: `repos`, `symbols`, and `stitch` can now
+  render their table data as `json`, `toml`, or `yaml` in addition to the
+  default Rich table output. The same option is honored when mounted as
+  `witan --output-format … code …`.
+
 ## [0.3.0] - 2026-07-10
 
 ### Added

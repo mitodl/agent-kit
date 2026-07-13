@@ -7,7 +7,13 @@ the `witan` umbrella package. Run `witan-code --help` or `witan-code
 <command> --help` for the live version of this table — it is generated from
 the same docstrings.
 
-Global flags: `--help` / `-h`, `--version`.
+Global flags: `--help` / `-h`, `--version`, `--output-format txt|json|toml|yaml`.
+
+`--output-format` controls table-producing commands (`repos`, `symbols`, and
+`stitch`) and is also available as `WITAN_OUTPUT_FORMAT`. The default `txt`
+renders the existing Rich tables; `json`, `toml`, and `yaml` emit a wrapper
+object with `title` and `rows` for machine parsing. The same option works when
+mounted under the umbrella CLI, e.g. `witan --output-format json code repos`.
 
 Boolean flags follow cyclopts' `--flag`/`--no-flag` convention; both forms are
 always available even where only `--flag` is shown below.
