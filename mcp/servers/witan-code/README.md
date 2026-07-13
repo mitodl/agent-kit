@@ -60,6 +60,22 @@ machine's local code index.
 - [CLI reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/docs/CLI_REFERENCE.md) — every `witan-code` command with
   its full flag table and an example invocation.
 
+## CLI structured output
+
+`witan-code` table-producing commands can emit machine-readable output instead
+of Rich tables:
+
+```bash
+witan-code --output-format json repos
+witan-code --output-format yaml symbols --role exported
+witan --output-format toml code stitch --unresolved
+```
+
+Supported formats are `txt` (default), `json`, `toml`, and `yaml`. The same
+setting is available through `WITAN_OUTPUT_FORMAT`. It currently applies to
+`repos`, `symbols`, and `stitch`; free-text commands such as `index` and hook
+commands keep their existing output.
+
 ## Cross-repo context bridge (Layer 2.5)
 
 The per-repo graph stops at a repo boundary, but service-oriented architectures

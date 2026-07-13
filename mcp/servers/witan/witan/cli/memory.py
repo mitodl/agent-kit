@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from rich.table import Table
-
-from ._common import MemoryKind, _fn, _repo_arg, _srv, app, console
+from ._common import MemoryKind, _fn, _repo_arg, _srv, app, console, render_table
 
 
 @app.command
@@ -28,17 +26,18 @@ def memory(
     if not rows:
         console.print("[dim]No memories.[/dim]")
         return
-    table = Table(title=title, header_style="bold")
-    for col in ("kind", "slug", "title", "repo"):
-        if col == "kind":
-            table.add_column(col, no_wrap=True)
-        else:
-            table.add_column(col, overflow="fold", no_wrap=False)
-    for r in rows:
-        table.add_row(
-            r.get("kind", "project_fact"),
-            r["slug"],
-            r.get("title", ""),
-            r.get("repo", "") or "",
-        )
-    console.print(table)
+    rows_data = [
+        {
+            "kind": r.get("kind", "project_fact"),
+            "slug": r["slug"],
+            "title": r.get("title", ""),
+            "repo": r.get("repo", "") or "",
+        }
+        for r in rows
+    ]
+    render_table(
+        title=title,
+        columns=["kind", "slug", "title", "repo"],
+        rows=rows_data,
+        no_wrap={"kind"},
+    )

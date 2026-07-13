@@ -5,16 +5,23 @@ description = "witan — agent memory, planning, and collaboration graph (work-c
 readme = "README.md"
 license = "BSD-3-Clause"
 requires-python = ">=3.11"
-keywords = ["mcp", "agent", "memory", "knowledge-graph", "task-tracking", "coding-agent"]
-classifiers = [
-    "Programming Language :: Python :: 3",
+keywords = [
+  "mcp",
+  "agent",
+  "memory",
+  "knowledge-graph",
+  "task-tracking",
+  "coding-agent",
 ]
+classifiers = ["Programming Language :: Python :: 3"]
 dependencies = [
-    "fastmcp>=3.4.2,<4",
-    "cyclopts>=4,<5",
-    "rich>=13",
-    "pydantic>=2,<3",
-    "agent-config-kit>=0.4,<1",
+  "fastmcp>=3.4.2,<4",
+  "cyclopts>=4,<5",
+  "rich>=13",
+  "pydantic>=2,<3",
+  "agent-config-kit>=0.4,<1",
+  "pyyaml>=6,<7",
+  "tomli-w>=1,<2",
 ]
 
 [project.urls]
@@ -67,5 +74,5 @@ test = ["pytest>=8"]
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
-    "perf: loose latency guardrails; excludable on slow/contended runners with -m 'not perf'",
+  "perf: loose latency guardrails; excludable on slow/contended runners with -m 'not perf'",
 ]

@@ -18,6 +18,7 @@ import cyclopts
 
 from ._common import app, console
 from .. import config as cfg_module
+from .output import OutputFormat, set_output_format
 from .run_helpers import _run_task_slug
 
 # Import submodules to trigger @app.command / @*_app.command registrations.
@@ -132,5 +133,31 @@ def run(
     )
 
 
+@app.meta.default
+def _launcher(
+    *tokens: Annotated[str, cyclopts.Parameter(show=False, allow_leading_hyphen=True)],
+    output_format: Annotated[
+        OutputFormat,
+        cyclopts.Parameter(name="--output-format", env_var="WITAN_OUTPUT_FORMAT"),
+    ] = "txt",
+) -> None:
+    """witan — agent memory, planning, and collaboration graph.
+
+    Parameters
+    ----------
+    output_format: Output format for table commands. Commands include tasks,
+        projects, memory, traces, scan, and mounted witan-code tables. Values:
+        txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.
+    """
+    set_output_format(output_format)
+    try:
+        from witan_code.output import set_output_format as set_code_output_format
+
+        set_code_output_format(output_format)
+    except ImportError:
+        pass
+    app(tokens)
+
+
 def main() -> None:
-    app()
+    app.meta()

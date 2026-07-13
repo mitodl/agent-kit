@@ -10,8 +10,10 @@ from typing import Literal
 import cyclopts
 from agent_config_kit.version import resolve_version
 from rich.console import Console
+from rich.table import Table
 
 from .. import repo as repo_module
+from .output import dump_structured, get_output_format
 
 # Enum literals mirrored from witan.server — drive CLI argument validation.
 MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
@@ -102,3 +104,58 @@ def _short_repo(uri: str | None) -> str:
 def _detect_repo_for_display() -> str | None:
     """Detect current repo URI for CLI display/filtering."""
     return repo_module.detect()
+
+
+def render_table(
+    *,
+    title: str,
+    columns: list[str],
+    rows: list[dict[str, object]],
+    no_wrap: set[str] | None = None,
+    styles: dict[str, dict[str, str]] | None = None,
+    dim_if_present: set[str] | None = None,
+    placeholders: dict[str, str] | None = None,
+) -> None:
+    """Render ``rows`` as a rich table, or dump them structured per ``--output-format``.
+
+    ``rows`` hold plain, unstyled values of any JSON/TOML/YAML-serializable
+    type — ``None`` is normalized to ``""`` (TOML has no null, and a bare
+    ``None`` would otherwise print as the literal text ``"None"``); every
+    other type (``int``, ``float``, ``bool``, ``str``) passes through
+    unchanged, so structured output keeps its native type (e.g. a session
+    count stays a JSON number). ``styles``/``dim_if_present``/``placeholders``
+    are display-only concerns applied only in ``txt`` mode.
+    """
+    rows = [{k: ("" if v is None else v) for k, v in r.items()} for r in rows]
+
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_structured(rows, title, fmt)
+        return
+
+    no_wrap = no_wrap or set()
+    styles = styles or {}
+    dim_if_present = dim_if_present or set()
+    placeholders = placeholders or {}
+
+    table = Table(title=title, header_style="bold")
+    for col in columns:
+        if col in no_wrap:
+            table.add_column(col, no_wrap=True)
+        else:
+            table.add_column(col, overflow="fold", no_wrap=False)
+
+    for r in rows:
+        cells = []
+        for col in columns:
+            value = str(r.get(col, ""))
+            if not value and col in placeholders:
+                cells.append(f"[dim]{placeholders[col]}[/dim]")
+            elif col in styles:
+                cells.append(_styled(value, styles[col]))
+            elif value and col in dim_if_present:
+                cells.append(f"[dim]{value}[/dim]")
+            else:
+                cells.append(value)
+        table.add_row(*cells)
+    console.print(table)

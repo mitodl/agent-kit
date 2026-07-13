@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Added
+
+- **`witan --output-format json|toml|yaml`**: a global option (default
+  `txt`; env `WITAN_OUTPUT_FORMAT`) that renders table-producing commands
+  (`tasks`, `projects`, `memory`, `traces`, `scan test`, `scan rules`, plus
+  `witan-code`'s `code repos`, `code symbols`, and `code stitch` when
+  installed) as a machine-readable dump of the same rows instead of a rich
+  table.
+
 ## [0.3.0] - 2026-07-10
 
 ### Added

@@ -10,7 +10,6 @@ rather than just slugs.
 from __future__ import annotations
 
 import cyclopts
-from rich.table import Table
 
 from ._common import (
     _detect_repo_for_display,
@@ -20,6 +19,7 @@ from ._common import (
     _srv,
     app,
     console,
+    render_table,
 )
 
 
@@ -52,23 +52,25 @@ def traces(
             else "all repos (no git context)"
         )
     )
-    table = Table(title=f"Workflow traces — {scope}", header_style="bold")
-    for col in ("slug", "title", "sessions", "mined", "repos"):
-        table.add_column(
-            col, overflow="fold", no_wrap=col in {"slug", "sessions", "mined"}
-        )
-    for r in rows:
-        mined = (
-            f"{len(r.get('patterns_slug') or [])}p/{len(r.get('lessons_slug') or [])}l"
-        )
-        table.add_row(
-            r["slug"],
-            r.get("title", ""),
-            str(r.get("session_count", "")),
-            mined,
-            ", ".join(_short_repo(u) for u in (r.get("repos") or [])),
-        )
-    console.print(table)
+    rows_data = [
+        {
+            "slug": r["slug"],
+            "title": r.get("title", ""),
+            "sessions": r.get("session_count"),
+            "mined": (
+                f"{len(r.get('patterns_slug') or [])}p/"
+                f"{len(r.get('lessons_slug') or [])}l"
+            ),
+            "repos": ", ".join(_short_repo(u) for u in (r.get("repos") or [])),
+        }
+        for r in rows
+    ]
+    render_table(
+        title=f"Workflow traces — {scope}",
+        columns=["slug", "title", "sessions", "mined", "repos"],
+        rows=rows_data,
+        no_wrap={"slug", "sessions", "mined"},
+    )
 
 
 def _trace_show(slug: str) -> None:

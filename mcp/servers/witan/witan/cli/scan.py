@@ -8,12 +8,11 @@ string, ``scan rules`` lists what's active and where it came from.
 from __future__ import annotations
 
 import cyclopts
-from rich.table import Table
 
 from .. import config as cfg_module
 from ..scan import ScannerRegistry, redact_spans
 from ..scan.allowlist import compile_allowlist, suppression_reason
-from ._common import app, console
+from ._common import app, console, render_table
 
 scan_app = cyclopts.App(
     name="scan", help="Introspect and dry-run write-path content scanning (ADR 0001)."
@@ -64,32 +63,36 @@ def test(
     allowlist = compile_allowlist(cfg.allowlist)
     reasons = {f: suppression_reason(f, text, cfg, allowlist) for f in findings}
 
-    table = Table(title="Findings", header_style="bold")
-    for col in (
-        "detector",
-        "category",
-        "severity",
-        "span",
-        "action",
-        "suppressed",
-        "preview",
-    ):
-        table.add_column(col)
+    rows_data = []
     for f in findings:
         reason = reasons[f]
         mode = "warn" if reason else _mode_for(cfg, f.category, f.action)
-        table.add_row(
-            f.detector,
-            f.category,
-            f.severity,
-            f"{f.start}-{f.end}",
-            f"[{_MODE_STYLE.get(mode, '')}]{mode}[/{_MODE_STYLE.get(mode, '')}]"
-            if _MODE_STYLE.get(mode)
-            else mode,
-            f"[dim]{reason}[/dim]" if reason else "",
-            f.preview,
+        rows_data.append(
+            {
+                "detector": f.detector,
+                "category": f.category,
+                "severity": f.severity,
+                "span": f"{f.start}-{f.end}",
+                "action": mode,
+                "suppressed": reason or "",
+                "preview": f.preview,
+            }
         )
-    console.print(table)
+    render_table(
+        title="Findings",
+        columns=[
+            "detector",
+            "category",
+            "severity",
+            "span",
+            "action",
+            "suppressed",
+            "preview",
+        ],
+        rows=rows_data,
+        styles={"action": _MODE_STYLE},
+        dim_if_present={"suppressed"},
+    )
 
     unsuppressed = [f for f in findings if reasons[f] is None]
     console.print(f"\n[dim]Redacted preview:[/dim] {redact_spans(text, unsuppressed)}")
@@ -122,17 +125,18 @@ def rules() -> None:
         console.print("[dim]No active detectors.[/dim]")
         return
 
-    table = Table(title="Active detectors", header_style="bold")
-    for col in ("detector", "category", "mode", "source"):
-        table.add_column(col)
-    for s in sorted(scanners, key=lambda s: (s.category, s.name)):
-        mode = _mode_for(cfg, s.category, None)
-        table.add_row(
-            s.name,
-            s.category,
-            f"[{_MODE_STYLE.get(mode, '')}]{mode}[/{_MODE_STYLE.get(mode, '')}]"
-            if _MODE_STYLE.get(mode)
-            else mode,
-            registry.source_for(s.name),
-        )
-    console.print(table)
+    rows_data = [
+        {
+            "detector": s.name,
+            "category": s.category,
+            "mode": _mode_for(cfg, s.category, None),
+            "source": registry.source_for(s.name),
+        }
+        for s in sorted(scanners, key=lambda s: (s.category, s.name))
+    ]
+    render_table(
+        title="Active detectors",
+        columns=["detector", "category", "mode", "source"],
+        rows=rows_data,
+        styles={"mode": _MODE_STYLE},
+    )

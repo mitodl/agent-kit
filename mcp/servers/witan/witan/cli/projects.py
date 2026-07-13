@@ -8,7 +8,6 @@ from typing import Annotated
 import cyclopts
 from rich.markup import escape
 from rich.prompt import Prompt
-from rich.table import Table
 
 from .. import config as cfg_module
 from ._common import (
@@ -23,6 +22,7 @@ from ._common import (
     WorkflowPhase,
     app,
     console,
+    render_table,
 )
 from .run_helpers import (
     _launch_agent,
@@ -58,22 +58,23 @@ def projects(
         scope = _short_repo(detected_repo)
     else:
         scope = "all repos (no git context)"
-    table = Table(title=f"Workflow projects — {scope}", header_style="bold")
-    _short_cols = {"status", "phase"}
-    for col in ("status", "phase", "slug", "title", "repos"):
-        if col in _short_cols:
-            table.add_column(col, no_wrap=True)
-        else:
-            table.add_column(col, overflow="fold", no_wrap=False)
-    for r in rows:
-        table.add_row(
-            _styled(r.get("status", ""), _STATUS_STYLE),
-            r.get("phase", ""),
-            r["slug"],
-            r.get("title", ""),
-            ", ".join(_short_repo(u) for u in (r.get("repos") or [])),
-        )
-    console.print(table)
+    rows_data = [
+        {
+            "status": r.get("status", ""),
+            "phase": r.get("phase", ""),
+            "slug": r["slug"],
+            "title": r.get("title", ""),
+            "repos": ", ".join(_short_repo(u) for u in (r.get("repos") or [])),
+        }
+        for r in rows
+    ]
+    render_table(
+        title=f"Workflow projects — {scope}",
+        columns=["status", "phase", "slug", "title", "repos"],
+        rows=rows_data,
+        no_wrap={"status", "phase"},
+        styles={"status": _STATUS_STYLE},
+    )
 
 
 def _project_show(slug: str) -> None:
