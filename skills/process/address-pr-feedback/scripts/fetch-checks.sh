@@ -28,7 +28,7 @@ output="${positional[2]:-/dev/stdout}"
 [[ -z "$repo" || -z "$pr" ]] && usage
 
 checks="$(gh pr checks "$pr" -R "$repo" \
-  --json name,bucket,state,description,workflow,link,startedAt,completedAt 2>/dev/null || echo '[]')"
+  --json name,bucket,state,description,workflow,link,startedAt,completedAt)"
 
 if [[ "$include_passing" == false ]]; then
   checks="$(echo "$checks" | jq '[.[] | select(.bucket != "pass" and .bucket != "skipping")]')"
@@ -40,11 +40,10 @@ checks="$(echo "$checks" | jq '[.[] | . + {
 
 # Pull failed-step logs for GitHub Actions checks; dedupe by run id since one
 # workflow run can produce several job-level checks.
-run_ids="$(echo "$checks" | jq -r '[.[] | select(.bucket == "fail" and .run_id != null) | .run_id] | unique[]')"
-
 logs_json='{}'
 max_log_chars=20000
-for run_id in $run_ids; do
+while read -r run_id; do
+  [[ -z "$run_id" ]] && continue
   raw_log="$(gh run view "$run_id" -R "$repo" --log-failed 2>/dev/null || echo "(failed to fetch log)")"
   if [[ ${#raw_log} -gt $max_log_chars ]]; then
     log="[...truncated, showing last ${max_log_chars} chars...]
@@ -53,7 +52,7 @@ $(printf '%s' "$raw_log" | tail -c "$max_log_chars")"
     log="$raw_log"
   fi
   logs_json="$(jq -n --argjson acc "$logs_json" --arg id "$run_id" --arg log "$log" '$acc + {($id): $log}')"
-done
+done < <(echo "$checks" | jq -r '[.[] | select(.bucket == "fail" and .run_id != null) | .run_id] | unique[]')
 
 jq -n \
   --arg repo "$repo" \
