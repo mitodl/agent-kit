@@ -27,13 +27,17 @@ def get_output_format() -> OutputFormat:
     return _current_format
 
 
-def dump_structured(rows: list[dict[str, str]], title: str, fmt: OutputFormat) -> None:
-    """Print ``rows`` (plain, unstyled values) as JSON, TOML, or YAML.
+def dump_structured(
+    rows: list[dict[str, object]], title: str, fmt: OutputFormat
+) -> None:
+    """Print ``rows`` as JSON, TOML, or YAML, preserving each value's native type.
 
     Wrapped in a ``{title, rows}`` object rather than a bare array — TOML has
     no bare top-level array, so this keeps all three formats consistent.
     Uses plain ``print`` rather than the rich console: these are meant to be
-    piped/parsed, and rich's line-wrapping would corrupt the output.
+    piped/parsed, and rich's line-wrapping would corrupt the output. Callers
+    go through :func:`witan.cli._common.render_table`, which normalizes
+    ``None`` to ``""`` first — TOML has no null.
     """
     payload = {"title": title, "rows": rows}
     if fmt == "json":

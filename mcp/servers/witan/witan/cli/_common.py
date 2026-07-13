@@ -110,7 +110,7 @@ def render_table(
     *,
     title: str,
     columns: list[str],
-    rows: list[dict[str, str]],
+    rows: list[dict[str, object]],
     no_wrap: set[str] | None = None,
     styles: dict[str, dict[str, str]] | None = None,
     dim_if_present: set[str] | None = None,
@@ -118,10 +118,16 @@ def render_table(
 ) -> None:
     """Render ``rows`` as a rich table, or dump them structured per ``--output-format``.
 
-    ``rows`` hold plain, unstyled string values — ``styles``/``dim_if_present``/
-    ``placeholders`` are display-only concerns applied in ``txt`` mode, so
-    ``json``/``toml``/``yaml`` output always carries the raw data.
+    ``rows`` hold plain, unstyled values of any JSON/TOML/YAML-serializable
+    type — ``None`` is normalized to ``""`` (TOML has no null, and a bare
+    ``None`` would otherwise print as the literal text ``"None"``); every
+    other type (``int``, ``float``, ``bool``, ``str``) passes through
+    unchanged, so structured output keeps its native type (e.g. a session
+    count stays a JSON number). ``styles``/``dim_if_present``/``placeholders``
+    are display-only concerns applied only in ``txt`` mode.
     """
+    rows = [{k: ("" if v is None else v) for k, v in r.items()} for r in rows]
+
     fmt = get_output_format()
     if fmt != "txt":
         dump_structured(rows, title, fmt)

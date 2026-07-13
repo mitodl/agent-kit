@@ -56,7 +56,7 @@ def traces(
         {
             "slug": r["slug"],
             "title": r.get("title", ""),
-            "sessions": str(r.get("session_count", "")),
+            "sessions": r.get("session_count"),
             "mined": (
                 f"{len(r.get('patterns_slug') or [])}p/"
                 f"{len(r.get('lessons_slug') or [])}l"
