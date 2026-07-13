@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import cyclopts
 from rich.prompt import Prompt
-from rich.table import Table
 
 from .. import config as cfg_module
 from ._common import (
@@ -23,6 +22,7 @@ from ._common import (
     TaskType,
     app,
     console,
+    render_table,
 )
 from .run_helpers import (
     _launch_agent,
@@ -98,35 +98,36 @@ def tasks(
     else:
         scope = "all repos (no git context)"
     base_title = "Ready tasks" if ready else "Tasks"
-    table = Table(title=f"{base_title} — {scope}", header_style="bold")
-    _short_cols = {"priority", "status", "type"}
-    for col in (
-        "priority",
-        "status",
-        "type",
-        "slug",
-        "title",
-        "repo",
-        "assignee",
-        "blocked_by",
-    ):
-        if col in _short_cols:
-            table.add_column(col, no_wrap=True)
-        else:
-            table.add_column(col, overflow="fold", no_wrap=False)
-    for r in rows:
-        repo_display = _short_repo(r.get("repo")) or "[dim](unscoped)[/dim]"
-        table.add_row(
-            _styled(r.get("priority", ""), _PRIORITY_STYLE),
-            _styled(r.get("status", ""), _STATUS_STYLE),
-            r.get("type", ""),
-            r["slug"],
-            r.get("title", ""),
-            repo_display,
-            r.get("assignee") or "",
-            ", ".join(r.get("blocked_by") or []),
-        )
-    console.print(table)
+    rows_data = [
+        {
+            "priority": r.get("priority", ""),
+            "status": r.get("status", ""),
+            "type": r.get("type", ""),
+            "slug": r["slug"],
+            "title": r.get("title", ""),
+            "repo": _short_repo(r.get("repo")) or "",
+            "assignee": r.get("assignee") or "",
+            "blocked_by": ", ".join(r.get("blocked_by") or []),
+        }
+        for r in rows
+    ]
+    render_table(
+        title=f"{base_title} — {scope}",
+        columns=[
+            "priority",
+            "status",
+            "type",
+            "slug",
+            "title",
+            "repo",
+            "assignee",
+            "blocked_by",
+        ],
+        rows=rows_data,
+        no_wrap={"priority", "status", "type"},
+        styles={"priority": _PRIORITY_STYLE, "status": _STATUS_STYLE},
+        placeholders={"repo": "(unscoped)"},
+    )
 
 
 def _task_show(slug: str) -> None:

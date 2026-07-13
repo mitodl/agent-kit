@@ -231,6 +231,13 @@ A cyclopts CLI for manual inspection of the work-coordination graph and the
 indexed code graphs. Installed alongside the server (`uv run witan …`,
 or `uv tool install` the package to get it on `PATH`):
 
+Pass `--output-format json|toml|yaml` (default `txt`; env `WITAN_OUTPUT_FORMAT`)
+anywhere on the command line to get a machine-readable dump of a
+table-producing command's rows instead of the rich table — e.g.
+`witan tasks --all-repos --output-format json`. Covers `tasks`, `projects`,
+`memory`, `traces`, `scan test`, and `scan rules`; commands whose output isn't
+a flat table (`task <slug>`, `project <slug>`, `graph`, …) are unaffected.
+
 | Command | Description |
 |---|---|
 | `setup [--agent claude\|pi\|…\|all]` | Install witan for one or all supported coding agents; also writes a starter `~/.config/witan/config.toml` if one doesn't exist yet |
