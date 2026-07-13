@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -25,6 +26,35 @@ _MAX_ATTEMPTS = 8
 # backtrace (see docs/user/operations/upgrade.md). Not retryable/repairable.
 _STORAGE_VERSION_MISMATCH_MARKERS = ("stamped at internal schema", "reads only")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# omnigraph-server (remote http(s)/s3 stores) enforces a hard per-actor
+# admission cap — both an in-flight *count* (default 16, configurable via
+# OMNIGRAPH_PER_ACTOR_INFLIGHT_MAX) and a concurrent *byte* budget
+# (OMNIGRAPH_PER_ACTOR_BYTES_MAX) — and rejects excess concurrent writes
+# outright (HTTP 429) rather than queuing them. Confirmed against the
+# omnigraph source (crates/omnigraph-server/src/workload.rs): both reject
+# reasons map to 429 with a constant `Retry-After: 60` header, but the CLI's
+# error path only surfaces the JSON body's message text, not headers — so
+# this can't read Retry-After and backs off on its own, much shorter,
+# schedule (60s is a conservative RFC ceiling, not a measured value; in
+# practice the cap clears as soon as any of the actor's other in-flight
+# writes complete). This is unrelated to the local Lance drift/OCC conflicts
+# above (server mode doesn't see those), so it gets its own budget —
+# independent of _MAX_ATTEMPTS and of surface_conflict (it isn't a
+# compare-and-swap race, just admission control).
+_ADMISSION_CAP_MARKERS = ("in-flight count cap", "byte budget exceeded")
+_ADMISSION_CAP_MAX_ATTEMPTS = 6
+_ADMISSION_CAP_BASE_DELAY = 0.25
+_ADMISSION_CAP_MAX_DELAY = 4.0
+
+
+def _admission_cap_backoff(attempt: int) -> float:
+    """Exponential backoff with jitter — plain exponential backoff makes
+    concurrent retries from the same burst (the actual trigger case here)
+    retry in lockstep and re-collide on the cap; jitter breaks that up."""
+    delay = _ADMISSION_CAP_BASE_DELAY * (2 ** (attempt - 1))
+    jitter = random.uniform(0, 0.1 * delay)
+    return min(delay + jitter, _ADMISSION_CAP_MAX_DELAY)
 
 
 class OmnigraphConflict(RuntimeError):
@@ -220,7 +250,9 @@ class OmnigraphClient:
 
         lock_fh = self._acquire_write_lock(is_write)
         try:
-            for attempt in range(_MAX_ATTEMPTS):
+            attempt = 0
+            admission_cap_attempt = 0
+            while True:
                 try:
                     result = subprocess.run(
                         cmd, capture_output=True, text=True, env=env
@@ -232,24 +264,37 @@ class OmnigraphClient:
                 if result.returncode == 0:
                     return result.stdout
                 err = result.stderr
+                err_lower = err.lower()
                 if _is_storage_version_mismatch(err):
                     raise RuntimeError(_friendly_storage_error(err)) from None
-                if surface_conflict and any(m in err for m in _RETRYABLE):
+                if any(m in err_lower for m in _ADMISSION_CAP_MARKERS):
+                    # Independent budget/backoff from the drift retries below —
+                    # doesn't consume _MAX_ATTEMPTS and ignores surface_conflict.
+                    admission_cap_attempt += 1
+                    if admission_cap_attempt < _ADMISSION_CAP_MAX_ATTEMPTS:
+                        time.sleep(_admission_cap_backoff(admission_cap_attempt))
+                        continue
+                    raise RuntimeError(
+                        f"omnigraph {label} failed after "
+                        f"{_ADMISSION_CAP_MAX_ATTEMPTS} attempts (actor "
+                        f"admission cap exceeded):\n{err.strip()}"
+                    )
+                if surface_conflict and any(m in err_lower for m in _RETRYABLE):
                     # A compare-and-swap caller wants to lose the race, not
                     # re-apply its write over the winner. Surface immediately.
                     raise OmnigraphConflict(err.strip()) from None
-                if attempt + 1 < _MAX_ATTEMPTS:
-                    if any(m in err for m in _NEEDS_REPAIR):
+                attempt += 1
+                if attempt < _MAX_ATTEMPTS:
+                    if any(m in err_lower for m in _NEEDS_REPAIR):
                         self._repair(env)
                         continue
-                    if any(m in err for m in _RETRYABLE):
-                        time.sleep(0.05 * (attempt + 1))
+                    if any(m in err_lower for m in _RETRYABLE):
+                        time.sleep(0.05 * attempt)
                         continue
                 raise RuntimeError(
                     f"omnigraph {label} failed (exit {result.returncode}):\n"
                     f"{err.strip()}"
                 )
-            raise AssertionError("unreachable")  # pragma: no cover
         finally:
             if lock_fh is not None:
                 fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
