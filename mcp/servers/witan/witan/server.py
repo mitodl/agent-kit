@@ -1,3 +1,4 @@
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -930,12 +931,56 @@ _EDGE_INDEX_TTL_SECONDS = 5.0
 _edge_index_cache: dict | None = None
 _edge_index_cache_key: tuple[str, float] | None = None
 
+# ``recall`` needs full Memory rows for seed+expanded slugs. Fetching each slug
+# individually is prohibitively slow because every client.read shells out to the
+# omnigraph CLI. Cache the compact all-memory projection briefly and use it both
+# as a slug lookup and as a tag→slug index for topic-sibling expansion.
+_MEMORY_INDEX_TTL_SECONDS = 5.0
+_memory_index_cache: tuple[dict[str, dict], dict[str, set[str]]] | None = None
+_memory_index_cache_key: tuple[str, float] | None = None
+
 
 def _invalidate_edge_index() -> None:
     """Drop the cached edge index after a local edge write."""
     global _edge_index_cache, _edge_index_cache_key
     _edge_index_cache = None
     _edge_index_cache_key = None
+
+
+def _invalidate_memory_index() -> None:
+    """Drop the cached memory lookup after a local memory write."""
+    global _memory_index_cache, _memory_index_cache_key
+    _memory_index_cache = None
+    _memory_index_cache_key = None
+
+
+def _memory_index() -> tuple[dict[str, dict], dict[str, set[str]]]:
+    """Return cached ``(slug→Memory row, tag→memory slugs)`` indexes.
+
+    This intentionally uses one unbounded list query instead of ``memory_get``
+    per candidate. On local stores the fixed cost is process startup/opening the
+    Lance store, so one broad read is much faster than N point reads.
+    """
+    global _memory_index_cache, _memory_index_cache_key
+    now = time.monotonic()
+    if (
+        _memory_index_cache is not None
+        and _memory_index_cache_key is not None
+        and _memory_index_cache_key[0] == client.graph_uri
+        and now - _memory_index_cache_key[1] < _MEMORY_INDEX_TTL_SECONDS
+    ):
+        return _memory_index_cache
+
+    rows = client.read("read.gq", "list_memories_unbounded", {})
+    by_slug = {row["slug"]: row for row in rows}
+    by_tag: dict[str, set[str]] = {}
+    for row in rows:
+        for tag in row.get("tags") or []:
+            by_tag.setdefault(tag, set()).add(row["slug"])
+    result = (by_slug, by_tag)
+    _memory_index_cache = result
+    _memory_index_cache_key = (client.graph_uri, now)
+    return result
 
 
 def _edge_index() -> dict:
@@ -961,7 +1006,7 @@ def _edge_index() -> dict:
     # Corroboration counts supporting edges touching a memory: RelatedTo, AppliesTo,
     # Refines (all directions), plus provenance (Informed, SessionProduced).
     # Contradicts is NOT support — it drives the penalty instead.
-    corroboration: Counter = Counter()
+    edge_slugs: dict[str, list[str]] = {}
     for query in (
         "rel_edges_from",
         "rel_edges_to",
@@ -972,7 +1017,11 @@ def _edge_index() -> dict:
         "informed_edges_to",
         "produced_edges_to",
     ):
-        corroboration.update(slugs(query))
+        edge_slugs[query] = slugs(query)
+
+    corroboration: Counter = Counter()
+    for rows in edge_slugs.values():
+        corroboration.update(rows)
     contradicted = set(slugs("contradicts_edges_from")) | set(
         slugs("contradicts_edges_to")
     )
@@ -981,6 +1030,13 @@ def _edge_index() -> dict:
         "corroboration": corroboration,
         "contradicted": contradicted,
         "superseded": superseded,
+        "edge_counts": {
+            "applies": len(edge_slugs["applies_edges_from"])
+            + len(edge_slugs["applies_edges_to"]),
+            "related": len(edge_slugs["rel_edges_from"])
+            + len(edge_slugs["rel_edges_to"]),
+            "produced": len(edge_slugs["produced_edges_to"]),
+        },
     }
     _edge_index_cache = result
     _edge_index_cache_key = (client.graph_uri, now)
@@ -1242,6 +1298,7 @@ def _store_memory(
         except RuntimeError:
             pass
 
+    _invalidate_memory_index()
     result = {
         "slug": slug,
         "kind": kind,
@@ -2591,10 +2648,8 @@ def workflow_session_start(
     # Write state file so Stop hook can close this session
     state = {"session_slug": slug, "project_slug": project_slug, "started_at": now}
     state_path = _session_state_path(session_id)
-    try:
+    with contextlib.suppress(OSError):
         state_path.write_text(json.dumps(state))
-    except OSError:
-        pass
 
     return {"session_slug": slug, "project_slug": project_slug, "phase": phase}
 
@@ -3389,13 +3444,11 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
     bindings: dict = {"providers": [], "consumers": []}
     code = _code_server()
     if code is not None and kind is not None:
-        try:
+        with contextlib.suppress(Exception):  # noqa: BLE001 — cross-store lookup is best-effort
             bindings = {
                 "providers": code.code_interface_providers(kind, key_norm),
                 "consumers": code.code_interface_consumers(kind, key_norm),
             }
-        except Exception:  # noqa: BLE001 — cross-store lookup is best-effort
-            pass
 
     return {
         "key_norm": key_norm,
@@ -3425,14 +3478,12 @@ def memory_symbols(slug: str) -> dict:
         # Only a well-formed symbol id (repo#path::Name) is worth resolving;
         # skip the cross-store call for anything without the :: delimiter.
         if code is not None and "::" in ref:
-            try:
+            with contextlib.suppress(Exception):  # noqa: BLE001 — best-effort enrichment
                 name = ref.split("::")[-1]
                 repo = ref.split("#", 1)[0] if "#" in ref else None
                 defs = code.code_find_definition(name, repo)
                 if defs:
                     entry["definition"] = defs
-            except Exception:  # noqa: BLE001 — best-effort enrichment
-                pass
         symbols.append(entry)
     return {"slug": slug, "symbols": symbols}
 
@@ -3440,22 +3491,35 @@ def memory_symbols(slug: str) -> dict:
 # ── Graph-aware recall (spec §8) ──────────────────────────────────
 
 
-def _expand_neighbors(slug: str) -> set[str]:
-    """One-hop memory neighbours of ``slug``: along AppliesTo/RelatedTo, topic
-    siblings (Tagged), and provenance siblings (same producing session).
+def _expand_neighbors(
+    slug: str,
+    *,
+    edge_index: dict,
+    rows_by_slug: dict[str, dict],
+    slugs_by_tag: dict[str, set[str]],
+) -> set[str]:
+    """One-hop memory neighbours of ``slug``.
 
-    Each relation is a single conjunctive query — topic_siblings and
-    provenance_siblings join memory→topic/session→memory in one roundtrip rather
-    than fanning out per topic/session."""
+    Topic-sibling expansion is handled in-process from the cached memory tag
+    index instead of by spawning one omnigraph query per seed. Relationship and
+    provenance traversals still fall back to graph queries, but only when the
+    global edge index says those edge classes exist in the store.
+    """
     out: set[str] = set()
-    for query in (
-        "applies_to_targets",
-        "applies_to_sources",
-        "related_out",
-        "related_in",
-        "topic_siblings",
-        "provenance_siblings",
-    ):
+
+    for tag in (rows_by_slug.get(slug) or {}).get("tags") or []:
+        out.update(slugs_by_tag.get(tag, set()))
+
+    edge_counts = edge_index.get("edge_counts", {})
+    queries: list[str] = []
+    if edge_counts.get("applies"):
+        queries.extend(("applies_to_targets", "applies_to_sources"))
+    if edge_counts.get("related"):
+        queries.extend(("related_out", "related_in"))
+    if edge_counts.get("produced"):
+        queries.append("provenance_siblings")
+
+    for query in queries:
         out.update(r["slug"] for r in client.read("read.gq", query, {"slug": slug}))
     out.discard(slug)
     return out
@@ -3495,6 +3559,7 @@ def recall(
 
     # ── Seed ──────────────────────────────────────────────────────
     seed_rank: dict[str, int] = {}  # query-seed BM25 position (norm proxy)
+    seed_rows: dict[str, dict] = {}  # full rows already returned by seed queries
     seeds: dict[str, list[str]] = {"query": [], "symbol": [], "task": [], "topic": []}
     candidates: dict[str, int] = {}  # slug → min hop distance
 
@@ -3505,6 +3570,7 @@ def recall(
     if query:
         for i, r in enumerate(_search_rows(query, repo, kind)):
             seed_rank.setdefault(r["slug"], i)
+            seed_rows[r["slug"]] = r
             add_seed(r["slug"], "query")
     if symbol_id:
         for m in _context_for_symbol(symbol_id)["memories"]:
@@ -3524,12 +3590,24 @@ def recall(
             ):
                 add_seed(m["slug"], "topic")
 
+    # No seeds matched (and nothing to expand from) — skip the global scans.
+    if not candidates:
+        return {"memories": [], "contradictions": [], "seeds": {}}
+
     # ── Expand ────────────────────────────────────────────────────
+    edge_index = _edge_index()
+    rows_by_slug, slugs_by_tag = _memory_index()
+    rows_by_slug = {**rows_by_slug, **seed_rows}
     frontier = set(candidates)
     for distance in range(1, hops + 1):
         nxt: set[str] = set()
         for slug in frontier:
-            for neighbor in _expand_neighbors(slug):
+            for neighbor in _expand_neighbors(
+                slug,
+                edge_index=edge_index,
+                rows_by_slug=rows_by_slug,
+                slugs_by_tag=slugs_by_tag,
+            ):
                 if neighbor not in candidates:
                     candidates[neighbor] = distance
                     nxt.add(neighbor)
@@ -3537,12 +3615,7 @@ def recall(
         if not frontier:
             break
 
-    # No seeds matched (and nothing to expand from) — skip the global edge scan.
-    if not candidates:
-        return {"memories": [], "contradictions": [], "seeds": {}}
-
     # ── Prune + score ─────────────────────────────────────────────
-    edge_index = _edge_index()
     if not include_superseded:
         candidates = {
             s: h for s, h in candidates.items() if s not in edge_index["superseded"]
@@ -3557,7 +3630,9 @@ def recall(
 
     scored: list[tuple[float, dict]] = []
     for slug, hop in candidates.items():
-        node = memory_get(slug)
+        node = rows_by_slug.get(slug)
+        if node is None:
+            node = memory_get(slug)
         if node is None:
             continue
         base = _score(
@@ -3578,15 +3653,16 @@ def recall(
     # caller actually receives.
     returned_slugs = {n["slug"] for n in returned}
     contradictions: list[dict] = []
-    seen_pairs: set[tuple[str, str]] = set()
-    for slug in returned_slugs:
-        for other in client.read("read.gq", "contradicts_out", {"slug": slug}):
-            if other["slug"] not in returned_slugs:
-                continue
-            pair = tuple(sorted((slug, other["slug"])))
-            if pair not in seen_pairs:
-                seen_pairs.add(pair)
-                contradictions.append({"a": pair[0], "b": pair[1]})
+    if returned_slugs & edge_index["contradicted"]:
+        seen_pairs: set[tuple[str, str]] = set()
+        for slug in returned_slugs:
+            for other in client.read("read.gq", "contradicts_out", {"slug": slug}):
+                if other["slug"] not in returned_slugs:
+                    continue
+                pair = tuple(sorted((slug, other["slug"])))
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    contradictions.append({"a": pair[0], "b": pair[1]})
 
     return {
         "memories": returned,
