@@ -2,14 +2,18 @@
 name: address-pr-feedback
 description: >
   Fetch, categorize, and address GitHub pull request review feedback --
-  inline review comments, review threads, and top-level discussion comments
-  -- including paginating through large or long-running PRs with many
-  rounds of review. Applies fixes, replies to reviewers with evidence
-  (never a generic "noted"), and marks resolved review threads via the
-  GraphQL API. Use this skill when asked to "address PR feedback", "address
-  the comments on <PR>", "resolve the review comments", "mark addressed
-  comments as resolved", or to triage feedback from bots (Copilot, Gemini,
-  CodeQL, Sentry) or human reviewers on a specific pull request.
+  inline review comments, review threads, top-level discussion comments,
+  and failing status checks (GitHub Actions jobs plus third-party checks
+  like pre-commit.ci, GitGuardian, and CodeQL) -- including paginating
+  through large or long-running PRs with many rounds of review. Applies
+  fixes, replies to reviewers with evidence (never a generic "noted"),
+  marks resolved review threads via the GraphQL API, and diagnoses/fixes
+  failing checks using their logs. Use this skill when asked to "address PR
+  feedback", "address the comments on <PR>", "resolve the review comments",
+  "mark addressed comments as resolved", "fix the failing checks", "the CI
+  is red on <PR>", or to triage feedback from bots (Copilot, Gemini, CodeQL,
+  Sentry), third-party check services (pre-commit.ci, GitGuardian), or
+  human reviewers on a specific pull request.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -17,15 +21,16 @@ metadata:
 
 # Address PR Feedback
 
-Turns a PR's review activity into fixes plus a clean, fully-resolved thread
-list. The core pattern is **fetch → categorize → address → reply & resolve →
-verify**, using three scripts for the mechanical parts so the interesting
-work is reading feedback correctly and knowing when a decision belongs to a
-human instead of you.
+Turns a PR's review activity — and its CI/status checks — into fixes plus a
+clean, fully-resolved thread list and a green check bar. The core pattern is
+**fetch → categorize → address → reply & resolve → verify**, using scripts
+for the mechanical parts so the interesting work is reading feedback
+correctly and knowing when a decision belongs to a human instead of you.
 
 | Script | Purpose |
 |--------|---------|
 | `scripts/fetch-feedback.sh` | Fetch review threads (paginated), discussion comments, and reviews in one JSON payload |
+| `scripts/fetch-checks.sh` | Fetch status checks (GitHub Actions + third-party) and failed-step logs for any failing Actions run |
 | `scripts/resolve-thread.sh` | Reply to (optional) and resolve one review thread by GraphQL node ID |
 | `scripts/resolve-threads.sh` | Batch version: reads `[{"thread_id": "...", "comment": "..."}, ...]` from stdin |
 | `scripts/reply-comment.sh` | Post a top-level PR comment — for discussion-comment replies or a final summary |
@@ -33,7 +38,9 @@ human instead of you.
 See [references/graphql-reference.md](references/graphql-reference.md) for
 the underlying queries/mutations, why plain `first: N` GraphQL calls silently
 truncate on long-running PRs, and why replying and resolving are separate
-mutations.
+mutations. See [references/checks-reference.md](references/checks-reference.md)
+for how the Checks API and third-party status checks differ, and how to
+re-run or diagnose each.
 
 ## Recognizing the request
 
@@ -48,6 +55,13 @@ bundled with other git operations:
   addressing feedback on the PRs first, then merge" (a stacked-PR batch)
 - "Review the latest human-contributed feedback" / "there's more bot feedback
   to evaluate" (a re-check after previously addressing a first round)
+- "Fix the failing checks [on #N]" / "the CI is red, why?" / "address the
+  GitGuardian alert" / "pre-commit.ci is failing" — a checks-only request,
+  not review-comment feedback; jump straight to
+  [Phase 1b — Checks](#phase-1b--checks) below
+- "Address the PR feedback" alone, with no mention of checks, still means
+  glance at the check bar (Phase 1b) — a PR with unresolved review comments
+  *and* a failing required check is not addressed until both are handled
 
 Resolve two things before running anything, asking if either is unclear:
 
@@ -88,6 +102,36 @@ reviews: [...]}`. Each `review_threads[]` entry carries the GraphQL `id`
 (pass this straight to `resolve-thread.sh`), `isResolved`, `isOutdated`,
 `path`/`line`, and its `comments`.
 
+## Phase 1b — Checks
+
+```bash
+./skills/process/address-pr-feedback/scripts/fetch-checks.sh mitodl/agent-kit 116 /tmp/pr116-checks.json
+```
+
+Covers both GitHub Actions jobs and third-party status checks (pre-commit.ci,
+GitGuardian, Sentry, CodeQL, and anything else posting to the PR's check
+bar) in one call. Excludes passing/skipped checks by default; add
+`--include-passing` for the full bar (e.g. a final "everything green" report).
+
+Output shape: `{repo, pr, checks: [...], action_run_logs: {<run_id>:
+<log text>}}`. Each `checks[]` entry has `name`, `bucket`
+(`pass`/`fail`/`pending`/`skipping`/`cancel`), `state`, `description`,
+`workflow`, `link`, and a derived `run_id` when the check is a GitHub
+Actions job. For every *failing* check with a `run_id`, `action_run_logs`
+holds that run's failed-step output (deduped — several failing jobs from the
+same workflow run share one log entry), truncated to the last ~20k
+characters, so you can usually diagnose without a separate `gh run view`
+call. Checks with `run_id: null` (pre-commit.ci, GitGuardian, Sentry, a
+legacy commit-status check, etc.) have no fetchable log here — their `link`
+points at the external service; fetch it directly if it's a public page,
+otherwise summarize from `description` and ask the user if more detail is
+needed — rather than guessing at the failure from the name alone.
+
+A `pending` check isn't a failure — don't "fix" something that's still
+running. If everything is `pass`/`pending` and the user asked to address
+*checks* specifically, say so and stop; there's nothing to act on yet beyond
+noting what's still in flight.
+
 ## Phase 2 — Categorize
 
 Group by reviewer and tag each item with a priority, inheriting the
@@ -112,6 +156,27 @@ leave everything in `COMMENTED` state with the real content in the thread
 comments, same as noted in
 [`github-pr-triage`](../github-pr-triage/SKILL.md#phase-3--classify).
 
+Failing checks split into three kinds that get handled differently in
+Phase 3 — tag each one on the way in:
+
+1. **Your own CI** (unit/integration tests, lint, build, typecheck — usually
+   `workflow` is a repo-owned workflow name). A code problem to fix like any
+   other actionable item: read `action_run_logs[<run_id>]` for the actual
+   failure, fix it, push, and the check re-runs on its own.
+2. **Auto-fixable formatting/lint bots** (pre-commit.ci is the common case).
+   These often can't be fixed by editing and pushing yourself — pre-commit.ci
+   in particular reacts to a PR comment (`pre-commit.ci autofix`) or you can
+   run the same hooks locally and push the diff. Check the failure's `link`
+   for the specific instruction before guessing.
+3. **Security/compliance scanners** (GitGuardian, CodeQL alerts, Sentry-linked
+   checks, secret scanning). Never treat these like an ordinary lint failure
+   — see the "Security/compliance-flagged findings" rule in
+   [When to stop and ask instead of deciding](#when-to-stop-and-ask-instead-of-deciding).
+   This applies even when the check is the *only* thing blocking merge and
+   the fix looks obvious (e.g. "just delete the leaked-looking string") —
+   deleting a secret from the current diff does not remove it from git
+   history, and rotation is a decision with consequences beyond this PR.
+
 ## Phase 3 — Address
 
 For each actionable item: make the code change, run the relevant
@@ -130,6 +195,24 @@ or "will consider". A good decline reads like: *"Verified — `write_bindings`
 always calls `ensure_bridge_store` first at every call site, so this
 fallback path is unreachable. Not adding it; would reintroduce the redundant
 read this PR removes."*
+
+For a failing check, read `action_run_logs[<run_id>]` (from Phase 1b) before
+touching code — a stack trace or assertion diff tells you exactly what broke,
+where a guess from the check *name* alone often doesn't. If a test looks
+flaky rather than broken by this PR's changes (same test fails intermittently
+across unrelated commits, or the log shows a timeout/network blip unrelated
+to the diff), say that's your read and re-run rather than "fixing" a
+non-issue:
+
+```bash
+gh run rerun <run-id> -R mitodl/agent-kit --failed
+```
+
+Don't reach for `--failed` reruns as a first response to every red check,
+though — re-running without understanding the failure just burns CI minutes
+and may mask a real, intermittently-reproducing bug. Only use it once you've
+read the log and concluded the failure is genuinely unrelated to this PR's
+changes.
 
 ## Phase 4 — Reply & resolve
 
@@ -151,6 +234,13 @@ jq -n '[
 ]' | ./skills/process/address-pr-feedback/scripts/resolve-threads.sh
 ```
 
+Checks have no resolution state either — like discussion comments, there's
+no thread to mark resolved. A code fix and push is the resolution; the check
+re-runs and flips green on its own. For a scanner finding you investigated
+and declined to act on (Phase 3's security/compliance rule — only after the
+user has weighed in), record the reasoning in the same PR summary comment
+rather than a per-check reply, since most check UIs don't support one.
+
 Top-level discussion comments have no resolution state — reply to those (or
 post one consolidated summary of the whole pass) with `reply-comment.sh`:
 
@@ -170,18 +260,31 @@ remaining unresolved count. If anything is still open, say specifically why
 (deferred pending a human decision, blocked on another PR, a design choice
 you're waiting on) — never let a comment silently drop off the report.
 
+If you pushed any commits during Phase 3, also re-run `fetch-checks.sh` —
+checks take time to complete, so poll (`gh pr checks <pr> -R <repo> --watch
+--fail-fast` or a short retry loop) rather than checking once immediately
+after the push and reporting on stale `pending` state. Report the final
+bucket for every check you touched, not just the ones that turned green —
+a check that's still failing after your fix needs the same "why, and what's
+next" treatment as an unresolved review thread.
+
 ## When to stop and ask instead of deciding
 
 These are not edge cases to handle gracefully and move on from — they're
 signals to pause the batch and get the user's input before continuing:
 
 - **Security/compliance-flagged findings** (CodeQL alerts, Sentry issues,
-  anything touching auth/secrets). Never auto-dismiss one as a false
-  positive, no matter how confident the verification looks — surface it with
-  your evidence and ask whether to dismiss or leave it open. If the tooling
-  itself blocks the action (some environments gate CodeQL alert dismissal
-  behind explicit confirmation), that's a signal to use `AskUserQuestion`,
-  not to route around it.
+  GitGuardian secret-detection checks, anything touching auth/secrets).
+  Never auto-dismiss one as a false positive, no matter how confident the
+  verification looks — surface it with your evidence and ask whether to
+  dismiss or leave it open. If the tooling itself blocks the action (some
+  environments gate CodeQL alert dismissal behind explicit confirmation),
+  that's a signal to ask the user directly, not to route around it. For a
+  GitGuardian (or similar secret-scanner) hit specifically: removing the
+  string from the current diff is not a fix if the secret already landed in
+  a pushed commit — it's still live in git history and, if real, needs
+  rotation. Ask before doing either; don't just delete the line and call the
+  check addressed.
 - **A design decision with more than one reasonable fix** — e.g. a
   reviewer flags a race condition and a cheap guard vs. a more thorough
   lock-based rewrite are both defensible. Present the options with
@@ -210,5 +313,9 @@ rest of the batch, not just the first ambiguous item you hit.
 
 Requires `gh` (authenticated, with write access on the target repo — see the
 [permission-errors note](references/graphql-reference.md#permission-errors))
-and `jq`. No dependency on any repo-specific tooling; the scripts work from
-any checkout via `owner/repo` + PR number.
+and `jq`. Fetching Actions logs (`fetch-checks.sh`, `gh run view --log-failed`)
+and re-running jobs (`gh run rerun`) need the `actions:read`/`actions:write`
+scopes on top of that — both are included by default for `gh auth login`
+against a repo you have write access to, so this is usually already covered.
+No dependency on any repo-specific tooling; the scripts work from any
+checkout via `owner/repo` + PR number.
