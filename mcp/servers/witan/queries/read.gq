@@ -385,6 +385,19 @@ query topics_for_memory($slug: String) {
     return { $tp.slug, $tp.name, $tp.kind }
 }
 
+// All Memory→Topic edges for recall's in-process topic-sibling cache. Return the
+// topic name/kind instead of topic slug so the client-side alias stripper does
+// not collapse both ``$m.slug`` and ``$tp.slug`` into the same key.
+query all_topic_edges() {
+    match {
+        $m: Memory
+        $tp: Topic
+        $m tagged $tp
+    }
+    return { $m.slug, $tp.name, $tp.kind }
+    limit 10000
+}
+
 // ── Project facts ─────────────────────────────────────────────────
 
 query get_project_facts($repo: String) {

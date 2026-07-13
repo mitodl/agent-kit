@@ -933,10 +933,12 @@ _edge_index_cache_key: tuple[str, float] | None = None
 
 # ``recall`` needs full Memory rows for seed+expanded slugs. Fetching each slug
 # individually is prohibitively slow because every client.read shells out to the
-# omnigraph CLI. Cache the compact all-memory projection briefly and use it both
-# as a slug lookup and as a tag→slug index for topic-sibling expansion.
+# omnigraph CLI. Cache compact global projections briefly and use them for slug
+# lookup plus topic-sibling expansion through both Memory.tags and Tagged edges.
 _MEMORY_INDEX_TTL_SECONDS = 5.0
-_memory_index_cache: tuple[dict[str, dict], dict[str, set[str]]] | None = None
+_memory_index_cache: tuple[
+    dict[str, dict], dict[str, set[str]], dict[str, set[str]]
+] | None = None
 _memory_index_cache_key: tuple[str, float] | None = None
 
 
@@ -954,12 +956,21 @@ def _invalidate_memory_index() -> None:
     _memory_index_cache_key = None
 
 
-def _memory_index() -> tuple[dict[str, dict], dict[str, set[str]]]:
-    """Return cached ``(slug→Memory row, tag→memory slugs)`` indexes.
+def _topic_key(topic: dict) -> str | None:
+    name = topic.get("name")
+    kind = topic.get("kind")
+    if not name or not kind:
+        return None
+    return f"{kind}:{name}"
 
-    This intentionally uses one unbounded list query instead of ``memory_get``
-    per candidate. On local stores the fixed cost is process startup/opening the
-    Lance store, so one broad read is much faster than N point reads.
+
+def _memory_index() -> tuple[dict[str, dict], dict[str, set[str]], dict[str, set[str]]]:
+    """Return cached ``(slug→Memory row, topic/tag→slugs, slug→topics)`` indexes.
+
+    This intentionally uses broad list queries instead of ``memory_get`` per
+    candidate. On local stores the fixed cost is process startup/opening the
+    Lance store, so a small number of global reads is much faster than N point
+    reads.
     """
     global _memory_index_cache, _memory_index_cache_key
     now = time.monotonic()
@@ -973,11 +984,22 @@ def _memory_index() -> tuple[dict[str, dict], dict[str, set[str]]]:
 
     rows = client.read("read.gq", "list_memories_unbounded", {})
     by_slug = {row["slug"]: row for row in rows}
-    by_tag: dict[str, set[str]] = {}
+    slugs_by_topic: dict[str, set[str]] = {}
+    topics_by_slug: dict[str, set[str]] = {}
     for row in rows:
         for tag in row.get("tags") or []:
-            by_tag.setdefault(tag, set()).add(row["slug"])
-    result = (by_slug, by_tag)
+            # Legacy Memory.tags values represent Topic{kind:"topic"} siblings.
+            slugs_by_topic.setdefault(tag, set()).add(row["slug"])
+
+    for edge in client.read("read.gq", "all_topic_edges", {}):
+        topic_key = _topic_key(edge)
+        slug = edge.get("slug")
+        if topic_key is None or not slug:
+            continue
+        slugs_by_topic.setdefault(topic_key, set()).add(slug)
+        topics_by_slug.setdefault(slug, set()).add(topic_key)
+
+    result = (by_slug, slugs_by_topic, topics_by_slug)
     _memory_index_cache = result
     _memory_index_cache_key = (client.graph_uri, now)
     return result
@@ -1466,6 +1488,7 @@ async def memory_link(
         client.change(
             "mutations.gq", "link_tagged", {"from": from_slug, "to": topic_slug}
         )
+        _invalidate_memory_index()
         return {"from": from_slug, "to": topic_slug, "kind": kind, "linked": True}
 
     endpoints = {from_slug, to_slug}
@@ -3496,19 +3519,40 @@ def _expand_neighbors(
     *,
     edge_index: dict,
     rows_by_slug: dict[str, dict],
-    slugs_by_tag: dict[str, set[str]],
+    slugs_by_topic: dict[str, set[str]],
+    topics_by_slug: dict[str, set[str]],
 ) -> set[str]:
     """One-hop memory neighbours of ``slug``.
 
-    Topic-sibling expansion is handled in-process from the cached memory tag
-    index instead of by spawning one omnigraph query per seed. Relationship and
-    provenance traversals still fall back to graph queries, but only when the
-    global edge index says those edge classes exist in the store.
+    Topic-sibling expansion is handled in-process from cached ``Memory.tags``
+    and ``Tagged`` edges instead of by spawning one omnigraph query per seed.
+    Relationship and provenance traversals still fall back to graph queries, but
+    only when the global edge index says those edge classes exist in the store.
     """
     out: set[str] = set()
 
-    for tag in (rows_by_slug.get(slug) or {}).get("tags") or []:
-        out.update(slugs_by_tag.get(tag, set()))
+    node = rows_by_slug.get(slug)
+    topic_keys = topics_by_slug.get(slug, set())
+    if node is None:
+        try:
+            fetched = memory_get(slug, include_topics=True)
+        except Exception:
+            fetched = None
+        if fetched is not None:
+            topic_keys = set(topic_keys)
+            for topic in fetched.pop("topics", []) or []:
+                topic_key = _topic_key(topic)
+                if topic_key is not None:
+                    topic_keys.add(topic_key)
+            if topic_keys:
+                topics_by_slug[slug] = topic_keys
+            node = fetched
+            rows_by_slug[slug] = node
+
+    for tag in (node or {}).get("tags") or []:
+        out.update(slugs_by_topic.get(tag, set()))
+    for topic_key in topic_keys:
+        out.update(slugs_by_topic.get(topic_key, set()))
 
     edge_counts = edge_index.get("edge_counts", {})
     queries: list[str] = []
@@ -3596,7 +3640,7 @@ def recall(
 
     # ── Expand ────────────────────────────────────────────────────
     edge_index = _edge_index()
-    rows_by_slug, slugs_by_tag = _memory_index()
+    rows_by_slug, slugs_by_topic, topics_by_slug = _memory_index()
     rows_by_slug = {**rows_by_slug, **seed_rows}
     frontier = set(candidates)
     for distance in range(1, hops + 1):
@@ -3606,7 +3650,8 @@ def recall(
                 slug,
                 edge_index=edge_index,
                 rows_by_slug=rows_by_slug,
-                slugs_by_tag=slugs_by_tag,
+                slugs_by_topic=slugs_by_topic,
+                topics_by_slug=topics_by_slug,
             ):
                 if neighbor not in candidates:
                     candidates[neighbor] = distance
@@ -3646,16 +3691,24 @@ def recall(
         )
         scored.append((base - rank_cfg.w_hop * hop, node))
     scored.sort(key=lambda t: -t[0])
-    returned = [node for _, node in scored][:limit]
+    returned = []
+    for _, node in scored[:limit]:
+        with contextlib.suppress(Exception):
+            hydrated = memory_get(node["slug"])
+            if hydrated is not None:
+                rows_by_slug[node["slug"]] = hydrated
+                node = hydrated
+        returned.append(node)
 
     # ── Contradictions among the RETURNED memories ────────────────
     # Only over the limited result set, so every pair references a memory the
     # caller actually receives.
     returned_slugs = {n["slug"] for n in returned}
     contradictions: list[dict] = []
-    if returned_slugs & edge_index["contradicted"]:
+    contradicted_returned = returned_slugs & edge_index["contradicted"]
+    if contradicted_returned:
         seen_pairs: set[tuple[str, str]] = set()
-        for slug in returned_slugs:
+        for slug in contradicted_returned:
             for other in client.read("read.gq", "contradicts_out", {"slug": slug}):
                 if other["slug"] not in returned_slugs:
                     continue

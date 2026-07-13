@@ -57,7 +57,8 @@ def test_recall_prunes_superseded_and_flags_contradictions(server):
     assert {x["slug"], y["slug"]} <= slugs
 
     pairs = {tuple(sorted((c["a"], c["b"]))) for c in out["contradictions"]}
-    assert tuple(sorted((x["slug"], y["slug"]))) in pairs
+    expected_pair = tuple(sorted((x["slug"], y["slug"])))
+    assert expected_pair in pairs
 
     # include_superseded surfaces the old one again
     with_old = {
@@ -100,6 +101,35 @@ def test_recall_expands_topic_sibling(server):
     slugs = {m["slug"] for m in out["memories"]}
     assert a["slug"] in slugs
     assert b["slug"] in slugs  # pulled in via the shared-topic sibling expansion
+
+
+@requires_omnigraph
+def test_recall_expands_tagged_topic_sibling(server):
+    a = server.memory_store(kind="pattern", title="seed", content="quokka anchor")
+    b = server.memory_store(
+        kind="pattern", title="sib", content="nothing matching here"
+    )
+    server.memory_link(a["slug"], "DATABASE_URL:contract", "tagged")
+    server.memory_link(b["slug"], "DATABASE_URL:contract", "tagged")
+
+    out = server.recall(query="quokka anchor", hops=1)
+    slugs = {m["slug"] for m in out["memories"]}
+    assert a["slug"] in slugs
+    assert b["slug"] in slugs  # pulled in via the Tagged edge sibling expansion
+
+
+@requires_omnigraph
+def test_recall_rehydrates_returned_memories(server):
+    m = server.memory_store(
+        kind="pattern",
+        title="seed",
+        content="quokka symbol anchor",
+        symbol_refs=["python::witan.server.recall"],
+    )
+
+    out = server.recall(query="quokka symbol")
+    got = next(mem for mem in out["memories"] if mem["slug"] == m["slug"])
+    assert got["symbol_refs"] == ["python::witan.server.recall"]
 
 
 @requires_omnigraph
