@@ -43,7 +43,7 @@ build logs GitHub itself stores. A check posted by an external service
 run stored on GitHub's side; the `link` field is the *only* pointer GitHub
 has to it; the actual log lives on that service's infrastructure. For these:
 
-- If the link is a public, unauthenticated page, `WebFetch` it directly.
+- If the link is a public, unauthenticated page, fetch it directly.
 - If it requires the service's own login (GitGuardian's dashboard, most
   Sentry links), you generally can't fetch it — work from the check's
   `description` field (often has a one-line summary) and ask the user for

@@ -123,9 +123,9 @@ same workflow run share one log entry), truncated to the last ~20k
 characters, so you can usually diagnose without a separate `gh run view`
 call. Checks with `run_id: null` (pre-commit.ci, GitGuardian, Sentry, a
 legacy commit-status check, etc.) have no fetchable log here — their `link`
-points at the external service; open it (`WebFetch` if it's a public page,
+points at the external service; fetch it directly if it's a public page,
 otherwise summarize from `description` and ask the user if more detail is
-needed) rather than guessing at the failure from the name alone.
+needed — rather than guessing at the failure from the name alone.
 
 A `pending` check isn't a failure — don't "fix" something that's still
 running. If everything is `pass`/`pending` and the user asked to address
@@ -279,7 +279,7 @@ signals to pause the batch and get the user's input before continuing:
   verification looks — surface it with your evidence and ask whether to
   dismiss or leave it open. If the tooling itself blocks the action (some
   environments gate CodeQL alert dismissal behind explicit confirmation),
-  that's a signal to use `AskUserQuestion`, not to route around it. For a
+  that's a signal to ask the user directly, not to route around it. For a
   GitGuardian (or similar secret-scanner) hit specifically: removing the
   string from the current diff is not a fix if the secret already landed in
   a pushed commit — it's still live in git history and, if real, needs

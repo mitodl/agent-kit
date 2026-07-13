@@ -35,7 +35,7 @@ if [[ "$include_passing" == false ]]; then
 fi
 
 checks="$(echo "$checks" | jq '[.[] | . + {
-  run_id: (.link | if test("/actions/runs/[0-9]+") then capture("/actions/runs/(?<id>[0-9]+)").id else null end)
+  run_id: (.link | if test("/actions/runs/[0-9]+") then (capture("/actions/runs/(?<id>[0-9]+)").id | tonumber) else null end)
 }]')"
 
 # Pull failed-step logs for GitHub Actions checks; dedupe by run id since one
