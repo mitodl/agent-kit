@@ -824,3 +824,48 @@ def test_load_identity_config_issuer_without_audience_raises(monkeypatch):
     monkeypatch.setenv("WITAN_ACTOR_TOKENS_FILE", "/etc/witan/actor-tokens.json")
     with pytest.raises(ValueError, match="must be set together"):
         load_identity_config()
+
+
+# ── load_remote_config (ADR 0005) ────────────────────────────────────────────
+
+
+def test_load_remote_config_unset_is_none(monkeypatch):
+    from witan.config import load_remote_config
+
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+    assert load_remote_config() is None
+
+
+def test_load_remote_config_populated(monkeypatch):
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.org/mcp")
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/ol")
+    monkeypatch.setenv("WITAN_OIDC_CLIENT_ID", "my-cli")
+    monkeypatch.setenv("WITAN_OIDC_AUDIENCE", "witan")
+    cfg = load_remote_config()
+    assert cfg is not None
+    assert cfg.url == "https://witan.example.org/mcp"
+    assert cfg.oidc_client_id == "my-cli"
+    assert cfg.oidc_audience == "witan"
+
+
+def test_load_remote_config_defaults_client_id(monkeypatch):
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.org/mcp")
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/ol")
+    monkeypatch.delenv("WITAN_OIDC_CLIENT_ID", raising=False)
+    monkeypatch.delenv("WITAN_OIDC_AUDIENCE", raising=False)
+    cfg = load_remote_config()
+    assert cfg.oidc_client_id == "witan-cli"
+    assert cfg.oidc_audience is None
+
+
+def test_load_remote_config_url_without_issuer_raises(monkeypatch):
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.org/mcp")
+    monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
+    with pytest.raises(ValueError, match="WITAN_OIDC_ISSUER"):
+        load_remote_config()

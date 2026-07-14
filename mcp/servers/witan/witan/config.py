@@ -179,6 +179,65 @@ def load_identity_config() -> IdentityConfig:
     )
 
 
+class RemoteConfig(BaseModel):
+    """Client-side config for the CLI's remote MCP-client mode (ADR 0005, path a).
+
+    Opt-in: ``WITAN_REMOTE_URL`` unset means the CLI runs its in-process path
+    exactly as before. When set, ``witan.cli._common._srv()`` routes every
+    command through the deployed witan MCP endpoint over ``streamable-http``,
+    authenticated with a per-user Keycloak JWT (device-code flow, see
+    ``witan/remote/oidc.py``).
+
+    These name the *client's* view of the deployment and are deliberately
+    separate from the server-side ``IdentityConfig`` triple
+    (``WITAN_ACTOR_TOKENS_FILE`` et al.), which the CLI user never sets.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    url: str
+    """The deployed witan MCP endpoint, e.g. https://witan.example.org/mcp."""
+
+    oidc_issuer: str
+    """Keycloak realm issuer URL — where ``witan login`` discovers the device
+    authorization and token endpoints."""
+
+    oidc_client_id: str = "witan-cli"
+    """Public OIDC client id registered for the device grant."""
+
+    oidc_audience: str | None = None
+    """Optional audience/resource to request in the token, matching the
+    deployment's ``WITAN_OIDC_AUDIENCE``. Keycloak maps this to an ``aud``
+    claim the server validates."""
+
+
+def load_remote_config() -> RemoteConfig | None:
+    """Resolve RemoteConfig from ``WITAN_REMOTE_URL`` / ``WITAN_OIDC_*``.
+
+    Returns ``None`` when ``WITAN_REMOTE_URL`` is unset (in-process mode).
+    Raises ``ValueError`` if the URL is set without ``WITAN_OIDC_ISSUER`` — a
+    remote endpoint the CLI can't authenticate to is useless, so fail loudly
+    rather than fall through to the unauthenticated in-process path.
+    """
+    url = os.environ.get("WITAN_REMOTE_URL")
+    if not url:
+        return None
+    issuer = os.environ.get("WITAN_OIDC_ISSUER")
+    if not issuer:
+        raise ValueError(
+            "WITAN_REMOTE_URL is set but WITAN_OIDC_ISSUER is not — the CLI "
+            "cannot obtain a Keycloak JWT to authenticate the remote MCP "
+            "connection. Set WITAN_OIDC_ISSUER (and, if the deployment checks "
+            "it, WITAN_OIDC_AUDIENCE) or unset WITAN_REMOTE_URL."
+        )
+    return RemoteConfig(
+        url=url,
+        oidc_issuer=issuer,
+        oidc_client_id=os.environ.get("WITAN_OIDC_CLIENT_ID", "witan-cli"),
+        oidc_audience=os.environ.get("WITAN_OIDC_AUDIENCE"),
+    )
+
+
 ScanAction = Literal["block", "redact", "warn"]
 """What to do when a scanner flags content on the write path (ADR 0001 §D3).
 

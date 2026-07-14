@@ -34,11 +34,27 @@ _server = None
 
 
 def _srv():
+    """Return the tool provider the CLI dispatches through.
+
+    In-process ``witan.server`` by default; a network-dispatching
+    ``RemoteServerProxy`` when ``WITAN_REMOTE_URL`` is set (ADR-0005). The
+    proxy mirrors the server module's tool surface, so every call site is
+    identical either way.
+    """
     global _server
     if _server is None:
-        from .. import server as server_module
+        from .. import config as cfg_module
 
-        _server = server_module
+        remote = cfg_module.load_remote_config()
+        if remote is not None:
+            from ..remote.oidc import default_token_provider
+            from ..remote.proxy import RemoteServerProxy
+
+            _server = RemoteServerProxy(remote, default_token_provider(remote))
+        else:
+            from .. import server as server_module
+
+            _server = server_module
     return _server
 
 
