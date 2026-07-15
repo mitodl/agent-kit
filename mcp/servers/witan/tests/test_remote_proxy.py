@@ -96,3 +96,15 @@ def test_admin_only_functions_are_refused_without_network(proxy):
 def test_unknown_tool_is_refused(proxy):
     with pytest.raises(RemoteToolUnavailable):
         proxy.definitely_not_a_tool(repo="")
+
+
+def test_srv_surfaces_misconfigured_remote_as_clean_exit(monkeypatch):
+    # WITAN_REMOTE_URL without WITAN_OIDC_ISSUER makes load_remote_config raise
+    # ValueError; _srv() must turn that into a clean SystemExit, not a traceback.
+    from witan.cli import _common
+
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.org/mcp")
+    monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
+    monkeypatch.setattr(_common, "_server", None)
+    with pytest.raises(SystemExit):
+        _common._srv()

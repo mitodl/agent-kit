@@ -45,7 +45,14 @@ def _srv():
     if _server is None:
         from .. import config as cfg_module
 
-        remote = cfg_module.load_remote_config()
+        # A misconfigured remote (e.g. WITAN_REMOTE_URL without WITAN_OIDC_ISSUER)
+        # raises ValueError here; surface it as a clean CLI error rather than
+        # letting a traceback escape every command that touches the graph.
+        try:
+            remote = cfg_module.load_remote_config()
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise SystemExit(1) from None
         if remote is not None:
             from ..remote.oidc import default_token_provider
             from ..remote.proxy import RemoteServerProxy

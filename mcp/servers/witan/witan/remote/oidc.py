@@ -40,6 +40,43 @@ class NeedsLogin(RemoteAuthError):
     """
 
 
+def _json(resp: httpx.Response, what: str) -> dict:
+    """Parse a response body as JSON, or raise a clean RemoteAuthError.
+
+    A provider (or an HTML proxy error in front of it) can return a 2xx with a
+    non-JSON body; a bare ``resp.json()`` would then raise ``JSONDecodeError``
+    and crash the CLI instead of surfacing a readable auth failure.
+    """
+    try:
+        return resp.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise RemoteAuthError(
+            f"{what} returned a non-JSON response (HTTP {resp.status_code})."
+        ) from exc
+
+
+def _json_safe(resp: httpx.Response) -> dict:
+    """Best-effort dict parse for error bodies — never raises, {} on failure."""
+    try:
+        data = resp.json()
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _auth_params(cfg: RemoteConfig) -> dict:
+    """Request params common to the device-auth and token calls.
+
+    Includes ``audience`` only when configured — Keycloak realms with an
+    audience/resource mapper honor it to stamp the ``aud`` claim the deployment
+    validates; realms without one ignore the extra param harmlessly.
+    """
+    params = {"client_id": cfg.oidc_client_id}
+    if cfg.oidc_audience:
+        params["audience"] = cfg.oidc_audience
+    return params
+
+
 def _cache_path() -> Path:
     override = os.environ.get("WITAN_TOKEN_CACHE")
     return Path(override) if override else _DEFAULT_CACHE
@@ -66,11 +103,23 @@ def _load_cache() -> dict:
 def _write_cache(cache: dict) -> None:
     path = _cache_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Write via a temp file then chmod+replace so the token is never briefly
-    # world-readable between create and chmod.
+    # Create the temp file 0600 *at creation* (O_CREAT | mode), not chmod-after,
+    # so the token is never even briefly group/world-readable, then atomically
+    # replace. os.open honors the mode only when it creates the file, so drop
+    # any stale temp first (a crashed prior write could have left one with
+    # laxer perms that O_CREAT would silently reuse).
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(cache, indent=2), encoding="utf-8")
-    os.chmod(tmp, 0o600)
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(cache, indent=2))
+    except BaseException:
+        os.unlink(tmp)
+        raise
     os.replace(tmp, path)
 
 
@@ -82,7 +131,7 @@ def discover_endpoints(issuer: str, *, client: httpx.Client | None = None) -> di
     try:
         resp = client.get(url)
         resp.raise_for_status()
-        meta = resp.json()
+        meta = _json(resp, "OIDC metadata endpoint")
     except httpx.HTTPError as exc:
         raise RemoteAuthError(
             f"Could not fetch OIDC metadata from {url}: {exc}"
@@ -110,6 +159,8 @@ def decode_claims(access_token: str) -> dict:
 
 
 def _store_token(cfg: RemoteConfig, token: dict) -> dict:
+    if not token.get("access_token"):
+        raise RemoteAuthError("Token response contained no access_token.")
     now = time.time()
     entry = {
         "access_token": token["access_token"],
@@ -140,26 +191,26 @@ def login(
     client = client or httpx.Client(timeout=15)
     try:
         meta = discover_endpoints(cfg.oidc_issuer, client=client)
-        req = {"client_id": cfg.oidc_client_id, "scope": "openid"}
+        req = {**_auth_params(cfg), "scope": "openid"}
         resp = client.post(meta["device_authorization_endpoint"], data=req)
         resp.raise_for_status()
-        device = resp.json()
+        device = _json(resp, "device authorization endpoint")
         on_prompt(device)
 
         interval = float(device.get("interval", 5))
         deadline = time.time() + float(device.get("expires_in", 300))
         poll = {
+            **_auth_params(cfg),
             "grant_type": DEVICE_GRANT,
             "device_code": device["device_code"],
-            "client_id": cfg.oidc_client_id,
         }
         while time.time() < deadline:
             sleep(interval)
             tok = client.post(meta["token_endpoint"], data=poll)
             if tok.status_code == 200:
-                entry = _store_token(cfg, tok.json())
+                entry = _store_token(cfg, _json(tok, "token endpoint"))
                 return decode_claims(entry["access_token"])
-            err = (tok.json() or {}).get("error", "")
+            err = _json_safe(tok).get("error", "")
             if err == "authorization_pending":
                 continue
             if err == "slow_down":
@@ -179,16 +230,16 @@ def _refresh(cfg: RemoteConfig, refresh_token: str, client: httpx.Client) -> dic
     resp = client.post(
         meta["token_endpoint"],
         data={
+            **_auth_params(cfg),
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": cfg.oidc_client_id,
         },
     )
     if resp.status_code != 200:
         raise NeedsLogin(
             "Refresh token rejected — run `witan login` to re-authenticate."
         )
-    return _store_token(cfg, resp.json())
+    return _store_token(cfg, _json(resp, "token endpoint"))
 
 
 def get_valid_token(cfg: RemoteConfig, *, client: httpx.Client | None = None) -> str:

@@ -137,6 +137,98 @@ def test_login_access_denied_raises(cfg):
         )
 
 
+def test_non_json_metadata_raises_clean_error(cfg):
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>proxy error</html>")
+
+    with pytest.raises(oidc.RemoteAuthError, match="non-JSON"):
+        oidc.discover_endpoints(cfg.oidc_issuer, client=_client(handler))
+
+
+def test_non_json_token_response_raises_not_crashes(cfg):
+    # A 200 with a non-JSON body on the token endpoint must surface as a clean
+    # RemoteAuthError, not an unhandled JSONDecodeError.
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx.Response(200, json=_META)
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            return httpx.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx.Response(200, text="not json")
+
+    with pytest.raises(oidc.RemoteAuthError, match="non-JSON"):
+        oidc.login(
+            cfg,
+            on_prompt=lambda _d: None,
+            client=_client(handler),
+            sleep=lambda _s: None,
+        )
+
+
+def test_non_json_error_body_falls_through_to_generic_error(cfg):
+    # A non-JSON *error* body must not crash the poll loop; err defaults to ""
+    # and we raise the generic failure carrying the raw text.
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx.Response(200, json=_META)
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            return httpx.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx.Response(400, text="<html>gateway timeout</html>")
+
+    with pytest.raises(oidc.RemoteAuthError, match="Device authorization failed"):
+        oidc.login(
+            cfg,
+            on_prompt=lambda _d: None,
+            client=_client(handler),
+            sleep=lambda _s: None,
+        )
+
+
+def test_audience_is_sent_when_configured():
+    cfg = RemoteConfig(
+        url="https://witan.example.org/mcp",
+        oidc_issuer="https://sso.example.org/realms/ol",
+        oidc_audience="witan-api",
+    )
+    access = _jwt({"sub": "u"})
+    seen: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx.Response(200, json=_META)
+        # Capture the posted form for both device-auth and token calls.
+        from urllib.parse import parse_qs
+
+        seen.append({k: v[0] for k, v in parse_qs(req.content.decode()).items()})
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            return httpx.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx.Response(200, json={"access_token": access, "expires_in": 60})
+
+    oidc.login(
+        cfg, on_prompt=lambda _d: None, client=_client(handler), sleep=lambda _s: None
+    )
+    assert all(form.get("audience") == "witan-api" for form in seen)
+
+
+def test_audience_absent_when_not_configured(cfg):
+    access = _jwt({"sub": "u"})
+    seen: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx.Response(200, json=_META)
+        from urllib.parse import parse_qs
+
+        seen.append({k: v[0] for k, v in parse_qs(req.content.decode()).items()})
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            return httpx.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx.Response(200, json={"access_token": access, "expires_in": 60})
+
+    oidc.login(
+        cfg, on_prompt=lambda _d: None, client=_client(handler), sleep=lambda _s: None
+    )
+    assert all("audience" not in form for form in seen)
+
+
 def test_get_valid_token_without_login_raises(cfg):
     with pytest.raises(oidc.NeedsLogin):
         oidc.get_valid_token(cfg)

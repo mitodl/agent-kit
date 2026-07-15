@@ -206,9 +206,11 @@ class RemoteConfig(BaseModel):
     """Public OIDC client id registered for the device grant."""
 
     oidc_audience: str | None = None
-    """Optional audience/resource to request in the token, matching the
-    deployment's ``WITAN_OIDC_AUDIENCE``. Keycloak maps this to an ``aud``
-    claim the server validates."""
+    """Optional audience/resource to request, matching the deployment's
+    ``WITAN_OIDC_AUDIENCE``. When set it is sent as the ``audience`` parameter
+    on the device-auth and token requests (``witan.remote.oidc._auth_params``);
+    Keycloak realms with an audience mapper honor it to stamp the ``aud`` claim
+    the server validates, and realms without one ignore it harmlessly."""
 
 
 def load_remote_config() -> RemoteConfig | None:
