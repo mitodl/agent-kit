@@ -17,10 +17,13 @@ from __future__ import annotations
 
 from ._detach import popen_detached
 from .omnigraph_install import install_omnigraph
+from .repo_key import find_git_config, normalise
 from .timeutil import now_iso
 
 __all__ = [
+    "find_git_config",
     "install_omnigraph",
+    "normalise",
     "now_iso",
     "popen_detached",
 ]

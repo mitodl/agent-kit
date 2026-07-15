@@ -4,6 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from witan_core.repo_key import find_git_config, normalise
+
 
 def detect(override: str | None = None) -> str | None:
     """
@@ -39,21 +41,13 @@ def detect(override: str | None = None) -> str | None:
     # `fetch =` lines) that configparser rejects. Fall back to parsing
     # .git/config directly when the git binary is unavailable.
     if url := git_remote_url(cwd):
-        return _normalise(url)
+        return normalise(url)
 
-    git_config_path = _find_git_config(cwd)
+    git_config_path = find_git_config(cwd)
     if git_config_path is None:
         return None
 
     return _parse_remote(git_config_path)
-
-
-def normalise(url: str) -> str:
-    """Public alias for the canonical-URI normaliser (see ``_normalise``).
-
-    Exposed so the context hook can share one normalisation path with
-    ``detect`` instead of reimplementing it and drifting."""
-    return _normalise(url)
 
 
 def current_branch(start: Path | None = None) -> str | None:
@@ -149,15 +143,6 @@ def _git_remote_names(start: Path) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def _find_git_config(start: Path) -> Path | None:
-    """Walk up from ``start`` until a .git/config is found."""
-    for directory in [start, *start.parents]:
-        candidate = directory / ".git" / "config"
-        if candidate.exists():
-            return candidate
-    return None
-
-
 def _parse_remote(git_config: Path) -> str | None:
     """
     Parse .git/config and return the normalised remote URL: ``origin`` if it
@@ -174,7 +159,7 @@ def _parse_remote(git_config: Path) -> str | None:
         return None
 
     if parser.has_option('remote "origin"', "url"):
-        return _normalise(parser.get('remote "origin"', "url"))
+        return normalise(parser.get('remote "origin"', "url"))
 
     # Match ``git_remote_url``'s fallback order: git lists remotes sorted by
     # name, so sort the candidate sections by remote name too. Otherwise the
@@ -190,31 +175,6 @@ def _parse_remote(git_config: Path) -> str | None:
         key=lambda pair: pair[0],
     )
     if candidates:
-        return _normalise(parser.get(candidates[0][1], "url"))
+        return normalise(parser.get(candidates[0][1], "url"))
 
     return None
-
-
-def _normalise(url: str) -> str:
-    """
-    Normalise a git remote URL to its canonical HTTPS project URI.
-
-    Examples
-    --------
-    git@github.com:mitodl/ol-django.git  →  https://github.com/mitodl/ol-django
-    https://github.com/mitodl/ol-django  →  https://github.com/mitodl/ol-django
-    git@gitlab.com:grp/sub/repo.git      →  https://gitlab.com/grp/sub/repo
-    """
-    # Strip trailing .git and any auth userinfo in https remotes.
-    url = re.sub(r"\.git$", "", url.strip()).rstrip("/")
-
-    # SSH: git@host:org/repo  →  https://host/org/repo
-    if m := re.match(r"(?:ssh://)?[^@]+@([^:/]+)[:/](.+)", url):
-        return f"https://{m.group(1)}/{m.group(2)}"
-
-    # HTTP(S): normalise scheme to https, drop any userinfo.
-    if m := re.match(r"https?://(?:[^@/]+@)?([^/]+)/(.+)", url):
-        return f"https://{m.group(1)}/{m.group(2)}"
-
-    # Unknown format — return as-is.
-    return url
