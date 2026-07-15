@@ -6,8 +6,9 @@ and a bridge failure can't corrupt a per-repo store that already succeeded.
 """
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
+
+from witan_core import now_iso
 
 from . import config as cfg_module
 from . import package_map
@@ -19,10 +20,6 @@ from .bridge_extractors import (
 )
 from .graph import OmnigraphClient
 from .store import bridge_store, ensure_bridge_store
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def write_bindings(
@@ -246,7 +243,7 @@ def _symbol_table_records(
             row["confidence"] = max(row["confidence"], conf)
             row["loc"] = min(row["loc"], loc)
 
-    now = _now_iso()
+    now = now_iso()
     out: list[dict] = []
     for (table_role, symbol), row in agg.items():
         parsed = parse_symbol(symbol)
@@ -333,7 +330,7 @@ def _package_map_record(identity: package_map.PackageIdentity, repo: str) -> dic
             if identity.provides
             else None,
             "declared": "1" if identity.declared else None,
-            "indexed_at": _now_iso(),
+            "indexed_at": now_iso(),
         },
     }
 
@@ -374,7 +371,7 @@ def _record(b: ParsedBinding, repo: str) -> dict:
             "generic": "1" if b.generic else None,
             "confidence": b.confidence,
             "symbol": b.symbol,
-            "indexed_at": _now_iso(),
+            "indexed_at": now_iso(),
         },
     }
 

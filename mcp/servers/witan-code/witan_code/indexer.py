@@ -14,8 +14,9 @@ import hashlib
 import importlib
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
+
+from witan_core import now_iso
 
 from . import bridge as bridge_module
 from . import bridge_extractors
@@ -428,7 +429,7 @@ def _edge(edge_type: str, from_id: str, to_id: str) -> dict:
 
 def _file_records(parsed: ParsedFile, slug: str, stats: IndexStats) -> list[dict]:
     """Build the load() records (node + edge JSONL dicts) for one parsed file."""
-    now = _now_iso()
+    now = now_iso()
     records: list[dict] = [
         {
             "type": "CodeFile",
@@ -1033,10 +1034,3 @@ def _decorators(def_node, raw: bytes, spec: LanguageSpec) -> list[str] | None:
         out = list(reversed(preceding)) + own
     out = [d[:200] for d in out if d]
     return out or None
-
-
-# ── Misc ──────────────────────────────────────────────────────────
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()

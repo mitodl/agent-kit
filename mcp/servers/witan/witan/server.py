@@ -20,6 +20,8 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
+from witan_core import now_iso
+
 from . import config as cfg_module
 from . import elicit
 from . import readiness
@@ -273,10 +275,6 @@ _KIND_PREFIX = {
 }
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 # Advisory-claim lease lives in ``readiness`` (shared with the context hook so
 # the injected "Ready Tasks" list and ``task_ready`` agree). Re-exported under
 # the historical names for the in-module call sites.
@@ -356,7 +354,7 @@ def _upsert_topic(name: str, kind: str) -> tuple[str, bool]:
     client.change(
         "mutations.gq",
         "insert_topic",
-        {"slug": slug, "name": name, "kind": kind, "created_at": _now_iso()},
+        {"slug": slug, "name": name, "kind": kind, "created_at": now_iso()},
     )
     return slug, True
 
@@ -1192,7 +1190,7 @@ def _store_memory(
         tags = [tags]
     if isinstance(symbol_refs, str):
         symbol_refs = [symbol_refs]
-    now = _now_iso()
+    now = now_iso()
     slug = _make_slug(kind, title)
     detected_repo = repo_module.detect(override=repo)
 
@@ -1537,7 +1535,7 @@ def _upsert_code_branch(repo: str, branch: str) -> str:
     branch resuming work after being marked ``abandoned`` is active again).
     """
     slug = _code_branch_slug(repo, branch)
-    now = _now_iso()
+    now = now_iso()
     if client.read("read.gq", "get_code_branch", {"slug": slug}):
         client.change(
             "mutations.gq",
@@ -1723,7 +1721,7 @@ def workflow_project_create(
     tags:
         Optional list of tags for grouping and searching.
     """
-    now = _now_iso()
+    now = now_iso()
     slug = _make_slug("workflow_project", title)
     repo_set = _merge_repos(repos, repo_module.detect())
 
@@ -1910,7 +1908,7 @@ async def workflow_project_advance(
     github_pr:
         URL of the GitHub PR if one has been opened.
     """
-    now = _now_iso()
+    now = now_iso()
     before = client.read("read.gq", "get_workflow_project", {"slug": slug})
     prev_phase = before[0].get("phase") if before else None
     advisory = _advance_advisory(prev_phase, phase)
@@ -1966,7 +1964,7 @@ async def workflow_project_complete(
     github_pr:
         URL of the merged PR, if applicable.
     """
-    now = _now_iso()
+    now = now_iso()
 
     trace_slug = f"wt-{slug}"
     existing = client.read("read.gq", "get_trace", {"slug": trace_slug})
@@ -2400,7 +2398,7 @@ def workflow_project_block(slug: str, blocks_slug: str) -> dict:
             "linked": False,
             "reason": "a project cannot block itself",
         }
-    now = _now_iso()
+    now = now_iso()
     client.change(
         "mutations.gq", "link_project_blocks", {"from": slug, "to": blocks_slug}
     )
@@ -2436,7 +2434,7 @@ def workflow_project_unblock(slug: str, blocks_slug: str) -> dict:
     blocks_slug:
         The ``wp-`` slug of the project to unblock.
     """
-    now = _now_iso()
+    now = now_iso()
     blocked = client.read("read.gq", "get_workflow_project", {"slug": blocks_slug})
     if blocked:
         existing = blocked[0].get("blocked_by") or []
@@ -2542,7 +2540,7 @@ def workflow_session_start(
     tags:
         Optional tags.
     """
-    now = _now_iso()
+    now = now_iso()
     slug = _make_slug("workflow_session", project_slug)
     detected_repo = repo_module.detect(override=repo)
 
@@ -2629,7 +2627,7 @@ def workflow_session_end(
     files_changed:
         List of file paths modified in this session.
     """
-    now = _now_iso()
+    now = now_iso()
     client.change(
         "mutations.gq",
         "update_workflow_session_end",
@@ -2729,7 +2727,7 @@ def _update_task(
         "tags": changes.get("tags", current.get("tags")),
         "closed_at": changes.get("closed_at", current.get("closed_at")),
         "claimed_at": changes.get("claimed_at", current.get("claimed_at")),
-        "updated_at": _now_iso(),
+        "updated_at": now_iso(),
     }
     client.change(
         "mutations.gq", "update_task", merged, surface_conflict=surface_conflict
@@ -2786,7 +2784,7 @@ async def task_create(
     tags:
         Optional free-form tags.
     """
-    now = _now_iso()
+    now = now_iso()
     slug = _make_slug("task", title)
     # Offer to scope the task when nothing is detected; falls back to an
     # unscoped task (today's behavior) under automation / an unsupported client.
@@ -2972,7 +2970,7 @@ def task_update(
     if status is not None:
         changes["status"] = status
         if status == "closed":
-            changes["closed_at"] = _now_iso()
+            changes["closed_at"] = now_iso()
 
     updated = _update_task(slug, changes)
 
@@ -2997,7 +2995,7 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
     """
     closed = _update_task(
         slug,
-        {"status": "closed", "closed_at": _now_iso(), "resolution": resolution},
+        {"status": "closed", "closed_at": now_iso(), "resolution": resolution},
     )
     if closed:
         _unblock_dependents(closed.get("repo"))
@@ -3089,7 +3087,7 @@ async def task_claim(
             }
         force = True
 
-    now = _now_iso()
+    now = now_iso()
     claim = {"status": "in_progress", "assignee": holder, "claimed_at": now}
     # omnigraph has no conditional-write (CAS) primitive, so on each surfaced
     # optimistic-concurrency conflict we re-read and either bail (a rival won) or

@@ -1533,6 +1533,7 @@ mcp = [
 
 [package.dev-dependencies]
 test = [
+    { name = "fastmcp" },
     { name = "pytest" },
     { name = "rich" },
 ]
@@ -1547,6 +1548,7 @@ provides-extras = ["cli", "mcp"]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "pytest", specifier = ">=8" },
     { name = "rich", specifier = ">=13" },
 ]

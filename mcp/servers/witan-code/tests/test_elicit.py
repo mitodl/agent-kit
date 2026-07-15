@@ -383,60 +383,9 @@ def test_find_definition_multi_repo_disambiguation(tmp_path, monkeypatch):
     assert {d["repo"] for d in r1} == {RA}
 
 
-# ── Direct unit tests for witan_code/elicit.py (no server/omnigraph needed) ──
-
-
-class _RaiseCtx:
-    async def elicit(self, *args, **kwargs):
-        raise RuntimeError("unsupported")
-
-
-def test_confirm_no_ctx_or_error_returns_default():
-    from witan_code import elicit
-
-    assert (
-        asyncio.run(elicit.confirm(None, "q?", default_when_unsupported=True)) is True
-    )
-    assert (
-        asyncio.run(elicit.confirm(None, "q?", default_when_unsupported=False)) is False
-    )
-    assert (
-        asyncio.run(elicit.confirm(_RaiseCtx(), "q?", default_when_unsupported=True))
-        is True
-    )
-
-
-def test_confirm_accept_and_decline():
-    from witan_code import elicit
-
-    assert (
-        asyncio.run(
-            elicit.confirm(_AcceptCtx(True), "q?", default_when_unsupported=False)
-        )
-        is True
-    )
-    # accepting with a False value is still a "no"
-    assert (
-        asyncio.run(
-            elicit.confirm(_AcceptCtx(False), "q?", default_when_unsupported=True)
-        )
-        is False
-    )
-    assert (
-        asyncio.run(elicit.confirm(_DeclineCtx(), "q?", default_when_unsupported=True))
-        is False
-    )
-
-
-def test_text_no_ctx_error_or_empty_returns_default():
-    from witan_code import elicit
-
-    assert asyncio.run(elicit.text(None, "q?", default="d")) == "d"
-    assert asyncio.run(elicit.text(_RaiseCtx(), "q?", default="d")) == "d"
-    assert asyncio.run(elicit.text(_AcceptCtx(""), "q?", default="d")) == "d"
-    # whitespace-only is treated as empty -> default; a real value is stripped
-    assert asyncio.run(elicit.text(_AcceptCtx("   "), "q?", default="d")) == "d"
-    assert asyncio.run(elicit.text(_AcceptCtx("  real  "), "q?", default="d")) == "real"
+# ── choose_repo unit tests (no server/omnigraph needed) ──
+# The confirm/text primitives are covered in witan-core's own test suite
+# (packages/witan-core/tests/test_elicit.py); only choose_repo is witan-code's.
 
 
 def test_choose_repo_exact_match_case_insensitive_and_stripped():

@@ -43,8 +43,9 @@ replace = 'version = "{new_version}"'
 
 [dependency-groups]
 # rich: the omnigraph installer imports it lazily; the installer tests exercise
-# that path, so the test env needs it even though the base package does not.
-test = ["pytest>=8", "rich>=13"]
+# that path. fastmcp: witan_core.elicit imports it (the `mcp` extra); the elicit
+# tests need it. Both are test-only — the base package requires neither.
+test = ["pytest>=8", "rich>=13", "fastmcp>=3.4.2,<4"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
