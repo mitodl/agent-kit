@@ -6,11 +6,12 @@ duplicates. See ``docs/design/witan-core-extraction-spec.md``.
 
 ``witan_core`` imports neither ``witan`` nor ``witan_code``: it sits below both,
 preserving the one-directional ``witan`` → ``witan_code`` optional-mount DAG.
-
-Nothing is extracted into this package yet — the incremental extraction tasks
-land modules here and delete the duplicated copies from each server.
 """
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from ._detach import popen_detached
+
+__all__ = [
+    "popen_detached",
+]

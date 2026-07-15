@@ -1,17 +1,18 @@
-"""Smoke tests for the scaffolded package.
+"""Package-level invariants.
 
-Until the extraction tasks land real modules here, these just prove the package
-is importable and declares no public surface yet — and, crucially, that it pulls
-in neither server (the leaf-package invariant).
+The leaf-package invariant (importing witan_core must pull in neither server) is
+load-bearing: it is what lets both servers depend on witan_core without a cycle.
 """
 
 import sys
 
 
-def test_witan_core_imports():
+def test_public_surface_is_exported():
     import witan_core
 
-    assert witan_core.__all__ == []
+    assert "popen_detached" in witan_core.__all__
+    for name in witan_core.__all__:
+        assert hasattr(witan_core, name), name
 
 
 def test_no_cross_package_import():

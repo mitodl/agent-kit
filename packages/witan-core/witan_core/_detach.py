@@ -2,11 +2,10 @@
 
 ``subprocess.Popen``'s ``start_new_session=True`` (setsid) is POSIX-only — a
 no-op on Windows, where a background hook child can otherwise get torn down
-with its parent's process group/console. Used by ``maintenance.py``'s
-throttled optimize checkpoint, spawned from the ``Stop`` hook.
-
-Deliberately duplicated in witan_code/_detach.py (no cross-package import,
-matching this package's existing convention — see graph.py's docstring).
+with its parent's process group/console. Used by every hook that must spawn
+work and return immediately: the witan-code SessionStart indexer and both
+servers' throttled optimize checkpoint (``maintenance.py``), spawned from the
+``Stop`` hook.
 """
 
 from __future__ import annotations

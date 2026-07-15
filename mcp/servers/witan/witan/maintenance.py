@@ -25,7 +25,7 @@ import sys
 import time
 
 from . import session_state
-from ._detach import popen_detached
+from witan_core import popen_detached
 
 # Opportunistic optimize runs at most once per this window. Optimize takes the
 # store's write lock and is ~tens of seconds on a bloated store, so daily is a

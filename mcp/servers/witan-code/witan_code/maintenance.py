@@ -33,7 +33,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from ._detach import popen_detached
+from witan_core import popen_detached
 
 # Opportunistic optimize runs at most once per this window per store. Optimize
 # takes the store's write lock and is ~tens of seconds on a bloated store, so

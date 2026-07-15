@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import indexer
 from . import repo as repo_module
-from ._detach import popen_detached
+from witan_core import popen_detached
 from .context import _lock_path, _project_dir
 
 
