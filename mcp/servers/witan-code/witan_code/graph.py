@@ -1,30 +1,27 @@
-import fcntl
+"""witan-code's OmnigraphClient — the shared base plus witan-code's own tail.
+
+The subprocess/lock/retry/admission-cap machinery lives in
+``witan_core.omnigraph``; this subclass adds omnigraph *branch* support (each
+per-user/per-session code index is isolated on its own store branch) and the
+bulk ``load`` used to write thousands of symbol/edge records in one call.
+"""
+
+from __future__ import annotations
+
 import json
 import os
-import shutil
-import subprocess
 import tempfile
-import time
 from pathlib import Path
 
-# omnigraph local stores use optimistic concurrency (Lance manifest versions) and
-# are NOT safe for concurrent writers — a manual index racing the
-# PostToolUse/SessionStart reindex hooks can leave HEAD ahead of the manifest.
-# We serialize writes with a per-store advisory lock (prevention) and, as a
-# safety net, retry transient "stale view" conflicts and `omnigraph repair`
-# stores already in the drifted state.
-_WRITE_SUBCOMMANDS = {"mutate", "load", "optimize", "cleanup"}
-_RETRYABLE = ("stale view", "manifest table version", "refresh and retry")
-_NEEDS_REPAIR = ("ahead of manifest", "omnigraph repair")
-_MAX_ATTEMPTS = 8
+from witan_core.omnigraph import OmnigraphClient as _BaseOmnigraphClient
+
+__all__ = ["OmnigraphClient"]
 
 
-class OmnigraphClient:
-    """Subprocess wrapper for the omnigraph CLI.
+class OmnigraphClient(_BaseOmnigraphClient):
+    """The base client, specialized for witan-code (per-repo code-graph stores)."""
 
-    Copied verbatim from witan (queries_dir default adjusted) so the
-    two Layer packages stay independent — no cross-package imports.
-    """
+    _SETUP_HINT = "witan-code setup (or `witan setup`, if witan is also installed)"
 
     def __init__(
         self,
@@ -33,60 +30,11 @@ class OmnigraphClient:
         token: str | None = None,
         branch: str | None = None,
     ) -> None:
-        self.graph_uri = graph_uri
-        self.queries_dir = queries_dir
-        self.token = token
-        # Target omnigraph branch for query/mutate/load; None = the store's
-        # main branch. Loads pass `--from main` so the branch forks lazily on
-        # first write (docs/BRANCH_INDEXING.md).
+        # Target omnigraph branch for query/mutate/load; None = the store's main
+        # branch. Loads pass `--from main` so the branch forks lazily on first
+        # write (docs/BRANCH_INDEXING.md).
         self.branch = branch
-        self._binary = self._find_binary()
-
-    # ── Public API ────────────────────────────────────────────────
-
-    def read(
-        self,
-        query_file: str,
-        query_name: str,
-        params: dict,
-    ) -> list[dict]:
-        """Run a named read query. Returns a list of result rows."""
-        result = self._run(
-            "query",
-            "--query",
-            str(self.queries_dir / query_file),
-            query_name,
-            "--params",
-            json.dumps(params),
-            "--format",
-            "json",
-        )
-        if not result.strip():
-            return []
-        try:
-            parsed = json.loads(result)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"omnigraph returned non-JSON: {result!r}") from exc
-        # v0.7.0 wraps results in {rows: [...], columns: [...], ...}
-        rows = parsed.get("rows", parsed) if isinstance(parsed, dict) else parsed
-        # strip alias prefixes: "s.name" → "name"
-        return [{k.split(".", 1)[-1]: v for k, v in row.items()} for row in rows]
-
-    def change(
-        self,
-        query_file: str,
-        query_name: str,
-        params: dict,
-    ) -> None:
-        """Run a named mutation query."""
-        self._run(
-            "mutate",
-            "--query",
-            str(self.queries_dir / query_file),
-            query_name,
-            "--params",
-            json.dumps(params),
-        )
+        super().__init__(graph_uri, queries_dir, token)
 
     def load(self, records: list[dict], mode: str = "merge") -> None:
         """Bulk-load node/edge records via one ``omnigraph load`` call.
@@ -107,40 +55,6 @@ class OmnigraphClient:
             self._run("load", "--data", tmp, "--mode", mode)
         finally:
             Path(tmp).unlink(missing_ok=True)
-
-    def optimize(self) -> str:
-        """Compact small Lance fragments across every table (non-destructive).
-
-        Every load()/mutate() appends a new tiny Lance fragment + manifest
-        version; an un-compacted store bloats until *opening* it dominates
-        query latency (a fixed per-query cost regardless of rows) — the same
-        failure mode witan's own store hit (#98). ``omnigraph optimize``
-        collapses the fragments. It takes the store's write lock and can run
-        for tens of seconds on a bloated store, so callers must throttle it
-        and keep it off the indexing hot path (see ``witan_code.maintenance``).
-        """
-        return self._run("optimize")
-
-    def cleanup(self, *, keep: int | None = None, older_than: str | None = None) -> str:
-        """Reclaim disk by removing old Lance versions (**destructive**).
-
-        ``optimize`` compacts fragments but leaves old versions behind, so disk
-        stays large until they are GC'd. ``cleanup`` removes them, keeping the
-        most recent ``keep`` versions per table and/or those newer than
-        ``older_than`` (a Go-style duration like ``7d``). At least one bound
-        must be given (omnigraph requires it). ``--confirm`` is passed so it
-        actually runs.
-        """
-        if keep is None and older_than is None:
-            raise ValueError("cleanup requires keep and/or older_than")
-        args = ["--confirm"]
-        if keep is not None:
-            args += ["--keep", str(keep)]
-        if older_than is not None:
-            args += ["--older-than", older_than]
-        return self._run("cleanup", *args)
-
-    # ── Internals ─────────────────────────────────────────────────
 
     # ── Branch operations ─────────────────────────────────────────
 
@@ -174,98 +88,11 @@ class OmnigraphClient:
     def delete_branch(self, name: str) -> None:
         self._run("branch", "delete", name, "--yes")
 
-    # ── Internals ─────────────────────────────────────────────────
-
-    def _branch_args(self, subcommand: str) -> list[str]:
-        # optimize/cleanup compact the whole store (every branch), not a
-        # single one, so they never take --branch even on a branched client.
+    def _extra_args(self, subcommand: str) -> list[str]:
+        # optimize/cleanup compact the whole store (every branch), not a single
+        # one, so they never take --branch even on a branched client.
         if self.branch is None or subcommand in ("branch", "optimize", "cleanup"):
             return []
         if subcommand == "load":
             return ["--branch", self.branch, "--from", "main"]
         return ["--branch", self.branch]
-
-    def _run(self, subcommand: str, *args: str) -> str:
-        quiet = ["--quiet"] if subcommand in _WRITE_SUBCOMMANDS else []
-        cmd = [
-            self._binary,
-            subcommand,
-            "--store",
-            self.graph_uri,
-            *quiet,
-            *self._branch_args(subcommand),
-            *args,
-        ]
-        env = dict(os.environ)
-        if self.token:
-            env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = self.token
-
-        lock_fh = self._acquire_write_lock(subcommand)
-        try:
-            for attempt in range(_MAX_ATTEMPTS):
-                result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-                if result.returncode == 0:
-                    return result.stdout
-                err = result.stderr
-                if attempt + 1 < _MAX_ATTEMPTS:
-                    if any(m in err for m in _NEEDS_REPAIR):
-                        self._repair(env)
-                        continue
-                    if any(m in err for m in _RETRYABLE):
-                        time.sleep(0.05 * (attempt + 1))
-                        continue
-                raise RuntimeError(
-                    f"omnigraph {subcommand} failed (exit {result.returncode}):\n"
-                    f"{err.strip()}"
-                )
-            raise AssertionError("unreachable")  # pragma: no cover
-        finally:
-            if lock_fh is not None:
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
-                lock_fh.close()
-
-    def _acquire_write_lock(self, subcommand: str):
-        """Hold a per-store exclusive lock for write subcommands (local stores)."""
-        if subcommand not in _WRITE_SUBCOMMANDS or self.graph_uri.startswith(
-            ("http://", "https://", "s3://")
-        ):
-            return None
-        lock_path = Path(f"{self.graph_uri}.lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = open(lock_path, "w")  # noqa: SIM115 — released in _run's finally
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        return fh
-
-    def _repair(self, env: dict) -> None:
-        """Reconcile manifest/HEAD drift so the retried write can proceed."""
-        subprocess.run(
-            [
-                self._binary,
-                "repair",
-                "--store",
-                self.graph_uri,
-                "--confirm",
-                "--force",
-                "--quiet",
-            ],
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-
-    @staticmethod
-    def _find_binary() -> str:
-        binary = shutil.which("omnigraph")
-        if binary is not None:
-            return binary
-        # MCP servers are often launched by a desktop app or IDE extension
-        # whose process doesn't inherit a shell PATH — `witan setup`/
-        # `witan-code setup` always install to this fixed location, so check
-        # it directly rather than relying on PATH alone.
-        fallback = Path.home() / ".local" / "bin" / "omnigraph"
-        if fallback.exists():
-            return str(fallback)
-        raise RuntimeError(
-            "omnigraph binary not found. Install via: witan-code setup "
-            "(or `witan setup`, if witan is also installed)"
-        )
