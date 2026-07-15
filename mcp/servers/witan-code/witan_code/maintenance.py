@@ -1,12 +1,10 @@
 """Store compaction (omnigraph optimize/cleanup) with throttling.
 
-Mirrors witan's own ``witan.maintenance`` (deliberately duplicated — no
-cross-package import, see ``graph.py``'s docstring), adapted for witan-code's
-per-repo, multi-store layout: there is no single configured store to
-throttle. The current repo's per-repo store and the shared cross-repo bridge
-store are each compacted and throttled independently, keyed by the store's
-own path, so a bloated bridge store doesn't gate (or get gated by) a repo
-store's compaction.
+Adapted for witan-code's per-repo, multi-store layout: there is no single
+configured store to throttle. The current repo's per-repo store and the shared
+cross-repo bridge store are each compacted and throttled independently, keyed by
+the store's own path, so a bloated bridge store doesn't gate (or get gated by) a
+repo store's compaction.
 
 Every witan-code write — the ``PostToolUse`` single-file reindex, the
 ``SessionStart`` full index — appends a new tiny Lance fragment + manifest
@@ -20,12 +18,15 @@ The ``Stop`` hook (``witan-code checkpoint``) calls
 repo — at most once per interval each, detached so the hook returns
 immediately. There is also a ``witan-code optimize`` / ``witan-code cleanup``
 CLI for cron/systemd-timer driven maintenance.
+
+The throttle window, atomic last-run stamp, and due-check live in
+``witan_core.maintenance``; this module supplies witan-code's own env var,
+stamp-file location (a temp-dir digest), and detached command.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import subprocess
 import sys
@@ -33,26 +34,19 @@ import tempfile
 import time
 from pathlib import Path
 
+from witan_core import maintenance as _throttle
 from witan_core import popen_detached
 
-# Opportunistic optimize runs at most once per this window per store. Optimize
-# takes the store's write lock and is ~tens of seconds on a bloated store, so
-# daily is a safe default; override with WITAN_CODE_OPTIMIZE_INTERVAL (seconds;
-# 0 disables).
-_OPTIMIZE_INTERVAL = 24 * 3600.0
-
-_REMOTE_PREFIXES = ("http://", "https://", "s3://")
+# Opportunistic optimize runs at most once per this window per store. Override
+# with WITAN_CODE_OPTIMIZE_INTERVAL (seconds; 0 disables).
+_OPTIMIZE_INTERVAL = _throttle.DEFAULT_OPTIMIZE_INTERVAL
 
 
 def optimize_interval() -> float:
     """Throttle window in seconds; ``0`` (or negative) disables auto-optimize."""
-    raw = os.environ.get("WITAN_CODE_OPTIMIZE_INTERVAL")
-    if raw is None:
-        return _OPTIMIZE_INTERVAL
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        return _OPTIMIZE_INTERVAL
+    return _throttle.resolve_interval(
+        "WITAN_CODE_OPTIMIZE_INTERVAL", _OPTIMIZE_INTERVAL
+    )
 
 
 def _stamp_file(store: str | Path) -> Path:
@@ -61,30 +55,11 @@ def _stamp_file(store: str | Path) -> Path:
 
 
 def _last_run(store: str | Path) -> float:
-    try:
-        return float(json.loads(_stamp_file(store).read_text()).get("stamp", 0.0))
-    except Exception:  # noqa: BLE001 — missing/corrupt stamp → treat as never run
-        return 0.0
+    return _throttle.last_run(_stamp_file(store))
 
 
 def _mark_run(store: str | Path, when: float) -> None:
-    """Record the last-optimize time atomically.
-
-    Concurrent Stop hooks (or an interrupted write) could otherwise leave a
-    half-written stamp that ``_last_run`` reads as "never run", defeating the
-    throttle and letting optimize spawn repeatedly. Write a process-unique temp
-    file and ``os.replace`` it in, so a reader always sees a complete file.
-    """
-    path = _stamp_file(store)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    try:
-        tmp.write_text(json.dumps({"stamp": when}))
-        os.replace(tmp, path)
-    except OSError:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+    _throttle.mark_run(_stamp_file(store), when)
 
 
 def due(store: str | Path, now: float | None = None) -> bool:
@@ -94,15 +69,13 @@ def due(store: str | Path, now: float | None = None) -> bool:
     server-side, not by a client hook), the store doesn't exist yet, or the
     throttle window hasn't elapsed.
     """
-    interval = optimize_interval()
-    if interval <= 0:
-        return False
-    if str(store).startswith(_REMOTE_PREFIXES):
-        return False
-    if not Path(store).exists():
-        return False
-    now = time.time() if now is None else now
-    return now - _last_run(store) >= interval
+    return _throttle.is_due(
+        store=store,
+        stamp_file=_stamp_file(store),
+        interval=optimize_interval(),
+        now=time.time() if now is None else now,
+        require_exists=True,
+    )
 
 
 def spawn_background_optimize(store: str | Path, now: float | None = None) -> bool:
