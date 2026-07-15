@@ -100,7 +100,7 @@ Two distinct non-human identities, deliberately kept separate:
 
 ```bash
 # once: install the pinned omnigraph binary the way CI does
-uv run python -c "from witan.setup import install_omnigraph; install_omnigraph(dry_run=False)"
+uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 export PATH="$HOME/.local/bin:$PATH"
 
 ./policy/check.sh          # lint all 4 bundles, validate 3, run 38 test cases

@@ -1758,7 +1758,10 @@ requires-dist = [
 provides-extras = ["cli", "mcp"]
 
 [package.metadata.requires-dev]
-test = [{ name = "pytest", specifier = ">=8" }]
+test = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "rich", specifier = ">=13" },
+]
 
 [[package]]
 name = "zipp"

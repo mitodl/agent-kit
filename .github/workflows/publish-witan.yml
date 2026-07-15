@@ -59,7 +59,7 @@ jobs:
         # witan/server.py bootstraps a local graph at import time, so the
         # binary must exist before pytest even collects tests.
         if: steps.check.outputs.new == 'true'
-        run: uv run python -c "from witan.setup import install_omnigraph; install_omnigraph(dry_run=False)"
+        run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 
       - name: Run tests
         if: steps.check.outputs.new == 'true'

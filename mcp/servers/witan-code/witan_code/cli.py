@@ -550,7 +550,9 @@ def setup(
         known_platforms,
     )
 
-    from .setup import install_omnigraph, witan_code_bundle
+    from witan_core import install_omnigraph
+
+    from .setup import witan_code_bundle
 
     pkg_dir = Path(__file__).parent
 

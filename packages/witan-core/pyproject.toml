@@ -42,7 +42,9 @@ search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
 [dependency-groups]
-test = ["pytest>=8"]
+# rich: the omnigraph installer imports it lazily; the installer tests exercise
+# that path, so the test env needs it even though the base package does not.
+test = ["pytest>=8", "rich>=13"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

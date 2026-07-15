@@ -11,7 +11,9 @@ preserving the one-directional ``witan`` → ``witan_code`` optional-mount DAG.
 from __future__ import annotations
 
 from ._detach import popen_detached
+from .omnigraph_install import install_omnigraph
 
 __all__ = [
+    "install_omnigraph",
     "popen_detached",
 ]

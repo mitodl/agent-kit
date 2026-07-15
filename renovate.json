@@ -4,10 +4,9 @@
 	"customManagers": [
 		{
 			"customType": "regex",
-			"description": "omnigraph binary version pinned in witan/setup.py and witan-code/setup.py — both fetch this pinned release at runtime (no build-time bundling), and must stay in lockstep, so one Renovate PR updates both together",
+			"description": "omnigraph binary version pinned in witan-core's shared installer; both servers fetch this pinned release at runtime (no build-time bundling)",
 			"managerFilePatterns": [
-				"/^mcp/servers/witan/witan/setup\\.py$/",
-				"/^mcp/servers/witan-code/witan_code/setup\\.py$/"
+				"/^packages/witan-core/witan_core/omnigraph_install\\.py$/"
 			],
 			"matchStrings": ["_OMNIGRAPH_VERSION = \"(?<currentValue>[^\"]+)\""],
 			"datasourceTemplate": "github-releases",

@@ -23,10 +23,11 @@ MCP server entry into your agent config in one step. Run it once; re-run after
 upgrades to refresh installed files.
 
 The omnigraph binary step always downloads the release pinned by
-`_OMNIGRAPH_VERSION` in [`witan/setup.py`](./witan/setup.py) straight from
-GitHub releases into `~/.local/bin/omnigraph` — there is no build-time
-bundling, so re-running `witan setup` is also how you pick up an omnigraph
-version bump (a Renovate PR bumps the pin; see `renovate.json`'s
+`_OMNIGRAPH_VERSION` in the shared installer
+[`witan_core.omnigraph_install`](../../../packages/witan-core/witan_core/omnigraph_install.py)
+straight from GitHub releases into `~/.local/bin/omnigraph` — there is no
+build-time bundling, so re-running `witan setup` is also how you pick up an
+omnigraph version bump (a Renovate PR bumps the pin; see `renovate.json`'s
 `omnigraph-version` customManager). When `witan-code` is also installed
 (importable in this environment — e.g. via the `--with` in the `uv tool
 install`/MCP server's `uvx` invocation below), `witan setup` folds its skill
