@@ -25,6 +25,9 @@ import" convention. See `docs/design/witan-core-extraction-spec.md`.
 - `now_iso` (`witan_core.timeutil`).
 - Throttled-optimize mechanics (`witan_core.maintenance`) — interval parsing,
   atomic last-run stamp, and due-check.
+- `OmnigraphClient` base (`witan_core.omnigraph`) — the omnigraph-CLI subprocess
+  wrapper (write lock, retry/repair, per-actor admission-cap backoff,
+  `OmnigraphConflict`); each server subclasses it for its own tail.
 
 Extracted from the duplicated surface of `witan` (witan-council) and
 `witan-code`; the now-duplicated copies were deleted from both servers.

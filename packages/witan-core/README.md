@@ -46,7 +46,10 @@ Extracted so far (each deletes the duplicated copies from both servers):
   canonicalizer, with a golden contract test
 - `timeutil.now_iso`
 - `maintenance` — the throttled-optimize stamp/interval/due mechanics
+- `omnigraph.OmnigraphClient` — the omnigraph-CLI subprocess wrapper base
+  (write lock, retry/repair, admission-cap backoff); each server subclasses it
+  (witan adds `apply_schema`; witan-code adds branch ops + bulk `load`)
 
-Still local to each server (intentionally): the `OmnigraphClient` subprocess
-wrapper and the CLI scaffolding — their extraction is coordinated with the
-in-flight multi-user deployment work (see the spec).
+Still local to each server (intentionally): the CLI scaffolding — its
+extraction coordinates with the in-flight multi-user deployment work (see the
+spec).
