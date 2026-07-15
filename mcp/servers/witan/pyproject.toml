@@ -20,6 +20,7 @@ dependencies = [
   "rich>=13",
   "pydantic>=2,<3",
   "agent-config-kit>=0.4,<1",
+  "witan-core>=0.1,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
 ]
@@ -43,6 +44,7 @@ build-backend = "hatchling.build"
 # has actually landed on PyPI. Published wheels only see the PyPI-range
 # dependency declared above.
 agent-config-kit = { path = "../../../packages/agent-config-kit", editable = true }
+witan-core = { path = "../../../packages/witan-core", editable = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["witan"]

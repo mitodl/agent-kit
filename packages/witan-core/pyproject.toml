@@ -1,0 +1,49 @@
+[project]
+name = "witan-core"
+version = "0.1.0"
+description = "Shared core for the witan MCP servers (witan-council + witan-code)"
+readme = "README.md"
+license = "BSD-3-Clause"
+requires-python = ">=3.11"
+keywords = ["mcp", "agent", "omnigraph", "shared", "coding-agent"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+# Base modules (_detach, repo_key, timeutil, omnigraph, maintenance) are
+# stdlib-only on purpose so neither server pulls weight it doesn't use. Heavier
+# concerns are gated behind the extras below.
+dependencies = []
+
+[project.optional-dependencies]
+# cli.py + the omnigraph installer's styled output.
+cli = ["cyclopts>=4,<5", "rich>=13"]
+# elicit.py (fastmcp.server.elicitation.AcceptedElicitation).
+mcp = ["fastmcp>=3.4.2,<4"]
+
+[project.urls]
+Homepage = "https://github.com/mitodl/agent-kit/tree/main/packages/witan-core"
+Repository = "https://github.com/mitodl/agent-kit"
+Issues = "https://github.com/mitodl/agent-kit/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["witan_core"]
+
+[tool.bumpversion]
+current_version = "0.1.0"
+allow_dirty = true
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[dependency-groups]
+test = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
