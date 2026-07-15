@@ -26,8 +26,10 @@ def normalise(url: str) -> str:
     https://github.com/mitodl/ol-django  →  https://github.com/mitodl/ol-django
     git@gitlab.com:grp/sub/repo.git      →  https://gitlab.com/grp/sub/repo
     """
-    # Strip trailing .git and any auth userinfo in https remotes.
-    url = re.sub(r"\.git$", "", url.strip()).rstrip("/")
+    # Strip trailing slashes first, then a trailing .git, so a malformed
+    # ".../repo.git/" canonicalizes to ".../repo" rather than leaving ".git"
+    # stranded (the .git$ anchor won't match when a slash trails it).
+    url = re.sub(r"\.git$", "", url.strip().rstrip("/"))
 
     # SSH: git@host:org/repo  →  https://host/org/repo
     if m := re.match(r"(?:ssh://)?[^@]+@([^:/]+)[:/](.+)", url):

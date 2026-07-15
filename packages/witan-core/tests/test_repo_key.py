@@ -35,6 +35,9 @@ from witan_core import repo_key
         ("ssh://git@github.com/mitodl/repo.git", "https://github.com/mitodl/repo"),
         # trailing slash stripped
         ("https://github.com/mitodl/repo/", "https://github.com/mitodl/repo"),
+        # trailing slash *after* .git — .git must still be stripped
+        ("https://github.com/mitodl/repo.git/", "https://github.com/mitodl/repo"),
+        ("git@github.com:mitodl/repo.git/", "https://github.com/mitodl/repo"),
         # unknown format returned as-is
         ("some-bare-string", "some-bare-string"),
     ],

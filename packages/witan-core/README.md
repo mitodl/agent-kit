@@ -33,7 +33,20 @@ neither server pulls weight it doesn't use:
 - `witan-core[cli]` → `cyclopts`, `rich` (CLI scaffolding, styled installer output)
 - `witan-core[mcp]` → `fastmcp` (MCP elicitation primitives)
 
-## Status
+## What's here
 
-Scaffold only. The incremental extraction tasks (see the epic) land modules here
-and delete the now-duplicated copies from each server.
+Extracted so far (each deletes the duplicated copies from both servers):
+
+- `_detach.popen_detached` — cross-platform detached subprocess spawning
+- `omnigraph_install` — the pinned-omnigraph-binary installer (single source of
+  the version; `rich` imported lazily)
+- `elicit` — the `confirm`/`text` MCP elicitation primitives (needs the `mcp`
+  extra; not re-exported from the package root)
+- `repo_key` — `normalise` + `find_git_config`, the cross-layer repo-key
+  canonicalizer, with a golden contract test
+- `timeutil.now_iso`
+- `maintenance` — the throttled-optimize stamp/interval/due mechanics
+
+Still local to each server (intentionally): the `OmnigraphClient` subprocess
+wrapper and the CLI scaffolding — their extraction is coordinated with the
+in-flight multi-user deployment work (see the spec).

@@ -68,7 +68,14 @@ def install_omnigraph(dry_run: bool = False) -> None:
 
 
 def _download_omnigraph(dest: Path, dry_run: bool) -> None:
-    from rich.console import Console
+    try:
+        from rich.console import Console
+    except ImportError as exc:  # pragma: no cover - depends on install extras
+        raise RuntimeError(
+            "the omnigraph installer needs `rich` for its progress output; "
+            "install it via the witan-core[cli] extra (both servers already "
+            "depend on rich, so this only bites a bare witan-core install)."
+        ) from exc
 
     console = Console()
 
