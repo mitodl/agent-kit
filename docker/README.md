@@ -47,9 +47,11 @@ docker build -f docker/omnigraph-server.Dockerfile -t omnigraph-server:${GIT_TAG
   `omnigraph cluster import` (first boot) or `cluster refresh` (state already
   exists in the storage backend) followed by `cluster apply`, then `exec`s the
   server. This is the remote analogue of witan's local `_ensure_graph`
-  auto-bootstrap — it is what creates the `main` graph under the S3 storage
-  root and applies the schema, so `Pulumi up` alone produces a *queryable*
-  graph with no manual runbook step. The sequence is idempotent: `apply` is a
+  auto-bootstrap — it is what creates the cluster's declared graph(s) under the
+  S3 storage root and applies their schemas, so `Pulumi up` alone produces a
+  *queryable* graph with no manual runbook step. (Graph names are set in the
+  deployment's `cluster.yaml`, not in this image; the convention is to name
+  them after the owning package — `council`, `code` — overridable per env.) The sequence is idempotent: `apply` is a
   no-op once converged, and the import→refresh split keeps pod restarts (whose
   local `__cluster/` working state is ephemeral) reconciling with the existing
   storage-backed ledger instead of erroring.
