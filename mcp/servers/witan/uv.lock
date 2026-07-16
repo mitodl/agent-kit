@@ -1554,20 +1554,34 @@ name = "witan-core"
 version = "0.2.0"
 source = { editable = "../../../packages/witan-core" }
 
+[package.optional-dependencies]
+cli = [
+    { name = "agent-config-kit" },
+    { name = "cyclopts" },
+    { name = "rich" },
+]
+remote = [
+    { name = "fastmcp" },
+    { name = "httpx" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "agent-config-kit", marker = "extra == 'cli'", editable = "../../../packages/agent-config-kit" },
     { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=4,<5" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.4.2,<4" },
+    { name = "fastmcp", marker = "extra == 'remote'", specifier = ">=3.4.2,<4" },
+    { name = "httpx", marker = "extra == 'remote'", specifier = ">=0.27" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
 ]
-provides-extras = ["cli", "mcp"]
+provides-extras = ["cli", "mcp", "remote"]
 
 [package.metadata.requires-dev]
 test = [
     { name = "agent-config-kit", editable = "../../../packages/agent-config-kit" },
     { name = "cyclopts", specifier = ">=4,<5" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8" },
     { name = "rich", specifier = ">=13" },
 ]
@@ -1585,7 +1599,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
     { name = "tomli-w" },
-    { name = "witan-core" },
+    { name = "witan-core", extra = ["cli", "remote"] },
 ]
 
 [package.dev-dependencies]
@@ -1603,7 +1617,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "rich", specifier = ">=13" },
     { name = "tomli-w", specifier = ">=1,<2" },
-    { name = "witan-core", editable = "../../../packages/witan-core" },
+    { name = "witan-core", extras = ["cli", "remote"], editable = "../../../packages/witan-core" },
 ]
 
 [package.metadata.requires-dev]

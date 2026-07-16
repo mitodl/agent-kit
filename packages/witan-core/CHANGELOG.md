@@ -10,6 +10,16 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
+- Remote-access layer (`witan_core.remote`, the `remote` extra) — the
+  transport-agnostic ADR-0005 path-a client stack, so a second deployed server
+  can reuse it: `DeviceAuth` (`witan_core.remote.oidc`) drives the OIDC
+  device-authorization grant (RFC 8628) + a 0600 token cache, parameterized by
+  cache path and login hint; `RemoteMCPProxy` (`witan_core.remote.proxy`) mirrors
+  a FastMCP server's tool surface over `streamable-http` (positional→name arg
+  mapping, `{"result": …}` envelope unwrap), with subclass hooks for the
+  admin-tool refusal set, client-side repo resolution, and error wording.
+  witan-council now binds its policy (cache location, `witan login` hint,
+  `_ADMIN_ONLY`, `repo.detect`) via thin shims instead of owning the mechanism.
 - CLI scaffolding (`witan_core.cli`, the `cli` extra): `AgentName`/`AGENT_NAMES`
   (the supported coding-agent constants), `make_app` (the `--version`-wired
   cyclopts app factory), `resolve_author` (`--author` → `git config user.name` →
