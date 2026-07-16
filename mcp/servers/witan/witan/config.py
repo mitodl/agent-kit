@@ -208,7 +208,7 @@ class RemoteConfig(BaseModel):
     oidc_audience: str | None = None
     """Optional audience/resource to request, matching the deployment's
     ``WITAN_OIDC_AUDIENCE``. When set it is sent as the ``audience`` parameter
-    on the device-auth and token requests (``witan.remote.oidc._auth_params``);
+    on the device-auth and token requests (``witan_core.remote.oidc.DeviceAuth._auth_params``);
     Keycloak realms with an audience mapper honor it to stamp the ``aud`` claim
     the server validates, and realms without one ignore it harmlessly."""
 

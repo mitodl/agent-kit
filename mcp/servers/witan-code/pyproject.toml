@@ -11,7 +11,7 @@ classifiers = [
 ]
 dependencies = [
     "agent-config-kit>=0.4,<1",
-    "witan-core>=0.1,<1",
+    "witan-core[cli]>=0.2,<1",
     "fastmcp>=3.4.2,<4",
     "cyclopts>=4,<5",
     # Pinned to 0.25.x: tree-sitter 0.26.0 has a use-after-free in its pyo3 Node

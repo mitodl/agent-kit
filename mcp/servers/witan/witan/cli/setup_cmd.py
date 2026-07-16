@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Literal
 
 from agent_config_kit import (
-    InstallResult,
     apply,
     apply_all,
     detect_installed_platforms,
@@ -19,25 +16,9 @@ from agent_config_kit import (
 )
 from agent_config_kit.installers import install_files
 from witan_core import install_omnigraph
+from witan_core.cli import AGENT_NAMES, AgentName, report_install, resolve_author
 
 from ._common import app, console
-
-_AGENT_NAMES = {
-    "claude": "Claude Code",
-    "pi": "Pi",
-    "copilot": "GitHub Copilot",
-    "opencode": "OpenCode",
-}
-AgentName = Literal["claude", "pi", "copilot", "opencode", "all"]
-
-
-def _report(name: str, result: InstallResult, *, dry_run: bool) -> None:
-    console.print(f"\n[bold]{_AGENT_NAMES.get(name, name)}[/bold]")
-    for path in result.planned:
-        tag = " [dim](dry-run)[/dim]" if dry_run else ""
-        console.print(f"  [green]→[/green] {path}{tag}")
-    for path, reason in result.skipped:
-        console.print(f"  [yellow]skip[/yellow] {path} — {reason}")
 
 
 def _witan_code_mounted() -> bool:
@@ -100,16 +81,7 @@ def setup(
 
     pkg_dir = Path(__file__).parent.parent
 
-    if author is None:
-        try:
-            author = subprocess.check_output(
-                ["git", "config", "user.name"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            author = ""
-        author = author or os.environ.get("USER", "unknown")
+    author = resolve_author(author)
 
     if not shutil.which("witan") and not dry_run:
         console.print(
@@ -174,13 +146,18 @@ def setup(
 
     if agent == "all":
         for name, result in apply_all(bundle, dry_run=dry_run).items():
-            _report(name, result, dry_run=dry_run)
+            report_install(name, result, dry_run=dry_run, console=console)
         for name in sorted(set(known_platforms()) - set(detect_installed_platforms())):
             console.print(
-                f"\n[dim]{_AGENT_NAMES.get(name, name)} — not detected, skipping[/dim]"
+                f"\n[dim]{AGENT_NAMES.get(name, name)} — not detected, skipping[/dim]"
             )
     else:
-        _report(agent, apply(agent, bundle, dry_run=dry_run), dry_run=dry_run)
+        report_install(
+            agent,
+            apply(agent, bundle, dry_run=dry_run),
+            dry_run=dry_run,
+            console=console,
+        )
 
     if agent in ("claude", "all"):
         # Witan's own hook shell scripts — a generic file-copy, not part of the

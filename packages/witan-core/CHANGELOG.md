@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.2.0] - 2026-07-16
+
+### Added
+
+- Remote-access layer (`witan_core.remote`, the `remote` extra) — the
+  transport-agnostic ADR-0005 path-a client stack, so a second deployed server
+  can reuse it: `DeviceAuth` (`witan_core.remote.oidc`) drives the OIDC
+  device-authorization grant (RFC 8628) + a 0600 token cache, parameterized by
+  cache path and login hint; `RemoteMCPProxy` (`witan_core.remote.proxy`) mirrors
+  a FastMCP server's tool surface over `streamable-http` (positional→name arg
+  mapping, `{"result": …}` envelope unwrap), with subclass hooks for the
+  admin-tool refusal set, client-side repo resolution, and error wording.
+  witan-council now binds its policy (cache location, `witan login` hint,
+  `_ADMIN_ONLY`, `repo.detect`) via thin shims instead of owning the mechanism.
+- CLI scaffolding (`witan_core.cli`, the `cli` extra): `AgentName`/`AGENT_NAMES`
+  (the supported coding-agent constants), `make_app` (the `--version`-wired
+  cyclopts app factory), `resolve_author` (`--author` → `git config user.name` →
+  `$USER` → `"unknown"`), and `report_install` (the agent-config install-result
+  printer — styled with a rich `console`, plain `print` without one). Both
+  servers' `setup` commands now share these instead of carrying divergent copies.
+- `agent-config-kit` is now a dependency of the `cli` extra (supplies
+  `resolve_version` and the `InstallResult` type) — a valid leaf→leaf edge, since
+  both servers already depend on it.
+
 ## [0.1.0] - 2026-07-15
 
 Initial release of the shared `witan-core` package (import `witan_core`),
