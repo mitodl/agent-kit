@@ -67,7 +67,7 @@ test = [
 [tool.uv.sources]
 # Resolve the sibling shared package from the monorepo checkout for local dev
 # and CI; PyPI still serves it for external installs via the version range above.
-agent-config-kit = { path = "../agent-config-kit", editable = true }
+agent-config-kit = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

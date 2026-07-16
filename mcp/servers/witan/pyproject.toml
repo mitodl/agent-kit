@@ -46,8 +46,8 @@ build-backend = "hatchling.build"
 # agent-config-kit version bumped alongside it — even before that version
 # has actually landed on PyPI. Published wheels only see the PyPI-range
 # dependency declared above.
-agent-config-kit = { path = "../../../packages/agent-config-kit", editable = true }
-witan-core = { path = "../../../packages/witan-core", editable = true }
+agent-config-kit = { workspace = true }
+witan-core = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["witan"]

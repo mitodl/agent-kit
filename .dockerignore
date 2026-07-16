@@ -1,0 +1,18 @@
+# Build-context excludes for the witan / omnigraph-server images
+# (docker/witan.Dockerfile, docker/omnigraph-server.Dockerfile — both built
+# from the repo root so they can reach the whole uv workspace).
+.git
+.github
+.claude
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/node_modules
+**/__cluster
+**/*.omni
+dist
+build
+*.egg-info

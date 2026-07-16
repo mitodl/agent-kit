@@ -1,0 +1,23 @@
+# Top-level uv workspace for the agent-kit monorepo.
+#
+# Purpose: give the repo a single, unified ``uv.lock`` spanning the internal
+# libraries (``agent-config-kit``, ``witan-core``), the two MCP servers
+# (``witan-council``, ``witan-code``), and the ``ol-agent-kit`` meta-package, so
+# a container build can ``uv sync --frozen`` the whole set reproducibly in one
+# resolution (see ``docker/witan.Dockerfile``).
+#
+# This is a *virtual* workspace root: it declares no package of its own, it only
+# groups the members. Each member keeps its own ``pyproject.toml``, version,
+# publish flow, and ``[tool.uv.sources]`` path entries, so a standalone
+# ``uvx --from git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan``
+# install and an in-member ``uv sync`` keep working exactly as before — uv simply
+# recognizes those sibling paths as workspace members when it resolves from here.
+
+[tool.uv.workspace]
+members = [
+    "packages/agent-config-kit",
+    "packages/agent-kit",
+    "packages/witan-core",
+    "mcp/servers/witan",
+    "mcp/servers/witan-code",
+]
