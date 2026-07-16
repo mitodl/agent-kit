@@ -145,7 +145,7 @@ def test_login_access_denied_raises(auth):
         )
 
 
-def test_non_json_metadata_raises_clean_error(auth):
+def test_non_json_metadata_raises_clean_error():
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="<html>proxy error</html>")
 
