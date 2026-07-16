@@ -29,6 +29,9 @@ Global conventions used throughout:
 | `serve` | Run the witan MCP server |
 | `run` | Claim a task and launch an agent to execute it |
 | `setup` | Install witan for one or all supported coding agents |
+| `login` | Authenticate to a deployed witan service (see [Remote mode](#remote-mode)) |
+| `logout` | Forget the cached token for the deployed service (see [Remote mode](#remote-mode)) |
+| `whoami` | Show the identity presented to the deployed service (see [Remote mode](#remote-mode)) |
 | `tasks` | List tasks (see [Tasks](#tasks)) |
 | `task` | Manage a single task (see [Tasks](#tasks)) |
 | `projects` | List workflow projects (see [Projects](#projects)) |
@@ -61,6 +64,54 @@ server.
 ```bash
 witan serve --transport streamable-http --host 0.0.0.0 --port 8080
 ```
+
+## Remote mode
+
+By default every `witan` command runs **in-process** against the local graph
+(`WITAN_GRAPH_URI`). To instead run commands against a *deployed* witan service
+as your own Keycloak-authenticated user — inheriting the same per-user Cedar
+scoping and audit trail as the agent traffic — set `WITAN_REMOTE_URL` and log
+in. See [ADR-0005](adr/0005-secure-cli-path-into-deployed-witan.md).
+
+| Env var | Required | Description |
+|---|---|---|
+| `WITAN_REMOTE_URL` | yes (to enable) | The deployed MCP endpoint, e.g. `https://witan.example.org/mcp` |
+| `WITAN_OIDC_ISSUER` | yes | Keycloak realm issuer URL (where `witan login` discovers the device + token endpoints) |
+| `WITAN_OIDC_CLIENT_ID` | no (`witan-cli`) | Public OIDC client id with the device grant enabled |
+| `WITAN_OIDC_AUDIENCE` | no | Audience/resource to request, matching the deployment's expected `aud` claim |
+| `WITAN_TOKEN_CACHE` | no (`~/.config/witan/tokens.json`) | Override the token cache path |
+
+With those set, `_srv()` transparently dispatches every command over MCP —
+`witan tasks`, `witan memory search`, `witan project show`, etc. all work
+unchanged. Admin/migration commands (`witan apply-schema`, `witan migrate …`,
+`merge-store`) are **not** available remotely — they have no per-user identity
+and run in-cluster as `svc-witan-admin` (ADR-0005 path b).
+
+```bash
+export WITAN_REMOTE_URL=https://witan.example.org/mcp
+export WITAN_OIDC_ISSUER=https://sso.example.org/realms/ol-platform-engineering
+witan login          # opens a browser device-code flow, caches the token
+witan whoami         # shows user / sub / derived actor id / token expiry
+witan tasks --ready  # now runs against the deployment as you
+witan logout         # forget the cached token
+```
+
+### `login`
+
+Runs the OIDC device authorization grant (RFC 8628): prints a verification URL
+and user code, waits for browser approval, then caches the access/refresh
+tokens (mode `0600`). Refreshes happen automatically on later commands.
+
+### `whoami`
+
+Decodes the cached token and prints the endpoint, `preferred_username`,
+`email`, `sub`, the derived `act-<id>` the server will scope you to, and the
+token expiry. Refreshes the token first if it has expired.
+
+### `logout`
+
+Drops the cached token for the configured deployment only (tokens for other
+deployments in the same cache are untouched).
 
 ## `setup`
 
