@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.2.0] - 2026-07-16
+
+### Added
+
+- CLI scaffolding (`witan_core.cli`, the `cli` extra): `AgentName`/`AGENT_NAMES`
+  (the supported coding-agent constants), `make_app` (the `--version`-wired
+  cyclopts app factory), `resolve_author` (`--author` → `git config user.name` →
+  `$USER` → `"unknown"`), and `report_install` (the agent-config install-result
+  printer — styled with a rich `console`, plain `print` without one). Both
+  servers' `setup` commands now share these instead of carrying divergent copies.
+- `agent-config-kit` is now a dependency of the `cli` extra (supplies
+  `resolve_version` and the `InstallResult` type) — a valid leaf→leaf edge, since
+  both servers already depend on it.
+
 ## [0.1.0] - 2026-07-15
 
 Initial release of the shared `witan-core` package (import `witan_core`),

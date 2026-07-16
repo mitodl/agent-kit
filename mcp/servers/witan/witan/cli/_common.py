@@ -7,10 +7,9 @@ import inspect
 import re
 from typing import Literal
 
-import cyclopts
-from agent_config_kit.version import resolve_version
 from rich.console import Console
 from rich.table import Table
+from witan_core.cli import make_app
 
 from .. import repo as repo_module
 from .output import dump_structured, get_output_format
@@ -23,10 +22,10 @@ TaskPriority = Literal["p0", "p1", "p2", "p3"]
 TaskLinkKind = Literal["blocks", "parent", "discovered_from", "addresses"]
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
 
-app = cyclopts.App(
+app = make_app(
     name="witan",
-    help="witan — agent memory, planning, and collaboration graph.",
-    version=lambda: resolve_version("witan-council"),
+    help_text="witan — agent memory, planning, and collaboration graph.",
+    version_dist="witan-council",
 )
 console = Console()
 

@@ -9,6 +9,29 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agent-config-kit"
+version = "0.4.0"
+source = { editable = "../agent-config-kit" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=4,<5" },
+    { name = "pydantic", specifier = ">=2,<3" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
+]
+provides-extras = ["cli"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "cyclopts", specifier = ">=4,<5" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "rich", specifier = ">=13" },
+]
+
+[[package]]
 name = "aiofile"
 version = "3.11.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1519,11 +1542,12 @@ wheels = [
 
 [[package]]
 name = "witan-core"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
 cli = [
+    { name = "agent-config-kit" },
     { name = "cyclopts" },
     { name = "rich" },
 ]
@@ -1533,6 +1557,8 @@ mcp = [
 
 [package.dev-dependencies]
 test = [
+    { name = "agent-config-kit" },
+    { name = "cyclopts" },
     { name = "fastmcp" },
     { name = "pytest" },
     { name = "rich" },
@@ -1540,6 +1566,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agent-config-kit", marker = "extra == 'cli'", editable = "../agent-config-kit" },
     { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=4,<5" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.4.2,<4" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
@@ -1548,6 +1575,8 @@ provides-extras = ["cli", "mcp"]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "agent-config-kit", editable = "../agent-config-kit" },
+    { name = "cyclopts", specifier = ">=4,<5" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "pytest", specifier = ">=8" },
     { name = "rich", specifier = ">=13" },

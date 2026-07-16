@@ -1551,11 +1551,12 @@ wheels = [
 
 [[package]]
 name = "witan-core"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "../../../packages/witan-core" }
 
 [package.metadata]
 requires-dist = [
+    { name = "agent-config-kit", marker = "extra == 'cli'", editable = "../../../packages/agent-config-kit" },
     { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=4,<5" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.4.2,<4" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
@@ -1564,6 +1565,8 @@ provides-extras = ["cli", "mcp"]
 
 [package.metadata.requires-dev]
 test = [
+    { name = "agent-config-kit", editable = "../../../packages/agent-config-kit" },
+    { name = "cyclopts", specifier = ">=4,<5" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
     { name = "pytest", specifier = ">=8" },
     { name = "rich", specifier = ">=13" },

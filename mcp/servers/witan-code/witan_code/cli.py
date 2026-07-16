@@ -8,15 +8,21 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import cyclopts
-from agent_config_kit.version import resolve_version
+from witan_core.cli import (
+    AGENT_NAMES,
+    AgentName,
+    make_app,
+    report_install,
+    resolve_author,
+)
 
 from . import indexer
 from .output import OutputFormat, dump_structured, get_output_format, set_output_format
 
-app = cyclopts.App(
+app = make_app(
     name="witan-code",
-    help="witan-code — tree-sitter code graph + cross-repo bridge.",
-    version=lambda: resolve_version("witan-code"),
+    help_text="witan-code — tree-sitter code graph + cross-repo bridge.",
+    version_dist="witan-code",
 )
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]
@@ -498,24 +504,6 @@ def reindex_hook_cmd() -> None:
         pass
 
 
-_AGENT_NAMES = {
-    "claude": "Claude Code",
-    "pi": "Pi",
-    "copilot": "GitHub Copilot",
-    "opencode": "OpenCode",
-}
-AgentName = Literal["claude", "pi", "copilot", "opencode", "all"]
-
-
-def _report_setup(name: str, result, *, dry_run: bool) -> None:
-    print(f"\n{_AGENT_NAMES.get(name, name)}")
-    for path in result.planned:
-        tag = " (dry-run)" if dry_run else ""
-        print(f"  -> {path}{tag}")
-    for path, reason in result.skipped:
-        print(f"  skip {path} — {reason}")
-
-
 @app.command
 def setup(
     *,
@@ -540,9 +528,6 @@ def setup(
     author: Name written to graph nodes (default: git config user.name or $USER).
     dry_run: Print what would happen without writing anything.
     """
-    import os
-    import subprocess
-
     from agent_config_kit import (
         apply,
         apply_all,
@@ -556,16 +541,7 @@ def setup(
 
     pkg_dir = Path(__file__).parent
 
-    if author is None:
-        try:
-            author = subprocess.check_output(
-                ["git", "config", "user.name"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            author = ""
-        author = author or os.environ.get("USER", "unknown")
+    author = resolve_author(author)
 
     print("omnigraph binary")
     install_omnigraph(dry_run)
@@ -574,11 +550,11 @@ def setup(
 
     if agent == "all":
         for name, result in apply_all(bundle, dry_run=dry_run).items():
-            _report_setup(name, result, dry_run=dry_run)
+            report_install(name, result, dry_run=dry_run)
         for name in sorted(set(known_platforms()) - set(detect_installed_platforms())):
-            print(f"\n{_AGENT_NAMES.get(name, name)} — not detected, skipping")
+            print(f"\n{AGENT_NAMES.get(name, name)} — not detected, skipping")
     else:
-        _report_setup(agent, apply(agent, bundle, dry_run=dry_run), dry_run=dry_run)
+        report_install(agent, apply(agent, bundle, dry_run=dry_run), dry_run=dry_run)
 
     if dry_run:
         print("\n(dry-run — no files written)")

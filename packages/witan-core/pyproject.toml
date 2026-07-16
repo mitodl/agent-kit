@@ -1,6 +1,6 @@
 [project]
 name = "witan-core"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared core for the witan MCP servers (witan-council + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -15,8 +15,11 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# cli.py + the omnigraph installer's styled output.
-cli = ["cyclopts>=4,<5", "rich>=13"]
+# cli.py (make_app/report_install/resolve_author) + the omnigraph installer's
+# styled output. agent-config-kit supplies resolve_version (--version wiring)
+# and the InstallResult type report_install prints; it is a sibling leaf package
+# both servers already depend on, so this stays a valid leaf→leaf edge.
+cli = ["cyclopts>=4,<5", "rich>=13", "agent-config-kit>=0.4,<1"]
 # elicit.py (fastmcp.server.elicitation.AcceptedElicitation).
 mcp = ["fastmcp>=3.4.2,<4"]
 
@@ -33,7 +36,7 @@ build-backend = "hatchling.build"
 packages = ["witan_core"]
 
 [tool.bumpversion]
-current_version = "0.1.0"
+current_version = "0.2.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
@@ -44,8 +47,21 @@ replace = 'version = "{new_version}"'
 [dependency-groups]
 # rich: the omnigraph installer imports it lazily; the installer tests exercise
 # that path. fastmcp: witan_core.elicit imports it (the `mcp` extra); the elicit
-# tests need it. Both are test-only — the base package requires neither.
-test = ["pytest>=8", "rich>=13", "fastmcp>=3.4.2,<4"]
+# tests need it. cyclopts + agent-config-kit: the `cli` extra; the cli tests
+# exercise make_app/report_install. All test-only — the base package requires
+# none of them.
+test = [
+    "pytest>=8",
+    "rich>=13",
+    "fastmcp>=3.4.2,<4",
+    "cyclopts>=4,<5",
+    "agent-config-kit>=0.4,<1",
+]
+
+[tool.uv.sources]
+# Resolve the sibling shared package from the monorepo checkout for local dev
+# and CI; PyPI still serves it for external installs via the version range above.
+agent-config-kit = { path = "../agent-config-kit", editable = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
