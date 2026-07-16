@@ -35,9 +35,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-# Until a sibling package's local version bump has actually been published
-# to PyPI, consume it as an editable workspace path dependency so `uv sync`
-# / CI can resolve ahead of publish (same pattern as mcp/servers/witan).
+# Until a sibling package's local version bump has actually been published to
+# PyPI, resolve it from the in-repo uv workspace (`workspace = true`) so
+# `uv sync` / CI build against the bumped source ahead of publish. Published
+# wheels only see the PyPI-range dependency declared above (same pattern as
+# mcp/servers/witan).
 agent-config-kit = { workspace = true }
 witan-council = { workspace = true }
 witan-code = { workspace = true }

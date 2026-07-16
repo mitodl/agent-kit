@@ -76,8 +76,10 @@ The toolhive_witan Pulumi stack provisions the ECR repos (`witan-<env>`,
 `omnigraph-server-<env>`) and references `:latest`, following
 kubewatch_webhook_handler's "ECR repo in Pulumi, image built separately by
 Concourse" split. The Concourse image-build job that builds these two
-Dockerfiles and pushes to those repos still needs to be written in
+Dockerfiles and pushes to those repos — plus the Pulumi deploy pipelines for
+the two tiers, gated on the image builds — still needs to be written in
 ol-infrastructure (task
-`tk-build-publish-dockerfiles-for-witan-and-omnigrap`). Wire the git resource
-`paths:` filter to `docker/**`, `pyproject.toml`, `uv.lock`, `packages/**`, and
+`tk-concourse-image-build-pulumi-deploy-pipelines-fo-5bef89`). Because the
+build context is this repo, wire that job's `agent-kit` git resource `paths:`
+filter to `docker/**`, `pyproject.toml`, `uv.lock`, `packages/**`, and
 `mcp/servers/witan{,-code}/**` so a change to either image triggers a rebuild.

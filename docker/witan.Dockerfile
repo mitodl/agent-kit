@@ -18,6 +18,9 @@
 
 ARG PYTHON_VERSION=3.14
 ARG OMNIGRAPH_VERSION=0.8.1
+# Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
+# [project].version / [tool.bumpversion]); it labels the built image.
+ARG WITAN_VERSION=0.4.0
 
 # ── Fetch the pinned omnigraph CLI binary (checksum-verified) ─────────────────
 FROM debian:trixie-slim AS omnigraph-fetch
@@ -38,8 +41,11 @@ RUN set -eux; \
     curl -fsSL -o "${base}.tar.gz" "${url}/${base}.tar.gz"; \
     curl -fsSL -o "${base}.sha256" "${url}/${base}.sha256"; \
     sha256sum -c "${base}.sha256"; \
-    mkdir -p /out; \
-    tar -xzf "${base}.tar.gz" -C /out omnigraph; \
+    mkdir -p /out /stage; \
+    tar -xzf "${base}.tar.gz" -C /stage; \
+    found="$(find /stage -type f -name omnigraph | head -n1)"; \
+    [ -n "$found" ] || { echo "omnigraph binary not found in ${base}.tar.gz" >&2; exit 1; }; \
+    install -m 0755 "$found" /out/omnigraph; \
     /out/omnigraph --version
 
 # ── Build the relocatable venv from the uv workspace ──────────────────────────
@@ -72,9 +78,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim-trixie AS runtime
+ARG WITAN_VERSION
 LABEL org.opencontainers.image.title="witan" \
       org.opencontainers.image.description="witan MCP server — agent memory, task, and code graph" \
-      org.opencontainers.image.source="https://github.com/mitodl/agent-kit"
+      org.opencontainers.image.source="https://github.com/mitodl/agent-kit" \
+      org.opencontainers.image.version="${WITAN_VERSION}"
 
 RUN useradd --uid 1000 --user-group --create-home witan
 

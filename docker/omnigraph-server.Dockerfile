@@ -41,8 +41,13 @@ RUN set -eux; \
     curl -fsSL -o "${base}.tar.gz" "${url}/${base}.tar.gz"; \
     curl -fsSL -o "${base}.sha256" "${url}/${base}.sha256"; \
     sha256sum -c "${base}.sha256"; \
-    mkdir -p /out; \
-    tar -xzf "${base}.tar.gz" -C /out omnigraph omnigraph-server; \
+    mkdir -p /out /stage; \
+    tar -xzf "${base}.tar.gz" -C /stage; \
+    for b in omnigraph omnigraph-server; do \
+        found="$(find /stage -type f -name "$b" | head -n1)"; \
+        [ -n "$found" ] || { echo "binary $b not found in ${base}.tar.gz" >&2; exit 1; }; \
+        install -m 0755 "$found" "/out/$b"; \
+    done; \
     /out/omnigraph --version
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
