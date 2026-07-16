@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.3.0"
+version = "0.4.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -72,7 +72,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 [tool.bumpversion]
-current_version = "0.3.0"
+current_version = "0.4.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
