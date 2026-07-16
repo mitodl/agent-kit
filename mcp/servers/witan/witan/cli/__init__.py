@@ -22,6 +22,7 @@ from .output import OutputFormat, set_output_format
 from .run_helpers import _run_task_slug
 
 # Import submodules to trigger @app.command / @*_app.command registrations.
+from . import auth  # noqa: F401
 from . import graph  # noqa: F401
 from . import hooks  # noqa: F401
 from . import maintenance  # noqa: F401
@@ -160,4 +161,11 @@ def _launcher(
 
 
 def main() -> None:
-    app.meta()
+    from ..remote.oidc import RemoteAuthError
+    from ..remote.proxy import RemoteToolUnavailable
+
+    try:
+        app.meta()
+    except (RemoteAuthError, RemoteToolUnavailable) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
