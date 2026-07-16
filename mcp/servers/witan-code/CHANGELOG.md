@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [Unreleased]
+## [0.4.0] - 2026-07-16
 
 ### Added
 
@@ -14,6 +14,13 @@ a MINOR bump may include breaking changes).
   render their table data as `json`, `toml`, or `yaml` in addition to the
   default Rich table output. The same option is honored when mounted as
   `witan --output-format … code …`.
+
+### Changed
+
+- Adopted the shared `witan-core` package for the CLI scaffolding
+  (`make_app`/`report_install`/`resolve_author` + agent-name constants),
+  replacing the previously duplicated copies. No user-facing behavior change.
+  Now depends on `witan-core[cli]>=0.2,<1`.
 
 ## [0.3.0] - 2026-07-10
 

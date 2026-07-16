@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [Unreleased]
+## [0.4.0] - 2026-07-16
 
 ### Added
 
@@ -16,6 +16,15 @@ a MINOR bump may include breaking changes).
   `witan-code`'s `code repos`, `code symbols`, and `code stitch` when
   installed) as a machine-readable dump of the same rows instead of a rich
   table.
+
+### Changed
+
+- Adopted the shared `witan-core` package for the CLI scaffolding
+  (`make_app`/`report_install`/`resolve_author` + agent-name constants) and the
+  remote MCP-client stack (OIDC device-auth + `RemoteServerProxy`), replacing
+  the previously duplicated copies; witan-council now binds only its own policy
+  on top. No user-facing behavior change. Now depends on
+  `witan-core[cli,remote]>=0.2,<1`.
 
 ## [0.3.0] - 2026-07-10
 
