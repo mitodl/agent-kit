@@ -38,9 +38,9 @@ build-backend = "hatchling.build"
 # Until a sibling package's local version bump has actually been published
 # to PyPI, consume it as an editable workspace path dependency so `uv sync`
 # / CI can resolve ahead of publish (same pattern as mcp/servers/witan).
-agent-config-kit = { path = "../agent-config-kit", editable = true }
-witan-council = { path = "../../mcp/servers/witan", editable = true }
-witan-code = { path = "../../mcp/servers/witan-code", editable = true }
+agent-config-kit = { workspace = true }
+witan-council = { workspace = true }
+witan-code = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["agent_kit"]
