@@ -16,6 +16,84 @@ from witan_core import omnigraph as og
 from witan_core.omnigraph import OmnigraphClient, OmnigraphConflict
 
 
+# ── store addressing: local --store vs remote --server/--graph ─────
+
+
+def _built_client(monkeypatch, uri, **kwargs):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    return OmnigraphClient(uri, Path("/queries"), **kwargs)
+
+
+def test_local_store_addressed_with_store_flag(monkeypatch):
+    client = _built_client(monkeypatch, "/var/lib/witan/graph.omni", graph_id="council")
+    assert client.is_remote is False
+    # graph_id is carried but ignored for local addressing
+    assert client._store_args() == ["--store", "/var/lib/witan/graph.omni"]
+
+
+def test_s3_store_still_uses_store_flag(monkeypatch):
+    client = _built_client(monkeypatch, "s3://bucket/graph", graph_id="council")
+    assert client.is_remote is False
+    assert client._store_args() == ["--store", "s3://bucket/graph"]
+
+
+def test_remote_uses_server_and_graph_from_explicit_id(monkeypatch):
+    client = _built_client(
+        monkeypatch, "http://omnigraph-server:8080", graph_id="council"
+    )
+    assert client.is_remote is True
+    assert client.server_url == "http://omnigraph-server:8080"
+    assert client.graph_id == "council"
+    assert client._store_args() == [
+        "--server",
+        "http://omnigraph-server:8080",
+        "--graph",
+        "council",
+    ]
+
+
+def test_remote_graph_id_parsed_from_uri_path(monkeypatch):
+    client = _built_client(monkeypatch, "http://host:8080/graphs/code")
+    assert client.server_url == "http://host:8080"
+    assert client.graph_id == "code"
+
+
+def test_explicit_graph_id_overrides_uri_path(monkeypatch):
+    client = _built_client(
+        monkeypatch, "http://host:8080/graphs/ignored", graph_id="council"
+    )
+    assert client.graph_id == "council"
+
+
+def test_remote_without_graph_id_raises(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    with pytest.raises(ValueError, match="no graph id"):
+        OmnigraphClient("http://host:8080", Path("/queries"))
+
+
+def test_remote_rejects_underscore_graph_id(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    with pytest.raises(ValueError, match="invalid omnigraph graph id"):
+        OmnigraphClient("http://host:8080", Path("/queries"), graph_id="code_repo")
+
+
+def test_remote_run_builds_server_graph_command(monkeypatch):
+    client = _built_client(monkeypatch, "http://host:8080", graph_id="council")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    client.read("read.gq", "some_query", {})
+
+    cmd = captured["cmd"]
+    assert "--store" not in cmd
+    assert cmd[cmd.index("--server") + 1] == "http://host:8080"
+    assert cmd[cmd.index("--graph") + 1] == "council"
+
+
 def test_find_binary_prefers_path(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
     assert OmnigraphClient._find_binary() == "/usr/bin/omnigraph"
@@ -49,10 +127,10 @@ def test_is_storage_version_mismatch_detects_marker_pair():
 
 
 def _client(monkeypatch):
-    """A base client over a remote URI (skips the local write lock), with the
+    """A base client over a remote server (skips the local write lock), with the
     binary lookup stubbed so no real omnigraph is needed."""
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
-    return OmnigraphClient("https://graph.example/g", Path("/queries"))
+    return OmnigraphClient("https://graph.example", Path("/queries"), graph_id="g")
 
 
 def _stub_run(monkeypatch, *, returncode, stderr):

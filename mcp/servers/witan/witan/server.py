@@ -76,6 +76,7 @@ _default_client = OmnigraphClient(
     cfg.queries_dir,
     cfg.graph_token,
     guard=_write_guard,
+    graph_id=cfg.graph_name,
 )
 
 # Per-user actor/token mapping for the deployed streamable-http service (ADR
@@ -137,6 +138,7 @@ def _resolve_client() -> OmnigraphClient:
                 cfg.queries_dir,
                 bearer,
                 guard=_write_guard,
+                graph_id=cfg.graph_name,
             )
     return _actor_clients[actor_id]
 

@@ -1,10 +1,12 @@
 """Shared base for the omnigraph CLI subprocess wrapper.
 
-Both servers drive the ``omnigraph`` binary the same way: a per-store advisory
-write lock for local stores, a retry/repair loop for optimistic-concurrency
-drift, a self-backoff for the deployed omnigraph-server's per-actor admission
-cap, and named read/mutate queries. That LOCAL-vs-REMOTE-generic surface lives
-here; each server subclasses to add its own tail:
+Both servers drive the ``omnigraph`` binary the same way: store addressing that
+picks ``--store <uri>`` for local/s3 stores and ``--server <url> --graph <id>``
+for a deployed omnigraph-server (omnigraph 0.8.1 rejects an http(s) ``--store``),
+a per-store advisory write lock for local stores, a retry/repair loop for
+optimistic-concurrency drift, a self-backoff for the deployed omnigraph-server's
+per-actor admission cap, and named read/mutate queries. That LOCAL-vs-REMOTE-
+generic surface lives here; each server subclasses to add its own tail:
 
 - ``witan`` adds a write ``guard`` + ``surface_conflict`` (CAS task claims),
   ``apply_schema``, and the storage-version friendly-error hint.
@@ -33,6 +35,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
 
@@ -65,6 +68,45 @@ _ADMISSION_CAP_MARKERS = ("in-flight count cap", "byte budget exceeded")
 _ADMISSION_CAP_MAX_ATTEMPTS = 6
 _ADMISSION_CAP_BASE_DELAY = 0.25
 _ADMISSION_CAP_MAX_DELAY = 4.0
+
+# A deployed omnigraph-server is reached over http(s); local files and s3://
+# roots are opened directly. Only http(s) needs the `--server`/`--graph`
+# addressing split — s3:// keeps `--store` (omnigraph opens it directly).
+_SERVER_SCHEMES = ("http://", "https://")
+# omnigraph graph ids: letters, digits, hyphens; 1-64 chars. NO underscores
+# (the engine reserves them) and no path separators — see the naming decision
+# in memory pf-decision-cluster-graph-names-track-package.
+_GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
+
+
+def _split_server_uri(graph_uri: str, graph_id: str | None) -> tuple[str, str]:
+    """Split an http(s) graph URI into ``(server_url, graph_id)`` for omnigraph
+    0.8.1 remote addressing (``--server <url> --graph <id>``).
+
+    omnigraph 0.8.1 rejects an http(s) ``--store``: a deployed omnigraph-server
+    is reachable *only* as ``--server <scheme://host[:port]> --graph <id>`` (see
+    memory pf-omnigraph-0-8-1-one-server-serves-n-graphs-remot). The server URL
+    is the scheme/host/port prefix; the graph id comes from the explicit
+    ``graph_id`` (preferred — the deployment sets WITAN_MEMORY_URI to a bare
+    server URL) or, failing that, a ``.../graphs/<id>`` path baked into the URI.
+    """
+    parts = urllib.parse.urlsplit(graph_uri)
+    server_url = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "", "", ""))
+    segments = [s for s in parts.path.split("/") if s]
+    from_path = segments[1] if len(segments) == 2 and segments[0] == "graphs" else None
+    resolved = graph_id or from_path
+    if not resolved:
+        raise ValueError(
+            f"remote graph URI {graph_uri!r} has no graph id — pass a graph id "
+            "(e.g. WITAN_MEMORY_GRAPH / WITAN_CODE_GRAPH) or encode it in the URI "
+            "as .../graphs/<id>"
+        )
+    if not _GRAPH_ID_RE.match(resolved):
+        raise ValueError(
+            f"invalid omnigraph graph id {resolved!r}: must match "
+            f"{_GRAPH_ID_RE.pattern} (letters, digits, hyphens; no underscores)"
+        )
+    return server_url, resolved
 
 
 def _admission_cap_backoff(attempt: int) -> float:
@@ -118,11 +160,21 @@ class OmnigraphClient:
         queries_dir: Path,
         token: str | None = None,
         guard: Callable[[str, dict], dict] | None = None,
+        graph_id: str | None = None,
     ) -> None:
         self.graph_uri = graph_uri
         self.queries_dir = queries_dir
         self.token = token
         self.guard = guard
+        # http(s) stores are a remote omnigraph-server, addressed with
+        # `--server <url> --graph <id>`; local paths and s3:// roots keep
+        # `--store <uri>`. Resolve the split once at construction so a bad
+        # graph id fails fast rather than on the first subprocess.
+        self.is_remote = graph_uri.startswith(_SERVER_SCHEMES)
+        if self.is_remote:
+            self.server_url, self.graph_id = _split_server_uri(graph_uri, graph_id)
+        else:
+            self.server_url, self.graph_id = None, graph_id
         self._binary = self._find_binary()
 
     # ── Public API ────────────────────────────────────────────────
@@ -223,13 +275,21 @@ class OmnigraphClient:
         (e.g. witan-code injects ``--branch``)."""
         return []
 
+    def _store_args(self) -> list[str]:
+        """The CLI flags that address this store. A remote omnigraph-server
+        (http(s)) is ``--server <url> --graph <id>`` (omnigraph 0.8.1 rejects an
+        http(s) ``--store``); local paths and s3:// roots are ``--store <uri>``.
+        """
+        if self.is_remote:
+            return ["--server", self.server_url, "--graph", self.graph_id]
+        return ["--store", self.graph_uri]
+
     def _run(self, subcommand: str, *args: str, surface_conflict: bool = False) -> str:
         quiet = ["--quiet"] if subcommand in _WRITE_SUBCOMMANDS else []
         cmd = [
             self._binary,
             subcommand,
-            "--store",
-            self.graph_uri,
+            *self._store_args(),
             *quiet,
             *self._extra_args(subcommand),
             *args,
@@ -325,8 +385,7 @@ class OmnigraphClient:
             [
                 self._binary,
                 "repair",
-                "--store",
-                self.graph_uri,
+                *self._store_args(),
                 "--confirm",
                 "--force",
                 "--quiet",
