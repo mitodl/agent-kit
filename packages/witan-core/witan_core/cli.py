@@ -1,8 +1,12 @@
 """Shared CLI scaffolding for the witan servers' ``setup`` commands.
 
-Needs the ``cli`` extra (cyclopts + rich + agent-config-kit). Following the
-package convention (see ``__init__``), nothing here is re-exported from the root
-package — import from ``witan_core.cli`` directly.
+Uses the ``cli`` extra: ``make_app`` needs cyclopts, and ``report_install``
+uses agent-config-kit's ``InstallResult`` type. This module never imports rich
+itself — the extra bundles it only for ``report_install``'s styled branch,
+which runs on a rich ``Console`` the *caller* passes in (without one it plain
+``print``s), so importing/using ``witan_core.cli`` never requires rich.
+Following the package convention (see ``__init__``), nothing here is re-exported
+from the root package — import from ``witan_core.cli`` directly.
 
 The pieces both ``witan`` (witan-council) and ``witan_code`` carried as
 copy-paste duplicates: the supported-agent constants, the ``--version`` app
@@ -70,7 +74,10 @@ def resolve_author(author: str | None) -> str:
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, OSError):
+        # OSError covers a missing git binary (FileNotFoundError) plus any other
+        # OS-level failure to spawn it (e.g. PermissionError); degrade to the
+        # $USER/"unknown" fallback rather than letting `setup` crash.
         resolved = ""
     return resolved or os.environ.get("USER", "unknown")
 

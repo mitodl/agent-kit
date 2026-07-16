@@ -73,6 +73,14 @@ def test_unknown_tool_raises_with_hook_message():
         p._map_args("nope", (), {})
 
 
+def test_too_many_positionals_raises_not_indexerror():
+    # task_get has one param; two positionals is a client/server signature
+    # mismatch that must surface as RemoteToolUnavailable, not IndexError.
+    p = _Proxy()
+    with pytest.raises(RemoteToolUnavailable, match="positional"):
+        p._map_args("task_get", ("a", "b"), {})
+
+
 def test_admin_tool_is_refused_by_getattr():
     p = _Proxy(admin=frozenset({"merge_store"}))
     with pytest.raises(RemoteToolUnavailable, match="admin-only"):

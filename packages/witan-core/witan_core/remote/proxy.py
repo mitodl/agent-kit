@@ -110,6 +110,13 @@ class RemoteMCPProxy:
         names = self._param_names.get(name)
         if names is None:
             raise RemoteToolUnavailable(self._unknown_tool_error(name))
+        if len(args) > len(names):
+            # More positionals than the deployed tool accepts — a client/server
+            # signature mismatch. Surface it clearly instead of an IndexError.
+            raise RemoteToolUnavailable(
+                f"`{name}` was called with {len(args)} positional argument(s) but "
+                f"the deployed tool accepts {len(names)} ({', '.join(names)})."
+            )
         arguments = dict(kwargs)
         for i, val in enumerate(args):
             arguments[names[i]] = val
