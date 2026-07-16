@@ -1,24 +1,13 @@
-"""Witan-code's registration bundle, plus the omnigraph binary installer.
+"""Witan-code's registration bundle.
 
 Per-agent MCP/skill/hook installation itself lives in ``agent_config_kit``
 (``apply``/``apply_all``) — this module only builds witan-code's own
-``RegistrationBundle`` and keeps the omnigraph binary distribution logic.
-
-The bundle-building shape is copied from witan/witan/setup.py so the two
-Layer packages stay independent — no cross-package imports, matching
-OmnigraphClient's own docstring in graph.py. ``_OMNIGRAPH_VERSION`` here is
-kept in lockstep with witan's copy by the omnigraph-version customManager in
-renovate.json — a single Renovate PR bumps both.
+``RegistrationBundle``. The omnigraph binary installer is shared with witan and
+lives in ``witan_core.omnigraph_install``.
 """
 
 from __future__ import annotations
 
-import platform
-import re
-import subprocess
-import tarfile
-import tempfile
-import urllib.request
 from pathlib import Path
 
 from agent_config_kit import (
@@ -37,36 +26,6 @@ _WITAN_CODE_ARGS = [
     "witan-code",
     "serve",
 ]
-
-_OMNIGRAPH_VERSION = "0.8.1"
-_OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
-    ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
-    ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
-}
-_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
-
-
-def _installed_version(dest: Path) -> str | None:
-    """Return ``dest``'s reported version, or ``None`` if absent/unreadable.
-
-    A hung, corrupted, or non-executable binary must degrade to "unknown
-    version" (triggering a re-download) rather than crash `setup` —
-    ``subprocess.TimeoutExpired`` is a ``SubprocessError``, not an
-    ``OSError``, so both need catching, and a non-zero exit means the
-    output isn't trustworthy version text even if something printed.
-    """
-    if not dest.exists():
-        return None
-    try:
-        result = subprocess.run(
-            [str(dest), "--version"], capture_output=True, text=True, timeout=10
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-    match = _VERSION_RE.search(result.stdout + result.stderr)
-    return match.group(0) if match else None
 
 
 def witan_code_bundle(
@@ -145,86 +104,3 @@ def witan_code_bundle(
         skills=skills,
         hooks=hooks,
     )
-
-
-def install_omnigraph(dry_run: bool = False) -> None:
-    """Fetch the pinned omnigraph release into ``~/.local/bin/``.
-
-    Skips the download when a binary is already present and reports the
-    pinned version via ``--version``, so re-running always converges on the
-    current pin without refetching an already-correct binary.
-    """
-    local_bin = Path.home() / ".local" / "bin"
-    dest = local_bin / "omnigraph"
-    _download_omnigraph(dest, dry_run)
-
-
-def _download_omnigraph(dest: Path, dry_run: bool) -> None:
-    from rich.console import Console
-
-    console = Console()
-
-    if _installed_version(dest) == _OMNIGRAPH_VERSION:
-        console.print(
-            f"  [dim]omnigraph[/dim] — {dest} already at v{_OMNIGRAPH_VERSION}, skipping"
-        )
-        return
-
-    key = (platform.system().lower(), platform.machine().lower())
-    asset = _OMNIGRAPH_ASSETS.get(key)
-    if asset is None:
-        console.print(
-            f"  [yellow]omnigraph[/yellow] — no pre-built binary for"
-            f" {key[0]}/{key[1]}; install manually"
-        )
-        return
-
-    url = (
-        f"https://github.com/ModernRelay/omnigraph/releases/download"
-        f"/v{_OMNIGRAPH_VERSION}/{asset}"
-    )
-    console.print(f"  downloading omnigraph v{_OMNIGRAPH_VERSION} …")
-
-    if dry_run:
-        console.print(f"  [green]omnigraph[/green] → {dest} [dim](dry-run)[/dim]")
-        return
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp_dest = dest.with_name(dest.name + ".tmp")
-    try:
-        extracted = False
-        with tempfile.TemporaryDirectory() as tmp:
-            archive = Path(tmp) / asset
-            try:
-                with (
-                    urllib.request.urlopen(url, timeout=60) as resp,
-                    open(archive, "wb") as fh,
-                ):
-                    fh.write(resp.read())
-            except Exception as exc:  # noqa: BLE001
-                console.print(
-                    f"  [red]omnigraph download failed[/red] ({exc}); install manually"
-                )
-                return
-            with tarfile.open(archive) as tf:
-                for member in tf.getmembers():
-                    if member.name.split("/")[-1] == "omnigraph" and not member.isdir():
-                        f = tf.extractfile(member)
-                        if f:
-                            tmp_dest.write_bytes(f.read())
-                            extracted = True
-                        break
-        if extracted:
-            tmp_dest.chmod(0o755)
-            tmp_dest.replace(dest)
-            console.print(f"  [green]omnigraph[/green] → {dest}")
-        else:
-            console.print(
-                "  [red]omnigraph[/red] — binary not found in archive; install manually"
-            )
-    except Exception as exc:  # noqa: BLE001
-        console.print(
-            f"  [red]omnigraph download failed[/red] ({exc}); install manually"
-        )
-    finally:
-        tmp_dest.unlink(missing_ok=True)

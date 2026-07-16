@@ -245,7 +245,7 @@ def test_claim_conflict_reports_lost_race_without_clobber(server, monkeypatch):
                 {
                     "status": "in_progress",
                     "assignee": "agentB",
-                    "claimed_at": srv._now_iso(),
+                    "claimed_at": srv.now_iso(),
                 },
             )
             raise graph_mod.OmnigraphConflict("stale view")
@@ -282,7 +282,7 @@ def test_claim_post_write_verification_catches_last_writer(server, monkeypatch):
                 {
                     "status": "in_progress",
                     "assignee": "agentB",
-                    "claimed_at": srv._now_iso(),
+                    "claimed_at": srv.now_iso(),
                 },
             )
         return result
@@ -318,7 +318,7 @@ def test_claim_consecutive_conflicts_stay_surfaced_no_clobber(server, monkeypatc
                     {
                         "status": "in_progress",
                         "assignee": "agentB",
-                        "claimed_at": srv._now_iso(),
+                        "claimed_at": srv.now_iso(),
                     },
                 )
             raise graph_mod.OmnigraphConflict("stale view")

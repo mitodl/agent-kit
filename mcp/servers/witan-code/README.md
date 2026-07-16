@@ -272,11 +272,12 @@ witan's). Run `witan-code setup` on its own for a witan-code-only install, or
 when witan-code isn't importable from witan's environment. See
 [Hooks](#hooks) and [Skill](#skill).
 
-This downloads the omnigraph release pinned by `_OMNIGRAPH_VERSION` in
-[`witan_code/setup.py`](./witan_code/setup.py) — the same pin `witan`'s own
-`setup.py` uses, kept in lockstep by Renovate (see the repo-root
-`renovate.json`'s `omnigraph-version` customManager, which bumps both files
-in one PR). There is no build-time bundling of the binary into the wheel —
+This downloads the omnigraph release pinned by `_OMNIGRAPH_VERSION` in the
+shared installer
+[`witan_core.omnigraph_install`](../../../packages/witan-core/witan_core/omnigraph_install.py)
+— the same pin `witan` uses (both import it from `witan-core`), bumped by
+Renovate (see the repo-root `renovate.json`'s `omnigraph-version`
+customManager). There is no build-time bundling of the binary into the wheel —
 `witan-code setup` (or `witan setup`) is the only source of the binary, and
 re-running it is how you pick up a version bump.
 

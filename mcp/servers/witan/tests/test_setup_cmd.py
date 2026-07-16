@@ -19,7 +19,7 @@ from witan.cli import setup_cmd
 @pytest.fixture
 def _no_network(monkeypatch):
     """Every setup() call fetches the omnigraph binary; keep it a no-op."""
-    monkeypatch.setattr("witan.setup.install_omnigraph", lambda dry_run: None)
+    monkeypatch.setattr("witan.cli.setup_cmd.install_omnigraph", lambda dry_run: None)
     monkeypatch.setattr("witan.setup.install_default_config", lambda dry_run: None)
     monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/usr/bin/{name}")
 
@@ -155,7 +155,7 @@ def test_no_subcommand_warning_when_witan_itself_is_missing(
     ("witan")` guard this fired both warnings side by side, each recommending
     a different (redundant) `uv tool install` command."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setattr("witan.setup.install_omnigraph", lambda dry_run: None)
+    monkeypatch.setattr("witan.cli.setup_cmd.install_omnigraph", lambda dry_run: None)
     monkeypatch.setattr("witan.setup.install_default_config", lambda dry_run: None)
     monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: None)
     _install_fake_witan_code(monkeypatch, tmp_path)

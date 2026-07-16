@@ -11,6 +11,7 @@ classifiers = [
 ]
 dependencies = [
     "agent-config-kit>=0.4,<1",
+    "witan-core>=0.1,<1",
     "fastmcp>=3.4.2,<4",
     "cyclopts>=4,<5",
     # Pinned to 0.25.x: tree-sitter 0.26.0 has a use-after-free in its pyo3 Node
@@ -58,6 +59,7 @@ build-backend = "hatchling.build"
 # has actually landed on PyPI. Published wheels only see the PyPI-range
 # dependency declared above.
 agent-config-kit = { path = "../../../packages/agent-config-kit", editable = true }
+witan-core = { path = "../../../packages/witan-core", editable = true }
 
 [dependency-groups]
 test = ["pytest>=8"]

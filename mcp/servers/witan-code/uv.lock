@@ -1714,6 +1714,7 @@ dependencies = [
     { name = "tree-sitter-sql" },
     { name = "tree-sitter-typescript" },
     { name = "tree-sitter-yaml" },
+    { name = "witan-core" },
 ]
 
 [package.dev-dependencies]
@@ -1737,10 +1738,31 @@ requires-dist = [
     { name = "tree-sitter-sql", specifier = ">=0.3,<0.4" },
     { name = "tree-sitter-typescript", specifier = ">=0.23,<0.24" },
     { name = "tree-sitter-yaml", specifier = ">=0.7,<0.8" },
+    { name = "witan-core", editable = "../../../packages/witan-core" },
 ]
 
 [package.metadata.requires-dev]
 test = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
+name = "witan-core"
+version = "0.1.0"
+source = { editable = "../../../packages/witan-core" }
+
+[package.metadata]
+requires-dist = [
+    { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=4,<5" },
+    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.4.2,<4" },
+    { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
+]
+provides-extras = ["cli", "mcp"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "fastmcp", specifier = ">=3.4.2,<4" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "rich", specifier = ">=13" },
+]
 
 [[package]]
 name = "zipp"

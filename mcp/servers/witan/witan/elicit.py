@@ -1,11 +1,9 @@
-"""Additive MCP elicitation helpers.
+"""witan's repo-elicitation helper, on top of witan_core's shared primitives.
 
-FastMCP 3.4.3 supports ``ctx.elicit``, but the connected client may not, and
-several witan tools also run under headless automation (the context/checkpoint
-hooks, background indexers). These helpers keep elicitation strictly *additive*:
-when the client can't elicit — or ``ctx`` is absent — they return the caller's
-``default`` so behavior is exactly what it was before elicitation existed. Only
-an *explicit* user decline changes the outcome.
+The ``confirm``/``text`` primitives live in ``witan_core.elicit`` (re-exported
+below so existing ``elicit.confirm``/``elicit.text`` call sites keep working).
+``repo_or_detect`` is witan-specific — it offers to elicit a *repo* for a write
+when detection finds none.
 
 Never call these from a tool that must stay non-interactive under automation
 (``workflow_session_start``/``_end``, ``workflow_project_list``, ``code_reindex``,
@@ -22,31 +20,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastmcp.server.elicitation import AcceptedElicitation
+from witan_core.elicit import confirm, text
 
 if TYPE_CHECKING:
     from fastmcp import Context
 
-
-async def confirm(
-    ctx: Context | None, message: str, *, default_when_unsupported: bool
-) -> bool:
-    """Ask a yes/no question.
-
-    ``accept`` → the chosen bool; ``decline``/``cancel`` → ``False``; and when
-    elicitation is unsupported or errors (headless client, no ``ctx``) →
-    ``default_when_unsupported`` — pick that so the non-interactive path keeps
-    today's behavior (e.g. ``False`` for "don't steal", ``True`` for "proceed").
-    """
-    if ctx is None:
-        return default_when_unsupported
-    try:
-        result = await ctx.elicit(message, response_type=bool)
-    except Exception:  # noqa: BLE001 — any elicit failure means "can't ask"
-        return default_when_unsupported
-    if isinstance(result, AcceptedElicitation):
-        return bool(result.data)
-    return False
+__all__ = ["confirm", "repo_or_detect", "text"]
 
 
 async def repo_or_detect(ctx: Context | None, repo: str | None) -> str | None:
@@ -82,18 +61,3 @@ async def repo_or_detect(ctx: Context | None, repo: str | None) -> str | None:
         default="",
     )
     return chosen or None
-
-
-async def text(ctx: Context | None, message: str, *, default: str) -> str:
-    """Ask for a line of text. A non-empty accepted value is returned; a
-    decline/cancel, an empty value, an unsupported client, or no ``ctx`` all
-    fall back to ``default``."""
-    if ctx is None:
-        return default
-    try:
-        result = await ctx.elicit(message, response_type=str)
-    except Exception:  # noqa: BLE001
-        return default
-    if isinstance(result, AcceptedElicitation) and (result.data or "").strip():
-        return result.data.strip()
-    return default

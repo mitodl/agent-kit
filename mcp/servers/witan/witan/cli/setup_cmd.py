@@ -18,6 +18,7 @@ from agent_config_kit import (
     write_json,
 )
 from agent_config_kit.installers import install_files
+from witan_core import install_omnigraph
 
 from ._common import app, console
 
@@ -120,7 +121,7 @@ def setup(
         )
 
     console.print("[bold]omnigraph binary[/bold]")
-    su.install_omnigraph(dry_run)
+    install_omnigraph(dry_run)
 
     console.print("\n[bold]config.toml[/bold]")
     su.install_default_config(dry_run)

@@ -8,25 +8,8 @@ import pytest
 from witan import repo
 
 
-@pytest.mark.parametrize(
-    ("url", "expected"),
-    [
-        ("git@github.com:mitodl/ol-django.git", "https://github.com/mitodl/ol-django"),
-        ("https://github.com/mitodl/ol-django", "https://github.com/mitodl/ol-django"),
-        (
-            "https://github.com/mitodl/ol-django.git",
-            "https://github.com/mitodl/ol-django",
-        ),
-        ("git@gitlab.com:grp/sub/repo.git", "https://gitlab.com/grp/sub/repo"),
-        (
-            "https://x-token@github.com/mitodl/repo.git",
-            "https://github.com/mitodl/repo",
-        ),
-        ("ssh://git@github.com/mitodl/repo.git", "https://github.com/mitodl/repo"),
-    ],
-)
-def test_normalise_to_https_uri(url, expected):
-    assert repo._normalise(url) == expected
+# The repo-key canonicalizer (normalise) lives in witan_core.repo_key; its
+# golden contract table is packages/witan-core/tests/test_repo_key.py.
 
 
 def test_detect_override_wins(monkeypatch):

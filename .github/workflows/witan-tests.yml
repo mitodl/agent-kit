@@ -40,17 +40,17 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.local/bin/omnigraph
-          key: omnigraph-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mcp/servers/witan/witan/setup.py') }}
+          key: omnigraph-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/witan-core/witan_core/omnigraph_install.py') }}
 
       - name: Install omnigraph binary
         # witan/server.py bootstraps a local graph at import time, so the
         # binary must exist before pytest even collects tests — no more
-        # build-time bundling (see witan/setup.py), so fetch it explicitly.
-        # Skipped on a cache hit: the cache key is tied to setup.py's
-        # content, so a version bump (_OMNIGRAPH_VERSION) invalidates it
-        # automatically instead of pinning CI to a stale binary.
+        # build-time bundling (see witan_core.omnigraph_install), so fetch it
+        # explicitly. Skipped on a cache hit: the cache key is tied to the
+        # installer module's content, so a version bump (_OMNIGRAPH_VERSION)
+        # invalidates it automatically instead of pinning CI to a stale binary.
         if: steps.cache-omnigraph.outputs.cache-hit != 'true'
-        run: uv run python -c "from witan.setup import install_omnigraph; install_omnigraph(dry_run=False)"
+        run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 
       - name: Run tests
         run: uv run pytest -v
@@ -78,14 +78,14 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.local/bin/omnigraph
-          key: omnigraph-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mcp/servers/witan/witan/setup.py') }}
+          key: omnigraph-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/witan-core/witan_core/omnigraph_install.py') }}
 
       - name: Install omnigraph binary
         # policy check.sh shells out to the pinned omnigraph binary for
         # `cluster apply` / `policy validate` / `policy test`. Skipped on a
         # cache hit — see the cache-omnigraph step above.
         if: steps.cache-omnigraph.outputs.cache-hit != 'true'
-        run: uv run python -c "from witan.setup import install_omnigraph; install_omnigraph(dry_run=False)"
+        run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 
       - name: Validate + test Cedar policy bundle
         run: |
@@ -113,7 +113,7 @@ jobs:
       - name: Install omnigraph binary
         # requires_stack-marked indexer tests (test_indexer.py, test_languages.py,
         # …) are silently skipped without it — see tests/conftest.py.
-        run: uv run python -c "from witan_code.setup import install_omnigraph; install_omnigraph(dry_run=False)"
+        run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 
       - name: Run tests
         run: uv run pytest -v

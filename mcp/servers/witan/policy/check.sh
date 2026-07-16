@@ -4,7 +4,7 @@
 # runnable locally: `mcp/servers/witan/policy/check.sh`.
 #
 # Requires `omnigraph` on PATH. Install it the same way CI does:
-#   uv run python -c "from witan.setup import install_omnigraph; install_omnigraph(dry_run=False)"
+#   uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 #   export PATH="$HOME/.local/bin:$PATH"
 #
 # Covers the three per-graph bundles (memory / code-graph / bridge). The

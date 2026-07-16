@@ -8,18 +8,9 @@ import pytest
 from witan_code import repo
 
 
-@pytest.mark.parametrize(
-    ("url", "expected"),
-    [
-        ("git@github.com:mitodl/ol-django.git", "https://github.com/mitodl/ol-django"),
-        ("https://github.com/mitodl/ol-django", "https://github.com/mitodl/ol-django"),
-        ("ssh://git@github.com/mitodl/repo.git", "https://github.com/mitodl/repo"),
-    ],
-)
-def test_normalise_matches_memory_layer(url, expected):
-    # Must stay identical to witan.repo._normalise so symbol ids and
-    # the Layer-1 symbol_refs that point at them share one repo key.
-    assert repo._normalise(url) == expected
+# The repo-key canonicalizer (normalise) lives in witan_core.repo_key — a single
+# source of truth shared with the memory layer (no more "must stay identical"
+# copy). Its golden contract table is packages/witan-core/tests/test_repo_key.py.
 
 
 def test_detect_env_override(monkeypatch):

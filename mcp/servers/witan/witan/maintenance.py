@@ -13,69 +13,47 @@ the agent: the ``Stop`` hook calls :func:`spawn_background_optimize`, which — 
 most once per interval — detaches a ``witan optimize`` process and returns
 immediately. There is also a ``witan optimize`` / ``witan cleanup`` CLI for
 cron / systemd-timer driven maintenance.
+
+The throttle window, atomic last-run stamp, and due-check live in
+``witan_core.maintenance``; this module supplies witan's own env var, stamp-file
+location (keyed off ``session_state``), and detached command.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+from witan_core import maintenance as _throttle
+from witan_core import popen_detached
 
 from . import session_state
-from ._detach import popen_detached
 
-# Opportunistic optimize runs at most once per this window. Optimize takes the
-# store's write lock and is ~tens of seconds on a bloated store, so daily is a
-# safe default; override with WITAN_OPTIMIZE_INTERVAL (seconds; 0 disables).
-_OPTIMIZE_INTERVAL = 24 * 3600.0
-
-_REMOTE_PREFIXES = ("http://", "https://", "s3://")
+# Opportunistic optimize runs at most once per this window. Override with
+# WITAN_OPTIMIZE_INTERVAL (seconds; 0 disables).
+_OPTIMIZE_INTERVAL = _throttle.DEFAULT_OPTIMIZE_INTERVAL
 
 
 def optimize_interval() -> float:
     """Throttle window in seconds; ``0`` (or negative) disables auto-optimize."""
-    raw = os.environ.get("WITAN_OPTIMIZE_INTERVAL")
-    if raw is None:
-        return _OPTIMIZE_INTERVAL
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        return _OPTIMIZE_INTERVAL
+    return _throttle.resolve_interval("WITAN_OPTIMIZE_INTERVAL", _OPTIMIZE_INTERVAL)
 
 
-def _stamp_file(graph_uri: str):
+def _stamp_file(graph_uri: str) -> Path:
     digest = hashlib.sha1(graph_uri.encode()).hexdigest()[:16]
     return session_state.session_state_dir() / f"witan-optimize-{digest}.json"
 
 
 def _last_run(graph_uri: str) -> float:
-    try:
-        return float(json.loads(_stamp_file(graph_uri).read_text()).get("stamp", 0.0))
-    except Exception:  # noqa: BLE001 — missing/corrupt stamp → treat as never run
-        return 0.0
+    return _throttle.last_run(_stamp_file(graph_uri))
 
 
 def _mark_run(graph_uri: str, when: float) -> None:
-    """Record the last-optimize time atomically.
-
-    Concurrent Stop hooks (or an interrupted write) could otherwise leave a
-    half-written stamp that ``_last_run`` reads as "never run", defeating the
-    throttle and letting optimize spawn repeatedly. Write a process-unique temp
-    file and ``os.replace`` it in, so a reader always sees a complete file.
-    """
-    path = _stamp_file(graph_uri)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    try:
-        tmp.write_text(json.dumps({"stamp": when}))
-        os.replace(tmp, path)
-    except OSError:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+    _throttle.mark_run(_stamp_file(graph_uri), when)
 
 
 def due(graph_uri: str, now: float | None = None) -> bool:
@@ -84,13 +62,13 @@ def due(graph_uri: str, now: float | None = None) -> bool:
     False when auto-optimize is disabled, the store is remote (maintained
     server-side, not by a client hook), or the throttle window hasn't elapsed.
     """
-    interval = optimize_interval()
-    if interval <= 0:
-        return False
-    if graph_uri.startswith(_REMOTE_PREFIXES):
-        return False
-    now = time.time() if now is None else now
-    return now - _last_run(graph_uri) >= interval
+    return _throttle.is_due(
+        store=graph_uri,
+        stamp_file=_stamp_file(graph_uri),
+        interval=optimize_interval(),
+        now=time.time() if now is None else now,
+        require_exists=False,
+    )
 
 
 def spawn_background_optimize(graph_uri: str, now: float | None = None) -> bool:
