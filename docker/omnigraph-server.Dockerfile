@@ -7,10 +7,12 @@
 # vendored in this repo). It bakes BOTH release binaries: `omnigraph-server`
 # (the HTTP server the witan MCP tier talks to over the cluster network) and
 # `omnigraph` (the CLI, used by the entrypoint to converge the cluster catalog
-# on boot). The bundled `schema.pg` is baked at ${CLUSTER_CONFIG_DIR}/schema.pg;
-# the toolhive_witan Pulumi stack mounts a generated cluster.yaml alongside it
+# on boot). All three cluster schemas are baked under ${OMNIGRAPH_CLUSTER_DIR}/:
+# schema.pg (the `council` memory/work graph), code-schema.pg (per-repo
+# `code-<repo>` graphs), and bridge-schema.pg (the shared `code-bridge` graph).
+# The toolhive_witan Pulumi stack mounts a generated cluster.yaml alongside them
 # via a ConfigMap `subPath` (single-file overlay) precisely so it does not
-# shadow this baked-in schema.
+# shadow these baked-in schemas.
 #
 # Build (from the repo root, so schema.pg is in the build context):
 #   docker build -f docker/omnigraph-server.Dockerfile \
@@ -76,7 +78,14 @@ COPY docker/omnigraph-server-entrypoint.sh /usr/local/bin/omnigraph-server-entry
 ENV OMNIGRAPH_CLUSTER_DIR=/etc/omnigraph/cluster
 RUN mkdir -p "${OMNIGRAPH_CLUSTER_DIR}" \
     && chmod +x /usr/local/bin/omnigraph-server-entrypoint.sh
+# All three cluster schemas are baked in: schema.pg (witan memory/work graph →
+# the `council` graph), code-schema.pg (per-repo `code-<repo>` graphs), and
+# bridge-schema.pg (the shared `code-bridge` graph). The deploy-time cluster.yaml
+# ConfigMap references each by these paths; all three are self-contained (soft
+# refs only, no hard cross-store edges).
 COPY mcp/servers/witan/schema/schema.pg /etc/omnigraph/cluster/schema.pg
+COPY mcp/servers/witan-code/witan_code/schema/code-schema.pg /etc/omnigraph/cluster/code-schema.pg
+COPY mcp/servers/witan-code/witan_code/schema/bridge-schema.pg /etc/omnigraph/cluster/bridge-schema.pg
 RUN chown -R omnigraph:omnigraph /etc/omnigraph
 
 USER omnigraph
