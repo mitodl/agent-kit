@@ -30,6 +30,15 @@ class _RaiseCtx:
         raise RuntimeError("unsupported")
 
 
+class _HangCtx:
+    """Simulates a client that accepts elicitation but never answers — e.g. a
+    remote/mobile session with no UI surface to render the prompt on."""
+
+    async def elicit(self, *args, **kwargs):
+        await asyncio.sleep(3600)
+        raise AssertionError("should have timed out before this returns")
+
+
 def test_confirm_no_ctx_or_error_returns_default():
     assert (
         asyncio.run(elicit.confirm(None, "q?", default_when_unsupported=True)) is True
@@ -70,3 +79,38 @@ def test_text_no_ctx_error_or_empty_returns_default():
     # whitespace-only is treated as empty → default; a real value is stripped
     assert asyncio.run(elicit.text(_AcceptCtx("   "), "q?", default="d")) == "d"
     assert asyncio.run(elicit.text(_AcceptCtx("  real  "), "q?", default="d")) == "real"
+
+
+def test_confirm_timeout_returns_default_when_unsupported():
+    # A client that never answers (e.g. remote/mobile with no elicitation UI)
+    # must not hang the tool call forever — a short timeout degrades it like
+    # an unsupported client.
+    assert (
+        asyncio.run(
+            elicit.confirm(
+                _HangCtx(),
+                "q?",
+                default_when_unsupported=True,
+                timeout_seconds=0.01,
+            )
+        )
+        is True
+    )
+    assert (
+        asyncio.run(
+            elicit.confirm(
+                _HangCtx(),
+                "q?",
+                default_when_unsupported=False,
+                timeout_seconds=0.01,
+            )
+        )
+        is False
+    )
+
+
+def test_text_timeout_returns_default():
+    assert (
+        asyncio.run(elicit.text(_HangCtx(), "q?", default="d", timeout_seconds=0.01))
+        == "d"
+    )
