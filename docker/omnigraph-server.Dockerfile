@@ -7,7 +7,7 @@
 # vendored in this repo). It bakes BOTH release binaries: `omnigraph-server`
 # (the HTTP server the witan MCP tier talks to over the cluster network) and
 # `omnigraph` (the CLI, used by the entrypoint to converge the cluster catalog
-# on boot). All three cluster schemas are baked under ${CLUSTER_CONFIG_DIR}/:
+# on boot). All three cluster schemas are baked under ${OMNIGRAPH_CLUSTER_DIR}/:
 # schema.pg (the `council` memory/work graph), code-schema.pg (per-repo
 # `code-<repo>` graphs), and bridge-schema.pg (the shared `code-bridge` graph).
 # The toolhive_witan Pulumi stack mounts a generated cluster.yaml alongside them
