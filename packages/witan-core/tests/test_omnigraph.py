@@ -71,6 +71,12 @@ def test_remote_without_graph_id_raises(monkeypatch):
         OmnigraphClient("http://host:8080", Path("/queries"))
 
 
+def test_remote_without_host_raises(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    with pytest.raises(ValueError, match="no host"):
+        OmnigraphClient("http://", Path("/queries"), graph_id="council")
+
+
 def test_remote_rejects_underscore_graph_id(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
     with pytest.raises(ValueError, match="invalid omnigraph graph id"):

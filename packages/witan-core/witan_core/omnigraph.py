@@ -91,6 +91,11 @@ def _split_server_uri(graph_uri: str, graph_id: str | None) -> tuple[str, str]:
     server URL) or, failing that, a ``.../graphs/<id>`` path baked into the URI.
     """
     parts = urllib.parse.urlsplit(graph_uri)
+    if not parts.netloc:
+        raise ValueError(
+            f"remote graph URI {graph_uri!r} has no host — expected "
+            "http(s)://<host>[:port] (optionally .../graphs/<id>)"
+        )
     server_url = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "", "", ""))
     segments = [s for s in parts.path.split("/") if s]
     from_path = segments[1] if len(segments) == 2 and segments[0] == "graphs" else None

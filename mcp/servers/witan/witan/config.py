@@ -17,7 +17,7 @@ class Config(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     graph_uri: str
-    """Local path, s3://, or http:// URI pointing at the graph."""
+    """Local path, s3://, or http(s):// URI pointing at the graph."""
 
     graph_name: str
     """omnigraph graph id addressed on a remote server (``--graph``). Selects one
@@ -25,7 +25,7 @@ class Config(BaseModel):
     ``--store`` graphs. Env WITAN_MEMORY_GRAPH, default ``council``."""
 
     graph_token: str | None
-    """Bearer token. Required when graph_uri is http://. Unused for local/S3."""
+    """Bearer token. Required when graph_uri is http(s)://. Unused for local/S3."""
 
     author: str
     """Attribution string written to Memory.author on every insert."""
@@ -514,15 +514,15 @@ def default_config_toml() -> str:
 # Env: WITAN_AUTHOR (falls back to `git config user.name`, then $USER).
 # author = "Your Name"
 
-# Graph store location: a local path, s3://, or http:// URI.
+# Graph store location: a local path, s3://, or http(s):// URI.
 # Env: WITAN_MEMORY_URI (default: ~/.local/share/witan/graph.omni)
 # server = "~/.local/share/witan/graph.omni"
 
-# Graph id addressed on an http:// omnigraph-server (one server serves many
+# Graph id addressed on an http(s):// omnigraph-server (one server serves many
 # graphs). Ignored for local/s3 stores. Env: WITAN_MEMORY_GRAPH (default: council)
 # graph = "council"
 
-# Bearer token, required only for an http:// server.
+# Bearer token, required only for an http(s):// server.
 # Env: WITAN_MEMORY_TOKEN
 # token = "..."
 
