@@ -36,15 +36,17 @@ class OmnigraphClient(_BaseOmnigraphClient):
 
         Runs through the same per-store write lock + retry/repair as a mutation,
         so it can't race other writers and leave the store drifted. Uses a raw
-        ``_execute`` (not ``_run``) because ``schema apply`` takes the store as a
-        positional arg, not ``--store``.
+        ``_execute`` (not ``_run``) because for a local/s3 store ``schema apply``
+        takes the store as a positional arg, not ``--store``; a remote
+        omnigraph-server still uses ``--server <url> --graph <id>``.
         """
+        store = self._store_args() if self.is_remote else [self.graph_uri]
         cmd = [
             self._binary,
             "schema",
             "apply",
             "--schema",
             str(schema_path),
-            self.graph_uri,
+            *store,
         ]
         return self._execute(cmd, "schema apply", is_write=True)

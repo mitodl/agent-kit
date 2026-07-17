@@ -120,7 +120,11 @@ def _dbg(enabled: bool, msg: str) -> None:
 
 
 def inject_context(
-    graph_uri: str, queries_dir: Path, token: str | None, debug: bool = False
+    graph_uri: str,
+    queries_dir: Path,
+    token: str | None,
+    debug: bool = False,
+    graph_id: str | None = None,
 ) -> str:
     """Return markdown context for active projects + ready tasks, or empty string.
 
@@ -145,7 +149,7 @@ def inject_context(
             _dbg(debug, f"served from output cache ({len(cached)} chars)")
             return cached
 
-        client = OmnigraphClient(graph_uri, queries_dir, token)
+        client = OmnigraphClient(graph_uri, queries_dir, token, graph_id=graph_id)
 
         # The "list_unscoped_tasks" query is an all-tasks scan (capped at the
         # query's own limit 10000). Derive both the unscoped and the repo-scoped
@@ -433,7 +437,12 @@ def _detect_repo() -> str | None:
 # ── Session checkpoint (Stop hook) ────────────────────────────────────────────
 
 
-def session_checkpoint(graph_uri: str, queries_dir: Path, token: str | None) -> None:
+def session_checkpoint(
+    graph_uri: str,
+    queries_dir: Path,
+    token: str | None,
+    graph_id: str | None = None,
+) -> None:
     """Auto-close the active WorkflowSession when the agent stops.
 
     Reads the state file written by ``workflow_session_start``. No-op when
@@ -464,7 +473,7 @@ def session_checkpoint(graph_uri: str, queries_dir: Path, token: str | None) -> 
         except subprocess.CalledProcessError:
             changed = []
 
-        client = OmnigraphClient(graph_uri, queries_dir, token)
+        client = OmnigraphClient(graph_uri, queries_dir, token, graph_id=graph_id)
         client.change(
             "mutations.gq",
             "update_workflow_session_end",

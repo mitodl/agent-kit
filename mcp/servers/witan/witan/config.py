@@ -17,10 +17,15 @@ class Config(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     graph_uri: str
-    """Local path, s3://, or http:// URI pointing at the graph."""
+    """Local path, s3://, or http(s):// URI pointing at the graph."""
+
+    graph_name: str
+    """omnigraph graph id addressed on a remote server (``--graph``). Selects one
+    of the N graphs a single omnigraph-server serves; ignored for local/S3
+    ``--store`` graphs. Env WITAN_MEMORY_GRAPH, default ``council``."""
 
     graph_token: str | None
-    """Bearer token. Required when graph_uri is http://. Unused for local/S3."""
+    """Bearer token. Required when graph_uri is http(s)://. Unused for local/S3."""
 
     author: str
     """Attribution string written to Memory.author on every insert."""
@@ -509,11 +514,15 @@ def default_config_toml() -> str:
 # Env: WITAN_AUTHOR (falls back to `git config user.name`, then $USER).
 # author = "Your Name"
 
-# Graph store location: a local path, s3://, or http:// URI.
+# Graph store location: a local path, s3://, or http(s):// URI.
 # Env: WITAN_MEMORY_URI (default: ~/.local/share/witan/graph.omni)
 # server = "~/.local/share/witan/graph.omni"
 
-# Bearer token, required only for an http:// server.
+# Graph id addressed on an http(s):// omnigraph-server (one server serves many
+# graphs). Ignored for local/s3 stores. Env: WITAN_MEMORY_GRAPH (default: council)
+# graph = "council"
+
+# Bearer token, required only for an http(s):// server.
 # Env: WITAN_MEMORY_TOKEN
 # token = "..."
 
@@ -533,6 +542,7 @@ def default_config_toml() -> str:
 #
 # [targets.work]
 # server = "http://witan.internal:8080"
+# graph = "council"
 # token = "..."
 # author = "Your Name <you@corp.com>"
 # agent = "claude"
@@ -584,6 +594,7 @@ class _Target(BaseModel):
 
     name: str
     server: str | None = None
+    graph: str | None = None
     token: str | None = None
     author: str | None = None
     agent: str | None = None
@@ -640,6 +651,7 @@ def _parse_targets(raw: dict) -> list[_Target]:
             _Target(
                 name=name,
                 server=cfg.get("server"),
+                graph=cfg.get("graph"),
                 token=cfg.get("token"),
                 author=cfg.get("author"),
                 agent=cfg.get("agent"),
@@ -706,9 +718,9 @@ def load(target: str | None = None) -> Config:
     3. Global values in config.toml
     4. Hardcoded defaults
 
-    Each target section in config.toml can override ``server``, ``token``,
-    ``author``, ``agent``, and ``model``. Targets are matched against the
-    current repo URI detected from ``.git/config`` (or WITAN_REPO).
+    Each target section in config.toml can override ``server``, ``graph``,
+    ``token``, ``author``, ``agent``, and ``model``. Targets are matched against
+    the current repo URI detected from ``.git/config`` (or WITAN_REPO).
 
     Example config.toml::
 
@@ -717,6 +729,7 @@ def load(target: str | None = None) -> Config:
 
         [targets.work]
         server = "http://witan.internal:8080"
+        graph = "council"
         token = "..."
         author = "Alice <alice@corp.com>"
         agent = "claude"
@@ -754,6 +767,12 @@ def load(target: str | None = None) -> Config:
 
     return Config(
         graph_uri=_resolve_path(raw_server),
+        graph_name=_first(
+            os.environ.get("WITAN_MEMORY_GRAPH"),
+            selected.graph if selected else None,
+            file_cfg.get("graph"),
+            default="council",
+        ),
         graph_token=_first(
             os.environ.get("WITAN_MEMORY_TOKEN"),
             selected.token if selected else None,

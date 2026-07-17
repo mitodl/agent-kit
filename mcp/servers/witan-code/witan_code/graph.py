@@ -29,12 +29,13 @@ class OmnigraphClient(_BaseOmnigraphClient):
         queries_dir: Path,
         token: str | None = None,
         branch: str | None = None,
+        graph_id: str | None = None,
     ) -> None:
         # Target omnigraph branch for query/mutate/load; None = the store's main
         # branch. Loads pass `--from main` so the branch forks lazily on first
         # write (docs/BRANCH_INDEXING.md).
         self.branch = branch
-        super().__init__(graph_uri, queries_dir, token)
+        super().__init__(graph_uri, queries_dir, token, graph_id=graph_id)
 
     def load(self, records: list[dict], mode: str = "merge") -> None:
         """Bulk-load node/edge records via one ``omnigraph load`` call.

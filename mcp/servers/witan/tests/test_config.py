@@ -225,12 +225,38 @@ def test_load_defaults(monkeypatch, toml_file):
     monkeypatch.delenv("WITAN_AGENT", raising=False)
     monkeypatch.delenv("WITAN_MODEL", raising=False)
     monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_MEMORY_GRAPH", raising=False)
     monkeypatch.setenv("WITAN_REPO", "https://github.com/nobody/nothing")
 
     cfg = load()
     assert cfg.agent == "claude"
     assert cfg.model is None
     assert cfg.target_name is None
+    assert cfg.graph_name == "council"
+
+
+def test_load_graph_name_env_and_target_override(monkeypatch, toml_file):
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.work]
+            server = "http://work:8080"
+            graph = "council-work"
+            match_orgs = ["mitodl"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_MEMORY_GRAPH", raising=False)
+
+    # target's `graph` wins when no env override is set
+    assert load().graph_name == "council-work"
+
+    # WITAN_MEMORY_GRAPH env overrides the target
+    monkeypatch.setenv("WITAN_MEMORY_GRAPH", "council-env")
+    assert load().graph_name == "council-env"
 
 
 def test_load_global_file_values(monkeypatch, toml_file):

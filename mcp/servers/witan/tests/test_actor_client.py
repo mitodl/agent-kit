@@ -63,8 +63,9 @@ def deployed_mode(monkeypatch):
     built = []
 
     class _FakeOmnigraphClient:
-        def __init__(self, graph_uri, queries_dir, token, guard=None):
+        def __init__(self, graph_uri, queries_dir, token, guard=None, graph_id=None):
             self.graph_uri = graph_uri
+            self.graph_id = graph_id
             self.queries_dir = queries_dir
             self.token = token
             self.guard = guard

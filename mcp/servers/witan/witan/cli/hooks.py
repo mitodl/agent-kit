@@ -43,7 +43,11 @@ def inject_context(*, debug: bool = False) -> None:
             )
         return
     text = ctx_module.inject_context(
-        cfg.graph_uri, cfg.queries_dir, cfg.graph_token, debug=debug
+        cfg.graph_uri,
+        cfg.queries_dir,
+        cfg.graph_token,
+        debug=debug,
+        graph_id=cfg.graph_name,
     )
     if text:
         print(text)
@@ -62,7 +66,9 @@ def session_checkpoint() -> None:
     from .. import maintenance
 
     cfg = cfg_module.load()
-    ctx_module.session_checkpoint(cfg.graph_uri, cfg.queries_dir, cfg.graph_token)
+    ctx_module.session_checkpoint(
+        cfg.graph_uri, cfg.queries_dir, cfg.graph_token, graph_id=cfg.graph_name
+    )
 
     # Keep the store compacted so query latency doesn't re-bloat. Runs at most
     # once per WITAN_OPTIMIZE_INTERVAL and detaches, so the Stop hook returns
