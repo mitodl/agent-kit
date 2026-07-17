@@ -236,6 +236,7 @@ async def _confirm_and_reindex(
         f"No code graph indexed yet for {repo}. Index it now? "
         "(may take a while on a large repo)",
         default_when_unsupported=False,
+        title="Index now?",
     )
     if not ok:
         return None
@@ -260,6 +261,7 @@ async def _confirm_and_reindex_bridge(ctx: Context | None) -> OmnigraphClient | 
         f"No cross-repo graph indexed yet. Index the current repo ({repo}) "
         "now to start building it?",
         default_when_unsupported=False,
+        title="Index now?",
     )
     if not ok:
         return None
@@ -497,6 +499,7 @@ async def code_symbols_in_file(
             "No repo detected for this file (not in a git repo, or no remote). "
             "Enter its canonical repo URI (e.g. https://github.com/org/name):",
             default="",
+            title="Repo URI",
         )
         if not slug:
             return []
