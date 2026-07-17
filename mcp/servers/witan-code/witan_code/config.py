@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -49,8 +50,57 @@ def load() -> Config:
 
 
 def sanitize_slug(slug: str) -> str:
-    """Make a repo slug safe for use as a filename component."""
+    """Make a repo slug safe for use as a LOCAL filename / branch-name component.
+
+    Emits underscores (``[/:]+`` → ``_``). Fine for local ``<slug>.omni`` store
+    dirs and per-repo branch prefixes, but NOT valid as a shared-cluster graph
+    id — omnigraph graph ids must match ``^[a-zA-Z0-9-]{1,64}$`` (no
+    underscores). Use :func:`graph_id` to derive the cluster ``--graph`` id.
+    """
     return re.sub(r"[/:]+", "_", slug).strip("_")
+
+
+# ── Shared-cluster graph id ──────────────────────────────────────────────────
+#
+# On the deployed omnigraph-server, each repo's code graph is a distinct cluster
+# graph addressed as `--server <url> --graph <id>`. `graph_id()` is the CANONICAL
+# repo-URI → graph-id function.
+#
+# SHARED CONTRACT — this exact algorithm is mirrored by ol-infrastructure's
+# Pulumi provisioning (toolhive_witan/data_tier.py, which declares each
+# `code-<repo>` graph in the cluster.yaml ConfigMap). witan-code selects the
+# `--graph` id and provisioning declares the same id; they MUST agree
+# byte-for-byte or a client will address a graph the cluster never created. Any
+# change here has to land in lockstep on both sides — see task
+# tk-code-graph-deployment-topology-shared-per-repo-c-cac400.
+CODE_GRAPH_PREFIX = "code-"
+# The shared cross-repo bridge graph (Layer 2.5), analogous to the local
+# `_bridge.omni` store. Fixed id, not derived from any repo.
+BRIDGE_GRAPH_ID = "code-bridge"
+# omnigraph's graph-id constraint. Enforced by construction in `graph_id`.
+_GRAPH_ID_MAX_LEN = 64
+GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
+
+
+def graph_id(repo: str) -> str:
+    """Canonical cluster graph-id for ``repo``'s code graph.
+
+    e.g. ``https://github.com/mitodl/ol-django`` → ``code-github-com-mitodl-ol-django``.
+
+    Strip the URI scheme, collapse every run of non-alphanumerics to ``-``,
+    lowercase, and prefix ``code-``. The result always satisfies
+    :data:`GRAPH_ID_RE`. Slugs that would exceed :data:`_GRAPH_ID_MAX_LEN` are
+    truncated and disambiguated with a hash of the full repo URI (so distinct
+    long repos never collide on the same id).
+    """
+    body = re.sub(r"(?i)^[a-z][a-z0-9+.-]*://", "", repo)  # strip scheme
+    body = re.sub(r"[^a-zA-Z0-9]+", "-", body).strip("-").lower()
+    candidate = f"{CODE_GRAPH_PREFIX}{body}"
+    if len(candidate) <= _GRAPH_ID_MAX_LEN:
+        return candidate
+    digest = hashlib.sha256(repo.encode()).hexdigest()[:8]
+    keep = _GRAPH_ID_MAX_LEN - len(CODE_GRAPH_PREFIX) - len(digest) - 1
+    return f"{CODE_GRAPH_PREFIX}{body[:keep].strip('-')}-{digest}"
 
 
 def store_path(slug: str, code_dir: Path | None = None) -> Path:

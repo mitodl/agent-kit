@@ -1,4 +1,7 @@
-// Cross-Repo Context Bridge (Layer 2.5) — shared LOCAL store (_bridge.omni).
+// Cross-Repo Context Bridge (Layer 2.5) — one shared store across all repos.
+//
+// Deployed as the `code-bridge` graph on the shared, S3-backed omnigraph-server
+// cluster (config.BRIDGE_GRAPH_ID); locally it is the `_bridge.omni` store.
 //
 // One flat node per interface binding. Cross-repo linkages are computed by
 // GROUPING bindings on (kind, key_norm) where roles/repos differ — there are
@@ -8,7 +11,8 @@
 // run + every PostToolUse reindex hook). Flat bindings are each scoped to their
 // own repo+file, so concurrent writers never touch the same row.
 //
-// Local-only and re-derivable, like the per-repo Layer-2 stores; never synced.
+// Re-derivable, like the per-repo Layer-2 graphs; seed the shared copy by
+// re-indexing on the server or export→load, never by copying a local store to S3.
 //
 // Id convention:
 //   InterfaceBinding.slug = repo|file|kind|key_norm|role|symbol_id

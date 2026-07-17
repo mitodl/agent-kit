@@ -1,6 +1,11 @@
 // Code Graph (Layer 2) — per-repo tree-sitter-derived symbol graph.
 //
-// One store per repository, kept LOCAL only (never synced to team S3).
+// One graph per repository. Deployed as a distinct graph on the shared,
+// S3-backed omnigraph-server cluster, addressed as `--graph code-<repo>` (the
+// canonical id from witan_code.config.graph_id); a local `<slug>.omni` store is
+// the standalone/dev fallback. The graph is re-derivable from source either way,
+// so seed the shared copy by re-indexing on the server or export→load — never
+// copy a local store up to S3 (Lance embeds root-relative paths).
 // Composes with witan (Layer 1) via soft symbol-ID references:
 // Layer-1 nodes store symbol ids of the form `repo#path::Qualified.Name`,
 // which resolve here without a hard cross-store edge.
