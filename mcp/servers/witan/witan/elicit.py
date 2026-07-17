@@ -59,5 +59,6 @@ async def repo_or_detect(ctx: Context | None, repo: str | None) -> str | None:
         "Enter a canonical repo URI (e.g. https://github.com/org/name) to scope "
         "it, or leave blank to store it unscoped:",
         default="",
+        title="Repo URI",
     )
     return chosen or None

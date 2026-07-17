@@ -1435,6 +1435,7 @@ async def memory_link(
         f"Superseding hides {to_slug} from default memory_search results "
         f"(in favor of {from_slug}). Proceed?",
         default_when_unsupported=True,
+        title="Supersede?",
     ):
         return {
             "from": from_slug,
@@ -1922,7 +1923,10 @@ async def workflow_project_advance(
         advisory
         and prev_phase != phase
         and not await elicit.confirm(
-            ctx, f"{advisory} Proceed with the advance?", default_when_unsupported=True
+            ctx,
+            f"{advisory} Proceed with the advance?",
+            default_when_unsupported=True,
+            title="Advance anyway?",
         )
     ):
         current = before[0] if before else {"slug": slug, "phase": prev_phase}
@@ -1983,6 +1987,7 @@ async def workflow_project_complete(
             f"outcome is brief ({outcome!r}). Provide a fuller narrative of what "
             "was delivered:",
             default=outcome,
+            title="Outcome narrative",
         )
 
     client.change(
@@ -3078,6 +3083,7 @@ async def task_claim(
             f"Task {slug} is held by {current_holder} (claimed {claimed_at}). "
             "Steal the claim?",
             default_when_unsupported=False,
+            title="Steal claim?",
         )
         if not stole:
             return {

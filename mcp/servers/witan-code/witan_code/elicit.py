@@ -44,7 +44,7 @@ async def choose_repo(
     doesn't match any candidate — returns ``None``, meaning "keep every
     match" (today's behavior, unchanged).
     """
-    answer = await text(ctx, message, default="")
+    answer = await text(ctx, message, default="", title="Repo")
     if not answer:
         return None
     normalized = answer.strip().casefold()
