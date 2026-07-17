@@ -15,8 +15,12 @@ from witan_core import elicit
 class _AcceptCtx:
     def __init__(self, data):
         self._data = data
+        self.calls = []
 
     async def elicit(self, message, response_type=None, **kwargs):
+        self.calls.append(
+            {"message": message, "response_type": response_type, **kwargs}
+        )
         return AcceptedElicitation(data=self._data)
 
 
@@ -114,3 +118,29 @@ def test_text_timeout_returns_default():
         asyncio.run(elicit.text(_HangCtx(), "q?", default="d", timeout_seconds=0.01))
         == "d"
     )
+
+
+def test_confirm_forwards_title_as_response_title():
+    # A regression here (param renamed, or the forwarding accidentally
+    # dropped) would silently fall back to FastMCP's generic "Value" label
+    # in the client UI — assert the kwarg actually reaches ctx.elicit().
+    ctx = _AcceptCtx(True)
+    asyncio.run(
+        elicit.confirm(ctx, "q?", default_when_unsupported=False, title="Steal claim?")
+    )
+    assert ctx.calls[-1]["response_title"] == "Steal claim?"
+
+    # and the default title when the caller doesn't override it
+    default_ctx = _AcceptCtx(True)
+    asyncio.run(elicit.confirm(default_ctx, "q?", default_when_unsupported=False))
+    assert default_ctx.calls[-1]["response_title"] == "Proceed?"
+
+
+def test_text_forwards_title_as_response_title():
+    ctx = _AcceptCtx("answer")
+    asyncio.run(elicit.text(ctx, "q?", default="d", title="Repo URI"))
+    assert ctx.calls[-1]["response_title"] == "Repo URI"
+
+    default_ctx = _AcceptCtx("answer")
+    asyncio.run(elicit.text(default_ctx, "q?", default="d"))
+    assert default_ctx.calls[-1]["response_title"] == "Response"
