@@ -49,6 +49,16 @@ Extracted so far (each deletes the duplicated copies from both servers):
 - `omnigraph.OmnigraphClient` — the omnigraph-CLI subprocess wrapper base
   (write lock, retry/repair, admission-cap backoff); each server subclasses it
   (witan adds `apply_schema`; witan-code adds branch ops + bulk `load`)
+- `config_file.load_toml` — shared config.toml loading (`WITAN_CONFIG` env
+  var). Both servers read the same file, so one `[targets.<name>]` block can
+  override both at once.
+- `target_config` — the `[targets.<name>]` match/select logic: `match_target`
+  (priority `match_paths` > `match_repos` > `match_hosts` > `match_orgs`),
+  `parse_target_tables`, `to_list`, `local_project_path`. Each server keeps
+  its own typed target model (different override fields — witan's
+  `server`/`graph`/`token`/…, witan-code's `code_dir`) and calls into this
+  shared matcher, which is structurally typed over just the four `match_*`
+  lists.
 
 Still local to each server (intentionally): the CLI scaffolding — its
 extraction coordinates with the in-flight multi-user deployment work (see the

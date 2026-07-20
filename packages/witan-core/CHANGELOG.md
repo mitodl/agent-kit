@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.3.0] - 2026-07-20
+
+### Added
+
+- `target_config` module — the shared `[targets.<name>]` routing logic
+  (`match_target`, `parse_target_tables`, `to_list`, `local_project_path`),
+  extracted from witan's `config.py`. Adds a `match_paths` tier (local
+  checkout path prefix) alongside the existing `match_orgs`/`match_repos`/
+  `match_hosts`, checked first since it's the most specific — it pins a
+  filesystem location regardless of remote, and runs even when no
+  `repo_uri` is available. `match_target` is structurally typed (a
+  `Protocol` over the four `match_*` lists), so each server keeps its own
+  typed target model (different override fields) and both route through the
+  same precedence rules. witan-code now uses this too (see its CHANGELOG).
+- `config_file.load_toml` — shared config.toml loading (`WITAN_CONFIG` env
+  var, missing-file/parse-error handling). Both servers read the *same*
+  file by convention, so one `[targets.<name>]` block can carry overrides
+  for both at once.
+
 ## [0.2.0] - 2026-07-16
 
 ### Added
