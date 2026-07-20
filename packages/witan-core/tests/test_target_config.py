@@ -202,6 +202,29 @@ def test_match_path_expands_tilde(tmp_path, monkeypatch):
     assert match_target([t], local_path=checkout) is t
 
 
+def test_match_path_resolves_relative_segments(tmp_path):
+    """A pattern with `..` segments must normalize before comparing, not be
+    compared as a literal string prefix."""
+    checkout = tmp_path / "work" / "some-repo"
+    checkout.mkdir(parents=True)
+    (tmp_path / "other").mkdir()
+    t = _Target(name="work", match_paths=[str(tmp_path / "other" / ".." / "work")])
+    assert match_target([t], local_path=checkout) is t
+
+
+def test_match_path_resolves_symlinks(tmp_path):
+    """A pattern that differs from local_path only by an unresolved symlink
+    hop must still match — both sides are resolved before comparing."""
+    real_dir = tmp_path / "real-work"
+    real_dir.mkdir()
+    link = tmp_path / "link-work"
+    link.symlink_to(real_dir)
+    checkout = real_dir / "some-repo"
+    checkout.mkdir()
+    t = _Target(name="work", match_paths=[str(link)])
+    assert match_target([t], local_path=checkout) is t
+
+
 def test_match_no_path_targets_falls_through_to_repo_tiers(tmp_path):
     t = match_target(
         _TARGETS, repo_uri="https://github.com/mitodl/agent-kit", local_path=tmp_path

@@ -105,11 +105,11 @@ def match_target(
     against); tier 1 still runs.
     """
     if local_path is not None:
-        resolved = str(local_path.expanduser().resolve())
+        resolved = local_path.expanduser().resolve()
         for t in targets:
             for pattern in t.match_paths:
-                candidate = str(Path(pattern).expanduser()).rstrip("/")
-                if resolved == candidate or resolved.startswith(candidate + "/"):
+                candidate = Path(pattern).expanduser().resolve()
+                if resolved == candidate or resolved.is_relative_to(candidate):
                     return t
 
     if not repo_uri:
