@@ -25,11 +25,16 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "witan" / "config.toml"
 def load_toml(path: Path) -> dict:
     """Load ``WITAN_CONFIG`` path or ``path``. Returns ``{}`` on a missing file.
 
+    Expands ``~`` in the resolved path — ``WITAN_CONFIG`` is commonly set in
+    contexts that skip shell tilde-expansion (a Docker/systemd ``Environment=``,
+    a CI env block), so a literal ``WITAN_CONFIG=~/.config/witan/config.toml``
+    must still resolve rather than fail with a not-found on the literal ``~``.
+
     Raises ``ValueError`` for a malformed or unreadable file so a
     misconfiguration fails loudly at startup rather than silently falling
     back to defaults.
     """
-    resolved = Path(os.environ.get("WITAN_CONFIG", str(path)))
+    resolved = Path(os.environ.get("WITAN_CONFIG", str(path))).expanduser()
     try:
         with open(resolved, "rb") as f:
             return tomllib.load(f)

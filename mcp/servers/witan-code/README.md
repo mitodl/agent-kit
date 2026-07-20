@@ -317,11 +317,12 @@ bindings.
 
 witan-code reads the same `config.toml` as witan (witan-council) — a global
 `code_dir`/`author`, plus named `[targets.<name>]` blocks that override them
-and are selected by `WITAN_TARGET`, an explicit `--target`, or auto-detection
-against the current repo/checkout (`match_paths` > `match_repos` >
-`match_hosts` > `match_orgs` — see witan's README/`witan/config.py`
-docstring for the full precedence). Because the file is shared, one target
-block can carry witan's `server`/`graph`/`token` alongside `code_dir` under
+and are selected by `WITAN_TARGET`, `load(target=...)` (Python API only — no
+CLI `--target` flag yet), or auto-detection against the current
+repo/checkout (`match_paths` > `match_repos` > `match_hosts` > `match_orgs`
+— see witan's README/`witan/config.py` docstring for the full precedence).
+Because the file is shared, one target block can carry witan's
+`server`/`graph`/`token` alongside `code_dir` under
 the same name — each server reads only the fields it knows:
 
 ```toml
