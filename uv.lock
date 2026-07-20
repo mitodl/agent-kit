@@ -1793,7 +1793,7 @@ test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "witan-core"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
@@ -1843,7 +1843,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },

@@ -4,31 +4,12 @@ import textwrap
 
 import pytest
 
-from witan.config import _match_target, _parse_targets, _to_list, load, _Target
+from witan.config import _parse_targets, load
 
-
-# ── _to_list ──────────────────────────────────────────────────────────────────
-
-
-def test_to_list_none():
-    assert _to_list(None) == []
-
-
-def test_to_list_string():
-    assert _to_list("mitodl") == ["mitodl"]
-
-
-def test_to_list_list():
-    assert _to_list(["a", "b"]) == ["a", "b"]
-
-
-def test_to_list_coerces_non_string_items():
-    assert _to_list([1, 2]) == ["1", "2"]
-
-
-def test_to_list_invalid():
-    with pytest.raises(ValueError, match="Expected a list or string"):
-        _to_list(42)
+# to_list and match_target's precedence-order tests (org/repo/host/path)
+# moved to packages/witan-core/tests/test_target_config.py along with the
+# logic. This file keeps only _parse_targets shape tests and load()
+# integration tests.
 
 
 # ── _parse_targets ────────────────────────────────────────────────────────────
@@ -54,6 +35,7 @@ def test_parse_targets_basic():
     assert result[0].match_orgs == ["mitodl"]
     assert result[0].match_repos == []
     assert result[0].match_hosts == []
+    assert result[0].match_paths == []
 
 
 def test_parse_targets_bare_string_match_orgs():
@@ -84,124 +66,6 @@ def test_target_is_immutable():
     t = _parse_targets({"targets": {"work": {"match_orgs": ["mitodl"]}}})[0]
     with pytest.raises(ValueError):
         t.name = "other"
-
-
-# ── _match_target ─────────────────────────────────────────────────────────────
-
-_WORK = _Target(
-    name="work",
-    server="http://work:8080",
-    token=None,
-    author=None,
-    agent=None,
-    model=None,
-    match_orgs=["mitodl"],
-    match_repos=[],
-    match_hosts=[],
-)
-_PERSONAL = _Target(
-    name="personal",
-    server=None,
-    token=None,
-    author=None,
-    agent=None,
-    model=None,
-    match_orgs=["alice"],
-    match_repos=["github.com/alice/dotfiles"],
-    match_hosts=[],
-)
-_ENTERPRISE = _Target(
-    name="enterprise",
-    server=None,
-    token=None,
-    author=None,
-    agent=None,
-    model=None,
-    match_orgs=[],
-    match_repos=[],
-    match_hosts=["github.mit.edu"],
-)
-
-_TARGETS = [_WORK, _PERSONAL, _ENTERPRISE]
-
-
-def test_match_by_org():
-    t = _match_target(_TARGETS, "https://github.com/mitodl/agent-kit")
-    assert t is _WORK
-
-
-def test_match_by_org_different_host():
-    t = _match_target(_TARGETS, "https://gitlab.com/mitodl/some-repo")
-    assert t is _WORK
-
-
-def test_match_by_repo_exact():
-    t = _match_target(_TARGETS, "https://github.com/alice/dotfiles")
-    assert t is _PERSONAL
-
-
-def test_match_by_repo_wins_over_org():
-    """match_repos takes priority over match_orgs for the same target (and others)."""
-    t = _match_target([_PERSONAL, _WORK], "https://github.com/alice/dotfiles")
-    assert t is _PERSONAL
-
-
-def test_match_by_host():
-    t = _match_target(_TARGETS, "https://github.mit.edu/some-org/some-repo")
-    assert t is _ENTERPRISE
-
-
-def test_match_host_beats_org():
-    """match_hosts is evaluated before match_orgs."""
-    org_target = _Target(
-        name="org",
-        server=None,
-        token=None,
-        author=None,
-        agent=None,
-        model=None,
-        match_orgs=["some-org"],
-        match_repos=[],
-        match_hosts=[],
-    )
-    host_target = _Target(
-        name="host",
-        server=None,
-        token=None,
-        author=None,
-        agent=None,
-        model=None,
-        match_orgs=[],
-        match_repos=[],
-        match_hosts=["github.mit.edu"],
-    )
-    t = _match_target([org_target, host_target], "https://github.mit.edu/some-org/repo")
-    assert t is host_target
-
-
-def test_match_no_targets():
-    assert _match_target([], "https://github.com/mitodl/agent-kit") is None
-
-
-def test_match_no_match():
-    assert _match_target(_TARGETS, "https://github.com/unrelated/repo") is None
-
-
-def test_match_empty_org_does_not_match(monkeypatch):
-    """An empty org segment must not accidentally match a target with '' in match_orgs."""
-    bad_target = _Target(
-        name="bad",
-        server=None,
-        token=None,
-        author=None,
-        agent=None,
-        model=None,
-        match_orgs=[""],
-        match_repos=[],
-        match_hosts=[],
-    )
-    # A URI with no org segment (just a host) should not match
-    assert _match_target([bad_target], "https://example.com") is None
 
 
 # ── load() ────────────────────────────────────────────────────────────────────
@@ -311,6 +175,59 @@ def test_load_auto_detects_target_by_org(monkeypatch, toml_file):
     cfg = load()
     assert cfg.target_name == "work"
     assert cfg.graph_uri == "http://work:8080"
+
+
+def test_load_auto_detects_target_by_path(monkeypatch, toml_file, tmp_path):
+    checkout = tmp_path / "code" / "personal" / "dotfiles"
+    checkout.mkdir(parents=True)
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            f"""
+            [targets.personal]
+            server = "http://personal:8080"
+            match_paths = [{str(tmp_path / "code" / "personal")!r}]
+            """
+        ),
+    )
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(checkout))
+    # No git remote at all — path routing must still fire without WITAN_REPO.
+    monkeypatch.setenv("WITAN_REPO", "")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_MEMORY_URI", raising=False)
+
+    cfg = load()
+    assert cfg.target_name == "personal"
+    assert cfg.graph_uri == "http://personal:8080"
+
+
+def test_load_path_target_beats_org_target(monkeypatch, toml_file, tmp_path):
+    """match_paths is the most specific tier — it wins even when the repo
+    would also match a different target via match_orgs."""
+    checkout = tmp_path / "pinned-checkout"
+    checkout.mkdir()
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            f"""
+            [targets.work]
+            server = "http://work:8080"
+            match_orgs = ["mitodl"]
+
+            [targets.pinned]
+            server = "http://pinned:8080"
+            match_paths = [{str(checkout)!r}]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(checkout))
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_MEMORY_URI", raising=False)
+
+    cfg = load()
+    assert cfg.target_name == "pinned"
+    assert cfg.graph_uri == "http://pinned:8080"
 
 
 def test_load_explicit_target_arg(monkeypatch, toml_file):

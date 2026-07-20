@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.5.0] - 2026-07-20
+
+### Added
+
+- `[targets.<name>]` blocks gained a `match_paths` criterion — routes by
+  local checkout path prefix (e.g. `match_paths = ["~/code/personal"]`),
+  checked before `match_repos`/`match_hosts`/`match_orgs` since it pins a
+  specific filesystem location regardless of remote, and applies even when
+  no repo remote is configured at all. See the `load()` docstring in
+  `witan/config.py` for the full precedence order.
+
+### Changed
+
+- Target routing (`match_target`, `parse_target_tables`, `to_list`) moved to
+  `witan_core.target_config`; `witan-code` now shares it (and this same
+  `config.toml`), so a single `[targets.<name>]` block can carry overrides
+  for both servers — witan's `server`/`graph`/`token`/… alongside
+  witan-code's `code_dir`. No user-facing behavior change for existing
+  `match_orgs`/`match_repos`/`match_hosts` configs. Now depends on
+  `witan-core[cli,remote]>=0.2,<1` (unchanged range; picks up 0.3.0).
+
 ## [0.4.0] - 2026-07-16
 
 ### Added

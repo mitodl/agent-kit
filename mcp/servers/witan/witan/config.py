@@ -1,10 +1,16 @@
 import os
 import re
-import tomllib
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from witan_core.config_file import load_toml as _load_toml_shared
+from witan_core.target_config import (
+    local_project_path,
+    match_target,
+    parse_target_tables,
+    to_list,
+)
 
 from . import repo as repo_module
 
@@ -350,7 +356,7 @@ class ScanConfig(BaseModel):
         Items are stripped and blanks dropped in both cases, so a stray space in
         a plugin path (from either source) can't become an unimportable entry.
         """
-        items = v.split(",") if isinstance(v, str) else _to_list(v)
+        items = v.split(",") if isinstance(v, str) else to_list(v)
         return [s.strip() for s in items if s.strip()]
 
     @field_validator("allowlist")
@@ -535,10 +541,11 @@ def default_config_toml() -> str:
 # model = "claude-opus-4-8"
 
 # ── Named targets ────────────────────────────────────────────────────────────
-# Route different repos/orgs at different stores (e.g. work vs. personal).
-# The first target whose match_repos/match_hosts/match_orgs matches the
-# current repo wins; see the `load()` docstring in witan/config.py for the
-# full precedence rules.
+# Route different repos/orgs/checkouts at different stores (e.g. work vs.
+# personal). The first target whose match_paths/match_repos/match_hosts/
+# match_orgs matches the current repo or local checkout wins; see the
+# `load()` docstring in witan/config.py for the full precedence rules.
+# witan-code reads this same file, so a target can also carry `code_dir`.
 #
 # [targets.work]
 # server = "http://witan.internal:8080"
@@ -551,6 +558,7 @@ def default_config_toml() -> str:
 # [targets.personal]
 # server = "~/.local/share/witan-personal/graph.omni"
 # match_repos = ["github.com/you/dotfiles"]
+# match_paths = ["~/code/personal"]
 
 # ── [rank] — memory search re-ranking ───────────────────────────────────────
 # Ranking is always on; these are tuning knobs, not a feature flag. Set every
@@ -602,97 +610,26 @@ class _Target(BaseModel):
     match_orgs: list[str] = Field(default_factory=list)
     match_repos: list[str] = Field(default_factory=list)
     match_hosts: list[str] = Field(default_factory=list)
+    match_paths: list[str] = Field(default_factory=list)
+    """Local checkout path prefixes (e.g. "~/code/work"). See
+    witan_core.target_config.match_target for precedence — this is the most
+    specific tier, checked before match_repos/match_hosts/match_orgs."""
 
-    @field_validator("match_orgs", "match_repos", "match_hosts", mode="before")
+    @field_validator(
+        "match_orgs", "match_repos", "match_hosts", "match_paths", mode="before"
+    )
     @classmethod
     def _normalize_match_list(cls, v: object) -> list[str]:
-        return _to_list(v)
+        return to_list(v)
 
 
 def _load_toml() -> dict:
     """Load WITAN_CONFIG path or ~/.config/witan/config.toml. Returns {} on missing file."""
-    path = Path(os.environ.get("WITAN_CONFIG", str(DEFAULT_CONFIG_PATH)))
-    try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
-    except FileNotFoundError:
-        return {}
-    except tomllib.TOMLDecodeError as exc:
-        raise ValueError(f"Failed to parse config file {path}: {exc}") from exc
-    except OSError as exc:
-        raise ValueError(f"Failed to read config file {path}: {exc}") from exc
-
-
-def _to_list(val: object) -> list[str]:
-    """Normalise a TOML value to a list of strings.
-
-    Accepts a list (normal case), a bare string (convenience shorthand for a
-    single-element list), or None/missing (returns []). Raises ValueError for
-    anything else so config errors surface early with a clear message.
-    """
-    if val is None:
-        return []
-    if isinstance(val, str):
-        return [val]
-    if isinstance(val, list):
-        return [str(item) for item in val]
-    raise ValueError(f"Expected a list or string, got {type(val).__name__!r}")
+    return _load_toml_shared(DEFAULT_CONFIG_PATH)
 
 
 def _parse_targets(raw: dict) -> list[_Target]:
-    targets = raw.get("targets", {})
-    if not isinstance(targets, dict):
-        raise ValueError("The 'targets' section in config must be a table.")
-    result = []
-    for name, cfg in targets.items():
-        if not isinstance(cfg, dict):
-            raise ValueError(f"Target {name!r} in config must be a table.")
-        result.append(
-            _Target(
-                name=name,
-                server=cfg.get("server"),
-                graph=cfg.get("graph"),
-                token=cfg.get("token"),
-                author=cfg.get("author"),
-                agent=cfg.get("agent"),
-                model=cfg.get("model"),
-                match_orgs=cfg.get("match_orgs"),
-                match_repos=cfg.get("match_repos"),
-                match_hosts=cfg.get("match_hosts"),
-            )
-        )
-    return result
-
-
-def _match_target(targets: list[_Target], repo_uri: str) -> _Target | None:
-    """Return the first target whose patterns match repo_uri.
-
-    Priority (highest first):
-    1. match_repos — suffix match on host+path (e.g. "github.com/mitodl/agent-kit"
-       or just "mitodl/agent-kit")
-    2. match_hosts — hostname match (e.g. "github.mit.edu")
-    3. match_orgs  — first path segment after host (e.g. "mitodl")
-    """
-    bare = re.sub(r"^https?://", "", repo_uri).rstrip("/")
-    parts = bare.split("/")
-    host = parts[0]
-    org = parts[1] if len(parts) > 1 else ""
-
-    for t in targets:
-        for pattern in t.match_repos:
-            p = re.sub(r"^https?://", "", pattern).rstrip("/")
-            if bare == p or bare.endswith("/" + p):
-                return t
-
-    for t in targets:
-        if host and host in t.match_hosts:
-            return t
-
-    for t in targets:
-        if org and org in t.match_orgs:
-            return t
-
-    return None
+    return [_Target(name=name, **cfg) for name, cfg in parse_target_tables(raw).items()]
 
 
 def _resolve_path(value: str) -> str:
@@ -720,7 +657,11 @@ def load(target: str | None = None) -> Config:
 
     Each target section in config.toml can override ``server``, ``graph``,
     ``token``, ``author``, ``agent``, and ``model``. Targets are matched against
-    the current repo URI detected from ``.git/config`` (or WITAN_REPO).
+    the current repo URI detected from ``.git/config`` (or WITAN_REPO), and/or
+    the local checkout path (``match_paths`` — see
+    ``witan_core.target_config.match_target`` for the full precedence order).
+    witan-code reads the same config.toml, so a target can carry its
+    ``code_dir`` alongside these fields under one name.
 
     Example config.toml::
 
@@ -740,6 +681,7 @@ def load(target: str | None = None) -> Config:
         server = "~/.local/share/witan-personal/graph.omni"
         match_orgs = ["alice-personal"]
         match_repos = ["github.com/alice/dotfiles"]
+        match_paths = ["~/code/personal"]
 
     Raises ValueError for an explicitly-requested target that is not defined.
     """
@@ -755,8 +697,9 @@ def load(target: str | None = None) -> Config:
             available = ", ".join(t.name for t in targets) or "(none defined)"
             raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
     else:
-        repo_uri = repo_module.detect()
-        selected = _match_target(targets, repo_uri) if repo_uri else None
+        selected = match_target(
+            targets, repo_uri=repo_module.detect(), local_path=local_project_path()
+        )
 
     raw_server = _first(
         os.environ.get("WITAN_MEMORY_URI"),
