@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.5.0] - 2026-07-20
+
+### Added
+
+- `config.toml` + `[targets.<name>]` support (previously env-var only):
+  `WITAN_CONFIG` / `~/.config/witan/config.toml`, a global `code_dir`/
+  `author`, and named targets overriding `code_dir`/`author`, selected by
+  `WITAN_TARGET` env var, an explicit `load(target=...)`, or auto-detection
+  via `match_paths`/`match_repos`/`match_hosts`/`match_orgs` (same
+  precedence and file as witan — see `witan_core.target_config` and
+  `witan.config.load()`'s docstring). A target can carry witan's
+  `server`/`graph`/`token` alongside this server's `code_dir` under one
+  name; witan-code reads only the fields it knows. `Config` gained
+  `target_name`. `load()` now optionally takes a `target` argument (was
+  zero-argument only). New dependency: `pydantic>=2,<3`.
+
+### Changed
+
+- Now depends on `witan-core[cli]>=0.2,<1` (unchanged range; picks up
+  0.3.0, which adds the shared target-routing logic this release uses).
+
 ## [0.4.0] - 2026-07-16
 
 ### Added
