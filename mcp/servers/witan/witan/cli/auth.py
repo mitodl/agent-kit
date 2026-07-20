@@ -83,6 +83,8 @@ def whoami() -> None:
         raise SystemExit(1) from None
     claims = oidc.decode_claims(token)
     sub = claims.get("sub", "")
+    if remote.target_name:
+        console.print(f"[bold]Target[/bold]    {remote.target_name}")
     console.print(f"[bold]Endpoint[/bold]  {remote.url}")
     console.print(f"[bold]User[/bold]      {claims.get('preferred_username', '?')}")
     if claims.get("email"):

@@ -16,6 +16,17 @@ a MINOR bump may include breaking changes).
   specific filesystem location regardless of remote, and applies even when
   no repo remote is configured at all. See the `load()` docstring in
   `witan/config.py` for the full precedence order.
+- `[targets.<name>]` blocks can now also carry `remote_url`/`oidc_issuer`/
+  `oidc_client_id`/`oidc_audience` — the CLI's remote MCP-client mode (ADR
+  0005) is now resolved the same way as the omnigraph `server`/`graph`
+  fields (env var > target > global config.toml > default), instead of
+  `WITAN_REMOTE_URL`/`WITAN_OIDC_*` env vars alone. This lets different
+  orgs/repos/checkouts point at different deployed witan services, and a
+  single target can route both the omnigraph store and the deployed
+  service under one name. `RemoteConfig` gained `target_name`; `witan
+  whoami` now shows it. `load_remote_config()` gained an optional `target`
+  argument. Existing `WITAN_REMOTE_URL`/`WITAN_OIDC_*`-only setups are
+  unaffected (env vars still take precedence over any target).
 
 ### Changed
 

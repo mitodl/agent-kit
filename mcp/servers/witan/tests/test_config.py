@@ -38,6 +38,24 @@ def test_parse_targets_basic():
     assert result[0].match_paths == []
 
 
+def test_parse_targets_remote_fields():
+    raw = {
+        "targets": {
+            "hosted": {
+                "remote_url": "https://witan.example.org/mcp",
+                "oidc_issuer": "https://sso.example.org/realms/ol",
+                "oidc_client_id": "my-cli",
+                "oidc_audience": "witan",
+            }
+        }
+    }
+    result = _parse_targets(raw)
+    assert result[0].remote_url == "https://witan.example.org/mcp"
+    assert result[0].oidc_issuer == "https://sso.example.org/realms/ol"
+    assert result[0].oidc_client_id == "my-cli"
+    assert result[0].oidc_audience == "witan"
+
+
 def test_parse_targets_bare_string_match_orgs():
     """A bare string for match_orgs is normalised to a single-element list."""
     raw = {"targets": {"work": {"match_orgs": "mitodl"}}}
@@ -772,16 +790,29 @@ def test_load_identity_config_issuer_without_audience_raises(monkeypatch):
 # ── load_remote_config (ADR 0005) ────────────────────────────────────────────
 
 
-def test_load_remote_config_unset_is_none(monkeypatch):
+def _isolate_remote_config(monkeypatch, tmp_path):
+    """load_remote_config() now reads config.toml/targets like load() does —
+    point WITAN_CONFIG at an empty file so these tests can't pick up a real
+    ~/.config/witan/config.toml from the machine they run on, and clear
+    WITAN_TARGET. Call at the top of each load_remote_config test that
+    doesn't already set WITAN_CONFIG via ``toml_file``.
+    """
+    monkeypatch.setenv("WITAN_CONFIG", str(tmp_path / "unused.toml"))
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+
+
+def test_load_remote_config_unset_is_none(monkeypatch, tmp_path):
     from witan.config import load_remote_config
 
+    _isolate_remote_config(monkeypatch, tmp_path)
     monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
     assert load_remote_config() is None
 
 
-def test_load_remote_config_populated(monkeypatch):
+def test_load_remote_config_populated(monkeypatch, tmp_path):
     from witan.config import load_remote_config
 
+    _isolate_remote_config(monkeypatch, tmp_path)
     monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.org/mcp")
     monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/ol")
     monkeypatch.setenv("WITAN_OIDC_CLIENT_ID", "my-cli")
@@ -791,24 +822,202 @@ def test_load_remote_config_populated(monkeypatch):
     assert cfg.url == "https://witan.example.org/mcp"
     assert cfg.oidc_client_id == "my-cli"
     assert cfg.oidc_audience == "witan"
+    assert cfg.target_name is None
 
 
-def test_load_remote_config_defaults_client_id(monkeypatch):
+def test_load_remote_config_defaults_client_id(monkeypatch, tmp_path):
     from witan.config import load_remote_config
 
+    _isolate_remote_config(monkeypatch, tmp_path)
     monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.org/mcp")
     monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/ol")
-    monkeypatch.delenv("WITAN_OIDC_CLIENT_ID", raising=False)
-    monkeypatch.delenv("WITAN_OIDC_AUDIENCE", raising=False)
     cfg = load_remote_config()
     assert cfg.oidc_client_id == "witan-cli"
     assert cfg.oidc_audience is None
 
 
-def test_load_remote_config_url_without_issuer_raises(monkeypatch):
+def test_load_remote_config_url_without_issuer_raises(monkeypatch, tmp_path):
     from witan.config import load_remote_config
 
+    _isolate_remote_config(monkeypatch, tmp_path)
     monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.org/mcp")
-    monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
     with pytest.raises(ValueError, match="WITAN_OIDC_ISSUER"):
         load_remote_config()
+
+
+def test_load_remote_config_from_target_by_org(monkeypatch, toml_file):
+    """A [targets.<name>] block can carry remote_url/oidc_issuer, auto-selected
+    the same way as the omnigraph server/graph fields."""
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.hosted]
+            remote_url = "https://witan.example.org/mcp"
+            oidc_issuer = "https://sso.example.org/realms/ol"
+            match_orgs = ["mitodl"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+
+    cfg = load_remote_config()
+    assert cfg is not None
+    assert cfg.url == "https://witan.example.org/mcp"
+    assert cfg.oidc_issuer == "https://sso.example.org/realms/ol"
+    assert cfg.target_name == "hosted"
+
+
+def test_load_remote_config_env_overrides_target(monkeypatch, toml_file):
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.hosted]
+            remote_url = "https://witan.example.org/mcp"
+            oidc_issuer = "https://sso.example.org/realms/ol"
+            match_orgs = ["mitodl"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan-env.example.org/mcp")
+
+    cfg = load_remote_config()
+    assert cfg.url == "https://witan-env.example.org/mcp"
+    # env WITAN_REMOTE_URL wins, but the matched target still supplies issuer
+    assert cfg.oidc_issuer == "https://sso.example.org/realms/ol"
+
+
+def test_load_remote_config_target_shared_with_omnigraph_fields(monkeypatch, toml_file):
+    """One target block routes both the omnigraph store and the deployed
+    witan service under the same name."""
+    from witan.config import load, load_remote_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.hosted]
+            server = "http://work:8080"
+            remote_url = "https://witan.example.org/mcp"
+            oidc_issuer = "https://sso.example.org/realms/ol"
+            match_orgs = ["mitodl"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_MEMORY_URI", raising=False)
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+
+    assert load().target_name == "hosted"
+    remote = load_remote_config()
+    assert remote.target_name == "hosted"
+    assert remote.url == "https://witan.example.org/mcp"
+
+
+def test_load_remote_config_by_path(monkeypatch, toml_file, tmp_path):
+    from witan.config import load_remote_config
+
+    checkout = tmp_path / "pinned-checkout"
+    checkout.mkdir()
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            f"""
+            [targets.hosted]
+            remote_url = "https://witan.example.org/mcp"
+            oidc_issuer = "https://sso.example.org/realms/ol"
+            match_paths = [{str(checkout)!r}]
+            """
+        ),
+    )
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(checkout))
+    monkeypatch.setenv("WITAN_REPO", "")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+
+    cfg = load_remote_config()
+    assert cfg is not None
+    assert cfg.target_name == "hosted"
+
+
+def test_load_remote_config_explicit_target_arg(monkeypatch, toml_file):
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.hosted]
+            remote_url = "https://witan.example.org/mcp"
+            oidc_issuer = "https://sso.example.org/realms/ol"
+            """
+        ),
+    )
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+
+    cfg = load_remote_config(target="hosted")
+    assert cfg.target_name == "hosted"
+
+
+def test_load_remote_config_witan_target_env(monkeypatch, toml_file):
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.hosted]
+            remote_url = "https://witan.example.org/mcp"
+            oidc_issuer = "https://sso.example.org/realms/ol"
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_TARGET", "hosted")
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+
+    cfg = load_remote_config()
+    assert cfg.target_name == "hosted"
+
+
+def test_load_remote_config_unknown_explicit_target_raises(monkeypatch, toml_file):
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv("WITAN_CONFIG", toml_file('[targets.work]\nmatch_orgs = ["x"]'))
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+
+    with pytest.raises(ValueError, match="Unknown target 'nope'"):
+        load_remote_config(target="nope")
+
+
+def test_load_remote_config_target_without_remote_fields_is_none(
+    monkeypatch, toml_file
+):
+    """A matched target that only carries omnigraph fields (no remote_url)
+    must not accidentally enable remote mode."""
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.work]
+            server = "http://work:8080"
+            match_orgs = ["mitodl"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+
+    assert load_remote_config() is None

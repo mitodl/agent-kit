@@ -127,6 +127,15 @@ tools, so `RemoteServerProxy` raises a clear "run in-cluster as
   `WITAN_OIDC_AUDIENCE`). These name the *client's* view of the deployment and
   are distinct from the server-side `WITAN_ACTOR_TOKENS_FILE` /
   `load_identity_config()` triple.
+  - **Amendment (2026-07-20):** these four fields are also resolvable per
+    named `[targets.<name>]` block in `config.toml` (`remote_url`/
+    `oidc_issuer`/`oidc_client_id`/`oidc_audience`), matched the same way as
+    the omnigraph `server`/`graph`/`token` fields — env var still wins, then
+    the matched target, then a global config.toml value. This lets
+    different orgs/repos/checkouts point at different deployed witan
+    services, and a single target block can route both the omnigraph store
+    and the deployed MCP endpoint together. See `RemoteConfig`/
+    `load_remote_config()` in `witan/config.py`.
 - **Known v1 limitation:** `RemoteServerProxy` opens a fresh MCP connection per
   tool call, so a single CLI command that fans out to several tools pays
   several MCP handshakes. Acceptable for interactive CLI use; a persistent
