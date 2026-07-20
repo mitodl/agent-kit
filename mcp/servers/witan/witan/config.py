@@ -1,10 +1,16 @@
 import os
 import re
-import tomllib
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from witan_core.config_file import load_toml as _load_toml_shared
+from witan_core.target_config import (
+    local_project_path,
+    match_target,
+    parse_target_tables,
+    to_list,
+)
 
 from . import repo as repo_module
 
@@ -187,11 +193,17 @@ def load_identity_config() -> IdentityConfig:
 class RemoteConfig(BaseModel):
     """Client-side config for the CLI's remote MCP-client mode (ADR 0005, path a).
 
-    Opt-in: ``WITAN_REMOTE_URL`` unset means the CLI runs its in-process path
+    Opt-in: no configured ``url`` means the CLI runs its in-process path
     exactly as before. When set, ``witan.cli._common._srv()`` routes every
     command through the deployed witan MCP endpoint over ``streamable-http``,
     authenticated with a per-user Keycloak JWT (device-code flow, see
     ``witan/remote/oidc.py``).
+
+    Resolved by ``load_remote_config()`` the same way as ``Config`` — env var
+    > named ``[targets.<name>]`` override > global config.toml value >
+    default — so different orgs/repos/checkouts can point at different
+    deployed witan services under the same target that already routes their
+    omnigraph store (``server``/``graph``/``token``).
 
     These name the *client's* view of the deployment and are deliberately
     separate from the server-side ``IdentityConfig`` triple
@@ -217,31 +229,78 @@ class RemoteConfig(BaseModel):
     Keycloak realms with an audience mapper honor it to stamp the ``aud`` claim
     the server validates, and realms without one ignore it harmlessly."""
 
+    target_name: str | None = None
+    """Name of the matched [targets.<name>] section that supplied any of the
+    above, or None when resolved from env vars/global config.toml alone."""
 
-def load_remote_config() -> RemoteConfig | None:
-    """Resolve RemoteConfig from ``WITAN_REMOTE_URL`` / ``WITAN_OIDC_*``.
 
-    Returns ``None`` when ``WITAN_REMOTE_URL`` is unset (in-process mode).
-    Raises ``ValueError`` if the URL is set without ``WITAN_OIDC_ISSUER`` — a
-    remote endpoint the CLI can't authenticate to is useless, so fail loudly
-    rather than fall through to the unauthenticated in-process path.
+def load_remote_config(target: str | None = None) -> RemoteConfig | None:
+    """Resolve RemoteConfig from env > named target > global config.toml > default.
+
+    Target selection mirrors ``load()``: ``target`` arg > ``WITAN_TARGET`` env
+    var > auto-detect by repo/local checkout path (``match_paths`` >
+    ``match_repos`` > ``match_hosts`` > ``match_orgs`` —
+    ``witan_core.target_config.match_target``). A ``[targets.<name>]`` block
+    can carry ``remote_url``/``oidc_issuer``/``oidc_client_id``/
+    ``oidc_audience`` alongside its omnigraph ``server``/``graph``/``token``,
+    so one target routes both the store and which deployed witan service the
+    CLI talks to.
+
+    Returns ``None`` when no ``url`` is configured from any source
+    (in-process mode). Raises ``ValueError`` if a URL is configured without an
+    issuer — a remote endpoint the CLI can't authenticate to is useless, so
+    fail loudly rather than fall through to the unauthenticated in-process
+    path — or if an explicitly-requested target is not defined.
     """
-    url = os.environ.get("WITAN_REMOTE_URL")
+    file_cfg = _load_toml()
+    targets = _parse_targets(file_cfg)
+
+    explicit = target or os.environ.get("WITAN_TARGET")
+    if explicit:
+        selected = next((t for t in targets if t.name == explicit), None)
+        if selected is None:
+            available = ", ".join(t.name for t in targets) or "(none defined)"
+            raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
+    else:
+        selected = match_target(
+            targets, repo_uri=repo_module.detect(), local_path=local_project_path()
+        )
+
+    url = _first(
+        os.environ.get("WITAN_REMOTE_URL"),
+        selected.remote_url if selected else None,
+        file_cfg.get("remote_url"),
+    )
     if not url:
         return None
-    issuer = os.environ.get("WITAN_OIDC_ISSUER")
+    issuer = _first(
+        os.environ.get("WITAN_OIDC_ISSUER"),
+        selected.oidc_issuer if selected else None,
+        file_cfg.get("oidc_issuer"),
+    )
     if not issuer:
         raise ValueError(
-            "WITAN_REMOTE_URL is set but WITAN_OIDC_ISSUER is not — the CLI "
-            "cannot obtain a Keycloak JWT to authenticate the remote MCP "
-            "connection. Set WITAN_OIDC_ISSUER (and, if the deployment checks "
-            "it, WITAN_OIDC_AUDIENCE) or unset WITAN_REMOTE_URL."
+            "A remote witan URL is configured but no OIDC issuer is — the "
+            "CLI cannot obtain a Keycloak JWT to authenticate the remote MCP "
+            "connection. Set WITAN_OIDC_ISSUER (or oidc_issuer in "
+            "config.toml / the matched target), and if the deployment checks "
+            "it, WITAN_OIDC_AUDIENCE — or unset the remote URL."
         )
     return RemoteConfig(
         url=url,
         oidc_issuer=issuer,
-        oidc_client_id=os.environ.get("WITAN_OIDC_CLIENT_ID", "witan-cli"),
-        oidc_audience=os.environ.get("WITAN_OIDC_AUDIENCE"),
+        oidc_client_id=_first(
+            os.environ.get("WITAN_OIDC_CLIENT_ID"),
+            selected.oidc_client_id if selected else None,
+            file_cfg.get("oidc_client_id"),
+            default="witan-cli",
+        ),
+        oidc_audience=_first(
+            os.environ.get("WITAN_OIDC_AUDIENCE"),
+            selected.oidc_audience if selected else None,
+            file_cfg.get("oidc_audience"),
+        ),
+        target_name=selected.name if selected else None,
     )
 
 
@@ -350,7 +409,7 @@ class ScanConfig(BaseModel):
         Items are stripped and blanks dropped in both cases, so a stray space in
         a plugin path (from either source) can't become an unimportable entry.
         """
-        items = v.split(",") if isinstance(v, str) else _to_list(v)
+        items = v.split(",") if isinstance(v, str) else to_list(v)
         return [s.strip() for s in items if s.strip()]
 
     @field_validator("allowlist")
@@ -535,10 +594,14 @@ def default_config_toml() -> str:
 # model = "claude-opus-4-8"
 
 # ── Named targets ────────────────────────────────────────────────────────────
-# Route different repos/orgs at different stores (e.g. work vs. personal).
-# The first target whose match_repos/match_hosts/match_orgs matches the
-# current repo wins; see the `load()` docstring in witan/config.py for the
-# full precedence rules.
+# Route different repos/orgs/checkouts at different stores (e.g. work vs.
+# personal). The first target whose match_paths/match_repos/match_hosts/
+# match_orgs matches the current repo or local checkout wins; see the
+# `load()` docstring in witan/config.py for the full precedence rules.
+# witan-code reads this same file, so a target can also carry `code_dir`. A
+# target can also carry remote_url/oidc_issuer/oidc_client_id/oidc_audience
+# to point the CLI at a deployed witan service instead of running in-process
+# (see RemoteConfig/load_remote_config() in witan/config.py, ADR 0005).
 #
 # [targets.work]
 # server = "http://witan.internal:8080"
@@ -551,6 +614,12 @@ def default_config_toml() -> str:
 # [targets.personal]
 # server = "~/.local/share/witan-personal/graph.omni"
 # match_repos = ["github.com/you/dotfiles"]
+# match_paths = ["~/code/personal"]
+#
+# [targets.hosted]
+# remote_url = "https://witan.example.org/mcp"
+# oidc_issuer = "https://sso.example.org/realms/ol-platform-engineering"
+# match_orgs = ["ol-platform-engineering"]
 
 # ── [rank] — memory search re-ranking ───────────────────────────────────────
 # Ranking is always on; these are tuning knobs, not a feature flag. Set every
@@ -599,100 +668,36 @@ class _Target(BaseModel):
     author: str | None = None
     agent: str | None = None
     model: str | None = None
+    remote_url: str | None = None
+    """Overrides WITAN_REMOTE_URL — routes this target's CLI commands through
+    a deployed witan MCP endpoint instead of running in-process. See
+    RemoteConfig/load_remote_config()."""
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_audience: str | None = None
     match_orgs: list[str] = Field(default_factory=list)
     match_repos: list[str] = Field(default_factory=list)
     match_hosts: list[str] = Field(default_factory=list)
+    match_paths: list[str] = Field(default_factory=list)
+    """Local checkout path prefixes (e.g. "~/code/work"). See
+    witan_core.target_config.match_target for precedence — this is the most
+    specific tier, checked before match_repos/match_hosts/match_orgs."""
 
-    @field_validator("match_orgs", "match_repos", "match_hosts", mode="before")
+    @field_validator(
+        "match_orgs", "match_repos", "match_hosts", "match_paths", mode="before"
+    )
     @classmethod
     def _normalize_match_list(cls, v: object) -> list[str]:
-        return _to_list(v)
+        return to_list(v)
 
 
 def _load_toml() -> dict:
     """Load WITAN_CONFIG path or ~/.config/witan/config.toml. Returns {} on missing file."""
-    path = Path(os.environ.get("WITAN_CONFIG", str(DEFAULT_CONFIG_PATH)))
-    try:
-        with open(path, "rb") as f:
-            return tomllib.load(f)
-    except FileNotFoundError:
-        return {}
-    except tomllib.TOMLDecodeError as exc:
-        raise ValueError(f"Failed to parse config file {path}: {exc}") from exc
-    except OSError as exc:
-        raise ValueError(f"Failed to read config file {path}: {exc}") from exc
-
-
-def _to_list(val: object) -> list[str]:
-    """Normalise a TOML value to a list of strings.
-
-    Accepts a list (normal case), a bare string (convenience shorthand for a
-    single-element list), or None/missing (returns []). Raises ValueError for
-    anything else so config errors surface early with a clear message.
-    """
-    if val is None:
-        return []
-    if isinstance(val, str):
-        return [val]
-    if isinstance(val, list):
-        return [str(item) for item in val]
-    raise ValueError(f"Expected a list or string, got {type(val).__name__!r}")
+    return _load_toml_shared(DEFAULT_CONFIG_PATH)
 
 
 def _parse_targets(raw: dict) -> list[_Target]:
-    targets = raw.get("targets", {})
-    if not isinstance(targets, dict):
-        raise ValueError("The 'targets' section in config must be a table.")
-    result = []
-    for name, cfg in targets.items():
-        if not isinstance(cfg, dict):
-            raise ValueError(f"Target {name!r} in config must be a table.")
-        result.append(
-            _Target(
-                name=name,
-                server=cfg.get("server"),
-                graph=cfg.get("graph"),
-                token=cfg.get("token"),
-                author=cfg.get("author"),
-                agent=cfg.get("agent"),
-                model=cfg.get("model"),
-                match_orgs=cfg.get("match_orgs"),
-                match_repos=cfg.get("match_repos"),
-                match_hosts=cfg.get("match_hosts"),
-            )
-        )
-    return result
-
-
-def _match_target(targets: list[_Target], repo_uri: str) -> _Target | None:
-    """Return the first target whose patterns match repo_uri.
-
-    Priority (highest first):
-    1. match_repos — suffix match on host+path (e.g. "github.com/mitodl/agent-kit"
-       or just "mitodl/agent-kit")
-    2. match_hosts — hostname match (e.g. "github.mit.edu")
-    3. match_orgs  — first path segment after host (e.g. "mitodl")
-    """
-    bare = re.sub(r"^https?://", "", repo_uri).rstrip("/")
-    parts = bare.split("/")
-    host = parts[0]
-    org = parts[1] if len(parts) > 1 else ""
-
-    for t in targets:
-        for pattern in t.match_repos:
-            p = re.sub(r"^https?://", "", pattern).rstrip("/")
-            if bare == p or bare.endswith("/" + p):
-                return t
-
-    for t in targets:
-        if host and host in t.match_hosts:
-            return t
-
-    for t in targets:
-        if org and org in t.match_orgs:
-            return t
-
-    return None
+    return [_Target(name=name, **cfg) for name, cfg in parse_target_tables(raw).items()]
 
 
 def _resolve_path(value: str) -> str:
@@ -719,8 +724,15 @@ def load(target: str | None = None) -> Config:
     4. Hardcoded defaults
 
     Each target section in config.toml can override ``server``, ``graph``,
-    ``token``, ``author``, ``agent``, and ``model``. Targets are matched against
-    the current repo URI detected from ``.git/config`` (or WITAN_REPO).
+    ``token``, ``author``, ``agent``, and ``model`` — plus, for the CLI's
+    remote MCP-client mode, ``remote_url``/``oidc_issuer``/``oidc_client_id``/
+    ``oidc_audience`` (see ``RemoteConfig``/``load_remote_config()``, which
+    resolves those the same way). Targets are matched against the current
+    repo URI detected from ``.git/config`` (or WITAN_REPO), and/or the local
+    checkout path (``match_paths`` — see
+    ``witan_core.target_config.match_target`` for the full precedence order).
+    witan-code reads the same config.toml, so a target can carry its
+    ``code_dir`` alongside these fields under one name.
 
     Example config.toml::
 
@@ -740,6 +752,12 @@ def load(target: str | None = None) -> Config:
         server = "~/.local/share/witan-personal/graph.omni"
         match_orgs = ["alice-personal"]
         match_repos = ["github.com/alice/dotfiles"]
+        match_paths = ["~/code/personal"]
+
+        [targets.hosted]
+        remote_url = "https://witan.example.org/mcp"
+        oidc_issuer = "https://sso.example.org/realms/ol-platform-engineering"
+        match_orgs = ["ol-platform-engineering"]
 
     Raises ValueError for an explicitly-requested target that is not defined.
     """
@@ -755,8 +773,9 @@ def load(target: str | None = None) -> Config:
             available = ", ".join(t.name for t in targets) or "(none defined)"
             raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
     else:
-        repo_uri = repo_module.detect()
-        selected = _match_target(targets, repo_uri) if repo_uri else None
+        selected = match_target(
+            targets, repo_uri=repo_module.detect(), local_path=local_project_path()
+        )
 
     raw_server = _first(
         os.environ.get("WITAN_MEMORY_URI"),

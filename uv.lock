@@ -1744,12 +1744,13 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "mcp/servers/witan-code" }
 dependencies = [
     { name = "agent-config-kit" },
     { name = "cyclopts" },
     { name = "fastmcp" },
+    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "tomli-w" },
@@ -1774,6 +1775,7 @@ requires-dist = [
     { name = "agent-config-kit", editable = "packages/agent-config-kit" },
     { name = "cyclopts", specifier = ">=4,<5" },
     { name = "fastmcp", specifier = ">=3.4.2,<4" },
+    { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "rich", specifier = ">=13" },
     { name = "tomli-w", specifier = ">=1,<2" },
@@ -1793,7 +1795,7 @@ test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "witan-core"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
@@ -1843,7 +1845,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },

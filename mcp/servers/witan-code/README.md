@@ -305,11 +305,34 @@ symlink alternative:
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
+| `WITAN_CONFIG` | `~/.config/witan/config.toml` | config file path (see below) |
+| `WITAN_TARGET` | — | force a named `[targets.<name>]` block instead of auto-detecting one |
 
 The store URI for a repo is `<dir>/<sanitized-slug>.omni`, where the slug's `/`
 and `:` are replaced with `_`. The shared cross-repo bridge lives alongside them
 at `<dir>/_bridge.omni` and is created lazily on the first index that yields any
 bindings.
+
+### config.toml
+
+witan-code reads the same `config.toml` as witan (witan-council) — a global
+`code_dir`/`author`, plus named `[targets.<name>]` blocks that override them
+and are selected by `WITAN_TARGET`, `load(target=...)` (Python API only — no
+CLI `--target` flag yet), or auto-detection against the current
+repo/checkout (`match_paths` > `match_repos` > `match_hosts` > `match_orgs`
+— see witan's README/`witan/config.py` docstring for the full precedence).
+Because the file is shared, one target block can carry witan's
+`server`/`graph`/`token` alongside `code_dir` under
+the same name — each server reads only the fields it knows:
+
+```toml
+[targets.work]
+server = "http://witan.internal:8080"  # witan (witan-council)
+code_dir = "/mnt/work/witan-code"      # witan-code
+match_orgs = ["myorg"]
+```
+
+Environment variables always win over `config.toml`.
 
 ## MCP tools
 
