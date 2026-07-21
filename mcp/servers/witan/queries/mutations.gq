@@ -226,6 +226,14 @@ query insert_workflow_session(
     }
 }
 
+// For the one-shot `witan migrate repo-keys` scan only — no tool exposes
+// changing a session's repo otherwise (it's set once at workflow_session_start).
+query update_workflow_session_repo($slug: String, $repo: String?) {
+    update WorkflowSession
+        set { repo: $repo }
+        where slug = $slug
+}
+
 query update_workflow_session_end(
     $slug: String,
     $summary: String,
@@ -277,6 +285,15 @@ query insert_workflow_trace(
         tags: $tags,
         created_at: $created_at
     }
+}
+
+// For the one-shot `witan migrate repo-keys` scan only — WorkflowTrace is
+// otherwise immutable after creation (see schema.pg); this corrects the case
+// of an already-recorded repos list, never its substantive content.
+query update_workflow_trace_repos($slug: String, $repos: [String]?) {
+    update WorkflowTrace
+        set { repos: $repos }
+        where slug = $slug
 }
 
 query update_workflow_trace_annotations(

@@ -147,6 +147,21 @@ query list_memories_by_kind_unbounded($kind: String) {
     limit 10000
 }
 
+// Every mutable field, for the one-shot `witan migrate repo-keys` scan — the
+// other unbounded listings above omit symbol_refs, which update_memory also
+// needs (it replaces the full mutable set, per its own doc comment).
+query list_all_memories_full() {
+    match {
+        $m: Memory
+    }
+    return {
+        $m.slug, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.tags, $m.symbol_refs, $m.confidence, $m.updated_at
+    }
+    limit 10000
+}
+
 // ── Single node fetch ─────────────────────────────────────────────
 
 query get_memory($slug: String) {
@@ -528,6 +543,16 @@ query list_all_sessions() {
     order { $s.started_at asc }
 }
 
+// slug + repo only, for the `witan migrate repo-keys` scan — the listing
+// above omits repo since the context hook that drives it never needs it.
+query list_all_sessions_repo() {
+    match {
+        $s: WorkflowSession
+    }
+    return { $s.slug, $s.repo }
+    limit 10000
+}
+
 // Memories produced during a session (provenance walk). Edge predicate is the
 // type name lowercased with underscores stripped: `sessionproduced`.
 query session_produced_memories($session_slug: String) {
@@ -674,6 +699,23 @@ query list_unscoped_tasks() {
     limit 10000
 }
 
+// Every mutable field, for the one-shot `witan migrate repo-keys` scan — the
+// listings above omit description/resolution/closed_at/symbol_refs, which
+// update_task also needs (it replaces the full mutable set, per its own doc
+// comment).
+query list_all_tasks_full() {
+    match {
+        $t: Task
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.type, $t.status, $t.priority,
+        $t.repo, $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.resolution,
+        $t.symbol_refs, $t.tags, $t.closed_at, $t.claimed_at
+    }
+    limit 10000
+}
+
 query list_tasks_by_project($project_slug: String) {
     match {
         $t: Task { project_slug: $project_slug }
@@ -748,6 +790,15 @@ query code_branches_by_repo($repo: String) {
     return { $b.slug, $b.repo, $b.branch, $b.status, $b.created_at, $b.updated_at }
 }
 
+// For the one-shot `witan migrate repo-keys` scan.
+query list_all_code_branches() {
+    match {
+        $b: CodeBranch
+    }
+    return { $b.slug, $b.repo, $b.branch, $b.status, $b.created_at, $b.updated_at }
+    limit 10000
+}
+
 // Tasks a branch WorksOn — "which task(s) does branch B carry".
 query code_branch_tasks($branch_slug: String) {
     match {
@@ -788,4 +839,15 @@ query code_branch_for_project_edge($branch_slug: String, $project_slug: String) 
         $b forproject $p
     }
     return { $b.slug }
+}
+
+// The project(s) a branch ForProjects — for the `witan migrate repo-keys`
+// scan, which re-links this edge onto a recreated CodeBranch's new slug.
+query code_branch_projects($branch_slug: String) {
+    match {
+        $b: CodeBranch { slug: $branch_slug }
+        $p: WorkflowProject
+        $b forproject $p
+    }
+    return { $p.slug }
 }

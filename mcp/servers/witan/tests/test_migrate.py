@@ -356,6 +356,238 @@ def test_parse_ts_orders_mixed_offset_formats_correctly():
     assert later_with_offset > earlier_utc  # correct once parsed
 
 
+@requires_omnigraph
+def test_migrate_repo_keys_folds_task_repo_and_symbol_refs(server):
+    from witan import server as srv
+
+    stale = "https://github.com/MITODL/OL-Django"
+    canonical = "https://github.com/mitodl/ol-django"
+    srv.client.change(
+        "mutations.gq",
+        "insert_task",
+        {
+            "slug": "tk-stale-case-aaaaaa",
+            "title": "stale",
+            "description": "",
+            "repo": stale,
+            "type": "task",
+            "status": "open",
+            "priority": "p2",
+            "project_slug": None,
+            "parent_slug": None,
+            "blocked_by": None,
+            "assignee": None,
+            "external_uri": None,
+            "author": "pytest",
+            "symbol_refs": [f"{stale}#app.py::Foo"],
+            "tags": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "claimed_at": None,
+        },
+    )
+
+    result = srv.migrate_repo_keys()
+    assert result["tasks_updated"] == 1
+    assert result["repos_changed"] == {stale: canonical}
+
+    row = srv.client.read("read.gq", "get_task", {"slug": "tk-stale-case-aaaaaa"})[0]
+    assert row["repo"] == canonical
+    assert row["symbol_refs"] == [f"{canonical}#app.py::Foo"]
+
+    # Idempotent: nothing left to fold on a second run.
+    assert srv.migrate_repo_keys()["tasks_updated"] == 0
+
+
+@requires_omnigraph
+def test_migrate_repo_keys_folds_memory_repo(server):
+    from witan import server as srv
+
+    stale = "https://GitHub.com/mitodl/ol-django"
+    canonical = "https://github.com/mitodl/ol-django"
+    _insert_memory(
+        srv.client,
+        slug="mem-stale-case-bbbbbb",
+        content="hi",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    # _insert_memory hardcodes repo=None; overwrite it directly via update_memory
+    # so this test controls the exact stale value under migration.
+    srv.client.change(
+        "mutations.gq",
+        "update_memory",
+        {
+            "slug": "mem-stale-case-bbbbbb",
+            "title": "collide",
+            "content": "hi",
+            "repo": stale,
+            "language": None,
+            "category": None,
+            "severity": None,
+            "tags": None,
+            "symbol_refs": None,
+            "confidence": None,
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+
+    result = srv.migrate_repo_keys()
+    assert result["memories_updated"] == 1
+    row = srv.client.read("read.gq", "get_memory", {"slug": "mem-stale-case-bbbbbb"})[0]
+    assert row["repo"] == canonical
+
+
+@requires_omnigraph
+def test_migrate_repo_keys_folds_and_dedupes_project_repos(server):
+    from witan import server as srv
+
+    srv.client.change(
+        "mutations.gq",
+        "insert_workflow_project",
+        {
+            "slug": "wp-stale-case-cccccc",
+            "title": "stale project",
+            "description": "",
+            "repos": [
+                "https://github.com/MITODL/OL-Django",
+                "https://github.com/mitodl/ol-django",
+            ],
+            "status": "active",
+            "phase": "discovery",
+            "author": "pytest",
+            "tags": None,
+            "github_issue": None,
+            "github_pr": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+
+    result = srv.migrate_repo_keys()
+    assert result["projects_updated"] == 1
+
+    row = srv.client.read(
+        "read.gq", "get_workflow_project", {"slug": "wp-stale-case-cccccc"}
+    )[0]
+    # Both entries fold onto the same canonical key and dedupe to one.
+    assert row["repos"] == ["https://github.com/mitodl/ol-django"]
+
+
+@requires_omnigraph
+def test_migrate_repo_keys_recreates_code_branch_under_canonical_slug(server):
+    from witan import server as srv
+
+    stale = "https://github.com/MITODL/OL-Django"
+    canonical = "https://github.com/mitodl/ol-django"
+    stale_slug = f"{stale}|feature/x"
+    canonical_slug = f"{canonical}|feature/x"
+    srv.client.change(
+        "mutations.gq",
+        "insert_code_branch",
+        {
+            "slug": stale_slug,
+            "repo": stale,
+            "branch": "feature/x",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+    # WorksOn/ForProject edges on the stale branch must survive the move to
+    # the canonical slug, else "In-Flight Branch" context silently drops them.
+    srv.client.change(
+        "mutations.gq",
+        "insert_task",
+        {
+            "slug": "tk-branch-carries-dddddd",
+            "title": "carried",
+            "description": "",
+            "repo": None,
+            "type": "task",
+            "status": "open",
+            "priority": "p2",
+            "project_slug": None,
+            "parent_slug": None,
+            "blocked_by": None,
+            "assignee": None,
+            "external_uri": None,
+            "author": "pytest",
+            "symbol_refs": None,
+            "tags": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "claimed_at": None,
+        },
+    )
+    srv.client.change(
+        "mutations.gq",
+        "insert_workflow_project",
+        {
+            "slug": "wp-branch-carries-eeeeee",
+            "title": "carried project",
+            "description": "",
+            "repos": None,
+            "status": "active",
+            "phase": "discovery",
+            "author": "pytest",
+            "tags": None,
+            "github_issue": None,
+            "github_pr": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+    srv.client.change(
+        "mutations.gq",
+        "link_works_on",
+        {"from": stale_slug, "to": "tk-branch-carries-dddddd"},
+    )
+    srv.client.change(
+        "mutations.gq",
+        "link_for_project",
+        {"from": stale_slug, "to": "wp-branch-carries-eeeeee"},
+    )
+
+    result = srv.migrate_repo_keys()
+    assert result["code_branches_migrated"] == 1
+
+    new_row = srv.client.read("read.gq", "get_code_branch", {"slug": canonical_slug})
+    assert (
+        new_row and new_row[0]["repo"] == canonical and new_row[0]["status"] == "active"
+    )
+
+    old_row = srv.client.read("read.gq", "get_code_branch", {"slug": stale_slug})
+    assert old_row and old_row[0]["status"] == "abandoned"
+
+    carried_tasks = srv.client.read(
+        "read.gq", "code_branch_tasks", {"branch_slug": canonical_slug}
+    )
+    assert [t["slug"] for t in carried_tasks] == ["tk-branch-carries-dddddd"]
+    carried_projects = srv.client.read(
+        "read.gq", "code_branch_projects", {"branch_slug": canonical_slug}
+    )
+    assert [p["slug"] for p in carried_projects] == ["wp-branch-carries-eeeeee"]
+
+    # Idempotent: the canonical slug already exists, so re-running skips it.
+    assert srv.migrate_repo_keys()["code_branches_migrated"] == 0
+
+
+@requires_omnigraph
+def test_migrate_repo_keys_is_noop_on_already_canonical_store(server):
+    from witan import server as srv
+
+    result = srv.migrate_repo_keys()
+    assert result == {
+        "tasks_updated": 0,
+        "memories_updated": 0,
+        "sessions_updated": 0,
+        "projects_updated": 0,
+        "traces_updated": 0,
+        "code_branches_migrated": 0,
+        "repos_changed": {},
+    }
+
+
 def test_parse_ts_compares_naive_and_aware_without_raising():
     """omnigraph's own export strips the offset witan writes down to a naive
     string — an aware value must still compare against a naive one without

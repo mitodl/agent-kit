@@ -12,8 +12,9 @@ def detect(override: str | None = None, start: Path | None = None) -> str | None
     Return a canonical repo key (HTTPS URI) for ``start`` (or the cwd).
 
     Resolution order:
-      1. ``override`` parameter (explicit caller value)
-      2. ``WITAN_REPO`` environment variable
+      1. ``override`` parameter (explicit caller value) — canonicalized the
+         same way an auto-detected remote is (see ``normalise``)
+      2. ``WITAN_REPO`` environment variable — canonicalized the same way
       3. ``git remote get-url origin`` (handles worktrees and multi-valued
          config keys that ``configparser`` rejects)
       4. ``origin`` remote URL parsed from the nearest ``.git/config``
@@ -21,10 +22,10 @@ def detect(override: str | None = None, start: Path | None = None) -> str | None
       6. ``None`` — no repo context available
     """
     if override is not None:
-        return override or None
+        return normalise(override) if override else None
 
     if env_repo := os.environ.get("WITAN_REPO"):
-        return env_repo
+        return normalise(env_repo)
 
     base = start or Path.cwd()
 

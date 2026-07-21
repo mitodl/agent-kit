@@ -18,6 +18,19 @@ def test_detect_env_override(monkeypatch):
     assert repo.detect() == "https://github.com/test/cg"
 
 
+def test_detect_env_override_is_normalised(monkeypatch):
+    monkeypatch.setenv("WITAN_REPO", "https://GitHub.com/MITODL/OL-Django")
+    assert repo.detect() == "https://github.com/mitodl/ol-django"
+
+
+def test_detect_override_arg_is_normalised(monkeypatch):
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    assert (
+        repo.detect(override="git@github.com:MITODL/OL-Django.git")
+        == "https://github.com/mitodl/ol-django"
+    )
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_detect_tolerates_multivalued_fetch(tmp_path, monkeypatch):
     # git allows several `fetch =` lines under a remote; configparser rejects

@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.6.0] - 2026-07-21
+
+### Fixed
+
+- **`repo.detect(override=...)` and the `WITAN_REPO` env var now route
+  through `normalise`** (issue #142), same as an auto-detected git remote —
+  matching the fix in witan-council 0.6.0. Previously an explicitly-passed
+  `repo=` (or `WITAN_REPO`) was stored verbatim, bypassing
+  canonicalization. `graph_id` (the shared-cluster graph id) already
+  case-folded unconditionally and needs no change; a repo whose canonical
+  key changes case after this fix should be re-indexed (`witan-code
+  reindex`) so its per-repo store lands under the new key.
+- Depends on `witan-core[cli]>=0.2,<1` (unchanged range; picks up 0.4.0's
+  repo-key case-fold in `normalise`, which this package's `repo.detect`
+  relies on).
+
 ## [0.5.0] - 2026-07-20
 
 ### Added

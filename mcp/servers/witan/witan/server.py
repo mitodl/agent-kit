@@ -20,7 +20,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
-from witan_core import now_iso
+from witan_core import normalise, now_iso
 
 from . import config as cfg_module
 from . import elicit
@@ -436,6 +436,179 @@ def migrate_topics() -> dict:
         "topics_created": topics_created,
         "edges_created": edges_created,
     }
+
+
+def _fold_symbol_ref(ref: str) -> str:
+    """Case-fold the repo prefix of a soft symbol ref (``repo#path::Name``)."""
+    repo_part, sep, rest = ref.partition("#")
+    return f"{normalise(repo_part)}{sep}{rest}" if sep else ref
+
+
+def migrate_repo_keys() -> dict:
+    """One-shot, idempotent repo-key case-fold migration (issue #142).
+
+    ``normalise`` (``witan_core.repo_key``) now case-folds GitHub/GitLab
+    ``repo`` keys — host always, org/repo path for those two hosts — so the
+    same remote canonicalizes identically regardless of how it's spelled;
+    ``repo.detect`` now routes every resolution path (override, ``WITAN_REPO``,
+    git remote) through it. Rows written before that fix may still carry a
+    stale, differently-cased ``repo``/``repos``/symbol-ref value that no
+    longer matches what ``repo.detect`` returns for the same remote — silently
+    dropping them out of every repo-scoped read (``task_ready``,
+    ``memory_list``, ...). This rewrites every repo-keyed field in place,
+    using ``normalise`` as the source of truth for "canonical".
+
+    ``CodeBranch`` is the one exception: its slug embeds ``repo`` (``@key``),
+    so it can't be updated in place. A canonical replacement is inserted
+    (skipped if one already exists — what makes this idempotent), its
+    ``WorksOn``/``ForProject`` edges are re-linked onto the new slug (else the
+    "In-Flight Branch" context and `task_code_branches` silently lose the
+    association once reads move to the canonical slug), and the stale row is
+    marked ``abandoned`` rather than deleted (no delete mutation exists for
+    it).
+
+    Does NOT touch the code graph (witan-code): its per-repo stores and symbol
+    ids are documented as re-derivable caches, so the fix there is
+    ``witan-code reindex``, not a migration — the returned ``repos_changed``
+    map is which repos need it.
+
+    Safe to re-run — every row is skipped once its key is already canonical.
+    """
+    now = now_iso()
+    counts = {
+        "tasks_updated": 0,
+        "memories_updated": 0,
+        "sessions_updated": 0,
+        "projects_updated": 0,
+        "traces_updated": 0,
+        "code_branches_migrated": 0,
+    }
+    repos_changed: dict[str, str] = {}
+
+    def _note(old: str | None, new: str) -> None:
+        if old and old != new:
+            repos_changed[old] = new
+
+    for row in client.read("read.gq", "list_all_tasks_full", {}):
+        repo = row.get("repo")
+        refs = row.get("symbol_refs")
+        new_repo = normalise(repo) if repo else repo
+        new_refs = [_fold_symbol_ref(r) for r in refs] if refs else refs
+        if new_repo == repo and new_refs == refs:
+            continue
+        _note(repo, new_repo)
+        client.change(
+            "mutations.gq",
+            "update_task",
+            {**row, "repo": new_repo, "symbol_refs": new_refs, "updated_at": now},
+        )
+        counts["tasks_updated"] += 1
+
+    for row in client.read("read.gq", "list_all_memories_full", {}):
+        repo = row.get("repo")
+        refs = row.get("symbol_refs")
+        new_repo = normalise(repo) if repo else repo
+        new_refs = [_fold_symbol_ref(r) for r in refs] if refs else refs
+        if new_repo == repo and new_refs == refs:
+            continue
+        _note(repo, new_repo)
+        client.change(
+            "mutations.gq",
+            "update_memory",
+            {**row, "repo": new_repo, "symbol_refs": new_refs, "updated_at": now},
+        )
+        counts["memories_updated"] += 1
+
+    for row in client.read("read.gq", "list_all_sessions_repo", {}):
+        repo = row.get("repo")
+        if not repo:
+            continue
+        new_repo = normalise(repo)
+        if new_repo == repo:
+            continue
+        _note(repo, new_repo)
+        client.change(
+            "mutations.gq",
+            "update_workflow_session_repo",
+            {"slug": row["slug"], "repo": new_repo},
+        )
+        counts["sessions_updated"] += 1
+
+    for row in client.read("read.gq", "list_all_projects", {}):
+        repos = row.get("repos") or []
+        pairs = [(r, normalise(r)) for r in repos]
+        folded = _merge_repos([new for _, new in pairs])
+        if folded == repos:
+            continue
+        for old, new in pairs:
+            _note(old, new)
+        client.change(
+            "mutations.gq",
+            "update_workflow_project_repos",
+            {"slug": row["slug"], "repos": folded, "updated_at": now},
+        )
+        counts["projects_updated"] += 1
+
+    for row in client.read("read.gq", "list_all_traces", {}):
+        repos = row.get("repos") or []
+        pairs = [(r, normalise(r)) for r in repos]
+        folded = _merge_repos([new for _, new in pairs])
+        if folded == repos:
+            continue
+        for old, new in pairs:
+            _note(old, new)
+        client.change(
+            "mutations.gq",
+            "update_workflow_trace_repos",
+            {"slug": row["slug"], "repos": folded},
+        )
+        counts["traces_updated"] += 1
+
+    for row in client.read("read.gq", "list_all_code_branches", {}):
+        repo = row["repo"]
+        canonical = normalise(repo)
+        if canonical == repo:
+            continue
+        new_slug = _code_branch_slug(canonical, row["branch"])
+        if client.read("read.gq", "get_code_branch", {"slug": new_slug}):
+            continue  # already migrated in a prior run
+        _note(repo, canonical)
+        client.change(
+            "mutations.gq",
+            "insert_code_branch",
+            {
+                "slug": new_slug,
+                "repo": canonical,
+                "branch": row["branch"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "updated_at": now,
+            },
+        )
+        for task in client.read(
+            "read.gq", "code_branch_tasks", {"branch_slug": row["slug"]}
+        ):
+            client.change(
+                "mutations.gq",
+                "link_works_on",
+                {"from": new_slug, "to": task["slug"]},
+            )
+        for project in client.read(
+            "read.gq", "code_branch_projects", {"branch_slug": row["slug"]}
+        ):
+            client.change(
+                "mutations.gq",
+                "link_for_project",
+                {"from": new_slug, "to": project["slug"]},
+            )
+        client.change(
+            "mutations.gq",
+            "touch_code_branch",
+            {"slug": row["slug"], "status": "abandoned", "updated_at": now},
+        )
+        counts["code_branches_migrated"] += 1
+
+    return {**counts, "repos_changed": repos_changed}
 
 
 # ── Storage-format migration ────────────────────────────────────

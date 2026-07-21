@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.4.0] - 2026-07-21
+
+### Changed
+
+- **`repo_key.normalise` now case-folds GitHub/GitLab repo keys** (issue
+  #142): the host is always lowercased (DNS hostnames are inherently
+  case-insensitive), and the org/repo path is additionally lowercased for
+  `github.com`/`gitlab.com`, whose org/repo names are themselves
+  case-insensitive. A generic/self-hosted git host's path is left as-is,
+  since its paths aren't guaranteed case-insensitive. Previously
+  `https://github.com/Org/repo` and `https://github.com/org/repo`
+  canonicalized to two different keys, silently fragmenting every
+  `repo`-keyed record (tasks, memories, workflow projects, symbol ids)
+  across whichever case happened to be detected in a given session. This is
+  a **breaking change to the golden-contract output** for any repo whose
+  GitHub/GitLab org or name contains uppercase characters — existing data
+  written under the old, differently-cased key needs a one-time migration;
+  see witan-council 0.6.0's `witan migrate repo-keys` (witan-code's
+  per-repo/bridge stores are unaffected — they were already
+  case-insensitive via `graph_id`, or are documented re-derivable caches
+  fixed by `witan-code reindex`).
+
 ## [0.3.0] - 2026-07-20
 
 ### Added

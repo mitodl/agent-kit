@@ -21,6 +21,30 @@ def _apply_schema() -> None:
     console.print(result["output"] or f"schema applied to {result['store']}")
 
 
+def _repo_keys() -> None:
+    s = _srv()
+    try:
+        result = s.migrate_repo_keys()
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
+    console.print(
+        f"Updated {result['tasks_updated']} task(s), {result['memories_updated']} "
+        f"memory(ies), {result['sessions_updated']} session(s), "
+        f"{result['projects_updated']} project(s), {result['traces_updated']} "
+        f"trace(s); migrated {result['code_branches_migrated']} code branch(es)."
+    )
+    changed = result.get("repos_changed") or {}
+    if changed:
+        console.print(
+            "\n[yellow]The following repos' canonical key changed case — "
+            "re-run `witan-code reindex` for each (the code graph is a "
+            "re-derivable cache, not covered by this migration):[/yellow]"
+        )
+        for old, new in changed.items():
+            console.print(f"  {old} -> {new}")
+
+
 def _backfill_topics() -> None:
     s = _srv()
     try:
@@ -186,11 +210,29 @@ def topics() -> None:
     _backfill_topics()
 
 
+@migrate_app.command(name="repo-keys")
+def repo_keys() -> None:
+    """Fold every stored repo key onto its canonical, case-folded form (#142).
+
+    ``normalise`` now lowercases GitHub/GitLab repo keys, so a key written
+    before that fix may still carry the old case and silently drop out of
+    every repo-scoped read. Rewrites Task/Memory/WorkflowSession ``repo`` (and
+    their ``symbol_refs`` repo prefixes), WorkflowProject/WorkflowTrace
+    ``repos`` lists, and CodeBranch (recreated under the canonical slug, the
+    stale row marked ``abandoned``). Idempotent — safe to re-run, and safe to
+    run on a store with nothing to fix. Does not touch the code graph
+    (witan-code); prints which repos need `witan-code reindex` instead.
+    """
+    _repo_keys()
+
+
 @migrate_app.command(name="all")
 def all_() -> None:
-    """Run the full bring-up: apply schema, then backfill topics.
+    """Run the full bring-up: apply schema, backfill topics, fold repo keys.
 
-    Both steps are idempotent, so this is safe to re-run.
+    All three steps are idempotent, so this is safe to re-run — including as
+    part of every deploy, to keep a live store self-healing.
     """
     _apply_schema()
     _backfill_topics()
+    _repo_keys()

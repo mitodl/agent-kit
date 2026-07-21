@@ -110,6 +110,32 @@ def _write_output_cache(
 # ── Context injection (UserPromptSubmit hook) ─────────────────────────────────
 
 
+def _stale_repo_case_present(
+    repo: str, task_rows: list[dict], project_rows: list[dict]
+) -> bool:
+    """True if ``task_rows``/``project_rows`` — reads the hook already made —
+    contain a repo value that case-insensitively matches ``repo`` but isn't
+    identical to it.
+
+    ``repo`` is always canonical here (``_detect_repo`` routes through
+    ``repo_module.normalise``), so any such row was written before #142's
+    case-fold fix and needs ``witan migrate repo-keys``. Best-effort: only
+    scans the rows already fetched for this prompt, not the whole store, so a
+    store with no active projects/tasks for this repo may miss stale memories
+    — the migration command itself is the exhaustive check.
+    """
+    folded = repo.casefold()
+    for row in task_rows:
+        value = row.get("repo")
+        if value and value != repo and value.casefold() == folded:
+            return True
+    for project in project_rows:
+        for value in project.get("repos") or []:
+            if value != repo and value.casefold() == folded:
+                return True
+    return False
+
+
 def _dbg(enabled: bool, msg: str) -> None:
     """Print a diagnostic line to stderr when ``--debug`` is on.
 
@@ -161,14 +187,20 @@ def inject_context(
 
         projects: list[dict] = []
         repo_tasks: list[dict] = []
+        stale_repo_case = False
         if repo:
-            projects = client.read(
+            projects_active = client.read(
                 "read.gq",
                 "list_projects_by_status",
                 {"status": "active"},
             )
-            projects = [p for p in projects if repo in (p.get("repos") or [])]
+            projects = [p for p in projects_active if repo in (p.get("repos") or [])]
             repo_tasks = [r for r in all_rows if r.get("repo") == repo]
+            # Cheap nudge (issue #142): reuses the reads already done above —
+            # no extra graph round trip. A row whose repo case-insensitively
+            # matches the (now-canonical) detected repo but isn't identical is
+            # pre-migration data that `list ... == repo` silently drops.
+            stale_repo_case = _stale_repo_case_present(repo, all_rows, projects_active)
 
         # Unscoped (no repo) and repo-scoped sets are disjoint; the dedup is just
         # belt-and-suspenders.
@@ -301,6 +333,18 @@ def inject_context(
             "",
         ]
 
+    if stale_repo_case:
+        lines += [
+            "## ⚠ Unmigrated Repo Keys",
+            "",
+            "This store has task/project records for this repo under a "
+            "different letter case — a data-fragmentation bug (issue #142) "
+            "whose fix needs a one-time backfill. Run `witan migrate "
+            "repo-keys` once; until then, reads scoped to this repo "
+            "(`task_ready`, `memory_list`, ...) may be missing results.",
+            "",
+        ]
+
     if not lines:
         output = ""
     else:
@@ -424,7 +468,9 @@ def _detect_repo() -> str | None:
     """
     witan_repo = os.environ.get("WITAN_REPO")
     if witan_repo is not None:
-        return witan_repo or None  # "" → disabled; non-empty → use as-is
+        # "" → disabled; non-empty → canonicalized the same way a detected
+        # remote is, so this hook's repo can never drift from repo.detect()'s.
+        return repo_module.normalise(witan_repo) if witan_repo else None
 
     project_dir = _cwd_or_dot()
     try:
