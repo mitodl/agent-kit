@@ -27,6 +27,7 @@ _ADMIN_ONLY = frozenset(
     {
         "apply_schema",
         "migrate_topics",
+        "migrate_repo_keys",
         "migrate_storage_format",
         "merge_store",
         "_topic_schema_present",

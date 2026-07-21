@@ -175,6 +175,106 @@ def test_inject_context_survives_missing_code_branch_schema(tmp_path, monkeypatc
     assert "## In-Flight Branch" not in text
 
 
+@requires_omnigraph
+def test_inject_context_warns_on_stale_repo_case(tmp_path, monkeypatch):
+    """A task written under a differently-cased (pre-#142-fix) repo key
+    surfaces a nudge to run `witan migrate repo-keys` — the case-insensitive,
+    not-identical match against the (now-canonical) detected repo."""
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/mitodl/ctx-case-repo"
+    stale = "https://github.com/MITODL/ctx-case-repo"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+
+    srv.client.change(
+        "mutations.gq",
+        "insert_task",
+        {
+            "slug": "tk-stale-ctx-aaaaaa",
+            "title": "stale-cased task",
+            "description": "",
+            "repo": stale,
+            "type": "task",
+            "status": "open",
+            "priority": "p2",
+            "project_slug": None,
+            "parent_slug": None,
+            "blocked_by": None,
+            "assignee": None,
+            "external_uri": None,
+            "author": "pytest",
+            "symbol_refs": None,
+            "tags": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "claimed_at": None,
+        },
+    )
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "## ⚠ Unmigrated Repo Keys" in text
+    assert "witan migrate repo-keys" in text
+
+
+@requires_omnigraph
+def test_inject_context_no_warning_when_repo_keys_are_canonical(tmp_path, monkeypatch):
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-clean-repo"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+    _unwrap(srv.task_create)(title="clean task", description="x")
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "Unmigrated Repo Keys" not in text
+
+
+@requires_omnigraph
+def test_inject_context_no_warning_for_self_hosted_path_case_difference(
+    tmp_path, monkeypatch
+):
+    """A self-hosted (non-GitHub/GitLab) repo's path case is NOT folded by
+    normalise() — it may be a genuinely different, case-sensitive-path repo.
+    A task recorded under a path-case-different value for the same host must
+    not trigger the migration nudge, since `witan migrate repo-keys` would
+    leave it alone (it only folds path case for github.com/gitlab.com)."""
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://git.example.com/Org/Repo"
+    other_case = "https://git.example.com/org/repo"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+
+    srv.client.change(
+        "mutations.gq",
+        "insert_task",
+        {
+            "slug": "tk-selfhosted-case-bbbbbb",
+            "title": "different repo, coincidental case match",
+            "description": "",
+            "repo": other_case,
+            "type": "task",
+            "status": "open",
+            "priority": "p2",
+            "project_slug": None,
+            "parent_slug": None,
+            "blocked_by": None,
+            "assignee": None,
+            "external_uri": None,
+            "author": "pytest",
+            "symbol_refs": None,
+            "tags": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "claimed_at": None,
+        },
+    )
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "Unmigrated Repo Keys" not in text
+
+
 # ── B1: latest session handoff summary on resume ─────────────────────────────
 
 
@@ -306,6 +406,16 @@ def test_detect_repo_survives_missing_git(monkeypatch):
     # a missing git binary (OSError) must degrade to None, not propagate.
     monkeypatch.setattr(repo_module.subprocess, "run", _boom)
     assert ctx._detect_repo() is None
+
+
+def test_detect_repo_normalises_witan_repo_env(monkeypatch):
+    """WITAN_REPO must canonicalize the same way an auto-detected remote does
+    (issue #142) — else the hook's injected repo scope can drift in case from
+    what ``repo.detect()`` returns for the same env var."""
+    from witan import context as ctx
+
+    monkeypatch.setenv("WITAN_REPO", "https://GitHub.com/MITODL/OL-Django")
+    assert ctx._detect_repo() == "https://github.com/mitodl/ol-django"
 
 
 @requires_omnigraph

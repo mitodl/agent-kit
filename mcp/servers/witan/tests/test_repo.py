@@ -17,9 +17,25 @@ def test_detect_override_wins(monkeypatch):
     assert repo.detect(override="https://override/repo") == "https://override/repo"
 
 
+def test_detect_override_is_normalised(monkeypatch):
+    # An explicit override must canonicalize the same way an auto-detected
+    # remote does (issue #142) — an SSH form or mismatched case must not
+    # bypass normalise() and fragment the repo key.
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    assert (
+        repo.detect(override="git@github.com:MITODL/OL-Django.git")
+        == "https://github.com/mitodl/ol-django"
+    )
+
+
 def test_detect_env_fallback(monkeypatch):
     monkeypatch.setenv("WITAN_REPO", "https://env/repo")
     assert repo.detect() == "https://env/repo"
+
+
+def test_detect_env_is_normalised(monkeypatch):
+    monkeypatch.setenv("WITAN_REPO", "https://GitHub.com/MITODL/OL-Django")
+    assert repo.detect() == "https://github.com/mitodl/ol-django"
 
 
 def test_detect_empty_override_means_no_scope(monkeypatch):

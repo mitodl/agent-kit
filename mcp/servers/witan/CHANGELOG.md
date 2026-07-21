@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.6.0] - 2026-07-21
+
+### Added
+
+- **`witan migrate repo-keys`** (issue #142): a one-shot, idempotent
+  migration that folds every stored repo key onto its canonical,
+  case-folded form (`witan-core` 0.4.0's `normalise` change). Rewrites
+  Task/Memory/WorkflowSession `repo` (and their `symbol_refs` repo
+  prefixes), WorkflowProject/WorkflowTrace `repos` lists (deduping entries
+  that fold onto the same key), and CodeBranch (recreated under the
+  canonical slug — its slug embeds `repo`, so it can't be updated in place
+  — with the stale row marked `abandoned`). Now part of `witan migrate
+  all`, so a routine deploy self-heals a store instead of needing this run
+  by hand. Prints which repos' canonical key changed case, since the code
+  graph (witan-code) isn't touched by this migration and needs its own
+  `witan-code reindex` for those repos.
+- The injected context block now warns when it detects pre-migration,
+  differently-cased data for the current repo (reusing reads the hook
+  already makes, so this costs nothing extra) — a nudge to run `witan
+  migrate repo-keys`, not the exhaustive check itself.
+
+### Fixed
+
+- **`repo.detect(override=...)` and the `WITAN_REPO` env var now route
+  through `normalise`** (issue #142), same as an auto-detected git remote.
+  Previously an explicitly-passed `repo=` (or `WITAN_REPO`) was stored
+  verbatim — an SSH-style URL, a `.git`-suffixed URL, or mismatched case all
+  bypassed canonicalization and could never join against auto-detected
+  data for the same repo. Same fix applied to the context-injection hook's
+  own `WITAN_REPO` handling (`context.py`), so it can't drift from
+  `repo.detect`'s resolution.
+- Depends on `witan-core[cli,remote]>=0.2,<1` (unchanged range; picks up
+  0.4.0's repo-key case-fold).
+
 ## [0.5.0] - 2026-07-20
 
 ### Added
