@@ -67,7 +67,10 @@ jobs:
 
       - name: Build
         if: steps.check.outputs.new == 'true'
-        run: uv build
+        # uv build defaults to the workspace root's dist/ when run from a
+        # workspace member directory; pin it to the member's own dist/ so the
+        # publish step's packages-dir actually finds the artifacts.
+        run: uv build -o dist
 
       - name: Publish to PyPI
         if: steps.check.outputs.new == 'true'
