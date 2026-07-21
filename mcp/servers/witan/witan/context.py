@@ -114,24 +114,29 @@ def _stale_repo_case_present(
     repo: str, task_rows: list[dict], project_rows: list[dict]
 ) -> bool:
     """True if ``task_rows``/``project_rows`` — reads the hook already made —
-    contain a repo value that case-insensitively matches ``repo`` but isn't
-    identical to it.
+    contain a repo value that ``witan migrate repo-keys`` would rewrite.
 
     ``repo`` is always canonical here (``_detect_repo`` routes through
-    ``repo_module.normalise``), so any such row was written before #142's
-    case-fold fix and needs ``witan migrate repo-keys``. Best-effort: only
-    scans the rows already fetched for this prompt, not the whole store, so a
-    store with no active projects/tasks for this repo may miss stale memories
-    — the migration command itself is the exhaustive check.
+    ``repo_module.normalise``), so a stored value is stale exactly when
+    normalising it yields ``repo`` but the stored value itself differs —
+    matching the migration's own "needs rewriting" check
+    (``server.migrate_repo_keys``). A plain case-insensitive string compare
+    would also flag a self-hosted repo whose path case is *not* folded by
+    ``normalise`` (only github.com/gitlab.com paths are) — a value that
+    happens to case-insensitively match but is left alone by the migration,
+    and may even be a genuinely different, case-sensitive-path repo. Best
+    -effort: only scans the rows already fetched for this prompt, not the
+    whole store, so a store with no active projects/tasks for this repo may
+    miss stale memories — the migration command itself is the exhaustive
+    check.
     """
-    folded = repo.casefold()
     for row in task_rows:
         value = row.get("repo")
-        if value and value != repo and value.casefold() == folded:
+        if value and value != repo and repo_module.normalise(value) == repo:
             return True
     for project in project_rows:
         for value in project.get("repos") or []:
-            if value != repo and value.casefold() == folded:
+            if value != repo and repo_module.normalise(value) == repo:
                 return True
     return False
 

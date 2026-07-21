@@ -459,13 +459,18 @@ def migrate_repo_keys() -> dict:
     using ``normalise`` as the source of truth for "canonical".
 
     ``CodeBranch`` is the one exception: its slug embeds ``repo`` (``@key``),
-    so it can't be updated in place. A canonical replacement is inserted
-    (skipped if one already exists — what makes this idempotent), its
-    ``WorksOn``/``ForProject`` edges are re-linked onto the new slug (else the
-    "In-Flight Branch" context and `task_code_branches` silently lose the
-    association once reads move to the canonical slug), and the stale row is
-    marked ``abandoned`` rather than deleted (no delete mutation exists for
-    it).
+    so it can't be updated in place. A canonical replacement is inserted if
+    one doesn't already exist (e.g. a session may have created it via
+    ``task_claim`` after the case-fold fix shipped but before this migration
+    ran), its ``WorksOn``/``ForProject`` edges are merged onto that slug —
+    existing-edge checks keep this dedup-safe whether the canonical branch is
+    freshly inserted or pre-existing — else the "In-Flight Branch" context and
+    ``task_code_branches`` silently lose the association once reads move to
+    the canonical slug, and the stale row is marked ``abandoned`` rather than
+    deleted (no delete mutation exists for it). Idempotency for this section
+    is keyed on the stale row's own status (skip once it's ``abandoned``), not
+    on whether the canonical branch exists — the latter alone would skip the
+    edge-merge step on a second run against the scenario above.
 
     Does NOT touch the code graph (witan-code): its per-repo stores and symbol
     ids are documented as re-derivable caches, so the fix there is
@@ -567,40 +572,54 @@ def migrate_repo_keys() -> dict:
     for row in client.read("read.gq", "list_all_code_branches", {}):
         repo = row["repo"]
         canonical = normalise(repo)
-        if canonical == repo:
+        # Idempotency is keyed on the STALE row's own status, not on whether
+        # the canonical branch already exists — a session can legitimately
+        # create the canonical branch (e.g. via task_claim) after the
+        # case-fold fix shipped but before this migration runs, and that
+        # branch still needs the stale row's edges merged onto it below.
+        if canonical == repo or row["status"] == "abandoned":
             continue
         new_slug = _code_branch_slug(canonical, row["branch"])
-        if client.read("read.gq", "get_code_branch", {"slug": new_slug}):
-            continue  # already migrated in a prior run
         _note(repo, canonical)
-        client.change(
-            "mutations.gq",
-            "insert_code_branch",
-            {
-                "slug": new_slug,
-                "repo": canonical,
-                "branch": row["branch"],
-                "status": row["status"],
-                "created_at": row["created_at"],
-                "updated_at": now,
-            },
-        )
+        if not client.read("read.gq", "get_code_branch", {"slug": new_slug}):
+            client.change(
+                "mutations.gq",
+                "insert_code_branch",
+                {
+                    "slug": new_slug,
+                    "repo": canonical,
+                    "branch": row["branch"],
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                    "updated_at": now,
+                },
+            )
         for task in client.read(
             "read.gq", "code_branch_tasks", {"branch_slug": row["slug"]}
         ):
-            client.change(
-                "mutations.gq",
-                "link_works_on",
-                {"from": new_slug, "to": task["slug"]},
-            )
+            if not client.read(
+                "read.gq",
+                "code_branch_works_on_edge",
+                {"branch_slug": new_slug, "task_slug": task["slug"]},
+            ):
+                client.change(
+                    "mutations.gq",
+                    "link_works_on",
+                    {"from": new_slug, "to": task["slug"]},
+                )
         for project in client.read(
             "read.gq", "code_branch_projects", {"branch_slug": row["slug"]}
         ):
-            client.change(
-                "mutations.gq",
-                "link_for_project",
-                {"from": new_slug, "to": project["slug"]},
-            )
+            if not client.read(
+                "read.gq",
+                "code_branch_for_project_edge",
+                {"branch_slug": new_slug, "project_slug": project["slug"]},
+            ):
+                client.change(
+                    "mutations.gq",
+                    "link_for_project",
+                    {"from": new_slug, "to": project["slug"]},
+                )
         client.change(
             "mutations.gq",
             "touch_code_branch",

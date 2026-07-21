@@ -568,8 +568,98 @@ def test_migrate_repo_keys_recreates_code_branch_under_canonical_slug(server):
     )
     assert [p["slug"] for p in carried_projects] == ["wp-branch-carries-eeeeee"]
 
-    # Idempotent: the canonical slug already exists, so re-running skips it.
+    # Idempotent: the stale row is now abandoned, so re-running skips it.
     assert srv.migrate_repo_keys()["code_branches_migrated"] == 0
+
+
+@requires_omnigraph
+def test_migrate_repo_keys_merges_edges_when_canonical_branch_preexists(server):
+    """A session can create the canonical-slug CodeBranch (e.g. via
+    task_claim) after the case-fold fix ships but before this migration runs.
+    The migration must still merge the stale row's WorksOn/ForProject edges
+    onto that pre-existing canonical branch, not skip it outright — else the
+    association silently disappears once reads move to the canonical slug."""
+    from witan import server as srv
+
+    stale = "https://github.com/MITODL/OL-Django"
+    canonical = "https://github.com/mitodl/ol-django"
+    stale_slug = f"{stale}|feature/y"
+    canonical_slug = f"{canonical}|feature/y"
+
+    srv.client.change(
+        "mutations.gq",
+        "insert_code_branch",
+        {
+            "slug": stale_slug,
+            "repo": stale,
+            "branch": "feature/y",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+    # The canonical branch already exists — created independently, e.g. by a
+    # session running after the fix but before the migration.
+    srv.client.change(
+        "mutations.gq",
+        "insert_code_branch",
+        {
+            "slug": canonical_slug,
+            "repo": canonical,
+            "branch": "feature/y",
+            "status": "active",
+            "created_at": "2026-02-01T00:00:00Z",
+            "updated_at": "2026-02-01T00:00:00Z",
+        },
+    )
+    srv.client.change(
+        "mutations.gq",
+        "insert_task",
+        {
+            "slug": "tk-preexist-branch-ffffff",
+            "title": "carried onto preexisting branch",
+            "description": "",
+            "repo": None,
+            "type": "task",
+            "status": "open",
+            "priority": "p2",
+            "project_slug": None,
+            "parent_slug": None,
+            "blocked_by": None,
+            "assignee": None,
+            "external_uri": None,
+            "author": "pytest",
+            "symbol_refs": None,
+            "tags": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "claimed_at": None,
+        },
+    )
+    srv.client.change(
+        "mutations.gq",
+        "link_works_on",
+        {"from": stale_slug, "to": "tk-preexist-branch-ffffff"},
+    )
+
+    result = srv.migrate_repo_keys()
+    assert result["code_branches_migrated"] == 1
+
+    old_row = srv.client.read("read.gq", "get_code_branch", {"slug": stale_slug})
+    assert old_row and old_row[0]["status"] == "abandoned"
+
+    carried_tasks = srv.client.read(
+        "read.gq", "code_branch_tasks", {"branch_slug": canonical_slug}
+    )
+    assert [t["slug"] for t in carried_tasks] == ["tk-preexist-branch-ffffff"]
+
+    # No duplicate WorksOn edge from re-running against an unchanged store.
+    result2 = srv.migrate_repo_keys()
+    assert result2["code_branches_migrated"] == 0
+    carried_tasks_again = srv.client.read(
+        "read.gq", "code_branch_tasks", {"branch_slug": canonical_slug}
+    )
+    assert [t["slug"] for t in carried_tasks_again] == ["tk-preexist-branch-ffffff"]
 
 
 @requires_omnigraph

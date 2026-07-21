@@ -230,6 +230,51 @@ def test_inject_context_no_warning_when_repo_keys_are_canonical(tmp_path, monkey
     assert "Unmigrated Repo Keys" not in text
 
 
+@requires_omnigraph
+def test_inject_context_no_warning_for_self_hosted_path_case_difference(
+    tmp_path, monkeypatch
+):
+    """A self-hosted (non-GitHub/GitLab) repo's path case is NOT folded by
+    normalise() — it may be a genuinely different, case-sensitive-path repo.
+    A task recorded under a path-case-different value for the same host must
+    not trigger the migration nudge, since `witan migrate repo-keys` would
+    leave it alone (it only folds path case for github.com/gitlab.com)."""
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://git.example.com/Org/Repo"
+    other_case = "https://git.example.com/org/repo"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+
+    srv.client.change(
+        "mutations.gq",
+        "insert_task",
+        {
+            "slug": "tk-selfhosted-case-bbbbbb",
+            "title": "different repo, coincidental case match",
+            "description": "",
+            "repo": other_case,
+            "type": "task",
+            "status": "open",
+            "priority": "p2",
+            "project_slug": None,
+            "parent_slug": None,
+            "blocked_by": None,
+            "assignee": None,
+            "external_uri": None,
+            "author": "pytest",
+            "symbol_refs": None,
+            "tags": None,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "claimed_at": None,
+        },
+    )
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "Unmigrated Repo Keys" not in text
+
+
 # ── B1: latest session handoff summary on resume ─────────────────────────────
 
 
