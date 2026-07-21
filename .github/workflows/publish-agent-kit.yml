@@ -5,6 +5,7 @@ on:
     branches: ["main"]
     paths:
       - "packages/agent-kit/pyproject.toml"
+  workflow_dispatch: {}
 
 permissions:
   contents: read

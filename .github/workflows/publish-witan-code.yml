@@ -5,6 +5,7 @@ on:
     branches: ["main"]
     paths:
       - "mcp/servers/witan-code/pyproject.toml"
+  workflow_dispatch: {}
 
 permissions:
   contents: read
