@@ -96,6 +96,12 @@ through these options in order and use the first one that applies:
    entirely and proceed with GitHub-only data — do not fabricate session
    activity.
 
+Whichever source applies, normalize each session you find into a common
+shape before moving on — `repository` (or `null` if none), `branch` (or
+`null`), `summary`, and `updated_at`. Later steps (Step 2's session-only
+detection, Step 3's bucketing) assume this shape regardless of which source
+strategy produced it.
+
 **Summarization rules** (apply regardless of which source above was used):
 
 | Evidence available | Action |
