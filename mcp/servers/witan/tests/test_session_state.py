@@ -27,13 +27,23 @@ def test_path_uses_tempfile_and_prefix(tmp_state_dir):
     assert p.name == "workflow-session-abc123.json"
 
 
-def test_server_and_hook_agree_on_path(tmp_state_dir):
+def test_server_and_hook_agree_on_path(tmp_state_dir, monkeypatch):
     """The whole point of the module: writer (server) and reader (hook) resolve
-    the same path even under a custom TMPDIR — the divergence bug (B6)."""
-    from witan import server
+    the same path even under a custom TMPDIR — the divergence bug (B6).
 
-    assert server._session_state_path is session_state.session_state_path
-    # And context uses it too (imported symbol identity).
+    Asserted behaviourally rather than by symbol identity: an ``is`` check on a
+    re-exported alias keeps passing after the callers stop going through it,
+    which is exactly how this assertion went dead once before.
+    """
+    from witan import server as srv
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "agree")
+    # What the client (or a local-stdio server) writes...
+    session_state.write_handle("agree", {"session_slug": "ws-agree"})
+    # ...is what the server-side provenance reader finds.
+    assert srv._active_session_slug() == "ws-agree"
+
+    # And context resolves the same module (it shares the temp dir for caches).
     assert context.session_state is session_state
 
 

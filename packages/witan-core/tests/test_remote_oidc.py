@@ -184,6 +184,19 @@ def test_missing_issuer_is_refused():
         discover_endpoints(_Endpoint().oidc_issuer, client=_client(handler))
 
 
+@pytest.mark.parametrize("body", [[], "nope", 3])
+def test_non_object_metadata_raises_clean_error(body):
+    """A 200 that parses as JSON but isn't an object must not AttributeError on
+    the issuer lookup — same failure class as the non-JSON case."""
+    from witan_core.remote.oidc import discover_endpoints
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(RemoteAuthError, match="not a JSON object"):
+        discover_endpoints(_Endpoint().oidc_issuer, client=_client(handler))
+
+
 def test_trailing_slash_is_not_a_mismatch():
     """The URL construction rstrips '/', so issuer comparison must too."""
     from witan_core.remote.oidc import discover_endpoints

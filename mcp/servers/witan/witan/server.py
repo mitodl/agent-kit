@@ -1848,12 +1848,6 @@ def _advance_advisory(prev_phase: str | None, new_phase: str) -> str | None:
     return None
 
 
-# Session-state path lives in ``session_state`` (shared with the Stop hook so
-# the writer and reader can't diverge under a custom TMPDIR).
-_STATE_FILE_PREFIX = session_state.STATE_FILE_PREFIX
-_session_state_path = session_state.session_state_path
-
-
 def _is_local_stdio() -> bool:
     """True when this process is the user's own stdio server, not a deployment.
 

@@ -103,6 +103,15 @@ def discover_endpoints(issuer: str, *, client: httpx.Client | None = None) -> di
     finally:
         if owns:
             client.close()
+    # A 200 whose body is a JSON array or scalar (an HTML-ish proxy page that
+    # happens to parse, a misrouted endpoint) would make the .get() below raise
+    # AttributeError. The endpoint-presence loop that used to run first tolerated
+    # a list, so guard explicitly to keep the clean RemoteAuthError.
+    if not isinstance(meta, dict):
+        raise RemoteAuthError(
+            f"OIDC metadata endpoint at {url} returned {type(meta).__name__}, "
+            "not a JSON object."
+        )
     advertised = meta.get("issuer")
     # Compare the way the URL above was built — a trailing slash is not a
     # different issuer, but anything else is.

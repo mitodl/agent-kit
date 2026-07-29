@@ -86,12 +86,17 @@ def session_checkpoint() -> None:
                 tools_used=None,
                 files_changed=_changed_files() or None,
             )
-        except Exception:  # noqa: BLE001 — the Stop hook must never fail the agent
+        # SystemExit is not an Exception: _srv() raises it for a half-configured
+        # remote, and letting it escape would break the "never blocks" contract.
+        except (Exception, SystemExit):  # noqa: BLE001 — never fail the agent
+            # Keep the handle. The close now goes over the network (token fetch
+            # + MCP round-trip), so a failure here is usually transient — offline,
+            # or an expired token needing `witan login`. Dropping the handle would
+            # discard the only pointer to the session and leak it open forever;
+            # keeping it lets the next Stop, or `witan session end`, finish the job.
+            # Re-closing an already-ended session just re-stamps ended_at.
             pass
-        finally:
-            # Drop the handle either way: a close that failed here is not going
-            # to succeed on the next Stop either, and a stale handle would keep
-            # re-targeting a slug this agent no longer owns.
+        else:
             session_state.clear_handle(session_id)
 
     # Keep the store compacted so query latency doesn't re-bloat. Runs at most

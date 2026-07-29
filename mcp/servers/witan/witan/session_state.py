@@ -74,21 +74,34 @@ def read_handle(session_id: str) -> dict | None:
 
 
 def clear_handle(session_id: str) -> None:
-    if is_safe_session_id(session_id):
+    """Drop the handle for ``session_id``. Never raises.
+
+    ``unlink`` itself can fail (read-only or sticky-bit temp dir, a shared
+    ``/tmp`` where the file belongs to another user) — and this is called from
+    the Stop hook, where an escaping OSError would break the "never blocks"
+    contract.
+    """
+    if not is_safe_session_id(session_id):
+        return
+    try:
         session_state_path(session_id).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def clear_handle_for_slug(session_slug: str) -> None:
     """Drop whichever handle file points at ``session_slug``.
 
     ``workflow_session_end`` is given a slug, not the session id that keyed the
-    file, so the file is found by scanning. Best-effort.
+    file, so the file is found by scanning. Best-effort: the unlink is inside the
+    guard because this runs *after* the session-end mutation has committed, and
+    an OSError escaping here would turn a successful close into a tool error.
     """
     for state_file in iter_session_state_files():
         try:
             data = json.loads(state_file.read_text())
+            if isinstance(data, dict) and data.get("session_slug") == session_slug:
+                state_file.unlink(missing_ok=True)
+                return
         except (OSError, json.JSONDecodeError):
             continue
-        if isinstance(data, dict) and data.get("session_slug") == session_slug:
-            state_file.unlink(missing_ok=True)
-            return

@@ -152,7 +152,7 @@ def test_memory_store_flags_missing_session(server):
 
 
 @requires_omnigraph
-def test_memory_store_links_active_session(server, monkeypatch):
+def test_memory_store_links_active_session(server, tmp_state_dir, monkeypatch):
     proj = server.workflow_project_create(title="p", description="d")
     sid = "test-session-b2"
     monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
@@ -483,15 +483,6 @@ def test_missing_trace_returns_consistent_shape(server):
 # workflow_session_start to workflow_session_end.
 
 
-@pytest.fixture
-def tmp_state_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
-    import tempfile
-
-    monkeypatch.setattr(tempfile, "tempdir", None)
-    return tmp_path
-
-
 @requires_omnigraph
 def test_session_start_returns_an_explicit_handle(server, tmp_state_dir):
     from witan import server as srv
@@ -559,7 +550,7 @@ def test_deployed_server_does_not_write_a_handle(server, tmp_state_dir, monkeypa
 
 @requires_omnigraph
 def test_stop_hook_closes_the_session_via_the_handle(
-    server, tmp_state_dir, monkeypatch
+    server, tmp_state_dir, no_background_optimize, monkeypatch
 ):
     """End-to-end: start → park handle → Stop hook reads it back and closes."""
     from witan import session_state
@@ -591,8 +582,47 @@ def test_stop_hook_closes_the_session_via_the_handle(
 
 
 @requires_omnigraph
-def test_stop_hook_is_a_noop_without_a_handle(server, tmp_state_dir, monkeypatch):
+def test_stop_hook_is_a_noop_without_a_handle(
+    server, tmp_state_dir, no_background_optimize, monkeypatch
+):
     from witan.cli import hooks
 
     monkeypatch.setenv("CLAUDE_SESSION_ID", uuid.uuid4().hex)
     hooks.session_checkpoint()  # must not raise
+
+
+@pytest.mark.parametrize(
+    "boom",
+    [
+        RuntimeError("offline"),
+        SystemExit(1),  # _srv() raises this for a half-configured remote
+    ],
+)
+def test_stop_hook_keeps_the_handle_when_the_close_fails(
+    boom, tmp_state_dir, no_background_optimize, monkeypatch
+):
+    """A failed close must not discard the handle.
+
+    The close now goes over the network, so failure is usually transient — an
+    expired token or an offline laptop. Dropping the handle there would throw
+    away the only pointer to the session and leak it open in the graph forever.
+    """
+    from witan import session_state
+    from witan.cli import _common, hooks
+
+    sid = uuid.uuid4().hex
+    session_state.write_handle(sid, {"session_slug": "ws-doomed"})
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+
+    class _Exploding:
+        def __getattr__(self, _name):
+            def _raise(*_a, **_kw):
+                raise boom
+
+            return _raise
+
+    monkeypatch.setattr(_common, "_server", _Exploding())
+
+    hooks.session_checkpoint()  # never blocks the agent, not even on SystemExit
+
+    assert session_state.read_handle(sid) == {"session_slug": "ws-doomed"}
