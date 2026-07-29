@@ -33,10 +33,12 @@ def serialize_mcp(server: McpServer) -> dict:
         # confirmed against a published schema — ~/.claude.json (where MCP
         # servers actually live) has none — so this follows documented CLI
         # behavior rather than a fetched schema, unlike the OpenCode adapter.
+        #
+        # Only an explicit transport="sse" emits the deprecated SSE type; any
+        # future transport falls through to "http" rather than being silently
+        # downgraded onto a transport MCP 2026-07-28 is retiring.
         data = {
-            "type": "http"
-            if server.transport in ("http", "streamable-http")
-            else "sse",
+            "type": "sse" if server.transport == "sse" else "http",
             "url": server.url,
         }
         if server.headers:

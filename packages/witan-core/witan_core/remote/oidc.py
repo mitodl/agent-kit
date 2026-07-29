@@ -80,7 +80,15 @@ def _json_safe(resp: httpx.Response) -> dict:
 
 
 def discover_endpoints(issuer: str, *, client: httpx.Client | None = None) -> dict:
-    """Fetch the realm's OIDC metadata (device + token endpoints)."""
+    """Fetch the realm's OIDC metadata (device + token endpoints).
+
+    The document's own ``issuer`` must match the one we asked for (RFC 8414 §3.3,
+    and the mix-up defense RFC 9207 generalises). Without that check a hijacked or
+    misconfigured metadata document can point the device grant at a *different*
+    authorization server's endpoints while the client still believes it is talking
+    to the configured issuer — so the user approves a code, and the token comes
+    from an AS nobody vetted.
+    """
     url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
     owns = client is None
     client = client or httpx.Client(timeout=15)
@@ -95,6 +103,15 @@ def discover_endpoints(issuer: str, *, client: httpx.Client | None = None) -> di
     finally:
         if owns:
             client.close()
+    advertised = meta.get("issuer")
+    # Compare the way the URL above was built — a trailing slash is not a
+    # different issuer, but anything else is.
+    if not isinstance(advertised, str) or advertised.rstrip("/") != issuer.rstrip("/"):
+        raise RemoteAuthError(
+            f"OIDC metadata from {url} advertises issuer {advertised!r}, which does "
+            f"not match the configured issuer {issuer!r}. Refusing to continue — "
+            "this is how an authorization-server mix-up attack presents."
+        )
     for key in ("device_authorization_endpoint", "token_endpoint"):
         if key not in meta:
             raise RemoteAuthError(

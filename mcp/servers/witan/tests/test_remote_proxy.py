@@ -7,6 +7,8 @@ client-side repo resolution are exercised end to end without a network.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastmcp import Client
 
@@ -91,6 +93,29 @@ def test_admin_only_functions_are_refused_without_network(proxy):
     for name in ("migrate_topics", "apply_schema", "merge_store"):
         with pytest.raises(RemoteToolUnavailable, match="in-cluster"):
             getattr(proxy, name)()
+
+
+def test_admin_only_functions_are_not_registered_as_tools(server):
+    """The server-side half of the admin refusal, and the load-bearing one.
+
+    ``RemoteServerProxy._is_admin_tool`` runs in the *client*, so it is advisory
+    — a stock MCP client with a valid JWT ignores it entirely. What actually
+    keeps ``apply_schema``/``migrate_*``/``merge_store`` unreachable is that they
+    are deliberately plain module functions, never ``@mcp.tool``. Assert that
+    invariant here so a future decorator can't silently expose an admin op with
+    no per-user identity to the whole deployment.
+    """
+    import witan.server as srv
+    from witan.remote.proxy import _ADMIN_ONLY
+
+    async def _list() -> set[str]:
+        async with Client(srv.mcp) as client:
+            return {t.name for t in await client.list_tools()}
+
+    exposed = asyncio.run(_list())
+
+    assert exposed, "expected the in-memory server to expose some tools"
+    assert not (_ADMIN_ONLY & exposed)
 
 
 def test_unknown_tool_is_refused(proxy):

@@ -50,6 +50,9 @@ def _jwt(claims: dict) -> str:
 
 
 _META = {
+    # A real metadata document always echoes its own issuer; discover_endpoints
+    # now requires it to match the one we asked for (RFC 9207 hardening).
+    "issuer": _Endpoint.oidc_issuer,
     "device_authorization_endpoint": "https://sso.example.org/dev",
     "token_endpoint": "https://sso.example.org/token",
 }
@@ -153,6 +156,45 @@ def test_non_json_metadata_raises_clean_error():
 
     with pytest.raises(RemoteAuthError, match="non-JSON"):
         discover_endpoints(_Endpoint().oidc_issuer, client=_client(handler))
+
+
+def test_issuer_mismatch_is_refused():
+    """An AS mix-up presents exactly this way: reachable metadata at the
+    configured issuer's well-known path that points elsewhere."""
+    from witan_core.remote.oidc import discover_endpoints
+
+    evil = {**_META, "issuer": "https://attacker.example.net/realms/ol"}
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=evil)
+
+    with pytest.raises(RemoteAuthError, match="does not match the configured issuer"):
+        discover_endpoints(_Endpoint().oidc_issuer, client=_client(handler))
+
+
+def test_missing_issuer_is_refused():
+    from witan_core.remote.oidc import discover_endpoints
+
+    bare = {k: v for k, v in _META.items() if k != "issuer"}
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=bare)
+
+    with pytest.raises(RemoteAuthError, match="advertises issuer None"):
+        discover_endpoints(_Endpoint().oidc_issuer, client=_client(handler))
+
+
+def test_trailing_slash_is_not_a_mismatch():
+    """The URL construction rstrips '/', so issuer comparison must too."""
+    from witan_core.remote.oidc import discover_endpoints
+
+    slashed = {**_META, "issuer": f"{_Endpoint.oidc_issuer}/"}
+
+    def handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=slashed)
+
+    meta = discover_endpoints(f"{_Endpoint().oidc_issuer}/", client=_client(handler))
+    assert meta["token_endpoint"] == _META["token_endpoint"]
 
 
 def test_non_json_token_response_raises_not_crashes(auth):

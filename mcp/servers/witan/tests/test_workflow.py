@@ -474,3 +474,125 @@ def test_missing_trace_returns_consistent_shape(server):
     for res in (mined, annotated):
         assert res["slug"] == "wt-does-not-exist"
         assert res["error"] == "no such trace"
+
+
+# ── Session handle (MCP 2026-07-28 stateless core) ───────────────────────────
+#
+# The protocol carries no session state and a deployment round-robins across
+# replicas, so the tool-returned handle is the only thing tying
+# workflow_session_start to workflow_session_end.
+
+
+@pytest.fixture
+def tmp_state_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    return tmp_path
+
+
+@requires_omnigraph
+def test_session_start_returns_an_explicit_handle(server, tmp_state_dir):
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="handle", description="d")
+    sid = uuid.uuid4().hex
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="spec"
+    )
+
+    # Everything the caller needs to close the session later, with no reliance
+    # on transport state or on reaching the same replica twice.
+    assert handle["session_slug"].startswith("ws-")
+    assert handle["project_slug"] == proj["slug"]
+    assert handle["phase"] == "spec"
+    assert handle["session_id"] == sid
+    assert handle["started_at"]
+    assert srv._is_local_stdio()
+
+
+@requires_omnigraph
+def test_local_stdio_server_parks_the_handle_for_the_stop_hook(server, tmp_state_dir):
+    from witan import session_state
+
+    proj = server.workflow_project_create(title="parked", description="d")
+    sid = uuid.uuid4().hex
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="spec"
+    )
+
+    assert session_state.read_handle(sid) == handle
+
+    server.workflow_session_end(handle["session_slug"], summary="done")
+    assert session_state.read_handle(sid) is None
+
+
+@requires_omnigraph
+def test_deployed_server_does_not_write_a_handle(server, tmp_state_dir, monkeypatch):
+    """A replica behind a load balancer shares no filesystem with the agent's
+    Stop hook, so a server-written handle is useless at best and a stale
+    pointer at worst. The client persists the returned handle instead."""
+    from witan import server as srv
+    from witan import session_state
+
+    monkeypatch.setattr(
+        srv,
+        "identity_cfg",
+        srv.identity_cfg.model_copy(
+            update={"oidc_issuer": "https://sso.example.org/realms/ol"}
+        ),
+    )
+    assert not srv._is_local_stdio()
+
+    proj = server.workflow_project_create(title="deployed", description="d")
+    sid = uuid.uuid4().hex
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="spec"
+    )
+
+    # The session is still created and the handle still returned — only the
+    # filesystem side effect is gone.
+    assert handle["session_slug"].startswith("ws-")
+    assert session_state.read_handle(sid) is None
+
+
+@requires_omnigraph
+def test_stop_hook_closes_the_session_via_the_handle(
+    server, tmp_state_dir, monkeypatch
+):
+    """End-to-end: start → park handle → Stop hook reads it back and closes."""
+    from witan import session_state
+    from witan.cli import _common, hooks
+
+    proj = server.workflow_project_create(title="hooked", description="d")
+    sid = uuid.uuid4().hex
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="spec"
+    )
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+
+    # The hook dispatches through _srv(); point it at the test-wired server
+    # module so the close lands in this test's throwaway store.
+    from witan import server as srv
+
+    monkeypatch.setattr(_common, "_server", srv)
+
+    hooks.session_checkpoint()
+
+    sessions = srv.client.read(
+        "read.gq", "list_sessions_by_project", {"project_slug": proj["slug"]}
+    )
+    closed = [s for s in sessions if s["slug"] == handle["session_slug"]]
+    assert closed and closed[0]["ended_at"]
+    assert "auto-closed by Stop hook" in closed[0]["summary"]
+    # Handle consumed, so a second Stop can't re-close it.
+    assert session_state.read_handle(sid) is None
+
+
+@requires_omnigraph
+def test_stop_hook_is_a_noop_without_a_handle(server, tmp_state_dir, monkeypatch):
+    from witan.cli import hooks
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", uuid.uuid4().hex)
+    hooks.session_checkpoint()  # must not raise

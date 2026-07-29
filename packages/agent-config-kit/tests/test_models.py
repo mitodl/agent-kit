@@ -38,6 +38,20 @@ def test_remote_server_round_trips_through_discriminated_union():
     assert restored.transport == "streamable-http"
 
 
+def test_sse_transport_is_accepted_but_deprecated():
+    """MCP 2026-07-28 retires HTTP+SSE, but this package wires up third-party
+    endpoints that still speak it — warn, don't reject."""
+    with pytest.deprecated_call(match="2026-07-28"):
+        server = RemoteServer(url="https://example.com/mcp", transport="sse")
+    assert server.transport == "sse"
+
+
+@pytest.mark.parametrize("transport", ["http", "streamable-http"])
+def test_current_transports_do_not_warn(transport, recwarn):
+    RemoteServer(url="https://example.com/mcp", transport=transport)
+    assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
+
+
 def test_hook_union_discriminates_declarative_vs_plugin():
     declarative = DeclarativeHook(
         event=HookEvent.STOP, command="witan session-checkpoint"

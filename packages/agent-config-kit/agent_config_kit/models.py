@@ -9,6 +9,7 @@ modeled here.
 from __future__ import annotations
 
 import re
+import warnings
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Union
@@ -47,6 +48,27 @@ class RemoteServer(BaseModel):
     oauth: dict[str, Any] | None = None
     timeout_seconds: float | None = None
     approval: ApprovalPolicy = Field(default_factory=ApprovalPolicy)
+
+    @field_validator("transport")
+    @classmethod
+    def _warn_deprecated_transport(cls, value: str) -> str:
+        """Accept ``sse``, but say it's on the way out.
+
+        MCP 2026-07-28 deprecates the legacy HTTP+SSE transport with a 12-month
+        offramp. We keep accepting it because this package's job is wiring up
+        *other people's* endpoints, and third-party servers still speak it — the
+        deprecation binds new implementations, not existing deployments.
+        """
+        if value == "sse":
+            warnings.warn(
+                "transport='sse' (legacy HTTP+SSE) is deprecated by MCP "
+                "2026-07-28 and is scheduled for removal after its 12-month "
+                "offramp. Use 'streamable-http' unless the server you are "
+                "wiring up only speaks SSE.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return value
 
 
 McpServer = Annotated[Union[StdioServer, RemoteServer], Field(discriminator="kind")]

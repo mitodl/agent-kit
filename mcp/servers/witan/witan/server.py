@@ -1854,27 +1854,32 @@ _STATE_FILE_PREFIX = session_state.STATE_FILE_PREFIX
 _session_state_path = session_state.session_state_path
 
 
+def _is_local_stdio() -> bool:
+    """True when this process is the user's own stdio server, not a deployment.
+
+    Only then does the server share a filesystem (and a ``$CLAUDE_SESSION_ID``)
+    with the agent whose Stop hook reads the session handle. ``oidc_issuer`` is
+    the same discriminator ``_resolve_client`` uses for per-user isolation.
+    """
+    return not identity_cfg.oidc_issuer
+
+
 def _active_session_slug() -> str | None:
     """The WorkflowSession slug for the current agent session, or None.
 
-    Reads the state file ``workflow_session_start`` wrote, keyed by
-    ``$CLAUDE_SESSION_ID``. Fails soft on any missing-env/read/parse error —
-    provenance is best-effort and must never block a memory write.
+    Reads the handle stored locally under ``$CLAUDE_SESSION_ID``. Fails soft on
+    any missing-env/read/parse error — provenance is best-effort and must never
+    block a memory write.
+
+    Local-stdio only: a deployed replica shares neither the filesystem nor the
+    agent's session id, so there is nothing to read. Memories written through a
+    deployment therefore carry no session provenance until the handle is threaded
+    in as a tool argument — see the follow-up note on ``workflow_session_start``.
     """
-    session_id = os.environ.get("CLAUDE_SESSION_ID")
-    # Validate before building a path with it: reject anything that isn't a plain
-    # session id so a crafted value can't redirect the read outside the temp dir.
-    if not session_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", session_id):
+    if not _is_local_stdio():
         return None
-    try:
-        state = json.loads(_session_state_path(session_id).read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    # A corrupt file can be valid JSON but not an object (e.g. `[]`/`null`);
-    # guard so .get() can't raise AttributeError and break the write.
-    if not isinstance(state, dict):
-        return None
-    return state.get("session_slug") or None
+    handle = session_state.read_handle(os.environ.get("CLAUDE_SESSION_ID") or "")
+    return (handle or {}).get("session_slug") or None
 
 
 @mcp.tool
@@ -2718,8 +2723,11 @@ def workflow_session_start(
     session id — ``$CLAUDE_SESSION_ID`` on Claude Code, or any stable unique
     string for the session otherwise.
 
-    Also writes a state file to ``/tmp`` so the ``Stop`` hook can close the
-    session automatically if ``workflow_session_end`` is not called explicitly.
+    Returns an explicit session handle (``session_slug``, ``project_slug``,
+    ``phase``, ``session_id``, ``started_at``). Hold on to it and pass
+    ``session_slug`` back to ``workflow_session_end`` — the handle is the only
+    thing that ties the two calls together, since the protocol carries no session
+    state of its own and consecutive calls may land on different replicas.
 
     When a repo is detected and the checkout is on a git branch, also
     upserts a ``CodeBranch`` (repo, branch) and links it ``ForProject`` to
@@ -2785,15 +2793,22 @@ def workflow_session_start(
 
     _track_code_branch(detected_repo, project_slug=project_slug)
 
-    # Write state file so Stop hook can close this session
-    state = {"session_slug": slug, "project_slug": project_slug, "started_at": now}
-    state_path = _session_state_path(session_id)
-    try:
-        state_path.write_text(json.dumps(state))
-    except OSError:
-        pass
+    handle = {
+        "session_slug": slug,
+        "project_slug": project_slug,
+        "phase": phase,
+        "session_id": session_id,
+        "started_at": now,
+    }
+    # Convenience only, and only when the server is the user's own stdio process:
+    # then it shares a filesystem with the Stop hook, so it can park the handle
+    # itself and a bare `workflow_session_start` tool call still auto-closes. A
+    # deployed replica shares nothing with the hook — the client persists the
+    # returned handle instead (``witan session start``). See ``session_state``.
+    if _is_local_stdio():
+        session_state.write_handle(session_id, handle)
 
-    return {"session_slug": slug, "project_slug": project_slug, "phase": phase}
+    return handle
 
 
 @mcp.tool
@@ -2839,16 +2854,12 @@ def workflow_session_end(
         },
     )
 
-    # Clean up state file for any session_id that maps to this slug
-    # (best-effort; Stop hook will also attempt cleanup)
-    for state_file in session_state.iter_session_state_files():
-        try:
-            data = json.loads(state_file.read_text())
-            if data.get("session_slug") == session_slug:
-                state_file.unlink(missing_ok=True)
-                break
-        except (OSError, json.JSONDecodeError):
-            continue
+    # Drop the local handle so the Stop hook doesn't re-close this session.
+    # Local-stdio only — a deployed replica would be scanning its own container's
+    # temp dir, where the client's handle was never written; the client clears
+    # its own copy (``witan session end`` / ``witan session-checkpoint``).
+    if _is_local_stdio():
+        session_state.clear_handle_for_slug(session_slug)
 
     return {"session_slug": session_slug, "ended_at": now}
 

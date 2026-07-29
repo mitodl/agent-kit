@@ -56,7 +56,7 @@ server.
 
 | Flag | Type | Default | Env var | Description |
 |---|---|---|---|---|
-| `--transport` | `stdio\|http\|streamable-http\|sse` | `stdio` | `WITAN_MCP_TRANSPORT` | MCP transport. `stdio` for local (Claude Desktop, `uvx`); the others bind a network listener |
+| `--transport` | `stdio\|http\|streamable-http` | `stdio` | `WITAN_MCP_TRANSPORT` | MCP transport. `stdio` for local (Claude Desktop, `uvx`); the others bind a network listener. The legacy HTTP+SSE transport is not offered — MCP 2026-07-28 deprecates it |
 | `--host` | str | `127.0.0.1` | `WITAN_MCP_HOST` | Interface to bind for HTTP transports (`0.0.0.0` inside a container) |
 | `--port` | int | `8000` | `WITAN_MCP_PORT` | Port to bind for HTTP transports |
 | `--path` | str | `/mcp` | `WITAN_MCP_PATH` | URL path the MCP endpoint is served on (HTTP transports only) |
@@ -463,9 +463,12 @@ current git repo to stdout, for the `UserPromptSubmit` hook
 
 ### `session-checkpoint`
 
-Auto-close the active WorkflowSession on agent stop: reads the state file
-written by `workflow_session_start` and records an end timestamp. No-op if
-that file is absent (Stop hook). No flags.
+Auto-close the active WorkflowSession on agent stop: reads back the session
+handle `workflow_session_start` returned (persisted client-side under
+`$CLAUDE_SESSION_ID`) and passes its `session_slug` to `workflow_session_end`.
+The call is dispatched the same way every other CLI command is, so it reaches
+the deployment when `WITAN_REMOTE_URL` is set. No-op if there is no handle —
+the session was already closed explicitly (Stop hook). No flags.
 
 ## `code` (witan-code only)
 
