@@ -43,6 +43,11 @@ Link the session before doing substantive work. The phase should reflect what
 this particular session will focus on, not necessarily the project's current
 overall phase.
 
+Hold on to the `session_slug` in the returned handle. Pass it to `memory_store`
+and `workflow_trace_mine` so what you record this session is attributed to it, and
+to `workflow_session_end` when you close. The protocol carries no session state,
+so the handle is the only link between these calls.
+
 ## Starting a Session: Creating a New Project
 
 If no active project in the injected context matches the work:

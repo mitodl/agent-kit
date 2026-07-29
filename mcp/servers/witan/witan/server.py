@@ -1378,6 +1378,7 @@ def _store_memory(
     tags: list[str] | None = None,
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
+    session_slug: str | None = None,
 ) -> dict:
     """Create a Memory node — shared by memory_store and workflow_trace_mine."""
     if isinstance(tags, str):
@@ -1416,11 +1417,14 @@ def _store_memory(
     for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
         _tag_memory(slug, tag, "topic")
 
-    # Provenance: record which session produced this memory (best-effort). The
-    # engine validates edge endpoints, so a stale /tmp state file pointing at a
+    # Provenance: record which session produced this memory (best-effort). An
+    # explicitly-threaded handle wins — it is the only source a deployed replica
+    # has, since MCP 2026-07-28 carries no session state and the replica shares
+    # no filesystem with the agent. Local stdio falls back to the parked handle.
+    # The engine validates edge endpoints, so a stale handle pointing at a
     # session that no longer exists in the store would raise — swallow it so a
     # provenance failure never blocks the memory write.
-    active = _active_session_slug()
+    active = session_slug or _active_session_slug()
     session_linked = False
     if active:
         try:
@@ -1448,7 +1452,8 @@ def _store_memory(
         result["note"] = (
             "Stored without an active workflow session, so it is not linked to a "
             "project (no SessionProduced provenance). Call workflow_session_start "
-            "first if this memory should roll up to the project's history."
+            "first if this memory should roll up to the project's history, and "
+            "pass the session_slug it returns."
         )
     return result
 
@@ -1465,6 +1470,7 @@ async def memory_store(
     tags: list[str] | None = None,
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
+    session_slug: str | None = None,
     ctx: Context | None = None,
 ) -> dict:
     """
@@ -1506,6 +1512,12 @@ async def memory_store(
     confidence:
         Optional author/agent trust in this memory, 0.0–1.0. Feeds the search
         re-rank; omitted memories use the configured default.
+    session_slug:
+        The ``ws-`` handle returned by ``workflow_session_start``, recording
+        which session produced this memory. Pass it whenever you have one: the
+        protocol carries no session state, so against a deployed service this is
+        the only way the ``SessionProduced`` provenance edge can be created.
+        Omit it under a local stdio server, which finds the handle itself.
     """
     # When no repo is known (not passed, and detection finds none), offer to
     # scope it rather than silently persisting an unscoped node. Falls back to
@@ -1522,6 +1534,7 @@ async def memory_store(
         tags=tags,
         symbol_refs=symbol_refs,
         confidence=confidence,
+        session_slug=session_slug,
     )
 
 
@@ -1866,9 +1879,10 @@ def _active_session_slug() -> str | None:
     block a memory write.
 
     Local-stdio only: a deployed replica shares neither the filesystem nor the
-    agent's session id, so there is nothing to read. Memories written through a
-    deployment therefore carry no session provenance until the handle is threaded
-    in as a tool argument — see the follow-up note on ``workflow_session_start``.
+    agent's session id, so there is nothing to read. Under a deployment the
+    handle instead arrives as the caller's ``session_slug`` argument (injected by
+    ``RemoteMCPProxy._resolve_session_slug`` for CLI call sites), which is why
+    this is the *fallback* in ``_store_memory`` rather than its only source.
     """
     if not _is_local_stdio():
         return None
@@ -2463,6 +2477,7 @@ def workflow_trace_mine(
     trace_slug: str,
     patterns: list[dict] | None = None,
     lessons: list[dict] | None = None,
+    session_slug: str | None = None,
 ) -> dict:
     """
     Turn a completed WorkflowTrace into reusable Pattern/Lesson Memory nodes.
@@ -2492,6 +2507,9 @@ def workflow_trace_mine(
         Proposed lesson memories to create on this call. Each dict needs
         ``title`` and ``content``; may also include ``repo``, ``severity``,
         and ``tags``.
+    session_slug:
+        The ``ws-`` handle from ``workflow_session_start``, recorded as the
+        provenance of every memory mined on this call — see ``memory_store``.
 
     Returns
     -------
@@ -2536,6 +2554,7 @@ def workflow_trace_mine(
             repo=spec.get("repo"),
             language=spec.get("language"),
             tags=spec.get("tags"),
+            session_slug=session_slug,
         )["slug"]
         for spec in patterns or []
     ]
@@ -2547,6 +2566,7 @@ def workflow_trace_mine(
             repo=spec.get("repo"),
             severity=spec.get("severity"),
             tags=spec.get("tags"),
+            session_slug=session_slug,
         )["slug"]
         for spec in lessons or []
     ]

@@ -79,6 +79,94 @@ def test_non_dict_state_file_is_ignored(server, tmp_state_dir, monkeypatch):
 
 
 @requires_omnigraph
+def test_explicit_session_slug_carries_provenance_under_a_deployment(
+    server, monkeypatch
+):
+    """A deployed replica can only learn the session from the tool argument.
+
+    Simulated by forcing ``_active_session_slug`` to None — exactly what
+    ``_is_local_stdio()`` produces once an OIDC issuer is configured.
+    """
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_active_session_slug", lambda: None)
+
+    proj = server.workflow_project_create(title="depl", description="deployed store")
+    sess = server.workflow_session_start(
+        project_slug=proj["slug"], session_id="sess-depl-1", phase="implementation"
+    )
+    mem = server.memory_store(
+        kind="lesson",
+        title="threaded",
+        content="handle came in as an argument",
+        severity="info",
+        session_slug=sess["session_slug"],
+    )
+
+    assert mem["session_linked"] is True
+    assert "note" not in mem
+    grouped = server.workflow_project_memories(proj["slug"], group_by_session=True)
+    assert mem["slug"] in {
+        m["slug"] for m in grouped["by_session"][sess["session_slug"]]
+    }
+
+
+@requires_omnigraph
+def test_explicit_session_slug_wins_over_the_local_handle(server, monkeypatch):
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="pref", description="precedence")
+    ambient = server.workflow_session_start(
+        project_slug=proj["slug"], session_id="sess-ambient", phase="implementation"
+    )
+    explicit = server.workflow_session_start(
+        project_slug=proj["slug"], session_id="sess-explicit", phase="implementation"
+    )
+    monkeypatch.setattr(srv, "_active_session_slug", lambda: ambient["session_slug"])
+
+    mem = server.memory_store(
+        kind="pattern",
+        title="pref",
+        content="argument beats ambient",
+        session_slug=explicit["session_slug"],
+    )
+
+    grouped = server.workflow_project_memories(proj["slug"], group_by_session=True)
+    by_session = {
+        slug: {m["slug"] for m in mems} for slug, mems in grouped["by_session"].items()
+    }
+    assert mem["slug"] in by_session[explicit["session_slug"]]
+    assert mem["slug"] not in by_session.get(ambient["session_slug"], set())
+
+
+@requires_omnigraph
+def test_trace_mine_threads_session_slug_to_mined_memories(server, monkeypatch):
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_active_session_slug", lambda: None)
+
+    proj = server.workflow_project_create(title="mine", description="mining test")
+    sess = server.workflow_session_start(
+        project_slug=proj["slug"], session_id="sess-mine-1", phase="delivery"
+    )
+    server.workflow_session_end(
+        session_slug=sess["session_slug"], summary="did the thing"
+    )
+    trace = server.workflow_project_complete(proj["slug"], outcome="shipped")
+
+    mined = server.workflow_trace_mine(
+        trace_slug=trace["trace_slug"],
+        lessons=[{"title": "mined lesson", "content": "worth remembering"}],
+        session_slug=sess["session_slug"],
+    )
+
+    grouped = server.workflow_project_memories(proj["slug"], group_by_session=True)
+    assert set(mined["created_lessons"]) <= {
+        m["slug"] for m in grouped["by_session"][sess["session_slug"]]
+    }
+
+
+@requires_omnigraph
 def test_malformed_session_id_is_rejected(server, monkeypatch):
     from witan import server as srv
 

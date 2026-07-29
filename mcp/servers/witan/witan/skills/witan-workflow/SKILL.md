@@ -81,6 +81,11 @@ For the session id: on Claude Code, run `echo $CLAUDE_SESSION_ID` via Bash. If
 that variable is empty (e.g. under Pi), use a short random hex string instead
 (read `/proc/sys/kernel/random/uuid` and take the first 8 chars).
 
+Keep the returned `session_slug` for the rest of the session: pass it to
+`memory_store` (and `workflow_trace_mine`) so anything you record is attributed to
+this session, and to `workflow_session_end` when you close. The protocol carries
+no session state, so the handle is the only thing tying those calls together.
+
 Confirm to the user: "Session linked to **{title}** (`{session_slug}`). Call
 `/witan-workflow end` before you stop, or the Stop hook will auto-close it with a
 placeholder summary."

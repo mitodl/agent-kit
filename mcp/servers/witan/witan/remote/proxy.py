@@ -3,19 +3,22 @@
 The transport, argument mapping, and result-envelope unwrapping live in
 :class:`witan_core.remote.proxy.RemoteMCPProxy`; :class:`RemoteServerProxy` here
 binds witan's policy — which tools are in-cluster admin/break-glass ops to refuse
-(:data:`_ADMIN_ONLY`), how ``repo=None`` is resolved client-side, and the exact
-refusal wording — so ``witan.cli._common._srv()`` gets a drop-in stand-in for the
-``witan.server`` module. Nothing in the ~40 CLI call sites changes; the deployed
-server does the ADR-0004 JWT→actor→token mapping.
+(:data:`_ADMIN_ONLY`), how ``repo=None`` and an omitted ``session_slug`` are
+resolved client-side, and the exact refusal wording — so
+``witan.cli._common._srv()`` gets a drop-in stand-in for the ``witan.server``
+module. Nothing in the ~40 CLI call sites changes; the deployed server does the
+ADR-0004 JWT→actor→token mapping.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Callable
 
 from witan_core.remote.proxy import RemoteMCPProxy, RemoteToolUnavailable
 
 from .. import repo as repo_module
+from .. import session_state
 from ..config import RemoteConfig
 
 __all__ = ["RemoteServerProxy", "RemoteToolUnavailable"]
@@ -64,3 +67,11 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def _resolve_repo(self) -> str | None:
         return repo_module.detect()
+
+    def _resolve_session_slug(self) -> str | None:
+        # The handle `witan session start` (or the local stdio server) parked
+        # under $CLAUDE_SESSION_ID. Sending it makes memories written through the
+        # deployment carry SessionProduced provenance, which the server cannot
+        # derive on its own — it shares neither the filesystem nor the session id.
+        handle = session_state.read_handle(os.environ.get("CLAUDE_SESSION_ID") or "")
+        return (handle or {}).get("session_slug") or None

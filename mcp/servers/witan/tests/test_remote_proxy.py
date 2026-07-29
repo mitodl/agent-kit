@@ -89,6 +89,52 @@ def test_repo_empty_string_sentinel_is_preserved(proxy, monkeypatch):
     assert captured["task_ready"]["repo"] == ""
 
 
+def test_session_handle_is_threaded_from_the_client(
+    proxy, server, tmp_path, monkeypatch
+):
+    """A memory stored over the proxy carries SessionProduced provenance.
+
+    The deployed server cannot resolve the session itself — no protocol session
+    state, no shared filesystem — so the proxy sends the handle the client parked.
+    """
+    import witan.server as srv
+
+    monkeypatch.setattr(srv, "_active_session_slug", lambda: None)
+    monkeypatch.setattr(
+        "witan.remote.proxy.repo_module.detect", lambda override=None: REPO
+    )
+    monkeypatch.setattr("witan.session_state.session_state_dir", lambda: tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-remote-1")
+
+    proj = proxy.workflow_project_create(title="remote", description="d")
+    handle = proxy.workflow_session_start(
+        project_slug=proj["slug"], session_id="sess-remote-1", phase="implementation"
+    )
+    # A deployed server never writes the handle file; the CLI does.
+    from witan import session_state
+
+    session_state.write_handle("sess-remote-1", dict(handle))
+
+    mem = proxy.memory_store(
+        kind="lesson", title="remote", content="c", severity="info"
+    )
+
+    assert mem["session_linked"] is True
+    grouped = proxy.workflow_project_memories(proj["slug"], group_by_session=True)
+    assert mem["slug"] in {
+        m["slug"] for m in grouped["by_session"][handle["session_slug"]]
+    }
+
+
+def test_no_parked_handle_means_no_provenance(proxy, tmp_path, monkeypatch):
+    monkeypatch.setattr("witan.session_state.session_state_dir", lambda: tmp_path)
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-absent")
+
+    assert proxy._resolve_session_slug() is None
+    mem = proxy.memory_store(kind="pattern", title="unlinked", content="c", repo=REPO)
+    assert mem["session_linked"] is False
+
+
 def test_admin_only_functions_are_refused_without_network(proxy):
     for name in ("migrate_topics", "apply_schema", "merge_store"):
         with pytest.raises(RemoteToolUnavailable, match="in-cluster"):

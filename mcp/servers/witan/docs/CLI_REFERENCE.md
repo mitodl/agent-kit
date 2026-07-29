@@ -87,6 +87,13 @@ unchanged. Admin/migration commands (`witan apply-schema`, `witan migrate …`,
 `merge-store`) are **not** available remotely — they have no per-user identity
 and run in-cluster as `svc-witan-admin` (ADR-0005 path b).
 
+Two arguments the deployed server cannot resolve for itself are filled in
+client-side before dispatch: `repo` (it has no git checkout) and `session_slug`
+(the protocol carries no session state, and a replica shares no filesystem with
+your agent). The latter comes from the handle `witan session start` parked under
+`$CLAUDE_SESSION_ID`, so memories written remotely keep their `SessionProduced`
+provenance. Pass either explicitly to override.
+
 ```bash
 export WITAN_REMOTE_URL=https://witan.example.org/mcp
 export WITAN_OIDC_ISSUER=https://sso.example.org/realms/ol-platform-engineering
