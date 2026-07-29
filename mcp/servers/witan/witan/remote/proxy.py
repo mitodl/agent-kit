@@ -23,6 +23,11 @@ __all__ = ["RemoteServerProxy", "RemoteToolUnavailable"]
 # In-process-only module functions (deliberately not @mcp.tool): schema/
 # migration/merge admin ops with no per-user identity. They belong to the
 # in-cluster svc-witan-admin path (ADR-0005 path b), never the remote CLI.
+#
+# Not registering them is what makes them unreachable — this client-side list is
+# only a better error message than the generic "no such tool" a remote dispatch
+# would otherwise produce. `test_admin_only_functions_are_not_registered_as_tools`
+# pins the invariant that the server keeps them off the tool surface.
 _ADMIN_ONLY = frozenset(
     {
         "apply_schema",

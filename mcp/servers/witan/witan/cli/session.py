@@ -1,11 +1,12 @@
 """Session commands: start, end, list.
 
 Sessions are the continuity primitive — ``workflow_session_start`` links an
-agent session to a project (and writes a state file, in the system temp dir
-resolved by ``witan.session_state``, that the Stop hook reads),
-``workflow_session_end`` records the handoff summary. These were MCP-only; the
-CLI now lets a human drive them too, e.g. to close a session that leaked open
-or to inspect a project's session history.
+agent session to a project and returns a handle, ``workflow_session_end`` takes
+that handle back and records the handoff summary. The handle is persisted here,
+client-side (``witan.session_state``), so the Stop hook can find it whether the
+tool ran in-process or against a deployment. These were MCP-only; the CLI now
+lets a human drive them too, e.g. to close a session that leaked open or to
+inspect a project's session history.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import uuid
 import cyclopts
 from rich.markup import escape
 
+from .. import session_state
 from ._common import (
     _fn,
     _split_csv,
@@ -61,6 +63,11 @@ def session_start(
         repo=repo,
         tags=_split_csv(tags),
     )
+    # Park the returned handle client-side. The server only writes it in local
+    # stdio mode; doing it here is what makes the Stop hook work against a
+    # deployment, where the replica that served this call shares no filesystem
+    # with us. Re-writing the local-stdio file is harmless (same contents).
+    session_state.write_handle(sid, dict(result))
     console.print(
         f"[green]Started session[/green] [bold]{result['session_slug']}[/bold]"
     )
@@ -92,6 +99,8 @@ def session_end(
         tools_used=_split_csv(tools_used),
         files_changed=_split_csv(files_changed),
     )
+    # Drop our copy of the handle so the Stop hook doesn't re-close this session.
+    session_state.clear_handle_for_slug(session_slug)
     console.print(f"[green]Ended session[/green] [bold]{session_slug}[/bold]")
     console.print(f"  ended_at: {result.get('ended_at')}")
 

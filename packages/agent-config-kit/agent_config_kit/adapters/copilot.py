@@ -22,7 +22,9 @@ def serialize_mcp(server: McpServer) -> dict:
         return data
 
     assert isinstance(server, RemoteServer)
+    # Only an explicit transport="sse" emits the type MCP 2026-07-28 deprecates;
+    # anything else maps to "http" rather than falling back onto it.
     return {
-        "type": "http" if server.transport in ("http", "streamable-http") else "sse",
+        "type": "sse" if server.transport == "sse" else "http",
         "url": server.url,
     }

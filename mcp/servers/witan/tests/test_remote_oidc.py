@@ -51,6 +51,11 @@ def _seed_cache(cfg: RemoteConfig, entry: dict) -> None:
 
 
 _META = {
+    # A real metadata document always echoes its own issuer, and
+    # witan_core.remote.oidc.discover_endpoints now requires it to match the one
+    # we asked for (RFC 9207 hardening). Keep in sync with the `cfg` fixture's
+    # oidc_issuer above — these tests drive the core through witan's shim.
+    "issuer": "https://sso.example.org/realms/ol",
     "device_authorization_endpoint": "https://sso.example.org/dev",
     "token_endpoint": "https://sso.example.org/token",
 }

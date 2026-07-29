@@ -4,13 +4,7 @@ from .conftest import requires_omnigraph
 
 
 @requires_omnigraph
-def test_session_produced_memory(server, tmp_path, monkeypatch):
-    from witan import server as srv
-
-    # Redirect the session-state file into the test's tmp dir for isolation.
-    monkeypatch.setattr(
-        srv, "_session_state_path", lambda sid: tmp_path / f"state-{sid}.json"
-    )
+def test_session_produced_memory(server, tmp_state_dir, monkeypatch):
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-prov-1")
 
     proj = server.workflow_project_create(title="prov", description="provenance test")
@@ -53,27 +47,29 @@ def test_informed_memory_in_project_walk(server):
 
 
 @requires_omnigraph
-def test_stale_session_state_does_not_block_store(server, tmp_path, monkeypatch):
-    # State file points at a session that doesn't exist in the store. The engine
+def test_stale_session_state_does_not_block_store(server, tmp_state_dir, monkeypatch):
+    # Handle points at a session that doesn't exist in the store. The engine
     # rejects the SessionProduced edge, but the memory write must still succeed.
     from witan import server as srv
+    from witan import session_state
 
-    state = tmp_path / "state-stale.json"
-    state.write_text('{"session_slug": "ws-does-not-exist"}')
-    monkeypatch.setattr(srv, "_session_state_path", lambda sid: state)
+    session_state.write_handle("stale", {"session_slug": "ws-does-not-exist"})
     monkeypatch.setenv("CLAUDE_SESSION_ID", "stale")
+    # Guard against the isolation silently going dead again: if the handle were
+    # not being read, this would be None and the test below would pass vacuously.
+    assert srv._active_session_slug() == "ws-does-not-exist"
 
     mem = server.memory_store(kind="lesson", title="x", content="y", severity="info")
     assert mem["slug"].startswith("les-")
 
 
 @requires_omnigraph
-def test_non_dict_state_file_is_ignored(server, tmp_path, monkeypatch):
+def test_non_dict_state_file_is_ignored(server, tmp_state_dir, monkeypatch):
     from witan import server as srv
+    from witan import session_state
 
-    state = tmp_path / "state-bad.json"
-    state.write_text("[]")  # valid JSON, not an object
-    monkeypatch.setattr(srv, "_session_state_path", lambda sid: state)
+    # Valid JSON, not an object — a truncated write can leave this behind.
+    session_state.session_state_path("weird").write_text("[]")
     monkeypatch.setenv("CLAUDE_SESSION_ID", "weird")
 
     # Must not raise AttributeError; just no active session.
