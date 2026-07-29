@@ -626,3 +626,19 @@ def test_stop_hook_keeps_the_handle_when_the_close_fails(
     hooks.session_checkpoint()  # never blocks the agent, not even on SystemExit
 
     assert session_state.read_handle(sid) == {"session_slug": "ws-doomed"}
+
+
+def test_stop_hook_survives_a_broken_config(tmp_state_dir, monkeypatch):
+    """`cfg_module.load()` raises ValueError on a malformed config.toml or an
+    unknown [targets.*] selection. The Stop hook is documented as always exiting
+    0 and never blocking, so a broken config must not turn into a failed stop."""
+    from witan.cli import hooks
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", uuid.uuid4().hex)
+
+    def _boom(*_a, **_kw):
+        raise ValueError("The 'rank' section in config must be a table.")
+
+    monkeypatch.setattr(hooks.cfg_module, "load", _boom)
+
+    hooks.session_checkpoint()  # must not raise

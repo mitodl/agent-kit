@@ -102,9 +102,12 @@ def session_checkpoint() -> None:
     # Keep the store compacted so query latency doesn't re-bloat. Runs at most
     # once per WITAN_OPTIMIZE_INTERVAL and detaches, so the Stop hook returns
     # immediately; best-effort, never fails the hook.
-    cfg = cfg_module.load()
+    #
+    # The config load is inside the guard: `load()` raises ValueError on a
+    # malformed config.toml or an unknown [targets.*] selection, and a broken
+    # config must not turn into a failing Stop hook.
     try:
-        maintenance.spawn_background_optimize(cfg.graph_uri)
+        maintenance.spawn_background_optimize(cfg_module.load().graph_uri)
     except Exception:  # noqa: BLE001 — maintenance must never fail the Stop hook
         pass
 
