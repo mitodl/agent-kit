@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.5.0] - 2026-07-30
+
+### Added
+
+- **MRTR elicitation.** `elicit.confirm` / `elicit.text` now pick their wire
+  mechanism per request: multi-round-trip (MCP 2026-07-28, SEP-2322) on a
+  connection whose client advertises elicitation, `ctx.elicit` on the handshake
+  eras, and the caller's default when neither is possible. This fixes
+  elicitation being silently dead on 2026-07-28 — that era removed the
+  server→client back-channel, so `ctx.elicit` raises there and the previous
+  blanket `except Exception` turned every prompt into its default. A server must
+  register the new `MRTRElicitationMiddleware` for the MRTR path to work.
+- **`witan_core.caching`** — the shared `ttlMs`/`cacheScope` hint a server
+  declares on its list results (SEP-2549). 300s at `private` scope; see the
+  module docstring for why `public` is the wrong default when a server holds
+  per-actor data.
+- **`RemoteMCPProxy` answers elicitation prompts.** New `_elicitation_handler()`
+  hook, defaulting to `console_elicitation_handler`, which prompts on the
+  terminal. Previously a prompt raised by a deployment could never be answered
+  over the CLI.
+
+### Changed
+
+- **The proxy honors the server's `ttlMs`** for its cached tool list, instead of
+  holding it for the whole process lifetime.
+
+### Notes
+
+- Still `fastmcp>=3.4.2,<5`. The 4.x-only features above degrade on 3.4.x rather
+  than requiring it: MRTR is selected per connection, and the cache hint is
+  omitted when the installed FastMCP has no `cache_ttl` argument. Requiring
+  FastMCP 4 outright is deferred until 4.0 leaves pre-release, because
+  `uv tool install` will not resolve a transitively-pulled pre-release.
+
 ## [0.4.0] - 2026-07-21
 
 ### Changed

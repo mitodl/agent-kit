@@ -20,7 +20,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
-from witan_core import normalise, now_iso
+from witan_core import caching, normalise, now_iso
 
 from . import config as cfg_module
 from . import elicit
@@ -227,12 +227,23 @@ mcp = FastMCP(
         'memory_link(from_slug=<new>, to_slug=<old>, kind="supersedes") — the old '
         "one is hidden from default reads but kept (include_superseded=True to "
         "see it).\n\n"
+        "Naming: the task_* tools track work items (task_create, task_claim, "
+        "task_ready, …) and have nothing to do with MCP's own tasks/* extension "
+        "for long-running calls. A task_* slug is a unit of work someone is "
+        "assigned; an MCP task id is a handle on a call still executing.\n\n"
         "Errors: a lookup that finds nothing returns null/empty, never raises; an "
         "invalid-but-well-formed mutation (self-link, self-block, claim "
         "contention) returns a status object with a reason; only malformed input "
         "raises."
     ),
+    # Let clients cache this server's ~37-tool list instead of re-listing it
+    # every session. Scope stays private: memory reads are per-actor.
+    **caching.hint_kwargs(),
 )
+
+# Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
+# server→client back-channel to run them on. Inert on the handshake eras.
+mcp.add_middleware(elicit.MRTRElicitationMiddleware())
 
 # ── Helpers ───────────────────────────────────────────────────────
 

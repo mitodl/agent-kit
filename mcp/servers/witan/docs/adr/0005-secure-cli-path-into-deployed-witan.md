@@ -8,7 +8,10 @@
 - Related: `docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md` (the
   server-side JWT→actor→token mapping this reuses); ol-infrastructure
   `docs/adr/0009-deploy-witan-as-shared-multi-tenant-mcp-service.md`
-  (ClusterIP-only omnigraph-server, the `svc-witan-admin` sketch)
+  (ClusterIP-only omnigraph-server, the `svc-witan-admin` sketch);
+  `docs/adr/0006-stateless-mcp-protocol-era.md` (the 2026-07-28 era this path
+  now runs on — read it alongside every `streamable-http` reference below,
+  which describes the handshake-era shape)
 
 ## Context
 
@@ -141,3 +144,9 @@ tools, so `RemoteServerProxy` raises a clear "run in-cluster as
   several MCP handshakes. Acceptable for interactive CLI use; a persistent
   per-process session is deferred and tracked with the subprocess-overhead
   spike (`tk-spike-subprocess-per-call-overhead-for-remote-om-d6ceac`).
+  - **Amendment (2026-07-30):** largely moot against a 2026-07-28 deployment.
+    That era has no `initialize` handshake and no session id, so a fresh
+    connection per call costs a connection, not a negotiation — see
+    `docs/adr/0006-stateless-mcp-protocol-era.md`. The proxy also gained an
+    elicitation handler, so a prompt the deployment raises now reaches the
+    human at the terminal instead of degrading to the tool's default.
