@@ -20,7 +20,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
-from witan_core import normalise, now_iso
+from witan_core import caching, normalise, now_iso
 
 from . import config as cfg_module
 from . import elicit
@@ -236,6 +236,9 @@ mcp = FastMCP(
         "contention) returns a status object with a reason; only malformed input "
         "raises."
     ),
+    # Let clients cache this server's ~37-tool list instead of re-listing it
+    # every session. Scope stays private: memory reads are per-actor.
+    **caching.hint_kwargs(),
 )
 
 # Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no

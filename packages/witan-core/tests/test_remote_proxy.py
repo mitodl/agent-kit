@@ -255,3 +255,86 @@ def test_client_is_built_with_the_handler(monkeypatch):
     )
     _Proxy()._new_client("tok")
     assert built["elicitation_handler"] is console_elicitation_handler
+
+
+# ── honoring the server's cache directive ─────────────────────────────────
+# The tool list used to be held for the whole process lifetime — a guess. MCP
+# 2026-07-28 has the server state how long its list results stay fresh, so the
+# proxy holds it for exactly that long instead.
+
+
+class _CountingProxy(RemoteMCPProxy):
+    """A proxy wired to an in-memory server, counting its tools/list calls."""
+
+    def __init__(self, server, mode="auto"):
+        super().__init__("http://unused/mcp", lambda: "tok")
+        self._server = server
+        self._mode = mode
+        self.lists = 0
+
+    def _new_client(self, token):
+        from fastmcp import Client
+
+        client = Client(self._server, mode=self._mode)
+        original = client.list_tools_mcp
+
+        async def _counted(*args, **kwargs):
+            self.lists += 1
+            return await original(*args, **kwargs)
+
+        client.list_tools_mcp = _counted
+        return client
+
+
+def _echo_server(**cache_kwargs):
+    from fastmcp import FastMCP
+
+    server = FastMCP("cache-test", **cache_kwargs)
+
+    @server.tool
+    def echo(value: str) -> str:
+        """Echo the value back."""
+        return value
+
+    return server
+
+
+def test_declared_ttl_bounds_how_long_the_list_is_held(monkeypatch):
+    from witan_core import caching
+
+    proxy = _CountingProxy(_echo_server(**caching.hint_kwargs(ttl_seconds=300)))
+    assert proxy.echo("a") == "a"
+    assert proxy.lists == 1
+
+    # Inside the window the cached list is reused...
+    assert proxy.echo("b") == "b"
+    assert proxy.lists == 1
+
+    # ...and past it the proxy re-lists rather than serving a stale surface.
+    expiry = proxy._param_names_expiry
+    monkeypatch.setattr("time.monotonic", lambda: expiry + 1)
+    assert proxy.echo("c") == "c"
+    assert proxy.lists == 2
+
+
+def test_a_zero_ttl_is_an_instruction_not_a_missing_value():
+    # A 2026-07-28 server that sets no hint still sends ttlMs=0, which says
+    # "do not cache this" — so the proxy re-reads rather than treating the
+    # absence of a *configured* hint as permission to hold the list forever.
+    proxy = _CountingProxy(_echo_server())
+    assert proxy.echo("a") == "a"
+    assert proxy.echo("b") == "b"
+    assert proxy.lists == 2
+
+
+def test_connection_without_the_field_keeps_the_process_lifetime_cache():
+    # A handshake-era peer carries no ttlMs at all, so there is nothing to
+    # honor — hold the list as the proxy always did rather than adding a
+    # round trip to every call.
+    import math
+
+    proxy = _CountingProxy(_echo_server(), mode="legacy")
+    assert proxy.echo("a") == "a"
+    assert proxy._param_names_expiry == math.inf
+    assert proxy.echo("b") == "b"
+    assert proxy.lists == 1

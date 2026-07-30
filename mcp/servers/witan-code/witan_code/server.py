@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastmcp import Context, FastMCP
+from witan_core import caching
 
 from . import bridge_extractors
 from . import config as cfg_module
@@ -50,6 +51,9 @@ mcp = FastMCP(
         "Calls/References edges are heuristic (syntactic name resolution), not a "
         "precise call graph; code_find_references includes code_callers."
     ),
+    # Let clients cache this server's tool list instead of re-listing it every
+    # session. Scope stays private: a code graph is scoped to its repos.
+    **caching.hint_kwargs(),
 )
 
 # Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no

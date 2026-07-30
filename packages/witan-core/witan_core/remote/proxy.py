@@ -15,7 +15,9 @@ Two shape details make that transparency work:
   schema property order, which FastMCP derives from the function signature
   (property order == signature order). MCP SDK v2 renamed that field to
   ``input_schema``; ``_tool_input_schema`` reads whichever the installed
-  fastmcp exposes, since the package supports both 3.4.x and 4.x.
+  fastmcp exposes, since the package supports both 3.4.x and 4.x. That list is
+  held for as long as the server's own ``ttlMs`` says (MCP 2026-07-28), rather
+  than for the process lifetime as it used to be.
 
 Server-specific policy is supplied by subclasses via the hooks below:
 :meth:`~RemoteMCPProxy._is_admin_tool` / :meth:`~RemoteMCPProxy._admin_error`
@@ -33,8 +35,10 @@ deployment raises — a terminal by default). Requires the ``remote`` extra
 from __future__ import annotations
 
 import asyncio
+import math
 import sys
 import threading
+import time
 from typing import Any, Callable
 
 from fastmcp import Client
@@ -92,6 +96,21 @@ def _tool_input_schema(tool: Any) -> dict:
     return schema if schema is not None else tool.inputSchema
 
 
+_MISSING = object()
+
+
+def _next_cursor(result: Any) -> str | None:
+    """A list result's pagination cursor, across the same v1→v2 rename.
+
+    Unlike the input schema, ``None`` is the *normal* value here — it means the
+    last page — so presence has to be tested rather than truthiness. Reading the
+    camelCase alias on a v2 result emits a deprecation warning, and this is on
+    the path of every single tool call.
+    """
+    cursor = getattr(result, "next_cursor", _MISSING)
+    return result.nextCursor if cursor is _MISSING else cursor
+
+
 class RemoteMCPProxy:
     """Mirror a FastMCP server's tool surface, dispatching each call over MCP."""
 
@@ -99,6 +118,10 @@ class RemoteMCPProxy:
         self._url = url
         self._token_provider = token_provider
         self._param_names: dict[str, list[str]] | None = None
+        # When the cached tool list goes stale, per the server's own ttlMs.
+        # `inf` is the pre-2026-07-28 behavior — hold it for the process
+        # lifetime — kept for servers that declare nothing to honor.
+        self._param_names_expiry = math.inf
         self._lock = threading.Lock()
 
     # ── policy hooks (override in subclasses) ──────────────────────────────
@@ -163,18 +186,50 @@ class RemoteMCPProxy:
         transport = StreamableHttpTransport(self._url, auth=BearerAuth(token))
         return Client(transport, elicitation_handler=self._elicitation_handler())
 
+    async def _refresh_param_names(self, client: Client) -> None:
+        """Re-read the deployment's tool surface and its cache directive.
+
+        Paginates through ``list_tools_mcp`` rather than calling ``list_tools``
+        because only the protocol-level result carries ``ttlMs`` — the whole
+        point being to hold the list for as long as the *server* says to,
+        instead of guessing.
+
+        A connection that declared no ``ttlMs`` has nothing to honor, so the
+        expiry stays at ``inf`` and the list is held for the process lifetime as
+        it always was. That has to be read off the *wire*, not the value: the
+        field only exists from 2026-07-28, but the SDK model carries it with a
+        default of 0 regardless of era, so a handshake-era peer would otherwise
+        look like it had asked for no caching at all. A ``ttlMs`` of 0 the peer
+        genuinely sent is different — a server declining to be cached — and
+        re-listing each call is the honest reading of that.
+        """
+        names: dict[str, list[str]] = {}
+        cursor: str | None = None
+        ttl_ms: float | None = None
+        while True:
+            page = await client.list_tools_mcp(cursor=cursor)
+            for tool in page.tools:
+                schema = _tool_input_schema(tool)
+                names[tool.name] = list(schema.get("properties", {}).keys())
+            declared = "ttl_ms" in getattr(page, "model_fields_set", ())
+            ttl_ms = page.ttl_ms if declared else None
+            cursor = _next_cursor(page)
+            if not cursor:
+                break
+        with self._lock:
+            self._param_names = names
+            self._param_names_expiry = (
+                math.inf if ttl_ms is None else time.monotonic() + ttl_ms / 1000
+            )
+
     async def _invoke(self, name: str, args: tuple, kwargs: dict) -> Any:
         token = self._token_provider()
         async with self._new_client(token) as client:
-            if self._param_names is None:
-                with self._lock:
-                    if self._param_names is None:
-                        self._param_names = {
-                            t.name: list(
-                                _tool_input_schema(t).get("properties", {}).keys()
-                            )
-                            for t in await client.list_tools()
-                        }
+            if (
+                self._param_names is None
+                or time.monotonic() >= self._param_names_expiry
+            ):
+                await self._refresh_param_names(client)
             arguments = self._map_args(name, args, kwargs)
             result = await client.call_tool(name, arguments)
             return result.data
