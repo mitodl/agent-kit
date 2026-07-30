@@ -234,6 +234,10 @@ mcp = FastMCP(
     ),
 )
 
+# Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
+# server→client back-channel to run them on. Inert on the handshake eras.
+mcp.add_middleware(elicit.MRTRElicitationMiddleware())
+
 # ── Helpers ───────────────────────────────────────────────────────
 
 MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]

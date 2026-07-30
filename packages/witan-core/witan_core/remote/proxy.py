@@ -24,23 +24,61 @@ Server-specific policy is supplied by subclasses via the hooks below:
 doesn't expose), :meth:`~RemoteMCPProxy._resolve_repo` (client-side repo
 resolution, since the deployed server has no git checkout), and
 :meth:`~RemoteMCPProxy._resolve_session_slug` (client-side workflow-session
-handle, since a deployed replica shares no filesystem with the agent). Requires
-the ``remote`` extra (``fastmcp``).
+handle, since a deployed replica shares no filesystem with the agent), and
+:meth:`~RemoteMCPProxy._elicitation_handler` (who answers a prompt the
+deployment raises — a terminal by default). Requires the ``remote`` extra
+(``fastmcp``).
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 from typing import Any, Callable
 
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
+from fastmcp.client.elicitation import ElicitResult
 from fastmcp.client.transports import StreamableHttpTransport
 
 
 class RemoteToolUnavailable(RuntimeError):
     """Raised when a CLI command has no remotely-callable counterpart."""
+
+
+async def console_elicitation_handler(
+    message: str, response_type: type | None, params: Any, _ctx: Any
+) -> ElicitResult:
+    """Answer a deployed server's elicitation prompt from the terminal.
+
+    A person is sitting at the CLI, so an ask can simply be put to them —
+    unlike an agent-hosted client, which may accept the elicitation capability
+    with no UI to render on. Reading stdin runs off-thread so the event loop
+    driving the MCP connection keeps servicing it while the human types.
+
+    A blank answer, EOF (Ctrl-D), or an interrupt (Ctrl-C) is a decline, which
+    every witan call site maps onto the same default it uses for a client that
+    can't elicit at all. Not a stdin-backed terminal (piped input, a cron run)
+    declines without prompting rather than consuming the pipe.
+    """
+    if not sys.stdin or not sys.stdin.isatty():
+        return ElicitResult(action="decline")
+    schema = getattr(params, "requested_schema", None) or {}
+    field = (schema.get("properties") or {}).get("value") or {}
+    boolean = field.get("type") == "boolean"
+    prompt = f"\n{message}\n{'[y/N]' if boolean else 'Answer'}: "
+    try:
+        answer = (await asyncio.to_thread(input, prompt)).strip()
+    except (EOFError, KeyboardInterrupt):
+        return ElicitResult(action="decline")
+    if not answer:
+        return ElicitResult(action="decline")
+    if boolean:
+        return ElicitResult(
+            action="accept", content={"value": answer.lower() in ("y", "yes")}
+        )
+    return ElicitResult(action="accept", content={"value": answer})
 
 
 def _tool_input_schema(tool: Any) -> dict:
@@ -108,13 +146,22 @@ class RemoteMCPProxy:
 
         return _call
 
+    def _elicitation_handler(self) -> Callable | None:
+        """Handler answering the deployment's elicitation prompts. None: refuse.
+
+        Advertising the capability is what makes a deployed tool ask at all: the
+        2026-07-28 server checks for it before returning an ``input_required``
+        result, and degrades to its own default when it is absent.
+        """
+        return console_elicitation_handler
+
     def _new_client(self, token: str) -> Client:
         """Build an MCP client authenticated with the caller's JWT.
 
         Isolated so tests can point the proxy at an in-memory FastMCP server.
         """
         transport = StreamableHttpTransport(self._url, auth=BearerAuth(token))
-        return Client(transport)
+        return Client(transport, elicitation_handler=self._elicitation_handler())
 
     async def _invoke(self, name: str, args: tuple, kwargs: dict) -> Any:
         token = self._token_provider()

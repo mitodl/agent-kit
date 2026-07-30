@@ -8,12 +8,16 @@ resolver hook, the None-dropping, and the admin/unknown refusal wording.
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 
 from witan_core.remote.proxy import (
     RemoteMCPProxy,
     RemoteToolUnavailable,
     _tool_input_schema,
+    console_elicitation_handler,
 )
 
 
@@ -175,3 +179,79 @@ def test_dunder_attributes_are_not_intercepted():
     p = _Proxy()
     with pytest.raises(AttributeError):
         p.__wrapped__
+
+
+# ── answering a deployed server's elicitation prompt ──────────────────────
+# A person is at the terminal, so the CLI can put the ask to them instead of
+# degrading to the tool's default the way an agent-hosted client does.
+
+
+class _Tty:
+    def isatty(self):
+        return True
+
+
+def _ask(monkeypatch, answer, *, boolean, tty=True):
+    """Run the console handler with ``answer`` typed at the prompt."""
+    monkeypatch.setattr("sys.stdin", _Tty() if tty else None)
+    if isinstance(answer, type) and issubclass(answer, BaseException):
+
+        def _input(_prompt):
+            raise answer
+
+    else:
+
+        def _input(_prompt):
+            return answer
+
+    monkeypatch.setattr("builtins.input", _input)
+    field = {"type": "boolean" if boolean else "string"}
+    params = SimpleNamespace(
+        requested_schema={"type": "object", "properties": {"value": field}}
+    )
+    return asyncio.run(console_elicitation_handler("Proceed?", None, params, None))
+
+
+def test_typed_answers_are_accepted(monkeypatch):
+    assert _ask(monkeypatch, "y", boolean=True).content == {"value": True}
+    assert _ask(monkeypatch, "YES", boolean=True).content == {"value": True}
+    # anything that isn't a yes is a no — not a decline, which would instead
+    # hand the tool its unsupported-client default.
+    assert _ask(monkeypatch, "n", boolean=True).content == {"value": False}
+    assert _ask(monkeypatch, "  a value  ", boolean=False).content == {
+        "value": "a value"
+    }
+
+
+@pytest.mark.parametrize("answer", ["", "   ", EOFError, KeyboardInterrupt])
+def test_no_answer_declines(monkeypatch, answer):
+    # Blank, Ctrl-D, and Ctrl-C all mean "don't ask me", which every witan call
+    # site maps onto the same default a client that can't elicit would get.
+    assert _ask(monkeypatch, answer, boolean=True).action == "decline"
+
+
+def test_without_a_terminal_declines_without_reading_stdin(monkeypatch):
+    def _fail(_prompt):
+        raise AssertionError("must not read stdin when there is no terminal")
+
+    monkeypatch.setattr("sys.stdin", None)
+    monkeypatch.setattr("builtins.input", _fail)
+    params = SimpleNamespace(
+        requested_schema={"properties": {"value": {"type": "boolean"}}}
+    )
+    result = asyncio.run(console_elicitation_handler("Proceed?", None, params, None))
+    assert result.action == "decline"
+
+
+def test_client_is_built_with_the_handler(monkeypatch):
+    # Advertising the capability is what makes a deployed tool ask at all, so a
+    # proxy that dropped the handler would silently get the defaults instead.
+    # Asserted on the constructor kwarg rather than a Client attribute, which
+    # differs across the fastmcp 3.4.x/4.x range this package supports.
+    built = {}
+    monkeypatch.setattr(
+        "witan_core.remote.proxy.Client",
+        lambda transport, **kwargs: built.update(kwargs) or object(),
+    )
+    _Proxy()._new_client("tok")
+    assert built["elicitation_handler"] is console_elicitation_handler

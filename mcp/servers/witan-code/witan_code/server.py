@@ -52,6 +52,10 @@ mcp = FastMCP(
     ),
 )
 
+# Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
+# server→client back-channel to run them on. Inert on the handshake eras.
+mcp.add_middleware(elicit.MRTRElicitationMiddleware())
+
 # Client cache keyed by "store path|branch" ("" = main).
 _clients: dict[str, OmnigraphClient] = {}
 

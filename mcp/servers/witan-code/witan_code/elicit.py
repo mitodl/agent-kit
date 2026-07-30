@@ -19,18 +19,22 @@ Call sites in ``server.py``:
 Never call these from a tool that must stay non-interactive under automation
 — ``code_reindex`` never takes a ``Context`` (see its docstring), and
 ``code_search_symbol`` returns many results by design, not an error case.
+
+A tool that does ask must also be safe to re-run up to the ask: on MCP
+2026-07-28 the client answers by retrying the whole call, so everything before
+the prompt happens twice. Ask after the reads and before the write.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from witan_core.elicit import confirm, text
+from witan_core.elicit import MRTRElicitationMiddleware, confirm, text
 
 if TYPE_CHECKING:
     from fastmcp import Context
 
-__all__ = ["choose_repo", "confirm", "text"]
+__all__ = ["MRTRElicitationMiddleware", "choose_repo", "confirm", "text"]
 
 
 async def choose_repo(

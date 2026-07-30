@@ -9,6 +9,10 @@ Never call these from a tool that must stay non-interactive under automation
 (``workflow_session_start``/``_end``, ``workflow_project_list``, ``code_reindex``,
 ``workflow_trace_mine``) — those never take a ``Context``.
 
+A tool that does ask must also be safe to re-run up to the ask: on MCP
+2026-07-28 the client answers by retrying the whole call, so everything before
+the prompt happens twice. Ask after the reads and before the write.
+
 ``memory_store``/``task_create`` are the exception: they take a ``Context`` *only*
 to offer a repo when detection finds none (``repo_or_detect`` below). Because that
 helper returns the caller's ``repo`` (``None``) unchanged whenever elicitation is
@@ -20,12 +24,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from witan_core.elicit import confirm, text
+from witan_core.elicit import MRTRElicitationMiddleware, confirm, text
 
 if TYPE_CHECKING:
     from fastmcp import Context
 
-__all__ = ["confirm", "repo_or_detect", "text"]
+__all__ = ["MRTRElicitationMiddleware", "confirm", "repo_or_detect", "text"]
 
 
 async def repo_or_detect(ctx: Context | None, repo: str | None) -> str | None:
