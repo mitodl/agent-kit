@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.7.0] - 2026-07-30
+
+### Changed
+
+- **Requires FastMCP 4 (`fastmcp>=4.0.0b1,<5`) and `witan-core>=0.5`.** The
+  3.4.x end of the previous range is dropped. **FastMCP 4.0 is still a
+  pre-release**: `pip install` resolves it, but `uv pip install` / `uv add`
+  need `--prerelease=allow` (see the `witan-core` 0.5.0 entry).
+- **`code_reindex` is now async and no longer blocks the event loop.** It was a
+  plain `def`, so a multi-minute index stalled every other request on the
+  server for its whole run; the indexer now runs on a thread.
+- **`tools/list` declares a cache directive** — `ttlMs=300000`,
+  `cacheScope=private`.
+- **Elicitation works on the stateless protocol era again** — the index-now
+  confirms and the repo prompt had been silently returning their
+  non-interactive defaults on any 2026-07-28 connection. See the `witan-core`
+  0.5.0 entry.
+
+### Added
+
+- **`code_reindex` accepts task-augmented execution** (`io.modelcontextprotocol/tasks`,
+  SEP-2663) via the new optional `witan-code[tasks]` extra: a client can take a
+  handle and poll rather than holding the tool call open for the whole rebuild.
+  Opt-in per call — a client that does not ask gets the same completed result as
+  before. Without the extra the tool stays synchronous; the extra is separate
+  because it pulls a Docket/Redis stack most installs never need.
+
 ## [0.6.0] - 2026-07-21
 
 ### Fixed

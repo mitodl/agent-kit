@@ -1945,7 +1945,7 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "mcp/servers/witan-code" }
 dependencies = [
     { name = "agent-config-kit" },
@@ -1981,7 +1981,7 @@ test = [
 requires-dist = [
     { name = "agent-config-kit", editable = "packages/agent-config-kit" },
     { name = "cyclopts", specifier = ">=4,<5" },
-    { name = "fastmcp", specifier = ">=3.4.2,<5" },
+    { name = "fastmcp", specifier = ">=4.0.0b1,<5" },
     { name = "fastmcp-tasks", marker = "extra == 'tasks'", specifier = ">=4.0.0b1,<5" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
@@ -2007,7 +2007,7 @@ test = [
 
 [[package]]
 name = "witan-core"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
@@ -2038,8 +2038,8 @@ test = [
 requires-dist = [
     { name = "agent-config-kit", marker = "extra == 'cli'", editable = "packages/agent-config-kit" },
     { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=4,<5" },
-    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.4.2,<5" },
-    { name = "fastmcp", marker = "extra == 'remote'", specifier = ">=3.4.2,<5" },
+    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=4.0.0b1,<5" },
+    { name = "fastmcp", marker = "extra == 'remote'", specifier = ">=4.0.0b1,<5" },
     { name = "httpx", marker = "extra == 'remote'", specifier = ">=0.27" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
 ]
@@ -2049,7 +2049,7 @@ provides-extras = ["cli", "mcp", "remote"]
 test = [
     { name = "agent-config-kit", editable = "packages/agent-config-kit" },
     { name = "cyclopts", specifier = ">=4,<5" },
-    { name = "fastmcp", specifier = ">=3.4.2,<5" },
+    { name = "fastmcp", specifier = ">=4.0.0b1,<5" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8" },
     { name = "rich", specifier = ">=13" },
@@ -2057,7 +2057,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },
@@ -2080,7 +2080,7 @@ test = [
 requires-dist = [
     { name = "agent-config-kit", editable = "packages/agent-config-kit" },
     { name = "cyclopts", specifier = ">=4,<5" },
-    { name = "fastmcp", specifier = ">=3.4.2,<5" },
+    { name = "fastmcp", specifier = ">=4.0.0b1,<5" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },

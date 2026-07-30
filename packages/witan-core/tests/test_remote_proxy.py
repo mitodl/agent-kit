@@ -16,7 +16,6 @@ import pytest
 from witan_core.remote.proxy import (
     RemoteMCPProxy,
     RemoteToolUnavailable,
-    _tool_input_schema,
     console_elicitation_handler,
 )
 
@@ -51,50 +50,6 @@ class _Proxy(RemoteMCPProxy):
 
     def _resolve_session_slug(self):
         return self._session
-
-
-# ── cross-version tool-schema access ──────────────────────────────────────
-# `fastmcp>=3.4.2,<5` spans the MCP SDK v1→v2 rename of `Tool.inputSchema` to
-# `input_schema`. Any single CI run installs exactly one of those, so these
-# stand in for the shapes rather than the real Tool class — otherwise the
-# version CI doesn't happen to resolve goes permanently untested.
-
-SCHEMA = {"properties": {"slug": {"type": "string"}}}
-
-
-class _LegacyTool:
-    """fastmcp 3.4.x: camelCase only."""
-
-    inputSchema = SCHEMA
-
-
-class _ModernTool:
-    """fastmcp 4.x: snake_case, with the old name kept as a warning shim."""
-
-    input_schema = SCHEMA
-
-    @property
-    def inputSchema(self):
-        raise AssertionError(
-            "read the deprecated camelCase field on a v2 tool (it warns)"
-        )
-
-
-def test_input_schema_read_from_legacy_camel_case_field():
-    assert _tool_input_schema(_LegacyTool()) == SCHEMA
-
-
-def test_input_schema_prefers_the_modern_field_and_never_reads_the_alias():
-    # _ModernTool raises if the deprecated camelCase alias is touched, so this
-    # fails loudly if the fallback order is ever inverted.
-    assert _tool_input_schema(_ModernTool()) == SCHEMA
-
-
-def test_param_name_extraction_works_on_both_shapes():
-    # The expression _invoke actually builds _param_names with.
-    for tool in (_LegacyTool(), _ModernTool()):
-        names = list(_tool_input_schema(tool).get("properties", {}).keys())
-        assert names == ["slug"]
 
 
 def test_positional_arg_maps_to_param_name():
@@ -246,8 +201,8 @@ def test_without_a_terminal_declines_without_reading_stdin(monkeypatch):
 def test_client_is_built_with_the_handler(monkeypatch):
     # Advertising the capability is what makes a deployed tool ask at all, so a
     # proxy that dropped the handler would silently get the defaults instead.
-    # Asserted on the constructor kwarg rather than a Client attribute, which
-    # differs across the fastmcp 3.4.x/4.x range this package supports.
+    # Asserted on the constructor kwarg rather than a Client attribute, so the
+    # test pins our wiring rather than FastMCP's internals.
     built = {}
     monkeypatch.setattr(
         "witan_core.remote.proxy.Client",

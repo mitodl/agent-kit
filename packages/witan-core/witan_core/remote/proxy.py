@@ -13,11 +13,9 @@ Two shape details make that transparency work:
 - CLI sites pass the first argument positionally (``s.task_get(slug)``); the MCP
   protocol is keyword-only. Positionals map to names using the tool's input
   schema property order, which FastMCP derives from the function signature
-  (property order == signature order). MCP SDK v2 renamed that field to
-  ``input_schema``; ``_tool_input_schema`` reads whichever the installed
-  fastmcp exposes, since the package supports both 3.4.x and 4.x. That list is
-  held for as long as the server's own ``ttlMs`` says (MCP 2026-07-28), rather
-  than for the process lifetime as it used to be.
+  (property order == signature order). That list is held for as long as the
+  server's own ``ttlMs`` says (MCP 2026-07-28), rather than for the process
+  lifetime as it used to be.
 
 Server-specific policy is supplied by subclasses via the hooks below:
 :meth:`~RemoteMCPProxy._is_admin_tool` / :meth:`~RemoteMCPProxy._admin_error`
@@ -83,32 +81,6 @@ async def console_elicitation_handler(
             action="accept", content={"value": answer.lower() in ("y", "yes")}
         )
     return ElicitResult(action="accept", content={"value": answer})
-
-
-def _tool_input_schema(tool: Any) -> dict:
-    """A listed tool's input schema, across the MCP SDK v1→v2 field rename.
-
-    fastmcp 3.4.x exposes ``inputSchema``; SDK v2 (fastmcp 4.x) renamed it to
-    ``input_schema`` and warns on the old spelling. Both are supported versions
-    of this package, so read the new name and fall back.
-    """
-    schema = getattr(tool, "input_schema", None)
-    return schema if schema is not None else tool.inputSchema
-
-
-_MISSING = object()
-
-
-def _next_cursor(result: Any) -> str | None:
-    """A list result's pagination cursor, across the same v1→v2 rename.
-
-    Unlike the input schema, ``None`` is the *normal* value here — it means the
-    last page — so presence has to be tested rather than truthiness. Reading the
-    camelCase alias on a v2 result emits a deprecation warning, and this is on
-    the path of every single tool call.
-    """
-    cursor = getattr(result, "next_cursor", _MISSING)
-    return result.nextCursor if cursor is _MISSING else cursor
 
 
 class RemoteMCPProxy:
@@ -209,11 +181,11 @@ class RemoteMCPProxy:
         while True:
             page = await client.list_tools_mcp(cursor=cursor)
             for tool in page.tools:
-                schema = _tool_input_schema(tool)
-                names[tool.name] = list(schema.get("properties", {}).keys())
+                properties = tool.input_schema.get("properties", {})
+                names[tool.name] = list(properties)
             declared = "ttl_ms" in getattr(page, "model_fields_set", ())
             ttl_ms = page.ttl_ms if declared else None
-            cursor = _next_cursor(page)
+            cursor = page.next_cursor
             if not cursor:
                 break
         with self._lock:

@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.7.0] - 2026-07-30
+
+### Changed
+
+- **Requires FastMCP 4 (`fastmcp>=4.0.0b1,<5`) and `witan-core>=0.5`.** The
+  3.4.x end of the previous range is dropped. **FastMCP 4.0 is still a
+  pre-release**: `pip install` resolves it, but `uv pip install` / `uv add`
+  need `--prerelease=allow` (see the `witan-core` 0.5.0 entry).
+- **Elicitation works on the stateless protocol era again.** Every prompt the
+  server raises — steal-the-claim (`task_claim`), supersede (`memory_link`),
+  the backward-phase confirm (`workflow_project_advance`), the thin-outcome
+  expand (`workflow_project_complete`), and the repo prompt on writes — had
+  been silently returning its non-interactive default on any 2026-07-28
+  connection. See the `witan-core` 0.5.0 entry for the mechanism.
+- **`tools/list` declares a cache directive** — `ttlMs=300000`,
+  `cacheScope=private` — so clients can stop re-fetching the 37-tool surface
+  every session.
+- **`instructions` now distinguish `task_*` from MCP `tasks/*`.** The tool
+  family tracks work items and is unrelated to MCP's async-execution extension.
+
+### Added
+
+- **ADR-0006** (`docs/adr/0006-stateless-mcp-protocol-era.md`) records the move
+  to the stateless 2026-07-28 era: what it unlocks (multi-replica behind a plain
+  round-robin LB, no session affinity) and the two pieces of state that are
+  still per-replica. ADR-0004 and ADR-0005 gained pointers to it.
+
 ## [0.6.0] - 2026-07-21
 
 ### Added

@@ -162,13 +162,6 @@ def test_text_forwards_title_as_response_title():
 
 ERAS = ["2026-07-28", "legacy"]
 
-# `fastmcp>=3.4.2,<5` spans the release that added the stateless era: 3.4.x has
-# neither MRTR nor the `mode` argument to pin an era with, and the helpers fall
-# back to `ctx.elicit` there (covered by the stand-in tests above).
-needs_mrtr = pytest.mark.skipif(
-    elicit.mcp_types is None, reason="MRTR needs fastmcp 4.x (MCP SDK v2)"
-)
-
 
 def _server():
     """A FastMCP server whose tools ask through the helpers under test."""
@@ -226,7 +219,6 @@ def _run(era, handler, tool, **arguments):
     return asyncio.run(_call())
 
 
-@needs_mrtr
 @pytest.mark.parametrize("era", ERAS)
 def test_accepted_answers_reach_the_tool(era):
     # Both answers are the opposite of what an un-askable client would get, so
@@ -238,7 +230,6 @@ def test_accepted_answers_reach_the_tool(era):
     }
 
 
-@needs_mrtr
 @pytest.mark.parametrize("era", ERAS)
 def test_decline_is_a_no_not_a_default(era):
     # The fallback is True, so False proves the decline was heard rather than
@@ -247,7 +238,6 @@ def test_decline_is_a_no_not_a_default(era):
     assert _run(era, _decline, "ask_twice") == {"a": "da", "b": "db"}
 
 
-@needs_mrtr
 @pytest.mark.parametrize("era", ERAS)
 def test_client_that_cannot_elicit_gets_the_defaults(era):
     # A client with no handler doesn't advertise the capability. Asking anyway
