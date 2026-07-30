@@ -11,9 +11,11 @@ Two shape details make that transparency work:
   output-schema envelope back to the raw ``list``/``dict`` an in-process call
   returns, so the CLI's rendering code is untouched.
 - CLI sites pass the first argument positionally (``s.task_get(slug)``); the MCP
-  protocol is keyword-only. Positionals map to names using the tool's
-  ``inputSchema`` property order, which FastMCP derives from the function
-  signature (property order == signature order).
+  protocol is keyword-only. Positionals map to names using the tool's input
+  schema property order, which FastMCP derives from the function signature
+  (property order == signature order). MCP SDK v2 renamed that field to
+  ``input_schema``; ``_tool_input_schema`` reads whichever the installed
+  fastmcp exposes, since the package supports both 3.4.x and 4.x.
 
 Server-specific policy is supplied by subclasses via the hooks below:
 :meth:`~RemoteMCPProxy._is_admin_tool` / :meth:`~RemoteMCPProxy._admin_error`
@@ -39,6 +41,17 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 class RemoteToolUnavailable(RuntimeError):
     """Raised when a CLI command has no remotely-callable counterpart."""
+
+
+def _tool_input_schema(tool: Any) -> dict:
+    """A listed tool's input schema, across the MCP SDK v1→v2 field rename.
+
+    fastmcp 3.4.x exposes ``inputSchema``; SDK v2 (fastmcp 4.x) renamed it to
+    ``input_schema`` and warns on the old spelling. Both are supported versions
+    of this package, so read the new name and fall back.
+    """
+    schema = getattr(tool, "input_schema", None)
+    return schema if schema is not None else tool.inputSchema
 
 
 class RemoteMCPProxy:
@@ -110,7 +123,9 @@ class RemoteMCPProxy:
                 with self._lock:
                     if self._param_names is None:
                         self._param_names = {
-                            t.name: list(t.inputSchema.get("properties", {}).keys())
+                            t.name: list(
+                                _tool_input_schema(t).get("properties", {}).keys()
+                            )
                             for t in await client.list_tools()
                         }
             arguments = self._map_args(name, args, kwargs)
