@@ -15,7 +15,7 @@ keywords = [
 ]
 classifiers = ["Programming Language :: Python :: 3"]
 dependencies = [
-  "fastmcp>=3.4.2,<4",
+  "fastmcp>=3.4.2,<5",
   "cyclopts>=4,<5",
   "rich>=13",
   "pydantic>=2,<3",

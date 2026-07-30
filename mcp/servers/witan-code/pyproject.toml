@@ -12,7 +12,7 @@ classifiers = [
 dependencies = [
     "agent-config-kit>=0.4,<1",
     "witan-core[cli]>=0.2,<1",
-    "fastmcp>=3.4.2,<4",
+    "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled
     # in by fastmcp, declared explicitly since config.py imports it directly.

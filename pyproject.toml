@@ -13,6 +13,20 @@
 # install and an in-member ``uv sync`` keep working exactly as before — uv simply
 # recognizes those sibling paths as workspace members when it resolves from here.
 
+[tool.uv]
+# Resolve to fastmcp 4.0.0b1 while 4.0 is still in beta (PyPI: 3.4.5 is the
+# latest stable). FastMCP 4 is where MCP 2026-07-28 lands — sessionless protocol
+# era, MRTR, the io.modelcontextprotocol/tasks extension — so our own lock and
+# the container image built from it (docker/witan.Dockerfile) run on 4.x now,
+# while the members' published ranges stay `>=3.4.2,<5` so a plain
+# `pip install witan-council` still resolves 3.4.5. The whole suite passes on
+# both; drop this setting once 4.0 GA ships.
+#
+# Needed even though nothing asks for a pre-release loosely: fastmcp pins
+# `fastmcp-slim==<same version>`, and that transitive pre-release is not covered
+# by an exact top-level pin, so resolution fails without it.
+prerelease = "allow"
+
 [tool.uv.workspace]
 members = [
     "packages/agent-config-kit",
