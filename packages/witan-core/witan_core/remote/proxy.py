@@ -19,9 +19,11 @@ Server-specific policy is supplied by subclasses via the hooks below:
 :meth:`~RemoteMCPProxy._is_admin_tool` / :meth:`~RemoteMCPProxy._admin_error`
 (refuse in-process-only admin/break-glass tools),
 :meth:`~RemoteMCPProxy._unknown_tool_error` (wording for a tool the deployment
-doesn't expose), and :meth:`~RemoteMCPProxy._resolve_repo` (client-side repo
-resolution, since the deployed server has no git checkout). Requires the
-``remote`` extra (``fastmcp``).
+doesn't expose), :meth:`~RemoteMCPProxy._resolve_repo` (client-side repo
+resolution, since the deployed server has no git checkout), and
+:meth:`~RemoteMCPProxy._resolve_session_slug` (client-side workflow-session
+handle, since a deployed replica shares no filesystem with the agent). Requires
+the ``remote`` extra (``fastmcp``).
 """
 
 from __future__ import annotations
@@ -63,6 +65,16 @@ class RemoteMCPProxy:
 
     def _resolve_repo(self) -> str | None:
         """Client-side value for ``repo=None`` (detect current repo). None: skip."""
+        return None
+
+    def _resolve_session_slug(self) -> str | None:
+        """Client-side value for an omitted ``session_slug``. None: skip.
+
+        The ambient workflow-session handle, held by whichever process is
+        client-side. MCP 2026-07-28 drops protocol-level session state, so a
+        deployed replica cannot infer which agent session is calling — the
+        handle has to travel as a tool argument for provenance edges to land.
+        """
         return None
 
     # ── dispatch ───────────────────────────────────────────────────────────
@@ -129,6 +141,19 @@ class RemoteMCPProxy:
                 arguments["repo"] = detected
             else:
                 arguments.pop("repo", None)
+        # Same injection for the workflow-session handle. Under MCP 2026-07-28
+        # the protocol carries no session state, so a deployed replica has no way
+        # to tell which agent session is calling — the client supplies the handle
+        # it persisted, and provenance edges land as they do under local stdio.
+        # Applies to any tool declaring the parameter; where it is *required*
+        # (``workflow_session_end``) callers already pass it explicitly, so this
+        # only ever fills an omission.
+        if "session_slug" in names and arguments.get("session_slug") is None:
+            active = self._resolve_session_slug()
+            if active is not None:
+                arguments["session_slug"] = active
+            else:
+                arguments.pop("session_slug", None)
         # Drop remaining None values so omitted optionals take the tool's own
         # default rather than being sent as explicit nulls.
         return {k: v for k, v in arguments.items() if v is not None}
