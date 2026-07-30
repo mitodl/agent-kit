@@ -136,6 +136,4 @@ exactly that long instead of for the process lifetime.
   `uv tool install ol-agent-kit`. Nor can it be fixed from the publishing side:
   `[tool.uv] prerelease` is project-local and never travels in wheel metadata.
   `pip install` is unaffected. Tracked in
-  `tk-move-the-fastmcp-floor-to-4-when-4-0-goes-ga-454f78`; note the servers
-  will also need their `witan-core` floor raised to `>=0.5` at that point, since
-  they now import `witan_core.caching` and `MRTRElicitationMiddleware`.
+  `tk-move-the-fastmcp-floor-to-4-when-4-0-goes-ga-454f78`.

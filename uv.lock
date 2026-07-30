@@ -836,7 +836,7 @@ wheels = [
 
 [[package]]
 name = "ol-agent-kit"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/agent-kit" }
 dependencies = [
     { name = "agent-config-kit", extra = ["cli"] },
@@ -1945,7 +1945,7 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "mcp/servers/witan-code" }
 dependencies = [
     { name = "agent-config-kit" },
@@ -2007,7 +2007,7 @@ test = [
 
 [[package]]
 name = "witan-core"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
@@ -2057,7 +2057,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },
