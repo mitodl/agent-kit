@@ -227,6 +227,10 @@ mcp = FastMCP(
         'memory_link(from_slug=<new>, to_slug=<old>, kind="supersedes") — the old '
         "one is hidden from default reads but kept (include_superseded=True to "
         "see it).\n\n"
+        "Naming: the task_* tools track work items (task_create, task_claim, "
+        "task_ready, …) and have nothing to do with MCP's own tasks/* extension "
+        "for long-running calls. A task_* slug is a unit of work someone is "
+        "assigned; an MCP task id is a handle on a call still executing.\n\n"
         "Errors: a lookup that finds nothing returns null/empty, never raises; an "
         "invalid-but-well-formed mutation (self-link, self-block, claim "
         "contention) returns a status object with a reason; only malformed input "

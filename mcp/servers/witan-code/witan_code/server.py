@@ -56,6 +56,25 @@ mcp = FastMCP(
 # server→client back-channel to run them on. Inert on the handshake eras.
 mcp.add_middleware(elicit.MRTRElicitationMiddleware())
 
+# The `io.modelcontextprotocol/tasks` extension (SEP-2663), which lets a client
+# take a handle on a long `code_reindex` and poll it instead of holding a tool
+# call open for minutes. Optional (`witan-code[tasks]`): it exists only for
+# fastmcp 4.x, and this package still supports the 3.4.x end of its pin. The
+# flag has to gate the tool declaration too — a `task=True` tool refuses to
+# serve at all when the extension is missing, rather than degrading.
+#
+# Note the backend defaults to in-process `memory://`, which is what a per-repo
+# stdio server wants. A multi-replica deployment polling through a round-robin
+# LB would need a shared Docket backend (FASTMCP_DOCKET_URL) — moot today, since
+# indexing needs a git checkout the deployment doesn't have.
+try:
+    from fastmcp_tasks import TasksExtension
+except ImportError:
+    TASKS_ENABLED = False
+else:
+    TASKS_ENABLED = True
+    mcp.add_extension(TasksExtension())
+
 # Client cache keyed by "store path|branch" ("" = main).
 _clients: dict[str, OmnigraphClient] = {}
 
@@ -835,14 +854,20 @@ async def code_interface_search(
     return _filter_by_precision(rows, min_precision)
 
 
-@mcp.tool
-def code_reindex(path: str | None = None, force: bool = False) -> dict:
+@mcp.tool(task=TASKS_ENABLED)
+async def code_reindex(path: str | None = None, force: bool = False) -> dict:
     """
     Index (or re-index) the current repo, or a subpath of it.
 
     Incremental by default — unchanged files (matching content hash) are
     skipped. Lazily creates the per-repo store on first run. Returns a summary of
     files scanned/indexed/skipped and symbols/edges written.
+
+    A full rebuild runs for minutes on a large repo, so this tool accepts
+    task-augmented execution (`io.modelcontextprotocol/tasks`): a client that
+    asks for it gets a task handle back immediately and polls `tasks/get`,
+    instead of holding one tool call open for the whole index. Asking is the
+    client's choice — omit it and the call runs to completion as it always has.
 
     Parameters
     ----------
@@ -853,7 +878,9 @@ def code_reindex(path: str | None = None, force: bool = False) -> dict:
         Re-index every file regardless of content hash.
     """
     target = Path(path) if path else (repo_module.root() or Path.cwd())
-    stats = indexer.index_path(target, force=force, config=cfg)
+    # Off the event loop: indexing is CPU- and IO-bound and would otherwise
+    # stall every other request on this server for its whole run.
+    stats = await asyncio.to_thread(indexer.index_path, target, force=force, config=cfg)
     return {
         "path": str(target),
         "scanned": stats.scanned,

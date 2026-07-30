@@ -43,6 +43,14 @@ dependencies = [
     "rich>=13",
 ]
 
+[project.optional-dependencies]
+# The io.modelcontextprotocol/tasks extension (SEP-2663), which lets a client
+# poll a long `code_reindex` instead of holding the tool call open. Optional
+# because it exists only for fastmcp 4.x while the pin above still spans 3.4.x,
+# and because it pulls a Docket/Redis stack that the default in-process
+# `memory://` backend does not need. server.py registers it when importable.
+tasks = ["fastmcp-tasks>=4.0.0b1,<5"]
+
 [project.urls]
 Homepage = "https://github.com/mitodl/agent-kit/tree/main/mcp/servers/witan-code"
 Repository = "https://github.com/mitodl/agent-kit"
@@ -65,7 +73,10 @@ agent-config-kit = { workspace = true }
 witan-core = { workspace = true }
 
 [dependency-groups]
-test = ["pytest>=8"]
+# fastmcp-tasks: the `tasks` extra. Without it CI would only ever exercise the
+# extension-absent branch, and `code_reindex`'s task declaration would go
+# untested — the failure mode there is the server refusing to start at all.
+test = ["pytest>=8", "fastmcp-tasks>=4.0.0b1,<5"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
