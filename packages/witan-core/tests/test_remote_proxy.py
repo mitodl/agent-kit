@@ -338,3 +338,51 @@ def test_connection_without_the_field_keeps_the_process_lifetime_cache():
     assert proxy._param_names_expiry == math.inf
     assert proxy.echo("b") == "b"
     assert proxy.lists == 1
+
+
+class _PagedProxy(RemoteMCPProxy):
+    """A proxy whose tools/list is a canned sequence of pages."""
+
+    def __init__(self, pages):
+        super().__init__("http://unused/mcp", lambda: "tok")
+        self._pages = pages
+
+    async def refresh(self):
+        proxy = self
+
+        class _Client:
+            async def list_tools_mcp(self, cursor=None):
+                index = 0 if cursor is None else int(cursor)
+                return proxy._pages[index]
+
+        await self._refresh_param_names(_Client())
+
+
+def _page(ttl_ms, next_cursor, *, declared=True):
+    """One tools/list page, with `ttl_ms` either declared on the wire or not."""
+    fields = {"ttl_ms"} if declared else set()
+    return SimpleNamespace(
+        tools=[
+            SimpleNamespace(input_schema={"properties": {"value": {}}}, name="echo")
+        ],
+        ttl_ms=ttl_ms,
+        next_cursor=next_cursor,
+        model_fields_set=fields,
+    )
+
+
+def test_shortest_declared_ttl_across_pages_wins(monkeypatch):
+    monkeypatch.setattr("time.monotonic", lambda: 1000.0)
+    # Shorter TTL first, so reading only the last page gives the wrong answer.
+    proxy = _PagedProxy([_page(60_000, "1"), _page(300_000, None)])
+    asyncio.run(proxy.refresh())
+    assert proxy._param_names_expiry == 1000.0 + 60.0
+
+
+def test_a_later_undeclared_page_cannot_upgrade_a_ttl_to_forever(monkeypatch):
+    # Reading only the last page would turn "cache me for 5 minutes" into
+    # "cache me forever" — the one direction that is unsafe.
+    monkeypatch.setattr("time.monotonic", lambda: 1000.0)
+    proxy = _PagedProxy([_page(300_000, "1"), _page(0, None, declared=False)])
+    asyncio.run(proxy.refresh())
+    assert proxy._param_names_expiry == 1000.0 + 300.0

@@ -134,9 +134,23 @@ def _collected_answers(ctx: Context) -> dict[str, dict]:
     A retry carries only the round it just answered, so earlier rounds are
     replayed through ``request_state`` — the opaque field the protocol echoes
     back verbatim for exactly this.
+
+    State that doesn't decode is treated as no prior answers rather than
+    raised. Not for the reason it looks like: a client cannot inject this,
+    because the SDK's request-state boundary unseals and rejects a tampered
+    value before any handler runs. The reachable case is our own past self —
+    a state minted by an older deploy whose format has since changed, handed
+    back mid-rollout. Re-asking a question is a far better failure than
+    breaking the whole tool call, which is what the additive contract exists
+    to prevent.
     """
     state = getattr(ctx, "request_state", None)
-    answers: dict[str, dict] = json.loads(state) if state else {}
+    try:
+        answers = json.loads(state) if state else {}
+    except (TypeError, ValueError):
+        answers = {}
+    if not isinstance(answers, dict):
+        answers = {}
     for key, response in (getattr(ctx, "input_responses", None) or {}).items():
         answers[key] = response.model_dump(mode="json")
     return answers

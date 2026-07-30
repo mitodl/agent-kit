@@ -12,6 +12,7 @@ reaching the same contract — and only an end-to-end run covers the retry.
 """
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 from fastmcp.server.elicitation import AcceptedElicitation, DeclinedElicitation
@@ -256,3 +257,29 @@ def test_client_that_cannot_elicit_gets_the_defaults(era):
     assert _run(era, None, "ask_once", fallback=True) == {"ok": True}
     assert _run(era, None, "ask_once", fallback=False) == {"ok": False}
     assert _run(era, None, "ask_twice") == {"a": "da", "b": "db"}
+
+
+def test_undecodable_request_state_re_asks_instead_of_failing():
+    """A `request_state` that doesn't decode must not break the tool call.
+
+    A client can't inject one — the SDK's request-state boundary rejects a
+    tampered value before any handler runs — but our own older deploy can,
+    mid-rollout, if the format changed. Degrading to "no prior answers" costs
+    a re-ask; raising would fail the whole call and break the additive
+    contract.
+    """
+    for state in ("not json at all", "[1, 2, 3]", '"a string"', "null", b"bytes"):
+        ctx = SimpleNamespace(request_state=state, input_responses=None)
+        assert elicit._collected_answers(ctx) == {}
+
+
+def test_prior_answers_survive_a_decodable_request_state():
+    # The happy path the above must not have broken: earlier rounds replay,
+    # and this round's responses merge on top.
+    ctx = SimpleNamespace(
+        request_state='{"witan-aaa": {"action": "accept", "content": {"value": 1}}}',
+        input_responses=None,
+    )
+    assert elicit._collected_answers(ctx) == {
+        "witan-aaa": {"action": "accept", "content": {"value": 1}}
+    }

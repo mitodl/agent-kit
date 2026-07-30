@@ -202,24 +202,32 @@ class RemoteMCPProxy:
         look like it had asked for no caching at all. A ``ttlMs`` of 0 the peer
         genuinely sent is different — a server declining to be cached — and
         re-listing each call is the honest reading of that.
+
+        Across a paginated list the shortest declared TTL wins, and one page
+        declaring is enough. FastMCP applies its hint uniformly so every page
+        agrees in practice, but reading only the last page would let a final
+        page that declared nothing silently upgrade an earlier "cache me for
+        5 minutes" into "cache me forever" — the one direction that is unsafe.
         """
         names: dict[str, list[str]] = {}
         cursor: str | None = None
-        ttl_ms: float | None = None
+        declared_ttls: list[float] = []
         while True:
             page = await client.list_tools_mcp(cursor=cursor)
             for tool in page.tools:
                 schema = _tool_input_schema(tool)
                 names[tool.name] = list(schema.get("properties", {}).keys())
-            declared = "ttl_ms" in getattr(page, "model_fields_set", ())
-            ttl_ms = page.ttl_ms if declared else None
+            if "ttl_ms" in getattr(page, "model_fields_set", ()):
+                declared_ttls.append(page.ttl_ms)
             cursor = _next_cursor(page)
             if not cursor:
                 break
         with self._lock:
             self._param_names = names
             self._param_names_expiry = (
-                math.inf if ttl_ms is None else time.monotonic() + ttl_ms / 1000
+                time.monotonic() + min(declared_ttls) / 1000
+                if declared_ttls
+                else math.inf
             )
 
     async def _invoke(self, name: str, args: tuple, kwargs: dict) -> Any:
