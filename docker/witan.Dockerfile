@@ -103,5 +103,8 @@ RUN witan --help >/dev/null && omnigraph --version
 EXPOSE 8000
 ENTRYPOINT ["witan"]
 # Overridden by the toolhive_witan MCPServer `args`; this default documents the
-# deployed invocation and keeps the image runnable standalone.
+# deployed invocation and keeps the image runnable standalone. The transport
+# serves both protocol eras: a 2026-07-28 client is answered statelessly (no
+# handshake, no Mcp-Session-Id, so replicas need no session affinity), an older
+# one still gets the handshake. See mcp/servers/witan/docs/adr/0006.
 CMD ["serve", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000"]

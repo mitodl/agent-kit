@@ -141,6 +141,8 @@ class IdentityConfig(BaseModel):
     Sourced entirely from ``WITAN_OIDC_*``/``WITAN_ACTOR_TOKENS_FILE`` env
     vars — this is deployment/ops config for the shared ``streamable-http``
     service, not something an individual local user sets in config.toml.
+    Unaffected by the stateless 2026-07-28 era (ADR-0006): the mapping reads
+    the JWT on every request and never depended on session state.
     ``oidc_issuer`` unset means the deployed-auth path is disabled entirely
     (local ``stdio`` usage never sets it).
     """
@@ -197,7 +199,8 @@ class RemoteConfig(BaseModel):
     exactly as before. When set, ``witan.cli._common._srv()`` routes every
     command through the deployed witan MCP endpoint over ``streamable-http``,
     authenticated with a per-user Keycloak JWT (device-code flow, see
-    ``witan/remote/oidc.py``).
+    ``witan/remote/oidc.py``). Against a 2026-07-28 deployment that connection
+    is stateless — no handshake, no session id (ADR-0006).
 
     Resolved by ``load_remote_config()`` the same way as ``Config`` — env var
     > named ``[targets.<name>]`` override > global config.toml value >
