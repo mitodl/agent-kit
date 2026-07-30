@@ -6,41 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [0.5.0] - 2026-07-30
-
-### Changed
-
-- **Requires FastMCP 4 (`fastmcp>=4.0.0b1,<5`).** The 3.4.x end of the previous
-  range is dropped, along with the cross-version shims it needed:
-  `_tool_input_schema` / `_next_cursor` in `remote/proxy.py` now read
-  `input_schema` / `next_cursor` directly, and `elicit.py` imports `mcp_types`
-  unconditionally. **FastMCP 4.0 is still a pre-release**, so an installer that
-  does not accept pre-releases cannot resolve this: `pip install` works (the
-  explicit `>=4.0.0b1` admits it), but `uv pip install` / `uv add` need
-  `--prerelease=allow` because `fastmcp` pins `fastmcp-slim` to the same
-  pre-release version transitively.
-
-### Added
-
-- **`witan_core.caching`** — the shared `ttlMs`/`cacheScope` hint both servers
-  declare on their list results (MCP 2026-07-28, SEP-2549). 300s at `private`
-  scope; see the module docstring for why `public` is the wrong default when a
-  server holds per-actor data.
-- **MRTR elicitation.** `elicit.confirm` / `elicit.text` now pick their wire
-  mechanism per request: multi-round-trip (SEP-2322) on a 2026-07-28 connection
-  whose client advertises elicitation, `ctx.elicit` on the handshake eras, and
-  the caller's default when neither is possible. This fixes elicitation being
-  silently dead on 2026-07-28 — that era removed the server→client back-channel,
-  so `ctx.elicit` raises and the previous blanket `except Exception` turned every
-  prompt into its default. `MRTRElicitationMiddleware` must be registered on the
-  server for the MRTR path to work.
-- **`RemoteMCPProxy` answers elicitation prompts.** New `_elicitation_handler()`
-  hook, defaulting to `console_elicitation_handler`, which prompts on the
-  terminal. Previously a prompt raised by a deployment could never be answered
-  over the CLI.
-- **The proxy honors the server's `ttlMs`** for its cached tool list, instead of
-  holding it for the whole process lifetime.
-
 ## [0.4.0] - 2026-07-21
 
 ### Changed

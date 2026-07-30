@@ -1,6 +1,6 @@
 [project]
 name = "witan-core"
-version = "0.5.0"
+version = "0.4.0"
 description = "Shared core for the witan MCP servers (witan-council + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -21,11 +21,11 @@ dependencies = []
 # both servers already depend on, so this stays a valid leaf→leaf edge.
 cli = ["cyclopts>=4,<5", "rich>=13", "agent-config-kit>=0.4,<1"]
 # elicit.py (fastmcp.server.elicitation.AcceptedElicitation).
-mcp = ["fastmcp>=4.0.0b1,<5"]
+mcp = ["fastmcp>=3.4.2,<5"]
 # remote/ — the OIDC device-auth + token cache (httpx) and the MCP-client proxy
 # (fastmcp). ADR-0005 path-a client stack; a server's CLI uses it to reach its
 # deployed self. httpx is also a transitive fastmcp dep, relied on directly.
-remote = ["httpx>=0.27", "fastmcp>=4.0.0b1,<5"]
+remote = ["httpx>=0.27", "fastmcp>=3.4.2,<5"]
 
 [project.urls]
 Homepage = "https://github.com/mitodl/agent-kit/tree/main/packages/witan-core"
@@ -40,7 +40,7 @@ build-backend = "hatchling.build"
 packages = ["witan_core"]
 
 [tool.bumpversion]
-current_version = "0.5.0"
+current_version = "0.4.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
@@ -58,7 +58,7 @@ replace = 'version = "{new_version}"'
 test = [
     "pytest>=8",
     "rich>=13",
-    "fastmcp>=4.0.0b1,<5",
+    "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     "agent-config-kit>=0.4,<1",
     "httpx>=0.27",

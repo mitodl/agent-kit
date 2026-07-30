@@ -49,8 +49,10 @@ as a tool argument.
 ### Forces
 
 - FastMCP 4.0 is still a beta (`4.0.0b1`) at the time of writing; the `mcp` SDK
-  underneath it is 2.0.0 stable. Everything on this page needs FastMCP 4, so the
-  packages require it outright (D5) rather than straddling both majors.
+  underneath it is 2.0.0 stable. The pins were widened to
+  `fastmcp>=3.4.2,<5` rather than moved to 4.x, so the packages resolve to
+  3.4.5 for anyone who has not opted into prereleases, while our own lock — and
+  therefore the container image — runs the beta.
 - Both witan servers are also used locally over `stdio`, where none of the
   above matters. Nothing here may make the local path worse.
 - The elicitation contract established when it was added is *additive*: a
@@ -87,15 +89,6 @@ independent of the replica that minted it.
 scope (`witan_core.caching`), and the CLI proxy holds its cached tool list for
 exactly that long instead of for the process lifetime.
 
-**D5. Require FastMCP 4 rather than straddle 3.4.x.** Every decision above needs
-it — MRTR, the tasks extension and the cache hint do not exist on 3.4.x — so
-supporting both majors meant version-sniffing shims (`inputSchema` vs
-`input_schema`, `nextCursor` vs `next_cursor`, a conditional `mcp_types` import,
-a signature check before passing `cache_ttl`) guarding a path CI never
-exercised, since resolution only ever installs one of the two. The pin is
-`fastmcp>=4.0.0b1,<5` and the shims are gone. Accepting a pre-release as a hard
-requirement is the cost, and it is a real one — see Consequences.
-
 ## Consequences
 
 - **Multi-replica is unblocked, not enabled.** Nothing here scales the
@@ -124,13 +117,6 @@ requirement is the cost, and it is a real one — see Consequences.
   fanning out to several tools pays several handshakes. On a 2026-07-28
   connection there is no handshake to pay for. The deferred persistent-session
   spike is correspondingly less urgent.
-- **The published packages depend on a pre-release, and not every installer
-  will take one.** `pip install witan-council` resolves, because naming
-  `>=4.0.0b1` explicitly admits pre-releases for that requirement. `uv pip
-  install` / `uv add` fail: `fastmcp` pins `fastmcp-slim` to the same
-  pre-release transitively, and uv does not enable pre-releases for a transitive
-  dependency without `--prerelease=allow`. uv does say so in its error hint, so
-  the failure is legible rather than mysterious, and it is recorded in each
-  package's changelog. This resolves itself when 4.0 goes GA — at which point
-  the floor should move to `>=4,<5`, and `[tool.uv] prerelease = "allow"` can
-  come out of the workspace root.
+- **Revisit when FastMCP 4.0 goes GA.** The beta is what the lock and image
+  currently resolve; CI therefore only exercises the 4.x end of the published
+  pin range, and the 3.4.5 end has been verified locally only.
