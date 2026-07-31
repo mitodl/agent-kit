@@ -305,6 +305,7 @@ symlink alternative:
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
+| `WITAN_CODE_INDEX_ROLE` | `client` | `ci` designates this process the writer of a shared graph's default-branch view. Only meaningful against a shared cluster graph; local stores are unaffected. See [Branch indexing](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view) |
 | `WITAN_CONFIG` | `~/.config/witan/config.toml` | config file path (see below) |
 | `WITAN_TARGET` | — | force a named `[targets.<name>]` block instead of auto-detecting one |
 | `WITAN_REMOTE_URL` | — | a deployed witan MCP endpoint; routes the read commands through it (see [Remote mode](#remote-mode)) |

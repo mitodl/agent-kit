@@ -18,7 +18,7 @@ from .bridge_extractors import (
     canonical_symbol,
     parse_symbol,
 )
-from .graph import OmnigraphClient
+from .graph import OmnigraphClient, check_writable
 from .store import bridge_store, ensure_bridge_store
 
 
@@ -79,6 +79,13 @@ def write_bindings(
     store = ensure_bridge_store(cfg)
     bridge_branch = f"{cfg_module.sanitize_slug(repo)}/{branch}" if branch else None
     client = OmnigraphClient(str(store), cfg.queries_dir, branch=bridge_branch)
+    # Bridge main is shared by every repo, and `delete_repo_symbols` below wipes
+    # a repo's whole Stage-1 table — the same CI-owns-the-default-view rule as
+    # the per-repo store. Checked here too rather than relying on the caller's:
+    # the bridge is a distinct store with its own addressing.
+    check_writable(
+        client=client, branch=bridge_branch, cfg=cfg, slug=f"{repo} (bridge)"
+    )
     # The reads below never fork; create the branch (from bridge main) first.
     client.ensure_branch()
 

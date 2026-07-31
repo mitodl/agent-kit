@@ -42,7 +42,83 @@ Branch stores are re-derivable caches, so lifecycle is deletion, not merge:
   is cheaper and always consistent; merging stale Lance rows is neither).
 * `witan-code branches [--prune]` lists omnigraph branches per store and
   deletes those whose git branch no longer exists (checked against
-  `git for-each-ref`), plus `_detached`.
+  `git for-each-ref`), plus `_detached`. Pruning is a **local-store**
+  operation on both counts: it is refused in remote MCP-client mode (ADR
+  0005) and refused against a remote store (below). On a shared graph one
+  machine's missing git ref is not evidence a branch is dead — it would
+  delete another user's in-flight view.
+
+## Who may write the shared default-branch view
+
+On the deployed omnigraph cluster a per-repo code graph is **one graph for
+the whole team**, so `main` — the view with no branch scoping, which every
+reader falls back to — has no natural owner. It gets one explicitly: **CI
+indexes the default branch, everyone else reads it.**
+
+Writer authority is a **role, not a transport**. "Refuse writes when the
+store is remote" cannot be applied unconditionally, because the CI indexer is
+remote too and is the one actor that must write. So the role is declared:
+
+```
+WITAN_CODE_INDEX_ROLE=ci     # or index_role = "ci" on a [targets.<name>] block
+```
+
+Values are `client` (the default — reads the shared view, never writes it)
+and `ci`. An unrecognized value is an error rather than a silent
+demotion to `client`, which would leave the shared view frozen with nothing
+to explain it.
+
+What the role gates (`witan_code.graph.check_writable`,
+`witan_code.indexer._may_purge`):
+
+| Write | Local store | Shared graph, `client` | Shared graph, `ci` |
+|---|---|---|---|
+| default-branch (`main`) view | ✅ | ❌ refused | ✅ |
+| branch view (`--branch <b>`) | ✅ | ✅ | ✅ |
+| stale-file purge | ✅ | ❌ | ✅ |
+| `branches --prune` | ✅ | ❌ | ❌ |
+
+Local stores are unaffected by the role: they have one user, who is their
+writer.
+
+### Per-user branch views live on the shared graph
+
+**Decided (2026-07-31).** In-flight branch views go on the shared cluster
+graph, not in a local store queried alongside it. Isolated agents being able
+to see each other's work *as it is being made* — rather than after a merge —
+is a large part of what the shared service is for, and that only works if
+the views are somewhere every reader can reach.
+
+Branch views are therefore exempt from the default-view gate above: a
+branch-scoped write cannot reach the view everyone falls back to, so it
+needs no role. Anyone may write their own.
+
+Two things this decision requires that are **not implemented yet**:
+
+1. **Branch views must be namespaced per writer.** `repo.store_branch()`
+   derives the view name from the git branch alone, so on a shared graph two
+   checkouts on `feature-x` write the *same* view and overwrite each other
+   with different working-tree states. Isolation and visibility are both
+   required, and they are not in tension: namespace the write key (the
+   writer's actor id alongside the branch), and keep reads able to enumerate
+   every view for a given branch. Layer 1 already keys in-flight work the
+   same way — `CodeBranch (repo, branch)` with `WorksOn`/`ForProject` edges
+   (below) — so the two layers should agree on the key.
+
+2. **Stale-file purging stays off for branch views until (1) lands.**
+   `_may_purge` refuses on a remote store for everyone but CI, branch views
+   included, so a developer's deleted files linger in their own view. That is
+   correct *today*: an un-namespaced shared branch view has no single
+   authoritative writer. Once views are namespaced it becomes wrong, and the
+   gate should be restated as "this actor owns the view being written" — of
+   which "CI owns `main`" is one case and "I own my own branch view" is the
+   other.
+
+Reaping is consequently **server-side and mandatory**, not a client
+convenience: branch sprawl is real under this decision, and no client can
+tell whose branch views are still live — which is why `branches --prune` is
+refused against a remote store above and stays that way. See
+`tk-branch-cedar-gating-stale-code-graph-branch-reap-0c621c`.
 
 ## Bridge store
 

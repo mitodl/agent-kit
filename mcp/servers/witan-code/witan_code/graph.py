@@ -15,7 +15,53 @@ from pathlib import Path
 
 from witan_core.omnigraph import OmnigraphClient as _BaseOmnigraphClient
 
-__all__ = ["OmnigraphClient"]
+from . import config as cfg_module
+
+__all__ = ["OmnigraphClient", "SharedGraphWriteRefused", "check_writable"]
+
+
+class SharedGraphWriteRefused(RuntimeError):
+    """A non-writer tried to write a shared graph's default-branch view."""
+
+
+def check_writable(
+    *,
+    client: OmnigraphClient,
+    branch: str | None,
+    cfg: cfg_module.Config,
+    slug: str,
+) -> None:
+    """Refuse to write a shared graph's default-branch view without the role.
+
+    ``branch is None`` means the write targets the store's ``main`` — the view
+    every user of a shared cluster graph reads. On the cluster that view has
+    exactly one writer, the CI indexer, and it says so
+    (``WITAN_CODE_INDEX_ROLE=ci``). Any other process indexing it would publish
+    one machine's working tree — whatever revision, whatever uncommitted state
+    it happens to be in — to the whole team.
+
+    Authority comes from the declared role, never from the transport: CI is
+    remote too, so a blanket "refuse when remote" would block the one writer
+    the design depends on (``Config.is_designated_writer``).
+
+    Branch views are exempt, and deliberately so: per-user branch views live
+    ON the shared graph (DECIDED, Tobias 2026-07-31), because in-flight work
+    being visible to other agents as it happens is a large part of what the
+    shared service is for. A branch-scoped write cannot reach the view
+    everyone falls back to, so it needs no role. See docs/BRANCH_INDEXING.md.
+
+    Local stores are unaffected: they have one user, who is their writer.
+    """
+    if not client.is_remote or branch is not None or cfg.is_designated_writer:
+        return
+    raise SharedGraphWriteRefused(
+        f"Refusing to index {slug} onto the shared graph's default branch: "
+        f"that view is owned by CI, and this process is acting as "
+        f"'{cfg.index_role}'. Index a non-default git branch to write an "
+        f"isolated branch view, or set "
+        f"WITAN_CODE_INDEX_ROLE={cfg_module.INDEX_ROLE_CI} if this IS the "
+        f"CI indexer."
+    )
 
 
 class OmnigraphClient(_BaseOmnigraphClient):

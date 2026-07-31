@@ -7,8 +7,10 @@ repo to itself (which is exactly how one ended up 74% duplicates).
 """
 
 import subprocess
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from witan_code import indexer
 
@@ -271,6 +273,7 @@ def _gate(**overrides):
         "repo_root": Path("/repo"),
         "walk_errors": [],
         "client": SimpleNamespace(is_remote=False),
+        "writer": False,
     }
     kwargs.update(overrides)
     return indexer._may_purge(**kwargs)
@@ -294,3 +297,82 @@ def test_purge_refused_against_a_shared_cluster_graph():
     purge files for every other user of that graph.
     """
     assert _gate(client=SimpleNamespace(is_remote=True)) is False
+
+
+def test_designated_writer_may_purge_a_shared_cluster_graph():
+    """CI owns the shared default-branch view, and dropping rows for files
+    deleted from the default branch is precisely its job. The right comes from
+    the declared role, not from the transport — CI is remote like everyone."""
+    assert _gate(client=SimpleNamespace(is_remote=True), writer=True) is True
+
+
+def test_the_writer_role_does_not_override_the_other_clauses():
+    """It answers only "is this graph mine to reconcile" — it says nothing
+    about whether this run's file listing is complete."""
+    remote = SimpleNamespace(is_remote=True)
+    assert _gate(client=remote, writer=True, full_repo=False) is False
+    assert _gate(client=remote, writer=True, repo_root=None) is False
+    assert (
+        _gate(
+            client=remote,
+            writer=True,
+            walk_errors=[PermissionError(13, "denied", "/repo/sub")],
+        )
+        is False
+    )
+
+
+# ── The gate is wired into index_path, not just testable in isolation ────────
+
+
+@requires_stack
+def test_index_path_refuses_a_shared_default_branch_view(tmp_path, monkeypatch):
+    """Refused before anything is written, not part-way through.
+
+    The store stays local — witan-code does not address `--server`/`--graph`
+    yet — so this forces the one attribute the policy reads. Only the refusing
+    direction can be driven this way: letting the write through would then hit
+    `--server None`. That direction is unit-covered in test_graph.py.
+    """
+    from witan_code import config as cfg_module
+    from witan_code import graph as graph_module
+    from witan_code import store as store_mod
+    from witan_code.graph import SharedGraphWriteRefused
+
+    src = _repo(tmp_path, monkeypatch)
+
+    class _Remote(graph_module.OmnigraphClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.is_remote = True
+
+    monkeypatch.setattr(indexer, "OmnigraphClient", _Remote)
+    cfg = cfg_module.load()
+
+    with pytest.raises(SharedGraphWriteRefused, match="owned by CI"):
+        indexer.index_path(src, config=cfg)
+
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert _files(store, cfg) == set()
+
+
+@requires_stack
+def test_index_path_passes_the_resolved_role_to_the_purge_gate(tmp_path, monkeypatch):
+    """The role has to reach `_may_purge`, or CI silently stops purging — a
+    failure whose only symptom is deleted files lingering in the shared view."""
+    from witan_code import config as cfg_module
+
+    src = _repo(tmp_path, monkeypatch)
+    monkeypatch.setenv("WITAN_CODE_INDEX_ROLE", "ci")
+
+    seen: dict = {}
+    real = indexer._may_purge
+
+    def _spy(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(indexer, "_may_purge", _spy)
+    indexer.index_path(src, config=cfg_module.load())
+
+    assert seen["writer"] is True

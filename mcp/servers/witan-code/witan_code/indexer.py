@@ -26,7 +26,7 @@ from . import config as cfg_module
 from . import package_map
 from . import repo as repo_module
 from .bridge_extractors import ParsedBinding
-from .graph import OmnigraphClient
+from .graph import OmnigraphClient, check_writable
 from .store import ensure_store
 
 # ── Language support ──────────────────────────────────────────────
@@ -282,6 +282,7 @@ def index_path(
 
     store = ensure_store(slug, cfg)
     client = OmnigraphClient(str(store), cfg.queries_dir, branch=branch)
+    check_writable(client=client, branch=branch, cfg=cfg, slug=slug)
     # The hash read below never forks; create the branch before reading.
     client.ensure_branch()
 
@@ -338,6 +339,7 @@ def index_path(
         repo_root=repo_root,
         walk_errors=walk_errors,
         client=client,
+        writer=cfg.is_designated_writer,
     )
 
     # Drop stale data for changed files (new files have nothing to delete), then
@@ -424,6 +426,7 @@ def _may_purge(
     repo_root: Path | None,
     walk_errors: list[OSError],
     client: OmnigraphClient,
+    writer: bool = False,
 ) -> bool:
     """Whether this run is entitled to delete rows for files it did not collect.
 
@@ -438,15 +441,20 @@ def _may_purge(
       stale.
     - ``walk_errors``: a directory the walk could not read is indistinguishable
       from one that was deleted, so its files would go while sitting on disk.
-    - ``client.is_remote``: a shared cluster graph is not this machine's to
-      reconcile. One developer's working tree — sparse checkout, stale
-      checkout, local deletions — would otherwise purge files for everyone on
-      the shared ``main`` view. There the default branch is indexed by CI and
-      everyone else reads it; a designated writer will need an explicit opt-in
-      rather than inheriting the right by being remote.
+    - ``client.is_remote`` unless ``writer``: a shared cluster graph is not an
+      arbitrary machine's to reconcile. One developer's working tree — sparse
+      checkout, stale checkout, local deletions — would otherwise purge files
+      for everyone on the shared ``main`` view. The designated writer (CI, via
+      ``WITAN_CODE_INDEX_ROLE``) is the exception, and needs it: dropping rows
+      for files deleted from the default branch is precisely its job. Note the
+      right comes from the declared role, never from being remote — the CI
+      indexer is remote and so is every reader.
     """
     return (
-        full_repo and repo_root is not None and not walk_errors and not client.is_remote
+        full_repo
+        and repo_root is not None
+        and not walk_errors
+        and (writer or not client.is_remote)
     )
 
 
