@@ -112,6 +112,14 @@ node WorkflowSession {
     started_at:    DateTime @index
     ended_at:      DateTime?
     tags:         [String]?
+    // Set on a session that duplicates another (same project_slug + session_id,
+    // minted by a retry before the first was ended). Points at the surviving
+    // session's slug. The node is kept — nothing is deleted — but every
+    // aggregate read (trace assembly, resume summary, staleness counts) skips
+    // it, so a duplicate can't skew the corpus. Written only by
+    // `witan migrate dedupe-sessions`; workflow_session_start now upserts
+    // instead of minting these.
+    superseded_by: String?
 }
 
 // WorkflowTrace is an assembled, corpus-ready record of a completed project.

@@ -122,7 +122,15 @@ def session_list(project_slug: str) -> None:
         return
     console.print(f"[bold]Sessions for {project_slug}[/bold] ({len(sessions)}):")
     for sess in sessions:
-        state = "open" if not sess.get("ended_at") else "ended"
+        # Unlike the aggregate views, this listing keeps superseded rows — it's
+        # the view you reach for to see what `migrate dedupe-sessions` did.
+        state = (
+            "duplicate"
+            if sess.get("superseded_by")
+            else "open"
+            if not sess.get("ended_at")
+            else "ended"
+        )
         summary = (sess.get("summary") or "(in progress)").splitlines()
         # Escape the free-text first line and use parentheses (not brackets) for
         # phase/state — Rich would parse "[implementation/open]" as a malformed

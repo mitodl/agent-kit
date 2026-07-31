@@ -8,7 +8,74 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **`workflow_project_update` — the missing post-creation edit path.** Until now
+  a project's `title`, `description`, `tags` and `github_issue` could not be
+  changed at all after creation, and its repo set could only ever *grow*, as a
+  side effect of running `workflow_session_start` in a new repo. That made the
+  common case — a repo set guessed during discovery, before the work's real
+  blast radius was known — uncorrectable, and a project missing a repo does not
+  surface in that repo's injected context at all. The new tool edits every
+  mutable field, replaces the repo set wholesale (`repos`) or by delta
+  (`add_repos` / `remove_repos`, both canonicalized so a differently-cased
+  spelling still matches), and can mark a project `abandoned`. Repos are a plain
+  list field rather than edges, so a removal really removes — unlike
+  `workflow_project_unblock`, which can only update its denormalized field.
+  Deliberately cannot set `phase` (`workflow_project_advance` owns transitions,
+  including backwards ones) or `status="completed"` (`workflow_project_complete`
+  stays the only route to a corpus trace, so a trace never exists without an
+  outcome narrative).
+- **`witan migrate dedupe-sessions`** reconciles sessions the pre-fix
+  `workflow_session_start` duplicated, marking them `superseded_by` the
+  surviving session (a new `WorkflowSession` field — run `witan migrate schema`
+  first). Nothing is deleted: a marked session keeps its row and its edges and
+  is simply skipped by every aggregate read. Dry by default, and deliberately
+  not part of `migrate all` — unlike the other migrations it makes a judgment
+  call about corpus content.
+
+  Sharing a `session_id` is not on its own evidence of duplication, so only
+  sessions that overlap *in time* are considered — and overlap is transitive:
+  given `s1 [10:00-10:10]` and a retry `s2 [10:05-10:20]`, a session starting
+  10:12 is still a duplicate, because s2 was open and the fixed
+  `workflow_session_start` would have handed back its handle. Within an
+  overlapping run only members with no summary of their own are marked, keeping
+  the fullest summary as the survivor; a run where every member wrote a real
+  summary is reported for review rather than guessed at, and resolved with
+  `--supersede <duplicate>=<survivor>`.
+
 ### Fixed
+
+- **`workflow_session_start` is re-entrant, and no longer duplicates a session
+  on retry.** Every call minted a node, so a hook retry, a transport reconnect,
+  or the replica failover its own docstring warns about silently created a
+  second `WorkflowSession` for one real agent session — and
+  `workflow_project_complete` aggregates every linked session into the
+  `WorkflowTrace`, so duplicates inflated the corpus and skewed anything mined
+  from it. A call for a (`project_slug`, `session_id`) whose session is still
+  open now returns that handle with `existed: true`, merging any newly-supplied
+  `repo` and `tags` into it.
+
+  That check and the insert are not one atomic operation, so two *simultaneous*
+  starts — a client retrying while the first request is still in flight, or two
+  replicas handling one retry — can still both insert. The engine can't
+  arbitrate it the way it does for `task_claim`: optimistic concurrency detects
+  competing writes to one row, and these are two rows under two freshly-minted
+  slugs. So it is resolved immediately after the insert instead, by keeping the
+  earliest-started open session and superseding the rest. Writes serialize and a
+  reader sees every write that preceded it, so the racer who inserted second
+  always observes both rows, and keep-earliest is a rule both compute
+  identically — they converge on the same handle. Costs one extra read per *new*
+  session; the re-entrant path never reaches it.
+
+  Idempotency is keyed on the *open* session rather than the pair alone,
+  deliberately: one `$CLAUDE_SESSION_ID` routinely spans several working stints
+  that are each closed with their own summary (the corpus holds clusters of
+  eight), and folding those into one node would destroy seven of them. A retry
+  always re-fires before the first call was ended; a new stint always starts
+  after. Because the repo accretion still runs on the re-entrant path, calling
+  this once per repo remains a valid way to widen a project's repo set — but
+  `workflow_project_update` now does that directly.
 
 - **Deployed multi-user writes are attributed to the calling user, not the
   server container.** `cfg.author` is resolved once at process startup, so under
