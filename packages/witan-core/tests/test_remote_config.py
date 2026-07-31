@@ -103,3 +103,15 @@ def test_cache_path_defaults_under_config_witan(monkeypatch):
 def test_cache_path_honors_the_env_override(monkeypatch, tmp_path):
     monkeypatch.setenv("WITAN_TOKEN_CACHE", str(tmp_path / "t.json"))
     assert cache_path() == tmp_path / "t.json"
+
+
+def test_cache_path_expands_a_tilde_override(monkeypatch):
+    # A shell expands ~ before the var is set, but a config file, Docker ENV,
+    # or a systemd unit does not — without expansion that override would make a
+    # directory literally named "~" under the cwd.
+    monkeypatch.setenv("WITAN_TOKEN_CACHE", "~/somewhere/tokens.json")
+    from pathlib import Path
+
+    resolved = cache_path()
+    assert "~" not in resolved.as_posix()
+    assert resolved == Path.home() / "somewhere" / "tokens.json"

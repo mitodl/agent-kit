@@ -1,5 +1,6 @@
 """Per-repo store resolution and lazy initialisation."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -149,13 +150,25 @@ def repo_from_stem(stem: str) -> str:
 
 
 def file_count(store: Path, config: cfg_module.Config | None = None) -> int | None:
-    """How many files ``store`` has indexed, or None if it can't be read."""
+    """How many files ``store`` has indexed, or None if it can't be read.
+
+    Counts in the engine (``count_files``) rather than materializing a row per
+    file: this runs per store in ``code_indexed_repos`` and on every prompt via
+    the UserPromptSubmit hook, and the bulk read it replaced would also have
+    undercounted a store past all_file_hashes' 1,000,000-row cap.
+    """
     cfg = config or cfg_module.load()
     try:
-        client = OmnigraphClient(str(store), cfg.queries_dir)
-        return len(client.read("code_read.gq", "all_file_hashes", {}))
+        rows = OmnigraphClient(str(store), cfg.queries_dir).read(
+            "code_read.gq", "count_files", {}
+        )
     except Exception:  # noqa: BLE001 — degrade gracefully, a listing isn't critical
         return None
+    if not rows:
+        return 0
+    # Read positionally: the column takes the match variable's name on a
+    # populated store but is "?" on an empty one (see code_read.gq).
+    return next(iter(rows[0].values()), 0)
 
 
 def dir_stats(path: Path) -> tuple[int, float]:
@@ -163,15 +176,25 @@ def dir_stats(path: Path) -> tuple[int, float]:
 
     The mtime stays an epoch rather than a formatted string so a caller reading
     a *remote* store's stats renders it in its own timezone, not the server's.
+
+    ``os.walk`` rather than ``Path.rglob`` — a Lance store is thousands of
+    fragment files, and this runs per store in ``code_indexed_repos`` plus on
+    every prompt via the UserPromptSubmit hook, so the per-entry ``Path``
+    construction is worth avoiding. Neither form follows directory symlinks.
     """
     total = 0
     latest = path.stat().st_mtime
-    for f in path.rglob("*"):
-        if f.is_file():
-            st = f.stat()
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                st = os.stat(os.path.join(root, name))
+            except OSError:
+                # A broken symlink (which the previous is_file() check skipped),
+                # or a file that vanished mid-walk — an index running alongside
+                # this rewrites fragments constantly.
+                continue
             total += st.st_size
-            if st.st_mtime > latest:
-                latest = st.st_mtime
+            latest = max(latest, st.st_mtime)
     return total, latest
 
 

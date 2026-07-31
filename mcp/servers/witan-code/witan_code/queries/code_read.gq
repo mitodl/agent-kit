@@ -143,6 +143,20 @@ query all_file_hashes() {
     limit 1000000
 }
 
+// How many files are indexed, without materializing a row per file.
+// `code_indexed_repos` and the UserPromptSubmit status block only ever need
+// the number, and going through all_file_hashes for it both allocates the
+// whole result and silently undercounts a store past its 1,000,000-row cap.
+// Note the projected column is named after the match variable ($f) on a
+// populated store but "?" on an empty one, so callers read it positionally.
+
+query count_files() {
+    match {
+        $f: CodeFile
+    }
+    return { count($f) }
+}
+
 // Symbol ids defined by a file — needed to delete their outgoing edges
 // before reindexing the file.
 

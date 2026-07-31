@@ -353,9 +353,16 @@ class DeviceAuth:
 
 
 def cache_path() -> Path:
-    """The token-cache location: ``$WITAN_TOKEN_CACHE`` or :data:`DEFAULT_CACHE_PATH`."""
+    """The token-cache location: ``$WITAN_TOKEN_CACHE`` or :data:`DEFAULT_CACHE_PATH`.
+
+    ``~`` is expanded, matching every other path setting in these packages
+    (``code_dir``, ``--store``). A shell expands ``~`` before the variable is
+    ever set, but a value from a config file, Docker ``ENV``, or a systemd unit
+    does not — and without this that override would silently create a directory
+    literally named ``~`` under the cwd.
+    """
     override = os.environ.get("WITAN_TOKEN_CACHE")
-    return Path(override) if override else DEFAULT_CACHE_PATH
+    return Path(override).expanduser() if override else DEFAULT_CACHE_PATH
 
 
 def device_auth(endpoint: OidcEndpoint, *, login_hint: str) -> DeviceAuth:
