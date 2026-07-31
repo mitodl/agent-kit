@@ -310,3 +310,70 @@ def test_load_remote_config_from_target(monkeypatch, toml_file, tmp_path):
     assert cfg.url == "https://witan.example.org/mcp"
     assert cfg.oidc_audience == "witan"
     assert cfg.target_name == "hosted"
+
+
+# ── index_role: who may write a shared graph's default-branch view ───────────
+
+
+def _isolate_role(monkeypatch, toml_file, content: str = "") -> None:
+    monkeypatch.setenv("WITAN_CONFIG", toml_file(content))
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_CODE_INDEX_ROLE", raising=False)
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+
+
+def test_index_role_defaults_to_client(monkeypatch, toml_file):
+    """Writing a shared graph's default view is opt-in, never inherited."""
+    _isolate_role(monkeypatch, toml_file)
+
+    cfg = load()
+    assert cfg.index_role == "client"
+    assert cfg.is_designated_writer is False
+
+
+def test_index_role_from_env(monkeypatch, toml_file):
+    _isolate_role(monkeypatch, toml_file)
+    monkeypatch.setenv("WITAN_CODE_INDEX_ROLE", "ci")
+
+    assert load().is_designated_writer is True
+
+
+def test_index_role_from_target(monkeypatch, toml_file):
+    _isolate_role(
+        monkeypatch,
+        toml_file,
+        """
+        [targets.hosted]
+        index_role = "ci"
+        match_orgs = ["mitodl"]
+        """,
+    )
+
+    cfg = load()
+    assert cfg.target_name == "hosted"
+    assert cfg.is_designated_writer is True
+
+
+def test_index_role_env_overrides_target(monkeypatch, toml_file):
+    _isolate_role(
+        monkeypatch,
+        toml_file,
+        """
+        [targets.hosted]
+        index_role = "ci"
+        match_orgs = ["mitodl"]
+        """,
+    )
+    monkeypatch.setenv("WITAN_CODE_INDEX_ROLE", "client")
+
+    assert load().is_designated_writer is False
+
+
+def test_unknown_index_role_is_rejected(monkeypatch, toml_file):
+    """Not defaulted: a typo silently demoting the CI indexer to a reader
+    leaves the shared view frozen with nothing to explain it."""
+    _isolate_role(monkeypatch, toml_file)
+    monkeypatch.setenv("WITAN_CODE_INDEX_ROLE", "writer")
+
+    with pytest.raises(ValueError, match="Unknown index_role"):
+        load()

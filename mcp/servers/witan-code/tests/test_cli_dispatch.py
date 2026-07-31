@@ -246,3 +246,31 @@ def test_branches_prune_is_refused_in_remote_mode(monkeypatch, capsys):
         cli_module.branches(prune=True)
 
     assert "does not share" in capsys.readouterr().out
+
+
+def test_branches_prune_is_refused_against_a_shared_store(monkeypatch, capsys):
+    """Remote MCP dispatch and a remote STORE are independent: either can be
+    remote without the other. A shared graph's branches belong to every user
+    of it, so "this checkout has no such git branch" is not evidence the
+    branch is dead.
+    """
+    from witan_code import repo as repo_module
+
+    repo = "https://github.com/test/a"
+    srv = _stub(
+        code_indexed_branches=[{"repo": repo, "branches": ["main", "someone-elses"]}]
+    )
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+    monkeypatch.setattr(cli_module, "_is_remote", lambda: False)
+    monkeypatch.setattr(repo_module, "detect", lambda **_kw: repo)
+    monkeypatch.setattr(repo_module, "local_branches", lambda: frozenset({"mine"}))
+
+    def _boom(_name):
+        raise AssertionError("pruned a branch on a shared graph")
+
+    remote_client = SimpleNamespace(is_remote=True, delete_branch=_boom)
+    monkeypatch.setattr(cli_module, "_branch_client", lambda _repo: remote_client)
+
+    cli_module.branches(prune=True)
+
+    assert "refusing to prune a shared graph" in capsys.readouterr().out

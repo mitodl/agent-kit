@@ -33,6 +33,17 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "witan" / "config.toml"
 # resolves to this name.
 BRIDGE_STORE_NAME = "_bridge.omni"
 
+# ── Index roles ──────────────────────────────────────────────────────────────
+#
+# On the shared omnigraph cluster a per-repo code graph is one graph for the
+# whole team, and its default-branch view is indexed by CI. Everyone else reads
+# it. This role says which side of that line the current process is on.
+INDEX_ROLE_CLIENT = "client"
+"""The default: reads the shared default-branch view, never writes it."""
+INDEX_ROLE_CI = "ci"
+"""The designated writer of the shared default-branch view."""
+INDEX_ROLES = frozenset({INDEX_ROLE_CLIENT, INDEX_ROLE_CI})
+
 
 @dataclass(frozen=True)
 class Config:
@@ -54,6 +65,20 @@ class Config:
     target_name: str | None = None
     """Name of the matched [targets.<name>] section, or None for global defaults."""
 
+    index_role: str = INDEX_ROLE_CLIENT
+    """Who this process is acting as when it indexes. See :data:`INDEX_ROLES`."""
+
+    @property
+    def is_designated_writer(self) -> bool:
+        """Whether this process may write a SHARED graph's default-branch view.
+
+        Writer authority is a role, not a transport. "Refuse writes when the
+        store is remote" cannot be applied unconditionally: the CI indexer is
+        remote too and is the one actor that must write, so a blanket refusal
+        would block exactly the writer the design depends on.
+        """
+        return self.index_role == INDEX_ROLE_CI
+
 
 class _Target(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -70,6 +95,9 @@ class _Target(BaseModel):
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
     oidc_audience: str | None = None
+    index_role: str | None = None
+    """``ci`` designates this target's indexer as the writer of the shared
+    default-branch view. See :data:`INDEX_ROLES` and ``Config.index_role``."""
     match_orgs: list[str] = Field(default_factory=list)
     match_repos: list[str] = Field(default_factory=list)
     match_hosts: list[str] = Field(default_factory=list)
@@ -146,7 +174,7 @@ def load(target: str | None = None) -> Config:
     """Load config from config.toml + environment, selecting a named target if applicable.
 
     Resolution order (highest -> lowest precedence):
-    1. Environment variables (WITAN_CODE_DIR, WITAN_AUTHOR)
+    1. Environment variables (WITAN_CODE_DIR, WITAN_AUTHOR, WITAN_CODE_INDEX_ROLE)
     2. Named target: ``target`` arg > WITAN_TARGET env var > auto-detect by
        repo or local checkout path
     3. Global values in config.toml
@@ -159,7 +187,8 @@ def load(target: str | None = None) -> Config:
     docstring for the full ``match_paths``/``match_repos``/``match_hosts``/
     ``match_orgs`` precedence (shared logic: ``witan_core.target_config``).
 
-    Raises ValueError for an explicitly-requested target that is not defined.
+    Raises ValueError for an explicitly-requested target that is not defined,
+    or for an ``index_role`` that is not one of :data:`INDEX_ROLES`.
     """
     file_cfg, selected = _select_target(target)
 
@@ -169,6 +198,20 @@ def load(target: str | None = None) -> Config:
         file_cfg.get("code_dir"),
         default=str(_DEFAULT_CODE_DIR),
     )
+
+    # Rejected rather than defaulted: a typo here decides whether the shared
+    # default-branch view is writable, and both ways of getting it wrong are
+    # bad — silently demoting the CI indexer to a reader leaves the shared view
+    # frozen with no error to explain it.
+    index_role = _first(
+        os.environ.get("WITAN_CODE_INDEX_ROLE"),
+        selected.index_role if selected else None,
+        file_cfg.get("index_role"),
+        default=INDEX_ROLE_CLIENT,
+    )
+    if index_role not in INDEX_ROLES:
+        known = ", ".join(sorted(INDEX_ROLES))
+        raise ValueError(f"Unknown index_role {index_role!r}. Known roles: {known}")
 
     return Config(
         code_dir=Path(raw_code_dir).expanduser(),
@@ -183,6 +226,7 @@ def load(target: str | None = None) -> Config:
         schema_file=_SCHEMA_FILE,
         bridge_schema_file=_BRIDGE_SCHEMA_FILE,
         target_name=selected.name if selected else None,
+        index_role=index_role,
     )
 
 

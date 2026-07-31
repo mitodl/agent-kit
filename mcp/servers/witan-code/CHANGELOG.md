@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Added
+
+- **`WITAN_CODE_INDEX_ROLE` — an explicit writer role for the shared
+  default-branch view.** On the deployed cluster a per-repo code graph is one
+  graph for the whole team, and its `main` view — the one every reader falls
+  back to — had no owner. It has one now: CI indexes the default branch,
+  everyone else reads it. Indexing a shared graph's default-branch view is
+  refused unless the process declares itself the writer
+  (`WITAN_CODE_INDEX_ROLE=ci`, or `index_role = "ci"` on a `[targets.<name>]`
+  block); an unrecognized value is an error rather than a silent demotion to
+  reader, which would freeze the shared view with nothing to explain it.
+  Authority is deliberately a **role, not a transport**: the CI indexer is
+  remote too, so the blanket "refuse writes when remote" that 0.8.1 shipped as
+  a down payment would have blocked the one writer the design depends on.
+  `_may_purge` now reads "not remote **or** designated writer" accordingly —
+  dropping rows for files deleted from the default branch is precisely CI's
+  job. Local stores are unaffected (one user, who is their writer), and branch
+  views stay writable by anyone: they are branch-scoped, so in-flight work
+  never lands on the shared view. Whether developer branch views belong on the
+  shared graph at all is still open. See
+  [docs/BRANCH_INDEXING.md](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view).
+
+### Fixed
+
+- **`branches --prune` no longer prunes a shared graph.** It deletes store
+  branches whose git branch is absent from *this machine's* refs — against a
+  graph shared by the team, "this checkout doesn't have that branch" and "that
+  branch is gone" are indistinguishable, so one user pruning would delete
+  another user's in-flight branch view. Now refused per-repo when the store is
+  remote, with the repo named. This is a **separate** check from the ADR-0005
+  guard added in 0.8.1: that one refuses `--prune` in remote MCP-*client* mode
+  (`WITAN_REMOTE_URL`), which is about where the read tools dispatch, whereas
+  cluster addressing is the data tier — either can be remote without the other.
+
 ## [0.8.1] - 2026-07-31
 
 ### Fixed

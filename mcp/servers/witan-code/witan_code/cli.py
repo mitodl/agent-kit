@@ -611,7 +611,9 @@ def branches(*, prune: bool = False) -> None:
         Delete the CURRENT repo's store branches whose git branch no longer
         exists locally, plus the ``_detached`` scratch branch. Other repos'
         stores are only listed (their git refs aren't visible from here).
-        Local stores only — see below.
+        Local stores only, on both counts below: pruning reads this machine's
+        git refs as the authority, which is true of a store only this machine
+        writes and false of a shared cluster graph.
     """
     from . import repo as repo_module
 
@@ -643,14 +645,28 @@ def branches(*, prune: bool = False) -> None:
 
         if not (prune and repo_uri == current_slug and git_branches is not None):
             continue
+        client = _branch_client(repo_uri)
+        # A shared cluster graph's branches are not this machine's git refs to
+        # follow. "This checkout doesn't have that branch" and "that branch is
+        # gone" are indistinguishable from here, so one user pruning would
+        # delete another user's in-flight branch view. Distinct from the
+        # `_is_remote()` check above: that one is about where the READ tools
+        # dispatch, this one about where the STORE lives — either can be remote
+        # without the other.
+        if client.is_remote:
+            print(
+                f"{repo_uri}: refusing to prune a shared graph — its branches "
+                "belong to every user of it, not to this checkout's git refs."
+            )
+            continue
         for name in extra:
             if name == repo_module.DETACHED_BRANCH or name not in git_branches:
-                _branch_client(repo_uri).delete_branch(name)
+                client.delete_branch(name)
                 print(f"  pruned {name}")
 
 
 def _branch_client(repo_uri: str):
-    """A local client on ``repo_uri``'s store, for branch deletion."""
+    """A client on ``repo_uri``'s store, for branch listing/deletion."""
     from . import config as cfg_module
     from .graph import OmnigraphClient
 

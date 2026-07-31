@@ -42,7 +42,51 @@ Branch stores are re-derivable caches, so lifecycle is deletion, not merge:
   is cheaper and always consistent; merging stale Lance rows is neither).
 * `witan-code branches [--prune]` lists omnigraph branches per store and
   deletes those whose git branch no longer exists (checked against
-  `git for-each-ref`), plus `_detached`.
+  `git for-each-ref`), plus `_detached`. Pruning is a **local-store**
+  operation on both counts: it is refused in remote MCP-client mode (ADR
+  0005) and refused against a remote store (below). On a shared graph one
+  machine's missing git ref is not evidence a branch is dead — it would
+  delete another user's in-flight view.
+
+## Who may write the shared default-branch view
+
+On the deployed omnigraph cluster a per-repo code graph is **one graph for
+the whole team**, so `main` — the view with no branch scoping, which every
+reader falls back to — has no natural owner. It gets one explicitly: **CI
+indexes the default branch, everyone else reads it.**
+
+Writer authority is a **role, not a transport**. "Refuse writes when the
+store is remote" cannot be applied unconditionally, because the CI indexer is
+remote too and is the one actor that must write. So the role is declared:
+
+```
+WITAN_CODE_INDEX_ROLE=ci     # or index_role = "ci" on a [targets.<name>] block
+```
+
+Values are `client` (the default — reads the shared view, never writes it)
+and `ci`. An unrecognized value is an error rather than a silent
+demotion to `client`, which would leave the shared view frozen with nothing
+to explain it.
+
+What the role gates (`witan_code.graph.check_writable`,
+`witan_code.indexer._may_purge`):
+
+| Write | Local store | Shared graph, `client` | Shared graph, `ci` |
+|---|---|---|---|
+| default-branch (`main`) view | ✅ | ❌ refused | ✅ |
+| branch view (`--branch <b>`) | ✅ | ✅ | ✅ |
+| stale-file purge | ✅ | ❌ | ✅ |
+| `branches --prune` | ✅ | ❌ | ❌ |
+
+Branch views are exempt from the default-view gate: they are written through
+a branch-scoped client, so in-flight work never lands on the view everyone
+reads. Whether developer branch views belong on the shared graph at all
+(namespaced per user, with reaping and Cedar gating) or stay in the local
+store with results merged at query time is **still open** — see task
+`tk-ci-owns-the-default-branch-code-graph-clients-re-9c90d6` item 3.
+
+Local stores are unaffected by the role: they have one user, who is their
+writer.
 
 ## Bridge store
 
