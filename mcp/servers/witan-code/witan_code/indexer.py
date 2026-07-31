@@ -14,6 +14,7 @@ import hashlib
 import importlib
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -298,7 +299,15 @@ def index_path(
     bindings: list[ParsedBinding] = []
     touched_files: list[str] = []
 
-    collected = _collect_files(target)
+    # A directory the walk could not read makes `collected` incomplete in a way
+    # that is invisible from the result alone — and the purge below reads
+    # "missing from the collected set" as "no longer part of the repo".
+    walk_errors: list[OSError] = []
+    collected = _collect_files(target, on_error=walk_errors.append)
+    for exc in walk_errors:
+        stats.errors += 1
+        print(f"codegraph: could not read {exc.filename}: {exc}", file=sys.stderr)
+
     # Every file the repo should have indexed, changed or not — the authority
     # for the purge below, which `touched_files` is not (an incremental run
     # touches only what changed).
@@ -331,7 +340,12 @@ def index_path(
     # all) and every path stored relative to the real root would look stale —
     # emptying the store. Only a confirmed repo root guarantees the collected
     # set covers what the store holds.
-    can_purge = full_repo and repo_root is not None
+    #
+    # An unreadable directory disqualifies it for the same reason: a subtree
+    # the walk skipped is indistinguishable from one that was deleted, so its
+    # files would be purged while sitting right there on disk. Indexing still
+    # proceeds with what was readable — only the destructive half backs off.
+    can_purge = full_repo and repo_root is not None and not walk_errors
 
     # Drop stale data for changed files (new files have nothing to delete), then
     # bulk-load every node and edge in a single omnigraph call.
@@ -435,12 +449,23 @@ def _is_nested_checkout(path: Path) -> bool:
     return (path / ".git").exists()
 
 
-def _collect_files(target: Path) -> list[Path]:
+def _collect_files(
+    target: Path, *, on_error: Callable[[OSError], None] | None = None
+) -> list[Path]:
+    """Every indexable file under ``target``, sorted.
+
+    ``on_error`` is handed any directory that could not be read. ``os.walk``
+    swallows those silently by default, which is fine for indexing (skip what
+    you can't read) but NOT for the purge that consumes this list: an
+    unreadable subtree would look like a set of deleted files and take their
+    rows with it. ``index_path`` passes a collector and declines to purge when
+    anything fired.
+    """
     if target.is_file():
         return [target] if target.suffix in _EXT_TO_SPEC else []
 
     out: list[Path] = []
-    for root, dirs, files in os.walk(target):
+    for root, dirs, files in os.walk(target, onerror=on_error):
         root_path = Path(root)
         # Prune in place, so a skipped directory is never descended into at
         # all. The previous rglob("*") walked every file under node_modules/

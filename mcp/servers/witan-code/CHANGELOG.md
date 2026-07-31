@@ -40,6 +40,12 @@ a MINOR bump may include breaking changes).
 
 ### Changed
 
+- An unreadable directory now suppresses the purge for that run (and is
+  reported on stderr, counting toward `errors`). `os.walk` hands such a
+  directory to `onerror` and otherwise continues silently, so a subtree the
+  walk could not enter is indistinguishable from one that was deleted — which
+  would have taken its still-present files' rows with it. Indexing still
+  proceeds with whatever was readable; only the destructive half backs off.
 - The file walk prunes as it goes (`os.walk`) instead of walking everything and
   filtering afterwards, so `node_modules`/`.venv` subtrees are no longer
   traversed in full. Collection order is now sorted, making a run reproducible.

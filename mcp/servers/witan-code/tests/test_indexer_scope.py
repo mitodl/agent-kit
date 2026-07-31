@@ -217,3 +217,44 @@ def test_no_purge_without_a_confirmed_git_root(tmp_path, monkeypatch):
     # WITAN_REPO without a git root, unrelated to purging. Asserted as a subset
     # so this test pins the guard and not that quirk.
     assert {"a.py", "pkg/b.py"} <= _files(store, cfg)
+
+
+@requires_stack
+def test_unreadable_directory_suppresses_the_purge(tmp_path, monkeypatch):
+    """A subtree the walk cannot read looks exactly like a deleted one.
+
+    os.walk reports such a directory to `onerror` and otherwise carries on
+    silently, so without this guard an unreadable subtree would take its
+    still-present files' rows with it — a permission blip turning into data
+    loss. Indexing still proceeds with whatever was readable.
+    """
+    from witan_code import config as cfg_mod
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    (src / "sub").mkdir()
+    (src / "sub" / "b.py").write_text("def b():\n    return 1\n")
+    cfg = cfg_mod.load()
+    indexer.index_path(src, config=cfg)
+    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
+    assert _files(store, cfg) == {"a.py", "sub/b.py"}
+
+    # Simulate `sub/` becoming unreadable: os.walk yields the root only and
+    # hands the failure to onerror, exactly as a PermissionError does.
+    real_walk = indexer.os.walk
+
+    def _walk(top, *args, onerror=None, **kwargs):
+        for entry in real_walk(top, *args, **kwargs):
+            root, dirs, files = entry
+            if Path(root) == src:
+                dirs[:] = [d for d in dirs if d != "sub"]
+                if onerror is not None:
+                    onerror(PermissionError(13, "Permission denied", str(src / "sub")))
+            yield entry
+
+    monkeypatch.setattr(indexer.os, "walk", _walk)
+    stats = indexer.index_path(src, config=cfg)
+
+    assert stats.errors >= 1  # the unreadable directory is reported, not hidden
+    assert stats.purged == 0
+    assert _files(store, cfg) == {"a.py", "sub/b.py"}
