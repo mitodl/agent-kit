@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.5.0] - 2026-07-31
+
+### Changed
+
+- **An unrecognized transport now serializes to `http`, not to deprecated
+  SSE.** The Claude and Copilot adapters mapped `transport` with
+  `"http" if transport in ("http", "streamable-http") else "sse"`, so the
+  `else` branch was a catch-all: any value that wasn't one of those two — a
+  typo, or a transport added to MCP later — silently emitted
+  `"type": "sse"`, wiring the server up over the one transport MCP
+  2026-07-28 is retiring. The test is now inverted (`"sse" if transport ==
+  "sse" else "http"`), so only an explicit `transport="sse"` opts into SSE
+  and everything else falls through to `http`.
+
+### Deprecated
+
+- **`transport="sse"` now emits a `DeprecationWarning`.** MCP 2026-07-28
+  deprecates the legacy HTTP+SSE transport with a 12-month offramp. It is
+  still accepted, and deliberately so: this package's job is wiring up
+  *other people's* endpoints, and third-party servers still speak SSE — the
+  deprecation binds new implementations, not existing deployments. The
+  warning names `streamable-http` as the replacement.
+
 ## [0.4.0] - 2026-07-10
 
 ### Added
