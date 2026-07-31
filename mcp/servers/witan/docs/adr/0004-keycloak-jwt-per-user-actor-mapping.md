@@ -186,7 +186,7 @@ specifically uses ToolHive's *other* scenario ("Embedded auth server" →
 upstream-token-swap, vMCP-scoped JWT only) — but generalizes that
 configuration choice into "ToolHive's embedded broker does not propagate
 end-user identity to the backend container," which overstates it: a
-*different* toolhive_witan configuration could plausibly get per-user JWT
+*different* `witan`-stack configuration could plausibly get per-user JWT
 forwarding, Cedar authz, or RFC 8693 token exchange from ToolHive itself,
 narrowing or removing the need for D1's own `JWTVerifier` path. This wasn't
 a "future ToolHive release" scenario as line 139 speculated — the capability
@@ -201,13 +201,13 @@ otherwise overlap) is tracked as a separate decision, not resolved here:
 ### Resolution (2026-07-10) — keep D1–D4 as designed; fix the ToolHive scenario, not the code
 
 `tk-revisit-adr-0004-adr-0009-per-user-identity-desi-e9005a` is resolved as:
-**adopt ToolHive's "External OIDC provider" scenario for `toolhive_witan`'s
+**adopt ToolHive's "External OIDC provider" scenario for the `witan` stack's
 auth config; do not adopt ToolHive's Cedar authorizer or RFC 8693 token
 exchange; make no code change to D1–D4.**
 
 - **Identity propagation.** The "Forces" section's mistake was inferring a
   platform limitation from `toolhive_swe`'s specific scenario
-  ("Embedded auth server" → upstream-token-swap). `toolhive_witan` doesn't
+  ("Embedded auth server" → upstream-token-swap). The `witan` stack doesn't
   have to use that scenario. Configuring it instead with ToolHive's
   "External OIDC provider" scenario makes ToolHive forward the client's
   genuine Keycloak-issued JWT to the backend container unmodified — which is
@@ -234,7 +234,7 @@ exchange; make no code change to D1–D4.**
   pre-filtering (e.g. rate-limiting a tool before it reaches witan at all)
   shows up.
 - **Follow-up.** The ol-infrastructure side of this decision — configuring
-  `toolhive_witan`'s `MCPServer`/`VirtualMCPServer` with the "External OIDC
+  the `witan` stack's `MCPServer`/`VirtualMCPServer` with the "External OIDC
   provider" scenario instead of copying `toolhive_swe`'s "Embedded auth
   server" pattern — is recorded in ADR-0009's own resolution addendum and in
   `tk-ol-infrastructure-toolhive-witan-pulumi-stack-e843b3`.

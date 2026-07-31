@@ -30,7 +30,7 @@ Three consequences land on this deployment specifically.
 
 **Load balancing.** A session id is affinity: every request in a session has to
 reach the replica holding it. Without one, any replica can answer any request,
-so `toolhive_witan` can scale past a single pod behind plain round-robin with
+so the `witan` stack can scale past a single pod behind plain round-robin with
 no sticky sessions and no shared session store.
 
 **Server-initiated requests are gone.** The back-channel that carried

@@ -30,7 +30,7 @@ docker build -f docker/omnigraph-server.Dockerfile -t omnigraph-server:${GIT_TAG
   from the container's cold-start path.
 - `ENTRYPOINT ["witan"]`; the default `CMD` is the deployed invocation
   (`serve --transport streamable-http --host 0.0.0.0 --port 8000`). The
-  toolhive_witan `MCPServer` overrides `args`; env (`WITAN_OIDC_ISSUER`,
+  `witan` stack's `MCPServer` overrides `args`; env (`WITAN_OIDC_ISSUER`,
   `WITAN_OIDC_AUDIENCE`, `WITAN_ACTOR_TOKENS_FILE`, `WITAN_MEMORY_URI`,
   `WITAN_MEMORY_TOKEN`) is supplied by the stack.
 
@@ -39,7 +39,7 @@ docker build -f docker/omnigraph-server.Dockerfile -t omnigraph-server:${GIT_TAG
 - Bakes **both** upstream release binaries (`omnigraph-server` to serve,
   `omnigraph` for the boot-time cluster convergence), checksum-verified against
   the release `.sha256`.
-- Bakes `schema.pg` at `/etc/omnigraph/cluster/schema.pg`. The toolhive_witan
+- Bakes `schema.pg` at `/etc/omnigraph/cluster/schema.pg`. The `omnigraph`
   stack mounts its generated `cluster.yaml` alongside it via a ConfigMap
   `subPath` (single-file overlay) so it does not shadow the baked-in schema.
 - **Auto-bootstraps the cluster on start**
@@ -72,16 +72,27 @@ glibc 2.36) cannot run them.
 (`packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_VERSION`).
 The same Renovate custom-manager pin drives both — bump them together.
 
-## Still to do: publish pipeline (ol-infrastructure)
+## Publish pipeline (ol-infrastructure)
 
-The toolhive_witan Pulumi stack provisions the ECR repos (`witan-<env>`,
-`omnigraph-server-<env>`) and references `:latest`, following
-kubewatch_webhook_handler's "ECR repo in Pulumi, image built separately by
-Concourse" split. The Concourse image-build job that builds these two
-Dockerfiles and pushes to those repos — plus the Pulumi deploy pipelines for
-the two tiers, gated on the image builds — still needs to be written in
-ol-infrastructure (task
-`tk-concourse-image-build-pulumi-deploy-pipelines-fo-5bef89`). Because the
-build context is this repo, wire that job's `agent-kit` git resource `paths:`
-filter to `docker/**`, `pyproject.toml`, `uv.lock`, `packages/**`, and
-`mcp/servers/witan{,-code}/**` so a change to either image triggers a rebuild.
+Both images are built and deployed by Concourse pipelines in ol-infrastructure:
+`src/ol_concourse/pipelines/infrastructure/omnigraph/pipeline.py` and
+`.../witan/pipeline.py` (pipeline sets `ol-infrastructure-pulumi-omnigraph` and
+`ol-infrastructure-pulumi-witan`). Each builds its Dockerfile here, pushes to
+ECR, then runs the matching Pulumi stack gated on that build.
+
+The **ECR repository is created by the build job**, idempotently on every push
+— not by Pulumi. There is one repo per image (`witan`, `omnigraph-server`, no
+`-<env>` suffix), shared across CI/QA/Production in the same AWS account, since
+a single repo cannot be owned by three independent per-env stacks. The Pulumi
+stacks only *consume* it, pinning the Deployment image by digest from
+`{WITAN,OMNIGRAPH}_DOCKER_SHA` (or `_DOCKER_TAG`), supplied by the build job
+via the pulumi-provisioner's `env_vars_from_files`. Pinning by digest is what
+makes a new push actually change the pod spec and trigger a rollout. There is
+no `:latest` fallback: with neither variable set the stack raises
+`Either <APP>_DOCKER_TAG or <APP>_DOCKER_SHA must be set` rather than deploying
+something unpinned.
+
+Because the build context is this repo, each pipeline's `agent-kit` git
+resource already filters `paths:` to `docker/`, `pyproject.toml`, `uv.lock`,
+`packages/`, `mcp/servers/witan/`, and `mcp/servers/witan-code/`, so a change
+to either image triggers a rebuild.
