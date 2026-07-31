@@ -96,7 +96,8 @@ unreachable over the MCP path). They keep the in-process path ADR-0004 already
 documented, run **inside the cluster** where ClusterIP is reachable, and
 authenticate as a narrow, separate `svc-witan-admin` principal:
 
-- Provisioned in the `toolhive_witan` Pulumi stack (ADR-0009 sketched it
+- Provisioned in the `omnigraph` Pulumi stack, sole writer of the shared
+  actor-token Vault source (ADR-0009 sketched it
   alongside `svc-witan-ci` but never provisioned it). Its omnigraph bearer
   token lives in the same actor-token source, and its Cedar policy grants only
   the maintenance verbs it needs — **not** blanket read/write to every actor's
@@ -123,7 +124,7 @@ tools, so `RemoteServerProxy` raises a clear "run in-cluster as
   mirrors all of this — see the 2026-07-31 amendment below.
 - **ol-infrastructure (follow-up):** provision `svc-witan-admin` (token +
   Cedar policy) and the maintenance-Job/bastion pattern in the
-  `toolhive_witan` stack, plus register `witan-cli` as a public OIDC client
+  `witan` stack, plus register `witan-cli` as a public OIDC client
   with the device grant enabled in the `ol-platform-engineering` Keycloak
   realm. Tracked as a spun-off task.
 - **Config surface:** the CLI's remote mode is opt-in via `WITAN_REMOTE_URL`

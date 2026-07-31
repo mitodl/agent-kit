@@ -2,7 +2,7 @@
 #
 # witan — the MCP tier (ADR-0009). Packages the `witan` umbrella CLI (which
 # mounts `witan code` from witan-code) and runs it as a streamable-HTTP MCP
-# server. The toolhive_witan Pulumi stack hosts this behind the ToolHive
+# server. The `witan` Pulumi stack hosts this behind the ToolHive
 # operator and points it at the omnigraph-server data tier over the cluster
 # network (WITAN_MEMORY_URI).
 #
@@ -102,7 +102,7 @@ RUN witan --help >/dev/null && omnigraph --version
 
 EXPOSE 8000
 ENTRYPOINT ["witan"]
-# Overridden by the toolhive_witan MCPServer `args`; this default documents the
+# Overridden by the `witan` stack's MCPServer `args`; this default documents the
 # deployed invocation and keeps the image runnable standalone. The transport
 # serves both protocol eras: a 2026-07-28 client is answered statelessly (no
 # handshake, no Mcp-Session-Id, so replicas need no session affinity), an older

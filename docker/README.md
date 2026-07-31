@@ -30,7 +30,7 @@ docker build -f docker/omnigraph-server.Dockerfile -t omnigraph-server:${GIT_TAG
   from the container's cold-start path.
 - `ENTRYPOINT ["witan"]`; the default `CMD` is the deployed invocation
   (`serve --transport streamable-http --host 0.0.0.0 --port 8000`). The
-  toolhive_witan `MCPServer` overrides `args`; env (`WITAN_OIDC_ISSUER`,
+  `witan` stack's `MCPServer` overrides `args`; env (`WITAN_OIDC_ISSUER`,
   `WITAN_OIDC_AUDIENCE`, `WITAN_ACTOR_TOKENS_FILE`, `WITAN_MEMORY_URI`,
   `WITAN_MEMORY_TOKEN`) is supplied by the stack.
 
@@ -39,7 +39,7 @@ docker build -f docker/omnigraph-server.Dockerfile -t omnigraph-server:${GIT_TAG
 - Bakes **both** upstream release binaries (`omnigraph-server` to serve,
   `omnigraph` for the boot-time cluster convergence), checksum-verified against
   the release `.sha256`.
-- Bakes `schema.pg` at `/etc/omnigraph/cluster/schema.pg`. The toolhive_witan
+- Bakes `schema.pg` at `/etc/omnigraph/cluster/schema.pg`. The `omnigraph`
   stack mounts its generated `cluster.yaml` alongside it via a ConfigMap
   `subPath` (single-file overlay) so it does not shadow the baked-in schema.
 - **Auto-bootstraps the cluster on start**
@@ -74,8 +74,8 @@ The same Renovate custom-manager pin drives both — bump them together.
 
 ## Still to do: publish pipeline (ol-infrastructure)
 
-The toolhive_witan Pulumi stack provisions the ECR repos (`witan-<env>`,
-`omnigraph-server-<env>`) and references `:latest`, following
+The `witan` and `omnigraph` Pulumi stacks provision their own ECR repos
+(`witan-<env>`, `omnigraph-server-<env>` respectively) and references `:latest`, following
 kubewatch_webhook_handler's "ECR repo in Pulumi, image built separately by
 Concourse" split. The Concourse image-build job that builds these two
 Dockerfiles and pushes to those repos — plus the Pulumi deploy pipelines for
