@@ -44,11 +44,11 @@ def check_writable(
     remote too, so a blanket "refuse when remote" would block the one writer
     the design depends on (``Config.is_designated_writer``).
 
-    Branch views are exempt: they are written through a branch-scoped client,
-    so in-flight work stays isolated from the shared view (see
-    docs/BRANCH_INDEXING.md). Whether developer branches belong on the shared
-    graph at all, or stay in the local store, is still open — see task
-    tk-ci-owns-the-default-branch-code-graph-clients-re-9c90d6 item 3.
+    Branch views are exempt, and deliberately so: per-user branch views live
+    ON the shared graph (DECIDED, Tobias 2026-07-31), because in-flight work
+    being visible to other agents as it happens is a large part of what the
+    shared service is for. A branch-scoped write cannot reach the view
+    everyone falls back to, so it needs no role. See docs/BRANCH_INDEXING.md.
 
     Local stores are unaffected: they have one user, who is their writer.
     """

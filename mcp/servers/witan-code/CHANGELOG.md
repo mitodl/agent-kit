@@ -26,8 +26,11 @@ a MINOR bump may include breaking changes).
   dropping rows for files deleted from the default branch is precisely CI's
   job. Local stores are unaffected (one user, who is their writer), and branch
   views stay writable by anyone: they are branch-scoped, so in-flight work
-  never lands on the shared view. Whether developer branch views belong on the
-  shared graph at all is still open. See
+  never lands on the shared view. That exemption is deliberate — per-user
+  branch views live *on* the shared graph, so isolated agents can see each
+  other's work as it happens. Two follow-ups that decision requires
+  (namespacing views per writer, and re-scoping the purge to "this actor owns
+  the view being written") are noted in the doc and not in this change. See
   [docs/BRANCH_INDEXING.md](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view).
 
 ### Fixed

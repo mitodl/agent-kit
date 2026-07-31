@@ -78,15 +78,47 @@ What the role gates (`witan_code.graph.check_writable`,
 | stale-file purge | ✅ | ❌ | ✅ |
 | `branches --prune` | ✅ | ❌ | ❌ |
 
-Branch views are exempt from the default-view gate: they are written through
-a branch-scoped client, so in-flight work never lands on the view everyone
-reads. Whether developer branch views belong on the shared graph at all
-(namespaced per user, with reaping and Cedar gating) or stay in the local
-store with results merged at query time is **still open** — see task
-`tk-ci-owns-the-default-branch-code-graph-clients-re-9c90d6` item 3.
-
 Local stores are unaffected by the role: they have one user, who is their
 writer.
+
+### Per-user branch views live on the shared graph
+
+**Decided (2026-07-31).** In-flight branch views go on the shared cluster
+graph, not in a local store queried alongside it. Isolated agents being able
+to see each other's work *as it is being made* — rather than after a merge —
+is a large part of what the shared service is for, and that only works if
+the views are somewhere every reader can reach.
+
+Branch views are therefore exempt from the default-view gate above: a
+branch-scoped write cannot reach the view everyone falls back to, so it
+needs no role. Anyone may write their own.
+
+Two things this decision requires that are **not implemented yet**:
+
+1. **Branch views must be namespaced per writer.** `repo.store_branch()`
+   derives the view name from the git branch alone, so on a shared graph two
+   checkouts on `feature-x` write the *same* view and overwrite each other
+   with different working-tree states. Isolation and visibility are both
+   required, and they are not in tension: namespace the write key (the
+   writer's actor id alongside the branch), and keep reads able to enumerate
+   every view for a given branch. Layer 1 already keys in-flight work the
+   same way — `CodeBranch (repo, branch)` with `WorksOn`/`ForProject` edges
+   (below) — so the two layers should agree on the key.
+
+2. **Stale-file purging stays off for branch views until (1) lands.**
+   `_may_purge` refuses on a remote store for everyone but CI, branch views
+   included, so a developer's deleted files linger in their own view. That is
+   correct *today*: an un-namespaced shared branch view has no single
+   authoritative writer. Once views are namespaced it becomes wrong, and the
+   gate should be restated as "this actor owns the view being written" — of
+   which "CI owns `main`" is one case and "I own my own branch view" is the
+   other.
+
+Reaping is consequently **server-side and mandatory**, not a client
+convenience: branch sprawl is real under this decision, and no client can
+tell whose branch views are still live — which is why `branches --prune` is
+refused against a remote store above and stays that way. See
+`tk-branch-cedar-gating-stale-code-graph-branch-reap-0c621c`.
 
 ## Bridge store
 
