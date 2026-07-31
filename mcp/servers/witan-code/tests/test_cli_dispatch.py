@@ -1,0 +1,248 @@
+"""Every read command goes through ``_srv()``, never straight to a store.
+
+That indirection is what gives the CLI a remote mode (ADR 0005, path a): if a
+command reaches for ``OmnigraphClient`` itself it silently loses it, and only
+works against the local ``~/.local/share/witan/code`` stores. These tests stub
+``_srv()`` and make constructing an ``OmnigraphClient`` an error, so a
+regression here fails loudly instead of quietly going local-only.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from witan_code import cli as cli_module
+
+
+@pytest.fixture(autouse=True)
+def _no_direct_store_access(monkeypatch):
+    from witan_code import graph
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError(
+            "read command built an OmnigraphClient directly — it must dispatch "
+            "through _srv() so remote mode keeps working"
+        )
+
+    monkeypatch.setattr(graph, "OmnigraphClient", _boom)
+
+
+def _stub(**tools):
+    """A stand-in for the tool provider that records the calls it receives."""
+    calls: list[tuple[str, dict]] = []
+
+    def _record(name, result):
+        def _call(**kwargs):
+            calls.append((name, kwargs))
+            return result
+
+        return _call
+
+    srv = SimpleNamespace(**{n: _record(n, r) for n, r in tools.items()})
+    srv.calls = calls  # type: ignore[attr-defined]
+    return srv
+
+
+def test_symbols_dispatches_to_code_repo_symbols(monkeypatch, capsys):
+    srv = _stub(
+        code_repo_symbols=[
+            {
+                "role": "exported",
+                "symbol": "env:API_URL",
+                "kind": "env_var",
+                "n_refs": 2,
+                "confidence": 0.9,
+                "file": "app/settings.py",
+                "line": 12,
+            }
+        ]
+    )
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+
+    cli_module.symbols(repo="https://github.com/test/repo", role="exported")
+
+    assert srv.calls == [
+        (
+            "code_repo_symbols",
+            {
+                "repo": "https://github.com/test/repo",
+                "role": "exported",
+                "scheme": None,
+            },
+        )
+    ]
+    out = capsys.readouterr().out
+    assert "API_URL" in out
+
+
+def test_symbols_resolves_the_repo_client_side(monkeypatch):
+    """The deployment has no checkout, so detection has to happen here."""
+    srv = _stub(code_repo_symbols=[])
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+    monkeypatch.setattr(
+        "witan_code.repo.detect", lambda *a, **kw: "https://github.com/test/detected"
+    )
+
+    cli_module.symbols()
+
+    assert srv.calls[0][1]["repo"] == "https://github.com/test/detected"
+
+
+def test_stitch_dispatches_to_precise_edges(monkeypatch, capsys):
+    srv = _stub(
+        code_precise_edges=[
+            {
+                "consumer_repo": "https://github.com/test/a",
+                "provider_repo": "https://github.com/test/b",
+                "kind": "package",
+                "match_count": 2,
+                "preferred": True,
+                "ambiguous_version": False,
+            }
+        ]
+    )
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+
+    cli_module.stitch()
+
+    assert srv.calls == [("code_precise_edges", {"repo": None})]
+    assert "test/a" in capsys.readouterr().out
+
+
+def test_stitch_unresolved_dispatches_to_unresolved_symbols(monkeypatch, capsys):
+    srv = _stub(
+        code_unresolved_symbols=[
+            {
+                "repo": "https://github.com/test/a",
+                "symbol": "pkg:npm/left-pad",
+                "kind": "package",
+                "n_refs": 1,
+            }
+        ]
+    )
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+
+    cli_module.stitch(repo="https://github.com/test/a", unresolved=True)
+
+    assert srv.calls == [
+        ("code_unresolved_symbols", {"repo": "https://github.com/test/a"})
+    ]
+    assert "left-pad" in capsys.readouterr().out
+
+
+def test_deps_dispatches_to_repo_dependencies(monkeypatch, capsys):
+    srv = _stub(
+        code_repo_dependencies={
+            "repos": ["https://github.com/test/a", "https://github.com/test/b"],
+            "edges": [
+                {
+                    "consumer": "https://github.com/test/a",
+                    "provider": "https://github.com/test/b",
+                    "weight": 3,
+                    "kinds": {"env_var": 3},
+                    "contracts": [
+                        {"kind": "env_var", "key": "API_URL", "confidence": 1.0}
+                    ],
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+
+    cli_module.deps(kind="env_var")
+
+    assert srv.calls == [
+        (
+            "code_repo_dependencies",
+            {"kind": "env_var", "repo": None, "min_precision": "heuristic"},
+        )
+    ]
+    out = capsys.readouterr().out
+    assert "test/a" in out and "test/b" in out
+
+
+def test_deps_renders_html_from_the_returned_graph(monkeypatch, tmp_path):
+    srv = _stub(
+        code_repo_dependencies={
+            "repos": ["https://github.com/test/a", "https://github.com/test/b"],
+            "edges": [
+                {
+                    "consumer": "https://github.com/test/a",
+                    "provider": "https://github.com/test/b",
+                    "weight": 1,
+                    "kinds": {"package": 1},
+                    "contracts": [{"kind": "package", "key": "left-pad"}],
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+    out = tmp_path / "graph.html"
+
+    cli_module.deps(html=out)
+
+    html = out.read_text()
+    assert "test/a" in html and "left-pad" in html
+
+
+def test_repos_dispatches_to_indexed_repos(monkeypatch, capsys):
+    srv = _stub(
+        code_indexed_repos=[
+            {
+                "repo": "https://github.com/test/a",
+                "files": 12,
+                "bytes": 2048,
+                "last_indexed": 1_800_000_000.0,
+            }
+        ]
+    )
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+
+    cli_module.repos()
+
+    assert srv.calls == [("code_indexed_repos", {})]
+    assert "test/a" in capsys.readouterr().out
+
+
+def test_repos_shows_a_question_mark_for_an_unreadable_store(monkeypatch, capsys):
+    srv = _stub(
+        code_indexed_repos=[
+            {
+                "repo": "https://github.com/test/a",
+                "files": None,
+                "bytes": 0,
+                "last_indexed": 1_800_000_000.0,
+            }
+        ]
+    )
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+
+    cli_module.repos()
+
+    assert "?" in capsys.readouterr().out
+
+
+def test_branches_dispatches_to_indexed_branches(monkeypatch, capsys):
+    srv = _stub(
+        code_indexed_branches=[
+            {"repo": "https://github.com/test/a", "branches": ["feature-x", "main"]}
+        ]
+    )
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+
+    cli_module.branches()
+
+    assert srv.calls == [("code_indexed_branches", {})]
+    assert "https://github.com/test/a: main,feature-x" in capsys.readouterr().out
+
+
+def test_branches_prune_is_refused_in_remote_mode(monkeypatch, capsys):
+    monkeypatch.setattr(cli_module, "_srv", lambda: _stub(code_indexed_branches=[]))
+    monkeypatch.setattr(cli_module, "_is_remote", lambda: True)
+
+    with pytest.raises(SystemExit):
+        cli_module.branches(prune=True)
+
+    assert "does not share" in capsys.readouterr().out

@@ -1,15 +1,18 @@
-"""witan's binding of the shared OIDC device-auth core (ADR 0005, path a).
+"""witan-code's binding of the shared OIDC device-auth core (ADR 0005, path a).
 
 The device-grant login, token cache, and refresh live in
-:mod:`witan_core.remote.oidc`; this module binds the one witan-specific bit —
-the ``witan login`` hint in "please re-authenticate" messages — and re-exports
-the flow under the names ``witan.cli`` already calls. The cache location
-(``~/.config/witan/tokens.json``, overridable with ``WITAN_TOKEN_CACHE``) is
-shared with witan-code, and entries are keyed by ``(issuer, client_id)``, so a
-single login serves both CLIs against one deployment.
+:mod:`witan_core.remote.oidc`; this module binds the one witan-code-specific
+bit — the ``witan-code login`` hint in "please re-authenticate" messages — and
+re-exports the flow under the names ``witan_code.cli`` calls.
+
+The cache file (``~/.config/witan/tokens.json``, overridable with
+``WITAN_TOKEN_CACHE``) and the default client id are shared with witan
+(witan-council), and entries are keyed by ``(issuer, client_id)`` — so a user
+who already ran ``witan login`` against the same deployment does NOT need to
+run ``witan-code login`` as well, and vice versa.
 
 The CLI never *verifies* the JWT — the deployed server does that against
-Keycloak's JWKS (ADR-0004). :func:`decode_claims` is display-only.
+Keycloak's JWKS (witan ADR-0004). :func:`decode_claims` is display-only.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import time
 from typing import Callable
 
 import httpx2
+from witan_core.remote.config import RemoteConfig
 from witan_core.remote.oidc import (
     DeviceAuth,
     NeedsLogin,
@@ -28,9 +32,7 @@ from witan_core.remote.oidc import (
     discover_endpoints,
 )
 
-from ..config import RemoteConfig
-
-_LOGIN_HINT = "witan login"
+_LOGIN_HINT = "witan-code login"
 
 __all__ = [
     "NeedsLogin",
@@ -66,7 +68,10 @@ def get_valid_token(cfg: RemoteConfig, *, client: httpx2.Client | None = None) -
 
 
 def logout(cfg: RemoteConfig) -> bool:
-    """Drop the cached token for this deployment. True if one existed."""
+    """Drop the cached token for this deployment. True if one existed.
+
+    Shared cache: this also logs the ``witan`` CLI out of the same deployment.
+    """
     return _auth(cfg).logout()
 
 

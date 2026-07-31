@@ -117,9 +117,10 @@ tools, so `RemoteServerProxy` raises a clear "run in-cluster as
 - **agent-kit (this repo):** implements (a) in full — `witan/remote/oidc.py`
   (device flow + token cache), `witan/remote/proxy.py`
   (`RemoteServerProxy`), `witan login`/`logout`/`whoami` commands,
-  `RemoteConfig` in `config.py`, and the `_srv()` switch. No change to the
-  existing in-process path: with `WITAN_REMOTE_URL` unset the CLI behaves
-  exactly as before.
+  `RemoteConfig` (since 2026-07-31 in `witan_core.remote.config`), and the
+  `_srv()` switch. No change to the existing in-process path: with
+  `WITAN_REMOTE_URL` unset the CLI behaves exactly as before. witan-code's CLI
+  mirrors all of this — see the 2026-07-31 amendment below.
 - **ol-infrastructure (follow-up):** provision `svc-witan-admin` (token +
   Cedar policy) and the maintenance-Job/bastion pattern in the
   `toolhive_witan` stack, plus register `witan-cli` as a public OIDC client
@@ -139,6 +140,23 @@ tools, so `RemoteServerProxy` raises a clear "run in-cluster as
     services, and a single target block can route both the omnigraph store
     and the deployed MCP endpoint together. See `RemoteConfig`/
     `load_remote_config()` in `witan/config.py`.
+  - **Amendment (2026-07-31):** witan-code's standalone CLI now takes the same
+    path. `witan serve` mounts its `code_*` tools onto this deployment with no
+    prefix, so the endpoint already served them — only the client side was
+    missing. `RemoteConfig` and the resolution above moved to
+    `witan_core.remote.config` (both servers keep just their own target
+    selection), and `witan_code/remote/proxy.py` binds the same
+    `RemoteMCPProxy` with witan-code's policy. Both CLIs therefore read the
+    same four keys off the same target block, and — since the token cache is
+    keyed by `(issuer, client_id)` and both default to the `witan-cli` client
+    id — one `witan login` authenticates both. witan-code's read commands
+    (`symbols`, `deps`, `stitch`, `repos`, `branches`) move; indexing and store
+    maintenance stay local, since they need a checkout and the store files that
+    a deployed replica does not share. One divergence worth noting:
+    witan-code's proxy deliberately does **not** resolve `repo=None`
+    client-side. On witan's tools that means "detect the current repo", but on
+    witan-code's bridge-wide tools it means "every indexed repo", so injecting
+    a detected repo would silently narrow the result.
 - **Known v1 limitation:** `RemoteServerProxy` opens a fresh MCP connection per
   tool call, so a single CLI command that fans out to several tools pays
   several MCP handshakes. Acceptable for interactive CLI use; a persistent

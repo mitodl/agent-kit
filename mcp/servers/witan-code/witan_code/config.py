@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from witan_core.config_file import load_toml as _load_toml_shared
+from witan_core.remote.config import RemoteConfig, resolve_remote_config
 from witan_core.target_config import (
     local_project_path,
     match_target,
@@ -60,6 +61,15 @@ class _Target(BaseModel):
     name: str
     code_dir: str | None = None
     author: str | None = None
+    remote_url: str | None = None
+    """Overrides WITAN_REMOTE_URL — routes this target's read commands through
+    a deployed witan MCP endpoint instead of the local stores. Same four keys
+    witan (witan-council) reads off the same target: the deployment mounts both
+    tool surfaces on one endpoint, so one block routes both CLIs. See
+    ``load_remote_config()`` and ADR 0005."""
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_audience: str | None = None
     match_orgs: list[str] = Field(default_factory=list)
     match_repos: list[str] = Field(default_factory=list)
     match_hosts: list[str] = Field(default_factory=list)
@@ -92,6 +102,46 @@ def _first(*values: str | None, default: str | None = None) -> str | None:
     return default
 
 
+def _select_target(target: str | None) -> tuple[dict, _Target | None]:
+    """Load config.toml and pick the target block that applies.
+
+    ``target`` arg > ``WITAN_TARGET`` env var > auto-detect by repo/local
+    checkout path. Returns ``(file_cfg, selected_or_None)``; raises ValueError
+    for an explicitly-requested target that is not defined.
+    """
+    file_cfg = _load_toml()
+    targets = _parse_targets(file_cfg)
+
+    explicit = target or os.environ.get("WITAN_TARGET")
+    if explicit:
+        selected = next((t for t in targets if t.name == explicit), None)
+        if selected is None:
+            available = ", ".join(t.name for t in targets) or "(none defined)"
+            raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
+        return file_cfg, selected
+    return file_cfg, match_target(
+        targets, repo_uri=repo_module.detect(), local_path=local_project_path()
+    )
+
+
+def load_remote_config(target: str | None = None) -> RemoteConfig | None:
+    """Resolve RemoteConfig from env > named target > global config.toml > default.
+
+    Target selection is exactly ``load()``'s, and the keys are exactly the ones
+    witan (witan-council) reads — ``WITAN_REMOTE_URL`` / ``WITAN_OIDC_*``, or
+    ``remote_url``/``oidc_issuer``/``oidc_client_id``/``oidc_audience`` on the
+    matched ``[targets.<name>]`` block. `witan serve` mounts this server's
+    ``code_*`` tools into the witan MCP server with no prefix, so one endpoint
+    and one login serve both CLIs; configuring the deployment once routes both.
+
+    Returns ``None`` when no URL is configured from any source — the default,
+    in-process path over the local stores. Raises ValueError when a URL is
+    configured without an issuer, or for an unknown explicit target.
+    """
+    file_cfg, selected = _select_target(target)
+    return resolve_remote_config(file_cfg, selected)
+
+
 def load(target: str | None = None) -> Config:
     """Load config from config.toml + environment, selecting a named target if applicable.
 
@@ -111,19 +161,7 @@ def load(target: str | None = None) -> Config:
 
     Raises ValueError for an explicitly-requested target that is not defined.
     """
-    file_cfg = _load_toml()
-    targets = _parse_targets(file_cfg)
-
-    explicit = target or os.environ.get("WITAN_TARGET")
-    if explicit:
-        selected = next((t for t in targets if t.name == explicit), None)
-        if selected is None:
-            available = ", ".join(t.name for t in targets) or "(none defined)"
-            raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
-    else:
-        selected = match_target(
-            targets, repo_uri=repo_module.detect(), local_path=local_project_path()
-        )
+    file_cfg, selected = _select_target(target)
 
     raw_code_dir = _first(
         os.environ.get("WITAN_CODE_DIR"),

@@ -80,6 +80,16 @@ Cross-repo (reads the shared bridge store; `kind` is one of `env_var` /
 | Who consumes it? | `code_interface_consumers(kind, key)` |
 | Every binding for this symbol's contracts, across repos | `code_cross_repo_impact(symbol_id)` |
 | Search bindings by key | `code_interface_search(query, kind=None)` |
+| What does this repo export / expect? | `code_repo_symbols(repo=None, role=None)` |
+| Which repos depend on which? | `code_repo_dependencies(kind=None, repo=None)` |
+
+Coverage — ask these before concluding "nothing uses X", since an unindexed
+repo looks identical to an unused one:
+
+| Question | Tool |
+|---|---|
+| Which repos are indexed, and how fresh? | `code_indexed_repos()` |
+| Which branch views does a repo's store have? | `code_indexed_branches()` |
 
 Every tool resolves the per-repo store from the current working directory and
 returns `[]`/`null` gracefully when nothing is indexed yet — an empty result

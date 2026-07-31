@@ -356,3 +356,25 @@ def test_build_graph_confidence_on_emitted_edge_contracts():
 def test_build_graph_rejects_invalid_min_precision():
     with pytest.raises(ValueError):
         visualize.build_graph(ROWS, min_precision="nonsense")
+
+
+def test_payload_round_trip_preserves_what_the_renderers_read():
+    """`code_repo_dependencies` ships a graph over MCP; `deps` renders it back."""
+    graph = visualize.build_graph(ROWS)
+    restored = visualize.from_payload(visualize.as_payload(graph))
+
+    assert restored.repos == graph.repos
+    assert set(restored.edges) == set(graph.edges)
+    for key, edge in graph.edges.items():
+        assert dict(restored.edges[key].kinds) == dict(edge.kinds)
+        assert restored.edges[key].weight == edge.weight
+        assert restored.edges[key].contracts == edge.contracts
+
+
+def test_payload_keeps_repos_with_no_dependencies():
+    # Derived from the edges alone, an indexed-but-unconnected repo would vanish
+    # from the "N repos · M links" header.
+    graph = visualize.DepGraph()
+    graph.repos = {"https://github.com/test/lonely"}
+
+    assert visualize.from_payload(visualize.as_payload(graph)).repos == graph.repos

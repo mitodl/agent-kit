@@ -44,7 +44,7 @@ def _jwt(claims: dict) -> str:
 
 def _seed_cache(cfg: RemoteConfig, entry: dict) -> None:
     """Write a cache entry directly, keyed the way the core keys it."""
-    path = oidc._cache_path()
+    path = oidc.cache_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     key = f"{cfg.oidc_issuer}|{cfg.oidc_client_id}"
     path.write_text(json.dumps({key: entry}), encoding="utf-8")
@@ -67,12 +67,12 @@ def _client(handler) -> httpx2.Client:
 
 def test_default_cache_path_is_under_config_witan(monkeypatch):
     monkeypatch.delenv("WITAN_TOKEN_CACHE", raising=False)
-    assert oidc._cache_path().as_posix().endswith(".config/witan/tokens.json")
+    assert oidc.cache_path().as_posix().endswith(".config/witan/tokens.json")
 
 
 def test_env_override_redirects_cache(tmp_path):
     # The autouse fixture points WITAN_TOKEN_CACHE at tmp_path.
-    assert oidc._cache_path() == tmp_path / "tokens.json"
+    assert oidc.cache_path() == tmp_path / "tokens.json"
 
 
 def test_login_round_trips_through_shim_and_caches(cfg, tmp_path):

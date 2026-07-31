@@ -16,6 +16,14 @@ def _lock(tmp_path, monkeypatch, project_dir):
     return context._lock_path(project_dir)
 
 
+def _stub_store_stats(monkeypatch):
+    """Answer the store lookups without an omnigraph binary or a real store."""
+    monkeypatch.setattr(
+        context.store_module, "repo_for_store", lambda s: "https://github.com/test/cg"
+    )
+    monkeypatch.setattr(context.store_module, "file_count", lambda s, cfg=None: 3)
+
+
 def test_inject_context_empty_without_repo(tmp_path, monkeypatch):
     monkeypatch.delenv("WITAN_REPO", raising=False)
     monkeypatch.chdir(tmp_path)  # no .git anywhere above a tmp dir
@@ -52,9 +60,7 @@ def test_inject_context_reports_indexed_store(tmp_path, monkeypatch):
     store = code_dir / "https_github.com_test_cg.omni"
     store.mkdir(parents=True)
     (store / "data.lance").write_text("x")
-    monkeypatch.setattr(
-        context, "_code_store_stats", lambda s: ("https://github.com/test/cg", "3")
-    )
+    _stub_store_stats(monkeypatch)
 
     text = context.inject_context()
 
@@ -76,9 +82,7 @@ def test_inject_context_notes_in_progress_alongside_existing_store(
     store = code_dir / "https_github.com_test_cg.omni"
     store.mkdir(parents=True)
     (store / "data.lance").write_text("x")
-    monkeypatch.setattr(
-        context, "_code_store_stats", lambda s: ("https://github.com/test/cg", "3")
-    )
+    _stub_store_stats(monkeypatch)
 
     text = context.inject_context()
 
@@ -134,12 +138,10 @@ def test_inject_context_degrades_when_dir_stats_fails(tmp_path, monkeypatch):
 
     store = code_dir / "https_github.com_test_cg.omni"
     store.mkdir(parents=True)
+    _stub_store_stats(monkeypatch)
     monkeypatch.setattr(
-        context, "_code_store_stats", lambda s: ("https://github.com/test/cg", "3")
-    )
-    monkeypatch.setattr(
-        context,
-        "_dir_stats",
+        context.store_module,
+        "dir_stats",
         lambda s: (_ for _ in ()).throw(OSError("vanished mid-walk")),
     )
 

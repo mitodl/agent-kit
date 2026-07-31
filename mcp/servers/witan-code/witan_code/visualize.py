@@ -52,6 +52,44 @@ class DepGraph:
         return self.edges[key]
 
 
+def as_payload(graph: DepGraph) -> dict:
+    """Serialize the renderable half of a graph: its repos and its edges.
+
+    What ``code_repo_dependencies`` returns and ``from_payload`` rebuilds, so
+    ``witan-code deps`` renders identically whether it computed the graph from
+    local binding rows or received it from a deployment. ``contracts`` (the
+    (kind, key_norm) → provider/consumer index) is deliberately left out: the
+    renderers don't read it, and it is by far the largest part of the graph.
+
+    Repos are carried explicitly rather than derived from the edges, so a repo
+    that is indexed but depends on nothing still shows up in the count.
+    """
+    return {
+        "repos": sorted(graph.repos),
+        "edges": [
+            {
+                "consumer": e.src,
+                "provider": e.dst,
+                "weight": e.weight,
+                "kinds": dict(e.kinds),
+                "contracts": e.contracts,
+            }
+            for e in graph.edges.values()
+        ],
+    }
+
+
+def from_payload(payload: dict) -> DepGraph:
+    """Rebuild a renderable :class:`DepGraph` from :func:`as_payload` output."""
+    graph = DepGraph()
+    graph.repos = set(payload.get("repos") or ())
+    for row in payload.get("edges") or ():
+        edge = graph.edge(row["consumer"], row["provider"])
+        edge.kinds.update(row.get("kinds") or {})
+        edge.contracts = list(row.get("contracts") or ())
+    return graph
+
+
 def short_repo(repo: str) -> str:
     """``https://github.com/mitodl/mit-learn`` → ``mitodl/mit-learn``."""
     repo = repo.rstrip("/")

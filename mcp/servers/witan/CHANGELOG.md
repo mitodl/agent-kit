@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.7.2] - 2026-07-31
+
+### Changed
+
+- **`RemoteConfig` and the remote-config resolution moved to
+  `witan_core.remote.config`** (re-exported from `witan.config`, so imports and
+  behavior are unchanged). It carried nothing witan-council-specific and should
+  have been extracted alongside `witan_core.remote.oidc`/`proxy`; witan-code now
+  shares it, which is what lets one `[targets.<name>]` block and one login route
+  both CLIs at the same deployment.
+- The token-cache location moved to `witan_core.remote.oidc.cache_path()` — same
+  `~/.config/witan/tokens.json` path and `WITAN_TOKEN_CACHE` override, now
+  shared with witan-code rather than a private copy.
+- **Requires `witan-core>=0.6`.**
+
 ## [0.7.0] - 2026-07-30
 
 ### Changed
