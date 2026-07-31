@@ -1083,3 +1083,60 @@ def test_dedupe_run_ends_when_every_member_has_closed(server):
     assert sorted(s["slug"] for s in srv._project_sessions(proj["slug"])) == sorted(
         [s1, later]
     )
+
+
+@requires_omnigraph
+def test_concurrent_session_starts_collapse_to_one_handle(
+    server, tmp_state_dir, monkeypatch
+):
+    """The check-then-insert isn't atomic, so two simultaneous starts can both
+    find no open session and both insert. Simulated by blinding the pre-insert
+    check for the first call only — the second then runs for real, sees both
+    rows, and both callers come back with the same handle."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="race", description="d")
+    sid = uuid.uuid4().hex
+
+    # Blind only the first two checks — a blanket monkeypatch.undo() would also
+    # revert the conftest fixture's redirect of srv.client to the throwaway graph.
+    real_check = srv._open_session_for_key
+    calls = {"n": 0}
+
+    def _blind_first_two(*args, **kwargs):
+        calls["n"] += 1
+        return None if calls["n"] <= 2 else real_check(*args, **kwargs)
+
+    monkeypatch.setattr(srv, "_open_session_for_key", _blind_first_two)
+    racer_a = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+    racer_b = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+
+    # Both raced past the check and inserted, but converge on one handle.
+    assert racer_b["session_slug"] == racer_a["session_slug"]
+
+    # Two rows exist; exactly one is live, and it's the earlier of the two.
+    rows = srv.client.read(
+        "read.gq", "sessions_for_key", {"project_slug": proj["slug"], "session_id": sid}
+    )
+    assert len(rows) == 2
+    live = [r for r in rows if not r.get("superseded_by")]
+    assert [r["slug"] for r in live] == [racer_a["session_slug"]]
+    assert len(srv._project_sessions(proj["slug"])) == 1
+
+    # A later, non-racing call still finds the surviving session.
+    third = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+    assert third["existed"] is True
+    assert third["session_slug"] == racer_a["session_slug"]
+
+    # ...and the collapsed duplicate never reaches the trace.
+    server.workflow_session_end(racer_a["session_slug"], summary="the real work")
+    done = server.workflow_project_complete(
+        proj["slug"], outcome="one session, not two"
+    )
+    assert server.workflow_trace_get(done["trace_slug"])["session_count"] == 1

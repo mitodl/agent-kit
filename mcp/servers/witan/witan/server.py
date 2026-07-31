@@ -3082,6 +3082,58 @@ def _open_session_for_key(project_slug: str, session_id: str) -> dict | None:
     return open_rows[-1] if open_rows else None
 
 
+def _dedupe_open_sessions(
+    project_slug: str, session_id: str, slug: str, started_at: str
+) -> tuple[str, str]:
+    """Collapse open sessions a concurrent start raced into existence.
+
+    The check-then-insert above is not atomic: two starts for one
+    (project, session_id) — a client retrying while the first request is still
+    in flight, or two replicas handling the same retry — can both find no open
+    session and both insert. The engine can't arbitrate that the way it does for
+    ``task_claim``: optimistic concurrency detects competing writes to *one*
+    row, and these are two rows under two freshly-minted slugs.
+
+    So resolve it after the fact. Writes serialize through the store, and a
+    reader sees every write that preceded it, so the racer who inserted second
+    necessarily sees both rows. It keeps the earliest-started as canonical and
+    supersedes the rest — a rule both racers compute identically, so they
+    converge on the same handle no matter which of them observes the collision.
+    Returns the (possibly reassigned) slug and its start time.
+
+    Costs one extra read per *new* session; the re-entrant path never reaches
+    here. Best-effort: a failure to read or mark leaves the duplicate for
+    ``witan migrate dedupe-sessions``, and must not fail the session start.
+    """
+    try:
+        rows = client.read(
+            "read.gq",
+            "sessions_for_key",
+            {"project_slug": project_slug, "session_id": session_id},
+        )
+    except RuntimeError:
+        return slug, started_at
+
+    open_rows = [
+        r for r in rows if not r.get("ended_at") and not r.get("superseded_by")
+    ]
+    if len(open_rows) < 2:
+        return slug, started_at
+
+    canonical = min(open_rows, key=lambda r: r.get("started_at") or "")
+    for row in open_rows:
+        if row["slug"] != canonical["slug"]:
+            try:
+                client.change(
+                    "mutations.gq",
+                    "update_workflow_session_superseded",
+                    {"slug": row["slug"], "superseded_by": canonical["slug"]},
+                )
+            except RuntimeError:
+                pass
+    return canonical["slug"], canonical.get("started_at") or started_at
+
+
 @mcp.tool
 def workflow_session_start(
     project_slug: str,
@@ -3114,6 +3166,12 @@ def workflow_session_start(
     ``workflow_project_advance`` to move a project's phase). Once a session has
     been ended, the same ``session_id`` starts a fresh session — one
     ``$CLAUDE_SESSION_ID`` legitimately spans several working stints.
+
+    Two *simultaneous* starts (a client retrying while the first request is
+    still in flight) can still both insert, since the check and the insert are
+    not one atomic operation. That is resolved immediately after the fact rather
+    than left for the migration to find — see ``_dedupe_open_sessions``. Both
+    racers return the same handle.
 
     Because the repo accretion below runs on the re-entrant path too, calling
     this once per repo remains a valid way to widen a project's repo set — but
@@ -3183,6 +3241,7 @@ def workflow_session_start(
             "link_belongs_to",
             {"from": slug, "to": project_slug},
         )
+        slug, started_at = _dedupe_open_sessions(project_slug, session_id, slug, now)
 
     # Accrete this session's repo into the project's repo set, so a project's
     # association grows as it's worked across repos without explicit declaration.
