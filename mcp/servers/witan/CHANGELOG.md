@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Fixed
+
+- **Deployed multi-user writes are attributed to the calling user, not the
+  server container.** `cfg.author` is resolved once at process startup, so under
+  a deployment every `Memory`, `WorkflowProject`, `WorkflowTrace`,
+  `WorkflowSession`, and `Task` carried a single author value deployment-wide —
+  making `workflow_trace_list(author=…)` an inert filter, flattening the ranking
+  layer's author-trust signal, and leaving mined corpus traces without usable
+  provenance. A new `_current_author()` resolves the identity per request from
+  the validated JWT (`preferred_username`, then `email`, then the derived
+  `act-<sub>`). `task_claim` / `task_release` default their holder to the same
+  helper, so parallel agents no longer all claim as one identity. Local stdio
+  behavior is unchanged — `WITAN_AUTHOR` / git config / `$USER` remains correct
+  there and stays in use. See ADR-0004 addendum D5.
+
 ## [0.7.2] - 2026-07-31
 
 ### Changed

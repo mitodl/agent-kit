@@ -89,7 +89,7 @@ export WITAN_AUTHOR="Your Name"
 |---|---|---|---|
 | `WITAN_MEMORY_URI` | No | `~/.local/share/witan/graph.omni` | Graph URI — local path, `s3://`, or `http://` |
 | `WITAN_MEMORY_TOKEN` | Only for `http://` | — | Bearer token for remote server auth |
-| `WITAN_AUTHOR` | No | `$USER` | Attribution on every insert |
+| `WITAN_AUTHOR` | No | `$USER` | Attribution on every insert. Local stdio only — a deployed server attributes each write to the calling user's JWT instead (see [ADR-0004](docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md)) |
 | `WITAN_REPO` | No | — | Repo slug override (bypasses git detection) |
 | `WITAN_SCAN_ENABLED` | No | `true` | Write-path secret/PII scanning; set to `false` to opt out — see [Write-path content scanning](docs/write-path-scanning.md) |
 | `WITAN_OPTIMIZE_INTERVAL` | No | `86400` | Throttle window (seconds) for the Stop hook's opportunistic background store compaction; `0` disables it |

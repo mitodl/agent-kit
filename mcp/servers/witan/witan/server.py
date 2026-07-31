@@ -143,6 +143,40 @@ def _resolve_client() -> OmnigraphClient:
     return _actor_clients[actor_id]
 
 
+def _current_author() -> str:
+    """The identity to attribute this request's writes to.
+
+    Sibling of :func:`_resolve_client`, which routes a write to the caller's
+    omnigraph client but never touches the ``author`` *value*. Without this,
+    every node a deployment writes carries the server container's configured
+    author, so ``workflow_trace_list(author=…)`` filters on a field with one
+    value deployment-wide and mined traces carry no usable provenance.
+
+    Local stdio use keeps ``cfg.author`` (``WITAN_AUTHOR`` / git config /
+    ``$USER``), which is already the right answer there. Same discriminator as
+    ``_resolve_client`` / ``_is_local_stdio``; ``get_access_token()`` returning
+    ``None`` under a deployment means an admin/migration CLI call rather than a
+    tool request, which likewise has no caller identity to attribute.
+
+    Prefers ``preferred_username`` so the value stays human-readable for author
+    filters and the ranking author-trust config, falling back to ``email`` and
+    then to the derived ``act-<sub>`` — the same id the token-mapping layer
+    uses, so attribution degrades to opaque-but-correct rather than to the
+    wrong user.
+    """
+    if _is_local_stdio():
+        return cfg.author
+    token = get_access_token()
+    if token is None:
+        return cfg.author
+    claims = token.claims
+    for claim in ("preferred_username", "email"):
+        value = claims.get(claim)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return derive_actor_id(claims.get("sub", ""))
+
+
 class _ActorScopedClient:
     """Proxy that delegates every attribute access to ``_resolve_client()``.
 
@@ -1412,7 +1446,7 @@ def _store_memory(
             "language": language,
             "category": category,
             "severity": severity,
-            "author": cfg.author,
+            "author": _current_author(),
             "tags": tags,
             "symbol_refs": symbol_refs,
             "confidence": confidence,
@@ -1954,7 +1988,7 @@ def workflow_project_create(
             "repos": repo_set or None,
             "status": "active",
             "phase": phase,
-            "author": cfg.author,
+            "author": _current_author(),
             "tags": tags,
             "github_issue": github_issue,
             "github_pr": None,
@@ -2257,7 +2291,7 @@ async def workflow_project_complete(
             "outcome": outcome,
             "lessons_slug": None,
             "patterns_slug": None,
-            "author": cfg.author,
+            "author": _current_author(),
             "tags": project.get("tags"),
             "created_at": now,
         },
@@ -2786,7 +2820,7 @@ def workflow_session_start(
             "repo": detected_repo,
             "phase": phase,
             "summary": "",
-            "author": cfg.author,
+            "author": _current_author(),
             "tags": tags,
             "started_at": now,
         },
@@ -3050,7 +3084,7 @@ async def task_create(
             "blocked_by": blocked_by,
             "assignee": None,
             "external_uri": external_uri,
-            "author": cfg.author,
+            "author": _current_author(),
             "symbol_refs": symbol_refs,
             "tags": tags,
             "created_at": now,
@@ -3269,9 +3303,10 @@ async def task_claim(
     slug:
         The ``tk-`` slug to claim.
     assignee:
-        Holder identity. Defaults to the configured author; parallel agents under
-        one identity should pass a distinct id (e.g. a session id) so claims don't
-        collide.
+        Holder identity. Defaults to the calling user (the JWT's
+        ``preferred_username`` when deployed, the configured author locally);
+        parallel agents under one identity should pass a distinct id (e.g. a
+        session id) so claims don't collide.
     force:
         Steal the task even if another holder's lease is still valid.
     """
@@ -3280,7 +3315,7 @@ async def task_claim(
     # last-write-wins (see docs/adr/0003 and the claim loop below). On success
     # also upserts a CodeBranch for the checkout's repo+branch and links it
     # WorksOn this task (best-effort).
-    holder = assignee or cfg.author
+    holder = assignee or _current_author()
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
@@ -3400,13 +3435,14 @@ def task_release(
     slug:
         The ``tk-`` slug to release.
     assignee:
-        Holder identity releasing the task. Defaults to the configured author.
+        Holder identity releasing the task. Defaults to the calling user, same
+        resolution as ``task_claim``'s ``assignee``.
     status:
         Status to return the task to (default ``open``).
     force:
         Release even if held by a different assignee.
     """
-    holder = assignee or cfg.author
+    holder = assignee or _current_author()
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
