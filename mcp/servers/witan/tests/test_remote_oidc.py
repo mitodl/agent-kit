@@ -14,7 +14,7 @@ import json
 import stat
 import time
 
-import httpx
+import httpx2
 import pytest
 
 from witan.config import RemoteConfig
@@ -61,8 +61,8 @@ _META = {
 }
 
 
-def _client(handler) -> httpx.Client:
-    return httpx.Client(transport=httpx.MockTransport(handler))
+def _client(handler) -> httpx2.Client:
+    return httpx2.Client(transport=httpx2.MockTransport(handler))
 
 
 def test_default_cache_path_is_under_config_witan(monkeypatch):
@@ -78,14 +78,14 @@ def test_env_override_redirects_cache(tmp_path):
 def test_login_round_trips_through_shim_and_caches(cfg, tmp_path):
     access = _jwt({"sub": "u-1", "preferred_username": "alice"})
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         if str(req.url) == _META["device_authorization_endpoint"]:
-            return httpx.Response(
+            return httpx2.Response(
                 200, json={"device_code": "d", "user_code": "WXYZ", "expires_in": 300}
             )
-        return httpx.Response(200, json={"access_token": access, "expires_in": 300})
+        return httpx2.Response(200, json={"access_token": access, "expires_in": 300})
 
     claims = oidc.login(
         cfg, on_prompt=lambda _d: None, client=_client(handler), sleep=lambda _s: None
@@ -114,11 +114,11 @@ def test_refresh_uses_cached_entry_at_witan_path(cfg):
         },
     )
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         assert "grant_type=refresh_token" in req.content.decode()
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={"access_token": fresh, "refresh_token": "r-new", "expires_in": 300},
         )
