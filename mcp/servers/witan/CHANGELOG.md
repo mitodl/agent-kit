@@ -34,6 +34,16 @@ a MINOR bump may include breaking changes).
   not part of `migrate all` — unlike the other migrations it makes a judgment
   call about corpus content.
 
+  Sharing a `session_id` is not on its own evidence of duplication, so only
+  sessions that overlap *in time* are considered — and overlap is transitive:
+  given `s1 [10:00-10:10]` and a retry `s2 [10:05-10:20]`, a session starting
+  10:12 is still a duplicate, because s2 was open and the fixed
+  `workflow_session_start` would have handed back its handle. Within an
+  overlapping run only members with no summary of their own are marked, keeping
+  the fullest summary as the survivor; a run where every member wrote a real
+  summary is reported for review rather than guessed at, and resolved with
+  `--supersede <duplicate>=<survivor>`.
+
 ### Fixed
 
 - **`workflow_session_start` is re-entrant, and no longer duplicates a session
@@ -44,7 +54,19 @@ a MINOR bump may include breaking changes).
   `WorkflowTrace`, so duplicates inflated the corpus and skewed anything mined
   from it. A call for a (`project_slug`, `session_id`) whose session is still
   open now returns that handle with `existed: true`, merging any newly-supplied
-  `repo`/`tags` into it.
+  `repo` and `tags` into it.
+
+  That check and the insert are not one atomic operation, so two *simultaneous*
+  starts — a client retrying while the first request is still in flight, or two
+  replicas handling one retry — can still both insert. The engine can't
+  arbitrate it the way it does for `task_claim`: optimistic concurrency detects
+  competing writes to one row, and these are two rows under two freshly-minted
+  slugs. So it is resolved immediately after the insert instead, by keeping the
+  earliest-started open session and superseding the rest. Writes serialize and a
+  reader sees every write that preceded it, so the racer who inserted second
+  always observes both rows, and keep-earliest is a rule both compute
+  identically — they converge on the same handle. Costs one extra read per *new*
+  session; the re-entrant path never reaches it.
 
   Idempotency is keyed on the *open* session rather than the pair alone,
   deliberately: one `$CLAUDE_SESSION_ID` routinely spans several working stints
