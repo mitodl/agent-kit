@@ -1,7 +1,11 @@
-"""Unit tests for the per-actor OmnigraphClient resolution path (ADR 0004 follow-up).
+"""Unit tests for the per-request identity path (ADR 0004 follow-up).
 
-No omnigraph binary required — ``OmnigraphClient`` construction inside
-``_resolve_client`` is monkeypatched to a lightweight fake.
+Covers both halves: ``_resolve_client`` (which omnigraph client performs the
+write) and ``_current_author`` (whose name the write is attributed to).
+
+The ``_resolve_client`` tests need no omnigraph binary — ``OmnigraphClient``
+construction is monkeypatched to a lightweight fake. The one end-to-end
+attribution test uses the real ``server`` fixture and skips without the binary.
 """
 
 import pytest
@@ -133,6 +137,98 @@ def test_deployed_mode_unprovisioned_actor_raises(deployed_mode, monkeypatch):
     monkeypatch.setattr(srv, "get_access_token", lambda: _FakeToken({"sub": "carol"}))
     with pytest.raises(LookupError, match="act-carol"):
         srv._resolve_client()
+
+
+def test_current_author_local_mode_ignores_jwt(local_mode, monkeypatch):
+    monkeypatch.setattr(srv, "cfg", srv.cfg.model_copy(update={"author": "Local Dev"}))
+    monkeypatch.setattr(
+        srv,
+        "get_access_token",
+        lambda: _FakeToken({"sub": "alice", "preferred_username": "alice"}),
+    )
+    assert srv._current_author() == "Local Dev"
+
+
+def test_current_author_deployed_without_token_falls_back_to_config(
+    deployed_mode, monkeypatch
+):
+    """An admin/migration CLI call inside the container has no caller identity."""
+    monkeypatch.setattr(srv, "cfg", srv.cfg.model_copy(update={"author": "witan-svc"}))
+    monkeypatch.setattr(srv, "get_access_token", lambda: None)
+    assert srv._current_author() == "witan-svc"
+
+
+def test_current_author_prefers_preferred_username(deployed_mode, monkeypatch):
+    monkeypatch.setattr(
+        srv,
+        "get_access_token",
+        lambda: _FakeToken(
+            {"sub": "uuid-1", "preferred_username": "tmacey", "email": "t@example.org"}
+        ),
+    )
+    assert srv._current_author() == "tmacey"
+
+
+def test_current_author_falls_back_to_email(deployed_mode, monkeypatch):
+    monkeypatch.setattr(
+        srv,
+        "get_access_token",
+        lambda: _FakeToken({"sub": "uuid-1", "email": "t@example.org"}),
+    )
+    assert srv._current_author() == "t@example.org"
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_current_author_skips_blank_display_claims(deployed_mode, monkeypatch, blank):
+    """A present-but-empty claim must not win over a usable one below it."""
+    monkeypatch.setattr(
+        srv,
+        "get_access_token",
+        lambda: _FakeToken(
+            {"sub": "uuid-1", "preferred_username": blank, "email": "t@example.org"}
+        ),
+    )
+    assert srv._current_author() == "t@example.org"
+
+
+def test_current_author_skips_non_string_display_claims(deployed_mode, monkeypatch):
+    monkeypatch.setattr(
+        srv,
+        "get_access_token",
+        lambda: _FakeToken({"sub": "uuid-1", "preferred_username": 42}),
+    )
+    assert srv._current_author() == "act-uuid-1"
+
+
+def test_current_author_last_resort_is_the_derived_actor_id(deployed_mode, monkeypatch):
+    """Same id the token-mapping layer uses — opaque, but never the wrong user."""
+    monkeypatch.setattr(srv, "get_access_token", lambda: _FakeToken({"sub": "Alice"}))
+    assert srv._current_author() == "act-alice"
+
+
+def test_current_author_trims_whitespace(deployed_mode, monkeypatch):
+    monkeypatch.setattr(
+        srv,
+        "get_access_token",
+        lambda: _FakeToken({"sub": "uuid-1", "preferred_username": "  tmacey  "}),
+    )
+    assert srv._current_author() == "tmacey"
+
+
+def test_deployed_memory_write_is_attributed_to_the_caller(
+    server, deployed_mode, monkeypatch
+):
+    """End-to-end: the stored node carries the JWT's user, not the server's config."""
+    monkeypatch.setattr(
+        srv,
+        "get_access_token",
+        lambda: _FakeToken({"sub": "uuid-1", "preferred_username": "tmacey"}),
+    )
+
+    stored = server.memory_store(kind="lesson", title="attributed", content="body")
+    rows = srv.client.read("read.gq", "get_memory", {"slug": stored["slug"]})
+
+    assert rows[0]["author"] == "tmacey"
 
 
 def test_actor_scoped_client_proxy_delegates_every_attribute(monkeypatch):
