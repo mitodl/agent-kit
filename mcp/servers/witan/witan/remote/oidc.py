@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-import httpx
+import httpx2
 from witan_core.remote.oidc import (
     DeviceAuth,
     NeedsLogin,
@@ -56,14 +56,14 @@ def login(
     cfg: RemoteConfig,
     *,
     on_prompt: Callable[[dict], None],
-    client: httpx.Client | None = None,
+    client: httpx2.Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict:
     """Run the device-authorization grant end to end and cache the token."""
     return _auth(cfg).login(on_prompt=on_prompt, client=client, sleep=sleep)
 
 
-def get_valid_token(cfg: RemoteConfig, *, client: httpx.Client | None = None) -> str:
+def get_valid_token(cfg: RemoteConfig, *, client: httpx2.Client | None = None) -> str:
     """Return a currently-valid access token, refreshing if needed."""
     return _auth(cfg).get_valid_token(client=client)
 

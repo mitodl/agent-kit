@@ -12,7 +12,7 @@ IdP's JWKS. :func:`decode_claims` is display-only.
 
 Server-specific policy is bound by the caller: the token-cache location and the
 ``login_hint`` woven into "run ``…``" messages are constructor args, so this
-module is server-agnostic. Requires the ``remote`` extra (``httpx``).
+module is server-agnostic. Requires the ``remote`` extra (``httpx2``).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Callable, Protocol
 
-import httpx
+import httpx2
 
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 _EXPIRY_SKEW_S = 30
@@ -55,7 +55,7 @@ class NeedsLogin(RemoteAuthError):
     """
 
 
-def _json(resp: httpx.Response, what: str) -> dict:
+def _json(resp: httpx2.Response, what: str) -> dict:
     """Parse a response body as JSON, or raise a clean RemoteAuthError.
 
     A provider (or an HTML proxy error in front of it) can return a 2xx with a
@@ -70,7 +70,7 @@ def _json(resp: httpx.Response, what: str) -> dict:
         ) from exc
 
 
-def _json_safe(resp: httpx.Response) -> dict:
+def _json_safe(resp: httpx2.Response) -> dict:
     """Best-effort dict parse for error bodies — never raises, {} on failure."""
     try:
         data = resp.json()
@@ -79,7 +79,7 @@ def _json_safe(resp: httpx.Response) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def discover_endpoints(issuer: str, *, client: httpx.Client | None = None) -> dict:
+def discover_endpoints(issuer: str, *, client: httpx2.Client | None = None) -> dict:
     """Fetch the realm's OIDC metadata (device + token endpoints).
 
     The document's own ``issuer`` must match the one we asked for (RFC 8414 §3.3,
@@ -91,12 +91,12 @@ def discover_endpoints(issuer: str, *, client: httpx.Client | None = None) -> di
     """
     url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
     owns = client is None
-    client = client or httpx.Client(timeout=15)
+    client = client or httpx2.Client(timeout=15)
     try:
         resp = client.get(url)
         resp.raise_for_status()
         meta = _json(resp, "OIDC metadata endpoint")
-    except httpx.HTTPError as exc:
+    except httpx2.HTTPError as exc:
         raise RemoteAuthError(
             f"Could not fetch OIDC metadata from {url}: {exc}"
         ) from exc
@@ -238,7 +238,7 @@ class DeviceAuth:
         self,
         *,
         on_prompt: Callable[[dict], None],
-        client: httpx.Client | None = None,
+        client: httpx2.Client | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> dict:
         """Run the device-authorization grant end to end and cache the token.
@@ -248,7 +248,7 @@ class DeviceAuth:
         wait. Returns the decoded JWT claims of the freshly-minted access token.
         """
         owns = client is None
-        client = client or httpx.Client(timeout=15)
+        client = client or httpx2.Client(timeout=15)
         try:
             meta = discover_endpoints(self._cfg.oidc_issuer, client=client)
             req = {**self._auth_params(), "scope": "openid"}
@@ -280,7 +280,7 @@ class DeviceAuth:
                     f"Device authorization failed: {err or tok.text!r}"
                 )
             raise RemoteAuthError("Device code expired before it was approved.")
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise RemoteAuthError(
                 f"Device authorization request failed: {exc}"
             ) from exc
@@ -288,7 +288,7 @@ class DeviceAuth:
             if owns:
                 client.close()
 
-    def _refresh(self, refresh_token: str, client: httpx.Client) -> dict:
+    def _refresh(self, refresh_token: str, client: httpx2.Client) -> dict:
         meta = discover_endpoints(self._cfg.oidc_issuer, client=client)
         resp = client.post(
             meta["token_endpoint"],
@@ -304,7 +304,7 @@ class DeviceAuth:
             )
         return self._store_token(_json(resp, "token endpoint"))
 
-    def get_valid_token(self, *, client: httpx.Client | None = None) -> str:
+    def get_valid_token(self, *, client: httpx2.Client | None = None) -> str:
         """Return a currently-valid access token, refreshing if needed.
 
         Raises :class:`NeedsLogin` when there is no cached token, or the cached
@@ -322,7 +322,7 @@ class DeviceAuth:
                 f"Session expired — run `{self._login_hint}` to re-authenticate."
             )
         owns = client is None
-        client = client or httpx.Client(timeout=15)
+        client = client or httpx2.Client(timeout=15)
         try:
             refreshed = self._refresh(entry["refresh_token"], client)
         finally:

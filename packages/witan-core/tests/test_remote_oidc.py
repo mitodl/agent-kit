@@ -2,7 +2,7 @@
 
 The transport-agnostic core of ADR-0005 path a. Each server binds its own
 cache path + login hint (see witan-council's shim); here we drive DeviceAuth
-directly against a tmp cache and an httpx.MockTransport.
+directly against a tmp cache and an httpx2.MockTransport.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import stat
 import time
 from dataclasses import dataclass
 
-import httpx
+import httpx2
 import pytest
 
 from witan_core.remote.oidc import (
@@ -58,8 +58,8 @@ _META = {
 }
 
 
-def _client(handler) -> httpx.Client:
-    return httpx.Client(transport=httpx.MockTransport(handler))
+def _client(handler) -> httpx2.Client:
+    return httpx2.Client(transport=httpx2.MockTransport(handler))
 
 
 def test_decode_claims_is_display_only():
@@ -72,11 +72,11 @@ def test_login_polls_until_approved_then_caches(auth, cache_path):
     access = _jwt({"sub": "u-1", "preferred_username": "alice"})
     calls = {"n": 0}
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         if str(req.url) == _META["device_authorization_endpoint"]:
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "device_code": "dev-code",
@@ -89,8 +89,8 @@ def test_login_polls_until_approved_then_caches(auth, cache_path):
         # token endpoint: pending twice, then success
         calls["n"] += 1
         if calls["n"] < 3:
-            return httpx.Response(400, json={"error": "authorization_pending"})
-        return httpx.Response(
+            return httpx2.Response(400, json={"error": "authorization_pending"})
+        return httpx2.Response(
             200,
             json={"access_token": access, "refresh_token": "r-1", "expires_in": 300},
         )
@@ -117,17 +117,17 @@ def test_login_slow_down_backs_off(auth):
     seen = []
     calls = {"n": 0}
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         if str(req.url) == _META["device_authorization_endpoint"]:
-            return httpx.Response(
+            return httpx2.Response(
                 200, json={"device_code": "d", "user_code": "C", "interval": 5}
             )
         calls["n"] += 1
         if calls["n"] == 1:
-            return httpx.Response(400, json={"error": "slow_down"})
-        return httpx.Response(200, json={"access_token": access, "expires_in": 60})
+            return httpx2.Response(400, json={"error": "slow_down"})
+        return httpx2.Response(200, json={"access_token": access, "expires_in": 60})
 
     auth.login(on_prompt=lambda _d: None, client=_client(handler), sleep=seen.append)
     # First sleep at base interval 5, second after slow_down bumps it to 10.
@@ -135,12 +135,12 @@ def test_login_slow_down_backs_off(auth):
 
 
 def test_login_access_denied_raises(auth):
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         if str(req.url) == _META["device_authorization_endpoint"]:
-            return httpx.Response(200, json={"device_code": "d", "user_code": "C"})
-        return httpx.Response(400, json={"error": "access_denied"})
+            return httpx2.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx2.Response(400, json={"error": "access_denied"})
 
     with pytest.raises(RemoteAuthError, match="access_denied"):
         auth.login(
@@ -149,8 +149,8 @@ def test_login_access_denied_raises(auth):
 
 
 def test_non_json_metadata_raises_clean_error():
-    def handler(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text="<html>proxy error</html>")
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, text="<html>proxy error</html>")
 
     from witan_core.remote.oidc import discover_endpoints
 
@@ -165,8 +165,8 @@ def test_issuer_mismatch_is_refused():
 
     evil = {**_META, "issuer": "https://attacker.example.net/realms/ol"}
 
-    def handler(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=evil)
+    def handler(_req: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=evil)
 
     with pytest.raises(RemoteAuthError, match="does not match the configured issuer"):
         discover_endpoints(_Endpoint().oidc_issuer, client=_client(handler))
@@ -177,8 +177,8 @@ def test_missing_issuer_is_refused():
 
     bare = {k: v for k, v in _META.items() if k != "issuer"}
 
-    def handler(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=bare)
+    def handler(_req: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=bare)
 
     with pytest.raises(RemoteAuthError, match="advertises issuer None"):
         discover_endpoints(_Endpoint().oidc_issuer, client=_client(handler))
@@ -190,8 +190,8 @@ def test_non_object_metadata_raises_clean_error(body):
     the issuer lookup — same failure class as the non-JSON case."""
     from witan_core.remote.oidc import discover_endpoints
 
-    def handler(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=body)
+    def handler(_req: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=body)
 
     with pytest.raises(RemoteAuthError, match="not a JSON object"):
         discover_endpoints(_Endpoint().oidc_issuer, client=_client(handler))
@@ -203,8 +203,8 @@ def test_trailing_slash_is_not_a_mismatch():
 
     slashed = {**_META, "issuer": f"{_Endpoint.oidc_issuer}/"}
 
-    def handler(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=slashed)
+    def handler(_req: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=slashed)
 
     meta = discover_endpoints(f"{_Endpoint().oidc_issuer}/", client=_client(handler))
     assert meta["token_endpoint"] == _META["token_endpoint"]
@@ -213,12 +213,12 @@ def test_trailing_slash_is_not_a_mismatch():
 def test_non_json_token_response_raises_not_crashes(auth):
     # A 200 with a non-JSON body on the token endpoint must surface as a clean
     # RemoteAuthError, not an unhandled JSONDecodeError.
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         if str(req.url) == _META["device_authorization_endpoint"]:
-            return httpx.Response(200, json={"device_code": "d", "user_code": "C"})
-        return httpx.Response(200, text="not json")
+            return httpx2.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx2.Response(200, text="not json")
 
     with pytest.raises(RemoteAuthError, match="non-JSON"):
         auth.login(
@@ -229,12 +229,12 @@ def test_non_json_token_response_raises_not_crashes(auth):
 def test_non_json_error_body_falls_through_to_generic_error(auth):
     # A non-JSON *error* body must not crash the poll loop; err defaults to ""
     # and we raise the generic failure carrying the raw text.
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         if str(req.url) == _META["device_authorization_endpoint"]:
-            return httpx.Response(200, json={"device_code": "d", "user_code": "C"})
-        return httpx.Response(400, text="<html>gateway timeout</html>")
+            return httpx2.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx2.Response(400, text="<html>gateway timeout</html>")
 
     with pytest.raises(RemoteAuthError, match="Device authorization failed"):
         auth.login(
@@ -247,16 +247,16 @@ def test_audience_is_sent_when_configured(cache_path):
     access = _jwt({"sub": "u"})
     seen: list[dict] = []
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         # Capture the posted form for both device-auth and token calls.
         from urllib.parse import parse_qs
 
         seen.append({k: v[0] for k, v in parse_qs(req.content.decode()).items()})
         if str(req.url) == _META["device_authorization_endpoint"]:
-            return httpx.Response(200, json={"device_code": "d", "user_code": "C"})
-        return httpx.Response(200, json={"access_token": access, "expires_in": 60})
+            return httpx2.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx2.Response(200, json={"access_token": access, "expires_in": 60})
 
     auth.login(
         on_prompt=lambda _d: None, client=_client(handler), sleep=lambda _s: None
@@ -268,15 +268,15 @@ def test_audience_absent_when_not_configured(auth):
     access = _jwt({"sub": "u"})
     seen: list[dict] = []
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         from urllib.parse import parse_qs
 
         seen.append({k: v[0] for k, v in parse_qs(req.content.decode()).items()})
         if str(req.url) == _META["device_authorization_endpoint"]:
-            return httpx.Response(200, json={"device_code": "d", "user_code": "C"})
-        return httpx.Response(200, json={"access_token": access, "expires_in": 60})
+            return httpx2.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx2.Response(200, json={"access_token": access, "expires_in": 60})
 
     auth.login(
         on_prompt=lambda _d: None, client=_client(handler), sleep=lambda _s: None
@@ -302,13 +302,13 @@ def test_get_valid_token_refreshes_when_expired(auth):
         }
     )
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         # token endpoint — expect a refresh_token grant
         body = req.content.decode()
         assert "grant_type=refresh_token" in body
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={"access_token": fresh, "refresh_token": "r-new", "expires_in": 300},
         )
@@ -327,10 +327,10 @@ def test_get_valid_token_refresh_rejected_needs_login(auth):
         }
     )
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
-        return httpx.Response(400, json={"error": "invalid_grant"})
+            return httpx2.Response(200, json=_META)
+        return httpx2.Response(400, json={"error": "invalid_grant"})
 
     with pytest.raises(NeedsLogin):
         auth.get_valid_token(client=_client(handler))
