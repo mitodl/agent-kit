@@ -541,9 +541,32 @@ Manual install: register the bare commands directly under the matching event
 in `settings.json` (see the linked README for the exact JSON) — there are no
 scripts to symlink.
 
+## What gets indexed
+
+The walk skips the usual noise directories (`.git`, `node_modules`, `.venv`,
+`__pycache__`, `dist`, `build`, the various caches) and — importantly — does
+not descend into a **nested checkout**: any subdirectory containing a `.git`
+entry belongs to a different repository. That covers linked worktrees
+(`.claude/worktrees/<name>/`, where `.git` is a *file*, not a directory),
+submodules, and plain clones dropped inside the tree. Their files are that
+repo's; indexing them here would attribute them to this one and leave the
+store serving stale copies of itself under a second set of paths.
+
+Indexing *from inside* a worktree still works normally — only descending into
+one from the parent is refused — so the hooks keep indexing while an agent
+works on a branch.
+
 ## Incremental indexing
 
 Each `CodeFile` stores a sha256 `contentHash`. On reindex, if the hash is
 unchanged the file is skipped. Otherwise its `Symbol`s and `CodeFile` are
 deleted (as separate `delete.gq` calls — Omnigraph cannot mix deletes with
 inserts in one query) and then re-parsed and re-inserted.
+
+A **full-repo** index additionally purges rows for files the repo no longer
+has — deleted, or newly excluded by the rules above. Membership is decided by
+the set of files just collected, not by whether the file still exists on disk:
+a linked worktree's files are very much on disk, they simply aren't this
+repo's. The count is reported as `purged=N` when non-zero. Purging requires a
+confirmed git root; indexing a subpath, a single file (the reindex hook), or a
+directory that isn't a git checkout never purges.

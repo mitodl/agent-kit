@@ -32,16 +32,22 @@ def write_bindings(
     identity: package_map.PackageIdentity | None = None,
     base: Path | None = None,
     branch: str | None = None,
+    indexed_files: frozenset[str] | None = None,
 ) -> int:
     """Purge stale bindings and merge in fresh ones for ``repo``.
 
     Purging is always per-file: the files (re)parsed this run, the files the
     fresh batch carries bindings for (covers Tier B sources like OpenAPI
-    specs, which aren't in ``touched_files``), and — on a full-repo run with
-    ``base`` — files whose stored bindings no longer exist on disk. An
-    incremental full-repo index skips unchanged files, so a repo-wide purge
-    here would drop those files' bindings with nothing in the batch to
-    restore them.
+    specs, which aren't in ``touched_files``), and — on a full-repo run — the
+    files that are no longer part of the repo. An incremental full-repo index
+    skips unchanged files, so a repo-wide purge here would drop those files'
+    bindings with nothing in the batch to restore them.
+
+    ``indexed_files`` is the indexer's collected set (repo-relative paths) and
+    is the accurate membership test for that last group: a file can still be
+    on disk yet no longer belong to this repo — a linked worktree's files are
+    the case that motivated it. Callers that don't have the set fall back to
+    an on-disk existence check against ``base``, which catches deletions only.
 
     Store-level confidence adjustments (self_provided_key, known_provider_package)
     are applied here before writing. The cross-repo half of each signal is
@@ -90,13 +96,17 @@ def write_bindings(
     repo_symbol_rows = _read_repo_symbols(client) if has_endpoint_consumers else []
 
     purge_files = set(touched_files) | {b.file for b in bindings}
-    if full_repo and base is not None:
+    if full_repo and (indexed_files is not None or base is not None):
+
+        def _gone(rel: str) -> bool:
+            if indexed_files is not None:
+                return rel not in indexed_files
+            return not (base / rel).exists()
+
         purge_files |= {
             r["file"]
             for r in all_rows
-            if r.get("repo") == repo
-            and r.get("file")
-            and not (base / r["file"]).exists()
+            if r.get("repo") == repo and r.get("file") and _gone(r["file"])
         }
     for rel in sorted(purge_files):
         client.change(

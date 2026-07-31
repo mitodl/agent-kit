@@ -591,6 +591,9 @@ def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:
         f"scanned={stats.scanned} indexed={stats.indexed} "
         f"skipped={stats.skipped} symbols={stats.symbols} "
         f"edges={stats.edges} bindings={stats.bindings} errors={stats.errors}"
+        # Only when it happened: a purge is newsworthy (rows were deleted),
+        # but printing purged=0 on every routine index is noise.
+        + (f" purged={stats.purged}" if stats.purged else "")
     )
 
 
