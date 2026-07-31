@@ -23,10 +23,12 @@ from witan_core import now_iso
 from . import bridge as bridge_module
 from . import bridge_extractors
 from . import config as cfg_module
+from . import identity as identity_module
 from . import package_map
 from . import repo as repo_module
+from . import views
 from .bridge_extractors import ParsedBinding
-from .graph import OmnigraphClient, check_writable
+from .graph import OmnigraphClient, check_writable, owns_view
 from .store import ensure_store
 
 # ── Language support ──────────────────────────────────────────────
@@ -275,14 +277,20 @@ def index_path(
         slug = (target if target.is_dir() else target.parent).name
     base = repo_root or (target if target.is_dir() else target.parent)
 
-    # Non-default git branches index onto the same-named omnigraph branch,
-    # forked from main on first write (docs/BRANCH_INDEXING.md), so in-flight
-    # work never overwrites the shared main view and stays visible per-branch.
-    branch = repo_module.store_branch(base) if repo_root else None
+    # Non-default git branches index onto their own omnigraph branch, forked
+    # from main on first write (docs/BRANCH_INDEXING.md), so in-flight work
+    # never overwrites the shared main view and stays visible per-branch. The
+    # view is named for its writer as well as the git branch
+    # (:mod:`witan_code.views`): on a shared graph the git branch alone is not
+    # a unique key — two checkouts on `feature-x` are two working trees — and
+    # the un-namespaced name is what let them overwrite each other.
+    actor = identity_module.actor_id()
+    git_branch = repo_module.store_branch(base) if repo_root else None
+    branch = views.repo_view(git_branch, actor=actor) if git_branch else None
 
     store = ensure_store(slug, cfg)
     client = OmnigraphClient(str(store), cfg.queries_dir, branch=branch)
-    check_writable(client=client, branch=branch, cfg=cfg, slug=slug)
+    check_writable(client=client, branch=branch, cfg=cfg, slug=slug, actor=actor)
     # The hash read below never forks; create the branch before reading.
     client.ensure_branch()
 
@@ -339,7 +347,9 @@ def index_path(
         repo_root=repo_root,
         walk_errors=walk_errors,
         client=client,
-        writer=cfg.is_designated_writer,
+        branch=branch,
+        cfg=cfg,
+        actor=actor,
     )
 
     # Drop stale data for changed files (new files have nothing to delete), then
@@ -386,7 +396,8 @@ def index_path(
             touched_files=tuple(touched_files),
             identity=package_map.load(base, slug),
             base=base,
-            branch=branch,
+            branch=git_branch,
+            actor=actor,
             indexed_files=frozenset(indexed_rel) if can_purge else None,
         )
     except Exception as exc:  # noqa: BLE001 — bridge is best-effort, never fatal
@@ -426,7 +437,9 @@ def _may_purge(
     repo_root: Path | None,
     walk_errors: list[OSError],
     client: OmnigraphClient,
-    writer: bool = False,
+    branch: str | None,
+    cfg: cfg_module.Config,
+    actor: str | None,
 ) -> bool:
     """Whether this run is entitled to delete rows for files it did not collect.
 
@@ -441,20 +454,19 @@ def _may_purge(
       stale.
     - ``walk_errors``: a directory the walk could not read is indistinguishable
       from one that was deleted, so its files would go while sitting on disk.
-    - ``client.is_remote`` unless ``writer``: a shared cluster graph is not an
-      arbitrary machine's to reconcile. One developer's working tree — sparse
-      checkout, stale checkout, local deletions — would otherwise purge files
-      for everyone on the shared ``main`` view. The designated writer (CI, via
-      ``WITAN_CODE_INDEX_ROLE``) is the exception, and needs it: dropping rows
-      for files deleted from the default branch is precisely its job. Note the
-      right comes from the declared role, never from being remote — the CI
-      indexer is remote and so is every reader.
+    - :func:`~witan_code.graph.owns_view`: the same predicate that decides
+      whether this process may WRITE the view at all, because deleting from a
+      view you do not own is the more destructive half of that. It answers
+      "CI owns the shared default view" and "an actor owns its own branch
+      views" in one place — the earlier "remote and not the designated writer"
+      rule got the first right and the second wrong, refusing a developer the
+      purge of their OWN branch view, where deleted files therefore lingered.
     """
     return (
         full_repo
         and repo_root is not None
         and not walk_errors
-        and (writer or not client.is_remote)
+        and owns_view(is_remote=client.is_remote, branch=branch, cfg=cfg, actor=actor)
     )
 
 

@@ -98,6 +98,9 @@ class _Target(BaseModel):
     index_role: str | None = None
     """``ci`` designates this target's indexer as the writer of the shared
     default-branch view. See :data:`INDEX_ROLES` and ``Config.index_role``."""
+    actor: str | None = None
+    """Overrides the OIDC-derived identity that owns this target's branch
+    views — an ``act-…`` id or a raw ``sub``. See ``witan_code.identity``."""
     match_orgs: list[str] = Field(default_factory=list)
     match_repos: list[str] = Field(default_factory=list)
     match_hosts: list[str] = Field(default_factory=list)

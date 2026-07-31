@@ -41,6 +41,21 @@ def main():
 """
 
 
+@pytest.fixture(autouse=True)
+def _fresh_identity():
+    """Forget the process-lifetime actor between tests.
+
+    ``identity.actor_id`` memoizes deliberately (a witan-code process writes as
+    exactly one identity), which without this would let the first test that
+    resolves one decide the branch-view names for every test after it.
+    """
+    from witan_code import identity
+
+    identity.reset_cache()
+    yield
+    identity.reset_cache()
+
+
 @pytest.fixture
 def sample_repo(tmp_path, monkeypatch):
     """A tiny source tree plus a configured, isolated code store."""

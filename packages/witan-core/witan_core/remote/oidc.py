@@ -339,6 +339,22 @@ class DeviceAuth:
                 client.close()
         return refreshed["access_token"]
 
+    def cached_claims(self) -> dict:
+        """Claims of the cached access token for this deployment, or ``{}``.
+
+        Deliberately offline and expiry-blind, unlike
+        :meth:`get_valid_token`: the only thing read through here is *who the
+        user is* (``sub``), which does not change when a token expires and is
+        still the right answer while a refresh is pending. Callers that need
+        to actually *call* the deployment use ``get_valid_token``; callers
+        that only need an identity — witan-code naming the branch views it
+        owns — must not pay a network round trip, or block, to learn it.
+        """
+        entry = self._load_cache().get(self._cache_key())
+        if not entry:
+            return {}
+        return decode_claims(entry.get("access_token", ""))
+
     def logout(self) -> bool:
         """Drop the cached token for this deployment. True if one existed."""
         cache = self._load_cache()

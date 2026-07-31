@@ -306,6 +306,7 @@ symlink alternative:
 | `WITAN_REPO` | — | override the detected repo slug |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
 | `WITAN_CODE_INDEX_ROLE` | `client` | `ci` designates this process the writer of a shared graph's default-branch view. Only meaningful against a shared cluster graph; local stores are unaffected. See [Branch indexing](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view) |
+| `WITAN_ACTOR` | derived from the `witan login` session | the identity that owns the branch views this process writes; an `act-…` id or a raw OIDC `sub`. For a non-interactive writer (CI, a maintenance job). See [Branch indexing](docs/BRANCH_INDEXING.md#per-writer-branch-views) |
 | `WITAN_CONFIG` | `~/.config/witan/config.toml` | config file path (see below) |
 | `WITAN_TARGET` | — | force a named `[targets.<name>]` block instead of auto-detecting one |
 | `WITAN_REMOTE_URL` | — | a deployed witan MCP endpoint; routes the read commands through it (see [Remote mode](#remote-mode)) |
@@ -385,7 +386,7 @@ graph):
 | Tool | Returns |
 |------|---------|
 | `code_indexed_repos()` | every indexed repo with file count, size, and last-indexed timestamp |
-| `code_indexed_branches()` | the omnigraph branches each repo's store carries |
+| `code_indexed_branches(branch=None)` | the in-flight branch views each repo's store carries, and who owns each; pass a git branch to see every writer's view of it |
 
 ## CLI
 
@@ -396,10 +397,13 @@ graph):
 - `index [PATH]` — incremental; skips files whose content hash is unchanged.
 - `reindex [PATH]` — force rebuild a path.
 - `repos` — list all indexed repos with file count, symbol count, and store size.
-- `branches [--prune]` — list omnigraph branches per store; `--prune` deletes
-  the current repo's store branches whose git branch is gone (plus
-  `_detached`). Non-default git branches index onto same-named omnigraph
-  branches so in-flight work never overwrites the shared `main` view — see
+- `branches [--branch B] [--prune]` — list the in-flight branch views per
+  store; `--branch` shows every writer's view of one git branch (how you find
+  a teammate's WIP — pass a listed view name to a read command's `--branch`),
+  `--prune` deletes the current repo's views whose git branch is gone (plus
+  `_detached`). A non-default git branch indexes onto its own view, named for
+  its writer as well as the branch, so in-flight work neither overwrites the
+  shared `main` view nor another checkout of the same branch — see
   [docs/BRANCH_INDEXING.md](docs/BRANCH_INDEXING.md).
 - `deps [--kind K] [--repo SUBSTR] [--html PATH] [--open-browser]` —
   visualize cross-repo dependencies from the bridge store. Prints a Rich

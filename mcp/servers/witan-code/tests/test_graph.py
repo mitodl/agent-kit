@@ -47,12 +47,19 @@ def _cfg(role: str = cfg_module.INDEX_ROLE_CLIENT) -> cfg_module.Config:
     )
 
 
-def _check(*, remote: bool, branch: str | None, role: str) -> None:
+def _check(
+    *,
+    remote: bool,
+    branch: str | None,
+    role: str = cfg_module.INDEX_ROLE_CLIENT,
+    actor: str | None = "act-alice",
+) -> None:
     check_writable(
         client=SimpleNamespace(is_remote=remote),
         branch=branch,
         cfg=_cfg(role),
         slug="https://github.com/test/a",
+        actor=actor,
     )
 
 
@@ -73,13 +80,46 @@ def test_designated_writer_may_write_the_shared_default_branch_view():
     _check(remote=True, branch=None, role=cfg_module.INDEX_ROLE_CI)
 
 
-def test_shared_branch_view_is_not_the_default_view():
-    """A branch-scoped write is isolated from the view everyone reads, so it
-    is not what this gate is protecting."""
-    _check(remote=True, branch="feature-x", role=cfg_module.INDEX_ROLE_CLIENT)
-
-
 def test_refusal_names_the_way_out():
     with pytest.raises(SharedGraphWriteRefused) as excinfo:
         _check(remote=True, branch=None, role=cfg_module.INDEX_ROLE_CLIENT)
     assert "WITAN_CODE_INDEX_ROLE=ci" in str(excinfo.value)
+
+
+# ── Branch views: readable by everyone, writable only by their owner ─────────
+#
+# Branch views live ON the shared graph, so isolation cannot come from where
+# they live. It comes from the name — `<actor>/<branch>` — and this gate.
+
+
+def test_an_actor_may_write_its_own_branch_view():
+    """No role needed: a view prefixed with your own actor cannot reach the
+    default view everyone falls back to."""
+    _check(remote=True, branch="act-alice/feature-x", actor="act-alice")
+
+
+def test_another_actors_branch_view_is_refused():
+    """The collision this whole scheme exists to prevent, in its explicit
+    form: writing where the name says someone else writes."""
+    with pytest.raises(SharedGraphWriteRefused, match="owned by act-bob"):
+        _check(remote=True, branch="act-bob/feature-x", actor="act-alice")
+
+
+def test_an_unnamespaced_branch_view_is_refused_on_a_shared_graph():
+    """`feature-x` with no owner is what two checkouts on the same git branch
+    used to share — and overwrite."""
+    with pytest.raises(SharedGraphWriteRefused, match="owned by nobody"):
+        _check(remote=True, branch="feature-x", actor="act-alice")
+
+
+def test_a_shared_branch_view_needs_an_identity_to_own_it():
+    """No login, no ownership. The message has to say so — the alternative is
+    an un-owned view landing on the shared graph."""
+    with pytest.raises(SharedGraphWriteRefused, match="witan login"):
+        _check(remote=True, branch="feature-x", actor=None)
+
+
+def test_local_branch_views_need_no_actor():
+    """A local store has one user, who owns every view in it — unchanged
+    names, no migration, no login required to index offline."""
+    _check(remote=False, branch="feature-x", actor=None)

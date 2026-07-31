@@ -12,6 +12,7 @@ from witan_core import now_iso
 
 from . import config as cfg_module
 from . import package_map
+from . import views
 from .bridge_extractors import (
     ParsedBinding,
     adjust_confidence,
@@ -32,6 +33,7 @@ def write_bindings(
     identity: package_map.PackageIdentity | None = None,
     base: Path | None = None,
     branch: str | None = None,
+    actor: str | None = None,
     indexed_files: frozenset[str] | None = None,
 ) -> int:
     """Purge stale bindings and merge in fresh ones for ``repo``.
@@ -58,16 +60,21 @@ def write_bindings(
     write yet (that happens further down), so it's read directly from the
     surviving + fresh bindings already in hand.
 
-    ``branch`` is the per-repo omnigraph branch name (``repo_module.
-    store_branch()`` — already sanitized, ``None`` for the default git
-    branch). When set, every read/write in this call targets the
-    repo-qualified bridge branch ``<sanitized-repo-slug>/<branch>``
-    (docs/BRANCH_INDEXING.md § Bridge store) instead of bridge ``main``: an
-    overlay forked once from bridge main, so it starts as every repo's main
-    bindings and then only ``repo``'s own writes land on it — the shared
-    main view never sees in-flight branch bindings, while a read scoped to
-    this branch sees this repo's in-flight state overlaid on everyone else's
-    (possibly since-updated) main.
+    ``branch`` is the sanitized git branch (``repo_module.store_branch()``,
+    ``None`` for the default git branch) and ``actor`` the identity writing
+    it. When ``branch`` is set, every read/write in this call targets the
+    bridge view ``[<actor>/]<sanitized-repo-slug>/<branch>``
+    (:mod:`witan_code.views`, docs/BRANCH_INDEXING.md § Bridge store) instead
+    of bridge ``main``: an overlay forked once from bridge main, so it starts
+    as every repo's main bindings and then only ``repo``'s own writes land on
+    it — the shared main view never sees in-flight branch bindings, while a
+    read scoped to this branch sees this repo's in-flight state overlaid on
+    everyone else's (possibly since-updated) main.
+
+    The repo qualifier is what keeps ``feature-x`` in two repos apart on the
+    one bridge graph; the actor qualifier is what keeps ``feature-x`` in two
+    *checkouts* of the same repo apart. Both are needed and they compose in
+    that order — actor first, so ownership stays a prefix of the name.
 
     Returns the number of binding records written.
     """
@@ -77,14 +84,18 @@ def write_bindings(
 
     identity = identity or package_map.fallback_identity(repo)
     store = ensure_bridge_store(cfg)
-    bridge_branch = f"{cfg_module.sanitize_slug(repo)}/{branch}" if branch else None
+    bridge_branch = views.bridge_view(branch, repo, actor=actor) if branch else None
     client = OmnigraphClient(str(store), cfg.queries_dir, branch=bridge_branch)
     # Bridge main is shared by every repo, and `delete_repo_symbols` below wipes
     # a repo's whole Stage-1 table — the same CI-owns-the-default-view rule as
     # the per-repo store. Checked here too rather than relying on the caller's:
     # the bridge is a distinct store with its own addressing.
     check_writable(
-        client=client, branch=bridge_branch, cfg=cfg, slug=f"{repo} (bridge)"
+        client=client,
+        branch=bridge_branch,
+        cfg=cfg,
+        slug=f"{repo} (bridge)",
+        actor=actor,
     )
     # The reads below never fork; create the branch (from bridge main) first.
     client.ensure_branch()

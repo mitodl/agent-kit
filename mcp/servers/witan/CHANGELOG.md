@@ -8,6 +8,16 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **`derive_actor_id` moved to `witan_core.identity`.** witan-code needs the
+  same ADR-0004 `sub` → `act-<id>` mapping client-side, to name the code-graph
+  branch views a writer owns; a view named by one derivation and authorized
+  against another would be a bug with no symptom until two users collide on
+  it. `witan.identity` re-exports it, so `from witan.identity import
+  derive_actor_id` is unchanged. `ActorTokenResolver` stays here — reading the
+  provisioned token map is server-side only.
+
 ### Added
 
 - **`workflow_project_update` — the missing post-creation edit path.** Until now
