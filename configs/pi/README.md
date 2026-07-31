@@ -15,7 +15,8 @@ so the omnigraph trackers work the same under Pi.
   - `session_start`: seeds/refreshes the whole repo's Layer-2 code graph in the background.
   - `tool_call`/`tool_result` (`edit`/`write`): incrementally re-indexes the edited file.
   - `before_agent_start`: reports whether the code graph is indexed (file count,
-    last-updated) or still being built, with a nudge toward `code_*` tools over grep.
+    last-updated) or still being built, plus cross-repo coverage and the
+    `ToolSearch` + `code_find_definition` calls to make against it.
   - `session_shutdown`: opportunistically compacts the current repo's store and
     the shared bridge store (throttled) — has no session-id dependency, so it
     *is* mirrored under Pi.

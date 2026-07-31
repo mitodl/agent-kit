@@ -528,7 +528,11 @@ A Pi equivalent of all four lives in one extension,
 - **`witan-code inject-context`** (`UserPromptSubmit`) — prints a short status
   block: whether the current repo is indexed (file count, last-updated time),
   or that a background index from `session-init` is still running (checking
-  the same lock path above), plus a nudge to prefer `code_*` tools over grep.
+  the same lock path above), how many *other* repos are indexed (so the agent
+  can tell "no cross-repo consumers" from "no cross-repo data"), and the
+  `ToolSearch` call that makes the `code_*` tools callable when the harness
+  delivers them deferred — followed by a `code_find_definition` →
+  `code_callers`/`code_impact` call template.
   Independent of `witan`'s own `inject-context` hook (no cross-package
   coupling) — register it alone for a witan-code-only install. Prints
   nothing when the repo has neither a store nor an index in flight.

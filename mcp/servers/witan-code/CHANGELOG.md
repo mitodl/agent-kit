@@ -33,6 +33,27 @@ a MINOR bump may include breaking changes).
   the view being written") are noted in the doc and not in this change. See
   [docs/BRANCH_INDEXING.md](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view).
 
+### Changed
+
+- **The `inject-context` block now names a call instead of stating a
+  preference.** The old block ended with "prefer `code_search_symbol` /
+  `code_find_definition` / ... over grep", which measured badly: across 50
+  sessions in `agent-kit` that received it, the block was injected 248 times
+  and produced 5 `code_*` calls against 802 Grep/Read/Glob/Explore calls, with
+  46 of the 50 sessions never calling a `code_*` tool at all. The cause is that
+  the `code_*` tools reach the agent **deferred** — name only, no schema, a
+  `ToolSearch` round-trip short of callable — in 50 of 50 of those sessions,
+  while Grep/Read/Glob are always loaded. Preferring a tool that is not in the
+  tool list is not an actionable instruction. The block now leads with the
+  `ToolSearch(query="+code_ find_definition callers impact")` that makes them
+  callable (the `+code_` form is used because `select:` needs the full
+  `mcp__<server>__` prefix, which depends on the user's MCP config), gives a
+  `code_find_definition` → `symbol_id` → `code_callers`/`code_impact` template
+  to fill in, reports how many *other* repos are indexed so an empty
+  `code_interface_*` result is not misread as "nothing consumes this", and
+  points at the `/witan-code` skill. Net cost is ~110 chars per prompt; a
+  regression test caps the whole block at 600.
+
 ### Fixed
 
 - **`branches --prune` no longer prunes a shared graph.** It deletes store
