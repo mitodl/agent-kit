@@ -157,6 +157,17 @@ tools, so `RemoteServerProxy` raises a clear "run in-cluster as
     client-side. On witan's tools that means "detect the current repo", but on
     witan-code's bridge-wide tools it means "every indexed repo", so injecting
     a detected repo would silently narrow the result.
+
+    **The coupling is deliberate: there is no `WITAN_CODE_REMOTE_URL`.** Both
+    CLIs read the one set of keys, so configuring a deployment sends *both*
+    remote — you cannot point witan-council at a deployment while keeping
+    witan-code's reads local. That follows from the topology (one endpoint
+    serving both tool surfaces) and keeps one precedence chain instead of two.
+    A `[targets.<name>]` block still discriminates by repo or checkout path,
+    just not by tool surface. Decided 2026-07-31 for the joint case, which is
+    how these are deployed and run today; revisit if a real "remote memory,
+    local code graph" need appears, since a per-server override would be
+    purely additive and break no existing config.
 - **Known v1 limitation:** `RemoteServerProxy` opens a fresh MCP connection per
   tool call, so a single CLI command that fans out to several tools pays
   several MCP handshakes. Acceptable for interactive CLI use; a persistent
