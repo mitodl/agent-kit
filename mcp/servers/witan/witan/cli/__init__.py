@@ -87,7 +87,7 @@ def serve(
     try:
         from witan_code.server import mcp as code_mcp
 
-        witan_mcp.mount(code_mcp, prefix=None)
+        witan_mcp.mount(code_mcp)
     except ImportError:
         pass
 
