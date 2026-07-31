@@ -500,27 +500,37 @@ def _has_own_summary(session: dict) -> bool:
 def _overlap_runs(sessions: list[dict]) -> list[list[dict]]:
     """Split one (project, session_id) group into runs of overlapping sessions.
 
-    A run is an anchor plus every later session that started while the anchor
-    was still open — exactly the condition ``workflow_session_start`` now
-    refuses to create. A session starting after the anchor ended opens a new
-    run: it's the next working stint of the same ``$CLAUDE_SESSION_ID``, not a
-    duplicate. Single-element runs are dropped; they have nothing to reconcile.
+    A run is a session plus every later one that started while **any** member of
+    the run was still open — exactly the condition ``workflow_session_start``
+    now refuses to create. A session starting after every member has ended opens
+    a new run instead: it's the next working stint of the same
+    ``$CLAUDE_SESSION_ID``, not a duplicate. Single-element runs are dropped;
+    they have nothing to reconcile.
+
+    Overlap is transitive, hence tracking the run's furthest end rather than
+    comparing against its first session: given s1 [10:00-10:10] and a retry
+    s2 [10:05-10:20], a third session starting 10:12 is still a duplicate — s1
+    had ended, but s2 was open, so the fixed ``workflow_session_start`` would
+    have handed back s2's handle. A member that never ended (``has_open``)
+    leaves the run open indefinitely.
     """
     runs: list[list[dict]] = []
     current: list[dict] = []
-    anchor: dict | None = None
+    has_open = False
+    max_end = ""
+
     for s in sorted(sessions, key=lambda r: r.get("started_at") or ""):
-        overlaps = anchor is not None and (
-            not anchor.get("ended_at")
-            or (s.get("started_at") or "") < anchor["ended_at"]
-        )
-        if overlaps:
-            current.append(s)
-        else:
+        overlaps = has_open or (s.get("started_at") or "") < max_end
+        if current and not overlaps:
             if len(current) > 1:
                 runs.append(current)
-            current = [s]
-            anchor = s
+            current, has_open, max_end = [], False, ""
+        current.append(s)
+        end = s.get("ended_at")
+        if end:
+            max_end = max(max_end, end)
+        else:
+            has_open = True
     if len(current) > 1:
         runs.append(current)
     return runs
@@ -2397,8 +2407,9 @@ def workflow_project_update(
     current = rows[0]
 
     # Canonicalize every caller-supplied repo the same way `repo.detect` does,
-    # so a differently-cased spelling adds a near-duplicate rather than a
-    # duplicate — and so `remove_repos` matches what's actually stored.
+    # so a differently-cased spelling of a repo already in the set updates that
+    # entry instead of adding a near-duplicate beside it — and so `remove_repos`
+    # matches what's actually stored.
     def _canon(values: list[str] | None) -> list[str]:
         return _merge_repos([normalise(r) for r in values or [] if r])
 
@@ -3098,8 +3109,8 @@ def workflow_session_start(
     session is still open returns that same handle with ``existed: true``
     instead of minting a second node — so a hook retry, a transport reconnect,
     or the replica failover the paragraph above warns about can't silently
-    duplicate a session. A newly-supplied ``repo``/``tags`` is merged into the
-    existing session; ``phase`` is left at what the first call set (use
+    duplicate a session. Any newly-supplied ``repo`` and ``tags`` are merged
+    into the existing session; ``phase`` is left at what the first call set (use
     ``workflow_project_advance`` to move a project's phase). Once a session has
     been ended, the same ``session_id`` starts a fresh session — one
     ``$CLAUDE_SESSION_ID`` legitimately spans several working stints.

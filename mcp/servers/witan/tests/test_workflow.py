@@ -1034,3 +1034,52 @@ def test_dedupe_ignores_the_stop_hook_placeholder_summary(server):
     result = srv.migrate_dedupe_sessions(apply=True)
     assert result["marked"] == {auto: anchor}
     assert result["needs_review"] == []
+
+
+@requires_omnigraph
+def test_dedupe_follows_transitive_overlap_chains(server):
+    """Overlap is transitive. s1 has ended by the time s3 starts, but s2 — itself
+    a retry — is still open, so the fixed workflow_session_start would have
+    handed back s2's handle and s3 would never have existed. Comparing only
+    against the run's first session would miss it."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="dedupe chain", description="d")
+    sid = uuid.uuid4().hex
+    s1 = _plant_session(
+        srv, proj["slug"], sid, "2026-05-01T10:00:00Z", "2026-05-01T10:10:00Z", "real"
+    )
+    s2 = _plant_session(
+        srv, proj["slug"], sid, "2026-05-01T10:05:00Z", "2026-05-01T10:20:00Z", ""
+    )
+    s3 = _plant_session(
+        srv, proj["slug"], sid, "2026-05-01T10:12:00Z", "2026-05-01T10:15:00Z", ""
+    )
+    # s3 starts after s1 ended — only s2's still-open window links it to the run.
+    result = srv.migrate_dedupe_sessions(apply=True)
+    assert result["marked"] == {s2: s1, s3: s1}
+    assert [s["slug"] for s in srv._project_sessions(proj["slug"])] == [s1]
+
+
+@requires_omnigraph
+def test_dedupe_run_ends_when_every_member_has_closed(server):
+    """The mirror of the chain case: once the whole run has closed, the next
+    session is a new stint, not a duplicate — however long the run ran."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="dedupe chain end", description="d")
+    sid = uuid.uuid4().hex
+    s1 = _plant_session(
+        srv, proj["slug"], sid, "2026-06-01T10:00:00Z", "2026-06-01T10:10:00Z", "first"
+    )
+    dup = _plant_session(
+        srv, proj["slug"], sid, "2026-06-01T10:05:00Z", "2026-06-01T10:20:00Z", ""
+    )
+    later = _plant_session(
+        srv, proj["slug"], sid, "2026-06-01T10:25:00Z", "2026-06-01T10:40:00Z", "second"
+    )
+    result = srv.migrate_dedupe_sessions(apply=True)
+    assert result["marked"] == {dup: s1}
+    assert sorted(s["slug"] for s in srv._project_sessions(proj["slug"])) == sorted(
+        [s1, later]
+    )

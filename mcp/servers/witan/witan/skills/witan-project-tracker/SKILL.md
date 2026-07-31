@@ -75,7 +75,7 @@ workflow_session_start(
 The call is **re-entrant**: if it returns `existed: true`, a session for this
 `(project_slug, session_id)` was already open and you've been handed that same
 handle back — safe to retry after a transport error without duplicating the
-session. A newly-supplied `repo`/`tags` is merged in; `phase` stays at what the
+session. Any newly-supplied `repo` and `tags` are merged in; `phase` stays at what the
 first call set. Once a session has been ended, the same `session_id` starts a
 fresh one, so several working stints under one Claude Code session each get
 their own record.
