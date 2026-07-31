@@ -10,6 +10,47 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
+- **Branch views are namespaced per writer, and the purge follows view
+  ownership.** A git branch is not a unique key for an index: two checkouts on
+  `feature-x` — two developers, one developer in two worktrees, an agent and
+  its human — are two working trees, and a view named for the branch alone
+  meant the second writer silently overwrote the first with a different
+  uncommitted state. A view is now named `[<actor>/]<branch>` on a per-repo
+  graph and `[<actor>/]<repo-slug>/<branch>` on the bridge, where `<actor>` is
+  the ADR-0004 `act-<sub>` id resolved from the `witan login` session (shared
+  derivation with the deployed server, `witan_core.identity`; never `$USER`,
+  which is not what the cluster's tokens and Cedar policies are written
+  against). Set `WITAN_ACTOR`, or `actor` on a `[targets.<name>]` block, for a
+  writer with no interactive login. The actor comes first in both schemes on
+  purpose: ownership is then a *prefix*, so one comparison, one reaper sweep,
+  and one Cedar rule cover both stores.
+
+  Isolation did not cost visibility, which is the whole reason branch views
+  live on the shared graph: `code_indexed_branches(branch=<git branch>)` (CLI:
+  `witan code branches --branch <b>`) lists every writer's view of a branch
+  with its owner, and any listed view name goes straight back as `branch=` to
+  `code_find_definition` / `code_search_symbol` / `code_symbols_in_file`.
+  Default reads follow the checkout's branch to *this* actor's view first,
+  then any other writer's, then `main`.
+
+  `graph.owns_view` is now the single predicate behind both `check_writable`
+  and `indexer._may_purge`, replacing two separate approximations of the same
+  question: a local store has one user who is its writer, CI owns the shared
+  default view, and every actor owns its own branch views. A developer may
+  therefore purge their own branch view again — under the old "remote and not
+  the designated writer" rule they could not, so files they had deleted
+  lingered in their own view. Writing a view owned by another actor, or an
+  un-owned branch view, is refused on a shared graph. Purely local use is
+  unchanged: no identity, no prefix, no migration, and no login needed to
+  index offline. `branches --prune` remains refused against a shared graph —
+  no client can tell whose views are live. See
+  [docs/BRANCH_INDEXING.md](docs/BRANCH_INDEXING.md#per-writer-branch-views).
+
+  **Breaking (tool surface):** `code_indexed_branches` returns
+  `{repo, views: [{view, branch, actor}]}` instead of
+  `{repo, branches: [str]}`, and no longer lists `main` (the default view is
+  not an in-flight branch view).
+
 - **`WITAN_CODE_INDEX_ROLE` — an explicit writer role for the shared
   default-branch view.** On the deployed cluster a per-repo code graph is one
   graph for the whole team, and its `main` view — the one every reader falls
@@ -28,9 +69,9 @@ a MINOR bump may include breaking changes).
   views stay writable by anyone: they are branch-scoped, so in-flight work
   never lands on the shared view. That exemption is deliberate — per-user
   branch views live *on* the shared graph, so isolated agents can see each
-  other's work as it happens. Two follow-ups that decision requires
+  other's work as it happens. The two follow-ups that decision required
   (namespacing views per writer, and re-scoping the purge to "this actor owns
-  the view being written") are noted in the doc and not in this change. See
+  the view being written") landed in the entry above. See
   [docs/BRANCH_INDEXING.md](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view).
 
 ### Changed

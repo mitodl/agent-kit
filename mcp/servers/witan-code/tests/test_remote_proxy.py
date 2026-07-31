@@ -110,7 +110,7 @@ def test_repo_tools_round_trip_through_the_proxy(proxy):
     assert set(deps) == {"repos", "edges"}
     branches = proxy.code_indexed_branches()
     assert [b["repo"] for b in branches] == [REPO]
-    assert "main" in branches[0]["branches"]
+    assert branches[0]["views"] == []
 
 
 def test_local_only_tools_are_refused_without_network():

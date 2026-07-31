@@ -95,7 +95,8 @@ def test_indexed_repos_and_branches_report_the_store(sample_repo, monkeypatch):
 
     branches = _fn(srv.code_indexed_branches)()
     assert [b["repo"] for b in branches] == ["https://github.com/test/cg"]
-    assert "main" in branches[0]["branches"]
+    # The default view is not an in-flight branch view, so it is not listed.
+    assert branches[0]["views"] == []
 
 
 @requires_stack

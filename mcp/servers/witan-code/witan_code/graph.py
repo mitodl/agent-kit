@@ -16,12 +16,55 @@ from pathlib import Path
 from witan_core.omnigraph import OmnigraphClient as _BaseOmnigraphClient
 
 from . import config as cfg_module
+from . import identity as identity_module
+from . import views
 
-__all__ = ["OmnigraphClient", "SharedGraphWriteRefused", "check_writable"]
+__all__ = [
+    "OmnigraphClient",
+    "SharedGraphWriteRefused",
+    "check_writable",
+    "owns_view",
+]
 
 
 class SharedGraphWriteRefused(RuntimeError):
-    """A non-writer tried to write a shared graph's default-branch view."""
+    """A writer tried to write a view of a shared graph it does not own."""
+
+
+def owns_view(
+    *,
+    is_remote: bool,
+    branch: str | None,
+    cfg: cfg_module.Config,
+    actor: str | None,
+) -> bool:
+    """Whether this process is the single writer of the view it is about to touch.
+
+    The one question both destructive operations turn on — writing a view, and
+    purging rows from one — so they ask it in the same place rather than each
+    spelling out its own approximation of it. Three cases:
+
+    - **A local store has one user, who is its writer.** Nothing to arbitrate.
+    - **CI owns the shared default view.** ``branch is None`` means the write
+      targets the store's ``main``, the view every reader falls back to. On the
+      cluster that view has exactly one writer, the CI indexer, and it says so
+      (``WITAN_CODE_INDEX_ROLE=ci``). Authority is the declared role, never the
+      transport: CI is remote too, so "refuse when remote" would block the one
+      writer the design depends on.
+    - **Each actor owns its own branch views.** Per-user branch views live ON
+      the shared graph (DECIDED, Tobias 2026-07-31) — in-flight work being
+      visible to other agents as it happens is much of what the shared service
+      is for — so isolation cannot come from *where* the view lives. It comes
+      from the name: a view is owned by the actor it is prefixed with
+      (:mod:`witan_code.views`), and a process writes only views prefixed with
+      its own. An un-prefixed branch view on a shared graph is owned by nobody,
+      which is the collision this replaced.
+    """
+    if not is_remote:
+        return True
+    if branch is None:
+        return cfg.is_designated_writer
+    return actor is not None and views.owner(branch) == actor
 
 
 def check_writable(
@@ -30,37 +73,38 @@ def check_writable(
     branch: str | None,
     cfg: cfg_module.Config,
     slug: str,
+    actor: str | None = None,
 ) -> None:
-    """Refuse to write a shared graph's default-branch view without the role.
+    """Raise :class:`SharedGraphWriteRefused` unless :func:`owns_view` allows it.
 
-    ``branch is None`` means the write targets the store's ``main`` — the view
-    every user of a shared cluster graph reads. On the cluster that view has
-    exactly one writer, the CI indexer, and it says so
-    (``WITAN_CODE_INDEX_ROLE=ci``). Any other process indexing it would publish
-    one machine's working tree — whatever revision, whatever uncommitted state
-    it happens to be in — to the whole team.
-
-    Authority comes from the declared role, never from the transport: CI is
-    remote too, so a blanket "refuse when remote" would block the one writer
-    the design depends on (``Config.is_designated_writer``).
-
-    Branch views are exempt, and deliberately so: per-user branch views live
-    ON the shared graph (DECIDED, Tobias 2026-07-31), because in-flight work
-    being visible to other agents as it happens is a large part of what the
-    shared service is for. A branch-scoped write cannot reach the view
-    everyone falls back to, so it needs no role. See docs/BRANCH_INDEXING.md.
-
-    Local stores are unaffected: they have one user, who is their writer.
+    ``actor`` is the identity this process writes as; it defaults to the
+    resolved one, so a caller that does not construct view names itself does
+    not have to thread it through.
     """
-    if not client.is_remote or branch is not None or cfg.is_designated_writer:
+    actor = actor if actor is not None else identity_module.actor_id()
+    if owns_view(is_remote=client.is_remote, branch=branch, cfg=cfg, actor=actor):
         return
+    if branch is None:
+        raise SharedGraphWriteRefused(
+            f"Refusing to index {slug} onto the shared graph's default branch: "
+            f"that view is owned by CI, and this process is acting as "
+            f"'{cfg.index_role}'. Index a non-default git branch to write an "
+            f"isolated branch view, or set "
+            f"WITAN_CODE_INDEX_ROLE={cfg_module.INDEX_ROLE_CI} if this IS the "
+            f"CI indexer."
+        )
+    if actor is None:
+        raise SharedGraphWriteRefused(
+            f"Refusing to write branch view {branch!r} of {slug} to a shared "
+            "graph without an identity to own it: another writer on the same "
+            "git branch would silently overwrite it. Run `witan login`, or set "
+            f"{identity_module.ACTOR_ENV_VAR} for a non-interactive writer."
+        )
     raise SharedGraphWriteRefused(
-        f"Refusing to index {slug} onto the shared graph's default branch: "
-        f"that view is owned by CI, and this process is acting as "
-        f"'{cfg.index_role}'. Index a non-default git branch to write an "
-        f"isolated branch view, or set "
-        f"WITAN_CODE_INDEX_ROLE={cfg_module.INDEX_ROLE_CI} if this IS the "
-        f"CI indexer."
+        f"Refusing to write branch view {branch!r} of {slug}: it is owned by "
+        f"{views.owner(branch) or 'nobody'}, and this process is {actor}. "
+        "Branch views are readable by everyone and writable only by their "
+        "owner."
     )
 
 

@@ -6,6 +6,7 @@ written for them have to go, or the store keeps serving stale copies of the
 repo to itself (which is exactly how one ended up 74% duplicates).
 """
 
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -266,6 +267,19 @@ def test_unreadable_directory_suppresses_the_purge(tmp_path, monkeypatch):
 # ── _may_purge: the gate on the one destructive step ─────────────────────────
 
 
+def _cfg(role: str = "client"):
+    from witan_code import config as cfg_mod
+
+    return cfg_mod.Config(
+        code_dir=Path("/code"),
+        author="test",
+        queries_dir=Path("/queries"),
+        schema_file=Path("/schema.pg"),
+        bridge_schema_file=Path("/bridge.pg"),
+        index_role=role,
+    )
+
+
 def _gate(**overrides):
     """Call `_may_purge` with an authoritative baseline, overriding one clause."""
     kwargs = {
@@ -273,7 +287,9 @@ def _gate(**overrides):
         "repo_root": Path("/repo"),
         "walk_errors": [],
         "client": SimpleNamespace(is_remote=False),
-        "writer": False,
+        "branch": None,
+        "cfg": _cfg(),
+        "actor": None,
     }
     kwargs.update(overrides)
     return indexer._may_purge(**kwargs)
@@ -291,7 +307,7 @@ def test_purge_allowed_only_when_this_machine_is_authoritative():
 
 
 def test_purge_refused_against_a_shared_cluster_graph():
-    """A remote graph is shared: the default branch is indexed by CI and
+    """A remote graph's default view is shared: it is indexed by CI and
     everyone else reads it. Reconciling it against one developer's working
     tree — sparse checkout, stale checkout, uncommitted deletions — would
     purge files for every other user of that graph.
@@ -303,19 +319,41 @@ def test_designated_writer_may_purge_a_shared_cluster_graph():
     """CI owns the shared default-branch view, and dropping rows for files
     deleted from the default branch is precisely its job. The right comes from
     the declared role, not from the transport — CI is remote like everyone."""
-    assert _gate(client=SimpleNamespace(is_remote=True), writer=True) is True
+    assert _gate(client=SimpleNamespace(is_remote=True), cfg=_cfg("ci")) is True
 
 
-def test_the_writer_role_does_not_override_the_other_clauses():
-    """It answers only "is this graph mine to reconcile" — it says nothing
+def test_an_actor_may_purge_its_own_branch_view():
+    """The case the old "remote and not the designated writer" rule got wrong.
+    A branch view has exactly one writer; refusing them the purge left files
+    they had deleted lingering in their own view."""
+    assert (
+        _gate(
+            client=SimpleNamespace(is_remote=True),
+            branch="act-alice/feature-x",
+            actor="act-alice",
+        )
+        is True
+    )
+
+
+def test_no_purging_of_a_branch_view_this_actor_does_not_own():
+    remote = SimpleNamespace(is_remote=True)
+    assert _gate(client=remote, branch="act-bob/feature-x", actor="act-alice") is False
+    # Un-owned, so nobody's to reconcile.
+    assert _gate(client=remote, branch="feature-x", actor="act-alice") is False
+
+
+def test_ownership_does_not_override_the_other_clauses():
+    """It answers only "is this view mine to reconcile" — it says nothing
     about whether this run's file listing is complete."""
     remote = SimpleNamespace(is_remote=True)
-    assert _gate(client=remote, writer=True, full_repo=False) is False
-    assert _gate(client=remote, writer=True, repo_root=None) is False
+    ci = _cfg("ci")
+    assert _gate(client=remote, cfg=ci, full_repo=False) is False
+    assert _gate(client=remote, cfg=ci, repo_root=None) is False
     assert (
         _gate(
             client=remote,
-            writer=True,
+            cfg=ci,
             walk_errors=[PermissionError(13, "denied", "/repo/sub")],
         )
         is False
@@ -375,4 +413,45 @@ def test_index_path_passes_the_resolved_role_to_the_purge_gate(tmp_path, monkeyp
     monkeypatch.setattr(indexer, "_may_purge", _spy)
     indexer.index_path(src, config=cfg_module.load())
 
-    assert seen["writer"] is True
+    assert seen["cfg"].is_designated_writer is True
+
+
+@requires_stack
+def test_index_path_passes_the_view_it_wrote_to_the_purge_gate(tmp_path, monkeypatch):
+    """The gate decides ownership of a *view*, so it has to be told which one
+    was written — not just the git branch, and not nothing."""
+    from witan_code import config as cfg_module
+    from witan_code import identity as identity_module
+
+    src = _repo(tmp_path, monkeypatch)
+    # `git rev-parse --abbrev-ref HEAD` fails on an unborn HEAD, so a branch
+    # only becomes visible to `store_branch` once something is committed.
+    subprocess.run(["git", "add", "-A"], cwd=src, check=True)
+    subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "init"],
+        cwd=src,
+        check=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@e",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@e",
+        },
+    )
+    subprocess.run(["git", "checkout", "-q", "-b", "feature/x"], cwd=src, check=True)
+    monkeypatch.setenv(identity_module.ACTOR_ENV_VAR, "act-alice")
+    identity_module.reset_cache()
+
+    seen: dict = {}
+    real = indexer._may_purge
+
+    def _spy(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(indexer, "_may_purge", _spy)
+    indexer.index_path(src, config=cfg_module.load())
+
+    assert seen["branch"] == "act-alice/feature_x"
+    assert seen["actor"] == "act-alice"

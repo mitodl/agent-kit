@@ -227,15 +227,25 @@ def test_repos_shows_a_question_mark_for_an_unreadable_store(monkeypatch, capsys
 def test_branches_dispatches_to_indexed_branches(monkeypatch, capsys):
     srv = _stub(
         code_indexed_branches=[
-            {"repo": "https://github.com/test/a", "branches": ["feature-x", "main"]}
+            {
+                "repo": "https://github.com/test/a",
+                "views": [
+                    {
+                        "view": "act-alice/feature-x",
+                        "branch": "feature-x",
+                        "actor": "act-alice",
+                    }
+                ],
+            }
         ]
     )
     monkeypatch.setattr(cli_module, "_srv", lambda: srv)
 
     cli_module.branches()
 
-    assert srv.calls == [("code_indexed_branches", {})]
-    assert "https://github.com/test/a: main,feature-x" in capsys.readouterr().out
+    assert srv.calls == [("code_indexed_branches", {"branch": None})]
+    out = capsys.readouterr().out
+    assert "https://github.com/test/a: main,act-alice/feature-x" in out
 
 
 def test_branches_prune_is_refused_in_remote_mode(monkeypatch, capsys):
@@ -258,7 +268,18 @@ def test_branches_prune_is_refused_against_a_shared_store(monkeypatch, capsys):
 
     repo = "https://github.com/test/a"
     srv = _stub(
-        code_indexed_branches=[{"repo": repo, "branches": ["main", "someone-elses"]}]
+        code_indexed_branches=[
+            {
+                "repo": repo,
+                "views": [
+                    {
+                        "view": "act-bob/someone-elses",
+                        "branch": "someone-elses",
+                        "actor": "act-bob",
+                    }
+                ],
+            }
+        ]
     )
     monkeypatch.setattr(cli_module, "_srv", lambda: srv)
     monkeypatch.setattr(cli_module, "_is_remote", lambda: False)

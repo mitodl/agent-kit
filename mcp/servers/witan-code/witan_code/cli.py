@@ -598,22 +598,27 @@ def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:
 
 
 @app.command
-def branches(*, prune: bool = False) -> None:
-    """List omnigraph branches per indexed repo store.
+def branches(*, branch: str | None = None, prune: bool = False) -> None:
+    """List the in-flight branch views per indexed repo store, and who owns each.
 
-    Non-default git branches index onto same-named omnigraph branches
-    (docs/BRANCH_INDEXING.md). Branch stores are re-derivable caches, so
-    lifecycle is deletion, not merge.
+    A non-default git branch is indexed onto its own view, named for its
+    writer as well as the branch (docs/BRANCH_INDEXING.md), so two checkouts
+    of the same branch do not overwrite each other. Views are re-derivable
+    caches, so lifecycle is deletion, not merge.
 
     Parameters
     ----------
+    branch:
+        Show only views of this git branch — every writer's, which is how you
+        find a teammate's in-flight work. Pass a listed view name to
+        ``--branch`` on the read commands to query it.
     prune:
-        Delete the CURRENT repo's store branches whose git branch no longer
-        exists locally, plus the ``_detached`` scratch branch. Other repos'
-        stores are only listed (their git refs aren't visible from here).
-        Local stores only, on both counts below: pruning reads this machine's
-        git refs as the authority, which is true of a store only this machine
-        writes and false of a shared cluster graph.
+        Delete the CURRENT repo's views whose git branch no longer exists
+        locally, plus the ``_detached`` scratch view. Other repos' stores are
+        only listed (their git refs aren't visible from here). Local stores
+        only, on both counts below: pruning reads this machine's git refs as
+        the authority, which is true of a store only this machine writes and
+        false of a shared cluster graph.
     """
     from . import repo as repo_module
 
@@ -627,7 +632,7 @@ def branches(*, prune: bool = False) -> None:
         )
         raise SystemExit(1)
 
-    rows = _fn(_srv().code_indexed_branches)()
+    rows = _fn(_srv().code_indexed_branches)(branch=branch)
     if not rows:
         print("No indexed repositories.")
         return
@@ -636,12 +641,12 @@ def branches(*, prune: bool = False) -> None:
     git_branches = repo_module.local_branches() if prune else None
 
     for row in rows:
-        repo_uri, names = row["repo"], row["branches"]
-        if names is None:
+        repo_uri, found = row["repo"], row["views"]
+        if found is None:
             print(f"{repo_uri}: <error: store could not be listed>")
             continue
-        extra = [n for n in names if n != "main"]
-        print(f"{repo_uri}: main" + ("," + ",".join(extra) if extra else ""))
+        names = [v["view"] for v in found]
+        print(f"{repo_uri}: main" + ("," + ",".join(names) if names else ""))
 
         if not (prune and repo_uri == current_slug and git_branches is not None):
             continue
@@ -659,10 +664,13 @@ def branches(*, prune: bool = False) -> None:
                 "belong to every user of it, not to this checkout's git refs."
             )
             continue
-        for name in extra:
-            if name == repo_module.DETACHED_BRANCH or name not in git_branches:
-                client.delete_branch(name)
-                print(f"  pruned {name}")
+        # Match on the branch component, not the view name: a view carries its
+        # writer as well, and `git_branches` only knows about branches.
+        for view in found:
+            gone = view["branch"] not in git_branches
+            if view["branch"] == repo_module.DETACHED_BRANCH or gone:
+                client.delete_branch(view["view"])
+                print(f"  pruned {view['view']}")
 
 
 def _branch_client(repo_uri: str):

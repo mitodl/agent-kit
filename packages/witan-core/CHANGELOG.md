@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Added
+
+- **`witan_core.identity`** — `derive_actor_id()`, the ADR-0004 Keycloak
+  `sub` → `act-<id>` mapping, moved up from witan-council. witan maps the
+  claim server-side off a validated JWT to route a request to the caller's
+  omnigraph client; witan-code maps the same claim client-side off its cached
+  OIDC token to name the code-graph branch views it owns. A view named by one
+  derivation and authorized against another is a bug with no symptom until
+  two users collide on it, so there is one function. witan-council's
+  `witan.identity` re-exports it, and keeps `ActorTokenResolver` (which is
+  server-side only — a CLI never reads the provisioned token map).
+- **`DeviceAuth.cached_claims()`** — the claims of the cached access token,
+  offline and expiry-blind. Callers that need to *call* a deployment use
+  `get_valid_token()`; a caller that only needs to know who the user is
+  (witan-code, naming its branch views) must not pay a network round trip, or
+  block, to learn it — and `sub` does not change when a token expires.
+
 ## [0.6.0] - 2026-07-31
 
 ### Added

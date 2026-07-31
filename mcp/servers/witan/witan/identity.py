@@ -1,43 +1,26 @@
-"""Keycloak JWT → omnigraph per-user actor/token mapping (ADR 0004).
+"""Keycloak JWT → omnigraph per-user actor/token lookup (ADR 0004).
 
-Two pure/lookup primitives for the deployed multi-user witan service:
+:class:`ActorTokenResolver` looks up the omnigraph bearer token pre-provisioned
+for an actor id. It never mints a token: omnigraph-server's bearer-token auth
+is static, read once at its own startup (see
+``docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md``), so the token has to
+already exist in the same source before it can be looked up here.
 
-- :func:`derive_actor_id` — deterministic ``sub`` → ``act-<id>`` mapping.
-- :class:`ActorTokenResolver` — looks up the omnigraph bearer token
-  pre-provisioned for an actor id. Never mints a token: omnigraph-server's
-  bearer-token auth is static, read once at its own startup (see
-  ``docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md``), so the token has
-  to already exist in the same source before it can be looked up here.
+The ``sub`` → ``act-<id>`` mapping itself lives in
+:mod:`witan_core.identity`, shared with witan-code (which derives the same id
+client-side to name the code-graph branch views it owns), and is re-exported
+here so this module remains the one place to look for identity in witan.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import threading
 from pathlib import Path
 
-_SANITIZE_RE = re.compile(r"[^a-z0-9-]+")
+from witan_core.identity import derive_actor_id
 
-
-def derive_actor_id(sub: str) -> str:
-    """Map a Keycloak ``sub`` claim to an omnigraph actor id.
-
-    Lowercases, collapses any run of characters outside ``[a-z0-9-]`` to a
-    single ``-``, and strips leading/trailing ``-``. ``sub`` is a UUID in
-    practice, so this is close to identity — sanitizing defensively means a
-    claim value never reaches a CLI arg or bearer-token lookup key unescaped.
-
-    Raises ``ValueError`` for a non-string ``sub``, or an empty/all-punctuation
-    one — an actor id of just ``act-`` would silently collide with every other
-    such claim.
-    """
-    if not isinstance(sub, str):
-        raise ValueError(f"sub must be a string, got {type(sub).__name__}")
-    slug = _SANITIZE_RE.sub("-", sub.strip().lower()).strip("-")
-    if not slug:
-        raise ValueError(f"Cannot derive an actor id from sub={sub!r}")
-    return f"act-{slug}"
+__all__ = ["ActorTokenResolver", "derive_actor_id"]
 
 
 class ActorTokenResolver:
