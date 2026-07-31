@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 #
 # omnigraph-server — witan's data tier (ADR-0009 decision point 2 / option 3).
 #
@@ -25,7 +25,7 @@
 ARG OMNIGRAPH_VERSION=0.8.1
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
-FROM debian:trixie-slim AS fetch
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS fetch
 ARG OMNIGRAPH_VERSION
 ARG TARGETARCH=amd64
 RUN apt-get update \
@@ -53,7 +53,7 @@ RUN set -eux; \
     /out/omnigraph --version
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-FROM debian:trixie-slim AS runtime
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
 ARG OMNIGRAPH_VERSION
 LABEL org.opencontainers.image.title="omnigraph-server" \
       org.opencontainers.image.description="witan data tier — S3-backed omnigraph graph server" \

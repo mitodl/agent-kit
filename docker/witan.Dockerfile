@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 #
 # witan — the MCP tier (ADR-0009). Packages the `witan` umbrella CLI (which
 # mounts `witan code` from witan-code) and runs it as a streamable-HTTP MCP
@@ -23,7 +23,7 @@ ARG OMNIGRAPH_VERSION=0.8.1
 ARG WITAN_VERSION=0.4.0
 
 # ── Fetch the pinned omnigraph CLI binary (checksum-verified) ─────────────────
-FROM debian:trixie-slim AS omnigraph-fetch
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS omnigraph-fetch
 ARG OMNIGRAPH_VERSION
 ARG TARGETARCH=amd64
 RUN apt-get update \
