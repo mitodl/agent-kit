@@ -30,11 +30,20 @@ DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 _EXPIRY_SKEW_S = 30
 
 
+DEFAULT_CACHE_PATH = Path.home() / ".config" / "witan" / "tokens.json"
+"""Where both CLIs cache their tokens, overridable with ``WITAN_TOKEN_CACHE``.
+
+Shared on purpose, next to the shared ``~/.config/witan/config.toml``: entries
+are keyed by ``(issuer, client_id)``, so one ``witan login`` covers every CLI
+pointing at the same deployment under the same client id.
+"""
+
+
 class OidcEndpoint(Protocol):
     """The client's view of a deployment the device grant authenticates to.
 
-    Structural — any object with these attributes works (e.g. witan-council's
-    ``RemoteConfig`` pydantic model).
+    Structural — any object with these attributes works (e.g.
+    :class:`witan_core.remote.config.RemoteConfig`).
     """
 
     url: str
@@ -341,3 +350,21 @@ class DeviceAuth:
     def token_provider(self) -> Callable[[], str]:
         """A zero-arg callable the proxy calls per request to get a fresh token."""
         return lambda: self.get_valid_token()
+
+
+def cache_path() -> Path:
+    """The token-cache location: ``$WITAN_TOKEN_CACHE`` or :data:`DEFAULT_CACHE_PATH`.
+
+    ``~`` is expanded, matching every other path setting in these packages
+    (``code_dir``, ``--store``). A shell expands ``~`` before the variable is
+    ever set, but a value from a config file, Docker ``ENV``, or a systemd unit
+    does not — and without this that override would silently create a directory
+    literally named ``~`` under the cwd.
+    """
+    override = os.environ.get("WITAN_TOKEN_CACHE")
+    return Path(override).expanduser() if override else DEFAULT_CACHE_PATH
+
+
+def device_auth(endpoint: OidcEndpoint, *, login_hint: str) -> DeviceAuth:
+    """A :class:`DeviceAuth` on the shared token cache, hinting ``login_hint``."""
+    return DeviceAuth(endpoint, cache_path(), login_hint=login_hint)

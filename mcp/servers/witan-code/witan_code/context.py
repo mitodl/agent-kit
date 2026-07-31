@@ -13,13 +13,14 @@ comes back.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import os
 from pathlib import Path
 
 from . import config as cfg_module
 from . import repo as repo_module
-from .cli import _code_store_stats, _dir_stats
+from . import store as store_module
 
 # Matches the lock directory hooks.session_init() creates around a background
 # SessionStart index, so this hook can report "indexing in progress" instead
@@ -77,16 +78,18 @@ def inject_context() -> str:
             "finishes.\n"
         )
 
-    repo_uri, file_count = _code_store_stats(store)
+    repo_uri = store_module.repo_for_store(store)
+    files = store_module.file_count(store, cfg)
     try:
-        _, last_indexed = _dir_stats(store)
-        freshness = f", last updated {last_indexed}"
+        _, mtime = store_module.dir_stats(store)
+        stamp = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        freshness = f", last updated {stamp}"
     except OSError:  # e.g. a file vanished mid-walk — degrade, don't blank the block
         freshness = ""
     lines = [
         "## Code Graph",
         "",
-        f"`{repo_uri}` is indexed: {file_count} files{freshness}.",
+        f"`{repo_uri}` is indexed: {'?' if files is None else files} files{freshness}.",
     ]
     if in_progress:
         lines.append("A background reindex is currently running.")

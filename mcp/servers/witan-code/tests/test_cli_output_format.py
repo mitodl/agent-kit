@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,19 +52,20 @@ def test_render_table_toml_dumps_normalized_rows(capsys):
     assert payload["rows"] == [{"role": "exported", "refs": 2}]
 
 
-def test_repos_honors_structured_output(tmp_path, monkeypatch, capsys):
-    code_dir = tmp_path / "code"
-    code_dir.mkdir()
-    store = code_dir / "https_github.com_test_repo.omni"
-    store.mkdir()
-    (code_dir / f"{store.name}.repo").write_text("https://github.com/test/repo")
-    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
-    monkeypatch.setattr(
-        cli_module,
-        "_code_store_stats",
-        lambda store: ("https://github.com/test/repo", "7"),
+def test_repos_honors_structured_output(monkeypatch, capsys):
+    # `repos` dispatches through _srv(), so stub the tool it calls: this test is
+    # about rendering the rows, not about stores on disk.
+    indexed = SimpleNamespace(
+        code_indexed_repos=lambda: [
+            {
+                "repo": "https://github.com/test/repo",
+                "files": 7,
+                "bytes": 1024,
+                "last_indexed": datetime.datetime(2026, 7, 13, 9, 41).timestamp(),
+            }
+        ]
     )
-    monkeypatch.setattr(cli_module, "_dir_stats", lambda path: (1024, "2026-07-13"))
+    monkeypatch.setattr(cli_module, "_srv", lambda: indexed)
     output_module.set_output_format("json")
 
     cli_module.repos()
@@ -75,7 +78,8 @@ def test_repos_honors_structured_output(tmp_path, monkeypatch, capsys):
                 "repo": "https://github.com/test/repo",
                 "files": "7",
                 "size": "1.0KB",
-                "last indexed": "2026-07-13",
+                # Rendered from the epoch in the reader's local timezone.
+                "last indexed": "2026-07-13 09:41",
             }
         ],
     }

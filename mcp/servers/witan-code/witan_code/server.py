@@ -178,14 +178,7 @@ def _client_for_symbol(symbol_id: str) -> OmnigraphClient | None:
 
 def _all_clients() -> list[OmnigraphClient]:
     """A client per indexed per-repo store (excludes the shared bridge store)."""
-    if not cfg.code_dir.exists():
-        return []
-    bridge = store_module.bridge_store(cfg).name
-    return [
-        _client_for_path(p)
-        for p in sorted(cfg.code_dir.glob("*.omni"))
-        if p.name != bridge
-    ]
+    return [_client_for_path(p) for p in store_module.per_repo_stores(cfg)]
 
 
 def _resolve_clients(
@@ -820,6 +813,143 @@ async def code_unresolved_symbols(
     rows = client.read("bridge.gq", "all_repo_symbols", {})
     _, unresolved = stitch.resolve(rows)
     return [r for r in unresolved if repo is None or r["repo"] == repo]
+
+
+@mcp.tool
+async def code_repo_symbols(
+    repo: str | None = None,
+    role: Literal["exported", "external"] | None = None,
+    scheme: str | None = None,
+    ctx: Context | None = None,
+) -> list[dict]:
+    """
+    A repo's cross-repo symbol table (docs/SYMBOL_TABLE.md).
+
+    One row per (role, symbol): ``exported`` rows are the repo's public
+    contract surface — what other repos can resolve against — and ``external``
+    rows are the unresolved references Stage 2 joins against other repos'
+    exports. Use it to see what a repo publishes and what it expects from the
+    rest of the SOA; ``code_precise_edges`` is the resolved join over the same
+    table.
+
+    Parameters
+    ----------
+    repo:
+        Canonical repo URI. Defaults to the current detected repo.
+    role:
+        Filter to ``exported`` or ``external`` rows.
+    scheme:
+        Filter to one symbol scheme (``http``/``env``/``pkg``/``svc``).
+    """
+    if repo is None:
+        repo = _cached_detect()
+    if repo is None:
+        return []
+    client = _bridge_client(repo=repo)
+    if client is None:
+        client = await _confirm_and_reindex_bridge(ctx)
+        if client is None:
+            return []
+    rows = client.read("bridge.gq", "repo_symbols", {"repo": repo})
+    return [
+        r
+        for r in rows
+        if (role is None or r.get("role") == role)
+        and (scheme is None or r.get("scheme") == scheme)
+    ]
+
+
+@mcp.tool
+async def code_repo_dependencies(
+    kind: BindingKind | None = None,
+    repo: str | None = None,
+    min_precision: PrecisionTier = "heuristic",
+    ctx: Context | None = None,
+) -> dict:
+    """
+    The repo-to-repo dependency graph over every indexed repo.
+
+    Aggregates the bridge store's interface bindings into "repo A depends on
+    repo B" links (A consumes a contract B provides; for ``service`` bindings,
+    the deploying repo depends on what it deploys). Returns
+    ``{"repos": [...], "edges": [{consumer, provider, weight, kinds,
+    contracts}]}`` — the coarse, whole-SOA view, where
+    ``code_interface_providers``/``_consumers`` answer about one contract key.
+
+    Parameters
+    ----------
+    kind:
+        Filter to one contract kind (``env_var``/``package``/``service``/``endpoint``).
+    repo:
+        Keep only links touching a repo whose URI contains this substring.
+    min_precision:
+        ``heuristic`` (default) | ``precise`` — see server instructions.
+    """
+    from . import visualize
+
+    client = _bridge_client()
+    if client is None:
+        client = await _confirm_and_reindex_bridge(ctx)
+        if client is None:
+            return {"repos": [], "edges": []}
+    rows = client.read("bridge.gq", "all_bindings", {})
+    repo_symbol_rows = (
+        client.read("bridge.gq", "all_repo_symbols", {})
+        if min_precision == "precise"
+        else None
+    )
+    graph = visualize.build_graph(
+        rows,
+        kind=kind,
+        repo=repo,
+        min_precision=min_precision,
+        repo_symbol_rows=repo_symbol_rows,
+    )
+    return visualize.as_payload(graph)
+
+
+@mcp.tool
+def code_indexed_repos() -> list[dict]:
+    """
+    The repositories that have a code graph indexed, and how big each is.
+
+    Use it to check coverage before trusting a negative result — a symbol
+    search returning nothing means something different when the repo in
+    question was never indexed. ``files`` is None for a store that could not be
+    read; ``last_indexed`` is a Unix timestamp.
+    """
+    out: list[dict] = []
+    for store in store_module.per_repo_stores(cfg):
+        size, mtime = store_module.dir_stats(store)
+        out.append(
+            {
+                "repo": store_module.repo_for_store(store),
+                "files": store_module.file_count(store, cfg),
+                "bytes": size,
+                "last_indexed": mtime,
+            }
+        )
+    return out
+
+
+@mcp.tool
+def code_indexed_branches() -> list[dict]:
+    """
+    The omnigraph branches each indexed repo's store carries.
+
+    Non-default git branches index onto same-named store branches
+    (docs/BRANCH_INDEXING.md), so this shows which in-flight views are
+    queryable per repo. ``branches`` is None for a store that could not be
+    listed.
+    """
+    out: list[dict] = []
+    for store in store_module.per_repo_stores(cfg):
+        try:
+            branches = sorted(_client_for_path(store).list_branches())
+        except Exception:  # noqa: BLE001 — one bad store shouldn't abort the list
+            branches = None
+        out.append({"repo": store_module.repo_for_store(store), "branches": branches})
+    return out
 
 
 @mcp.tool

@@ -307,6 +307,11 @@ symlink alternative:
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
 | `WITAN_CONFIG` | `~/.config/witan/config.toml` | config file path (see below) |
 | `WITAN_TARGET` | — | force a named `[targets.<name>]` block instead of auto-detecting one |
+| `WITAN_REMOTE_URL` | — | a deployed witan MCP endpoint; routes the read commands through it (see [Remote mode](#remote-mode)) |
+| `WITAN_OIDC_ISSUER` | — | Keycloak realm `witan-code login` authenticates against. Required whenever `WITAN_REMOTE_URL` is set |
+| `WITAN_OIDC_CLIENT_ID` | `witan-cli` | public OIDC client id for the device grant. Shared with witan on purpose — see [Remote mode](#remote-mode) |
+| `WITAN_OIDC_AUDIENCE` | — | audience/resource to request, matching the deployment's expected `aud` claim |
+| `WITAN_TOKEN_CACHE` | `~/.config/witan/tokens.json` | where the 0600 token cache lives (shared with witan) |
 
 The store URI for a repo is `<dir>/<sanitized-slug>.omni`, where the slug's `/`
 and `:` are replaced with `_`. The shared cross-repo bridge lives alongside them
@@ -330,6 +335,12 @@ the same name — each server reads only the fields it knows:
 server = "http://witan.internal:8080"  # witan (witan-council)
 code_dir = "/mnt/work/witan-code"      # witan-code
 match_orgs = ["myorg"]
+
+[targets.hosted]
+# remote_url/oidc_* route BOTH CLIs at one deployed endpoint — see Remote mode.
+remote_url = "https://witan.example.org/mcp"
+oidc_issuer = "https://sso.example.org/realms/ol-platform-engineering"
+match_orgs = ["ol-platform-engineering"]
 ```
 
 Environment variables always win over `config.toml`.
@@ -362,6 +373,18 @@ that repo's bridge branch overlay instead of `main` — see
 | `code_interface_consumers(kind, key)` | repos that **consume** it (`endpoint` keys are normalized from raw paths) |
 | `code_cross_repo_impact(symbol_id)` | the symbol's own bindings + every binding for those same contracts in **other** repos |
 | `code_interface_search(query, kind=None)` | BM25 search over interface bindings by normalized key |
+| `code_precise_edges(repo=None)` | Stage-2 cross-repo edges resolved by canonical symbol string |
+| `code_unresolved_symbols(repo=None)` | external references with no precise match (indexing-coverage gaps) |
+| `code_repo_symbols(repo=None, role=None, scheme=None)` | a repo's symbol table — what it exports, what it expects |
+| `code_repo_dependencies(kind=None, repo=None)` | the whole "repo A depends on repo B" graph (`{repos, edges}`) |
+
+Coverage tools (which stores exist at all — read the store directory, not the
+graph):
+
+| Tool | Returns |
+|------|---------|
+| `code_indexed_repos()` | every indexed repo with file count, size, and last-indexed timestamp |
+| `code_indexed_branches()` | the omnigraph branches each repo's store carries |
 
 ## CLI
 
@@ -405,9 +428,46 @@ that repo's bridge branch overlay instead of `main` — see
 - `checkpoint` — opportunistically compact the current repo's store and the
   bridge store if due (see [Hooks](#hooks)); registered as the `Stop` hook,
   not usually run by hand.
+- `login` / `logout` / `whoami` — authenticate to a deployed witan service
+  (see [Remote mode](#remote-mode)); no-ops with nothing configured.
 
 Both print a summary: files scanned/indexed/skipped, symbols, edges, errors. A
 parse failure on one file logs to stderr and continues.
+
+## Remote mode
+
+The deployed witan service mounts this server's `code_*` tools into its own
+FastMCP server with no prefix (`witan serve`), so one endpoint serves both tool
+surfaces. Point the CLI at it and the **read** commands query the deployment's
+code graphs instead of this machine's stores — witan-council's ADR-0005 path a,
+same mechanism ([`docs/adr/0005`](../witan/docs/adr/0005-secure-cli-path-into-deployed-witan.md)):
+
+```bash
+export WITAN_REMOTE_URL=https://witan.example.org/mcp
+export WITAN_OIDC_ISSUER=https://sso.example.org/realms/ol-platform-engineering
+witan-code login          # OIDC device grant; approve in a browser
+witan-code repos          # now answers about the deployment's stores
+```
+
+Or put `remote_url`/`oidc_issuer`/`oidc_client_id`/`oidc_audience` on a
+`[targets.<name>]` block, alongside that target's `code_dir` — the same four
+keys witan reads, so one block routes both CLIs.
+
+Which commands move:
+
+| Local **and** remote | Local only |
+|---|---|
+| `symbols`, `deps`, `stitch`, `repos`, `branches` | `index`, `reindex`, `optimize`, `cleanup`, `checkpoint`, `branches --prune`, the four hooks |
+
+Indexing and store maintenance need the git checkout and the store files on
+disk, so they always run against this machine and ignore `WITAN_REMOTE_URL`
+entirely.
+
+The token cache (`~/.config/witan/tokens.json`) and the default client id
+(`witan-cli`) are shared with the `witan` CLI, and cache entries are keyed by
+`(issuer, client id)` — so **one login covers both**. If you have already run
+`witan login` against the same deployment, `witan-code login` is unnecessary;
+conversely `witan-code logout` also logs `witan` out.
 
 ## Store compaction
 

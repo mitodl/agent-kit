@@ -799,7 +799,7 @@ wheels = [
 
 [[package]]
 name = "ol-agent-kit"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "packages/agent-kit" }
 dependencies = [
     { name = "agent-config-kit", extra = ["cli"] },
@@ -1908,7 +1908,7 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.7.0"
+version = "0.8.0"
 source = { editable = "mcp/servers/witan-code" }
 dependencies = [
     { name = "agent-config-kit" },
@@ -1926,7 +1926,7 @@ dependencies = [
     { name = "tree-sitter-sql" },
     { name = "tree-sitter-typescript" },
     { name = "tree-sitter-yaml" },
-    { name = "witan-core", extra = ["cli"] },
+    { name = "witan-core", extra = ["cli", "remote"] },
 ]
 
 [package.optional-dependencies]
@@ -1958,7 +1958,7 @@ requires-dist = [
     { name = "tree-sitter-sql", specifier = ">=0.3,<0.4" },
     { name = "tree-sitter-typescript", specifier = ">=0.23,<0.24" },
     { name = "tree-sitter-yaml", specifier = ">=0.7,<0.8" },
-    { name = "witan-core", extras = ["cli"], editable = "packages/witan-core" },
+    { name = "witan-core", extras = ["cli", "remote"], editable = "packages/witan-core" },
 ]
 provides-extras = ["tasks"]
 
@@ -1970,7 +1970,7 @@ test = [
 
 [[package]]
 name = "witan-core"
-version = "0.5.1"
+version = "0.6.0"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
@@ -2020,7 +2020,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.7.1"
+version = "0.7.2"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },

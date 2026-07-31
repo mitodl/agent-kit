@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.6.0] - 2026-07-31
+
+### Added
+
+- **`witan_core.remote.config`** — `RemoteConfig` plus `resolve_remote_config()`,
+  the "which deployment, and how do I authenticate to it" half of ADR-0005 path
+  a. It had stayed behind in witan-council even though it carried nothing
+  witan-council-specific, so witan-code could not reach a deployment at all
+  without copying it. Both servers now keep only their own target *selection*
+  and delegate the env > target > config.toml resolution here, so the two CLIs
+  read the same `WITAN_REMOTE_URL` / `WITAN_OIDC_*` keys off the same
+  `[targets.<name>]` block — one deployment, one configuration.
+- **`remote.oidc.cache_path()` / `device_auth()` / `DEFAULT_CACHE_PATH`** — the
+  shared `~/.config/witan/tokens.json` location (and its `WITAN_TOKEN_CACHE`
+  override), previously a private copy in witan-council. Entries are keyed by
+  `(issuer, client_id)` and both CLIs default to the `witan-cli` client id, so
+  one `witan login` authenticates both.
+
+### Changed
+
+- `RemoteConfig` is a frozen dataclass rather than a pydantic model. Every field
+  arrives as a string from the environment or TOML, so there was nothing to
+  coerce, and `witan_core.remote` keeps its dependency surface honest
+  (`httpx2` + `fastmcp`, no pydantic). Construction and attribute access are
+  unchanged; `.model_dump()` and friends are gone.
+
 ## [0.5.0] - 2026-07-30
 
 ### Added

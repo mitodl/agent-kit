@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.8.0] - 2026-07-31
+
+### Added
+
+- **Remote MCP-client mode for the CLI (ADR-0005 parity).** With
+  `WITAN_REMOTE_URL` + `WITAN_OIDC_ISSUER` set (or `remote_url`/`oidc_*` on the
+  matched `[targets.<name>]` block), the read commands — `symbols`, `deps`,
+  `stitch`, `repos`, `branches` — dispatch over `streamable-http` to a deployed
+  witan service instead of this machine's stores, authenticated with a per-user
+  Keycloak JWT. Previously only witan-council's CLI could reach a deployment,
+  even though `witan serve` has always mounted this server's `code_*` tools onto
+  the same endpoint. Indexing and store maintenance stay local unconditionally:
+  they need the checkout and the store files on disk.
+- **`witan-code login` / `logout` / `whoami`** — the OIDC device grant against
+  the configured deployment. The token cache and default client id are shared
+  with the `witan` CLI and keyed by `(issuer, client id)`, so a prior
+  `witan login` already covers witan-code and vice versa.
+- **Four MCP tools** backing the commands above, so both the CLI and an agent
+  reach the same data: `code_repo_symbols` (a repo's contract surface — what it
+  exports, what it expects), `code_repo_dependencies` (the whole "repo A depends
+  on repo B" graph), `code_indexed_repos` and `code_indexed_branches` (coverage:
+  which repos and branch views exist, and how fresh).
+
+### Changed
+
+- **The read commands route through the tool surface, not `OmnigraphClient`.**
+  The CLI and the MCP server used to be two disconnected implementations of the
+  same queries; the commands now dispatch through a `_srv()` indirection that is
+  the in-process server module locally and an MCP proxy remotely. Output is
+  unchanged in local mode.
+- **Requires `witan-core>=0.6`** and pulls its `remote` extra — the shared
+  `RemoteConfig` and OIDC client stack live there. No new transitive weight:
+  `fastmcp` was already required and itself depends on `httpx2`.
+- `witan-code branches --prune` refuses to run in remote mode (it deletes from
+  the local stores, comparing against this machine's git refs). Listing works
+  against a deployment.
+
 ## [0.7.0] - 2026-07-30
 
 ### Changed
