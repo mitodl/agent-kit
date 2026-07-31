@@ -156,6 +156,34 @@ query update_workflow_project_description(
         where slug = $slug
 }
 
+// The `workflow_project_update` write. Every editable field in one set, since
+// the caller supplies only what changed and the tool reads-modifies-writes the
+// rest — a per-field mutation would need a read between each one. `phase`,
+// `github_pr`, `completed_at` and `blocked_by` are deliberately absent: they
+// belong to advance/complete/block, which enforce their own semantics.
+query update_workflow_project_fields(
+    $slug: String,
+    $title: String,
+    $description: String,
+    $repos: [String]?,
+    $status: String,
+    $tags: [String]?,
+    $github_issue: String?,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set {
+            title: $title,
+            description: $description,
+            repos: $repos,
+            status: $status,
+            tags: $tags,
+            github_issue: $github_issue,
+            updated_at: $updated_at
+        }
+        where slug = $slug
+}
+
 query update_workflow_project_phase(
     $slug: String,
     $phase: String,
@@ -231,6 +259,29 @@ query insert_workflow_session(
 query update_workflow_session_repo($slug: String, $repo: String?) {
     update WorkflowSession
         set { repo: $repo }
+        where slug = $slug
+}
+
+// The re-entrant `workflow_session_start` path: fold a repeat call's repo/tags
+// into the session the first call created, rather than minting a second node.
+query update_workflow_session_meta(
+    $slug: String,
+    $repo: String?,
+    $tags: [String]?
+) {
+    update WorkflowSession
+        set { repo: $repo, tags: $tags }
+        where slug = $slug
+}
+
+// `witan migrate dedupe-sessions`: flag a session a retry minted, pointing at
+// the one that survives. The row is kept, only excluded from aggregates.
+query update_workflow_session_superseded(
+    $slug: String,
+    $superseded_by: String?
+) {
+    update WorkflowSession
+        set { superseded_by: $superseded_by }
         where slug = $slug
 }
 

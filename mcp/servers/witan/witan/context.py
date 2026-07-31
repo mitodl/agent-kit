@@ -229,7 +229,9 @@ def inject_context(
         try:
             for s in client.read("read.gq", "list_all_sessions", {}):
                 p_slug = s.get("project_slug")
-                if p_slug:
+                # Skip retry-minted duplicates so the per-phase staleness count
+                # ("18 sessions in implementation") reflects real working stints.
+                if p_slug and not s.get("superseded_by"):
                     sessions_by_project.setdefault(p_slug, []).append(s)
         except Exception:  # noqa: BLE001
             if debug:

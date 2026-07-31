@@ -447,6 +447,41 @@ isn't applied yet (`migrate schema` first). No flags.
 witan migrate topics
 ```
 
+### `migrate dedupe-sessions`
+
+Reconcile `WorkflowSession` nodes that a pre-upsert `workflow_session_start`
+duplicated. Every call used to mint a node, so a hook retry, a transport
+reconnect, or a deliberate re-call (once the only way to widen a project's repo
+set) left extra sessions sharing one `session_id` — and
+`workflow_project_complete` counts every linked session into its trace.
+
+Sharing a `session_id` is not on its own evidence of duplication: one
+`$CLAUDE_SESSION_ID` routinely spans several working stints, each closed with
+its own summary. So only sessions that **overlap in time** are considered, and
+within an overlapping run only the members with no summary of their own are
+marked `superseded_by` the survivor. A marked session keeps its row and its
+edges; it is simply skipped by every aggregate read. Runs where every member
+wrote a real summary are printed for review rather than guessed at — resolve
+those with `--supersede`.
+
+Dry by default. Idempotent. Deliberately **not** part of `migrate all`: unlike
+the other migrations this one makes a judgment call about corpus content.
+
+Needs `migrate schema` first — the mark is stored in a `superseded_by` field
+added alongside this command, and every session read now selects it, so an
+existing store must be reconciled before it will serve them.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--apply` | bool | `False` | Write the marks instead of only reporting them |
+| `--supersede` | list | — | `<duplicate-slug>=<survivor-slug>` pairs to mark regardless of the automatic rule; repeatable |
+
+```bash
+witan migrate dedupe-sessions                       # report only
+witan migrate dedupe-sessions --apply
+witan migrate dedupe-sessions --apply --supersede ws-dup-abc123=ws-real-def456
+```
+
 ### `migrate all`
 
 Run the full bring-up: `migrate schema` then `migrate topics`. Both steps

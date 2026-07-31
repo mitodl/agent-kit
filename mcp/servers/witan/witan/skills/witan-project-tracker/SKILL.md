@@ -72,6 +72,14 @@ workflow_session_start(
 )
 ```
 
+The call is **re-entrant**: if it returns `existed: true`, a session for this
+`(project_slug, session_id)` was already open and you've been handed that same
+handle back — safe to retry after a transport error without duplicating the
+session. A newly-supplied `repo`/`tags` is merged in; `phase` stays at what the
+first call set. Once a session has been ended, the same `session_id` starts a
+fresh one, so several working stints under one Claude Code session each get
+their own record.
+
 ### Multi-repo projects
 
 A project can span several repos (e.g. a Django service, its frontend, and the
@@ -93,6 +101,46 @@ You don't have to list every repo upfront — the set **accretes**: whenever
 `workflow_session_start` runs in a repo not yet in the set, that repo is added.
 A project surfaces in the injected context of any repo in its set. Omit `repos`
 entirely (from outside any git repo) to create a "floating" project tied to none.
+
+Guessing at creation time is normal — a project's real blast radius is rarely
+known during discovery — so the set is editable. Getting it right matters:
+repo-scoped recall from a repo missing from the set will not surface the project
+at all.
+
+```
+workflow_project_update(
+    slug="wp-b2b-self-serve-analytics-8db781",
+    add_repos=["https://github.com/mitodl/ol-analytics-api"],
+    remove_repos=["https://github.com/mitodl/mit-learn"],   # guessed wrong
+)
+```
+
+Pass `repos=[...]` instead to replace the set wholesale. Repos are a plain list
+on the project node, so a removal really removes.
+
+## Correcting a Project
+
+`workflow_project_update` is the general escape hatch for metadata set wrong or
+learned later. Every argument is optional and only what you pass is touched:
+
+```
+workflow_project_update(
+    slug="wp-...",
+    title="B2B self-serve analytics",       # renamed
+    description="...",                      # scope grew
+    tags=["analytics", "starrocks"],
+    github_issue="https://github.com/mitodl/hq/issues/10594",
+    status="abandoned",                     # work stopped without an outcome
+)
+```
+
+Two things it deliberately can't do:
+
+- **Set the phase** — use `workflow_project_advance`, which is also how a phase
+  set in error is corrected (it allows going backwards).
+- **Complete a project** — `status` takes `active` and `abandoned` only.
+  `workflow_project_complete` stays the only route to a corpus trace, so a trace
+  never exists without an outcome narrative.
 
 ## Phase Transitions
 

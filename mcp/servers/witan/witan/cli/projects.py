@@ -105,9 +105,13 @@ def _project_show(slug: str) -> None:
         console.print(f"  blocks: {', '.join(p['blocks'])}")
     console.print(f"\n{p.get('description') or '(no description)'}\n")
 
-    sessions = s.client.read(
-        "read.gq", "list_sessions_by_project", {"project_slug": slug}
-    )
+    sessions = [
+        sess
+        for sess in s.client.read(
+            "read.gq", "list_sessions_by_project", {"project_slug": slug}
+        )
+        if not sess.get("superseded_by")
+    ]
     console.print(f"  sessions: {len(sessions)}")
     for sess in sessions:
         console.print(

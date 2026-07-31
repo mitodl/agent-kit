@@ -8,7 +8,52 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **`workflow_project_update` — the missing post-creation edit path.** Until now
+  a project's `title`, `description`, `tags` and `github_issue` could not be
+  changed at all after creation, and its repo set could only ever *grow*, as a
+  side effect of running `workflow_session_start` in a new repo. That made the
+  common case — a repo set guessed during discovery, before the work's real
+  blast radius was known — uncorrectable, and a project missing a repo does not
+  surface in that repo's injected context at all. The new tool edits every
+  mutable field, replaces the repo set wholesale (`repos`) or by delta
+  (`add_repos` / `remove_repos`, both canonicalized so a differently-cased
+  spelling still matches), and can mark a project `abandoned`. Repos are a plain
+  list field rather than edges, so a removal really removes — unlike
+  `workflow_project_unblock`, which can only update its denormalized field.
+  Deliberately cannot set `phase` (`workflow_project_advance` owns transitions,
+  including backwards ones) or `status="completed"` (`workflow_project_complete`
+  stays the only route to a corpus trace, so a trace never exists without an
+  outcome narrative).
+- **`witan migrate dedupe-sessions`** reconciles sessions the pre-fix
+  `workflow_session_start` duplicated, marking them `superseded_by` the
+  surviving session (a new `WorkflowSession` field — run `witan migrate schema`
+  first). Nothing is deleted: a marked session keeps its row and its edges and
+  is simply skipped by every aggregate read. Dry by default, and deliberately
+  not part of `migrate all` — unlike the other migrations it makes a judgment
+  call about corpus content.
+
 ### Fixed
+
+- **`workflow_session_start` is re-entrant, and no longer duplicates a session
+  on retry.** Every call minted a node, so a hook retry, a transport reconnect,
+  or the replica failover its own docstring warns about silently created a
+  second `WorkflowSession` for one real agent session — and
+  `workflow_project_complete` aggregates every linked session into the
+  `WorkflowTrace`, so duplicates inflated the corpus and skewed anything mined
+  from it. A call for a (`project_slug`, `session_id`) whose session is still
+  open now returns that handle with `existed: true`, merging any newly-supplied
+  `repo`/`tags` into it.
+
+  Idempotency is keyed on the *open* session rather than the pair alone,
+  deliberately: one `$CLAUDE_SESSION_ID` routinely spans several working stints
+  that are each closed with their own summary (the corpus holds clusters of
+  eight), and folding those into one node would destroy seven of them. A retry
+  always re-fires before the first call was ended; a new stint always starts
+  after. Because the repo accretion still runs on the re-entrant path, calling
+  this once per repo remains a valid way to widen a project's repo set — but
+  `workflow_project_update` now does that directly.
 
 - **Deployed multi-user writes are attributed to the calling user, not the
   server container.** `cfg.author` is resolved once at process startup, so under

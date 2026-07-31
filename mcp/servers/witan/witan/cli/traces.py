@@ -91,9 +91,15 @@ def _trace_show(slug: str) -> None:
     console.print(f"\n{tr.get('description') or '(no description)'}\n")
     console.print(f"[bold]Outcome[/bold]\n{tr.get('outcome') or '(none recorded)'}\n")
 
-    sessions = s.client.read(
-        "read.gq", "list_sessions_by_project", {"project_slug": tr.get("project_slug")}
-    )
+    sessions = [
+        sess
+        for sess in s.client.read(
+            "read.gq",
+            "list_sessions_by_project",
+            {"project_slug": tr.get("project_slug")},
+        )
+        if not sess.get("superseded_by")
+    ]
     if sessions:
         console.print("[bold]Sessions[/bold]")
         for sess in sessions:

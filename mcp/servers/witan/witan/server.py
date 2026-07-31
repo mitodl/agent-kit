@@ -483,6 +483,172 @@ def migrate_topics() -> dict:
     }
 
 
+_AUTOCLOSE_PREFIX = "Session ended (auto-closed by Stop hook"
+
+
+def _has_own_summary(session: dict) -> bool:
+    """True when a session carries a summary someone actually wrote.
+
+    The Stop hook's auto-close placeholder is treated as no summary: it says
+    only that the session ended, so a session carrying it holds nothing the
+    corpus would lose.
+    """
+    summary = (session.get("summary") or "").strip()
+    return bool(summary) and not summary.startswith(_AUTOCLOSE_PREFIX)
+
+
+def _overlap_runs(sessions: list[dict]) -> list[list[dict]]:
+    """Split one (project, session_id) group into runs of overlapping sessions.
+
+    A run is an anchor plus every later session that started while the anchor
+    was still open — exactly the condition ``workflow_session_start`` now
+    refuses to create. A session starting after the anchor ended opens a new
+    run: it's the next working stint of the same ``$CLAUDE_SESSION_ID``, not a
+    duplicate. Single-element runs are dropped; they have nothing to reconcile.
+    """
+    runs: list[list[dict]] = []
+    current: list[dict] = []
+    anchor: dict | None = None
+    for s in sorted(sessions, key=lambda r: r.get("started_at") or ""):
+        overlaps = anchor is not None and (
+            not anchor.get("ended_at")
+            or (s.get("started_at") or "") < anchor["ended_at"]
+        )
+        if overlaps:
+            current.append(s)
+        else:
+            if len(current) > 1:
+                runs.append(current)
+            current = [s]
+            anchor = s
+    if len(current) > 1:
+        runs.append(current)
+    return runs
+
+
+def migrate_dedupe_sessions(
+    apply: bool = False, extra_marks: dict[str, str] | None = None
+) -> dict:
+    """Reconcile WorkflowSessions a pre-upsert ``workflow_session_start`` minted.
+
+    Before that fix, every call minted a node, so a hook retry, a transport
+    reconnect, or a deliberate re-call (the only way there was to widen a
+    project's repo set) left extra sessions sharing one ``session_id``.
+    ``workflow_project_complete`` counts every linked session into its trace,
+    so those extras inflate the corpus.
+
+    Sharing a ``session_id`` is *not* on its own evidence of duplication: one
+    ``$CLAUDE_SESSION_ID`` routinely spans several working stints, each closed
+    with its own summary. So this only considers sessions that **overlap in
+    time** — the retry signature — and within an overlapping run only flags
+    members with no summary of their own, keeping whichever member has the
+    fullest summary as the survivor. A run whose members all wrote real
+    summaries is left completely alone and reported for a human to judge;
+    ``extra_marks`` is how that judgment gets applied.
+
+    Nothing is deleted: a flagged session keeps its row and its edges and only
+    gains ``superseded_by``, which every aggregate read then skips.
+
+    Dry by default — pass ``apply=True`` to write. Idempotent: an
+    already-flagged session is skipped, and re-running finds nothing new.
+
+    Parameters
+    ----------
+    apply:
+        Write the ``superseded_by`` marks. Without it, only report.
+    extra_marks:
+        ``{duplicate_slug: survivor_slug}`` to mark regardless of the automatic
+        rule — for the ambiguous runs reported as needing review.
+    """
+    try:
+        rows = client.read("read.gq", "list_all_sessions_key", {})
+    except RuntimeError as exc:
+        # A store that hasn't applied the schema since `superseded_by` was added
+        # raises an opaque engine type error. Say what to run instead.
+        if "superseded_by" in str(exc):
+            raise RuntimeError(
+                "This store predates the WorkflowSession.superseded_by field. "
+                "Run `witan migrate schema` first."
+            ) from None
+        raise
+
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        if row.get("superseded_by"):
+            continue
+        key = (row.get("project_slug") or "", row.get("session_id") or "")
+        groups.setdefault(key, []).append(row)
+
+    marks: dict[str, str] = {}
+    needs_review: list[dict] = []
+    for (project_slug, session_id), group in groups.items():
+        if len(group) < 2:
+            continue
+        for run in _overlap_runs(group):
+            with_summary = [s for s in run if _has_own_summary(s)]
+            # Survivor: the fullest account of the work, else the earliest.
+            survivor = (
+                max(with_summary, key=lambda s: len(s.get("summary") or ""))
+                if with_summary
+                else run[0]
+            )
+            for s in run:
+                if s["slug"] != survivor["slug"] and not _has_own_summary(s):
+                    marks[s["slug"]] = survivor["slug"]
+            if len(with_summary) > 1:
+                needs_review.append(
+                    {
+                        "project_slug": project_slug,
+                        "session_id": session_id,
+                        "sessions": [
+                            {
+                                "slug": s["slug"],
+                                "started_at": s.get("started_at"),
+                                "ended_at": s.get("ended_at"),
+                                "summary": (s.get("summary") or "")[:160],
+                            }
+                            for s in run
+                            if _has_own_summary(s)
+                        ],
+                    }
+                )
+
+    by_slug = {r["slug"]: r for r in rows}
+    for dup_slug, survivor_slug in (extra_marks or {}).items():
+        if dup_slug not in by_slug:
+            raise RuntimeError(f"no such session: {dup_slug}")
+        if survivor_slug not in by_slug:
+            raise RuntimeError(f"no such session: {survivor_slug}")
+        if dup_slug == survivor_slug:
+            raise RuntimeError(f"a session cannot supersede itself: {dup_slug}")
+        marks[dup_slug] = survivor_slug
+
+    # A project whose trace is already sealed can't be recounted — the trace is
+    # immutable by design. Report it so the skew is at least known.
+    sealed: list[str] = []
+    if marks:
+        affected = {by_slug[dup]["project_slug"] for dup in marks if dup in by_slug}
+        for project_slug in sorted(p for p in affected if p):
+            if client.read("read.gq", "get_trace", {"slug": f"wt-{project_slug}"}):
+                sealed.append(project_slug)
+
+    if apply:
+        for dup_slug, survivor_slug in marks.items():
+            client.change(
+                "mutations.gq",
+                "update_workflow_session_superseded",
+                {"slug": dup_slug, "superseded_by": survivor_slug},
+            )
+
+    return {
+        "sessions_scanned": len(rows),
+        "marked": marks,
+        "needs_review": needs_review,
+        "sealed_traces": sealed,
+        "applied": apply,
+    }
+
+
 def _fold_symbol_ref(ref: str) -> str:
     """Case-fold the repo prefix of a soft symbol ref (``repo#path::Name``)."""
     repo_part, sep, rest = ref.partition("#")
@@ -1967,7 +2133,11 @@ def workflow_project_create(
     repos:
         Canonical repo URIs this project spans. The current repo (detected from
         ``.git/config``) is added automatically. Omit entirely when creating a
-        repo-less "floating" project from outside any git repo.
+        repo-less "floating" project from outside any git repo. Guessing here is
+        fine — a project's real blast radius is rarely known at creation. The
+        set can be corrected at any time with ``workflow_project_update``
+        (``repos`` to replace it, ``add_repos``/``remove_repos`` to nudge it),
+        and it also grows on its own as sessions run in new repos.
     github_issue:
         URL of the GitHub issue tracking this work.
         e.g. ``github.com/mitodl/ol-django/issues/847``.
@@ -2023,6 +2193,27 @@ def workflow_project_get(slug: str) -> dict | None:
     return project
 
 
+def _live_sessions(rows: list[dict]) -> list[dict]:
+    """Drop sessions a retry minted, which ``migrate dedupe-sessions`` flagged.
+
+    Every aggregate over sessions — trace assembly, resume summary, per-phase
+    staleness counts — runs through this, so a duplicate that predates the
+    ``workflow_session_start`` upsert can't inflate the corpus. The engine has
+    no where-clause, hence a Python filter over the full listing rather than a
+    query-level one.
+    """
+    return [r for r in rows if not r.get("superseded_by")]
+
+
+def _project_sessions(project_slug: str) -> list[dict]:
+    """A project's real sessions, ordered ``started_at`` asc."""
+    return _live_sessions(
+        client.read(
+            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+        )
+    )
+
+
 def _latest_session_summary(project_slug: str) -> dict | None:
     """The most-recently-started session for a project, condensed for resume.
 
@@ -2031,9 +2222,7 @@ def _latest_session_summary(project_slug: str) -> dict | None:
     sessions yet. Shared by ``workflow_project_status`` and the context hook so
     "where things stand" reads the same everywhere.
     """
-    sessions = client.read(
-        "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
-    )
+    sessions = _project_sessions(project_slug)
     if not sessions:
         return None
     latest = sessions[-1]
@@ -2137,6 +2326,104 @@ def workflow_project_list(
         rows = [r for r in rows if _project_is_ready(r, status_cache)]
 
     return rows
+
+
+@mcp.tool
+def workflow_project_update(
+    slug: str,
+    title: str | None = None,
+    description: str | None = None,
+    repos: list[str] | None = None,
+    add_repos: list[str] | None = None,
+    remove_repos: list[str] | None = None,
+    tags: list[str] | None = None,
+    github_issue: str | None = None,
+    status: Literal["active", "abandoned"] | None = None,
+) -> dict | None:
+    """
+    Correct a project's metadata after creation.
+
+    The escape hatch for everything ``workflow_project_advance`` (phase,
+    ``github_pr``), ``workflow_project_complete`` (completion) and
+    ``workflow_project_block``/``_unblock`` (dependencies) don't cover. Every
+    parameter is optional and only what you pass is touched; omitting a field
+    leaves it exactly as it was, so this can never blank something by accident.
+    Returns the updated project, or ``None`` if the slug doesn't exist.
+
+    The common case is repos. A project's real blast radius is rarely known
+    during discovery, and until the set is right, repo-scoped recall from the
+    repos where the work actually lands won't surface the project at all. Pass
+    ``repos`` to replace the set wholesale, or ``add_repos``/``remove_repos`` to
+    nudge it (both may be passed together; removals are applied after
+    additions). Repos are a plain list field on the project node, not edges, so
+    a removal really removes — unlike ``workflow_project_unblock``, which can
+    only update its denormalized field because omnigraph edges are append-only.
+
+    Two things this deliberately can't do:
+
+    - **Set the phase.** ``workflow_project_advance`` stays the only route, so
+      a transition is always seen by its ordering check. It does allow going
+      backwards (with a confirmation), which is how a phase set in error gets
+      corrected — this tool would just bypass the prompt.
+    - **Complete a project.** ``status`` accepts ``abandoned`` (for work that
+      stopped without an outcome) and ``active`` (to revive it), but not
+      ``completed``: that belongs to ``workflow_project_complete``, which seals
+      a corpus trace. Nothing should mint a trace without a narrative.
+
+    Parameters
+    ----------
+    slug:
+        The ``wp-`` slug of the project to update.
+    title:
+        Replacement short name.
+    description:
+        Replacement description.
+    repos:
+        Replace the repo set wholesale with these canonical URIs.
+    add_repos:
+        Canonical repo URIs to add to the set.
+    remove_repos:
+        Canonical repo URIs to drop from the set.
+    tags:
+        Replacement tag list. Pass ``[]`` to clear.
+    github_issue:
+        URL of the GitHub issue tracking this work.
+    status:
+        ``active`` | ``abandoned``.
+    """
+    rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    if not rows:
+        return None
+    current = rows[0]
+
+    # Canonicalize every caller-supplied repo the same way `repo.detect` does,
+    # so a differently-cased spelling adds a near-duplicate rather than a
+    # duplicate — and so `remove_repos` matches what's actually stored.
+    def _canon(values: list[str] | None) -> list[str]:
+        return _merge_repos([normalise(r) for r in values or [] if r])
+
+    base = _canon(repos) if repos is not None else _project_repos(current)
+    dropped = set(_canon(remove_repos))
+    new_repos = [r for r in _merge_repos(base, _canon(add_repos)) if r not in dropped]
+
+    payload = {
+        "slug": slug,
+        "title": title if title is not None else current.get("title"),
+        "description": (
+            description if description is not None else current.get("description")
+        ),
+        "repos": new_repos or None,
+        "status": status if status is not None else current.get("status", "active"),
+        "tags": (tags if tags is not None else current.get("tags")) or None,
+        "github_issue": (
+            github_issue if github_issue is not None else current.get("github_issue")
+        ),
+        "updated_at": now_iso(),
+    }
+    client.change("mutations.gq", "update_workflow_project_fields", payload)
+
+    updated = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    return updated[0] if updated else payload
 
 
 @mcp.tool
@@ -2255,9 +2542,7 @@ async def workflow_project_complete(
     project_rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     project = project_rows[0] if project_rows else {}
 
-    sessions = client.read(
-        "read.gq", "list_sessions_by_project", {"project_slug": slug}
-    )
+    sessions = _project_sessions(slug)
 
     session_count = len(sessions)
     phases_seen = list(
@@ -2358,9 +2643,7 @@ def workflow_project_memories(
 
     by_session: dict[str, list[dict]] = {}
     if group_by_session:
-        sessions = client.read(
-            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
-        )
+        sessions = _project_sessions(project_slug)
         for session in sessions:
             produced = client.read(
                 "read.gq",
@@ -2573,11 +2856,7 @@ def workflow_trace_mine(
         lessons = [lessons]
 
     if patterns is None and lessons is None:
-        sessions = client.read(
-            "read.gq",
-            "list_sessions_by_project",
-            {"project_slug": trace["project_slug"]},
-        )
+        sessions = _project_sessions(trace["project_slug"])
         return {"trace": trace, "sessions": sessions}
 
     for label, specs in (("pattern", patterns), ("lesson", lessons)):
@@ -2765,6 +3044,33 @@ def _project_is_ready(p: dict, status_cache: dict[str, str]) -> bool:
     )
 
 
+def _open_session_for_key(project_slug: str, session_id: str) -> dict | None:
+    """The still-open session already recorded for this (project, session_id).
+
+    "Still open" — ``ended_at`` unset — is deliberately narrower than the pair
+    alone. The pair is *not* unique in practice: one ``$CLAUDE_SESSION_ID``
+    routinely spans several working stints, each closed with its own summary
+    (the corpus has clusters of eight such sessions, each a distinct piece of
+    work). Keying idempotency on the pair alone would fold those into one node
+    and destroy seven summaries. A retry, reconnect or replica failover, by
+    contrast, always re-fires *before* the first call was ended — so an open
+    session with the same pair is the duplicate this must not mint, and a closed
+    one is a finished stint this must not touch.
+
+    Sessions already flagged by ``witan migrate dedupe-sessions`` are skipped;
+    the newest open match wins if somehow several survive.
+    """
+    rows = client.read(
+        "read.gq",
+        "sessions_for_key",
+        {"project_slug": project_slug, "session_id": session_id},
+    )
+    open_rows = [
+        r for r in rows if not r.get("ended_at") and not r.get("superseded_by")
+    ]
+    return open_rows[-1] if open_rows else None
+
+
 @mcp.tool
 def workflow_session_start(
     project_slug: str,
@@ -2788,6 +3094,21 @@ def workflow_session_start(
     thing that ties the two calls together, since the protocol carries no session
     state of its own and consecutive calls may land on different replicas.
 
+    **Re-entrant.** Calling again for a (``project_slug``, ``session_id``) whose
+    session is still open returns that same handle with ``existed: true``
+    instead of minting a second node — so a hook retry, a transport reconnect,
+    or the replica failover the paragraph above warns about can't silently
+    duplicate a session. A newly-supplied ``repo``/``tags`` is merged into the
+    existing session; ``phase`` is left at what the first call set (use
+    ``workflow_project_advance`` to move a project's phase). Once a session has
+    been ended, the same ``session_id`` starts a fresh session — one
+    ``$CLAUDE_SESSION_ID`` legitimately spans several working stints.
+
+    Because the repo accretion below runs on the re-entrant path too, calling
+    this once per repo remains a valid way to widen a project's repo set — but
+    ``workflow_project_update(add_repos=[...])`` does it directly, without
+    needing a session at all.
+
     When a repo is detected and the checkout is on a git branch, also
     upserts a ``CodeBranch`` (repo, branch) and links it ``ForProject`` to
     this project — schema.pg § Code Branches. Best-effort: silently skipped
@@ -2807,29 +3128,50 @@ def workflow_session_start(
         Optional tags.
     """
     now = now_iso()
-    slug = _make_slug("workflow_session", project_slug)
     detected_repo = repo_module.detect(override=repo)
+    existing = _open_session_for_key(project_slug, session_id)
 
-    client.change(
-        "mutations.gq",
-        "insert_workflow_session",
-        {
-            "slug": slug,
-            "project_slug": project_slug,
-            "session_id": session_id,
-            "repo": detected_repo,
-            "phase": phase,
-            "summary": "",
-            "author": _current_author(),
-            "tags": tags,
-            "started_at": now,
-        },
-    )
-    client.change(
-        "mutations.gq",
-        "link_belongs_to",
-        {"from": slug, "to": project_slug},
-    )
+    if existing:
+        slug = existing["slug"]
+        # Merge, never clear: a repeat call that omits repo/tags must not wipe
+        # what the first one recorded.
+        merged_repo = detected_repo or existing.get("repo")
+        merged_tags = list(
+            dict.fromkeys([*(existing.get("tags") or []), *(tags or [])])
+        )
+        if merged_repo != existing.get("repo") or merged_tags != (
+            existing.get("tags") or []
+        ):
+            client.change(
+                "mutations.gq",
+                "update_workflow_session_meta",
+                {"slug": slug, "repo": merged_repo, "tags": merged_tags or None},
+            )
+        phase = existing.get("phase") or phase
+        started_at = existing.get("started_at") or now
+    else:
+        slug = _make_slug("workflow_session", project_slug)
+        started_at = now
+        client.change(
+            "mutations.gq",
+            "insert_workflow_session",
+            {
+                "slug": slug,
+                "project_slug": project_slug,
+                "session_id": session_id,
+                "repo": detected_repo,
+                "phase": phase,
+                "summary": "",
+                "author": _current_author(),
+                "tags": tags,
+                "started_at": now,
+            },
+        )
+        client.change(
+            "mutations.gq",
+            "link_belongs_to",
+            {"from": slug, "to": project_slug},
+        )
 
     # Accrete this session's repo into the project's repo set, so a project's
     # association grows as it's worked across repos without explicit declaration.
@@ -2857,7 +3199,8 @@ def workflow_session_start(
         "project_slug": project_slug,
         "phase": phase,
         "session_id": session_id,
-        "started_at": now,
+        "started_at": started_at,
+        "existed": existing is not None,
     }
     # Convenience only, and only when the server is the user's own stdio process:
     # then it shares a filesystem with the Stop hook, so it can park the handle
