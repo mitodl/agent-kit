@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.8.1] - 2026-07-31
+
+### Fixed
+
+- **Nested checkouts are no longer indexed as part of the parent repo.** The
+  walk skipped `.git` *directories*, but a linked worktree or submodule marks
+  itself with a `.git` **file**, so `.claude/worktrees/<name>/` was descended
+  into and every file there was attributed to the parent repo — at a different
+  path, at whatever revision that worktree happened to be on. In this repo's
+  own store that was **732 of 990 indexed files (74%)**, spread across every
+  branch view. The practical damage was to `code_search_symbol` and friends:
+  a query returned the same function many times over with *different, older
+  signatures*, so reading the first hit gave a confidently wrong answer, and
+  `code_impact` inflated blast radius with callers that only exist on an
+  abandoned branch. Any subdirectory holding a `.git` entry is now skipped.
+  Indexing from *inside* a worktree is unaffected — only descending into one
+  from the parent is refused — so the hooks keep working on a branch.
+- **A full-repo index now purges files the repo no longer has**, reported as
+  `purged=N`. Nothing removed a `CodeFile`/`Symbol` once written unless that
+  same file was re-indexed, so deletions leaked forever: this repo's store
+  still held `_detach.py` and its tests, moved out to `witan-core` several
+  releases ago. This is also what clears the worktree rows above — excluding a
+  path stops adding rows but cannot retract the ones already written, so
+  without it the fix would only have stopped the bleeding.
+
+  Purging never runs against a shared cluster graph (`is_remote`): there the
+  default branch is indexed by CI and everyone else gets a read-only view, so
+  one developer's working tree must not reconcile it for everybody. Inert
+  today — code stores are still local — and load-bearing once witan-code
+  addresses `--server`/`--graph`.
+
+  Membership is decided by the set of files just collected, **not** by whether
+  the file still exists on disk: a linked worktree's files are on disk and
+  still must go. Purging requires a confirmed git root and a full-repo target;
+  a subpath, a single file (the reindex hook), or a non-git directory never
+  purges — without a git root `base` falls back to the target directory, which
+  would make every stored path look stale.
+
+### Changed
+
+- An unreadable directory now suppresses the purge for that run (and is
+  reported on stderr, counting toward `errors`). `os.walk` hands such a
+  directory to `onerror` and otherwise continues silently, so a subtree the
+  walk could not enter is indistinguishable from one that was deleted — which
+  would have taken its still-present files' rows with it. Indexing still
+  proceeds with whatever was readable; only the destructive half backs off.
+- The file walk prunes as it goes (`os.walk`) instead of walking everything and
+  filtering afterwards, so `node_modules`/`.venv` subtrees are no longer
+  traversed in full. Collection order is now sorted, making a run reproducible.
+- `code_reindex` returns a `purged` count alongside the existing counters.
+
 ## [0.8.0] - 2026-07-31
 
 ### Added

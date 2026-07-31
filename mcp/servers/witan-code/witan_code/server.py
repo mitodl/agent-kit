@@ -1024,4 +1024,5 @@ async def code_reindex(path: str | None = None, force: bool = False) -> dict:
         "edges": stats.edges,
         "bindings": stats.bindings,
         "errors": stats.errors,
+        "purged": stats.purged,
     }
