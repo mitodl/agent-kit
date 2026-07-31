@@ -568,5 +568,11 @@ has — deleted, or newly excluded by the rules above. Membership is decided by
 the set of files just collected, not by whether the file still exists on disk:
 a linked worktree's files are very much on disk, they simply aren't this
 repo's. The count is reported as `purged=N` when non-zero. Purging requires a
-confirmed git root; indexing a subpath, a single file (the reindex hook), or a
-directory that isn't a git checkout never purges.
+confirmed git root; indexing a subpath, a single file (the reindex hook), a
+directory that isn't a git checkout, or a directory the walk could not fully
+read never purges.
+
+Nor does a **shared cluster graph** (`is_remote`). There the default branch is
+indexed by CI and everyone else reads it — reconciling it against one
+developer's working tree (a sparse checkout, a stale one, uncommitted
+deletions) would purge files for every other user of that graph.

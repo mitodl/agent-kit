@@ -7,6 +7,7 @@ repo to itself (which is exactly how one ended up 74% duplicates).
 """
 
 import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 
 from witan_code import indexer
@@ -258,3 +259,38 @@ def test_unreadable_directory_suppresses_the_purge(tmp_path, monkeypatch):
     assert stats.errors >= 1  # the unreadable directory is reported, not hidden
     assert stats.purged == 0
     assert _files(store, cfg) == {"a.py", "sub/b.py"}
+
+
+# ── _may_purge: the gate on the one destructive step ─────────────────────────
+
+
+def _gate(**overrides):
+    """Call `_may_purge` with an authoritative baseline, overriding one clause."""
+    kwargs = {
+        "full_repo": True,
+        "repo_root": Path("/repo"),
+        "walk_errors": [],
+        "client": SimpleNamespace(is_remote=False),
+    }
+    kwargs.update(overrides)
+    return indexer._may_purge(**kwargs)
+
+
+def test_purge_allowed_only_when_this_machine_is_authoritative():
+    assert _gate() is True
+
+    # A subpath run collects a fraction of the repo by design.
+    assert _gate(full_repo=False) is False
+    # No git root => `base` is the target dir, so `full_repo` means nothing.
+    assert _gate(repo_root=None) is False
+    # An unreadable subtree looks exactly like a deleted one.
+    assert _gate(walk_errors=[PermissionError(13, "denied", "/repo/sub")]) is False
+
+
+def test_purge_refused_against_a_shared_cluster_graph():
+    """A remote graph is shared: the default branch is indexed by CI and
+    everyone else reads it. Reconciling it against one developer's working
+    tree — sparse checkout, stale checkout, uncommitted deletions — would
+    purge files for every other user of that graph.
+    """
+    assert _gate(client=SimpleNamespace(is_remote=True)) is False

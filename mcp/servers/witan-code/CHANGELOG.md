@@ -31,6 +31,12 @@ a MINOR bump may include breaking changes).
   path stops adding rows but cannot retract the ones already written, so
   without it the fix would only have stopped the bleeding.
 
+  Purging never runs against a shared cluster graph (`is_remote`): there the
+  default branch is indexed by CI and everyone else gets a read-only view, so
+  one developer's working tree must not reconcile it for everybody. Inert
+  today — code stores are still local — and load-bearing once witan-code
+  addresses `--server`/`--graph`.
+
   Membership is decided by the set of files just collected, **not** by whether
   the file still exists on disk: a linked worktree's files are on disk and
   still must go. Purging requires a confirmed git root and a full-repo target;

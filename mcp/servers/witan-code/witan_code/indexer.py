@@ -333,19 +333,12 @@ def index_path(
         stats.indexed += 1
 
     full_repo = target.is_dir() and target.resolve() == base.resolve()
-    # Purging deletes rows, so it demands more certainty than `full_repo` alone
-    # carries: without a git root, `base` falls back to the target directory
-    # itself, which makes `full_repo` true for ANY directory. Index a
-    # subdirectory under those conditions (a WITAN_REPO override, or no git at
-    # all) and every path stored relative to the real root would look stale —
-    # emptying the store. Only a confirmed repo root guarantees the collected
-    # set covers what the store holds.
-    #
-    # An unreadable directory disqualifies it for the same reason: a subtree
-    # the walk skipped is indistinguishable from one that was deleted, so its
-    # files would be purged while sitting right there on disk. Indexing still
-    # proceeds with what was readable — only the destructive half backs off.
-    can_purge = full_repo and repo_root is not None and not walk_errors
+    can_purge = _may_purge(
+        full_repo=full_repo,
+        repo_root=repo_root,
+        walk_errors=walk_errors,
+        client=client,
+    )
 
     # Drop stale data for changed files (new files have nothing to delete), then
     # bulk-load every node and edge in a single omnigraph call.
@@ -423,6 +416,38 @@ def _dedupe(records: list[dict]) -> list[dict]:
             seen_edges.add(key)
         out.append(record)
     return out
+
+
+def _may_purge(
+    *,
+    full_repo: bool,
+    repo_root: Path | None,
+    walk_errors: list[OSError],
+    client: OmnigraphClient,
+) -> bool:
+    """Whether this run is entitled to delete rows for files it did not collect.
+
+    Purging is the one destructive thing an index does, so it asks for more
+    than the run being a full-repo one. Every clause answers the same question
+    — is this machine's file listing authoritative for the view being written?
+
+    - ``full_repo``: a subpath run legitimately collects a fraction of the repo.
+    - ``repo_root``: without a git root, ``base`` falls back to the target
+      directory, making ``full_repo`` true for ANY directory — index a
+      subdirectory then and every path stored relative to the real root looks
+      stale.
+    - ``walk_errors``: a directory the walk could not read is indistinguishable
+      from one that was deleted, so its files would go while sitting on disk.
+    - ``client.is_remote``: a shared cluster graph is not this machine's to
+      reconcile. One developer's working tree — sparse checkout, stale
+      checkout, local deletions — would otherwise purge files for everyone on
+      the shared ``main`` view. There the default branch is indexed by CI and
+      everyone else reads it; a designated writer will need an explicit opt-in
+      rather than inheriting the right by being remote.
+    """
+    return (
+        full_repo and repo_root is not None and not walk_errors and not client.is_remote
+    )
 
 
 def _relative_path(path: Path, base: Path) -> str:
