@@ -20,7 +20,7 @@ ARG PYTHON_VERSION=3.14
 ARG OMNIGRAPH_VERSION=0.8.1
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
-ARG WITAN_VERSION=0.4.0
+ARG WITAN_VERSION=0.8.0
 
 # ── Fetch the pinned omnigraph CLI binary (checksum-verified) ─────────────────
 FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS omnigraph-fetch
