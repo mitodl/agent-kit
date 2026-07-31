@@ -127,10 +127,27 @@ def test_views_for_branch_finds_every_writer_including_unowned():
     found = views.views_for_branch(names, "feature-x")
 
     assert [v.name for v in found] == [
-        "feature-x",  # unowned sorts first (actor "")
         "act-alice/feature-x",
         "act-bob/feature-x",
+        "feature-x",  # un-owned sorts LAST — see the test below
     ]
+
+
+def test_an_unowned_view_is_the_last_fallback_not_the_first():
+    """Callers take `candidates[0]` as a read fallback. On a shared graph an
+    un-owned view is one left behind from before namespacing — the
+    collision-prone name this scheme replaced — so a read must prefer any
+    single-writer view over it, not the other way round."""
+    names = ["feature-x", "act-bob/feature-x"]
+
+    assert views.views_for_branch(names, "feature-x")[0].name == "act-bob/feature-x"
+
+    bridge_names = [
+        "https_github.com_test_a/feature-x",
+        "act-bob/https_github.com_test_a/feature-x",
+    ]
+    found = views.views_for_branch(bridge_names, "feature-x", bridge=True)
+    assert found[0].name == "act-bob/https_github.com_test_a/feature-x"
 
 
 def test_views_for_branch_takes_the_already_mapped_component():

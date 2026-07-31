@@ -152,10 +152,17 @@ def views_for_branch(
     decision to keep branch views on the shared graph was taken: an agent can
     enumerate every in-flight view of the branch it is working on, including
     the ones its teammates are still writing.
+
+    Owned views sort before un-owned ones, then by actor id so the order is
+    stable between calls. Callers that take the first candidate as a fallback
+    (``server._view_for_branch``) therefore land on a view with a single
+    writer rather than on an un-owned one — which, on a shared graph, is a
+    view left behind from before namespacing: the collision-prone name this
+    scheme replaced, and the last thing a read should default to.
     """
     slug = cfg_module.sanitize_slug(repo) if repo else None
     parsed = (parse_view(n, bridge=bridge) for n in names)
     return sorted(
         (v for v in parsed if v.branch == branch and (slug is None or v.repo == slug)),
-        key=lambda v: (v.actor or "", v.repo or ""),
+        key=lambda v: (v.actor is None, v.actor or "", v.repo or ""),
     )
