@@ -6,6 +6,7 @@ Each server's own test_graph.py keeps only its subclass-specific bits (the
 setup-hint message; witan-code's branch ops; witan's apply_schema).
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -98,6 +99,157 @@ def test_remote_run_builds_server_graph_command(monkeypatch):
     assert "--store" not in cmd
     assert cmd[cmd.index("--server") + 1] == "http://host:8080"
     assert cmd[cmd.index("--graph") + 1] == "council"
+
+
+# ── bearer token delivery ─────────────────────────────────────────
+#
+# The CLI resolves a token from `OMNIGRAPH_TOKEN_<NAME>`, then
+# ~/.omnigraph/credentials, then `OMNIGRAPH_BEARER_TOKEN` — and no subcommand
+# takes a token flag. This client relies on that last fallback.
+#
+# The name was wrong for the whole life of the remote path (it read
+# `OMNIGRAPH_SERVER_BEARER_TOKEN`, derived by analogy from the *server*-side
+# `OMNIGRAPH_SERVER_BEARER_TOKENS_FILE`), so every remote call from both
+# servers went out unauthenticated and the deployed migration Job crash-looped.
+# Nothing caught it because nothing asserted WHICH variable was set.
+
+
+def test_token_is_delivered_in_the_env_var_the_cli_actually_reads(monkeypatch):
+    client = _built_client(
+        monkeypatch, "http://host:8080", graph_id="council", token="t"
+    )
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    client.read("read.gq", "some_query", {})
+
+    # Pinned as a literal, not via the constant: asserting
+    # env[og.BEARER_TOKEN_ENV_VAR] would pass for ANY value of the constant,
+    # including the wrong one this test exists to prevent coming back.
+    assert captured["env"]["OMNIGRAPH_BEARER_TOKEN"] == "t"
+    assert "OMNIGRAPH_SERVER_BEARER_TOKEN" not in captured["env"]
+
+
+def _token_seen_by_subprocess(monkeypatch, uri, *, token=None, ambient=None):
+    """What the CLI subprocess would see in the token var for this address."""
+    if ambient is None:
+        monkeypatch.delenv("OMNIGRAPH_BEARER_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("OMNIGRAPH_BEARER_TOKEN", ambient)
+    client = _built_client(monkeypatch, uri, token=token, graph_id="council")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    client.read("read.gq", "some_query", {})
+    return captured["env"].get("OMNIGRAPH_BEARER_TOKEN")
+
+
+def test_no_token_invents_none(monkeypatch):
+    assert _token_seen_by_subprocess(monkeypatch, "/var/lib/witan/graph.omni") is None
+
+
+@pytest.mark.parametrize("uri", ["/var/lib/witan/graph.omni", "s3://bucket/graph"])
+@pytest.mark.parametrize("token", [None, "explicit"])
+def test_local_store_never_receives_a_bearer_token(monkeypatch, uri, token):
+    """`env` is a copy of os.environ, so an ambient token exported for cluster
+    use rode along into every local subprocess — a secret handed to a process
+    that has no server to present it to. s3:// included: it authenticates with
+    AWS credentials, not a bearer token."""
+    assert (
+        _token_seen_by_subprocess(
+            monkeypatch, uri, token=token, ambient="ambient-secret"
+        )
+        is None
+    )
+
+
+def test_remote_store_keeps_an_ambient_token_when_none_is_configured(monkeypatch):
+    """The complement of the rule above, and deliberately NOT stripped:
+    `export OMNIGRAPH_BEARER_TOKEN=…` with nothing in config is the CLI's own
+    documented fallback, so removing it here would break a supported way of
+    driving a remote graph."""
+    assert (
+        _token_seen_by_subprocess(
+            monkeypatch, "http://host:8080", ambient="ambient-secret"
+        )
+        == "ambient-secret"
+    )
+
+
+def test_explicit_token_overrides_an_ambient_one_on_a_remote_store(monkeypatch):
+    assert (
+        _token_seen_by_subprocess(
+            monkeypatch, "http://host:8080", token="explicit", ambient="ambient-secret"
+        )
+        == "explicit"
+    )
+
+
+def test_each_call_gets_its_own_env_so_per_actor_tokens_cannot_race(monkeypatch):
+    """witan resolves a different token per request (ADR-0004). The env is
+    built per `_execute`, so two clients' tokens never share mutable state —
+    which is why this uses the env fallback and not `omnigraph login`, whose
+    credentials file is process-global."""
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(kwargs["env"].get("OMNIGRAPH_BEARER_TOKEN"))
+        return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    for token in ("actor-a-token", "actor-b-token"):
+        _built_client(
+            monkeypatch, "http://host:8080", graph_id="council", token=token
+        ).read("read.gq", "q", {})
+
+    assert seen == ["actor-a-token", "actor-b-token"]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WITAN_TEST_OMNIGRAPH_SERVER"),
+    reason="set WITAN_TEST_OMNIGRAPH_SERVER=<url> to check token delivery live",
+)
+def test_live_server_reads_the_token_we_send(monkeypatch):
+    """The only check that catches omnigraph RENAMING the variable on us.
+
+    Every other test here pins our side of the contract; none would notice if
+    a future omnigraph stopped reading `OMNIGRAPH_BEARER_TOKEN`. The CLI's own
+    wording is the discriminator: "missing bearer token" means it found no
+    token at all (wrong variable), "invalid bearer token" means it read ours
+    and rejected the value — which is the expected outcome for a bogus token
+    and proves delivery works.
+
+    Opt-in because it needs a reachable server; point it at a port-forward:
+        kubectl -n omnigraph port-forward svc/omnigraph-server 18080:8080
+        WITAN_TEST_OMNIGRAPH_SERVER=http://127.0.0.1:18080 pytest -k live_server
+
+    ``WITAN_TEST_OMNIGRAPH_GRAPH`` names a graph the server serves (default
+    ``council``). Any remote command works — auth is checked before the graph
+    is touched — but the client requires a graph id to build a remote address
+    at all, so a server-level command is not actually simpler here.
+    """
+    url = os.environ["WITAN_TEST_OMNIGRAPH_SERVER"]
+    graph = os.environ.get("WITAN_TEST_OMNIGRAPH_GRAPH", "council")
+    client = OmnigraphClient(
+        url, Path("/queries"), token="deliberately-bogus", graph_id=graph
+    )
+    with pytest.raises(RuntimeError) as exc:
+        client._run("snapshot")
+
+    message = str(exc.value).lower()
+    assert "invalid bearer token" in message, (
+        "expected the server to reject our bogus token; got "
+        f"{message!r}. 'missing bearer token' here means the CLI no longer "
+        f"reads {og.BEARER_TOKEN_ENV_VAR} — re-check its token-resolution order."
+    )
 
 
 def test_find_binary_prefers_path(monkeypatch):

@@ -69,6 +69,24 @@ _ADMISSION_CAP_MAX_ATTEMPTS = 6
 _ADMISSION_CAP_BASE_DELAY = 0.25
 _ADMISSION_CAP_MAX_DELAY = 4.0
 
+# How a bearer token reaches the omnigraph CLI. Per its token-resolution order
+# (docs/user/cli/reference.md): a server-name-specific `OMNIGRAPH_TOKEN_<NAME>`,
+# then a `[<name>]` section in ~/.omnigraph/credentials, then THIS as the
+# default fallback for any server. No subcommand takes a token flag — only
+# `omnigraph login` does — so the env fallback is the only per-invocation form.
+#
+# That matters: witan resolves a DIFFERENT per-actor token per request
+# (ADR-0004), and a credentials file is process-global state that concurrent
+# requests for two actors would race. An env var set on each subprocess does
+# not, which is why this stays a per-call `env` rather than a login at startup.
+#
+# NOT to be confused with the SERVER-side `OMNIGRAPH_SERVER_BEARER_TOKENS_FILE`
+# (plural, a file: the {actor_id: token} map omnigraph-server boots from). This
+# was previously spelled `OMNIGRAPH_SERVER_BEARER_TOKEN`, derived from that name
+# by analogy — a variable the CLI has never read, which left every remote call
+# from both servers unauthenticated and crash-looped the deployed migration Job.
+BEARER_TOKEN_ENV_VAR = "OMNIGRAPH_BEARER_TOKEN"
+
 # A deployed omnigraph-server is reached over http(s); local files and s3://
 # roots are opened directly. Only http(s) needs the `--server`/`--graph`
 # addressing split — s3:// keeps `--store` (omnigraph opens it directly).
@@ -317,8 +335,20 @@ class OmnigraphClient:
         """Run an omnigraph CLI command under the write lock (for writes) with the
         retry/repair loop for optimistic-concurrency conflicts."""
         env = dict(os.environ)
-        if self.token:
-            env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = self.token
+        if not self.is_remote:
+            # A local path or an s3:// root is opened directly — there is no
+            # server to present a bearer token to, and s3 authenticates with AWS
+            # credentials instead. `env` is a copy of os.environ, so an ambient
+            # token exported for cluster use would otherwise ride along into
+            # every local subprocess: propagating a secret to a process that
+            # has no use for it. Strip it rather than merely not setting it.
+            env.pop(BEARER_TOKEN_ENV_VAR, None)
+        elif self.token:
+            env[BEARER_TOKEN_ENV_VAR] = self.token
+        # A remote store with no explicit token deliberately keeps whatever the
+        # environment already carries: that is the CLI's own documented fallback
+        # (see BEARER_TOKEN_ENV_VAR), and `export OMNIGRAPH_BEARER_TOKEN=…` with
+        # no token in config is a supported way to drive it.
 
         lock_fh = self._acquire_write_lock(is_write)
         try:
