@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -34,9 +35,22 @@ from .graph import OmnigraphClient
 _GRAPHS_TTL = 30.0
 _graphs_cache: dict[str, tuple[float, frozenset[str]]] = {}
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
 
 class ClusterGraphMissing(RuntimeError):
     """A cluster graph witan-code needs is not registered with the server."""
+
+
+class ClusterUnreachable(RuntimeError):
+    """The omnigraph-server could not be asked what graphs it has.
+
+    Distinct from :class:`ClusterGraphMissing` on purpose. "The server says
+    that graph does not exist" and "I could not reach the server" are the same
+    empty listing, and collapsing them sends you to check provisioning for
+    what is really a bad token or a closed port — which is exactly what
+    happened the first time this ran against the live CI cluster.
+    """
 
 
 @dataclass(frozen=True)
@@ -98,10 +112,14 @@ class StoreRef:
         creates. A registered-but-empty graph exists — callers distinguish that
         with :func:`file_count`, exactly as they do for a freshly-init'd local
         store.
+
+        A server that cannot be reached answers ``False`` here, since a read
+        path has nothing better to do with it; the write path calls
+        :func:`cluster_graphs` directly so it can tell the two apart.
         """
         if not self.is_remote:
             return Path(self.uri).exists()
-        return self.graph_id in cluster_graphs(self.uri, self.token)
+        return self.graph_id in safe_cluster_graphs(self.uri, self.token)
 
     def stats(self) -> tuple[int | None, float | None]:
         """``(total_bytes, latest mtime)``, or ``(None, None)`` on the cluster.
@@ -119,31 +137,74 @@ class StoreRef:
 def cluster_graphs(server_url: str, token: str | None = None) -> frozenset[str]:
     """Graph ids registered with the omnigraph-server at ``server_url``.
 
-    Empty on any failure — an unreachable server reads as "nothing indexed"
-    for listings, the same degradation an unreadable ``code_dir`` already got,
-    rather than taking down every ``code_*`` tool. ``ensure_store`` is the one
-    caller that turns "not registered" into a hard error, because that is the
-    one case where continuing would silently write nowhere.
+    Raises :class:`ClusterUnreachable` when the server could not be asked, so
+    that an auth failure or a closed port cannot masquerade as a server that
+    genuinely has no graphs. Callers that only need a listing catch it and
+    degrade (see :func:`safe_cluster_graphs`); ``ensure_store`` lets it
+    propagate, because a write that continues past it writes nowhere.
+
+    A successful-but-empty answer is cached; a failure is not, so a transient
+    outage doesn't pin an error for the whole TTL.
     """
     cached = _graphs_cache.get(server_url)
     if cached is not None and time.monotonic() - cached[0] < _GRAPHS_TTL:
         return cached[1]
-    env = dict(os.environ)
-    if token:
-        env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = token
     try:
         res = subprocess.run(
             [_binary(), "graphs", "list", "--server", server_url, "--json"],
             capture_output=True,
             text=True,
-            env=env,
+            env=_token_env(token),
         )
-        found = _parse_graph_ids(res.stdout) if res.returncode == 0 else []
-    except (OSError, RuntimeError):
-        found = []
-    graphs = frozenset(found)
+    except (OSError, RuntimeError) as exc:
+        raise ClusterUnreachable(f"could not run omnigraph graphs list: {exc}") from exc
+    if res.returncode != 0:
+        raise ClusterUnreachable(
+            f"omnigraph-server at {server_url} could not be listed "
+            f"(exit {res.returncode}): {_clean(res.stderr)}"
+        )
+    graphs = frozenset(_parse_graph_ids(res.stdout))
     _graphs_cache[server_url] = (time.monotonic(), graphs)
     return graphs
+
+
+def safe_cluster_graphs(server_url: str, token: str | None = None) -> frozenset[str]:
+    """:func:`cluster_graphs`, degrading to empty when the server can't be asked.
+
+    For the listing paths (``code_indexed_repos``, the prompt-hook coverage
+    line), which already treat an unreadable ``code_dir`` as "nothing
+    indexed" and must not take down a whole MCP tool call over it.
+    """
+    try:
+        return cluster_graphs(server_url, token)
+    except ClusterUnreachable:
+        return frozenset()
+
+
+def _token_env(token: str | None) -> dict[str, str]:
+    """Environment for an omnigraph subprocess carrying ``token``.
+
+    NOTE (verified against omnigraph 0.8.1 on the CI cluster, 2026-08-01): the
+    binary does NOT read ``OMNIGRAPH_SERVER_BEARER_TOKEN``. It resolves a
+    bearer token from ``~/.omnigraph/credentials`` written by ``omnigraph
+    login``, matched against the address being used. Setting the env var
+    leaves the CLI reporting "missing bearer token".
+
+    This is shared plumbing — ``witan_core.omnigraph._execute`` sets the same
+    variable for every remote call in both servers — so the fix belongs there
+    and is tracked separately. Kept here, unchanged and labelled, rather than
+    silently dropped: the variable is harmless, and removing it would erase
+    the only trace of where the token was *meant* to go.
+    """
+    env = dict(os.environ)
+    if token:
+        env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = token
+    return env
+
+
+def _clean(stderr: str) -> str:
+    """omnigraph's error text without ANSI codes or the Rust backtrace boilerplate."""
+    return _ANSI_RE.sub("", stderr).split("Location:")[0].strip()
 
 
 def reset_graph_cache() -> None:
@@ -277,9 +338,13 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
 
 
 def _verify_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> StoreRef:
-    if ref.exists():
+    # Deliberately NOT ref.exists(): that folds an unreachable server into
+    # "absent", and the message below would then blame provisioning for what
+    # is really a bad token or a closed port. Let ClusterUnreachable through.
+    declared = cluster_graphs(ref.uri, ref.token)
+    if ref.graph_id in declared:
         return ref
-    known = ", ".join(sorted(cluster_graphs(ref.uri, ref.token))) or "(none)"
+    known = ", ".join(sorted(declared)) or "(none)"
     unset = (
         f"code_server on target [{cfg.target_name}]"
         if cfg.target_name
@@ -307,7 +372,7 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
     if cfg.code_server:
         return [
             StoreRef(cfg.code_server, gid, cfg.code_token)
-            for gid in sorted(cluster_graphs(cfg.code_server, cfg.code_token))
+            for gid in sorted(safe_cluster_graphs(cfg.code_server, cfg.code_token))
             if gid.startswith(cfg_module.CODE_GRAPH_PREFIX)
             and gid != cfg_module.BRIDGE_GRAPH_ID
         ]

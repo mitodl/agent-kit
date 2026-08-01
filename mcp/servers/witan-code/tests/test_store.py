@@ -128,6 +128,90 @@ def _cluster(monkeypatch, *graphs: str, url: str = "https://omnigraph.test"):
     monkeypatch.setattr(
         store_module, "cluster_graphs", lambda *a, **kw: frozenset(graphs)
     )
+    monkeypatch.setattr(
+        store_module, "safe_cluster_graphs", lambda *a, **kw: frozenset(graphs)
+    )
+
+
+# The exact stderr omnigraph 0.8.1 produced against the deployed CI server when
+# the CLI had no usable credential (2026-08-01). Verbatim, because the whole
+# point of the two exception types is telling THIS apart from a graph that
+# genuinely isn't provisioned, and a paraphrase would stop testing that.
+_MISSING_TOKEN_STDERR = (
+    "\x1b[0mError: \n   0: \x1b[91mmissing bearer token\x1b[0m\n\n"
+    "Location:\n   \x1b[35mcrates/omnigraph-cli/src/helpers.rs\x1b[0m:\x1b[35m436\x1b[0m\n"
+)
+
+
+def _failing_graphs_list(
+    monkeypatch, stderr: str = _MISSING_TOKEN_STDERR, code: int = 1
+):
+    import subprocess as _sp
+
+    monkeypatch.setattr(store_module, "_binary", lambda: "/nonexistent/omnigraph")
+    monkeypatch.setattr(
+        store_module.subprocess,
+        "run",
+        lambda *a, **kw: _sp.CompletedProcess(a[0], code, "", stderr),
+    )
+    store_module.reset_graph_cache()
+
+
+def test_unreachable_server_is_not_reported_as_an_unprovisioned_graph(monkeypatch):
+    """An auth failure and "that graph does not exist" are the same empty
+    listing. Collapsing them sent the first live run to check provisioning for
+    what was really a missing bearer token."""
+    import pytest
+
+    from witan_code import config as cfg_module
+
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    cfg = cfg_module.load()
+    _failing_graphs_list(monkeypatch)
+
+    with pytest.raises(store_module.ClusterUnreachable) as exc:
+        store_module.ensure_store("https://github.com/mitodl/agent-kit", cfg)
+
+    message = str(exc.value)
+    assert "missing bearer token" in message  # the server's own words survive
+    assert "\x1b[" not in message  # ...without the ANSI codes
+    assert "Location:" not in message  # ...or the Rust backtrace boilerplate
+    assert "data_tier.py" not in message  # and WITHOUT blaming provisioning
+
+
+def test_listings_still_degrade_when_the_server_cannot_be_asked(monkeypatch):
+    """A read path has nothing better to do with an unreachable server than
+    report nothing — it must not take down every `code_*` tool."""
+    from witan_code import config as cfg_module
+
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    cfg = cfg_module.load()
+    _failing_graphs_list(monkeypatch)
+
+    assert store_module.per_repo_stores(cfg) == []
+    assert not store_module.store_for_repo("https://github.com/x/y", cfg).exists()
+
+
+def test_a_failed_listing_is_not_cached(monkeypatch):
+    """A transient outage must not pin an error for the whole TTL — the next
+    call has to be able to succeed."""
+    from witan_code import config as cfg_module
+
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    cfg = cfg_module.load()
+    _failing_graphs_list(monkeypatch)
+    assert store_module.per_repo_stores(cfg) == []
+
+    import subprocess as _sp
+
+    monkeypatch.setattr(
+        store_module.subprocess,
+        "run",
+        lambda *a, **kw: _sp.CompletedProcess(a[0], 0, '["code-github-com-x-y"]', ""),
+    )
+    assert [r.graph_id for r in store_module.per_repo_stores(cfg)] == [
+        "code-github-com-x-y"
+    ]
 
 
 def test_store_for_repo_addresses_the_cluster_graph(monkeypatch):
