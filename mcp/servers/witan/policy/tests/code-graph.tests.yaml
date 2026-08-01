@@ -38,6 +38,19 @@ cases:
     action: branch_create
     target_branch: main
     expect: deny
+  # Deleting a branch view on a shared graph is the reaper's job, not a user's:
+  # views are named for their writer, but Cedar cannot scope a delete to that
+  # writer, so the grant would be "any user may destroy any user's index".
+  - id: user-cannot-delete-own-wip-branch
+    actor: act-alice
+    action: branch_delete
+    target_branch: act-alice/feature-x
+    expect: deny
+  - id: user-cannot-delete-others-wip-branch
+    actor: act-bob
+    action: branch_delete
+    target_branch: act-alice/feature-x
+    expect: deny
   - id: user-cannot-merge-to-main
     actor: act-bob
     action: branch_merge
@@ -106,9 +119,77 @@ cases:
     target_branch: main
     expect: deny
 
-  # Unknown actor: default-deny.
+  # ── Per-writer branch views (witan_code/views.py) ────────────────────────
+  # Views are named `act-<sub>/<branch>`. To Cedar these are just unprotected
+  # branch names — it has no branch-name predicate — so the cases below pin
+  # what that actually decides, in both directions.
+
+  # READS STAY OPEN ACROSS PRINCIPALS. This is not incidental: per-user views
+  # live on the shared cluster graph precisely so an agent can read a
+  # teammate's in-flight index as it is written (DECIDED 2026-07-31, see
+  # docs/adr/0006). A later tightening that scoped reads to the caller's own
+  # views would defeat the reason the shared service exists — these cases are
+  # here to make that tightening fail loudly rather than land quietly.
+  - id: user-reads-own-view
+    actor: act-alice
+    action: read
+    branch: act-alice/feature-x
+    expect: allow
+  - id: user-reads-another-users-view
+    actor: act-bob
+    action: read
+    branch: act-alice/feature-x
+    expect: allow
+  - id: ci-reads-a-users-view
+    actor: act-svc-witan-ci
+    action: read
+    branch: act-alice/feature-x
+    expect: allow
+  - id: user-writes-own-view
+    actor: act-alice
+    action: change
+    branch: act-alice/feature-x
+    expect: allow
+  # A user's view of their own default branch is `act-<sub>/main`, which is a
+  # DIFFERENT branch from the store's `main`: it is a private reindex of the
+  # default branch, not the canonical index. protected_branches matches exact
+  # names, so it lands unprotected and its owner may write it — while the
+  # canonical `main` stays CI-only (user-cannot-write-main, above).
+  - id: user-writes-own-view-of-default-branch
+    actor: act-alice
+    action: change
+    branch: act-alice/main
+    expect: allow
+  # KNOWN GAP, ASSERTED DELIBERATELY. `expect: allow` is not what we want — it
+  # is what omnigraph 0.8.1 decides. A bundle rule compiles to a bare permit
+  # with no `when {}` clause and the only branch predicate is
+  # protected/unprotected/any, so "write views prefixed with your own actor id"
+  # is inexpressible; witan-code's write guard (graph.py:owns_view) enforces it
+  # client-side instead. When an omnigraph release adds a branch-name or
+  # principal-attribute predicate, THIS CASE FAILS — which is the point. Fix it
+  # by tightening the bundle and flipping this to deny, then update
+  # docs/adr/0006 and the code-graph.policy.yaml header.
+  - id: cedar-cannot-scope-wip-writes-to-owner
+    actor: act-bob
+    action: change
+    branch: act-alice/feature-x
+    expect: allow
+
+  # Unknown actor: default-deny. Namespacing does not create authority — an
+  # unauthenticated principal cannot reach a view merely by naming it after
+  # someone who is authenticated.
   - id: stranger-cannot-read
     actor: act-nobody
     action: read
     branch: main
+    expect: deny
+  - id: stranger-cannot-read-a-users-view
+    actor: act-nobody
+    action: read
+    branch: act-alice/feature-x
+    expect: deny
+  - id: stranger-cannot-write-a-users-view
+    actor: act-nobody
+    action: change
+    branch: act-alice/feature-x
     expect: deny

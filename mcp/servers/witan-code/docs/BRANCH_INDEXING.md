@@ -27,16 +27,24 @@ uncommitted state. The symptom is the class of confidently-wrong answer PR
 So the writer is part of the name. One scheme covers both stores
 (`witan_code/views.py`):
 
-```
+```text
 per-repo graph:  [<actor>/]<branch>
 bridge graph:    [<actor>/]<repo-slug>/<branch>
 ```
 
 The actor comes first in both, so **ownership is a prefix**: "may I write
-this view" is one string comparison, the stale-view reaper can sweep by
-owner, and a Cedar rule gates writes with
-`startsWith(branch, principal.actor + "/")` without knowing which store it is
-looking at.
+this view" is one string comparison, whichever store it is looking at, and
+the stale-view reaper can sweep by owner.
+
+That prefix is enforced **client-side only**, which was not the original
+intent. omnigraph 0.8.1 compiles a policy-bundle rule to a bare
+`permit(principal in Omnigraph::Group::…)` with no `when {}` clause, and its
+only branch predicate is the three-valued protected/unprotected scope — there
+is no branch-name pattern and no `principal.actor` to compare against, so the
+hoped-for `startsWith(branch, principal.actor + "/")` rule cannot be written.
+Cedar therefore enforces main-vs-WIP and `graph.owns_view` enforces
+writer-vs-writer; a client that ignores the guard gets past the second and
+not the first. See witan `docs/adr/0006-code-graph-branch-ownership-and-reaping.md`.
 
 `<actor>` is the ADR-0004 `act-<sub>` id — the same derivation the deployed
 server uses (`witan_core.identity.derive_actor_id`), resolved client-side
@@ -111,7 +119,7 @@ Writer authority is a **role, not a transport**. "Refuse writes when the
 store is remote" cannot be applied unconditionally, because the CI indexer is
 remote too and is the one actor that must write. So the role is declared:
 
-```
+```shell
 WITAN_CODE_INDEX_ROLE=ci     # or index_role = "ci" on a [targets.<name>] block
 ```
 
@@ -124,12 +132,13 @@ What the role gates (`witan_code.graph.check_writable`,
 `witan_code.indexer._may_purge`):
 
 | Write | Local store | Shared graph, `client` | Shared graph, `ci` |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | default-branch (`main`) view | ✅ | ❌ refused | ✅ |
 | own branch view (`act-me/<b>`) | ✅ | ✅ | ✅ |
 | another actor's branch view | ✅ | ❌ refused | ❌ refused |
 | stale-file purge | ✅ | ✅ own view only | ✅ |
 | `branches --prune` | ✅ | ❌ | ❌ |
+| `reap-views --apply` | ✅ | ❌ refused | ✅ |
 
 Local stores are unaffected by the role: they have one user, who is their
 writer.
@@ -168,8 +177,41 @@ Both things this decision required are **implemented** (2026-07-31):
 Reaping is consequently **server-side and mandatory**, not a client
 convenience: branch sprawl is real under this decision, and no client can
 tell whose branch views are still live — which is why `branches --prune` is
-refused against a remote store above and stays that way. See
-`tk-branch-cedar-gating-stale-code-graph-branch-reap-0c621c`.
+refused against a remote store above and stays that way.
+
+### Reaping stale views
+
+`witan-code reap-views` is that sweeper (witan `docs/adr/0006`). It is a
+different question from `branches --prune`, not a wider-scoped version of it:
+
+| | `branches --prune` | `reap-views` |
+| --- | --- | --- |
+| asks | does *this checkout* still have the git branch? | how long since anyone wrote this view? |
+| authority | this machine's git refs | the store's own commit log |
+| shared graph | refused, always | the only place it makes sense |
+| runs as | the user | `WITAN_CODE_INDEX_ROLE=ci` |
+
+```bash
+witan-code reap-views                                  # report every local store
+witan-code reap-views --store https://… --graph code-x --apply   # the scheduled job
+```
+
+Idleness comes from `omnigraph commit list --branch`, filtered to commits whose
+`manifest_branch` is the view itself — `branch list` returns bare names, with no
+date, owner, or size. Two rules follow:
+
+* **`main` is never reaped**, however idle. It is the view every reader falls
+  back to and is idle by design between merges.
+* **A view with no commits of its own is never reaped.** It holds nothing that
+  isn't already on its fork point, and with no branch-creation timestamp
+  anywhere, one made ten seconds ago is indistinguishable from one made a year
+  ago — reaping it would race the indexer that just created it.
+
+The window is `WITAN_CODE_VIEW_MAX_IDLE_DAYS` (default 14; `0` disables).
+Idleness is not abandonment: a branch parked past the window and picked back up
+loses its view, not its work, and the next index rebuilds it. Reporting is the
+default and `--apply` deletes, because the window is the one input nothing
+inside the store can validate.
 
 ## Bridge store
 
@@ -179,7 +221,7 @@ cross-repo view, but a branch view should still see every *other* repo's
 subtlety is naming: branch names collide across repos (`feature-x` in two
 repos), so bridge branches are **repo-qualified**:
 
-```
+```text
 bridge branch = [<actor>/]<sanitized-repo-slug>/<sanitized-git-branch>
 ```
 
@@ -200,8 +242,12 @@ can go stale relative to their current `main` if they're reindexed while
 this branch is still open — the same re-derivable-cache tradeoff already
 accepted for per-repo `main` (see Lifecycle above); prune/re-fork on the
 next index resolves it. Bridge branch pruning rides the same
-`branches --prune` sweep. The CLI (`witan code deps`/`stitch`/`symbols`)
-does not yet follow this — it always reads bridge `main`.
+`branches --prune` sweep locally, and the same `reap-views` sweep on the
+cluster — the reaper sweeps the bridge store alongside the per-repo ones, and
+the bridge's Cedar bundle grants users `change`/`branch_create` on unprotected
+branches for exactly this write path (witan `docs/adr/0006` D4). The CLI
+(`witan code deps`/`stitch`/`symbols`) does not yet follow this — it always
+reads bridge `main`.
 
 ## Linking code branches to projects and tasks (witan graph)
 
@@ -218,7 +264,7 @@ storage detail that must not leak into the witan schema. Consumers sanitize
 at the edge before calling `code_*` tools with `branch=…`. New node + edges
 in the witan (Layer 1) schema:
 
-```
+```graphql
 node CodeBranch {
     slug: String @key        // "<repo URI>|<git branch>"
     repo: String @index

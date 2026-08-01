@@ -2,10 +2,23 @@
 #
 # The bridge store (_bridge.omni) links SOA repos by shared contract keys
 # (env_var / endpoint / package / service). It is DERIVED, not authored: it is
-# (re)built by the code-graph indexer, so humans read it but only svc-witan-ci
-# writes its content. Single-branch/flat, like the memory graph. Its schema, like
-# every graph's, is applied by the witan MCP service (witan-service /
-# act-svc-witan) — see policy/README.md § "Non-human actors".
+# (re)built by the code-graph indexer, so nobody hand-writes it — but it is NOT
+# read-only for humans, and it is NOT flat. Indexing a WIP git branch writes that
+# branch's bindings to the bridge in the same pass it writes the per-repo graph
+# (witan_code/bridge.py), onto a branch view of its own
+# (`act-<sub>/<repo-slug>/<branch>`, one graph carrying every repo's views). A
+# bundle that granted users read-only here would fail every developer's WIP index
+# at the bridge step while the per-repo half succeeded — half-indexed branches
+# with no cross-repo bindings.
+#
+# So the branch model matches code-graph.policy.yaml: store `main` is the
+# committed, CI-owned projection; every other branch is an unprotected per-user
+# WIP view. Ownership among WIP views is client-enforced, not Cedar-enforced —
+# the same gap, for the same reason, documented in code-graph.policy.yaml's
+# header and docs/adr/0006-code-graph-branch-ownership-and-reaping.md.
+#
+# Its schema, like every graph's, is applied by the witan MCP service
+# (witan-service / act-svc-witan) — see policy/README.md § "Non-human actors".
 #
 # Group membership is templated by ol-infrastructure — see server.policy.yaml.
 version: 1
@@ -17,12 +30,10 @@ groups:
   # The witan MCP service's own account: owns the bridge schema/migrations.
   witan-service: [act-svc-witan]
 
-# The bridge is flat/single-branch, but we still declare its store `main`
-# protected so that schema_apply can be scoped to `protected` (the uniform
-# invariant: schema always targets protected main, every graph). Without this
-# list, `target_branch_scope: protected` would match nothing; and a bare
-# `target_branch_scope: any` would silently permit schema applies on arbitrary
-# branches the moment anyone introduced branching here.
+# The committed cross-repo projection. Protecting it does two jobs: it keeps
+# `schema_apply` scopable to `protected` (the uniform invariant — schema always
+# targets protected main, every graph), and it makes the CI-owned projection the
+# one thing a user's WIP bridge view cannot overwrite.
 protected_branches: [main]
 
 rules:
@@ -35,18 +46,42 @@ rules:
     allow:
       actors: { group: witan-users }
       actions: [invoke_query]
+  # A WIP index writes its branch's cross-repo bindings here, on its own view.
+  # Mirrors users-write-wip in code-graph.policy.yaml: unprotected only, so the
+  # committed projection on `main` stays CI's.
+  - id: users-write-wip-bridge
+    allow:
+      actors: { group: witan-users }
+      actions: [change]
+      branch_scope: unprotected
+  # Create only, for the same reason as code-graph.policy.yaml: deleting a view
+  # nobody can prove you own is the reaper's job, and CI's alone.
+  - id: users-create-wip-bridge-branches
+    allow:
+      actors: { group: witan-users }
+      actions: [branch_create]
+      target_branch_scope: unprotected
   # CI reads the existing bridge to compute diffs before it rewrites it.
   - id: ci-read-bridge
     allow:
       actors: { group: witan-ci }
       actions: [read, export]
       branch_scope: any
-  # Only CI writes the bridge content — it is a derived cross-repo projection.
+  # CI owns the committed projection on `main`, and reindex-on-merge rewrites it
+  # from whichever branch it just merged — so `any`, not `protected`.
   - id: ci-write-bridge
     allow:
       actors: { group: witan-ci }
       actions: [change]
       branch_scope: any
+  # The stale-view reaper sweeps the bridge's per-user views alongside the
+  # per-repo graphs'. Never `main` — no branch_delete on protected, here or in
+  # code-graph.policy.yaml.
+  - id: ci-manage-wip-bridge-branches
+    allow:
+      actors: { group: witan-ci }
+      actions: [branch_create, branch_delete]
+      target_branch_scope: unprotected
   # The service reads the bridge to decide whether a migration is needed, then
   # applies schema — its default responsibility, not CI's.
   - id: service-read-bridge

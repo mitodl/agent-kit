@@ -17,11 +17,48 @@ cases:
     actor: act-alice
     action: invoke_query
     expect: allow
-  # The bridge is derived — humans never write it.
-  - id: user-cannot-write-bridge
+  # `main` is the committed cross-repo projection — CI's, not a user's.
+  - id: user-cannot-write-bridge-main
     actor: act-alice
     action: change
     branch: main
+    expect: deny
+  # But indexing a WIP git branch writes that branch's bindings here too, on a
+  # repo-qualified view of its own (`act-<sub>/<repo-slug>/<branch>`). Without
+  # these grants every developer's WIP index half-succeeds: per-repo graph
+  # written, cross-repo bindings denied.
+  - id: user-writes-own-bridge-view
+    actor: act-alice
+    action: change
+    branch: act-alice/github_com_mitodl_ol-infrastructure/feature-x
+    expect: allow
+  - id: user-creates-own-bridge-view
+    actor: act-alice
+    action: branch_create
+    target_branch: act-alice/github_com_mitodl_ol-infrastructure/feature-x
+    expect: allow
+  # Cross-principal reads stay open on the bridge for the same reason they do on
+  # the per-repo graphs — see tests/code-graph.tests.yaml.
+  - id: user-reads-another-users-bridge-view
+    actor: act-bob
+    action: read
+    branch: act-alice/github_com_mitodl_ol-infrastructure/feature-x
+    expect: allow
+  # Deletion is the reaper's, not a user's (code-graph.policy.yaml header).
+  - id: user-cannot-delete-bridge-view
+    actor: act-bob
+    action: branch_delete
+    target_branch: act-alice/github_com_mitodl_ol-infrastructure/feature-x
+    expect: deny
+  - id: ci-reaps-stale-bridge-view
+    actor: act-svc-witan-ci
+    action: branch_delete
+    target_branch: act-alice/github_com_mitodl_ol-infrastructure/feature-x
+    expect: allow
+  - id: ci-cannot-delete-bridge-main
+    actor: act-svc-witan-ci
+    action: branch_delete
+    target_branch: main
     expect: deny
   - id: ci-reads-bridge
     actor: act-svc-witan-ci

@@ -448,6 +448,112 @@ def cleanup(
     print("Cleaned up.")
 
 
+@app.command(name="reap-views")
+def reap_views(
+    *,
+    store: str | None = None,
+    graph: str | None = None,
+    max_idle_days: float | None = None,
+    apply: bool = False,
+) -> None:
+    """Delete branch views nobody has written in a long time (**destructive**).
+
+    On a shared cluster graph every developer's every git branch gets a view of
+    its own, and nothing ever removes one — this is what bounds that. Views are
+    re-derivable caches, so a reaped view costs its owner a reindex, not work.
+
+    Distinct from ``branches --prune``, which asks whether *this checkout* still
+    has the git branch and so only makes sense against a store this machine
+    alone writes. This asks how long ago a view was last written, which a shared
+    graph can answer for every writer. A view with no writes of its own is never
+    reaped: it holds nothing, and there is no creation timestamp to age it by.
+
+    Reports by default; ``--apply`` is what deletes. On a shared graph deleting
+    requires ``WITAN_CODE_INDEX_ROLE=ci`` — Cedar grants ``branch_delete`` to
+    the CI indexer alone, and refusing here makes that a clear local error
+    rather than a server denial.
+
+    Parameters
+    ----------
+    store: Graph to sweep — a store path, or an ``http(s)://`` omnigraph-server
+        URL. Default: every local store, the shared bridge included.
+    graph: Cluster graph id, when ``--store`` is a server URL that doesn't
+        encode one as ``.../graphs/<id>``.
+    max_idle_days: Reap views idle at least this long (default: 14, or
+        ``WITAN_CODE_VIEW_MAX_IDLE_DAYS``). ``0`` disables reaping.
+    apply: Actually delete. Without it, nothing is written.
+    """
+    from . import config as cfg_module
+    from . import reaper as reaper_module
+    from . import store as store_module
+    from .graph import OmnigraphClient
+
+    cfg = cfg_module.load()
+    try:
+        idle = reaper_module.max_idle_days() if max_idle_days is None else max_idle_days
+    except ValueError as exc:
+        print(exc)
+        raise SystemExit(1) from None
+
+    if store is not None:
+        targets = [(store, OmnigraphClient(store, cfg.queries_dir, graph_id=graph))]
+    else:
+        paths = [
+            *store_module.per_repo_stores(cfg),
+            cfg_module.bridge_store_path(cfg.code_dir),
+        ]
+        targets = [
+            (str(p), OmnigraphClient(str(p), cfg.queries_dir))
+            for p in paths
+            if p.exists()
+        ]
+    if not targets:
+        print("No code-graph stores — nothing to reap.")
+        return
+    if idle <= 0:
+        print(
+            f"Reaping is disabled ({reaper_module.MAX_IDLE_ENV_VAR}=0) — "
+            f"{len(targets)} store(s) left untouched."
+        )
+        return
+
+    failed_graphs = 0
+    for name, client in targets:
+        try:
+            report = reaper_module.reap(
+                client, graph=name, max_idle=idle, apply=apply, cfg=cfg
+            )
+        except PermissionError as exc:
+            print(exc)
+            raise SystemExit(1) from None
+        except RuntimeError as exc:
+            # A graph that can't be surveyed (unreadable store, unexpected
+            # omnigraph output) must not strand the others — but it must not
+            # pass for a clean sweep either, so it shows up in the exit code.
+            print(f"{name}: FAILED to survey — {exc}")
+            failed_graphs += 1
+            continue
+        _print_reap_report(report, idle=idle)
+
+    if not apply:
+        print("\n(report only — re-run with --apply to delete)")
+    if failed_graphs:
+        raise SystemExit(1)
+
+
+def _print_reap_report(report, *, idle: float) -> None:
+    print(
+        f"{report.graph}: {report.scanned} view(s), {len(report.stale)} idle ≥{idle:g}d"
+    )
+    deleted = set(report.deleted)
+    for age in report.stale:
+        verb = "reaped" if age.view in deleted else "stale "
+        days = age.idle_days(report.now)
+        print(f"  {verb} {age.view} (owner {age.owner or 'nobody'}, idle {days:.1f}d)")
+    for view, err in report.failed:
+        print(f"  FAILED {view}: {err}")
+
+
 @app.command
 def checkpoint() -> None:
     """Opportunistically compact the current repo's store(s) (Stop hook).

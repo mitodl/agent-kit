@@ -28,8 +28,10 @@ def test_a_local_view_keeps_the_name_it_already_had():
 
 
 def test_the_actor_comes_first_so_ownership_is_a_prefix():
-    """Both stores put the owner first, which is what lets one Cedar rule
-    (`startsWith(branch, actor + "/")`) and one reaper cover both."""
+    """Both stores put the owner first, which is what lets one write guard and
+    one reaper cover both. Not a Cedar rule: omnigraph 0.8.1 has no branch-name
+    predicate to hang `startsWith(branch, actor + "/")` on, so the prefix is
+    enforced client-side only — see witan/docs/adr/0006."""
     assert views.repo_view("feature-x", actor="act-alice").startswith("act-alice/")
     assert views.bridge_view(
         "feature-x", "https://github.com/test/a", actor="act-alice"

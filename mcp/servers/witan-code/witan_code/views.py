@@ -15,10 +15,19 @@ So the writer goes in the name. One scheme covers both stores::
     bridge graph:    [<actor>/]<repo-slug>/<branch>
 
 The actor comes first in both, which is the point: ownership is a *prefix*
-predicate. "Does this actor own this view" is one string comparison here, the
-stale-view reaper can sweep by owner, and a Cedar rule can gate writes with
-``startsWith(branch, principal.actor + "/")`` without knowing which of the two
-stores it is looking at (tk-branch-cedar-gating-stale-code-graph-branch-reap).
+predicate. "Does this actor own this view" is one string comparison here,
+whichever of the two stores it is looking at, so the write guard
+(``graph.check_writable``) and the stale-view reaper (:mod:`witan_code.reaper`,
+which reports each swept view against its owner) share one notion of ownership.
+
+That comparison is where enforcement *ends*, though. omnigraph 0.8.1's policy
+bundle cannot express it: a rule compiles to a bare ``permit(principal in
+Omnigraph::Group::…)`` with no ``when {}`` clause, and its only branch predicate
+is the three-valued protected/unprotected scope — there is no branch-name
+pattern and no ``principal.actor`` to compare a prefix against. So Cedar
+enforces main-vs-WIP and this prefix enforces writer-vs-writer, client-side.
+A client that lies gets past the second and not the first. See
+witan/docs/adr/0006-code-graph-branch-ownership-and-reaping.md.
 
 The ``<actor>/`` prefix is absent exactly when this process has no identity to
 name — no deployment configured, so nothing shared to collide on
