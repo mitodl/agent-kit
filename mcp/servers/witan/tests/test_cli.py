@@ -503,3 +503,92 @@ def test_serve_http_prepends_missing_leading_slash(monkeypatch):
     fake = _patch_mcp(monkeypatch)
     serve(transport="http", path="mcp")
     assert fake.run_calls[0]["path"] == "/mcp"
+
+
+# ── witan project update ──────────────────────────────────────────
+
+
+@requires_omnigraph
+def test_project_update_only_touches_what_is_passed(server, monkeypatch):
+    from witan.cli.projects import project_create, project_update
+
+    _patch_server(monkeypatch, server)
+    project_create(
+        title="Original", description="full desc", tags=["alpha"], phase="spec"
+    )
+    from witan.cli._common import _fn
+
+    slug = _fn(server.workflow_project_list)(repo="")[0]["slug"]
+
+    project_update(slug, title="Corrected")
+
+    proj = _fn(server.workflow_project_get)(slug)
+    assert proj["title"] == "Corrected"
+    assert proj["description"] == "full desc"
+    assert proj["tags"] == ["alpha"]
+    assert proj["phase"] == "spec"
+
+
+@requires_omnigraph
+def test_project_update_adds_and_removes_repos(server, monkeypatch):
+    """The headline case: a repo set guessed during discovery, before the work's
+    real blast radius was known."""
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_update
+
+    _patch_server(monkeypatch, server)
+    created = _fn(server.workflow_project_create)(
+        title="blast radius", description="d", repos=["https://github.com/x/one"]
+    )
+
+    project_update(
+        created["slug"],
+        add_repo=["https://github.com/x/two"],
+        remove_repo=["https://github.com/x/one"],
+    )
+
+    proj = _fn(server.workflow_project_get)(created["slug"])
+    assert "https://github.com/x/two" in proj["repos"]
+    assert "https://github.com/x/one" not in proj["repos"]
+
+
+@requires_omnigraph
+def test_project_update_refuses_status_completed(server, monkeypatch):
+    """`project complete` seals a corpus trace, so it stays the only route —
+    nothing should mint a trace without an outcome narrative."""
+    import pytest
+
+    from witan.cli._common import _fn
+    from witan.cli.projects import project_update
+
+    printed = _patch_server(monkeypatch, server)
+    created = _fn(server.workflow_project_create)(title="seal me", description="d")
+
+    with pytest.raises(SystemExit):
+        project_update(created["slug"], status="completed")
+
+    combined = "\n".join(printed)
+    assert "project complete" in combined
+    assert _fn(server.workflow_project_get)(created["slug"])["status"] == "active"
+
+
+@requires_omnigraph
+def test_project_update_has_no_phase_option(server):
+    """Phase transitions stay behind `project advance`'s ordering check."""
+    import inspect
+
+    from witan.cli.projects import project_update
+
+    assert "phase" not in inspect.signature(project_update).parameters
+
+
+@requires_omnigraph
+def test_project_update_unknown_slug_exits_nonzero(server, monkeypatch):
+    import pytest
+
+    from witan.cli.projects import project_update
+
+    printed = _patch_server(monkeypatch, server)
+    with pytest.raises(SystemExit):
+        project_update("wp-does-not-exist", title="x")
+    assert "No project" in "\n".join(printed)

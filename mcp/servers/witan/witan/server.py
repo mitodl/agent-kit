@@ -3517,6 +3517,48 @@ def workflow_session_end(
     return {"session_slug": session_slug, "ended_at": now}
 
 
+@mcp.tool
+def workflow_session_list(
+    project_slug: str | None = None,
+    open_only: bool = False,
+) -> list[dict]:
+    """
+    List workflow sessions, newest last.
+
+    Mainly for finding sessions that leaked open — one whose agent died, or
+    whose Stop hook could not reach the graph. An open session is not cosmetic:
+    ``workflow_project_complete`` folds every linked session into the corpus
+    trace, so one with no ``ended_at`` inflates ``session_count``, contributes
+    its phase while having recorded nothing, carries no handoff summary, and
+    cannot extend ``duration`` (computed from ``max(ended_at)``). It is also
+    what drives the context hook's "N sessions in <phase>" staleness nag.
+
+    Use ``witan session sweep`` to close them in bulk.
+
+    Parameters
+    ----------
+    project_slug:
+        Restrict to one project's sessions. Omit for every project.
+    open_only:
+        Only sessions with no ``ended_at``. Superseded sessions (deduped by
+        ``witan migrate dedupe-sessions``) are always excluded — they are
+        already skipped by every aggregate read and are not leaks.
+    """
+    if project_slug:
+        rows = client.read(
+            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+        )
+        # That query filters ON project_slug so it doesn't return the column.
+        # Put it back, so a caller sees one row shape either way.
+        rows = [{**r, "project_slug": project_slug} for r in rows]
+    else:
+        rows = client.read("read.gq", "list_all_sessions", {})
+    rows = [r for r in rows if not r.get("superseded_by")]
+    if open_only:
+        rows = [r for r in rows if not r.get("ended_at")]
+    return rows
+
+
 # ── Task Tracking Tools ───────────────────────────────────────────
 #
 # A dependency-aware tracker living in the same graph as memory and workflow.

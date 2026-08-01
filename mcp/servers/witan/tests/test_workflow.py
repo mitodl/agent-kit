@@ -1140,3 +1140,136 @@ def test_concurrent_session_starts_collapse_to_one_handle(
         proj["slug"], outcome="one session, not two"
     )
     assert server.workflow_trace_get(done["trace_slug"])["session_count"] == 1
+
+
+# ── witan session sweep ──────────────────────────────────────────────────────
+
+
+def _patch_cli_server(monkeypatch, srv):
+    """Point the CLI's `_srv()` at the test server and capture console output.
+
+    Dispatching through `_srv()` is the load-bearing part: a direct
+    OmnigraphClient would only ever work locally, which is the bug that created
+    the leaked-session backlog in the first place.
+    """
+    from witan.cli import _common
+
+    monkeypatch.setattr(_common, "_server", srv)
+    printed = []
+    monkeypatch.setattr(
+        _common.console, "print", lambda *a, **kw: printed.append(str(a[0]))
+    )
+    return printed
+
+
+def test_parse_duration_accepts_units_and_bare_seconds():
+    from witan.cli.session import _parse_duration
+
+    assert _parse_duration("6h") == 21600
+    assert _parse_duration("30m") == 1800
+    assert _parse_duration("2d") == 172800
+    assert _parse_duration("45s") == 45
+    assert _parse_duration("90") == 90
+    with pytest.raises(ValueError, match="could not parse duration"):
+        _parse_duration("soon")
+
+
+@requires_omnigraph
+def test_session_list_open_only_excludes_ended_and_superseded(server, tmp_state_dir):
+    proj = server.workflow_project_create(title="sweepable", description="x")
+    open_s = server.workflow_session_start(proj["slug"], "sid-open", "implementation")
+    ended = server.workflow_session_start(proj["slug"], "sid-ended", "implementation")
+    server.workflow_session_end(ended["session_slug"], summary="done")
+
+    all_rows = server.workflow_session_list(project_slug=proj["slug"])
+    assert {r["slug"] for r in all_rows} == {
+        open_s["session_slug"],
+        ended["session_slug"],
+    }
+    # The by-project query filters ON project_slug and so omits the column;
+    # the tool puts it back so both code paths return one row shape.
+    assert all(r["project_slug"] == proj["slug"] for r in all_rows)
+
+    open_rows = server.workflow_session_list(project_slug=proj["slug"], open_only=True)
+    assert [r["slug"] for r in open_rows] == [open_s["session_slug"]]
+
+
+@requires_omnigraph
+def test_session_sweep_is_dry_by_default(server, tmp_state_dir, monkeypatch):
+    """The whole point of the default: it must not write."""
+    from witan.cli import session as session_cli
+
+    printed = _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="dry", description="x")
+    server.workflow_session_start(proj["slug"], "sid-1", "implementation")
+
+    session_cli.session_sweep(older_than="0s", project=proj["slug"])
+
+    assert "dry run" in "\n".join(printed)
+    assert server.workflow_session_list(project_slug=proj["slug"], open_only=True)
+
+
+@requires_omnigraph
+def test_session_sweep_closes_with_yes(server, tmp_state_dir, monkeypatch):
+    from witan.cli import session as session_cli
+
+    _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="wet", description="x")
+    started = server.workflow_session_start(proj["slug"], "sid-1", "implementation")
+
+    session_cli.session_sweep(older_than="0s", project=proj["slug"], yes=True)
+
+    assert server.workflow_session_list(project_slug=proj["slug"], open_only=True) == []
+    rows = server.workflow_session_list(project_slug=proj["slug"])
+    swept = next(r for r in rows if r["slug"] == started["session_slug"])
+    assert swept["ended_at"]
+    # The summary must be honest that this was a sweep, not a real checkpoint.
+    assert "sweep" in swept["summary"]
+
+
+@requires_omnigraph
+def test_session_sweep_leaves_sessions_younger_than_the_threshold(
+    server, tmp_state_dir, monkeypatch
+):
+    """Guards the one legitimately-running session against a sweep."""
+    from witan.cli import session as session_cli
+
+    printed = _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="young", description="x")
+    server.workflow_session_start(proj["slug"], "sid-live", "implementation")
+
+    session_cli.session_sweep(older_than="6h", project=proj["slug"], yes=True)
+
+    assert "No sessions" in "\n".join(printed)
+    assert server.workflow_session_list(project_slug=proj["slug"], open_only=True)
+
+
+@requires_omnigraph
+def test_session_sweep_is_idempotent(server, tmp_state_dir, monkeypatch):
+    """Re-closing an already-closed session just re-stamps ended_at."""
+    from witan.cli import session as session_cli
+
+    _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="twice", description="x")
+    server.workflow_session_start(proj["slug"], "sid-1", "implementation")
+
+    session_cli.session_sweep(older_than="0s", project=proj["slug"], yes=True)
+    session_cli.session_sweep(older_than="0s", project=proj["slug"], yes=True)
+
+    assert server.workflow_session_list(project_slug=proj["slug"], open_only=True) == []
+
+
+@requires_omnigraph
+def test_session_sweep_clears_the_local_handle(server, tmp_state_dir, monkeypatch):
+    """Otherwise a later Stop hook tries to re-close a session we just swept."""
+    from witan import session_state
+    from witan.cli import session as session_cli
+
+    _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="handles", description="x")
+    started = server.workflow_session_start(proj["slug"], "sid-h", "implementation")
+    session_state.write_handle("sid-h", dict(started))
+
+    session_cli.session_sweep(older_than="0s", project=proj["slug"], yes=True)
+
+    assert session_state.read_handle("sid-h") is None

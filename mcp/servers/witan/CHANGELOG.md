@@ -54,6 +54,42 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
+- **`witan session sweep` — close sessions that leaked open.** ~10 sessions in
+  the graph today have no `ended_at`, residue of the temp-file session
+  mechanism that never worked against the deployed service (fixed going
+  forward by the tool-returned handle, but that fix cleans up nothing). An open
+  session is not cosmetic: `workflow_project_complete` folds every linked
+  session into the corpus trace, so a leak inflates `session_count`,
+  contributes its phase having recorded nothing, carries no handoff summary,
+  and cannot extend `duration` (computed from `max(ended_at)`). It also drives
+  the context hook's "N sessions in <phase>" staleness nag on projects that are
+  progressing fine.
+
+  `--older-than` (default `6h`) keeps the one legitimately-running session
+  safe; dry-run by default, `--yes` performs it; `--project` narrows the scope.
+  The sweep summary says plainly that it was a sweep and that nothing is known
+  about what the session did — these were never checkpointed, so borrowing the
+  Stop hook's wording would be a lie in the corpus. Idempotent (re-closing just
+  re-stamps `ended_at`), and it clears the local handle so a later Stop hook
+  doesn't try to re-close what was just swept.
+
+  Dispatches through `_srv()`, not a direct `OmnigraphClient` — working only
+  locally is the exact bug that created this backlog. That needed a listing on
+  the tool surface, so **`workflow_session_list`** is new too (`project_slug`,
+  `open_only`; superseded sessions always excluded). Under a deployment the
+  per-actor client scopes it to the caller, so a sweep cannot reach a
+  teammate's sessions.
+
+- **`witan project update`** — the CLI half of `workflow_project_update`, which
+  shipped without one. Surfaces `--title`, `--description`, `--repos` /
+  `--add-repo` / `--remove-repo`, `--tags`, `--github-issue` and `--status`,
+  and keeps the tool's two refusals: no `--phase` (that belongs to `project
+  advance`, so transitions stay behind the ordering check) and no `--status
+  completed` (that belongs to `project complete`, which seals a corpus trace).
+  Fixing a stale project description is most urgent exactly when the graph is
+  misbehaving, and a human at a terminal shouldn't need an agent session to do
+  it. (#144)
+
 - **`memory_update` and `memory_delete` — repairing a memory no longer means
   dropping to `omnigraph export`/filter/`load`.** A memory written against the
   wrong `repo` silently vanished from every repo-scoped read, and the only fix
