@@ -351,3 +351,16 @@ def test_parse_graph_ids_reads_both_envelopes():
     assert store_module._parse_graph_ids('{"graphs": [{"id": "a"}]}') == ["a"]
     assert store_module._parse_graph_ids('{"graphs": [{"name": "b"}]}') == ["b"]
     assert store_module._parse_graph_ids("not json") == []
+
+
+def test_parse_graph_ids_mixes_plain_ids_and_records_without_calling_get_on_a_str():
+    """A plain-string row must never reach `.get`.
+
+    The row-shape expression reads as though the `.get`s might be evaluated
+    unconditionally (a review read it that way). They are not — `or` binds
+    tighter than the conditional — and a mixed list is the case that would
+    raise AttributeError if that were ever to change.
+    """
+    assert store_module._parse_graph_ids('["a", {"id": "b"}]') == ["a", "b"]
+    # Non-string, non-dict rows are skipped rather than coerced.
+    assert store_module._parse_graph_ids('["a", 7, null, {"id": "b"}]') == ["a", "b"]

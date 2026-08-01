@@ -229,7 +229,10 @@ def _parse_graph_ids(payload: str) -> list[str]:
         return []
     out = []
     for row in rows:
-        value = row.get("id") or row.get("name") if isinstance(row, dict) else row
+        # Parenthesized for the reader, not the parser: `or` binds tighter than
+        # the conditional, so the `.get`s were already confined to the dict
+        # branch. A review read it the other way round, which is reason enough.
+        value = (row.get("id") or row.get("name")) if isinstance(row, dict) else row
         if isinstance(value, str):
             out.append(value)
     return out
