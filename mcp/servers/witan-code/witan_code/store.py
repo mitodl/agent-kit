@@ -24,6 +24,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from witan_core.omnigraph import BEARER_TOKEN_ENV_VAR
+
 from . import config as cfg_module
 from .graph import OmnigraphClient
 
@@ -182,23 +184,22 @@ def safe_cluster_graphs(server_url: str, token: str | None = None) -> frozenset[
 
 
 def _token_env(token: str | None) -> dict[str, str]:
-    """Environment for an omnigraph subprocess carrying ``token``.
+    """Environment for the ``graphs list`` subprocess, carrying ``token``.
 
-    NOTE (verified against omnigraph 0.8.1 on the CI cluster, 2026-08-01): the
-    binary does NOT read ``OMNIGRAPH_SERVER_BEARER_TOKEN``. It resolves a
-    bearer token from ``~/.omnigraph/credentials`` written by ``omnigraph
-    login``, matched against the address being used. Setting the env var
-    leaves the CLI reporting "missing bearer token".
+    Uses :data:`witan_core.omnigraph.BEARER_TOKEN_ENV_VAR` rather than spelling
+    the name again — this is the one omnigraph call witan-code makes without
+    going through :class:`OmnigraphClient`, since listing a server's graphs is
+    not scoped to any one of them, so it is the one place the shared client's
+    token handling has to be repeated. Repeating the *name* is what put the
+    two out of step before.
 
-    This is shared plumbing — ``witan_core.omnigraph._execute`` sets the same
-    variable for every remote call in both servers — so the fix belongs there
-    and is tracked separately. Kept here, unchanged and labelled, rather than
-    silently dropped: the variable is harmless, and removing it would erase
-    the only trace of where the token was *meant* to go.
+    No local-store branch here, unlike ``_execute``'s: this only ever runs
+    against a server URL, so there is no address that could receive a token
+    with nothing to do with it.
     """
     env = dict(os.environ)
     if token:
-        env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = token
+        env[BEARER_TOKEN_ENV_VAR] = token
     return env
 
 
