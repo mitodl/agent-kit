@@ -1,5 +1,7 @@
 """End-to-end tests for the memory tools."""
 
+import pytest
+
 from .conftest import requires_omnigraph
 
 
@@ -279,3 +281,118 @@ def test_non_latin_tag_gets_distinct_slug(server):
     tb = server.memory_get(b["slug"], include_topics=True)["topics"][0]["slug"]
     assert ta != tb
     assert ta != "tp-topic-" and tb != "tp-topic-"
+
+
+# ── memory_update / memory_delete ─────────────────────────────────────
+
+
+@requires_omnigraph
+def test_update_partial_preserves_omitted_fields(server):
+    """The read-merge-write trap: update_memory replaces every field it is
+    given, so a partial update that skipped the merge would blank the rest."""
+    m = server.memory_store(
+        kind="lesson",
+        title="original title",
+        content="original content",
+        language="python",
+        severity="warning",
+        tags=["alpha"],
+        confidence=0.7,
+    )
+    updated = server.memory_update(m["slug"], title="corrected title")
+
+    assert updated["title"] == "corrected title"
+    assert updated["content"] == "original content"
+    assert updated["language"] == "python"
+    assert updated["severity"] == "warning"
+    assert updated["tags"] == ["alpha"]
+    assert updated["confidence"] == pytest.approx(0.7)  # stored as F32
+    assert updated["kind"] == "lesson"
+
+
+@requires_omnigraph
+def test_update_repo_rescopes_and_case_folds(server):
+    """The headline case from issue #145 — a memory written against the wrong
+    repo. The new key must be canonical or it just mis-scopes differently."""
+    m = server.memory_store(kind="pattern", title="misfiled", content="x")
+    updated = server.memory_update(m["slug"], repo="https://github.com/MITODL/Other")
+
+    assert updated["repo"] == "https://github.com/mitodl/other"
+    assert server.memory_list(kind="pattern", repo="https://github.com/mitodl/other")
+
+
+@requires_omnigraph
+def test_update_tags_dual_writes_topics(server):
+    m = server.memory_store(kind="pattern", title="untagged", content="x")
+    server.memory_update(m["slug"], tags=["ruff"])
+
+    topics = server.memory_get(m["slug"], include_topics=True)["topics"]
+    assert {t["name"] for t in topics} == {"ruff"}
+
+
+@requires_omnigraph
+def test_update_unknown_slug_returns_none(server):
+    assert server.memory_update("pat-nope-000000", title="x") is None
+
+
+@requires_omnigraph
+def test_delete_without_confirm_is_a_noop(server):
+    m = server.memory_store(kind="pattern", title="keepme", content="x")
+    res = server.memory_delete(m["slug"])
+
+    assert res["deleted"] is False
+    assert "confirm" in res["reason"]
+    assert res["memory"]["title"] == "keepme"
+    assert server.memory_get(m["slug"]) is not None
+
+
+@requires_omnigraph
+def test_delete_by_non_author_is_a_noop(server, monkeypatch):
+    from witan import server as srv
+
+    m = server.memory_store(kind="pattern", title="someone elses", content="x")
+    monkeypatch.setattr(srv, "_current_author", lambda: "not-the-author")
+
+    res = server.memory_delete(m["slug"], confirm=True)
+
+    assert res["deleted"] is False
+    assert "only the author" in res["reason"]
+    assert server.memory_get(m["slug"]) is not None
+
+
+@requires_omnigraph
+def test_delete_removes_the_node_and_returns_it_for_restore(server):
+    m = server.memory_store(
+        kind="pattern", title="oops", content="test write", tags=["alpha"]
+    )
+    res = server.memory_delete(m["slug"], confirm=True)
+
+    assert res["deleted"] is True
+    assert res["memory"]["title"] == "oops"
+    assert res["memory"]["content"] == "test write"
+    assert server.memory_get(m["slug"]) is None
+
+
+@requires_omnigraph
+def test_delete_unknown_slug_is_a_noop(server):
+    res = server.memory_delete("pat-nope-000000", confirm=True)
+    assert res["deleted"] is False
+    assert res["reason"] == "no such memory"
+
+
+@requires_omnigraph
+def test_delete_cascades_incident_edges(server):
+    """Deleting a node removes its incident edges in both directions, so no
+    dangling Supersedes is left pointing at a slug that no longer exists."""
+    old = server.memory_store(kind="pattern", title="old", content="pipenv for venvs")
+    new = server.memory_store(kind="pattern", title="new", content="pipenv is retired")
+    server.memory_link(new["slug"], old["slug"], "supersedes")
+    # `old` is hidden from default search while the Supersedes edge stands.
+    assert [h["slug"] for h in server.memory_search("pipenv")] == [new["slug"]]
+
+    server.memory_delete(old["slug"], confirm=True)
+
+    # The Supersedes edge went with the deleted target: nothing is still
+    # reported as superseded, and the surviving memory reads normally.
+    assert server.memory_get(new["slug"]) is not None
+    assert [h["slug"] for h in server.memory_search("pipenv")] == [new["slug"]]

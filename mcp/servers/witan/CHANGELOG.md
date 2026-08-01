@@ -17,6 +17,29 @@ a MINOR bump may include breaking changes).
   `{actor_id: token}` file, in the same process `witan serve` mounts both tool
   surfaces into. `witan.identity` re-exports both, unchanged for every caller.
 
+### Added
+
+- **`memory_update` and `memory_delete` — repairing a memory no longer means
+  dropping to `omnigraph export`/filter/`load`.** A memory written against the
+  wrong `repo` silently vanished from every repo-scoped read, and the only fix
+  on the MCP surface was to store a duplicate and supersede the original, which
+  leaves the mis-scoped node in the graph forever. `memory_update` is a
+  per-field-optional read-merge-write over the existing `update_memory`
+  mutation (partial updates preserve omitted fields; `repo` is case-folded
+  through `normalise` so the correction actually matches what `repo.detect`
+  returns). `memory_delete` hard-deletes, guarded by `confirm=True` plus an
+  author check, and returns the deleted node so an accidental delete can be
+  re-stored from the tool result.
+
+  Deletion is documented — in both tool descriptions and the server
+  instructions — as **graph hygiene, not secret erasure**: a deleted memory
+  stays fully readable from any prior commit via `omnigraph query --snapshot`,
+  so the answer for leaked credentials is rotation, and scrubbing history is an
+  admin `omnigraph cleanup`. Soft delete was rejected: `superseded_by` already
+  occupies that role, and two hide-mechanisms on one node type is worse than
+  one. Neither tool is `_ADMIN_ONLY` — both are per-user and author-scoped, so
+  they work over the remote CLI like the rest of the memory surface. (#145)
+
 ## [0.8.0] - 2026-07-31
 
 ### Changed
