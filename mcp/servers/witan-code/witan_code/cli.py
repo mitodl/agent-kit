@@ -355,37 +355,48 @@ def serve() -> None:
     mcp.run()
 
 
-def _resolve_store(store: str | None, *, bridge: bool = False) -> Path | None:
-    """Resolve a store path — explicit, the shared bridge, or the current
-    repo's — printing and returning ``None`` if it doesn't exist yet (nothing
-    to compact). Expands ``~`` in an explicit path so ``--store ~/…`` isn't
-    treated as missing.
+def _resolve_store(store: str | None, *, bridge: bool = False):
+    """Resolve a store to compact — explicit, the shared bridge, or the current
+    repo's — printing and returning ``None`` if there is nothing to compact.
+    Expands ``~`` in an explicit path so ``--store ~/…`` isn't treated as
+    missing.
+
+    A cluster graph is refused rather than resolved: ``optimize``/``cleanup``
+    are direct-storage commands (they reject ``--server``) and compacting the
+    shared store is the cluster's own job, run against the S3 root by a
+    maintenance CronJob, not by whichever client happened to finish a session.
     """
     from . import config as cfg_module
     from . import repo as repo_module
+    from . import store as store_module
 
     cfg = cfg_module.load()
     if store is not None:
-        path = Path(store).expanduser()
+        ref = store_module.StoreRef(str(Path(store).expanduser()))
     elif bridge:
-        path = cfg_module.bridge_store_path(cfg.code_dir)
+        ref = store_module.bridge_store(cfg)
     else:
         slug = repo_module.detect()
         if slug is None:
             print("No repo detected — pass --store PATH or --bridge.")
             return None
-        path = cfg_module.store_path(slug, cfg.code_dir)
-    if not path.exists():
-        print(f"No store at {path} — nothing to do.")
+        ref = store_module.store_for_repo(slug, cfg)
+    if ref.is_remote:
+        print(
+            f"{ref} is a shared cluster graph — compaction runs server-side "
+            "against the storage root, not from a client. Nothing to do here."
+        )
         return None
-    return path
+    if not ref.exists():
+        print(f"No store at {ref} — nothing to do.")
+        return None
+    return ref
 
 
-def _maintenance_client(store: Path):
+def _maintenance_client(ref):
     from . import config as cfg_module
-    from .graph import OmnigraphClient
 
-    return OmnigraphClient(str(store), cfg_module.load().queries_dir)
+    return ref.client(cfg_module.load())
 
 
 @app.command
@@ -401,11 +412,11 @@ def optimize(*, store: str | None = None, bridge: bool = False) -> None:
     store: Store path to optimize (default: the current repo's store).
     bridge: Optimize the shared cross-repo bridge store instead.
     """
-    path = _resolve_store(store, bridge=bridge)
-    if path is None:
+    ref = _resolve_store(store, bridge=bridge)
+    if ref is None:
         return
-    print(f"Optimizing {path} …")
-    _maintenance_client(path).optimize()
+    print(f"Optimizing {ref} …")
+    _maintenance_client(ref).optimize()
     print("Optimized. (run `witan-code cleanup` to reclaim disk)")
 
 
@@ -432,19 +443,19 @@ def cleanup(
     older_than: Also keep versions newer than this Go-style duration (e.g. 7d).
     yes: Confirm the destructive operation (required to actually run).
     """
-    path = _resolve_store(store, bridge=bridge)
-    if path is None:
+    ref = _resolve_store(store, bridge=bridge)
+    if ref is None:
         return
     if not yes:
         print(
             f"cleanup is destructive — would keep the {keep} most recent "
             f"version(s) per table"
             + (f" and anything newer than {older_than}" if older_than else "")
-            + f" in {path}.\nRe-run with --yes to proceed."
+            + f" in {ref}.\nRe-run with --yes to proceed."
         )
         return
-    print(f"Cleaning up {path} (keep={keep}) …")
-    _maintenance_client(path).cleanup(keep=keep, older_than=older_than)
+    print(f"Cleaning up {ref} (keep={keep}) …")
+    _maintenance_client(ref).cleanup(keep=keep, older_than=older_than)
     print("Cleaned up.")
 
 
@@ -476,7 +487,9 @@ def reap_views(
     Parameters
     ----------
     store: Graph to sweep — a store path, or an ``http(s)://`` omnigraph-server
-        URL. Default: every local store, the shared bridge included.
+        URL. Default: every store this config resolves to (cluster graphs when
+        ``code_server`` is set, else the local ones), the shared bridge
+        included.
     graph: Cluster graph id, when ``--store`` is a server URL that doesn't
         encode one as ``.../graphs/<id>``.
     max_idle_days: Reap views idle at least this long (default: 14, or
@@ -498,15 +511,11 @@ def reap_views(
     if store is not None:
         targets = [(store, OmnigraphClient(store, cfg.queries_dir, graph_id=graph))]
     else:
-        paths = [
+        refs = [
             *store_module.per_repo_stores(cfg),
-            cfg_module.bridge_store_path(cfg.code_dir),
+            store_module.bridge_store(cfg),
         ]
-        targets = [
-            (str(p), OmnigraphClient(str(p), cfg.queries_dir))
-            for p in paths
-            if p.exists()
-        ]
+        targets = [(str(r), r.client(cfg)) for r in refs if r.exists()]
     if not targets:
         print("No code-graph stores — nothing to reap.")
         return
@@ -564,26 +573,26 @@ def checkpoint() -> None:
     and non-blocking: always exits 0 and never raises, so a maintenance
     failure can't fail the Stop hook. Registered as the bare ``Stop`` hook
     command; not usually run by hand.
+
+    A no-op against cluster graphs — ``maintenance.due()`` never fires for a
+    remote store, since compacting the shared storage root is the cluster's
+    job rather than every client's at the end of every session.
     """
     from . import config as cfg_module
     from . import maintenance as maintenance_module
     from . import repo as repo_module
+    from . import store as store_module
 
     cfg = cfg_module.load()
     slug = repo_module.detect()
+    refs = [store_module.bridge_store(cfg)]
     if slug is not None:
+        refs.insert(0, store_module.store_for_repo(slug, cfg))
+    for ref in refs:
         try:
-            maintenance_module.spawn_background_optimize(
-                cfg_module.store_path(slug, cfg.code_dir)
-            )
+            maintenance_module.spawn_background_optimize(ref.uri)
         except Exception:  # noqa: BLE001 — maintenance must never fail the hook
             pass
-    try:
-        maintenance_module.spawn_background_optimize(
-            cfg_module.bridge_store_path(cfg.code_dir)
-        )
-    except Exception:  # noqa: BLE001 — maintenance must never fail the hook
-        pass
 
 
 @app.command(name="session-init")
@@ -782,12 +791,10 @@ def branches(*, branch: str | None = None, prune: bool = False) -> None:
 def _branch_client(repo_uri: str):
     """A client on ``repo_uri``'s store, for branch listing/deletion."""
     from . import config as cfg_module
-    from .graph import OmnigraphClient
+    from . import store as store_module
 
     cfg = cfg_module.load()
-    return OmnigraphClient(
-        str(cfg_module.store_path(repo_uri, cfg.code_dir)), cfg.queries_dir
-    )
+    return store_module.store_for_repo(repo_uri, cfg).client(cfg)
 
 
 # ── Indexed repositories ─────────────────────────────────────────────────────
@@ -796,8 +803,6 @@ def _branch_client(repo_uri: str):
 @app.command
 def repos() -> None:
     """List the repositories that have a code graph indexed."""
-    import datetime
-
     from rich.console import Console
 
     rows = _fn(_srv().code_indexed_repos)()
@@ -809,12 +814,12 @@ def repos() -> None:
         {
             "repo": r["repo"],
             "files": "?" if r["files"] is None else str(r["files"]),
+            # Both are null for a cluster graph — they describe a store
+            # directory, which a client of a shared graph does not have.
             "size": _human_size(r["bytes"]),
             # The tool returns an epoch, so a remote deployment's stores render
             # in the reader's timezone rather than the server's.
-            "last indexed": datetime.datetime.fromtimestamp(r["last_indexed"]).strftime(
-                "%Y-%m-%d %H:%M"
-            ),
+            "last indexed": _human_time(r["last_indexed"]),
         }
         for r in rows
     ]
@@ -934,7 +939,17 @@ def whoami() -> None:
         console.print(f"[bold]Expires[/bold]   {when}")
 
 
-def _human_size(n: int) -> str:
+def _human_time(epoch: float | None) -> str:
+    import datetime
+
+    if epoch is None:
+        return "?"
+    return datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
+
+
+def _human_size(n: int | None) -> str:
+    if n is None:
+        return "?"
     size = float(n)
     for unit in ("B", "KB", "MB", "GB"):
         if size < 1024 or unit == "GB":

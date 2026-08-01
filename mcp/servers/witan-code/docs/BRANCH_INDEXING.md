@@ -123,6 +123,12 @@ remote too and is the one actor that must write. So the role is declared:
 WITAN_CODE_INDEX_ROLE=ci     # or index_role = "ci" on a [targets.<name>] block
 ```
 
+The role only bites once the store actually *is* a shared graph, which is what
+`code_server` (env `WITAN_CODE_SERVER`) makes it — see
+[Shared cluster graphs](../README.md#shared-cluster-graphs). Without it every
+graph is a local directory with one user, and every row of the table below is
+the "Local store" column.
+
 Values are `client` (the default — reads the shared view, never writes it)
 and `ci`. An unrecognized value is an error rather than a silent
 demotion to `client`, which would leave the shared view frozen with nothing

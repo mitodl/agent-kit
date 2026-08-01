@@ -126,22 +126,22 @@ def _cached_store_branch() -> str | None:
     return _cached_git("store_branch", repo_module.store_branch)
 
 
-def _client_for_path(path, branch: str | None = None) -> OmnigraphClient:
-    key = f"{path}|{branch or ''}"
+def _client_for_ref(ref, branch: str | None = None) -> OmnigraphClient:
+    key = f"{ref}|{branch or ''}"
     if key not in _clients:
-        _clients[key] = OmnigraphClient(str(path), cfg.queries_dir, branch=branch)
+        _clients[key] = ref.client(cfg, branch=branch)
     return _clients[key]
 
 
-def _branch_in_store(path, branch: str) -> bool:
-    key = str(path)
+def _branch_in_store(ref, branch: str) -> bool:
+    key = str(ref)
     cached = _store_branches.get(key)
     if cached is not None:
         stamp, branches = cached
         if time.monotonic() - stamp < _BRANCH_CACHE_TTL and branch in branches:
             return True
     try:
-        branches = frozenset(_client_for_path(path).list_branches())
+        branches = frozenset(_client_for_ref(ref).list_branches())
     except Exception:  # noqa: BLE001 — degrade to main on any listing failure
         return False
     _store_branches[key] = (time.monotonic(), branches)
@@ -216,7 +216,7 @@ def _client_for_repo(repo: str, branch: str | None = None) -> OmnigraphClient | 
     store = store_module.store_for_repo(repo, cfg)
     if not store.exists():
         return None
-    return _client_for_path(store, _resolve_branch(store, repo, branch))
+    return _client_for_ref(store, _resolve_branch(store, repo, branch))
 
 
 def _client_for_symbol(symbol_id: str) -> OmnigraphClient | None:
@@ -226,7 +226,7 @@ def _client_for_symbol(symbol_id: str) -> OmnigraphClient | None:
 
 def _all_clients() -> list[OmnigraphClient]:
     """A client per indexed per-repo store (excludes the shared bridge store)."""
-    return [_client_for_path(p) for p in store_module.per_repo_stores(cfg)]
+    return [_client_for_ref(ref) for ref in store_module.per_repo_stores(cfg)]
 
 
 def _resolve_clients(
@@ -289,7 +289,7 @@ def _bridge_client(repo: str | None = None) -> OmnigraphClient | None:
         return None
     if repo is None:
         repo = _cached_detect()
-    return _client_for_path(store, _resolve_bridge_branch(store, repo))
+    return _client_for_ref(store, _resolve_bridge_branch(store, repo))
 
 
 async def _confirm_and_reindex(
@@ -969,14 +969,19 @@ def code_indexed_repos() -> list[dict]:
     search returning nothing means something different when the repo in
     question was never indexed. ``files`` is None for a store that could not be
     read; ``last_indexed`` is a Unix timestamp.
+
+    ``bytes`` and ``last_indexed`` are both null for a graph on the shared
+    omnigraph-server: they describe a directory on this machine, and a client
+    of a shared graph has neither the directory nor any business reporting the
+    server's disk. ``files`` stays real — it is a query, not a walk.
     """
     out: list[dict] = []
-    for store in store_module.per_repo_stores(cfg):
-        size, mtime = store_module.dir_stats(store)
+    for ref in store_module.per_repo_stores(cfg):
+        size, mtime = ref.stats()
         out.append(
             {
-                "repo": store_module.repo_for_store(store),
-                "files": store_module.file_count(store, cfg),
+                "repo": store_module.repo_for_store(ref, cfg),
+                "files": store_module.file_count(ref, cfg),
                 "bytes": size,
                 "last_indexed": mtime,
             }
@@ -1008,11 +1013,11 @@ def code_indexed_branches(branch: str | None = None) -> list[dict]:
     """
     wanted = repo_module.branch_store_name(branch) if branch else None
     out: list[dict] = []
-    for store in store_module.per_repo_stores(cfg):
+    for ref in store_module.per_repo_stores(cfg):
         try:
-            names = _client_for_path(store).list_branches()
+            names = _client_for_ref(ref).list_branches()
         except Exception:  # noqa: BLE001 — one bad store shouldn't abort the list
-            out.append({"repo": store_module.repo_for_store(store), "views": None})
+            out.append({"repo": store_module.repo_for_store(ref, cfg), "views": None})
             continue
         if wanted:
             found = views.views_for_branch(names, wanted)
@@ -1023,7 +1028,7 @@ def code_indexed_branches(branch: str | None = None) -> list[dict]:
             )
         out.append(
             {
-                "repo": store_module.repo_for_store(store),
+                "repo": store_module.repo_for_store(ref, cfg),
                 "views": [
                     {"view": v.name, "branch": v.branch, "actor": v.actor}
                     for v in found

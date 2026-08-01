@@ -85,7 +85,7 @@ def write_bindings(
     identity = identity or package_map.fallback_identity(repo)
     store = ensure_bridge_store(cfg)
     bridge_branch = views.bridge_view(branch, repo, actor=actor) if branch else None
-    client = OmnigraphClient(str(store), cfg.queries_dir, branch=bridge_branch)
+    client = store.client(cfg, branch=bridge_branch)
     # Bridge main is shared by every repo, and `delete_repo_symbols` below wipes
     # a repo's whole Stage-1 table — the same CI-owns-the-default-view rule as
     # the per-repo store. Checked here too rather than relying on the caller's:

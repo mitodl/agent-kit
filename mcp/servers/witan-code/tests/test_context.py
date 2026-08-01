@@ -19,7 +19,9 @@ def _lock(tmp_path, monkeypatch, project_dir):
 def _stub_store_stats(monkeypatch):
     """Answer the store lookups without an omnigraph binary or a real store."""
     monkeypatch.setattr(
-        context.store_module, "repo_for_store", lambda s: "https://github.com/test/cg"
+        context.store_module,
+        "repo_for_store",
+        lambda s, cfg=None: "https://github.com/test/cg",
     )
     monkeypatch.setattr(context.store_module, "file_count", lambda s, cfg=None: 3)
 

@@ -192,7 +192,7 @@ def test_resolve_store_expands_user(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / "g.omni").mkdir()
     resolved = cli_module._resolve_store("~/g.omni")
-    assert resolved == tmp_path / "g.omni"
+    assert resolved.local_path == tmp_path / "g.omni"
 
 
 def test_resolve_store_bridge_flag(tmp_path, monkeypatch):
@@ -204,7 +204,7 @@ def test_resolve_store_bridge_flag(tmp_path, monkeypatch):
     bridge.mkdir()
 
     resolved = cli_module._resolve_store(None, bridge=True)
-    assert resolved == bridge
+    assert resolved.local_path == bridge
 
 
 def test_resolve_store_defaults_to_current_repo(tmp_path, monkeypatch):
@@ -216,7 +216,20 @@ def test_resolve_store_defaults_to_current_repo(tmp_path, monkeypatch):
     store = cfg_module.store_path("https://github.com/test/cg", tmp_path)
     store.mkdir()
 
-    assert cli_module._resolve_store(None) == store
+    assert cli_module._resolve_store(None).local_path == store
+
+
+def test_resolve_store_refuses_a_cluster_graph(tmp_path, monkeypatch, capsys):
+    """`optimize`/`cleanup` are direct-storage commands — they reject
+    `--server`, and compacting the shared storage root is the cluster's job,
+    not every client's at the end of every session."""
+    from witan_code import cli as cli_module
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+
+    assert cli_module._resolve_store(None) is None
+    assert "server-side" in capsys.readouterr().out
 
 
 def test_checkpoint_spawns_for_repo_and_bridge_stores(tmp_path, monkeypatch):

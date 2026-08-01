@@ -289,7 +289,7 @@ def index_path(
     branch = views.repo_view(git_branch, actor=actor) if git_branch else None
 
     store = ensure_store(slug, cfg)
-    client = OmnigraphClient(str(store), cfg.queries_dir, branch=branch)
+    client = store.client(cfg, branch=branch)
     check_writable(client=client, branch=branch, cfg=cfg, slug=slug, actor=actor)
     # The hash read below never forks; create the branch before reading.
     client.ensure_branch()
