@@ -10,6 +10,16 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
+- **`schema_apply` / `schema_apply_if_changed` / `schema_stamp_path` in
+  `witan_core.omnigraph`** — the mtime-stamped schema re-apply, lifted out of
+  witan-code so witan-council can use the same one. Both servers face the same
+  problem (an existing local store must pick up additive schema changes without
+  paying a subprocess on every hot-path call) and both need the same failure
+  behavior: no `check=True`, stamp only on success, so a failed apply degrades
+  and is retried rather than taking down a server that runs its ensure at
+  import time. `witan_code.store`'s private `_schema_apply*` helpers are gone;
+  they had no callers outside that module.
+
 - **`witan_core.identity`** — `derive_actor_id()`, the ADR-0004 Keycloak
   `sub` → `act-<id>` mapping, moved up from witan-council. witan maps the
   claim server-side off a validated JWT to route a request to the caller's

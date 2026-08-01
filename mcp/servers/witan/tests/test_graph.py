@@ -7,6 +7,7 @@ binary-not-found message. (apply_schema is exercised against a real store in
 test_migrate.py.)
 """
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -58,3 +59,76 @@ def test_apply_schema_remote_uses_server_and_graph(monkeypatch):
     assert cmd[cmd.index("--server") + 1] == "http://host:8080"
     assert cmd[cmd.index("--graph") + 1] == "council"
     assert "--store" not in cmd
+
+
+# ── _ensure_graph: schema currency on an EXISTING store ────────────
+
+
+def test_ensure_graph_reapplies_schema_when_it_changed(monkeypatch, tmp_path):
+    """The bug this fixes: an existing store never saw additive schema changes,
+    because _ensure_graph early-returned on store.exists()."""
+    import witan.server as srv
+
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    calls = []
+    monkeypatch.setattr(srv, "_SCHEMA_FILE", tmp_path / "schema.pg")
+    srv._SCHEMA_FILE.write_text("node Memory { slug: String }")
+    monkeypatch.setattr(
+        srv.OmnigraphClient, "_find_binary", staticmethod(lambda: "omnigraph")
+    )
+    monkeypatch.setattr(
+        og.subprocess,
+        "run",
+        lambda cmd, **kw: (
+            calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+        ),
+    )
+
+    srv._ensure_graph(str(store))
+    assert [c[:3] for c in calls] == [["omnigraph", "schema", "apply"]]
+
+    # Unchanged schema: no second subprocess.
+    srv._ensure_graph(str(store))
+    assert len(calls) == 1
+
+    srv._SCHEMA_FILE.write_text("node Memory { slug: String }\nnode Topic { x: I64 }")
+    os.utime(srv._SCHEMA_FILE, (2_000_000_000, 2_000_000_000))
+    srv._ensure_graph(str(store))
+    assert len(calls) == 2
+
+
+def test_ensure_graph_survives_a_failing_reapply(monkeypatch, tmp_path):
+    """_ensure_graph runs at import time, so a failed re-apply against an
+    existing, working store must not be able to brick `witan serve`."""
+    import witan.server as srv
+
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    monkeypatch.setattr(srv, "_SCHEMA_FILE", tmp_path / "schema.pg")
+    srv._SCHEMA_FILE.write_text("node Memory { slug: String }")
+    monkeypatch.setattr(
+        srv.OmnigraphClient, "_find_binary", staticmethod(lambda: "omnigraph")
+    )
+    monkeypatch.setattr(
+        og.subprocess,
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "boom"),
+    )
+
+    srv._ensure_graph(str(store))  # must not raise
+
+
+def test_ensure_graph_is_still_a_noop_for_remote_uris(monkeypatch):
+    """A deployment's schema is managed by provisioning, and `schema apply`
+    against a server takes --server/--graph, not the local positional form."""
+    import witan.server as srv
+
+    def fail(*args, **kwargs):
+        raise AssertionError("should not shell out for a remote graph URI")
+
+    monkeypatch.setattr(og.subprocess, "run", fail)
+    monkeypatch.setattr(srv.OmnigraphClient, "_find_binary", staticmethod(fail))
+
+    for uri in ("https://omnigraph.example/", "http://localhost:8080", "s3://b/g"):
+        srv._ensure_graph(uri)

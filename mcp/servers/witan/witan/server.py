@@ -21,6 +21,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
 from witan_core import caching, normalise, now_iso
+from witan_core.omnigraph import schema_apply, schema_apply_if_changed
 
 from . import config as cfg_module
 from . import elicit
@@ -37,19 +38,35 @@ _SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "schema.pg"
 
 
 def _ensure_graph(graph_uri: str) -> None:
-    """Initialise the local graph if it does not yet exist.
+    """Initialise the local graph, and keep its schema current.
 
     No-op for remote (http/s3) URIs — those are assumed to be managed
-    externally. Local stores are created and schema-applied automatically
-    so `witan serve` and `witan <cmd>` work on a fresh machine without a
-    separate install step.
+    externally. A deployment's schema is applied by provisioning, and against a
+    server ``schema apply`` takes the ``--server <url> --graph <id>`` form
+    rather than the local positional one, so there is nothing correct to do here.
+
+    Local stores are created and schema-applied automatically so `witan serve`
+    and `witan <cmd>` work on a fresh machine without a separate install step.
+    An EXISTING store is re-applied when ``schema.pg`` has changed since the
+    last apply, which is what picks up additive changes (new node types, new
+    fields) after a version bump — previously that only happened if the user
+    knew to run `witan migrate`, the `apply_schema` admin tool, or `install.sh`,
+    and until they did, queries against the newer schema erred or silently
+    returned nothing.
+
+    The re-apply deliberately cannot raise: this runs at import time
+    (``_ensure_graph(cfg.graph_uri)`` below), so a failure would take down
+    `witan serve` at startup. A failed apply leaves the stamp unwritten and is
+    retried next time. Creation keeps ``check=True`` — a store that does not
+    exist yet has nothing to degrade to.
     """
     if graph_uri.startswith(("http://", "https://", "s3://")):
         return
     store = Path(graph_uri).expanduser()
-    if store.exists():
-        return
     binary = OmnigraphClient._find_binary()
+    if store.exists():
+        schema_apply_if_changed(binary, _SCHEMA_FILE, store)
+        return
     store.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [binary, "init", "--schema", str(_SCHEMA_FILE), str(store)],
@@ -57,12 +74,7 @@ def _ensure_graph(graph_uri: str) -> None:
         capture_output=True,
         text=True,
     )
-    subprocess.run(
-        [binary, "schema", "apply", "--schema", str(_SCHEMA_FILE), str(store)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    schema_apply(binary, _SCHEMA_FILE, store)
 
 
 cfg = cfg_module.load()
@@ -196,9 +208,11 @@ client = _ActorScopedClient()
 def apply_schema() -> dict:
     """Apply the bundled ``schema.pg`` to the configured store (idempotent).
 
-    Reconciles an EXISTING store with the current schema — ``_ensure_graph`` only
-    schema-applies when first *creating* a store, so additive changes (new
-    nodes/edges/fields) never reach an already-created store without this.
+    Reconciles an EXISTING store with the current schema. ``_ensure_graph`` now
+    does this automatically when ``schema.pg``'s mtime changes, so this is the
+    explicit escape hatch for the cases the mtime stamp cannot see: a store
+    whose stamp is current but whose schema is not (a restored backup, a
+    hand-edited stamp), or a re-apply forced without touching the file.
 
     Routes through ``OmnigraphClient`` so it holds the same per-store write lock +
     retry/repair as any other write. Returns ``{"store", "output"}``; raises

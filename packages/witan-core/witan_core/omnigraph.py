@@ -97,6 +97,57 @@ _SERVER_SCHEMES = ("http://", "https://")
 _GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
 
 
+def schema_stamp_path(store: Path) -> Path:
+    """Sidecar recording the schema file's mtime as of the last successful apply."""
+    return store.parent / f"{store.name}.schema_mtime"
+
+
+def schema_apply(binary: str, schema_file: Path, store: Path) -> bool:
+    """``omnigraph schema apply`` against a local store. Returns whether it worked.
+
+    Deliberately no ``check=True``. Both callers run this on a path that must
+    not be able to take down a working store's process — witan's
+    ``_ensure_graph`` runs at import time, so a raise here fails ``witan serve``
+    at startup rather than degrading. The stamp is only written on success, so
+    a failed apply is simply retried on the next call.
+    """
+    res = subprocess.run(
+        [binary, "schema", "apply", "--schema", str(schema_file), str(store)],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        return False
+    try:
+        schema_stamp_path(store).write_text(str(schema_file.stat().st_mtime))
+    except OSError:
+        # A read-only or full parent directory just means the next call
+        # re-applies. `schema apply` is idempotent, so that is the correct
+        # failure direction — never let stamping fail the apply itself.
+        pass
+    return True
+
+
+def schema_apply_if_changed(binary: str, schema_file: Path, store: Path) -> bool:
+    """Re-apply the schema to an existing store, but only if the file changed.
+
+    This is what picks up ADDITIVE schema changes (new node types, new fields)
+    on a store that was created by an older version. Without it, a store is
+    schema-applied only at creation and silently stays one revision behind
+    forever, which surfaces as a query erroring or quietly returning nothing.
+
+    ``schema apply`` is idempotent but costs a subprocess, and callers sit on
+    hot paths (a per-tool-call ensure, a per-file reindex), so the schema
+    file's mtime is stamped next to the store and the apply is skipped while it
+    matches. Returns ``True`` when the store is known-current.
+    """
+    stamp = schema_stamp_path(store)
+    current_mtime = str(schema_file.stat().st_mtime)
+    if stamp.exists() and stamp.read_text().strip() == current_mtime:
+        return True
+    return schema_apply(binary, schema_file, store)
+
+
 def _split_server_uri(graph_uri: str, graph_id: str | None) -> tuple[str, str]:
     """Split an http(s) graph URI into ``(server_url, graph_id)`` for omnigraph
     0.8.1 remote addressing (``--server <url> --graph <id>``).

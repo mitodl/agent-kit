@@ -27,7 +27,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from witan_core.omnigraph import BEARER_TOKEN_ENV_VAR
+from witan_core.omnigraph import (
+    BEARER_TOKEN_ENV_VAR,
+    schema_apply,
+    schema_apply_if_changed,
+)
 
 from . import config as cfg_module
 from .graph import OmnigraphClient
@@ -383,12 +387,12 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> StoreRef
             text=True,
         )
         # Force apply on first creation — stamp will be written below.
-        _schema_apply(binary, cfg.schema_file, store)
+        schema_apply(binary, cfg.schema_file, store)
     else:
         # Only re-apply when the schema file has changed since the last apply.
         # schema apply is additive/idempotent but spawns a subprocess on every
         # PostToolUse reindex; the mtime sidecar avoids the cost on hot paths.
-        _schema_apply_if_changed(binary, cfg.schema_file, store)
+        schema_apply_if_changed(binary, cfg.schema_file, store)
 
     # Record the canonical repo URI in a sidecar so listings can show it even for
     # a 0-file store (sanitize_slug is lossy — its `_` collapse isn't reversible).
@@ -415,7 +419,7 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     if store.exists():
         # Pick up additive schema changes (new nodes/fields) on existing
         # stores; the mtime stamp keeps hot reindex paths subprocess-free.
-        _schema_apply_if_changed(binary, cfg.bridge_schema_file, store)
+        schema_apply_if_changed(binary, cfg.bridge_schema_file, store)
         return StoreRef(str(store))
 
     store.parent.mkdir(parents=True, exist_ok=True)
@@ -425,7 +429,7 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
         capture_output=True,
         text=True,
     )
-    _schema_apply(binary, cfg.bridge_schema_file, store)
+    schema_apply(binary, cfg.bridge_schema_file, store)
     return StoreRef(str(store))
 
 
@@ -512,28 +516,6 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
 def repo_sidecar(store: Path) -> Path:
     """Sidecar file next to a LOCAL store holding its canonical repo URI."""
     return store.parent / f"{store.name}.repo"
-
-
-def _schema_stamp(store: Path) -> Path:
-    return store.parent / f"{store.name}.schema_mtime"
-
-
-def _schema_apply(binary: str, schema_file: Path, store: Path) -> None:
-    res = subprocess.run(
-        [binary, "schema", "apply", "--schema", str(schema_file), str(store)],
-        capture_output=True,
-        text=True,
-    )
-    if res.returncode == 0:
-        _schema_stamp(store).write_text(str(schema_file.stat().st_mtime))
-
-
-def _schema_apply_if_changed(binary: str, schema_file: Path, store: Path) -> None:
-    stamp = _schema_stamp(store)
-    current_mtime = str(schema_file.stat().st_mtime)
-    if stamp.exists() and stamp.read_text().strip() == current_mtime:
-        return
-    _schema_apply(binary, schema_file, store)
 
 
 def repo_for_store(ref: StoreRef, config: cfg_module.Config | None = None) -> str:

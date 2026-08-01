@@ -17,6 +17,26 @@ a MINOR bump may include breaking changes).
   `{actor_id: token}` file, in the same process `witan serve` mounts both tool
   surfaces into. `witan.identity` re-exports both, unchanged for every caller.
 
+### Fixed
+
+- **Additive schema changes now reach an existing local store.**
+  `_ensure_graph` early-returned on `store.exists()`, so `init` + `schema
+  apply` ran only when a store was first created. After that, a new node type
+  or field added to `schema.pg` never reached it, and the failure mode was a
+  query erroring or silently returning nothing against a store one revision
+  behind. The remedies all existed but all required knowing to run them after a
+  version bump: the `apply_schema` admin tool, `witan migrate schema`, or
+  re-running `install.sh`.
+
+  An existing store is now re-applied when `schema.pg`'s mtime differs from the
+  stamp beside it — witan-code's approach, now shared via
+  `witan_core.omnigraph`. Remote (http/s3) URIs stay a no-op: a deployment's
+  schema is provisioning's job, and `schema apply` against a server takes a
+  different argument form entirely. The re-apply cannot raise, because
+  `_ensure_graph` runs at import time and a failure there would take down
+  `witan serve` at startup; a failed apply leaves the stamp unwritten and is
+  retried next call. Creation keeps `check=True`.
+
 ### Added
 
 - **`memory_update` and `memory_delete` — repairing a memory no longer means
