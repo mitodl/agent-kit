@@ -19,6 +19,21 @@ a MINOR bump may include breaking changes).
 
 ### Fixed
 
+- **`witan inject-context` no longer fails the UserPromptSubmit hook on a bad
+  config.** The command documents that it "always exits 0 and never blocks",
+  and the rest of it honours that carefully — but `cfg_module.load()` ran
+  unguarded as its first statement, so it failed before any of that machinery
+  could help. Two ways in: `load_toml` raises on *any* TOML error and
+  `tomllib` fails the whole document, so one stray character in a
+  `[targets.*]` table takes out context injection entirely; and `load()` also
+  raises for a `WITAN_TARGET` naming an undefined target, so a stale env var
+  breaks the hook with a perfectly valid config file. Now guarded the same way
+  `session-checkpoint` already was — including `SystemExit`, which is not an
+  `Exception` — with the reason on stderr under `--debug` and stdout left
+  empty. `load_toml` itself stays strict: failing loudly is right for `witan
+  serve`; the hook is the caller that needs to be forgiving, and it is the
+  caller that now says so.
+
 - **Additive schema changes now reach an existing local store.**
   `_ensure_graph` early-returned on `store.exists()`, so `init` + `schema
   apply` ran only when a store was first created. After that, a new node type
