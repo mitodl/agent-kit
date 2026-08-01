@@ -77,16 +77,17 @@ def indexing_in_progress() -> bool:
 _TOOLSEARCH_QUERY = '`ToolSearch(query="+code_ find_definition callers impact")`'
 
 
-def _coverage_line(store: Path, cfg: cfg_module.Config) -> str:
+def _coverage_line(store: store_module.StoreRef, cfg: cfg_module.Config) -> str:
     """One line on how many OTHER repos are indexed.
 
     This is the fact an agent cannot infer and gets silently wrong in one
     direction: with no other repo indexed, ``code_interface_consumers`` and
     friends return ``[]`` for everything, which is indistinguishable from a
-    genuine "nothing consumes this". Cheap — a glob, no store reads.
+    genuine "nothing consumes this". Cheap — a glob locally, one cached graph
+    listing on the cluster; no store reads either way.
     """
     try:
-        others = [p for p in store_module.per_repo_stores(cfg) if p != store]
+        others = [ref for ref in store_module.per_repo_stores(cfg) if ref != store]
     except OSError:  # degrade to silence, never blank the block
         return ""
     if not others:
@@ -110,7 +111,7 @@ def inject_context() -> str:
     if slug is None:
         return ""
 
-    store = cfg_module.store_path(slug, cfg.code_dir)
+    store = store_module.store_for_repo(slug, cfg)
     in_progress = indexing_in_progress()
 
     if not store.exists():
@@ -123,14 +124,20 @@ def inject_context() -> str:
             "finishes.\n"
         )
 
-    repo_uri = store_module.repo_for_store(store)
+    repo_uri = store_module.repo_for_store(store, cfg)
     files = store_module.file_count(store, cfg)
+    # No freshness line for a cluster graph: mtime is a property of a store
+    # directory and there isn't one. Same degraded rendering as a mid-walk
+    # failure — the block is worth having without it.
     try:
-        _, mtime = store_module.dir_stats(store)
+        _, mtime = store.stats()
+    except OSError:  # e.g. a file vanished mid-walk — degrade, don't blank the block
+        mtime = None
+    if mtime is None:
+        freshness = ""
+    else:
         stamp = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
         freshness = f", last updated {stamp}"
-    except OSError:  # e.g. a file vanished mid-walk — degrade, don't blank the block
-        freshness = ""
     lines = [
         "## Code Graph",
         "",

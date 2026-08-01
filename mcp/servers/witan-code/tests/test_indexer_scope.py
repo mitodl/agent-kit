@@ -367,31 +367,98 @@ def test_ownership_does_not_override_the_other_clauses():
 def test_index_path_refuses_a_shared_default_branch_view(tmp_path, monkeypatch):
     """Refused before anything is written, not part-way through.
 
-    The store stays local — witan-code does not address `--server`/`--graph`
-    yet — so this forces the one attribute the policy reads. Only the refusing
-    direction can be driven this way: letting the write through would then hit
-    `--server None`. That direction is unit-covered in test_graph.py.
+    Driven through the real cluster addressing (``code_server`` + the
+    provisioned graph id) rather than by forcing ``is_remote`` on the client:
+    the point of the gate is that pointing an ordinary developer's indexer at
+    the deployed server does not let it overwrite CI's view, and that is only
+    actually tested if the store resolves to the server the way it would in
+    production.
     """
-    from witan_code import config as cfg_module
-    from witan_code import graph as graph_module
     from witan_code import store as store_mod
     from witan_code.graph import SharedGraphWriteRefused
 
     src = _repo(tmp_path, monkeypatch)
-
-    class _Remote(graph_module.OmnigraphClient):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.is_remote = True
-
-    monkeypatch.setattr(indexer, "OmnigraphClient", _Remote)
-    cfg = cfg_module.load()
+    cfg = _cluster_cfg(monkeypatch, "https://github.com/test/cg")
 
     with pytest.raises(SharedGraphWriteRefused, match="owned by CI"):
         indexer.index_path(src, config=cfg)
 
-    store = store_mod.store_for_repo("https://github.com/test/cg", cfg)
-    assert _files(store, cfg) == set()
+    # Nothing fell back to a local store, and nothing reached the server: the
+    # refusal is the whole of what happened.
+    assert not (tmp_path / "code").exists()
+    assert store_mod.store_for_repo("https://github.com/test/cg", cfg).is_remote
+
+
+def _cluster_cfg(monkeypatch, repo: str, **env: str):
+    """Config addressing a (stubbed) cluster that has ``repo``'s graph declared.
+
+    ``graphs list`` is the one thing a client genuinely cannot do without a
+    server; everything downstream of it — the graph id, the ``--server/--graph``
+    split, the write guard — is exercised for real.
+    """
+    from witan_code import config as cfg_module
+    from witan_code import store as store_mod
+
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    declared = frozenset({cfg_module.graph_id(repo), cfg_module.BRIDGE_GRAPH_ID})
+    monkeypatch.setattr(store_mod, "cluster_graphs", lambda *a, **kw: declared)
+    return cfg_module.load()
+
+
+@requires_stack
+def test_index_path_addresses_the_provisioned_cluster_graph(tmp_path, monkeypatch):
+    """The CI indexer reaches `--server <url> --graph code-…`, not a local path.
+
+    The graph id is the contract shared byte-for-byte with ol-infrastructure's
+    provisioning, so this pins the flags the subprocess would actually carry:
+    addressing a graph the cluster never declared is the failure this whole
+    resolution path exists to prevent.
+    """
+    from witan_code import config as cfg_module
+    from witan_code import store as store_mod
+
+    _repo(tmp_path, monkeypatch)
+    cfg = _cluster_cfg(
+        monkeypatch,
+        "https://github.com/test/cg",
+        WITAN_CODE_INDEX_ROLE="ci",
+        WITAN_CODE_TOKEN="s3cret",
+    )
+
+    ref = store_mod.ensure_store("https://github.com/test/cg", cfg)
+    client = ref.client(cfg)
+
+    assert client._store_args() == [
+        "--server",
+        "https://omnigraph.test",
+        "--graph",
+        cfg_module.graph_id("https://github.com/test/cg"),
+    ]
+    assert client.token == "s3cret"
+    # CI owns the default view, so the guard that refused above lets this pass.
+    assert store_mod.store_for_repo("https://github.com/test/cg", cfg).exists()
+
+
+@requires_stack
+def test_index_path_refuses_an_undeclared_cluster_graph(tmp_path, monkeypatch):
+    """A repo provisioning never declared fails loudly, before the first write.
+
+    The alternative is thousands of symbol writes each failing against a graph
+    that isn't there and an index that reports success having stored nothing.
+    """
+    from witan_code import config as cfg_module
+    from witan_code import store as store_mod
+
+    src = _repo(tmp_path, monkeypatch)
+    # A cluster that declares some other repo's graph, but not this one's.
+    cfg = _cluster_cfg(monkeypatch, "https://github.com/test/other")
+    monkeypatch.setenv("WITAN_CODE_INDEX_ROLE", "ci")
+    cfg = cfg_module.load()
+
+    with pytest.raises(store_mod.ClusterGraphMissing, match="data_tier.py"):
+        indexer.index_path(src, config=cfg)
 
 
 @requires_stack

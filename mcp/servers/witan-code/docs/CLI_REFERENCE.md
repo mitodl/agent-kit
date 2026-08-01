@@ -63,8 +63,12 @@ witan-code reindex   # rebuild the whole repo's store
 
 List the repositories that have a code graph indexed (reads every
 `<slug>.omni` store under `WITAN_CODE_DIR`, excluding the shared bridge
-store). Table columns: repo URI, file count, on-disk size, last-indexed
-timestamp.
+store — or, with `code_server` set, every `code-*` graph the cluster serves).
+Table columns: repo URI, file count, on-disk size, last-indexed timestamp.
+
+Size and last-indexed render as `?` for a cluster graph: both describe a store
+directory, which a client of a shared graph does not have. The file count is a
+query and stays real.
 
 No parameters.
 

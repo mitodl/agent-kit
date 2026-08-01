@@ -48,7 +48,10 @@ INDEX_ROLES = frozenset({INDEX_ROLE_CLIENT, INDEX_ROLE_CI})
 @dataclass(frozen=True)
 class Config:
     code_dir: Path
-    """Directory holding per-repo code stores (one ``<slug>.omni`` each)."""
+    """Directory holding per-repo code stores (one ``<slug>.omni`` each).
+
+    Only consulted when :attr:`code_server` is unset — a cluster deployment
+    addresses graphs on the server, not directories on this machine."""
 
     author: str
     """Attribution string (carried for parity with Layer 1; unused on inserts)."""
@@ -68,6 +71,31 @@ class Config:
     index_role: str = INDEX_ROLE_CLIENT
     """Who this process is acting as when it indexes. See :data:`INDEX_ROLES`."""
 
+    code_server: str | None = None
+    """Base URL of the deployed omnigraph-server holding the code graphs.
+
+    Set, every code graph is a graph ON THAT SERVER — ``--server <url> --graph
+    <id>``, with the id from :func:`graph_id` — and :attr:`code_dir` goes
+    unused. Unset (the default), every code graph is a local ``<slug>.omni``
+    directory under :attr:`code_dir`.
+
+    This is the DATA tier and is independent of ``remote_url`` (ADR 0005 path
+    a), which routes read *tools* through the deployed witan MCP endpoint.
+    Indexing needs a git checkout, so the indexer always runs locally; what
+    this setting changes is where it writes. Either tier can be remote without
+    the other."""
+
+    code_token: str | None = None
+    """Bearer token presented to :attr:`code_server`. Unused for local stores.
+
+    Per-actor: omnigraph-server resolves the writer from this token, and the
+    Cedar policies gate branch-view writes on the actor it resolves to."""
+
+    @property
+    def is_cluster(self) -> bool:
+        """Whether code graphs live on a shared omnigraph-server."""
+        return self.code_server is not None
+
     @property
     def is_designated_writer(self) -> bool:
         """Whether this process may write a SHARED graph's default-branch view.
@@ -85,6 +113,11 @@ class _Target(BaseModel):
 
     name: str
     code_dir: str | None = None
+    code_server: str | None = None
+    """omnigraph-server base URL for this target's code graphs — the DATA tier.
+    Distinct from ``remote_url`` below (the tool tier); see
+    ``Config.code_server``."""
+    code_token: str | None = None
     author: str | None = None
     remote_url: str | None = None
     """Overrides WITAN_REMOTE_URL — routes this target's read commands through
@@ -177,7 +210,8 @@ def load(target: str | None = None) -> Config:
     """Load config from config.toml + environment, selecting a named target if applicable.
 
     Resolution order (highest -> lowest precedence):
-    1. Environment variables (WITAN_CODE_DIR, WITAN_AUTHOR, WITAN_CODE_INDEX_ROLE)
+    1. Environment variables (WITAN_CODE_DIR, WITAN_CODE_SERVER,
+       WITAN_CODE_TOKEN, WITAN_AUTHOR, WITAN_CODE_INDEX_ROLE)
     2. Named target: ``target`` arg > WITAN_TARGET env var > auto-detect by
        repo or local checkout path
     3. Global values in config.toml
@@ -191,7 +225,8 @@ def load(target: str | None = None) -> Config:
     ``match_orgs`` precedence (shared logic: ``witan_core.target_config``).
 
     Raises ValueError for an explicitly-requested target that is not defined,
-    or for an ``index_role`` that is not one of :data:`INDEX_ROLES`.
+    for an ``index_role`` that is not one of :data:`INDEX_ROLES`, or for a
+    ``code_server`` that is not an http(s) URL.
     """
     file_cfg, selected = _select_target(target)
 
@@ -216,8 +251,27 @@ def load(target: str | None = None) -> Config:
         known = ", ".join(sorted(INDEX_ROLES))
         raise ValueError(f"Unknown index_role {index_role!r}. Known roles: {known}")
 
+    code_server = _first(
+        os.environ.get("WITAN_CODE_SERVER"),
+        selected.code_server if selected else None,
+        file_cfg.get("code_server"),
+    )
+    if code_server is not None:
+        code_server = code_server.rstrip("/")
+        if not code_server.startswith(("http://", "https://")):
+            raise ValueError(
+                f"code_server must be an http(s) omnigraph-server URL, got "
+                f"{code_server!r}. A local store directory goes in code_dir."
+            )
+
     return Config(
         code_dir=Path(raw_code_dir).expanduser(),
+        code_server=code_server,
+        code_token=_first(
+            os.environ.get("WITAN_CODE_TOKEN"),
+            selected.code_token if selected else None,
+            file_cfg.get("code_token"),
+        ),
         author=_first(
             os.environ.get("WITAN_AUTHOR"),
             selected.author if selected else None,

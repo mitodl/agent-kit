@@ -301,7 +301,9 @@ symlink alternative:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `WITAN_CODE_DIR` | `~/.local/share/witan/code` | directory of per-repo `<slug>.omni` stores |
+| `WITAN_CODE_DIR` | `~/.local/share/witan/code` | directory of per-repo `<slug>.omni` stores. Unused when `WITAN_CODE_SERVER` is set |
+| `WITAN_CODE_SERVER` | — | base URL of the deployed omnigraph-server holding the code graphs. Set, every code graph is a graph on that server (`--server <url> --graph code-<repo>`) instead of a local directory. Reachable from inside the cluster only — intended for CI/in-cluster indexers, not laptops. See [Shared cluster graphs](#shared-cluster-graphs) |
+| `WITAN_CODE_TOKEN` | — | bearer token presented to `WITAN_CODE_SERVER`. Per-actor: the server resolves the writer from it |
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
@@ -320,6 +322,55 @@ and `:` are replaced with `_`. The shared cross-repo bridge lives alongside them
 at `<dir>/_bridge.omni` and is created lazily on the first index that yields any
 bindings.
 
+### Shared cluster graphs
+
+Set `code_server` (env `WITAN_CODE_SERVER`) and each repo's code graph is
+instead a graph on the deployed omnigraph-server, addressed as `--server <url>
+--graph <id>` with the id from `witan_code.config.graph_id()` — e.g.
+`https://github.com/mitodl/ol-django` → `code-github-com-mitodl-ol-django`.
+The bridge graph is the fixed `code-bridge`. That id function is a contract
+shared byte-for-byte with ol-infrastructure's provisioning
+(`applications/omnigraph/data_tier.py`), which is what *declares* the graphs
+and applies their schema; this client never creates one, and indexing a repo
+the cluster has no graph for fails immediately with the id it expected and the
+ids the server actually serves.
+
+This is the **data tier** and is independent of `remote_url`
+([Remote mode](#remote-mode)), which routes read *tools* through a deployed
+witan MCP endpoint. Indexing needs a git checkout, so the indexer always runs
+locally; `code_server` only changes where it writes. Either tier can be remote
+without the other.
+
+> **Who this is for is narrowing.** `code_server` addresses the
+> omnigraph-server *directly*, which today means it only works from inside the
+> cluster — the data tier is a ClusterIP service with no external route, while
+> the witan MCP tier is the one that is publicly exposed. The decision taken
+> (2026-08-01) is to route witan-code's writes through that MCP tier rather
+> than expose a second boundary, so the long-term shape is:
+>
+> - **CI / in-cluster indexers** keep using `code_server` as documented here.
+> - **Developer machines** will write through the deployed witan endpoint,
+>   once it grows a bulk-ingest surface — indexing is one `omnigraph load` of
+>   thousands of records, which no per-record tool call can carry.
+>
+> So do not configure `code_server` on a laptop expecting it to be the
+> supported path; it needs a `kubectl port-forward` today and is not where
+> this is heading. Reads are unaffected either way.
+
+Two things a cluster graph cannot answer, and doesn't pretend to:
+
+- **Size and last-modified** are properties of a store directory. `witan-code
+  repos` and `code_indexed_repos` report `?`/null for both rather than a
+  plausible zero; `files` stays real, since it is a query.
+- **Compaction.** `witan-code optimize`/`cleanup` refuse a cluster graph —
+  they are direct-storage commands, and compacting the shared storage root is
+  the cluster's own scheduled job, not every client's at the end of every
+  session.
+
+Who may write which view on a shared graph is a separate question, answered by
+`index_role` and the per-writer view naming — see
+[Branch indexing](docs/BRANCH_INDEXING.md).
+
 ### config.toml
 
 witan-code reads the same `config.toml` as witan (witan-council) — a global
@@ -329,14 +380,23 @@ CLI `--target` flag yet), or auto-detection against the current
 repo/checkout (`match_paths` > `match_repos` > `match_hosts` > `match_orgs`
 — see witan's README/`witan/config.py` docstring for the full precedence).
 Because the file is shared, one target block can carry witan's
-`server`/`graph`/`token` alongside `code_dir` under
-the same name — each server reads only the fields it knows:
+`server`/`graph`/`token` alongside witan-code's `code_dir` (or
+`code_server`/`code_token`) under the same name — each server reads only the
+fields it knows:
 
 ```toml
 [targets.work]
 server = "http://witan.internal:8080"  # witan (witan-council)
 code_dir = "/mnt/work/witan-code"      # witan-code
 match_orgs = ["myorg"]
+
+[targets.cluster]
+# The shared data tier: code graphs live on the deployed omnigraph-server,
+# one `code-<repo>` graph each. For a CI or in-cluster indexer — the server is
+# not reachable from a laptop. See Shared cluster graphs.
+code_server = "https://omnigraph.example.org"
+code_token = "..."
+match_orgs = ["ol-platform-engineering"]
 
 [targets.hosted]
 # remote_url/oidc_* route BOTH CLIs at one deployed endpoint — see Remote mode.
