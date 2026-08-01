@@ -147,7 +147,7 @@ def test_the_shared_default_view_belongs_to_ci(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "query", ["../../../etc/passwd", "delete.gq/x", "code_read", "nope.gq"]
+    "query", ["../../../secrets.gq", "delete.gq/x", "code_read", "nope.gq"]
 )
 def test_only_bundled_query_files_can_be_named(query, tmp_path, monkeypatch):
     monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
