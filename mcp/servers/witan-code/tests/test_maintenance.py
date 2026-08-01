@@ -249,10 +249,12 @@ def test_resolve_store_refuses_an_explicit_server_url(monkeypatch, capsys):
     assert cli_module._resolve_store("https://omnigraph.test") is None
     out = capsys.readouterr().out
     assert "server-side" in out
-    # The URL survives intact, and an id-less ref does not render "(graph None)".
-    assert "https://omnigraph.test" in out
+    # Exact match on the leading token rather than `url in out`: the URL has to
+    # survive verbatim AND lead the message, which a containment check would
+    # not pin (and which CodeQL reasonably flags as URL-substring matching).
+    # A collapsed `https:/…` or a trailing "(graph None)" both fail this.
+    assert out.split()[0] == "https://omnigraph.test"
     assert "graph None" not in out
-    assert "https:/omnigraph.test " not in out  # the collapsed form
 
 
 def test_resolve_store_still_expands_a_tilde_path(tmp_path, monkeypatch):
