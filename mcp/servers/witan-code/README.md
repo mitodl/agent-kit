@@ -302,7 +302,7 @@ symlink alternative:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `WITAN_CODE_DIR` | `~/.local/share/witan/code` | directory of per-repo `<slug>.omni` stores. Unused when `WITAN_CODE_SERVER` is set |
-| `WITAN_CODE_SERVER` | — | base URL of the deployed omnigraph-server holding the code graphs. Set, every code graph is a graph on that server (`--server <url> --graph code-<repo>`) instead of a local directory — see [Shared cluster graphs](#shared-cluster-graphs) |
+| `WITAN_CODE_SERVER` | — | base URL of the deployed omnigraph-server holding the code graphs. Set, every code graph is a graph on that server (`--server <url> --graph code-<repo>`) instead of a local directory. Reachable from inside the cluster only — intended for CI/in-cluster indexers, not laptops. See [Shared cluster graphs](#shared-cluster-graphs) |
 | `WITAN_CODE_TOKEN` | — | bearer token presented to `WITAN_CODE_SERVER`. Per-actor: the server resolves the writer from it |
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
@@ -341,6 +341,22 @@ witan MCP endpoint. Indexing needs a git checkout, so the indexer always runs
 locally; `code_server` only changes where it writes. Either tier can be remote
 without the other.
 
+> **Who this is for is narrowing.** `code_server` addresses the
+> omnigraph-server *directly*, which today means it only works from inside the
+> cluster — the data tier is a ClusterIP service with no external route, while
+> the witan MCP tier is the one that is publicly exposed. The decision taken
+> (2026-08-01) is to route witan-code's writes through that MCP tier rather
+> than expose a second boundary, so the long-term shape is:
+>
+> - **CI / in-cluster indexers** keep using `code_server` as documented here.
+> - **Developer machines** will write through the deployed witan endpoint,
+>   once it grows a bulk-ingest surface — indexing is one `omnigraph load` of
+>   thousands of records, which no per-record tool call can carry.
+>
+> So do not configure `code_server` on a laptop expecting it to be the
+> supported path; it needs a `kubectl port-forward` today and is not where
+> this is heading. Reads are unaffected either way.
+
 Two things a cluster graph cannot answer, and doesn't pretend to:
 
 - **Size and last-modified** are properties of a store directory. `witan-code
@@ -376,7 +392,8 @@ match_orgs = ["myorg"]
 
 [targets.cluster]
 # The shared data tier: code graphs live on the deployed omnigraph-server,
-# one `code-<repo>` graph each. See Shared cluster graphs.
+# one `code-<repo>` graph each. For a CI or in-cluster indexer — the server is
+# not reachable from a laptop. See Shared cluster graphs.
 code_server = "https://omnigraph.example.org"
 code_token = "..."
 match_orgs = ["ol-platform-engineering"]
