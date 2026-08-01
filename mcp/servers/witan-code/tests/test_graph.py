@@ -9,7 +9,6 @@ store in test_branches.py / test_indexer.py.)
 
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -55,7 +54,7 @@ def _check(
     actor: str | None = "act-alice",
 ) -> None:
     check_writable(
-        client=SimpleNamespace(is_remote=remote),
+        is_remote=remote,
         branch=branch,
         cfg=_cfg(role),
         slug="https://github.com/test/a",

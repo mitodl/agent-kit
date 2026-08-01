@@ -1,10 +1,13 @@
 """Where a repo's code graph lives, and how to reach it.
 
-A code graph is EITHER a local ``<slug>.omni`` directory under ``code_dir`` OR
-a graph on the deployed omnigraph-server (``--server <url> --graph <id>``, the
-id from :func:`config.graph_id`). Which one is a deployment question, answered
-once by ``code_server`` (:attr:`config.Config.code_server`), so every caller
-resolves a :class:`StoreRef` and asks *it* rather than branching on config.
+A code graph is a local ``<slug>.omni`` directory under ``code_dir``, or a
+graph on the deployed omnigraph-server — reached either directly (``--server
+<url> --graph <id>``, the id from :func:`config.graph_id`) or through the
+deployed witan MCP tier, which is the only one of the two that is reachable
+from outside the cluster. All three are deployment questions, answered once by
+``code_server`` / ``code_transport`` (:mod:`witan_code.config`), so every
+caller resolves a :class:`StoreRef` and asks *it* rather than branching on
+config.
 
 The distinction is not cosmetic: a cluster graph has no directory, so the
 operations that were only ever a filesystem walk — "does it exist", "how big
@@ -61,23 +64,35 @@ class StoreRef:
 
     ``uri`` is what :class:`~witan_code.graph.OmnigraphClient` takes as its
     ``graph_uri``: a local path, or the server's base URL. ``graph_id`` is set
-    only for a cluster graph, where it selects which of the server's N graphs
-    this is.
+    only for a cluster graph addressed directly, where it selects which of the
+    server's N graphs this is.
+
+    ``via_mcp`` marks the third form: a cluster graph reached through the witan
+    MCP tier, whose ``uri`` is that endpoint and whose value is the *name* the
+    deployment resolves — a canonical repo URI, or
+    :data:`config.BRIDGE_GRAPH_ID` for the bridge, which has no repo of its
+    own. A per-repo graph travels as the repo URI rather than as a graph id
+    because the deployment maps repo to graph with its own configuration; a
+    client that sent an id would be asserting one it derived, and
+    :func:`config.graph_id` does not invert.
     """
 
     uri: str
     graph_id: str | None = None
     token: str | None = None
+    via_mcp: str | None = None
 
     @property
     def is_remote(self) -> bool:
-        """Whether this graph lives on an omnigraph-server.
+        """Whether this graph is a shared one rather than a directory here.
 
         Same rule the client itself applies (http(s) → ``--server/--graph``),
         so a ref and the client built from it never disagree about which one
-        of them is talking to a cluster.
+        of them is talking to a cluster. A graph reached through the MCP tier
+        is shared by construction, which is what every caller of this is
+        really asking — the write guard included.
         """
-        return self.uri.startswith(("http://", "https://"))
+        return self.via_mcp is not None or self.uri.startswith(("http://", "https://"))
 
     @property
     def local_path(self) -> Path | None:
@@ -93,6 +108,8 @@ class StoreRef:
         # A remote ref built from a bare `--store <url>` has no graph id yet, so
         # the suffix is conditional: "… (graph None)" in a user-facing refusal
         # reads like a bug in the tool rather than a URL missing its graph.
+        if self.via_mcp:
+            return f"{self.via_mcp} (via {self.uri})"
         if self.is_remote and self.graph_id:
             return f"{self.uri} (graph {self.graph_id})"
         return self.uri
@@ -101,8 +118,12 @@ class StoreRef:
         self,
         config: cfg_module.Config | None = None,
         branch: str | None = None,
-    ) -> OmnigraphClient:
+    ):
         cfg = config or cfg_module.load()
+        if self.via_mcp is not None:
+            from .remote.store import RemoteStoreClient  # noqa: PLC0415
+
+            return RemoteStoreClient(self.via_mcp, mcp_session(cfg), branch=branch)
         return OmnigraphClient(
             self.uri,
             cfg.queries_dir,
@@ -122,8 +143,16 @@ class StoreRef:
 
         A server that cannot be reached answers ``False`` here, since a read
         path has nothing better to do with it; the write path calls
-        :func:`cluster_graphs` directly so it can tell the two apart.
+        :func:`cluster_graphs` directly so it can tell the two apart. Through
+        the MCP tier the same question is a tool call — the deployment holds
+        the registry, and a client has no listing of its own to consult.
         """
+        if self.via_mcp is not None:
+            try:
+                self.client().list_branches()
+            except Exception:  # noqa: BLE001 — same degrade-to-False as above
+                return False
+            return True
         if not self.is_remote:
             return Path(self.uri).exists()
         return self.graph_id in safe_cluster_graphs(self.uri, self.token)
@@ -247,9 +276,48 @@ def _parse_graph_ids(payload: str) -> list[str]:
 # ── Resolution ────────────────────────────────────────────────────────────────
 
 
+def _endpoint(cfg: cfg_module.Config):
+    """The deployed witan MCP endpoint this process writes cluster graphs through.
+
+    A ``code_transport = "mcp"`` with no endpoint configured is a misconfigured
+    client, not an absent graph, so it raises rather than degrading to a local
+    store — which would silently index into a directory nobody reads.
+    """
+    remote = cfg_module.load_remote_config()
+    if remote is None:
+        where = f"target [{cfg.target_name}]" if cfg.target_name else "WITAN_REMOTE_URL"
+        raise ValueError(
+            f"code_transport is {cfg_module.CODE_TRANSPORT_MCP!r}, which reaches "
+            "the cluster's code graphs through the deployed witan MCP endpoint "
+            f"— but none is configured. Set remote_url (and oidc_issuer) on "
+            f"{where}, or use code_transport="
+            f"{cfg_module.CODE_TRANSPORT_DIRECT!r} with a reachable code_server."
+        )
+    return remote
+
+
+def mcp_session(config: cfg_module.Config | None = None):
+    """The MCP session this process reaches cluster graphs through.
+
+    One per endpoint, held open for the process (:mod:`witan_code.remote.store`).
+    """
+    cfg = config or cfg_module.load()
+    remote = _endpoint(cfg)
+    from .remote.oidc import default_token_provider  # noqa: PLC0415
+    from .remote.store import session_for  # noqa: PLC0415
+
+    return session_for(remote.url, default_token_provider(remote))
+
+
+def _via_mcp(cfg: cfg_module.Config) -> bool:
+    return cfg.code_transport == cfg_module.CODE_TRANSPORT_MCP
+
+
 def store_for_repo(slug: str, config: cfg_module.Config | None = None) -> StoreRef:
     """Where ``slug``'s code graph lives. Does not create or verify anything."""
     cfg = config or cfg_module.load()
+    if _via_mcp(cfg):
+        return StoreRef(_endpoint(cfg).url, via_mcp=slug)
     if cfg.code_server:
         return StoreRef(cfg.code_server, cfg_module.graph_id(slug), cfg.code_token)
     return StoreRef(str(cfg_module.store_path(slug, cfg.code_dir)))
@@ -258,6 +326,8 @@ def store_for_repo(slug: str, config: cfg_module.Config | None = None) -> StoreR
 def bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     """Where the shared cross-repo bridge graph lives. Creates nothing."""
     cfg = config or cfg_module.load()
+    if _via_mcp(cfg):
+        return StoreRef(_endpoint(cfg).url, via_mcp=cfg_module.BRIDGE_GRAPH_ID)
     if cfg.code_server:
         return StoreRef(cfg.code_server, cfg_module.BRIDGE_GRAPH_ID, cfg.code_token)
     return StoreRef(str(cfg_module.bridge_store_path(cfg.code_dir)))
@@ -283,6 +353,8 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> StoreRef
     nothing.
     """
     cfg = config or cfg_module.load()
+    if _via_mcp(cfg):
+        return _verify_served_graph(store_for_repo(slug, cfg), f"{slug}'s code graph")
     if cfg.code_server:
         return _verify_cluster_graph(
             store_for_repo(slug, cfg), f"{slug}'s code graph", cfg
@@ -324,6 +396,8 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     builds the FTS index on ``key_norm`` that ``search_bindings`` needs.
     """
     cfg = config or cfg_module.load()
+    if _via_mcp(cfg):
+        return _verify_served_graph(bridge_store(cfg), "the bridge graph")
     if cfg.code_server:
         return _verify_cluster_graph(bridge_store(cfg), "the bridge graph", cfg)
 
@@ -344,6 +418,29 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     )
     _schema_apply(binary, cfg.bridge_schema_file, store)
     return StoreRef(str(store))
+
+
+def _verify_served_graph(ref: StoreRef, what: str) -> StoreRef:
+    """Check that the deployment serves ``ref`` before a write starts.
+
+    The MCP-tier counterpart of :func:`_verify_cluster_graph`, and there for
+    the same reason: the client cannot create a cluster graph, so a run that
+    proceeds past a missing one turns thousands of records into one error per
+    call and reports success having written nothing. Listing the graph's views
+    is the cheapest question that has to reach the store to be answered.
+
+    Unlike the direct path, this does not distinguish "not registered" from
+    "unreachable": the tool call fails either way, and the deployment's own
+    message says which — it is the side that can tell.
+    """
+    try:
+        ref.client().list_branches()
+    except Exception as exc:  # noqa: BLE001 — re-raised with the address
+        raise ClusterGraphMissing(
+            f"{what} could not be reached through the witan MCP endpoint at "
+            f"{ref.uri}: {exc}"
+        ) from exc
+    return ref
 
 
 def _verify_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> StoreRef:
@@ -378,6 +475,15 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
     found this?"): the graph is queryable and empty, not absent.
     """
     cfg = config or cfg_module.load()
+    if _via_mcp(cfg):
+        # The deployment holds the registry and is the only side that can map a
+        # graph back to the repo it holds, so the listing arrives already
+        # resolved — no `repo_for_store` query per graph from here.
+        try:
+            repos = mcp_session(cfg).call("code_store_graphs")
+        except Exception:  # noqa: BLE001 — a listing degrades, same as above
+            return []
+        return [StoreRef(_endpoint(cfg).url, via_mcp=repo) for repo in sorted(repos)]
     if cfg.code_server:
         return [
             StoreRef(cfg.code_server, gid, cfg.code_token)
@@ -432,7 +538,12 @@ def repo_for_store(ref: StoreRef, config: cfg_module.Config | None = None) -> st
     so the graph is asked what it holds — one row, ``indexed_repo``. A graph
     with no files has no answer and falls back to its id, which is at least
     unambiguous even though it is not a URI.
+
+    A ref reached through the MCP tier already carries the repo URI: it is what
+    the deployment was asked to resolve, so there is nothing to ask back.
     """
+    if ref.via_mcp is not None:
+        return ref.via_mcp
     if ref.is_remote:
         try:
             rows = ref.client(config).read("code_read.gq", "indexed_repo", {})

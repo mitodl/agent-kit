@@ -91,7 +91,7 @@ def write_bindings(
     # the per-repo store. Checked here too rather than relying on the caller's:
     # the bridge is a distinct store with its own addressing.
     check_writable(
-        client=client,
+        is_remote=client.is_remote,
         branch=bridge_branch,
         cfg=cfg,
         slug=f"{repo} (bridge)",

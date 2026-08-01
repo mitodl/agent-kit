@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Changed
+
+- **`ActorTokenResolver` moved to `witan_core.identity`,** joining
+  `derive_actor_id` there. witan-code resolves the same actors' tokens
+  server-side now: under ADR-0005 path c the deployed MCP tier performs a
+  remote indexer's code-graph writes as the caller, from the same provisioned
+  `{actor_id: token}` file, in the same process `witan serve` mounts both tool
+  surfaces into. `witan.identity` re-exports both, unchanged for every caller.
+
 ## [0.8.0] - 2026-07-31
 
 ### Changed

@@ -304,6 +304,7 @@ symlink alternative:
 | `WITAN_CODE_DIR` | `~/.local/share/witan/code` | directory of per-repo `<slug>.omni` stores. Unused when `WITAN_CODE_SERVER` is set |
 | `WITAN_CODE_SERVER` | — | base URL of the deployed omnigraph-server holding the code graphs. Set, every code graph is a graph on that server (`--server <url> --graph code-<repo>`) instead of a local directory. Reachable from inside the cluster only — intended for CI/in-cluster indexers, not laptops. See [Shared cluster graphs](#shared-cluster-graphs) |
 | `WITAN_CODE_TOKEN` | — | bearer token presented to `WITAN_CODE_SERVER`. Per-actor: the server resolves the writer from it |
+| `WITAN_CODE_TRANSPORT` | `direct` | how a cluster code graph is reached. `mcp` writes through the deployed witan MCP endpoint (`WITAN_REMOTE_URL`) instead of addressing the omnigraph-server — the supported path from outside the cluster. See [Writing through the MCP tier](#writing-through-the-mcp-tier) |
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
@@ -341,21 +342,61 @@ witan MCP endpoint. Indexing needs a git checkout, so the indexer always runs
 locally; `code_server` only changes where it writes. Either tier can be remote
 without the other.
 
-> **Who this is for is narrowing.** `code_server` addresses the
-> omnigraph-server *directly*, which today means it only works from inside the
-> cluster — the data tier is a ClusterIP service with no external route, while
-> the witan MCP tier is the one that is publicly exposed. The decision taken
-> (2026-08-01) is to route witan-code's writes through that MCP tier rather
-> than expose a second boundary, so the long-term shape is:
+> **Who this is for.** `code_server` addresses the omnigraph-server
+> *directly*, which only works from inside the cluster — the data tier is a
+> ClusterIP service with no external route, while the witan MCP tier is the
+> one that is publicly exposed. So:
 >
-> - **CI / in-cluster indexers** keep using `code_server` as documented here.
-> - **Developer machines** will write through the deployed witan endpoint,
->   once it grows a bulk-ingest surface — indexing is one `omnigraph load` of
->   thousands of records, which no per-record tool call can carry.
+> - **CI / in-cluster indexers** use `code_server` as documented here.
+> - **Everyone else** sets `code_transport = "mcp"` and writes through the
+>   deployed witan endpoint — see below.
 >
-> So do not configure `code_server` on a laptop expecting it to be the
-> supported path; it needs a `kubectl port-forward` today and is not where
-> this is heading. Reads are unaffected either way.
+> Do not configure `code_server` on a laptop: it needs a `kubectl
+> port-forward` and is not the supported path. Reads are unaffected either way.
+
+### Writing through the MCP tier
+
+`code_transport = "mcp"` (env `WITAN_CODE_TRANSPORT`) makes the deployed witan
+endpoint — the same `remote_url` the read commands already use — the address
+of every code graph. It is the supported way to index onto the cluster from a
+machine that is not in it:
+
+```toml
+[targets.hosted]
+remote_url = "https://witan.example.org/mcp"
+oidc_issuer = "https://sso.example.org/realms/ol-platform-engineering"
+code_transport = "mcp"
+match_orgs = ["ol-platform-engineering"]
+```
+
+Then `witan-code index` runs exactly as it always has — parsing your working
+tree locally, because that is the part that needs a checkout — and its store
+operations travel to the deployment, which performs them against the cluster
+graph *as you*: it resolves your actor from the JWT `witan-code login`
+obtained and looks up your own omnigraph token (ADR-0004). Nothing about
+your local process decides who the write is attributed to.
+
+Two consequences follow from that, and they are the point rather than
+limitations:
+
+- **You can only write views you own.** The deployment applies the same
+  ownership rule the client does (`[<actor>/]<branch>`, see
+  [Branch indexing](docs/BRANCH_INDEXING.md)) — but against the actor in your
+  token, so naming someone else's view is refused rather than honoured.
+- **You cannot write the shared default-branch view through this path at
+  all.** Its single writer is the CI indexer, which runs in-cluster. Index a
+  non-default git branch, which is what a developer is doing anyway.
+
+Store maintenance (`optimize`/`cleanup`) and stale-view reaping are refused
+here too: they run inside the cluster against the storage root, not from
+whichever machine indexed last.
+
+Requires `remote_url` + `oidc_issuer` (a bare `code_transport = "mcp"` with no
+endpoint is a configuration error, not a silent fall back to a local store).
+The indexer holds one connection open for the run rather than one per store
+operation; the per-prompt hook block, being a fresh process each time, pays a
+connection and a round trip or two per prompt, and stays silent if the
+deployment is unreachable or the login has expired.
 
 Two things a cluster graph cannot answer, and doesn't pretend to:
 

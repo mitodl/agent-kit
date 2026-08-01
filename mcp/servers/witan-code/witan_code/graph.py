@@ -69,7 +69,7 @@ def owns_view(
 
 def check_writable(
     *,
-    client: OmnigraphClient,
+    is_remote: bool,
     branch: str | None,
     cfg: cfg_module.Config,
     slug: str,
@@ -80,9 +80,15 @@ def check_writable(
     ``actor`` is the identity this process writes as; it defaults to the
     resolved one, so a caller that does not construct view names itself does
     not have to thread it through.
+
+    ``is_remote`` is "is this graph shared", which for a client is a property
+    of its store (``client.is_remote``) and for the MCP tier serving somebody
+    else's write is true by construction — that is the only reason the request
+    exists (:mod:`witan_code.ingest`). Taking the bit rather than the client is
+    what lets both ask the same question.
     """
     actor = actor if actor is not None else identity_module.actor_id()
-    if owns_view(is_remote=client.is_remote, branch=branch, cfg=cfg, actor=actor):
+    if owns_view(is_remote=is_remote, branch=branch, cfg=cfg, actor=actor):
         return
     if branch is None:
         raise SharedGraphWriteRefused(
