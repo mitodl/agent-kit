@@ -90,7 +90,12 @@ class StoreRef:
         return None if self.is_remote else Path(self.uri)
 
     def __str__(self) -> str:
-        return f"{self.uri} (graph {self.graph_id})" if self.is_remote else self.uri
+        # A remote ref built from a bare `--store <url>` has no graph id yet, so
+        # the suffix is conditional: "… (graph None)" in a user-facing refusal
+        # reads like a bug in the tool rather than a URL missing its graph.
+        if self.is_remote and self.graph_id:
+            return f"{self.uri} (graph {self.graph_id})"
+        return self.uri
 
     def client(
         self,

@@ -232,6 +232,39 @@ def test_resolve_store_refuses_a_cluster_graph(tmp_path, monkeypatch, capsys):
     assert "server-side" in capsys.readouterr().out
 
 
+def test_resolve_store_refuses_an_explicit_server_url(monkeypatch, capsys):
+    """`--store https://…` must reach the cluster refusal, not be mistaken for
+    a missing directory.
+
+    `Path("https://host").expanduser()` collapses the `//` to `/`, so wrapping
+    an explicit --store in Path left `https:/host` failing the http(s) test.
+    The refusal never fired for the exact input it was written for; the user
+    got "No store at https:/host" instead. Nothing exercised this path, which
+    is why it shipped.
+    """
+    from witan_code import cli as cli_module
+
+    monkeypatch.delenv("WITAN_CODE_SERVER", raising=False)
+
+    assert cli_module._resolve_store("https://omnigraph.test") is None
+    out = capsys.readouterr().out
+    assert "server-side" in out
+    # The URL survives intact, and an id-less ref does not render "(graph None)".
+    assert "https://omnigraph.test" in out
+    assert "graph None" not in out
+    assert "https:/omnigraph.test " not in out  # the collapsed form
+
+
+def test_resolve_store_still_expands_a_tilde_path(tmp_path, monkeypatch):
+    """The URL carve-out must not cost `--store ~/…` its expansion."""
+    from witan_code import cli as cli_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "g.omni").mkdir()
+
+    assert cli_module._resolve_store("~/g.omni").local_path == tmp_path / "g.omni"
+
+
 def test_checkpoint_spawns_for_repo_and_bridge_stores(tmp_path, monkeypatch):
     from witan_code import cli as cli_module
     from witan_code import config as cfg_module

@@ -365,6 +365,12 @@ def _resolve_store(store: str | None, *, bridge: bool = False):
     are direct-storage commands (they reject ``--server``) and compacting the
     shared store is the cluster's own job, run against the S3 root by a
     maintenance CronJob, not by whichever client happened to finish a session.
+
+    An explicit ``--store`` is only run through ``Path`` when it is NOT a URL:
+    ``Path("https://host").expanduser()`` collapses the ``//`` to ``/``, which
+    left ``https:/host`` failing the http(s) test and being refused as a
+    missing local directory — the one input the cluster refusal above exists
+    to catch.
     """
     from . import config as cfg_module
     from . import repo as repo_module
@@ -372,7 +378,12 @@ def _resolve_store(store: str | None, *, bridge: bool = False):
 
     cfg = cfg_module.load()
     if store is not None:
-        ref = store_module.StoreRef(str(Path(store).expanduser()))
+        raw = (
+            store
+            if store.startswith(("http://", "https://"))
+            else str(Path(store).expanduser())
+        )
+        ref = store_module.StoreRef(raw)
     elif bridge:
         ref = store_module.bridge_store(cfg)
     else:
