@@ -335,8 +335,20 @@ class OmnigraphClient:
         """Run an omnigraph CLI command under the write lock (for writes) with the
         retry/repair loop for optimistic-concurrency conflicts."""
         env = dict(os.environ)
-        if self.token:
+        if not self.is_remote:
+            # A local path or an s3:// root is opened directly — there is no
+            # server to present a bearer token to, and s3 authenticates with AWS
+            # credentials instead. `env` is a copy of os.environ, so an ambient
+            # token exported for cluster use would otherwise ride along into
+            # every local subprocess: propagating a secret to a process that
+            # has no use for it. Strip it rather than merely not setting it.
+            env.pop(BEARER_TOKEN_ENV_VAR, None)
+        elif self.token:
             env[BEARER_TOKEN_ENV_VAR] = self.token
+        # A remote store with no explicit token deliberately keeps whatever the
+        # environment already carries: that is the CLI's own documented fallback
+        # (see BEARER_TOKEN_ENV_VAR), and `export OMNIGRAPH_BEARER_TOKEN=…` with
+        # no token in config is a supported way to drive it.
 
         lock_fh = self._acquire_write_lock(is_write)
         try:

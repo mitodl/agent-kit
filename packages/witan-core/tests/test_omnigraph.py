@@ -134,11 +134,13 @@ def test_token_is_delivered_in_the_env_var_the_cli_actually_reads(monkeypatch):
     assert "OMNIGRAPH_SERVER_BEARER_TOKEN" not in captured["env"]
 
 
-def test_no_token_sets_no_token_var(monkeypatch):
-    """A local store must not inherit a stray token var from the environment
-    being copied — and must not invent one."""
-    monkeypatch.delenv("OMNIGRAPH_BEARER_TOKEN", raising=False)
-    client = _built_client(monkeypatch, "/var/lib/witan/graph.omni")
+def _token_seen_by_subprocess(monkeypatch, uri, *, token=None, ambient=None):
+    """What the CLI subprocess would see in the token var for this address."""
+    if ambient is None:
+        monkeypatch.delenv("OMNIGRAPH_BEARER_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("OMNIGRAPH_BEARER_TOKEN", ambient)
+    client = _built_client(monkeypatch, uri, token=token, graph_id="council")
     captured = {}
 
     def fake_run(cmd, **kwargs):
@@ -147,8 +149,48 @@ def test_no_token_sets_no_token_var(monkeypatch):
 
     monkeypatch.setattr(og.subprocess, "run", fake_run)
     client.read("read.gq", "some_query", {})
+    return captured["env"].get("OMNIGRAPH_BEARER_TOKEN")
 
-    assert "OMNIGRAPH_BEARER_TOKEN" not in captured["env"]
+
+def test_no_token_invents_none(monkeypatch):
+    assert _token_seen_by_subprocess(monkeypatch, "/var/lib/witan/graph.omni") is None
+
+
+@pytest.mark.parametrize("uri", ["/var/lib/witan/graph.omni", "s3://bucket/graph"])
+@pytest.mark.parametrize("token", [None, "explicit"])
+def test_local_store_never_receives_a_bearer_token(monkeypatch, uri, token):
+    """`env` is a copy of os.environ, so an ambient token exported for cluster
+    use rode along into every local subprocess — a secret handed to a process
+    that has no server to present it to. s3:// included: it authenticates with
+    AWS credentials, not a bearer token."""
+    assert (
+        _token_seen_by_subprocess(
+            monkeypatch, uri, token=token, ambient="ambient-secret"
+        )
+        is None
+    )
+
+
+def test_remote_store_keeps_an_ambient_token_when_none_is_configured(monkeypatch):
+    """The complement of the rule above, and deliberately NOT stripped:
+    `export OMNIGRAPH_BEARER_TOKEN=…` with nothing in config is the CLI's own
+    documented fallback, so removing it here would break a supported way of
+    driving a remote graph."""
+    assert (
+        _token_seen_by_subprocess(
+            monkeypatch, "http://host:8080", ambient="ambient-secret"
+        )
+        == "ambient-secret"
+    )
+
+
+def test_explicit_token_overrides_an_ambient_one_on_a_remote_store(monkeypatch):
+    assert (
+        _token_seen_by_subprocess(
+            monkeypatch, "http://host:8080", token="explicit", ambient="ambient-secret"
+        )
+        == "explicit"
+    )
 
 
 def test_each_call_gets_its_own_env_so_per_actor_tokens_cannot_race(monkeypatch):
