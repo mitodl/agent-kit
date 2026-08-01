@@ -537,7 +537,7 @@ def reap_views(
             *store_module.per_repo_stores(cfg),
             store_module.bridge_store(cfg),
         ]
-        targets = [(str(r), r.client(cfg)) for r in refs if r.exists()]
+        targets = [(str(r), r.client(cfg)) for r in refs if r.exists(cfg)]
     if not targets:
         print("No code-graph stores — nothing to reap.")
         return

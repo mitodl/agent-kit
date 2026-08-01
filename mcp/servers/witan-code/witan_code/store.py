@@ -132,7 +132,7 @@ class StoreRef:
             graph_id=self.graph_id,
         )
 
-    def exists(self) -> bool:
+    def exists(self, config: cfg_module.Config | None = None) -> bool:
         """Whether this graph is there to be read.
 
         Locally that is the store directory; on the cluster it is registration
@@ -149,7 +149,7 @@ class StoreRef:
         """
         if self.via_mcp is not None:
             try:
-                self.client().list_branches()
+                self.client(config).list_branches()
             except Exception:  # noqa: BLE001 — same degrade-to-False as above
                 return False
             return True
@@ -279,11 +279,18 @@ def _parse_graph_ids(payload: str) -> list[str]:
 def _endpoint(cfg: cfg_module.Config):
     """The deployed witan MCP endpoint this process writes cluster graphs through.
 
+    Resolved against ``cfg``'s own target, not by re-running target selection:
+    ``cfg`` may have come from an explicit ``load(target=…)``, and re-selecting
+    would fall back to ``WITAN_TARGET``/auto-detection and could answer with a
+    *different* deployment than the one whose ``code_transport`` sent us here —
+    writing to the wrong endpoint, or refusing with a "none configured" message
+    naming a target that has one.
+
     A ``code_transport = "mcp"`` with no endpoint configured is a misconfigured
     client, not an absent graph, so it raises rather than degrading to a local
     store — which would silently index into a directory nobody reads.
     """
-    remote = cfg_module.load_remote_config()
+    remote = cfg_module.load_remote_config(cfg.target_name)
     if remote is None:
         where = f"target [{cfg.target_name}]" if cfg.target_name else "WITAN_REMOTE_URL"
         raise ValueError(
@@ -334,7 +341,7 @@ def bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
 
 
 def store_exists(slug: str, config: cfg_module.Config | None = None) -> bool:
-    return store_for_repo(slug, config).exists()
+    return store_for_repo(slug, config).exists(config)
 
 
 def ensure_store(slug: str, config: cfg_module.Config | None = None) -> StoreRef:
@@ -354,7 +361,9 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> StoreRef
     """
     cfg = config or cfg_module.load()
     if _via_mcp(cfg):
-        return _verify_served_graph(store_for_repo(slug, cfg), f"{slug}'s code graph")
+        return _verify_served_graph(
+            store_for_repo(slug, cfg), f"{slug}'s code graph", cfg
+        )
     if cfg.code_server:
         return _verify_cluster_graph(
             store_for_repo(slug, cfg), f"{slug}'s code graph", cfg
@@ -397,7 +406,7 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     """
     cfg = config or cfg_module.load()
     if _via_mcp(cfg):
-        return _verify_served_graph(bridge_store(cfg), "the bridge graph")
+        return _verify_served_graph(bridge_store(cfg), "the bridge graph", cfg)
     if cfg.code_server:
         return _verify_cluster_graph(bridge_store(cfg), "the bridge graph", cfg)
 
@@ -420,7 +429,7 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     return StoreRef(str(store))
 
 
-def _verify_served_graph(ref: StoreRef, what: str) -> StoreRef:
+def _verify_served_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> StoreRef:
     """Check that the deployment serves ``ref`` before a write starts.
 
     The MCP-tier counterpart of :func:`_verify_cluster_graph`, and there for
@@ -434,7 +443,7 @@ def _verify_served_graph(ref: StoreRef, what: str) -> StoreRef:
     message says which — it is the side that can tell.
     """
     try:
-        ref.client().list_branches()
+        ref.client(cfg).list_branches()
     except Exception as exc:  # noqa: BLE001 — re-raised with the address
         raise ClusterGraphMissing(
             f"{what} could not be reached through the witan MCP endpoint at "

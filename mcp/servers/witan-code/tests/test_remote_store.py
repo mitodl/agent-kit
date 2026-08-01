@@ -182,6 +182,35 @@ def test_the_transport_decides_the_address(monkeypatch, tmp_path):
     assert bridge.via_mcp == cfg_module.BRIDGE_GRAPH_ID
 
 
+def test_the_endpoint_comes_from_the_config_that_asked_for_it(monkeypatch, tmp_path):
+    """A `Config` from an explicit `load(target=…)` must resolve *that*
+    target's endpoint. Re-running target selection would fall back to
+    auto-detection and could answer with a different deployment than the one
+    whose `code_transport` sent the write here."""
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'remote_url = "https://global.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/global"\n'
+        "\n"
+        "[targets.hosted]\n"
+        'remote_url = "https://hosted.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/hosted"\n'
+        'code_transport = "mcp"\n'
+        'match_orgs = ["never-matches-this-checkout"]\n'
+    )
+    monkeypatch.setenv("WITAN_CONFIG", str(config))
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+    monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("WITAN_CODE_TRANSPORT", raising=False)
+
+    cfg = cfg_module.load(target="hosted")
+    assert (
+        store_module.store_for_repo(REPO, cfg).uri == "https://hosted.example.org/mcp"
+    )
+
+
 def test_no_endpoint_is_a_configuration_error_not_a_local_store(monkeypatch, tmp_path):
     """Degrading to a local store would index into a directory nobody reads."""
     monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))

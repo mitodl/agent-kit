@@ -79,7 +79,7 @@ def write_bindings(
     Returns the number of binding records written.
     """
     # Skip creating the store for a contract-less repo on its first index.
-    if not bindings and not bridge_store(cfg).exists():
+    if not bindings and not bridge_store(cfg).exists(cfg):
         return 0
 
     identity = identity or package_map.fallback_identity(repo)
