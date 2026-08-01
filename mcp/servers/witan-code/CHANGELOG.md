@@ -8,6 +8,17 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires `witan-core>=0.7`.** The mtime-stamped schema re-apply
+  (`_schema_apply` / `_schema_apply_if_changed` / `_schema_stamp` in
+  `witan_code/store.py`) moved up into `witan_core.omnigraph` as
+  `schema_apply` / `schema_apply_if_changed` / `schema_stamp_path`, so
+  witan-council can pick up additive schema changes on an existing store the
+  same way. No behavior change here — `ensure_store` and `ensure_bridge_store`
+  call the shared functions with the same arguments — but the floor moves,
+  because resolving witan-core 0.6 would now fail at import.
+
 ### Added
 
 - **Index onto a cluster code graph from outside the cluster —
