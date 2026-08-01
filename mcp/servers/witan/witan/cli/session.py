@@ -109,7 +109,13 @@ _DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
 def _parse_duration(spec: str) -> int:
-    """``"6h"`` → 21600. Accepts s/m/h/d, or a bare number of seconds."""
+    """``"6h"`` → 21600. Accepts s/m/h/d, or a bare number of seconds.
+
+    Negative is rejected rather than clamped. A negative age puts the sweep's
+    cutoff in the *future*, which makes every open session look stale — so
+    ``--older-than -1h --yes``, a plausible typo, would close every session the
+    caller can see instead of none.
+    """
     text = spec.strip().lower()
     unit = _DURATION_UNITS.get(text[-1:], None)
     number = text[:-1] if unit else text
@@ -119,6 +125,8 @@ def _parse_duration(spec: str) -> int:
         raise ValueError(
             f"could not parse duration {spec!r} — use e.g. 30m, 6h, 2d"
         ) from None
+    if value < 0:
+        raise ValueError(f"duration {spec!r} cannot be negative")
     return int(value * (unit or 1))
 
 

@@ -132,3 +132,40 @@ def test_ensure_graph_is_still_a_noop_for_remote_uris(monkeypatch):
 
     for uri in ("https://omnigraph.example/", "http://localhost:8080", "s3://b/g"):
         srv._ensure_graph(uri)
+
+
+def test_ensure_graph_skips_reapply_when_the_binary_is_missing(monkeypatch, tmp_path):
+    """For an EXISTING store a missing omnigraph must degrade to "skip the
+    re-apply", not raise — `_find_binary` raises RuntimeError, and this
+    function is documented as unable to take down import."""
+    import witan.server as srv
+
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    monkeypatch.setattr(srv, "_SCHEMA_FILE", tmp_path / "schema.pg")
+    srv._SCHEMA_FILE.write_text("node Memory { slug: String }")
+
+    def no_binary():
+        raise RuntimeError("omnigraph not found on PATH")
+
+    monkeypatch.setattr(srv.OmnigraphClient, "_find_binary", staticmethod(no_binary))
+
+    srv._ensure_graph(str(store))  # must not raise
+
+
+def test_ensure_graph_still_raises_for_a_missing_binary_on_create(
+    monkeypatch, tmp_path
+):
+    """A store that does not exist yet has nothing to degrade to."""
+    import witan.server as srv
+
+    monkeypatch.setattr(srv, "_SCHEMA_FILE", tmp_path / "schema.pg")
+    srv._SCHEMA_FILE.write_text("node Memory { slug: String }")
+
+    def no_binary():
+        raise RuntimeError("omnigraph not found on PATH")
+
+    monkeypatch.setattr(srv.OmnigraphClient, "_find_binary", staticmethod(no_binary))
+
+    with pytest.raises(RuntimeError, match="not found on PATH"):
+        srv._ensure_graph(str(tmp_path / "absent.omni"))

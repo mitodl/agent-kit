@@ -57,16 +57,29 @@ def _ensure_graph(graph_uri: str) -> None:
     The re-apply deliberately cannot raise: this runs at import time
     (``_ensure_graph(cfg.graph_uri)`` below), so a failure would take down
     `witan serve` at startup. A failed apply leaves the stamp unwritten and is
-    retried next time. Creation keeps ``check=True`` — a store that does not
-    exist yet has nothing to degrade to.
+    retried next time. That includes locating the binary — ``_find_binary``
+    raises when omnigraph is not on PATH, so for an EXISTING store a missing
+    binary degrades to "skip the re-apply" rather than propagating. (Import
+    still fails a few lines below, where the ``OmnigraphClient`` constructor
+    resolves the same binary — so this changes which error a user sees, not
+    whether witan works without omnigraph installed. It keeps this function's
+    contract honest, and keeps the other caller, ``merge_store``, from
+    inheriting a raise it does not expect.)
+
+    Creation keeps ``check=True``, and lets a missing binary raise — a store
+    that does not exist yet has nothing to degrade to.
     """
     if graph_uri.startswith(("http://", "https://", "s3://")):
         return
     store = Path(graph_uri).expanduser()
-    binary = OmnigraphClient._find_binary()
     if store.exists():
+        try:
+            binary = OmnigraphClient._find_binary()
+        except RuntimeError:
+            return
         schema_apply_if_changed(binary, _SCHEMA_FILE, store)
         return
+    binary = OmnigraphClient._find_binary()
     store.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [binary, "init", "--schema", str(_SCHEMA_FILE), str(store)],

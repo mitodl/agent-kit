@@ -110,12 +110,20 @@ def schema_apply(binary: str, schema_file: Path, store: Path) -> bool:
     ``_ensure_graph`` runs at import time, so a raise here fails ``witan serve``
     at startup rather than degrading. The stamp is only written on success, so
     a failed apply is simply retried on the next call.
+
+    A non-zero exit is not the only way this fails: ``subprocess.run`` itself
+    raises ``OSError`` when the binary is missing or not executable, which
+    would escape the same "cannot raise" path that dropping ``check=True``
+    exists to protect. Both become ``False``.
     """
-    res = subprocess.run(
-        [binary, "schema", "apply", "--schema", str(schema_file), str(store)],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        res = subprocess.run(
+            [binary, "schema", "apply", "--schema", str(schema_file), str(store)],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
     if res.returncode != 0:
         return False
     try:
@@ -140,11 +148,27 @@ def schema_apply_if_changed(binary: str, schema_file: Path, store: Path) -> bool
     hot paths (a per-tool-call ensure, a per-file reindex), so the schema
     file's mtime is stamped next to the store and the apply is skipped while it
     matches. Returns ``True`` when the store is known-current.
+
+    Neither filesystem read may raise, for the same import-time reason as
+    :func:`schema_apply`, and the two failures mean different things. An
+    unstattable schema file leaves nothing to apply, so it is ``False`` without
+    a subprocess. An unreadable stamp only means the last-applied mtime is
+    unknown — which is exactly the "might be stale" case — so it falls through
+    to a re-apply rather than assuming current. Erring toward a redundant
+    idempotent apply is the safe direction; erring toward skipping one silently
+    leaves the store a schema revision behind, which is the bug this exists to
+    fix.
     """
     stamp = schema_stamp_path(store)
-    current_mtime = str(schema_file.stat().st_mtime)
-    if stamp.exists() and stamp.read_text().strip() == current_mtime:
-        return True
+    try:
+        current_mtime = str(schema_file.stat().st_mtime)
+    except OSError:
+        return False
+    try:
+        if stamp.exists() and stamp.read_text().strip() == current_mtime:
+            return True
+    except OSError:
+        pass
     return schema_apply(binary, schema_file, store)
 
 

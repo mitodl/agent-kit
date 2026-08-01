@@ -1172,6 +1172,11 @@ def test_parse_duration_accepts_units_and_bare_seconds():
     assert _parse_duration("90") == 90
     with pytest.raises(ValueError, match="could not parse duration"):
         _parse_duration("soon")
+    # A negative age puts the cutoff in the FUTURE, which would make every open
+    # session look stale — so `--older-than -1h --yes` would sweep the lot.
+    for negative in ("-1h", "-30m", "-5"):
+        with pytest.raises(ValueError, match="cannot be negative"):
+            _parse_duration(negative)
 
 
 @requires_omnigraph
