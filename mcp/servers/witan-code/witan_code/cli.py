@@ -510,7 +510,14 @@ def reap_views(
     if not targets:
         print("No code-graph stores — nothing to reap.")
         return
+    if idle <= 0:
+        print(
+            f"Reaping is disabled ({reaper_module.MAX_IDLE_ENV_VAR}=0) — "
+            f"{len(targets)} store(s) left untouched."
+        )
+        return
 
+    failed_graphs = 0
     for name, client in targets:
         try:
             report = reaper_module.reap(
@@ -519,10 +526,19 @@ def reap_views(
         except PermissionError as exc:
             print(exc)
             raise SystemExit(1) from None
+        except RuntimeError as exc:
+            # A graph that can't be surveyed (unreadable store, unexpected
+            # omnigraph output) must not strand the others — but it must not
+            # pass for a clean sweep either, so it shows up in the exit code.
+            print(f"{name}: FAILED to survey — {exc}")
+            failed_graphs += 1
+            continue
         _print_reap_report(report, idle=idle)
 
     if not apply:
         print("\n(report only — re-run with --apply to delete)")
+    if failed_graphs:
+        raise SystemExit(1)
 
 
 def _print_reap_report(report, *, idle: float) -> None:

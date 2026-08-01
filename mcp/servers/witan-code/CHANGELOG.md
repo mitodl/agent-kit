@@ -22,8 +22,14 @@ a MINOR bump may include breaking changes).
   already on its fork point, and omnigraph records no branch-creation time to
   age it by, so reaping it would race the indexer that just made it. Reports by
   default; `--apply` deletes, and refuses on a shared graph unless
-  `WITAN_CODE_INDEX_ROLE=ci`. See `docs/BRANCH_INDEXING.md` § Reaping stale
-  views and witan `docs/adr/0006`.
+  `WITAN_CODE_INDEX_ROLE=ci`. Unparseable `commit list` output raises rather
+  than reading as "never written" — `None` is what tells the reaper to leave a
+  view alone, so degrading a parse failure to it would turn an omnigraph output
+  change into a reaper that reports success forever while sprawl grows. A
+  disabled window (`0`) skips the per-view aging entirely instead of scanning
+  and discarding, and a graph that cannot be surveyed is reported and
+  non-zero-exited without stranding the other stores in the sweep. See
+  `docs/BRANCH_INDEXING.md` § Reaping stale views and witan `docs/adr/0006`.
 
 ### Changed
 

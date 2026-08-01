@@ -192,15 +192,28 @@ class OmnigraphClient(_BaseOmnigraphClient):
         from the commit log: ``commit list --branch`` returns every reachable
         commit, each tagged with the ``manifest_branch`` it landed on, so the
         branch's own writes are the ones tagged with it.
+
+        Output that isn't the expected JSON shape **raises**, and must not
+        degrade to ``None``: ``None`` is load-bearing here — it tells the
+        reaper never to touch this view — so a format change or a stray
+        warning line on stdout would quietly turn a scheduled reaper into a
+        no-op that reports success while branch sprawl grows unbounded. Same
+        convention as the base client's :meth:`read`.
         """
         result = self._run("commit", "list", "--branch", name, "--json")
         try:
             parsed = json.loads(result)
-        except json.JSONDecodeError:
-            return None
-        commits = parsed.get("commits", []) if isinstance(parsed, dict) else parsed
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"omnigraph commit list returned non-JSON for branch "
+                f"{name!r}: {result!r}"
+            ) from exc
+        commits = parsed.get("commits") if isinstance(parsed, dict) else parsed
         if not isinstance(commits, list):
-            return None
+            raise RuntimeError(
+                f"omnigraph commit list returned no commit array for branch "
+                f"{name!r}: {parsed!r}"
+            )
         stamps = [
             row["created_at"]
             for row in commits

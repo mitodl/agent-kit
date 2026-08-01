@@ -207,6 +207,38 @@ def test_one_undeletable_view_does_not_strand_the_sweep():
     assert report.failed == [("act-alice/ancient", "branch is locked")]
 
 
+def test_a_disabled_window_ages_nothing_rather_than_ageing_and_discarding():
+    """`select_stale` would return nothing anyway — but only after a
+    `commit list` subprocess per view. On a shared graph carrying every
+    developer's every branch that is a full scan on every scheduled run to
+    reach a foregone conclusion."""
+    asked: list[str] = []
+
+    class _Counting(_FakeClient):
+        def branch_last_write(self, name):
+            asked.append(name)
+            return super().branch_last_write(name)
+
+    report = reap(_Counting(is_remote=False), graph="local", now=NOW, max_idle=0)
+    assert asked == []
+    assert report.scanned == 0
+    assert report.stale == []
+
+
+def test_the_role_refusal_outranks_a_disabled_window():
+    """A job running with the wrong role is a misconfiguration the operator
+    should hear about, even on a sweep that would have deleted nothing."""
+    with pytest.raises(PermissionError):
+        reap(
+            _FakeClient(is_remote=True),
+            graph="code-x",
+            now=NOW,
+            max_idle=0,
+            apply=True,
+            cfg=_cfg(),
+        )
+
+
 # ── Against the real binary ──────────────────────────────────────────────────
 
 
@@ -301,6 +333,25 @@ def test_the_reaper_deletes_what_it_selected(tmp_path):
 
     assert set(report.deleted) == {"act-alice/stale", "act-bob/fresh"}
     assert client.list_branches() == ["main"]
+
+
+def test_unparseable_commit_list_raises_rather_than_reading_as_never_written(
+    tmp_path, monkeypatch
+):
+    """`None` means "never written", which tells the reaper never to touch this
+    view. Degrading a parse failure to `None` would turn a format change or a
+    stray warning line into a reaper that reports success forever while sprawl
+    grows — the failure mode with no symptom."""
+    client = OmnigraphClient(str(tmp_path / "t.omni"), tmp_path)
+    monkeypatch.setattr(
+        OmnigraphClient, "_run", lambda self, *a, **k: "warning: something\n"
+    )
+    with pytest.raises(RuntimeError, match="non-JSON"):
+        client.branch_last_write("act-alice/x")
+
+    monkeypatch.setattr(OmnigraphClient, "_run", lambda self, *a, **k: '{"oops": 1}')
+    with pytest.raises(RuntimeError, match="no commit array"):
+        client.branch_last_write("act-alice/x")
 
 
 @requires_omnigraph

@@ -189,6 +189,9 @@ def reap(
     max_idle = max_idle_days() if max_idle is None else max_idle
     cfg = cfg_module.load() if cfg is None else cfg
 
+    # Authority first, and unconditionally: a job running with the wrong role
+    # is a misconfiguration the operator should hear about even on a sweep that
+    # would have deleted nothing.
     if apply and client.is_remote and not cfg.is_designated_writer:
         raise PermissionError(
             f"Refusing to reap views from the shared graph {graph}: they belong "
@@ -196,6 +199,14 @@ def reap(
             f"them. Set WITAN_CODE_INDEX_ROLE={cfg_module.INDEX_ROLE_CI} if this "
             "IS the reaper job; otherwise drop --apply and read the report."
         )
+
+    # Disabled means disabled: `select_stale` would return nothing anyway, but
+    # only after `survey` had already spent one `commit list` subprocess per
+    # view. On a shared graph carrying every developer's every branch that is a
+    # full scan to reach a foregone conclusion, on whatever schedule the job
+    # runs. The empty report is honest — nothing was scanned.
+    if max_idle <= 0:
+        return ReapReport(graph=graph, now=now)
 
     ages, stale = survey(client, now=now, max_idle=max_idle)
     report = ReapReport(graph=graph, now=now, scanned=len(ages), stale=stale)
