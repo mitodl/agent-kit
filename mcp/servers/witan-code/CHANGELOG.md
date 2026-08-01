@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Added
+
+- **`witan-code reap-views` — a stale branch-view reaper for the shared graph.**
+  With per-writer views on one cluster graph, every developer's every git branch
+  gets a view and nothing ever removes one. This sweeps views nobody has written
+  in `WITAN_CODE_VIEW_MAX_IDLE_DAYS` (default 14; `0` disables). It is not
+  `branches --prune` with a wider scope: prune asks whether *this checkout* still
+  has the git branch, which is unanswerable about a store every user writes, and
+  it keeps refusing there. This asks the store's own commit log how long ago a
+  view was last written. `main` is never reaped (idle by design between merges),
+  and neither is a view with no commits of its own — it holds nothing that isn't
+  already on its fork point, and omnigraph records no branch-creation time to
+  age it by, so reaping it would race the indexer that just made it. Reports by
+  default; `--apply` deletes, and refuses on a shared graph unless
+  `WITAN_CODE_INDEX_ROLE=ci`. See `docs/BRANCH_INDEXING.md` § Reaping stale
+  views and witan `docs/adr/0006`.
+
+### Changed
+
+- **Cedar can gate `main` vs WIP, but not view ownership** — corrected from
+  0.9.0's claim that one rule could. omnigraph 0.8.1 compiles a bundle rule to a
+  bare `permit(...)` with no `when {}` clause, and its only branch predicate is
+  the three-valued protected/unprotected scope: there is no branch-name pattern
+  and no `principal.actor` to compare a prefix against. The `act-<sub>/` prefix
+  is therefore enforced by the client write guard alone. The policy bundle now
+  pins this gap with a deliberately-`allow` test case, so an omnigraph release
+  that closes it fails the build instead of passing unnoticed.
+
 ## [0.9.0] - 2026-07-31
 
 ### Added

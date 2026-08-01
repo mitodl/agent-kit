@@ -179,10 +179,50 @@ class OmnigraphClient(_BaseOmnigraphClient):
     def delete_branch(self, name: str) -> None:
         self._run("branch", "delete", name, "--yes")
 
+    def branch_last_write(self, name: str) -> float | None:
+        """When ``name`` was last written, as epoch seconds, or ``None``.
+
+        ``None`` means the branch has no commits *of its own* — every commit
+        reachable from it came from the branch it forked off. That is a view
+        created but never indexed, and it is not the same as "old": there is no
+        branch-creation timestamp anywhere in omnigraph 0.8.1 to age it by. The
+        reaper treats it accordingly (:mod:`witan_code.reaper`).
+
+        ``omnigraph branch list`` returns bare names, so staleness has to come
+        from the commit log: ``commit list --branch`` returns every reachable
+        commit, each tagged with the ``manifest_branch`` it landed on, so the
+        branch's own writes are the ones tagged with it.
+        """
+        result = self._run("commit", "list", "--branch", name, "--json")
+        try:
+            parsed = json.loads(result)
+        except json.JSONDecodeError:
+            return None
+        commits = parsed.get("commits", []) if isinstance(parsed, dict) else parsed
+        if not isinstance(commits, list):
+            return None
+        stamps = [
+            row["created_at"]
+            for row in commits
+            if isinstance(row, dict)
+            and row.get("manifest_branch") == name
+            and isinstance(row.get("created_at"), (int, float))
+        ]
+        # created_at is microseconds since the epoch.
+        return max(stamps) / 1_000_000 if stamps else None
+
     def _extra_args(self, subcommand: str) -> list[str]:
         # optimize/cleanup compact the whole store (every branch), not a single
-        # one, so they never take --branch even on a branched client.
-        if self.branch is None or subcommand in ("branch", "optimize", "cleanup"):
+        # one, so they never take --branch even on a branched client. `commit`
+        # and `branch` name their branch positionally or as their own flag, so
+        # injecting this client's would either duplicate the flag or silently
+        # retarget the call.
+        if self.branch is None or subcommand in (
+            "branch",
+            "commit",
+            "optimize",
+            "cleanup",
+        ):
             return []
         if subcommand == "load":
             return ["--branch", self.branch, "--from", "main"]

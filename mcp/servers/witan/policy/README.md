@@ -23,6 +23,14 @@ crate — the constraints that shaped this bundle:
   not implemented server-side. So within the Layer-1 graph we cannot say
   "Memory yes, Task no"; anyone who can `change` the graph can change every
   node kind in it.
+- **No branch-name predicates, and no conditions at all.** A rule compiles to a
+  bare `permit(principal in Omnigraph::Group::"…", action == …, resource == …)`
+  — the generated Cedar has no `when {}` clause. Combined with the point above,
+  that means **ownership is inexpressible**: witan-code names each branch view
+  for its writer (`act-<sub>/<branch>`), but no bundle can say "write only views
+  prefixed with your own actor id". That rule is enforced client-side instead —
+  see `docs/adr/0006-code-graph-branch-ownership-and-reaping.md`, and the
+  deliberately-`allow` test case that pins the gap.
 - **Actions.** Per-graph: `read`, `export`, `change`, `schema_apply`,
   `branch_create`, `branch_delete`, `branch_merge`, `invoke_query`, `admin`.
   Server-scoped: `graph_list`.
@@ -60,11 +68,11 @@ Two distinct non-human identities, deliberately kept separate:
 - **`witan-ci` (`act-svc-witan-ci`) — the code-graph data pipeline.** Owns the
   canonical `main` index for each repo: reindex-on-merge (`change` any branch,
   `branch_merge` into protected `main`) and the WIP-branch lifecycle
-  (`branch_create`/`branch_delete` on unprotected branches — the stale-branch
-  reaper). It **cannot** delete protected `main` and **cannot** apply schema. It
-  has **no** access to the memory graph. Its enforcement is in place ahead of
-  the pipeline itself, which is a separate task
-  (`tk-branch-cedar-gating-stale-code-graph-branch-reap-0c621c`).
+  (`branch_create`/`branch_delete` on unprotected branches). It is the **only**
+  holder of `branch_delete` — deleting a view Cedar cannot prove you own is the
+  stale-view reaper's job (`witan-code reap-views`), not a user's. It **cannot**
+  delete protected `main` and **cannot** apply schema. It has **no** access to
+  the memory graph.
 - **`witan-service` (`act-svc-witan`) — the MCP service's own account.** Schema
   definition and migration is a **default, service-owned operation**: the witan
   MCP service applies the appropriate schema/migrations on every graph
@@ -78,8 +86,8 @@ Two distinct non-human identities, deliberately kept separate:
 | File                     | applies_to        | Grants                                                                                       |
 | ------------------------ | ----------------- | -------------------------------------------------------------------------------------------- |
 | `memory.policy.yaml`     | `[memory]`        | users: read/export/change/invoke on the flat shared work graph. service: read + schema_apply. (no CI)  |
-| `code-graph.policy.yaml` | per-repo graph ids | users: read/invoke anywhere, change + branch ops on **unprotected** (WIP) branches only. CI: read/change + merge into protected `main` + WIP branch lifecycle. service: read + schema_apply. |
-| `bridge.policy.yaml`     | `[bridge]`        | users: read/export/invoke. CI: read + change (bridge content). service: schema_apply.        |
+| `code-graph.policy.yaml` | per-repo graph ids | users: read/invoke anywhere, change + `branch_create` on **unprotected** (WIP) branches only. CI: read/change + merge into protected `main` + WIP branch lifecycle incl. `branch_delete`. service: read + schema_apply. |
+| `bridge.policy.yaml`     | `[bridge]`        | users: read/export/invoke anywhere, change + `branch_create` on unprotected WIP views. CI: read/change any + WIP branch lifecycle. service: schema_apply. |
 | `server.policy.yaml`     | `[cluster]`       | users: graph_list. *(Not in the CI harness — see below.)*                                    |
 
 ### Layer topology → graph mapping
@@ -90,11 +98,16 @@ Two distinct non-human identities, deliberately kept separate:
   `sanitize_slug(repo)`. Branch model (witan-code `repo.py:store_branch`): the
   repo's **default git branch → store `main`** (the committed, reviewed index,
   marked `protected`); every other git branch → a non-`main` store branch
-  (`unprotected`, per-user/per-session WIP). Humans reindex freely on WIP
-  branches but never mutate `main`; `svc-witan-ci` owns main-branch writes,
-  merges, and schema applies, so promotion into `main` is deliberate.
+  (`unprotected`, per-user/per-session WIP), named for its writer as
+  `act-<sub>/<branch>`. Humans reindex freely on WIP branches but never mutate
+  `main`; `svc-witan-ci` owns main-branch writes and merges, so promotion into
+  `main` is deliberate. To Cedar a namespaced view is just an unprotected
+  branch name — the `act-<sub>/` prefix is enforced by witan-code, not here.
 - **Layer 2.5 — `bridge`**: the cross-repo bridge (`_bridge.omni`), a derived
-  projection — read-only for humans, CI-written.
+  projection. Derived, but neither flat nor read-only for humans: indexing a WIP
+  git branch writes that branch's bindings here too, on a repo-qualified view of
+  its own (`act-<sub>/<repo-slug>/<branch>`). `main` is the committed,
+  CI-written projection.
 
 ## Validate & test
 
@@ -103,13 +116,13 @@ Two distinct non-human identities, deliberately kept separate:
 uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 export PATH="$HOME/.local/bin:$PATH"
 
-./policy/check.sh          # lint all 4 bundles, validate 3, run 38 test cases
+./policy/check.sh          # lint all 4 bundles, validate 3, run 54 test cases
 ```
 
 `check.sh` does three things: (1) `lint_bundles.py` — a structural lint of
 **every** bundle including `server.policy.yaml` (group references resolve,
 actions are known, scopes match their actions, allow-only); (2) `policy
-validate` on the three per-graph bundles; (3) `policy test` — 38 declarative
+validate` on the three per-graph bundles; (3) `policy test` — 54 declarative
 allow/deny cases. It runs in CI as the `witan (Cedar policy bundle)` job in
 `.github/workflows/witan-tests.yml`. `cluster.yaml` here is a **CI test
 harness**, not the deployed config — it wires the bundles onto three stub graphs
@@ -146,3 +159,10 @@ here) must:
    (`witan-users` = per-user actors; `witan-ci` = `act-svc-witan-ci`).
 4. Gate maintenance ops (`repair`/`optimize`/`cleanup`) with **AWS IAM** on the
    backing bucket — Cedar cannot.
+5. **Schedule the stale-view reaper.** `witan-ci`'s `branch_delete` grant is
+   authorization for a job that has to actually run: every developer's every git
+   branch gets a view on the shared graph, and nothing else removes one. Run
+   `witan-code reap-views --store <server-url> --graph <id> --apply` with
+   `WITAN_CODE_INDEX_ROLE=ci` and the `svc-witan-ci` token, per graph, on a
+   schedule (`WITAN_CODE_VIEW_MAX_IDLE_DAYS`, default 14). See
+   `docs/adr/0006-code-graph-branch-ownership-and-reaping.md` D5.

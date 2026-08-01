@@ -19,6 +19,20 @@
 # promoted into main deliberately, not by ambient reindex. Schema is owned by the
 # MCP service (witan-service), not the pipeline — see policy/README.md.
 #
+# OWNERSHIP IS NOT EXPRESSIBLE HERE. Since witan-code namespaces each branch view
+# by its writer (`act-<sub>/<branch>`, witan_code/views.py), the rule we actually
+# want for `change` is "write views prefixed with your own actor id". omnigraph
+# 0.8.1 cannot say that: a bundle rule compiles to a bare
+# `permit(principal in Omnigraph::Group::"…", action == …, resource == …)` with no
+# `when {}` clause, and the only branch predicate is the three-valued
+# protected/unprotected/any scope — there is no branch-name pattern and no
+# `principal.actor` to compare against. So Cedar enforces the main-vs-WIP split
+# and witan-code's write guard (graph.py:owns_view) enforces per-writer ownership
+# among WIP branches. See docs/adr/0006-code-graph-branch-ownership-and-reaping.md
+# for what that does and does not buy, and tests/code-graph.tests.yaml
+# `cedar-cannot-scope-wip-writes-to-owner`, which pins the gap so an omnigraph
+# release that closes it fails the build instead of passing silently.
+#
 # Group membership is templated by ol-infrastructure — see server.policy.yaml.
 version: 1
 
@@ -47,10 +61,18 @@ rules:
       actors: { group: witan-users }
       actions: [change]
       branch_scope: unprotected
-  - id: users-manage-wip-branches
+  # Create only — deletion on a shared graph belongs to CI (the reaper). A view
+  # is named for its writer but Cedar cannot scope a delete to that writer (see
+  # the header), so granting users `branch_delete` would let any authenticated
+  # user destroy any other's in-flight index, with the policy layer unable to
+  # tell the two apart. No client path needs it: `witan-code branches --prune`
+  # already refuses against a shared graph, because this machine's git refs are
+  # not the authority for branches every user of the cluster writes. Local
+  # stores are unaffected — they have no policy engine in front of them.
+  - id: users-create-wip-branches
     allow:
       actors: { group: witan-users }
-      actions: [branch_create, branch_delete]
+      actions: [branch_create]
       target_branch_scope: unprotected
   # svc-witan-ci owns the protected main index DATA: reads current state to diff,
   # reindex-on-merge, deliberate promotion of a WIP branch. `change` scopes on
@@ -76,7 +98,10 @@ rules:
       actions: [branch_merge]
       target_branch_scope: protected
   # WIP-branch lifecycle (staging a merge, reaping stale branches) stays on
-  # unprotected branches.
+  # unprotected branches. `branch_delete` here is what the stale-view reaper
+  # (`witan-code reap-views`) runs on: on a shared graph nothing else bounds
+  # branch sprawl, since every developer's every git branch gets a view, and no
+  # client can tell whose views are still live.
   - id: ci-manage-wip-branches
     allow:
       actors: { group: witan-ci }

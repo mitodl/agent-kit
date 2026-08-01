@@ -1,6 +1,6 @@
 # 2. witan v1 Cedar authorization bundle
 
-- Status: Accepted
+- Status: Accepted, amended by [0006](0006-code-graph-branch-ownership-and-reaping.md)
 - Date: 2026-07-07
 - Deciders: witan platform owners
 - Tracking: task `tk-witan-v1-cedar-policy-bundle-team-repo-scoped-re-77655e`, project `wp-witan-multi-user-service-deployment-dcf6ee`
@@ -77,9 +77,16 @@ Vault-provisioned tokens for the two service accounts), not committed.
   `witan-service` owns read + `schema_apply` on `main`. WIP reindexes are
   isolated; promotion into `main` is deliberate and CI-owned; schema stays
   service-owned.
+  **Amended by [ADR 0006](0006-code-graph-branch-ownership-and-reaping.md) D3:**
+  users keep `branch_create` but lose `branch_delete` — Cedar cannot scope a
+  delete to the view's owner, so deletion on a shared graph is CI's alone.
 - **`bridge.policy.yaml` → `[bridge]`** (Layer 2.5, derived cross-repo bridge):
   read-only for users; `witan-ci` writes the content; `witan-service` owns the
   schema.
+  **Amended by [ADR 0006](0006-code-graph-branch-ownership-and-reaping.md) D4:**
+  the bridge is neither flat nor read-only for humans — indexing a WIP git branch
+  writes its cross-repo bindings there too, on a per-user view. Users get
+  `change` + `branch_create` on unprotected branches; `main` stays CI's.
 
 ### D3 — Server-level `graph_list` is a deploy-time bundle, structurally linted
 
@@ -106,7 +113,7 @@ AWS IAM on the backing bucket. There is no `svc-witan-admin` Cedar principal.
 `policy/check.sh` (1) runs `lint_bundles.py` — a structural lint of all four
 bundles including the server bundle; (2) converges a fixture cluster
 (`policy/cluster.yaml`, stub graphs `memory`/`code_example`/`bridge`) and runs
-`omnigraph policy validate`; (3) runs 38 declarative `policy test` cases across
+`omnigraph policy validate`; (3) runs 54 declarative `policy test` cases across
 the three per-graph bundles. It runs as the `witan (Cedar policy bundle)` job in
 `witan-tests.yml`. The fixture is a test harness; the deployed cluster.yaml is
 templated by ol-infrastructure.
