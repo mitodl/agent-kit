@@ -743,7 +743,11 @@ class OmnigraphClient:
         cmd = [self._binary, subcommand, *args, self.graph_uri]
         env = dict(os.environ)
         if self.token:
-            env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = self.token
+            # The CLI's default token fallback. NOT the server-side
+            # OMNIGRAPH_SERVER_BEARER_TOKENS_FILE — a singular "SERVER_" spelling
+            # here is a variable the CLI has never read, and silently sends every
+            # remote call out unauthenticated.
+            env["OMNIGRAPH_BEARER_TOKEN"] = self.token
 
         result = subprocess.run(
             cmd,
@@ -1222,7 +1226,11 @@ graphs:
 omnigraph cluster import --config <cluster-config-dir>
 omnigraph cluster apply --config <cluster-config-dir>
 
-# On the server host or in a container:
+# On the server host or in a container. NOTE: this is the SERVER's own env, not
+# the CLI's — the deployed stack instead sets OMNIGRAPH_SERVER_BEARER_TOKENS_FILE
+# to a mounted {actor_id: token} map (ol-infrastructure
+# applications/omnigraph/data_tier.py). This single-token spelling is unverified
+# against a running server; prefer the TOKENS_FILE form.
 OMNIGRAPH_SERVER_BEARER_TOKEN="<token>" \
 AWS_REGION="us-east-1" \
 AWS_ACCESS_KEY_ID="<key>" \
