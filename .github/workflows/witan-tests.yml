@@ -1,16 +1,29 @@
 name: witan tests
 
+# Path-filter rule: a workflow must trigger on every workspace dependency it
+# resolves, not just its own directory, plus the workspace resolution inputs
+# (root pyproject.toml `members` and uv.lock — `uv sync` walks up to the
+# workspace root, so those govern what every package resolves). Otherwise a
+# change to a shared package is green on its own tests alone.
 on:
   push:
     branches: [main]
     paths:
       - "mcp/servers/witan/**"
       - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "packages/agent-config-kit/**"
+      - "uv.lock"
+      - "pyproject.toml"
       - ".github/workflows/witan-tests.yml"
   pull_request:
     paths:
       - "mcp/servers/witan/**"
       - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "packages/agent-config-kit/**"
+      - "uv.lock"
+      - "pyproject.toml"
       - ".github/workflows/witan-tests.yml"
 
 permissions:

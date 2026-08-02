@@ -1,7 +1,10 @@
 """Tests for the UserPromptSubmit context-injection hook (witan/context.py),
-focused on the CodeBranch "In-Flight Branch" section."""
+focused on the CodeBranch "In-Flight Branch" section, and on the
+`witan inject-context` command never failing the hook."""
 
 import subprocess
+
+import pytest
 
 from .conftest import SCHEMA, requires_omnigraph
 
@@ -607,3 +610,70 @@ def test_inject_context_survives_failing_sessions_read(tmp_path, monkeypatch):
     assert "## Active Workflow Projects" in text
     assert "## Ready Tasks" in text
     assert "visible task" in text
+
+
+# ── inject-context never fails the UserPromptSubmit hook ───────────
+
+
+def test_inject_context_cli_survives_a_broken_config(tmp_path, monkeypatch, capsys):
+    """The command documents "always exits 0 and never blocks", but the config
+    load was unguarded and ran first — so it failed before the graph-missing
+    and debug machinery could help. `load_toml` fails the whole document, so
+    one stray character anywhere in config.toml reaches this path."""
+    from witan.cli import hooks
+
+    broken = tmp_path / "config.toml"
+    broken.write_text("[targets.personal\ngraph = 'x'\n")
+    monkeypatch.setenv("WITAN_CONFIG", str(broken))
+
+    hooks.inject_context()  # must not raise
+
+    out = capsys.readouterr()
+    assert out.out == ""
+
+
+def test_inject_context_cli_survives_a_stale_witan_target(
+    tmp_path, monkeypatch, capsys
+):
+    """The second trigger: `load()` also raises for an explicitly-requested
+    target that isn't defined, so a stale WITAN_TARGET left in the environment
+    breaks the hook even with a perfectly valid config file."""
+    from witan.cli import hooks
+
+    valid = tmp_path / "config.toml"
+    valid.write_text('[targets.work]\ngraph = "work.omni"\n')
+    monkeypatch.setenv("WITAN_CONFIG", str(valid))
+    monkeypatch.setenv("WITAN_TARGET", "gone")
+
+    hooks.inject_context()  # must not raise
+
+    out = capsys.readouterr()
+    assert out.out == ""
+
+
+@pytest.mark.parametrize(
+    ("config_text", "target"),
+    [
+        ("[targets.personal\ngraph = 'x'\n", None),
+        ('[targets.work]\ngraph = "work.omni"\n', "gone"),
+    ],
+)
+def test_inject_context_cli_debug_explains_on_stderr_only(
+    config_text, target, tmp_path, monkeypatch, capsys
+):
+    """--debug is how a blank block is diagnosed, so the reason has to reach
+    stderr — while stdout stays empty, since anything printed there is
+    prepended to the user's prompt."""
+    from witan.cli import hooks
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(config_text)
+    monkeypatch.setenv("WITAN_CONFIG", str(cfg_file))
+    if target:
+        monkeypatch.setenv("WITAN_TARGET", target)
+
+    hooks.inject_context(debug=True)
+
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "could not load config" in out.err

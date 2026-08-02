@@ -164,6 +164,23 @@ def test_admin_only_functions_are_not_registered_as_tools(server):
     assert not (_ADMIN_ONLY & exposed)
 
 
+def test_memory_repair_tools_are_not_admin_only(server):
+    """``memory_update``/``memory_delete`` are per-user, author-scoped ops, not
+    identity-less admin ones — they must stay usable over the remote CLI like
+    the rest of the memory surface."""
+    import witan.server as srv
+    from witan.remote.proxy import _ADMIN_ONLY
+
+    async def _list() -> set[str]:
+        async with Client(srv.mcp) as client:
+            return {t.name for t in await client.list_tools()}
+
+    exposed = asyncio.run(_list())
+
+    assert {"memory_update", "memory_delete"} <= exposed
+    assert not (_ADMIN_ONLY & {"memory_update", "memory_delete"})
+
+
 def test_unknown_tool_is_refused(proxy):
     with pytest.raises(RemoteToolUnavailable):
         proxy.definitely_not_a_tool(repo="")

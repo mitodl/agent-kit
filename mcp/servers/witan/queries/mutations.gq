@@ -70,6 +70,17 @@ query update_memory(
         where slug = $slug
 }
 
+// ── Delete ────────────────────────────────────────────────────────
+// Hard delete for graph hygiene ("this should never have existed"), NOT for
+// erasing secrets: the row stays readable from any prior commit via
+// `omnigraph query --snapshot`. Deleting the node removes its incident edges
+// in both directions — that is the only way to remove an edge at all, since
+// edges cannot be individually retracted.
+
+query delete_memory($slug: String) {
+    delete Memory where slug = $slug
+}
+
 // ── Edges ─────────────────────────────────────────────────────────
 
 query link_supersedes($from: String, $to: String) {

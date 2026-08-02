@@ -6,7 +6,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [Unreleased]
+## [0.9.0] - 2026-08-01
+
+### Added
+
+- **`witan session sweep` — close sessions that leaked open.** ~10 sessions in
+  the graph today have no `ended_at`, residue of the temp-file session
+  mechanism that never worked against the deployed service (fixed going
+  forward by the tool-returned handle, but that fix cleans up nothing). An open
+  session is not cosmetic: `workflow_project_complete` folds every linked
+  session into the corpus trace, so a leak inflates `session_count`,
+  contributes its phase having recorded nothing, carries no handoff summary,
+  and cannot extend `duration` (computed from `max(ended_at)`). It also drives
+  the context hook's "N sessions in <phase>" staleness nag on projects that are
+  progressing fine.
+
+  `--older-than` (default `6h`) keeps the one legitimately-running session
+  safe; dry-run by default, `--yes` performs it; `--project` narrows the scope.
+  The sweep summary says plainly that it was a sweep and that nothing is known
+  about what the session did — these were never checkpointed, so borrowing the
+  Stop hook's wording would be a lie in the corpus. Idempotent (re-closing just
+  re-stamps `ended_at`), and it clears the local handle so a later Stop hook
+  doesn't try to re-close what was just swept.
+
+  Dispatches through `_srv()`, not a direct `OmnigraphClient` — working only
+  locally is the exact bug that created this backlog. That needed a listing on
+  the tool surface, so **`workflow_session_list`** is new too (`project_slug`,
+  `open_only`; superseded sessions always excluded). Under a deployment the
+  per-actor client scopes it to the caller, so a sweep cannot reach a
+  teammate's sessions.
+
+- **`witan project update`** — the CLI half of `workflow_project_update`, which
+  shipped without one. Surfaces `--title`, `--description`, `--repos` /
+  `--add-repo` / `--remove-repo`, `--tags`, `--github-issue` and `--status`,
+  and keeps the tool's two refusals: no `--phase` (that belongs to `project
+  advance`, so transitions stay behind the ordering check) and no `--status
+  completed` (that belongs to `project complete`, which seals a corpus trace).
+  Fixing a stale project description is most urgent exactly when the graph is
+  misbehaving, and a human at a terminal shouldn't need an agent session to do
+  it. (#144)
+
+- **`memory_update` and `memory_delete` — repairing a memory no longer means
+  dropping to `omnigraph export`/filter/`load`.** A memory written against the
+  wrong `repo` silently vanished from every repo-scoped read, and the only fix
+  on the MCP surface was to store a duplicate and supersede the original, which
+  leaves the mis-scoped node in the graph forever. `memory_update` is a
+  per-field-optional read-merge-write over the existing `update_memory`
+  mutation (partial updates preserve omitted fields; `repo` is case-folded
+  through `normalise` so the correction actually matches what `repo.detect`
+  returns). `memory_delete` hard-deletes, guarded by `confirm=True` plus an
+  author check, and returns the deleted node so an accidental delete can be
+  re-stored from the tool result.
+
+  Deletion is documented — in both tool descriptions and the server
+  instructions — as **graph hygiene, not secret erasure**: a deleted memory
+  stays fully readable from any prior commit via `omnigraph query --snapshot`,
+  so the answer for leaked credentials is rotation, and scrubbing history is an
+  admin `omnigraph cleanup`. Soft delete was rejected: `superseded_by` already
+  occupies that role, and two hide-mechanisms on one node type is worse than
+  one. Neither tool is `_ADMIN_ONLY` — both are per-user and author-scoped, so
+  they work over the remote CLI like the rest of the memory surface. (#145)
 
 ### Changed
 
@@ -16,6 +75,41 @@ a MINOR bump may include breaking changes).
   remote indexer's code-graph writes as the caller, from the same provisioned
   `{actor_id: token}` file, in the same process `witan serve` mounts both tool
   surfaces into. `witan.identity` re-exports both, unchanged for every caller.
+
+### Fixed
+
+- **`witan inject-context` no longer fails the UserPromptSubmit hook on a bad
+  config.** The command documents that it "always exits 0 and never blocks",
+  and the rest of it honours that carefully — but `cfg_module.load()` ran
+  unguarded as its first statement, so it failed before any of that machinery
+  could help. Two ways in: `load_toml` raises on *any* TOML error and
+  `tomllib` fails the whole document, so one stray character in a
+  `[targets.*]` table takes out context injection entirely; and `load()` also
+  raises for a `WITAN_TARGET` naming an undefined target, so a stale env var
+  breaks the hook with a perfectly valid config file. Now guarded the same way
+  `session-checkpoint` already was — including `SystemExit`, which is not an
+  `Exception` — with the reason on stderr under `--debug` and stdout left
+  empty. `load_toml` itself stays strict: failing loudly is right for `witan
+  serve`; the hook is the caller that needs to be forgiving, and it is the
+  caller that now says so.
+
+- **Additive schema changes now reach an existing local store.**
+  `_ensure_graph` early-returned on `store.exists()`, so `init` + `schema
+  apply` ran only when a store was first created. After that, a new node type
+  or field added to `schema.pg` never reached it, and the failure mode was a
+  query erroring or silently returning nothing against a store one revision
+  behind. The remedies all existed but all required knowing to run them after a
+  version bump: the `apply_schema` admin tool, `witan migrate schema`, or
+  re-running `install.sh`.
+
+  An existing store is now re-applied when `schema.pg`'s mtime differs from the
+  stamp beside it — witan-code's approach, now shared via
+  `witan_core.omnigraph`. Remote (http/s3) URIs stay a no-op: a deployment's
+  schema is provisioning's job, and `schema apply` against a server takes a
+  different argument form entirely. The re-apply cannot raise, because
+  `_ensure_graph` runs at import time and a failure there would take down
+  `witan serve` at startup; a failed apply leaves the stamp unwritten and is
+  retried next call. Creation keeps `check=True`.
 
 ## [0.8.0] - 2026-07-31
 

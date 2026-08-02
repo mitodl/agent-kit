@@ -399,3 +399,150 @@ def test_inflight_cap_ignores_surface_conflict(monkeypatch):
         client._execute(
             ["omnigraph", "mutate"], "mutate", is_write=True, surface_conflict=True
         )
+
+
+# ── schema apply + mtime stamp ─────────────────────────────────────
+
+
+@pytest.fixture
+def fake_schema(tmp_path):
+    schema = tmp_path / "schema.pg"
+    schema.write_text("node Memory { slug: String }")
+    return schema
+
+
+def _recording_run(monkeypatch, returncode=0):
+    """Replace subprocess.run in the omnigraph module, recording each call."""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, returncode, "", "")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    return calls
+
+
+def test_schema_apply_stamps_the_schema_mtime(monkeypatch, tmp_path, fake_schema):
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    _recording_run(monkeypatch)
+
+    assert og.schema_apply("omnigraph", fake_schema, store) is True
+    assert og.schema_stamp_path(store).read_text() == str(fake_schema.stat().st_mtime)
+
+
+def test_schema_apply_does_not_stamp_on_failure(monkeypatch, tmp_path, fake_schema):
+    """A failed apply must be retried next time, not recorded as done."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    _recording_run(monkeypatch, returncode=1)
+
+    assert og.schema_apply("omnigraph", fake_schema, store) is False
+    assert not og.schema_stamp_path(store).exists()
+
+
+def test_schema_apply_never_raises_on_a_failed_apply(
+    monkeypatch, tmp_path, fake_schema
+):
+    """witan's _ensure_graph calls this at import time — a raise here would
+    take down `witan serve` at startup rather than degrading."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+
+    def boom(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, "", "schema apply exploded")
+
+    monkeypatch.setattr(og.subprocess, "run", boom)
+    assert og.schema_apply("omnigraph", fake_schema, store) is False
+
+
+def test_apply_if_changed_skips_when_the_stamp_matches(
+    monkeypatch, tmp_path, fake_schema
+):
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    calls = _recording_run(monkeypatch)
+
+    og.schema_apply_if_changed("omnigraph", fake_schema, store)
+    assert len(calls) == 1  # first call applies
+    og.schema_apply_if_changed("omnigraph", fake_schema, store)
+    og.schema_apply_if_changed("omnigraph", fake_schema, store)
+    assert len(calls) == 1  # subsequent calls are subprocess-free
+
+
+def test_apply_if_changed_reapplies_when_the_schema_changes(
+    monkeypatch, tmp_path, fake_schema
+):
+    """The whole point: an additive schema change reaches an existing store."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    calls = _recording_run(monkeypatch)
+
+    og.schema_apply_if_changed("omnigraph", fake_schema, store)
+    assert len(calls) == 1
+
+    fake_schema.write_text("node Memory { slug: String }\nnode Topic { slug: String }")
+    os.utime(fake_schema, (2_000_000_000, 2_000_000_000))
+
+    og.schema_apply_if_changed("omnigraph", fake_schema, store)
+    assert len(calls) == 2
+    assert calls[1][:3] == ["omnigraph", "schema", "apply"]
+
+
+def test_apply_if_changed_retries_after_a_failed_apply(
+    monkeypatch, tmp_path, fake_schema
+):
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    calls = _recording_run(monkeypatch, returncode=1)
+
+    og.schema_apply_if_changed("omnigraph", fake_schema, store)
+    og.schema_apply_if_changed("omnigraph", fake_schema, store)
+    assert len(calls) == 2
+
+
+def test_schema_apply_returns_false_when_the_binary_is_missing(tmp_path, fake_schema):
+    """subprocess.run raises OSError for a missing/non-executable binary, which
+    would escape the same import-time path that dropping check=True protects."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+
+    assert og.schema_apply("/nonexistent/omnigraph", fake_schema, store) is False
+    assert not og.schema_stamp_path(store).exists()
+
+
+def test_apply_if_changed_returns_false_when_the_schema_is_unstattable(
+    monkeypatch, tmp_path
+):
+    """No schema file means nothing to apply — don't spawn a subprocess for it."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    calls = _recording_run(monkeypatch)
+
+    assert og.schema_apply_if_changed("omnigraph", tmp_path / "gone.pg", store) is False
+    assert calls == []
+
+
+def test_apply_if_changed_reapplies_when_the_stamp_is_unreadable(
+    monkeypatch, tmp_path, fake_schema
+):
+    """An unreadable stamp means the last-applied mtime is unknown, i.e. the
+    store *might* be stale. Fall through to a redundant idempotent apply rather
+    than assuming current — skipping one silently leaves the store behind."""
+    store = tmp_path / "graph.omni"
+    store.mkdir()
+    calls = _recording_run(monkeypatch)
+
+    og.schema_apply_if_changed("omnigraph", fake_schema, store)
+    assert len(calls) == 1
+
+    stamp = og.schema_stamp_path(store)
+
+    def boom(*_a, **_kw):
+        raise OSError("stamp is unreadable")
+
+    monkeypatch.setattr(type(stamp), "read_text", boom)
+
+    og.schema_apply_if_changed("omnigraph", fake_schema, store)
+    assert len(calls) == 2

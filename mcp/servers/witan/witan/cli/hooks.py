@@ -29,7 +29,24 @@ def inject_context(*, debug: bool = False) -> None:
 
     from .. import context as ctx_module
 
-    cfg = cfg_module.load()
+    # The config load is the earliest step and was the one unguarded one, so it
+    # failed before any of the machinery below could help. `load()` raises
+    # ValueError on a malformed config.toml — `load_toml` fails the whole
+    # document by design, so one stray character in a `[targets.*]` table takes
+    # out context injection entirely — and also for a `WITAN_TARGET` naming a
+    # target that isn't defined, which breaks the hook with a perfectly valid
+    # config file. SystemExit is not an Exception and `_srv()` raises it for a
+    # half-configured remote; letting either escape breaks the "never blocks"
+    # contract this command documents. Same guard as `session-checkpoint`.
+    try:
+        cfg = cfg_module.load()
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — never fail the hook
+        if debug:
+            print(
+                f"[witan inject-context] could not load config: {exc}",
+                file=sys.stderr,
+            )
+        return
     graph_path = (
         Path(cfg.graph_uri)
         if not cfg.graph_uri.startswith(("http://", "https://", "s3://"))

@@ -129,8 +129,9 @@ def _migrate_storage(old_binary: str | None, yes: bool) -> None:
 def schema() -> None:
     """Apply the bundled schema to the configured store (idempotent).
 
-    Reconciles an existing store with the current schema (new nodes/edges/fields)
-    — ``_ensure_graph`` only applies schema when first creating a store.
+    Reconciles an existing store with the current schema (new nodes/edges/fields).
+    Startup now does this on its own when ``schema.pg`` changes; this forces the
+    apply regardless of the mtime stamp.
     """
     _apply_schema()
 

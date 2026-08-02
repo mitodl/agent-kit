@@ -21,6 +21,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
 from witan_core import caching, normalise, now_iso
+from witan_core.omnigraph import schema_apply, schema_apply_if_changed
 
 from . import config as cfg_module
 from . import elicit
@@ -37,17 +38,46 @@ _SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "schema.pg"
 
 
 def _ensure_graph(graph_uri: str) -> None:
-    """Initialise the local graph if it does not yet exist.
+    """Initialise the local graph, and keep its schema current.
 
     No-op for remote (http/s3) URIs — those are assumed to be managed
-    externally. Local stores are created and schema-applied automatically
-    so `witan serve` and `witan <cmd>` work on a fresh machine without a
-    separate install step.
+    externally. A deployment's schema is applied by provisioning, and against a
+    server ``schema apply`` takes the ``--server <url> --graph <id>`` form
+    rather than the local positional one, so there is nothing correct to do here.
+
+    Local stores are created and schema-applied automatically so `witan serve`
+    and `witan <cmd>` work on a fresh machine without a separate install step.
+    An EXISTING store is re-applied when ``schema.pg`` has changed since the
+    last apply, which is what picks up additive changes (new node types, new
+    fields) after a version bump — previously that only happened if the user
+    knew to run `witan migrate`, the `apply_schema` admin tool, or `install.sh`,
+    and until they did, queries against the newer schema erred or silently
+    returned nothing.
+
+    The re-apply deliberately cannot raise: this runs at import time
+    (``_ensure_graph(cfg.graph_uri)`` below), so a failure would take down
+    `witan serve` at startup. A failed apply leaves the stamp unwritten and is
+    retried next time. That includes locating the binary — ``_find_binary``
+    raises when omnigraph is not on PATH, so for an EXISTING store a missing
+    binary degrades to "skip the re-apply" rather than propagating. (Import
+    still fails a few lines below, where the ``OmnigraphClient`` constructor
+    resolves the same binary — so this changes which error a user sees, not
+    whether witan works without omnigraph installed. It keeps this function's
+    contract honest, and keeps the other caller, ``merge_store``, from
+    inheriting a raise it does not expect.)
+
+    Creation keeps ``check=True``, and lets a missing binary raise — a store
+    that does not exist yet has nothing to degrade to.
     """
     if graph_uri.startswith(("http://", "https://", "s3://")):
         return
     store = Path(graph_uri).expanduser()
     if store.exists():
+        try:
+            binary = OmnigraphClient._find_binary()
+        except RuntimeError:
+            return
+        schema_apply_if_changed(binary, _SCHEMA_FILE, store)
         return
     binary = OmnigraphClient._find_binary()
     store.parent.mkdir(parents=True, exist_ok=True)
@@ -57,12 +87,7 @@ def _ensure_graph(graph_uri: str) -> None:
         capture_output=True,
         text=True,
     )
-    subprocess.run(
-        [binary, "schema", "apply", "--schema", str(_SCHEMA_FILE), str(store)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    schema_apply(binary, _SCHEMA_FILE, store)
 
 
 cfg = cfg_module.load()
@@ -196,9 +221,11 @@ client = _ActorScopedClient()
 def apply_schema() -> dict:
     """Apply the bundled ``schema.pg`` to the configured store (idempotent).
 
-    Reconciles an EXISTING store with the current schema — ``_ensure_graph`` only
-    schema-applies when first *creating* a store, so additive changes (new
-    nodes/edges/fields) never reach an already-created store without this.
+    Reconciles an EXISTING store with the current schema. ``_ensure_graph`` now
+    does this automatically when ``schema.pg``'s mtime changes, so this is the
+    explicit escape hatch for the cases the mtime stamp cannot see: a store
+    whose stamp is current but whose schema is not (a restored backup, a
+    hand-edited stamp), or a re-apply forced without touching the file.
 
     Routes through ``OmnigraphClient`` so it holds the same per-store write lock +
     retry/repair as any other write. Returns ``{"store", "output"}``; raises
@@ -257,10 +284,18 @@ mcp = FastMCP(
         'override it, or repo="" to operate across all repos. When a list tool '
         "detects no repo and none is passed, it returns slim records (slug, kind, "
         "title, tags — no content); memory_get a slug for the full memory.\n\n"
-        "Updating memory: to replace an outdated memory, store the new one then "
+        "Changing memory — pick by what is actually wrong:\n"
+        "  a field is wrong (wrong repo, typo'd title) → memory_update(slug, …); "
+        "only the fields you pass change\n"
+        "  the knowledge changed → memory_store the new one, then "
         'memory_link(from_slug=<new>, to_slug=<old>, kind="supersedes") — the old '
         "one is hidden from default reads but kept (include_superseded=True to "
-        "see it).\n\n"
+        "see it)\n"
+        "  it should never have existed (accidental duplicate, test write) → "
+        "memory_delete(slug, confirm=True); author-only, hard delete\n"
+        "  it contains a secret → rotate the credential. memory_delete removes it "
+        "from the current graph but not from history, and no tool can erase "
+        "that.\n\n"
         "Naming: the task_* tools track work items (task_create, task_claim, "
         "task_ready, …) and have nothing to do with MCP's own tasks/* extension "
         "for long-running calls. A task_* slug is a unit of work someone is "
@@ -1587,6 +1622,36 @@ def memory_list(
     return [_slim_memory(r) for r in unscoped]
 
 
+def _update_memory(slug: str, changes: dict) -> dict | None:
+    """Read a memory, merge ``changes`` over its mutable fields, write it back.
+
+    ``update_memory`` replaces every field it is given, so a partial update MUST
+    merge onto the current row — passing only the changed fields would blank the
+    omitted ones. Same read-merge-write shape as :func:`_update_task` and as the
+    ``migrate_repo_keys`` rewrite. Returns the updated node or ``None``.
+    """
+    rows = client.read("read.gq", "get_memory", {"slug": slug})
+    if not rows:
+        return None
+    current = rows[0]
+    merged = {
+        "slug": slug,
+        "title": changes.get("title", current.get("title")),
+        "content": changes.get("content", current.get("content")),
+        "repo": changes.get("repo", current.get("repo")),
+        "language": changes.get("language", current.get("language")),
+        "category": changes.get("category", current.get("category")),
+        "severity": changes.get("severity", current.get("severity")),
+        "tags": changes.get("tags", current.get("tags")),
+        "symbol_refs": changes.get("symbol_refs", current.get("symbol_refs")),
+        "confidence": changes.get("confidence", current.get("confidence")),
+        "updated_at": now_iso(),
+    }
+    client.change("mutations.gq", "update_memory", merged)
+    rows = client.read("read.gq", "get_memory", {"slug": slug})
+    return rows[0] if rows else None
+
+
 def _store_memory(
     kind: MemoryKind,
     title: str,
@@ -1779,6 +1844,135 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
     if include_topics:
         node["topics"] = client.read("read.gq", "topics_for_memory", {"slug": slug})
     return node
+
+
+@mcp.tool
+def memory_update(
+    slug: str,
+    title: str | None = None,
+    content: str | None = None,
+    repo: str | None = None,
+    language: str | None = None,
+    category: str | None = None,
+    severity: Literal["info", "warning", "critical"] | None = None,
+    tags: list[str] | None = None,
+    symbol_refs: list[str] | None = None,
+    confidence: float | None = None,
+) -> dict | None:
+    """
+    Correct a memory's fields in place. Only non-null arguments are applied.
+
+    This is the repair tool for a memory whose *content was always meant to be
+    what you are about to write* — a wrong ``repo`` (so it never showed up in
+    repo-scoped reads), a typo'd title, a missing tag. Returns the updated node,
+    or ``null`` if no memory has that slug.
+
+    Which tool to reach for:
+
+    - a field is wrong → ``memory_update`` (this one)
+    - the knowledge itself changed → ``memory_store`` the new one, then
+      ``memory_link(kind="supersedes")``; the old one stays readable as history
+    - it should never have existed (accidental duplicate, test write) →
+      ``memory_delete``
+    - it contains secret material → **rotate the credential.** Neither this tool
+      nor ``memory_delete`` erases the old value from the graph's history.
+
+    ``kind`` is deliberately not updatable: a memory that turns out to be a
+    different kind is a different memory — store it and supersede this one.
+    """
+    if isinstance(tags, str):
+        tags = [tags]
+    if isinstance(symbol_refs, str):
+        symbol_refs = [symbol_refs]
+    changes = {
+        key: value
+        for key, value in (
+            ("title", title),
+            ("content", content),
+            # Case-fold, as every other repo-key write path does. Correcting a
+            # mis-scoped memory is the headline use of this tool, and a repo key
+            # that doesn't match what repo.detect() returns just mis-scopes it
+            # again, differently.
+            ("repo", normalise(repo) if repo else repo),
+            ("language", language),
+            ("category", category),
+            ("severity", severity),
+            ("tags", tags),
+            ("symbol_refs", symbol_refs),
+            ("confidence", confidence),
+        )
+        if value is not None
+    }
+    updated = _update_memory(slug, changes)
+    if updated is None:
+        return None
+
+    # Keep the Topic traversal surface in step with the string list, same
+    # dual-write as _store_memory. Tags *removed* here keep their Tagged edge:
+    # edges cannot be individually retracted, and deleting the Topic to drop one
+    # would take out every other memory's edge to it. The string list stays
+    # authoritative for what the memory claims to be tagged with.
+    for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
+        _tag_memory(slug, tag, "topic")
+    return updated
+
+
+@mcp.tool
+def memory_delete(slug: str, confirm: bool = False) -> dict:
+    """
+    Hard-delete a memory. Graph hygiene only — NOT a way to erase secrets.
+
+    Use when a memory should never have existed: an accidental duplicate, a test
+    write, a node created against the wrong graph. For anything else prefer
+    ``memory_update`` (a field is wrong) or ``memory_store`` +
+    ``memory_link(kind="supersedes")`` (the knowledge changed) — superseding is
+    the soft delete, and it keeps the history legible.
+
+    **This does not erase content.** The row remains fully readable, content
+    included, from any prior commit of the graph. If a memory captured a
+    credential, the fix is to **rotate the credential**; scrubbing history is an
+    admin ``omnigraph cleanup``, which no MCP tool performs.
+
+    Deleting a node also removes its incident edges in both directions (that is
+    the only way an edge can be removed at all), so a deleted memory leaves no
+    dangling ``Supersedes``/``RelatedTo``/``Tagged`` behind. Topic nodes on the
+    far end of a ``Tagged`` edge survive and may be left with no memories.
+
+    Parameters
+    ----------
+    confirm:
+        Must be ``True``. Without it this is a no-op returning
+        ``{"deleted": False, "reason": ...}``.
+
+    Returns the deleted node's full fields under ``memory`` so an accidental
+    delete can be re-stored straight from this result. Refuses (again as a
+    no-op) when the caller is not the memory's author.
+    """
+    rows = client.read("read.gq", "get_memory", {"slug": slug})
+    if not rows:
+        return {"slug": slug, "deleted": False, "reason": "no such memory"}
+    node = rows[0]
+
+    if not confirm:
+        return {
+            "slug": slug,
+            "deleted": False,
+            "reason": "pass confirm=True to delete; this cannot be undone from "
+            "the tool surface",
+            "memory": node,
+        }
+
+    author = _current_author()
+    if node.get("author") != author:
+        return {
+            "slug": slug,
+            "deleted": False,
+            "reason": f"authored by {node.get('author')!r}, not {author!r}; only "
+            "the author can delete a memory",
+        }
+
+    client.change("mutations.gq", "delete_memory", {"slug": slug})
+    return {"slug": slug, "deleted": True, "memory": node}
 
 
 @mcp.tool
@@ -3334,6 +3528,48 @@ def workflow_session_end(
         session_state.clear_handle_for_slug(session_slug)
 
     return {"session_slug": session_slug, "ended_at": now}
+
+
+@mcp.tool
+def workflow_session_list(
+    project_slug: str | None = None,
+    open_only: bool = False,
+) -> list[dict]:
+    """
+    List workflow sessions, newest last.
+
+    Mainly for finding sessions that leaked open — one whose agent died, or
+    whose Stop hook could not reach the graph. An open session is not cosmetic:
+    ``workflow_project_complete`` folds every linked session into the corpus
+    trace, so one with no ``ended_at`` inflates ``session_count``, contributes
+    its phase while having recorded nothing, carries no handoff summary, and
+    cannot extend ``duration`` (computed from ``max(ended_at)``). It is also
+    what drives the context hook's "N sessions in <phase>" staleness nag.
+
+    Use ``witan session sweep`` to close them in bulk.
+
+    Parameters
+    ----------
+    project_slug:
+        Restrict to one project's sessions. Omit for every project.
+    open_only:
+        Only sessions with no ``ended_at``. Superseded sessions (deduped by
+        ``witan migrate dedupe-sessions``) are always excluded — they are
+        already skipped by every aggregate read and are not leaks.
+    """
+    if project_slug:
+        rows = client.read(
+            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+        )
+        # That query filters ON project_slug so it doesn't return the column.
+        # Put it back, so a caller sees one row shape either way.
+        rows = [{**r, "project_slug": project_slug} for r in rows]
+    else:
+        rows = client.read("read.gq", "list_all_sessions", {})
+    rows = [r for r in rows if not r.get("superseded_by")]
+    if open_only:
+        rows = [r for r in rows if not r.get("ended_at")]
+    return rows
 
 
 # ── Task Tracking Tools ───────────────────────────────────────────

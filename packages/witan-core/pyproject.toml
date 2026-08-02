@@ -1,6 +1,6 @@
 [project]
 name = "witan-core"
-version = "0.6.0"
+version = "0.7.0"
 description = "Shared core for the witan MCP servers (witan-council + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
