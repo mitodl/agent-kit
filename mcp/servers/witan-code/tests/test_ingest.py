@@ -82,6 +82,7 @@ def test_a_local_server_writes_as_itself(monkeypatch):
     assert ingest.request_actor() == "act-local"
 
 
+@requires_stack
 def test_an_unprovisioned_actor_is_refused_rather_than_served_as_the_service(
     tmp_path, monkeypatch
 ):
@@ -99,6 +100,7 @@ def test_an_unprovisioned_actor_is_refused_rather_than_served_as_the_service(
         ingest.views(REPO)
 
 
+@requires_stack
 def test_the_callers_own_token_addresses_the_data_tier(tmp_path, monkeypatch):
     tokens = tmp_path / "actor-tokens.json"
     tokens.write_text(json.dumps({"act-alice": "tok-alice"}))

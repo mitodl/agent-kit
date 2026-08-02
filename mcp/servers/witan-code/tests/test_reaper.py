@@ -335,6 +335,7 @@ def test_the_reaper_deletes_what_it_selected(tmp_path):
     assert client.list_branches() == ["main"]
 
 
+@requires_omnigraph
 def test_unparseable_commit_list_raises_rather_than_reading_as_never_written(
     tmp_path, monkeypatch
 ):
