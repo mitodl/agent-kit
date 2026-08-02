@@ -8,50 +8,6 @@ a MINOR bump may include breaking changes).
 
 ## [0.9.0] - 2026-08-01
 
-### Changed
-
-- **`ActorTokenResolver` moved to `witan_core.identity`,** joining
-  `derive_actor_id` there. witan-code resolves the same actors' tokens
-  server-side now: under ADR-0005 path c the deployed MCP tier performs a
-  remote indexer's code-graph writes as the caller, from the same provisioned
-  `{actor_id: token}` file, in the same process `witan serve` mounts both tool
-  surfaces into. `witan.identity` re-exports both, unchanged for every caller.
-
-### Fixed
-
-- **`witan inject-context` no longer fails the UserPromptSubmit hook on a bad
-  config.** The command documents that it "always exits 0 and never blocks",
-  and the rest of it honours that carefully — but `cfg_module.load()` ran
-  unguarded as its first statement, so it failed before any of that machinery
-  could help. Two ways in: `load_toml` raises on *any* TOML error and
-  `tomllib` fails the whole document, so one stray character in a
-  `[targets.*]` table takes out context injection entirely; and `load()` also
-  raises for a `WITAN_TARGET` naming an undefined target, so a stale env var
-  breaks the hook with a perfectly valid config file. Now guarded the same way
-  `session-checkpoint` already was — including `SystemExit`, which is not an
-  `Exception` — with the reason on stderr under `--debug` and stdout left
-  empty. `load_toml` itself stays strict: failing loudly is right for `witan
-  serve`; the hook is the caller that needs to be forgiving, and it is the
-  caller that now says so.
-
-- **Additive schema changes now reach an existing local store.**
-  `_ensure_graph` early-returned on `store.exists()`, so `init` + `schema
-  apply` ran only when a store was first created. After that, a new node type
-  or field added to `schema.pg` never reached it, and the failure mode was a
-  query erroring or silently returning nothing against a store one revision
-  behind. The remedies all existed but all required knowing to run them after a
-  version bump: the `apply_schema` admin tool, `witan migrate schema`, or
-  re-running `install.sh`.
-
-  An existing store is now re-applied when `schema.pg`'s mtime differs from the
-  stamp beside it — witan-code's approach, now shared via
-  `witan_core.omnigraph`. Remote (http/s3) URIs stay a no-op: a deployment's
-  schema is provisioning's job, and `schema apply` against a server takes a
-  different argument form entirely. The re-apply cannot raise, because
-  `_ensure_graph` runs at import time and a failure there would take down
-  `witan serve` at startup; a failed apply leaves the stamp unwritten and is
-  retried next call. Creation keeps `check=True`.
-
 ### Added
 
 - **`witan session sweep` — close sessions that leaked open.** ~10 sessions in
@@ -110,6 +66,50 @@ a MINOR bump may include breaking changes).
   occupies that role, and two hide-mechanisms on one node type is worse than
   one. Neither tool is `_ADMIN_ONLY` — both are per-user and author-scoped, so
   they work over the remote CLI like the rest of the memory surface. (#145)
+
+### Changed
+
+- **`ActorTokenResolver` moved to `witan_core.identity`,** joining
+  `derive_actor_id` there. witan-code resolves the same actors' tokens
+  server-side now: under ADR-0005 path c the deployed MCP tier performs a
+  remote indexer's code-graph writes as the caller, from the same provisioned
+  `{actor_id: token}` file, in the same process `witan serve` mounts both tool
+  surfaces into. `witan.identity` re-exports both, unchanged for every caller.
+
+### Fixed
+
+- **`witan inject-context` no longer fails the UserPromptSubmit hook on a bad
+  config.** The command documents that it "always exits 0 and never blocks",
+  and the rest of it honours that carefully — but `cfg_module.load()` ran
+  unguarded as its first statement, so it failed before any of that machinery
+  could help. Two ways in: `load_toml` raises on *any* TOML error and
+  `tomllib` fails the whole document, so one stray character in a
+  `[targets.*]` table takes out context injection entirely; and `load()` also
+  raises for a `WITAN_TARGET` naming an undefined target, so a stale env var
+  breaks the hook with a perfectly valid config file. Now guarded the same way
+  `session-checkpoint` already was — including `SystemExit`, which is not an
+  `Exception` — with the reason on stderr under `--debug` and stdout left
+  empty. `load_toml` itself stays strict: failing loudly is right for `witan
+  serve`; the hook is the caller that needs to be forgiving, and it is the
+  caller that now says so.
+
+- **Additive schema changes now reach an existing local store.**
+  `_ensure_graph` early-returned on `store.exists()`, so `init` + `schema
+  apply` ran only when a store was first created. After that, a new node type
+  or field added to `schema.pg` never reached it, and the failure mode was a
+  query erroring or silently returning nothing against a store one revision
+  behind. The remedies all existed but all required knowing to run them after a
+  version bump: the `apply_schema` admin tool, `witan migrate schema`, or
+  re-running `install.sh`.
+
+  An existing store is now re-applied when `schema.pg`'s mtime differs from the
+  stamp beside it — witan-code's approach, now shared via
+  `witan_core.omnigraph`. Remote (http/s3) URIs stay a no-op: a deployment's
+  schema is provisioning's job, and `schema apply` against a server takes a
+  different argument form entirely. The re-apply cannot raise, because
+  `_ensure_graph` runs at import time and a failure there would take down
+  `witan serve` at startup; a failed apply leaves the stamp unwritten and is
+  retried next call. Creation keeps `check=True`.
 
 ## [0.8.0] - 2026-07-31
 

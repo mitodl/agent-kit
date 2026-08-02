@@ -1908,7 +1908,7 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.9.0"
+version = "0.10.0"
 source = { editable = "mcp/servers/witan-code" }
 dependencies = [
     { name = "agent-config-kit" },

@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.9.0"
+version = "0.10.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"

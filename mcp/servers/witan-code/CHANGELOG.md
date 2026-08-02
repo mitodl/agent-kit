@@ -6,18 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [Unreleased]
-
-### Changed
-
-- **Requires `witan-core>=0.7`.** The mtime-stamped schema re-apply
-  (`_schema_apply` / `_schema_apply_if_changed` / `_schema_stamp` in
-  `witan_code/store.py`) moved up into `witan_core.omnigraph` as
-  `schema_apply` / `schema_apply_if_changed` / `schema_stamp_path`, so
-  witan-council can pick up additive schema changes on an existing store the
-  same way. No behavior change here — `ensure_store` and `ensure_bridge_store`
-  call the shared functions with the same arguments — but the floor moves,
-  because resolving witan-core 0.6 would now fail at import.
+## [0.10.0] - 2026-08-01
 
 ### Added
 
@@ -86,6 +75,15 @@ a MINOR bump may include breaking changes).
   is therefore enforced by the client write guard alone. The policy bundle now
   pins this gap with a deliberately-`allow` test case, so an omnigraph release
   that closes it fails the build instead of passing unnoticed.
+
+- **Requires `witan-core>=0.7`.** The mtime-stamped schema re-apply
+  (`_schema_apply` / `_schema_apply_if_changed` / `_schema_stamp` in
+  `witan_code/store.py`) moved up into `witan_core.omnigraph` as
+  `schema_apply` / `schema_apply_if_changed` / `schema_stamp_path`, so
+  witan-council can pick up additive schema changes on an existing store the
+  same way. No behavior change here — `ensure_store` and `ensure_bridge_store`
+  call the shared functions with the same arguments — but the floor moves,
+  because resolving witan-core 0.6 would now fail at import.
 
 ## [0.9.0] - 2026-07-31
 
