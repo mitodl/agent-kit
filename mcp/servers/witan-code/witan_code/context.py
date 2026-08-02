@@ -114,7 +114,7 @@ def inject_context() -> str:
     store = store_module.store_for_repo(slug, cfg)
     in_progress = indexing_in_progress()
 
-    if not store.exists():
+    if not store.exists(cfg):
         if not in_progress:
             return ""
         return (

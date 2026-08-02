@@ -17,8 +17,16 @@ a MINOR bump may include breaking changes).
   OIDC token to name the code-graph branch views it owns. A view named by one
   derivation and authorized against another is a bug with no symptom until
   two users collide on it, so there is one function. witan-council's
-  `witan.identity` re-exports it, and keeps `ActorTokenResolver` (which is
-  server-side only — a CLI never reads the provisioned token map).
+  `witan.identity` re-exports it.
+- **`witan_core.identity.ActorTokenResolver`** — the actor id → provisioned
+  omnigraph bearer token half of the same mapping, moved up from
+  witan-council for the same reason as the id derivation: witan-code now
+  resolves it too. Under ADR-0005 path c the deployed MCP tier performs a
+  remote indexer's code-graph writes as the *caller*, so both servers look up
+  tokens in the same file, in the same process, when `witan serve` mounts
+  witan-code's tools into witan's own server. It stays server-side either way
+  — a CLI never reads the provisioned token map. `witan.identity` re-exports
+  it unchanged.
 - **`DeviceAuth.cached_claims()`** — the claims of the cached access token,
   offline and expiry-blind. Callers that need to *call* a deployment use
   `get_valid_token()`; a caller that only needs to know who the user is

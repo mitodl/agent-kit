@@ -10,6 +10,35 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
+- **Index onto a cluster code graph from outside the cluster —
+  `code_transport = "mcp"` (ADR-0005 path c).** The omnigraph-server holding
+  the code graphs is ClusterIP-only and stays that way, so until now a
+  developer's checkout could reach it only through `kubectl port-forward`.
+  Set the transport (env `WITAN_CODE_TRANSPORT`) and every store operation
+  travels to the deployed witan MCP endpoint — the one exposed boundary —
+  which performs it against the cluster graph **as the caller**: it resolves
+  the actor from the validated JWT, looks up that actor's own omnigraph token,
+  and applies the branch-view ownership guard server-side. The client keeps
+  everything that needs a working tree; `indexer`/`bridge` are unchanged, and
+  `RemoteStoreClient` stands in for an `OmnigraphClient`. It holds one
+  connection open for the run rather than one per call, since an index is
+  thousands of store operations, and reconnects once on a dropped one.
+  Deliberate consequences: a write through this route can only target a view
+  the caller's own actor owns, and can never target the shared
+  default-branch view — that one's writer is the CI indexer, in-cluster over
+  `code_server`, which is unchanged. Compaction and view reaping refuse here
+  too; they belong to the cluster's own scheduled jobs.
+- **`code_store_*` tools** — the server half of the above: `read`, `mutate`,
+  `load`, `open`, `views`, `graphs`, mirroring the store operations the write
+  path performs rather than modelling indexing itself, so indexing policy
+  stays with the client that has the checkout. Mediated, not arbitrary:
+  `query` may only name a query file bundled with the server, and the graph is
+  resolved from a repo URI against the server's own configuration. Registered
+  **only on a deployment** (`WITAN_OIDC_ISSUER` set; override with
+  `WITAN_CODE_STORE_TOOLS`) — a local stdio server writes its stores directly,
+  so serving them there would add six machine-facing tools to every agent's
+  tool list to serve a caller that cannot exist.
+
 - **`witan-code reap-views` — a stale branch-view reaper for the shared graph.**
   With per-writer views on one cluster graph, every developer's every git branch
   gets a view and nothing ever removes one. This sweeps views nobody has written
@@ -33,6 +62,11 @@ a MINOR bump may include breaking changes).
 
 ### Changed
 
+- **`graph.check_writable` takes `is_remote: bool`, not a `client`.** It only
+  ever read that one bit off the client, and the MCP tier serving somebody
+  else's write has no client of its own to read it from — the answer there is
+  "shared, by construction", since that is the only reason the request exists.
+  Taking the bit lets both sides ask the same question.
 - **Cedar can gate `main` vs WIP, but not view ownership** — corrected from
   0.9.0's claim that one rule could. omnigraph 0.8.1 compiles a bundle rule to a
   bare `permit(...)` with no `when {}` clause, and its only branch predicate is

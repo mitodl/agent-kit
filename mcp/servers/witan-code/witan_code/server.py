@@ -12,6 +12,7 @@ from . import config as cfg_module
 from . import elicit
 from . import identity as identity_module
 from . import indexer
+from . import ingest
 from . import repo as repo_module
 from . import stitch
 from . import store as store_module
@@ -1112,3 +1113,125 @@ async def code_reindex(path: str | None = None, force: bool = False) -> dict:
         "errors": stats.errors,
         "purged": stats.purged,
     }
+
+
+# ── Store tier (machine-facing) ───────────────────────────────────
+#
+# The four store operations a remote indexer performs, served on its behalf
+# against the cluster graphs this deployment can reach and it cannot
+# (:mod:`witan_code.ingest`). Not for agents: they carry no code-graph meaning
+# on their own, and `code_store_mutate` runs named mutations. Registered only
+# where a remote indexer can exist — see `ingest.store_tools_enabled`.
+
+
+def code_store_read(
+    graph: str,
+    query: str,
+    name: str,
+    params: dict | None = None,
+    view: str | None = None,
+) -> list[dict]:
+    """
+    Run a bundled named read query against a code graph. Machine-facing.
+
+    Parameters
+    ----------
+    graph:
+        Canonical repo URI, or ``bridge`` for the cross-repo bridge graph.
+    query:
+        Bundled query file (e.g. ``code_read.gq``).
+    name:
+        Named query within that file.
+    params:
+        Query parameters.
+    view:
+        Branch view to read; omit for the graph's default (main) view.
+    """
+    return ingest.read(graph, view, query, name, params or {})
+
+
+def code_store_mutate(
+    graph: str,
+    query: str,
+    name: str,
+    params: dict | None = None,
+    view: str | None = None,
+) -> dict:
+    """
+    Run a bundled named mutation against a code graph view you own. Machine-facing.
+
+    Refused unless the request's own identity owns ``view`` — see
+    docs/BRANCH_INDEXING.md. Same arguments as ``code_store_read``.
+    """
+    ingest.mutate(graph, view, query, name, params or {})
+    return {"graph": graph, "view": view, "query": f"{query}:{name}"}
+
+
+def code_store_load(
+    graph: str,
+    records: list[dict],
+    mode: str = "merge",
+    view: str | None = None,
+) -> dict:
+    """
+    Bulk-load node/edge records into a code graph view you own. Machine-facing.
+
+    ``records`` are JSONL-shaped: ``{"type": Node, "data": {…}}`` for a node,
+    ``{"edge": Edge, "from": key, "to": key}`` for an edge. Refused unless the
+    request's own identity owns ``view``.
+    """
+    return {"written": ingest.load_records(graph, view, records, mode)}
+
+
+def code_store_open(graph: str, view: str) -> dict:
+    """
+    Create a branch view (forked from main) if it does not exist. Machine-facing.
+
+    Refused unless the request's own identity owns ``view``.
+    """
+    return {"view": ingest.open_view(graph, view)}
+
+
+def code_store_views(graph: str) -> list[str]:
+    """Every branch view on a code graph, ``main`` included. Machine-facing."""
+    return ingest.views(graph)
+
+
+def code_store_graphs() -> list[str]:
+    """
+    Canonical repo URI of every per-repo code graph served here. Machine-facing.
+
+    The bridge graph is not listed: it is one fixed graph, addressed by name.
+    """
+    return ingest.graphs()
+
+
+_STORE_TOOLS = (
+    code_store_read,
+    code_store_mutate,
+    code_store_load,
+    code_store_open,
+    code_store_views,
+    code_store_graphs,
+)
+_store_tools_registered = False
+
+
+def register_store_tools() -> None:
+    """Add the store tools to this server's surface. Idempotent.
+
+    Called at import where a remote indexer can exist. Exposed as a function
+    because whether these are registered is a property of the *process*, not
+    of the module, and a test serving them in-memory has to be able to say so
+    after the import that decided otherwise.
+    """
+    global _store_tools_registered
+    if _store_tools_registered:
+        return
+    for tool in _STORE_TOOLS:
+        mcp.tool(tool)
+    _store_tools_registered = True
+
+
+if ingest.store_tools_enabled():
+    register_store_tools()

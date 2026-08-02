@@ -290,7 +290,9 @@ def index_path(
 
     store = ensure_store(slug, cfg)
     client = store.client(cfg, branch=branch)
-    check_writable(client=client, branch=branch, cfg=cfg, slug=slug, actor=actor)
+    check_writable(
+        is_remote=client.is_remote, branch=branch, cfg=cfg, slug=slug, actor=actor
+    )
     # The hash read below never forks; create the branch before reading.
     client.ensure_branch()
 

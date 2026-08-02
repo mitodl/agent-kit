@@ -513,6 +513,17 @@ def reap_views(
     from .graph import OmnigraphClient
 
     cfg = cfg_module.load()
+    if store is None and cfg.code_transport == cfg_module.CODE_TRANSPORT_MCP:
+        # Same shape as optimize/cleanup's refusal: reaping reads each view's
+        # commit log and deletes branches, neither of which the MCP tier serves
+        # — it is the cluster's own scheduled job, run with the CI role.
+        print(
+            "Code graphs are reached through the deployed witan endpoint "
+            f"({cfg.target_name or 'code_transport = mcp'}), which does not "
+            "serve view reaping — it runs in-cluster, as the CI indexer. "
+            "Nothing to do here."
+        )
+        return
     try:
         idle = reaper_module.max_idle_days() if max_idle_days is None else max_idle_days
     except ValueError as exc:
@@ -526,7 +537,7 @@ def reap_views(
             *store_module.per_repo_stores(cfg),
             store_module.bridge_store(cfg),
         ]
-        targets = [(str(r), r.client(cfg)) for r in refs if r.exists()]
+        targets = [(str(r), r.client(cfg)) for r in refs if r.exists(cfg)]
     if not targets:
         print("No code-graph stores — nothing to reap.")
         return

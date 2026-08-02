@@ -113,6 +113,64 @@ The remote MCP proxy from (a) **refuses** these commands: they are not MCP
 tools, so `RemoteServerProxy` raises a clear "run in-cluster as
 `svc-witan-admin`" error rather than silently doing the wrong thing.
 
+### (c) Writes: witan-code indexes cluster code graphs through the MCP tier — `agent-kit` (2026-08-01)
+
+Path (a) moved witan-code's *reads* onto the deployment and left indexing
+local, on the reasoning that indexing needs a git checkout. That is still
+true, and it is exactly why (a) was not enough: the indexer is always a local
+process, but on the cluster the graph it writes is on the ClusterIP-only
+omnigraph-server. A developer's checkout could reach neither. Verified against
+the live CI cluster on 2026-08-01: `service/omnigraph-server` has no
+HTTPRoute, Ingress, or Gateway; only `witan.<env>.ol.mit.edu` (the MCP tier)
+is externally reachable, and the data tier was verified only through
+`kubectl port-forward`.
+
+Four options were weighed; **route the writes through the witan MCP tier**
+won. Exposing the raw omnigraph endpoint through APISIX was rejected as a
+second, policy-unmediated boundary; in-cluster-only indexing was rejected
+because it gives up the per-developer branch views ADR-0006 built; and
+`port-forward` was rejected as a supported path (cluster credentials per
+developer, poor ergonomics). One exposed boundary, already authenticated,
+already actor-resolving.
+
+- **Surface.** Six machine-facing `code_store_*` tools mirroring the store
+  operations the write path performs — `read`, `mutate`, `load`, `open` (fork
+  a branch view), `views`, `graphs`. Deliberately *not* one bulk-ingest tool:
+  a repo index is a hash read, a per-file purge, a bulk load, and then the
+  same again against the bridge graph. Modelling each phase as its own tool
+  would move indexing policy server-side, where it would have to stay in step
+  with clients that can be a release behind. Mediated rather than arbitrary:
+  `query` may only name a query file bundled with the server, and the graph is
+  resolved from a repo URI against the *server's* configuration — a client
+  never sends a store address.
+- **Identity and authorization move server-side.** `witan_code/ingest.py`
+  resolves the actor from the validated JWT per request (ADR-0004, the same
+  mapping witan uses for memory), looks that actor's omnigraph bearer token up
+  in the same provisioned map, and runs `check_writable` against it before any
+  mutation reaches the store. The client-side guard in `indexer.index_path`
+  stays as a fast-fail courtesy check; it is no longer the authority. An
+  actor with no provisioned token is refused rather than served under the
+  service account.
+- **A consequence worth stating plainly:** a write through this boundary can
+  never claim the shared default-branch view. That view's single writer is the
+  CI indexer, which runs in-cluster over the direct transport (b's network
+  position, not its credential). Everything through the tier is a branch view
+  owned by the actor whose JWT carried it.
+- **Client side.** `code_transport = "mcp"` (env `WITAN_CODE_TRANSPORT`, or
+  per `[targets.<name>]`) makes the deployed endpoint the store's address:
+  `StoreRef.via_mcp` resolves to a `RemoteStoreClient` that stands in for an
+  `OmnigraphClient`, so `indexer`/`bridge` are unchanged. Unlike (a)'s proxy
+  it holds one connection open for the process — an index is thousands of
+  store calls, not one — and reconnects once on a dropped one.
+- **The tools are registered only on a deployment** (`WITAN_OIDC_ISSUER` set,
+  overridable with `WITAN_CODE_STORE_TOOLS`). A local stdio server writes its
+  own stores directly, so serving them there would add six machine-facing
+  tools — one of which runs named mutations — to every agent's tool list to
+  serve a caller that cannot exist.
+- **`code_server` keeps its meaning** as the in-cluster/direct transport: the
+  CI indexer and maintenance jobs share the cluster network and have no reason
+  to pay for an extra hop.
+
 ## Consequences
 
 - **agent-kit (this repo):** implements (a) in full — `witan/remote/oidc.py`
@@ -127,6 +185,13 @@ tools, so `RemoteServerProxy` raises a clear "run in-cluster as
   `witan` stack, plus register `witan-cli` as a public OIDC client
   with the device grant enabled in the `ol-platform-engineering` Keycloak
   realm. Tracked as a spun-off task.
+- **ol-infrastructure (follow-up for (c)):** the witan MCP tier's Deployment
+  must set `WITAN_CODE_SERVER` (and nothing else new — the store tools
+  register themselves off the `WITAN_OIDC_ISSUER` the tier already has, and
+  resolve tokens from the `WITAN_ACTOR_TOKENS_FILE` it already mounts). Until
+  it does, the tier serves code-graph *reads* from whatever `code_dir` its
+  container has and can serve no cluster writes at all. Each repo's
+  `code-<repo>` graph must also be declared by the data-tier stack, as today.
 - **Config surface:** the CLI's remote mode is opt-in via `WITAN_REMOTE_URL`
   (+ `WITAN_OIDC_ISSUER`, `WITAN_OIDC_CLIENT_ID`, optional
   `WITAN_OIDC_AUDIENCE`). These name the *client's* view of the deployment and
