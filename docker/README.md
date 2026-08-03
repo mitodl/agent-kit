@@ -66,6 +66,31 @@ server is to index into a local `.omni` directory and report success — inside
 a pod whose filesystem is then discarded, while the shared graph goes stale.
 `WITAN_CODE_CI_ALLOW_LOCAL_STORE=1` waives them for testing the script itself.
 
+#### Cloning private repos (GitHub App)
+
+Public repos clone anonymously and need no credential. For private ones, set
+all three of `WITAN_CODE_GITHUB_APP_ID`, `WITAN_CODE_GITHUB_APP_INSTALLATION_ID`,
+and `WITAN_CODE_GITHUB_APP_KEY_FILE` (a mounted PEM). A partial set is an
+error, not a fallback to anonymous — the latter fails only on private repos,
+which reads like a GitHub-side permissions problem rather than a missing mount.
+
+A GitHub App rather than a deploy key or a PAT: a deploy key is scoped to one
+repository, so a fleet sweep would need one per repo; a PAT is long-lived and
+carries everything its owner can read. An App issues tokens that expire in an
+hour, needs only `contents: read`, and its *installation* is the list of repos
+it can reach — managed by an org admin in GitHub, so a private repo cannot be
+pulled into a shared graph by a Pulumi config change alone.
+
+The token is minted **per repo**, not per sweep: it lasts an hour and a cold
+run is allowed three, so a single token would expire partway through the first
+real run. It reaches git through a credential helper reading the environment,
+never through the clone URL — git echoes remote URLs in its error messages, so
+a URL-embedded credential would print itself into the job log on the first
+failed clone.
+
+`WITAN_CODE_GITHUB_API_URL` overrides the API host (GitHub Enterprise, or a
+stub in tests). See `witan_code/github_app.py`.
+
 ## `omnigraph-server` image
 
 - Bakes **both** upstream release binaries (`omnigraph-server` to serve,

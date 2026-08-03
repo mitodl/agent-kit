@@ -21,6 +21,12 @@ dependencies = [
     # [targets.<name>] override models (config.py) — also transitively pulled
     # in by fastmcp, declared explicitly since config.py imports it directly.
     "pydantic>=2,<3",
+    # RS256 signing for the GitHub App JWT the CI indexer exchanges for a
+    # clone credential (github_app.py). Reaches the environment anyway via
+    # fastmcp -> authlib -> joserfc, but that chain is nobody's contract: a
+    # fastmcp release that drops authlib would break private-repo cloning at
+    # runtime, in a CronJob, rather than at resolve time here.
+    "joserfc>=1.0,<2",
     # Pinned to 0.25.x: tree-sitter 0.26.0 has a use-after-free in its pyo3 Node
     # binding that segfaults (exit 139) under the heavy .parent()/.children()
     # churn _walk_defs does on real-world-sized files — deterministically on the
@@ -80,7 +86,10 @@ witan-core = { workspace = true }
 # fastmcp-tasks: the `tasks` extra. Without it CI would only ever exercise the
 # extension-absent branch, and `code_reindex`'s task declaration would go
 # untested — the failure mode there is the server refusing to start at all.
-test = ["pytest>=8", "fastmcp-tasks>=4.0.0b1,<5"]
+# cryptography: test_github_app generates a throwaway RSA key so the JWT path
+# is exercised for real rather than mocked. joserfc requires it at runtime, so
+# this only makes an existing import explicit.
+test = ["pytest>=8", "fastmcp-tasks>=4.0.0b1,<5", "cryptography"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

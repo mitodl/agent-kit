@@ -39,6 +39,11 @@
 #                          waive the two requirements above and index into
 #                          local .omni directories. For testing this script;
 #                          never for the deployed job.
+#   WITAN_CODE_GITHUB_APP_ID / _INSTALLATION_ID / _KEY_FILE
+#                          all three, or none: a GitHub App whose installation
+#                          token authenticates the clones. Without them repos
+#                          are cloned anonymously, which is correct when every
+#                          managed repo is public. See witan_code/github_app.py.
 
 set -eu
 
@@ -100,6 +105,40 @@ esac
 rm -rf "${workdir}"
 mkdir -p "${workdir}"
 
+# ── GitHub App authentication (optional) ─────────────────────────────────────
+#
+# Asked once, up front, so a broken credential fails before the first clone
+# rather than as N identical clone errors. Three outcomes, deliberately
+# distinct: configured, not configured (every managed repo is public — clone
+# anonymously), and misconfigured, which is an error rather than a silent
+# downgrade to anonymous.
+github_app=0
+check_status=0
+python -m witan_code.github_app --check || check_status=$?
+case ${check_status} in
+    0) github_app=1 ;;
+    2) : ;;         # EXIT_NOT_CONFIGURED — no App, clone anonymously
+    *) exit 1 ;;    # EXIT_ERROR — it already said what is wrong, on stderr
+esac
+
+if [ "${github_app}" = "1" ]; then
+    # The token reaches git through a credential helper reading the
+    # environment, never through the clone URL. A URL-embedded credential ends
+    # up in `origin`, and git echoes the remote URL in its own error messages —
+    # so the first failed clone would print the token into the job log.
+    #
+    # The single quotes are the point, so SC2016 is wrong here: git stores
+    # this string and runs it per credential request, and the token has to be
+    # read *then* — it changes once per repo. Expanding it now would freeze
+    # the first repo's token into the global gitconfig, where it would be both
+    # stale for every later repo and persisted to disk.
+    # shellcheck disable=SC2016
+    git config --global credential.helper \
+        '!f() { echo username=x-access-token; echo "password=${WITAN_CODE_GH_TOKEN}"; }; f'
+    echo "witan-ci-index: authenticating clones as GitHub App installation" \
+         "${WITAN_CODE_GITHUB_APP_INSTALLATION_ID}"
+fi
+
 indexed=0
 failed=0
 
@@ -109,6 +148,21 @@ for repo in ${WITAN_CODE_CI_REPOS}; do
     # working tree — is what the run produces.
     checkout="${workdir}/checkout"
     rm -rf "${checkout}"
+
+    # A fresh token per repo, not one for the sweep. An installation token is
+    # valid for an hour; a cold run — every repo's first index, each parsed
+    # from scratch — is allowed three. Minting once up front would work in
+    # every test worth writing and then 401 partway through the first real
+    # run, with the repos early in the list indexed and the rest not. One API
+    # call against the cost of cloning and parsing a repo is nothing.
+    if [ "${github_app}" = "1" ]; then
+        if ! WITAN_CODE_GH_TOKEN="$(python -m witan_code.github_app)"; then
+            echo "witan-ci-index: could not mint a token for ${repo}" >&2
+            failed=$((failed + 1))
+            continue
+        fi
+        export WITAN_CODE_GH_TOKEN
+    fi
 
     echo "witan-ci-index: cloning ${repo}"
     if ! git clone --quiet --depth 1 --no-tags "${repo}" "${checkout}"; then
