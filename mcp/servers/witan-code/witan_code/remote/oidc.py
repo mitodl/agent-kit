@@ -1,0 +1,80 @@
+"""witan-code's binding of the shared OIDC device-auth core (ADR 0005, path a).
+
+The device-grant login, token cache, and refresh live in
+:mod:`witan_core.remote.oidc`; this module binds the one witan-code-specific
+bit — the ``witan-code login`` hint in "please re-authenticate" messages — and
+re-exports the flow under the names ``witan_code.cli`` calls.
+
+The cache file (``~/.config/witan/tokens.json``, overridable with
+``WITAN_TOKEN_CACHE``) and the default client id are shared with witan
+(witan-council), and entries are keyed by ``(issuer, client_id)`` — so a user
+who already ran ``witan login`` against the same deployment does NOT need to
+run ``witan-code login`` as well, and vice versa.
+
+The CLI never *verifies* the JWT — the deployed server does that against
+Keycloak's JWKS (witan ADR-0004). :func:`decode_claims` is display-only.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Callable
+
+import httpx2
+from witan_core.remote.config import RemoteConfig
+from witan_core.remote.oidc import (
+    DeviceAuth,
+    NeedsLogin,
+    RemoteAuthError,
+    cache_path,
+    decode_claims,
+    device_auth,
+    discover_endpoints,
+)
+
+_LOGIN_HINT = "witan-code login"
+
+__all__ = [
+    "NeedsLogin",
+    "RemoteAuthError",
+    "cache_path",
+    "decode_claims",
+    "default_token_provider",
+    "discover_endpoints",
+    "get_valid_token",
+    "login",
+    "logout",
+]
+
+
+def _auth(cfg: RemoteConfig) -> DeviceAuth:
+    return device_auth(cfg, login_hint=_LOGIN_HINT)
+
+
+def login(
+    cfg: RemoteConfig,
+    *,
+    on_prompt: Callable[[dict], None],
+    client: httpx2.Client | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict:
+    """Run the device-authorization grant end to end and cache the token."""
+    return _auth(cfg).login(on_prompt=on_prompt, client=client, sleep=sleep)
+
+
+def get_valid_token(cfg: RemoteConfig, *, client: httpx2.Client | None = None) -> str:
+    """Return a currently-valid access token, refreshing if needed."""
+    return _auth(cfg).get_valid_token(client=client)
+
+
+def logout(cfg: RemoteConfig) -> bool:
+    """Drop the cached token for this deployment. True if one existed.
+
+    Shared cache: this also logs the ``witan`` CLI out of the same deployment.
+    """
+    return _auth(cfg).logout()
+
+
+def default_token_provider(cfg: RemoteConfig) -> Callable[[], str]:
+    """A zero-arg callable the proxy calls per request to get a fresh token."""
+    return lambda: get_valid_token(cfg)

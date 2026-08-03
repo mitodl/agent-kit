@@ -18,6 +18,18 @@ mounted under the umbrella CLI, e.g. `witan --output-format json code repos`.
 Boolean flags follow cyclopts' `--flag`/`--no-flag` convention; both forms are
 always available even where only `--flag` is shown below.
 
+## Local vs. remote
+
+The read commands — `symbols`, `deps`, `stitch`, `repos`, `branches` — dispatch
+through the same `code_*` tool surface the MCP server exposes, so setting
+`WITAN_REMOTE_URL` (plus `WITAN_OIDC_ISSUER`) points them at a deployed witan
+service instead of this machine's stores. See
+[Remote mode](../README.md#remote-mode) and `login`/`logout`/`whoami` below.
+
+Everything else operates on the checkout and the store files on disk — `index`,
+`reindex`, `optimize`, `cleanup`, `checkpoint`, `branches --prune`, and the
+hook commands — and always runs locally regardless of `WITAN_REMOTE_URL`.
+
 ## `index [PATH]`
 
 Incrementally index `PATH` (file or directory). Files whose content hash is
@@ -51,8 +63,12 @@ witan-code reindex   # rebuild the whole repo's store
 
 List the repositories that have a code graph indexed (reads every
 `<slug>.omni` store under `WITAN_CODE_DIR`, excluding the shared bridge
-store). Table columns: repo URI, file count, on-disk size, last-indexed
-timestamp.
+store — or, with `code_server` set, every `code-*` graph the cluster serves).
+Table columns: repo URI, file count, on-disk size, last-indexed timestamp.
+
+Size and last-indexed render as `?` for a cluster graph: both describe a store
+directory, which a client of a shared graph does not have. The file count is a
+query and stays real.
 
 No parameters.
 
@@ -156,4 +172,49 @@ re-running after an omnigraph version bump refreshes the binary.
 ```bash
 witan-code setup
 witan-code setup --dry-run
+```
+
+## `login`
+
+Authenticate to the deployed witan service named by `WITAN_REMOTE_URL` +
+`WITAN_OIDC_ISSUER` (or the matched `[targets.<name>]` block) via the OIDC
+device-authorization grant. Prints a verification URL and a user code; approve
+it in a browser and the resulting token is cached at
+`~/.config/witan/tokens.json` (mode 0600) and refreshed automatically.
+
+Exits 1 with an explanation when no remote is configured.
+
+No parameters.
+
+```bash
+witan-code login
+```
+
+The cache is shared with the `witan` CLI and keyed by `(issuer, client id)`, so
+a prior `witan login` against the same deployment already covers witan-code —
+and this command covers `witan` in turn.
+
+## `logout`
+
+Forget the cached token for the configured deployment. Shared cache, so this
+logs the `witan` CLI out as well.
+
+No parameters.
+
+```bash
+witan-code logout
+```
+
+## `whoami`
+
+Show the identity the CLI presents to the deployed service: the matched target
+(if any), endpoint, username, email, `sub`, and token expiry. Claims are
+decoded for display only — the CLI never verifies the JWT; the deployment does.
+
+Exits 1 when there is no valid cached token (run `witan-code login`).
+
+No parameters.
+
+```bash
+witan-code whoami
 ```

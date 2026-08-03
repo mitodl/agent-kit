@@ -61,7 +61,39 @@ class _Tools:
 
 
 @pytest.fixture
-def server(tmp_path, monkeypatch):
+def tmp_state_dir(tmp_path, monkeypatch):
+    """Redirect the system temp dir, which is where witan parks process state.
+
+    ``workflow_session_start`` parks a session handle there and ``maintenance``
+    keeps its optimize throttle stamp there, so without this a session-starting
+    test litters the developer's real ``$TMPDIR`` with handle files. Note the
+    redirect has to happen here rather than by patching a name on
+    ``witan.server``: the readers resolve the path through
+    ``session_state.session_state_path`` directly.
+    """
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    return tmp_path
+
+
+@pytest.fixture
+def no_background_optimize(monkeypatch):
+    """Stop ``session_checkpoint`` from touching the developer's real store.
+
+    The Stop hook ends with ``spawn_background_optimize(cfg.graph_uri)``, and
+    ``cfg_module.load()`` reads the *real* config — the ``server`` fixture
+    isolates ``srv.client``, not the graph URI. Redirecting ``TMPDIR`` also hides
+    the throttle stamp, so an optimize looks due on every run and would fork a
+    detached ``witan optimize`` against ``~/.local/share/witan/graph.omni``.
+    ``0`` disables auto-optimize; ``test_maintenance.py`` sets its own value.
+    """
+    monkeypatch.setenv("WITAN_OPTIMIZE_INTERVAL", "0")
+
+
+@pytest.fixture
+def server(tmp_path, monkeypatch, tmp_state_dir, no_background_optimize):
     if not omnigraph_available:
         pytest.skip("omnigraph binary not on PATH")
 

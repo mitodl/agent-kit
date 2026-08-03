@@ -100,52 +100,53 @@ Comments add `discussion_url` and `excerpt`.
 
 ---
 
-## Step 1b — Query agent session history
+## Step 1b — Mine your own session history
 
-**If the `sql` tool is unavailable in this harness, skip this step and say so
-explicitly in the message that presents the draft** — up front, not as a
-trailing footnote. Off-GitHub work is then entirely unrepresented, and the user
-is the only one who can fill that gap (the `off_github` field in Step 2).
+The goal of this step is to surface work you did that never produced a
+GitHub artifact — investigation, local changes, planning, incident
+follow-up — by reviewing your own recent session activity since
+`meta.since`. How you do this depends entirely on what your current agent
+runtime exposes; there is no fixed schema or tool name to assume. Work
+through these options in order and use the first one that applies:
 
-Using the `sql` tool (`database: "session_store"`), fetch agent sessions
-active since `meta.since`:
+1. **A dedicated session-history tool.** If your environment exposes a tool
+   for querying past sessions/checkpoints (for example a `sql`-style tool
+   backed by a session store, or an equivalent structured API), query it for
+   sessions updated since `meta.since`, along with any stored
+   summary/checkpoint/overview field and — for sessions with no stored
+   summary — the first user message as a fallback signal of intent.
+2. **Team or project memory/work-tracking MCP tools**, if this environment
+   has any configured (e.g. a shared memory graph, workflow/session tracker,
+   or project-tracking server). Use whatever read/query tools they expose to
+   find sessions, traces, or memories touched since `meta.since`, scoped to
+   the relevant repos.
+3. **Local transcript files**, if your runtime persists them to disk (e.g.
+   Claude Code writes one JSONL file per session under
+   `~/.claude/projects/<cwd-slug>/`, one project directory per working
+   directory). Filter to files modified since `meta.since`, and treat the
+   working-directory path as the repo, plus the first user message and the
+   most recent assistant text as a proxy summary of what happened.
+4. **None of the above available or discoverable.** Skip this step
+   entirely and proceed with GitHub-only data — do not fabricate session
+   activity. **Say so in the message presenting the draft**, up front rather
+   than as a trailing footnote: off-GitHub work is then entirely
+   unrepresented, and the user is the only one who can fill that gap (the
+   `off_github` field in Step 2).
 
-```sql
-SELECT
-  s.id,
-  s.repository,
-  s.branch,
-  s.summary,
-  s.created_at,
-  s.updated_at,
-  c.title        AS checkpoint_title,
-  c.overview     AS checkpoint_overview,
-  c.work_done    AS checkpoint_work_done
-FROM sessions s
-LEFT JOIN checkpoints c ON c.session_id = s.id
-WHERE s.updated_at >= '<meta.since>'
-ORDER BY s.updated_at DESC
-```
+Whichever source applies, normalize each session you find into a common
+shape before moving on — `repository` (or `null` if none), `branch` (or
+`null`), `summary`, and `updated_at`. Later steps (Step 2's session-only
+detection, Step 3's bucketing) assume this shape regardless of which source
+strategy produced it.
 
-For sessions with **no checkpoints**, fetch the first user turn as a fallback:
-
-```sql
-SELECT s.id, s.repository, s.branch, t.user_message
-FROM sessions s
-JOIN turns t ON t.session_id = s.id AND t.turn_index = 0
-WHERE s.updated_at >= '<meta.since>'
-  AND NOT EXISTS (SELECT 1 FROM checkpoints c WHERE c.session_id = s.id)
-ORDER BY s.updated_at DESC
-```
-
-**Summarization rules:**
+**Summarization rules** (apply regardless of which source above was used):
 
 | Evidence available | Action |
 |--------------------|--------|
-| Checkpoint with `work_done` / `overview` | Use as session summary |
-| No checkpoint; has repo + branch + concrete first turn | Derive brief summary from repo/branch + turn intent |
-| No checkpoint; NULL repo or trivial/meta prompt | Skip |
-| Session is for generating this standup | Skip |
+| Explicit summary/checkpoint/overview text | Use as the session summary |
+| No explicit summary; has repo + branch + a concrete first message | Derive a brief summary from repo/branch + message intent |
+| No explicit summary; no repo, or a trivial/meta prompt | Skip |
+| Session is for generating this standup itself | Skip |
 
 Store the resulting list of session summaries; use in Steps 3–4 to enrich
 GitHub-derived bullets and fill in non-GitHub work.
@@ -327,9 +328,16 @@ _<Display Name>_
 - **Blockers** go in announcements as a bullet; tag with `@handle` and link.
 - **Name line:** prefer a human-friendly display name, commonly wrapped in
   underscores for italics to match team style.
-- **Links:** raw GitHub URLs are fine; markdown `[text](url)` formatting is
-  also fine — match what feels natural for the content. External links
-  (runbooks, docs, Slack threads, etc.) are welcome when they add context.
+- **Links:** use plain URLs (`https://github.com/...`), not markdown
+  `[text](url)` formatting. External links (runbooks, docs, Slack threads,
+  etc.) are welcome when they add context — also as plain URLs.
+- **Never use a bare `#<number>` reference** (e.g. `ol-infrastructure #5133`)
+  for a PR/issue outside the posting repo. The standup is posted in
+  `mitodl/hq`, so GitHub auto-links bare `#number` text to an issue/PR in
+  `mitodl/hq` itself — silently producing a link to the wrong item whenever
+  the referenced PR lives in another repo. Always spell out the full
+  `https://github.com/<org>/<repo>/pull/<number>` URL instead; drop the `#N`
+  entirely rather than pairing it with the repo name.
 - **Level of detail:** match what the data supports. If a PR/issue title is
   self-explanatory, a bare link is sufficient. Add a brief description only
   when context genuinely helps (e.g., the PR title doesn't convey purpose, or
@@ -413,9 +421,9 @@ Tobias Macey
 > Standup announcements
 
 - PRs needing review:
-  - [ol-infrastructure #4659: add Archive/Deep Archive access tier support to OLBucket](https://github.com/mitodl/ol-infrastructure/pull/4659)
-  - [ol-data-platform #2238: automate Iceberg table maintenance across the lakehouse](https://github.com/mitodl/ol-data-platform/pull/2238)
-- [ol-infrastructure #4640](https://github.com/mitodl/ol-infrastructure/pull/4640) is approved and ready to merge
+  - ol-infrastructure: add Archive/Deep Archive access tier support to OLBucket — https://github.com/mitodl/ol-infrastructure/pull/4659
+  - ol-data-platform: automate Iceberg table maintenance across the lakehouse — https://github.com/mitodl/ol-data-platform/pull/2238
+- ol-infrastructure: approved and ready to merge — https://github.com/mitodl/ol-infrastructure/pull/4640
 
 > What did I work on yesterday?
 
@@ -437,7 +445,7 @@ _Chris Patti_
 
 > Standup announcements
 
-- [Retrospective on yesterday's XPro Production Certificate Outage](https://pe.ol.mit.edu/runbooks_post_mortems/20260603_xpro_outage/)
+- Retrospective on yesterday's XPro Production Certificate Outage — https://pe.ol.mit.edu/runbooks_post_mortems/20260603_xpro_outage/
 
 > What did I work on today?
 
@@ -445,7 +453,7 @@ _Chris Patti_
 - Reviewed a bunch of PRs:
   - https://github.com/mitodl/ol-infrastructure/pull/4715
   - https://github.com/mitodl/ol-infrastructure/pull/4713 and a couple more I forgot :)
-- Engaged in a wrestling match with Rootly's post incident retrospective creation tools. Lost, then after getting support from them won - kind of? It's not as clean as I'd like but details from yesterday's incident are documented [here](https://pe.ol.mit.edu/runbooks_post_mortems/20260603_xpro_outage/)
+- Engaged in a wrestling match with Rootly's post incident retrospective creation tools. Lost, then after getting support from them won - kind of? It's not as clean as I'd like but details from yesterday's incident are documented at https://pe.ol.mit.edu/runbooks_post_mortems/20260603_xpro_outage/
 
 > What am I working on tomorrow?
 

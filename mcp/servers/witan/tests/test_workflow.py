@@ -1,6 +1,7 @@
 """End-to-end tests for workflow project/session/trace tracking."""
 
 import uuid
+from datetime import datetime
 
 import pytest
 
@@ -152,7 +153,7 @@ def test_memory_store_flags_missing_session(server):
 
 
 @requires_omnigraph
-def test_memory_store_links_active_session(server, monkeypatch):
+def test_memory_store_links_active_session(server, tmp_state_dir, monkeypatch):
     proj = server.workflow_project_create(title="p", description="d")
     sid = "test-session-b2"
     monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
@@ -474,3 +475,806 @@ def test_missing_trace_returns_consistent_shape(server):
     for res in (mined, annotated):
         assert res["slug"] == "wt-does-not-exist"
         assert res["error"] == "no such trace"
+
+
+# ── Session handle (MCP 2026-07-28 stateless core) ───────────────────────────
+#
+# The protocol carries no session state and a deployment round-robins across
+# replicas, so the tool-returned handle is the only thing tying
+# workflow_session_start to workflow_session_end.
+
+
+@requires_omnigraph
+def test_session_start_returns_an_explicit_handle(server, tmp_state_dir):
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="handle", description="d")
+    sid = uuid.uuid4().hex
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="spec"
+    )
+
+    # Everything the caller needs to close the session later, with no reliance
+    # on transport state or on reaching the same replica twice.
+    assert handle["session_slug"].startswith("ws-")
+    assert handle["project_slug"] == proj["slug"]
+    assert handle["phase"] == "spec"
+    assert handle["session_id"] == sid
+    assert handle["started_at"]
+    assert srv._is_local_stdio()
+
+
+@requires_omnigraph
+def test_local_stdio_server_parks_the_handle_for_the_stop_hook(server, tmp_state_dir):
+    from witan import session_state
+
+    proj = server.workflow_project_create(title="parked", description="d")
+    sid = uuid.uuid4().hex
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="spec"
+    )
+
+    assert session_state.read_handle(sid) == handle
+
+    server.workflow_session_end(handle["session_slug"], summary="done")
+    assert session_state.read_handle(sid) is None
+
+
+@requires_omnigraph
+def test_deployed_server_does_not_write_a_handle(server, tmp_state_dir, monkeypatch):
+    """A replica behind a load balancer shares no filesystem with the agent's
+    Stop hook, so a server-written handle is useless at best and a stale
+    pointer at worst. The client persists the returned handle instead."""
+    from witan import server as srv
+    from witan import session_state
+
+    monkeypatch.setattr(
+        srv,
+        "identity_cfg",
+        srv.identity_cfg.model_copy(
+            update={"oidc_issuer": "https://sso.example.org/realms/ol"}
+        ),
+    )
+    assert not srv._is_local_stdio()
+
+    proj = server.workflow_project_create(title="deployed", description="d")
+    sid = uuid.uuid4().hex
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="spec"
+    )
+
+    # The session is still created and the handle still returned — only the
+    # filesystem side effect is gone.
+    assert handle["session_slug"].startswith("ws-")
+    assert session_state.read_handle(sid) is None
+
+
+@requires_omnigraph
+def test_stop_hook_closes_the_session_via_the_handle(
+    server, tmp_state_dir, no_background_optimize, monkeypatch
+):
+    """End-to-end: start → park handle → Stop hook reads it back and closes."""
+    from witan import session_state
+    from witan.cli import _common, hooks
+
+    proj = server.workflow_project_create(title="hooked", description="d")
+    sid = uuid.uuid4().hex
+    handle = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="spec"
+    )
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+
+    # The hook dispatches through _srv(); point it at the test-wired server
+    # module so the close lands in this test's throwaway store.
+    from witan import server as srv
+
+    monkeypatch.setattr(_common, "_server", srv)
+
+    hooks.session_checkpoint()
+
+    sessions = srv.client.read(
+        "read.gq", "list_sessions_by_project", {"project_slug": proj["slug"]}
+    )
+    closed = [s for s in sessions if s["slug"] == handle["session_slug"]]
+    assert closed and closed[0]["ended_at"]
+    assert "auto-closed by Stop hook" in closed[0]["summary"]
+    # Handle consumed, so a second Stop can't re-close it.
+    assert session_state.read_handle(sid) is None
+
+
+@requires_omnigraph
+def test_stop_hook_is_a_noop_without_a_handle(
+    server, tmp_state_dir, no_background_optimize, monkeypatch
+):
+    from witan.cli import hooks
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", uuid.uuid4().hex)
+    hooks.session_checkpoint()  # must not raise
+
+
+@pytest.mark.parametrize(
+    "boom",
+    [
+        RuntimeError("offline"),
+        SystemExit(1),  # _srv() raises this for a half-configured remote
+    ],
+)
+def test_stop_hook_keeps_the_handle_when_the_close_fails(
+    boom, tmp_state_dir, no_background_optimize, monkeypatch
+):
+    """A failed close must not discard the handle.
+
+    The close now goes over the network, so failure is usually transient — an
+    expired token or an offline laptop. Dropping the handle there would throw
+    away the only pointer to the session and leak it open in the graph forever.
+    """
+    from witan import session_state
+    from witan.cli import _common, hooks
+
+    sid = uuid.uuid4().hex
+    session_state.write_handle(sid, {"session_slug": "ws-doomed"})
+    monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
+
+    class _Exploding:
+        def __getattr__(self, _name):
+            def _raise(*_a, **_kw):
+                raise boom
+
+            return _raise
+
+    monkeypatch.setattr(_common, "_server", _Exploding())
+
+    hooks.session_checkpoint()  # never blocks the agent, not even on SystemExit
+
+    assert session_state.read_handle(sid) == {"session_slug": "ws-doomed"}
+
+
+def test_stop_hook_survives_a_broken_config(tmp_state_dir, monkeypatch):
+    """`cfg_module.load()` raises ValueError on a malformed config.toml or an
+    unknown [targets.*] selection. The Stop hook is documented as always exiting
+    0 and never blocking, so a broken config must not turn into a failed stop."""
+    from witan.cli import hooks
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", uuid.uuid4().hex)
+
+    def _boom(*_a, **_kw):
+        raise ValueError("The 'rank' section in config must be a table.")
+
+    monkeypatch.setattr(hooks.cfg_module, "load", _boom)
+
+    hooks.session_checkpoint()  # must not raise
+
+
+# ── workflow_session_start idempotency ───────────────────────────────────────
+#
+# A hook retry, transport reconnect or replica failover re-fires the call. It
+# used to mint a second node every time; now it returns the open one.
+
+
+@requires_omnigraph
+def test_session_start_is_idempotent_while_the_session_is_open(server, tmp_state_dir):
+    proj = server.workflow_project_create(title="retry", description="d")
+    sid = uuid.uuid4().hex
+
+    first = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+    second = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+
+    assert first["existed"] is False
+    assert second["existed"] is True
+    assert second["session_slug"] == first["session_slug"]
+
+    sessions = server.workflow_project_status(proj["slug"])
+    assert sessions["last_session"]["slug"] == first["session_slug"]
+
+    # One node, not two — the whole point.
+    from witan import server as srv
+
+    rows = srv.client.read(
+        "read.gq", "sessions_for_key", {"project_slug": proj["slug"], "session_id": sid}
+    )
+    assert len(rows) == 1
+    # The retry reports the session's real start, not its own arrival time. It
+    # comes back as the store spells it, so compare against the stored row.
+    assert second["started_at"] == rows[0]["started_at"]
+    assert datetime.fromisoformat(second["started_at"]) <= datetime.fromisoformat(
+        first["started_at"]
+    )
+
+
+@requires_omnigraph
+def test_session_start_merges_repo_and_tags_on_retry(server, tmp_state_dir):
+    """The repo-adding workaround still works, without the duplicate node it used
+    to leave behind: a second call's repo lands on the project's set, and the
+    session keeps the repo/tags the first call recorded."""
+    r1, r2 = "https://github.com/x/one", "https://github.com/x/two"
+    proj = server.workflow_project_create(title="merge repos", description="d")
+    sid = uuid.uuid4().hex
+
+    first = server.workflow_session_start(
+        project_slug=proj["slug"],
+        session_id=sid,
+        phase="spec",
+        repo=r1,
+        tags=["a"],
+    )
+    second = server.workflow_session_start(
+        project_slug=proj["slug"],
+        session_id=sid,
+        phase="spec",
+        repo=r2,
+        tags=["b"],
+    )
+    assert second["session_slug"] == first["session_slug"]
+
+    # Both repos reached the project even though only one session exists.
+    assert {r1, r2} <= set(server.workflow_project_get(proj["slug"])["repos"])
+
+    from witan import server as srv
+
+    rows = srv.client.read(
+        "read.gq", "sessions_for_key", {"project_slug": proj["slug"], "session_id": sid}
+    )
+    assert len(rows) == 1
+    assert set(rows[0]["tags"]) == {"a", "b"}
+
+
+@requires_omnigraph
+def test_session_start_after_end_starts_a_new_session(server, tmp_state_dir):
+    """One $CLAUDE_SESSION_ID legitimately spans several working stints. Once a
+    session is closed with its summary, the next start must not reopen it and
+    overwrite that summary."""
+    proj = server.workflow_project_create(title="stints", description="d")
+    sid = uuid.uuid4().hex
+
+    first = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+    server.workflow_session_end(first["session_slug"], summary="stint one")
+
+    second = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+    assert second["existed"] is False
+    assert second["session_slug"] != first["session_slug"]
+
+    server.workflow_session_end(second["session_slug"], summary="stint two")
+    done = server.workflow_project_complete(proj["slug"], outcome="two real stints")
+    assert server.workflow_trace_get(done["trace_slug"])["session_count"] == 2
+
+
+@requires_omnigraph
+def test_duplicate_sessions_are_excluded_from_the_trace(server, tmp_state_dir):
+    """A session marked superseded keeps its row but drops out of every
+    aggregate, so a pre-fix duplicate can't inflate a trace."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="skewed", description="d")
+    real = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=uuid.uuid4().hex, phase="spec"
+    )
+    server.workflow_session_end(real["session_slug"], summary="the actual work")
+    dupe = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=uuid.uuid4().hex, phase="spec"
+    )
+    server.workflow_session_end(dupe["session_slug"], summary="artifact")
+
+    srv.client.change(
+        "mutations.gq",
+        "update_workflow_session_superseded",
+        {"slug": dupe["session_slug"], "superseded_by": real["session_slug"]},
+    )
+
+    assert (
+        server.workflow_project_status(proj["slug"])["last_session"]["slug"]
+        == (real["session_slug"])
+    )
+    done = server.workflow_project_complete(proj["slug"], outcome="one real session")
+    assert server.workflow_trace_get(done["trace_slug"])["session_count"] == 1
+
+
+# ── workflow_project_update ──────────────────────────────────────────────────
+
+
+@requires_omnigraph
+def test_project_update_edits_metadata(server):
+    proj = server.workflow_project_create(
+        title="old title", description="old", tags=["x"]
+    )
+    updated = server.workflow_project_update(
+        proj["slug"],
+        title="new title",
+        description="new",
+        tags=["y", "z"],
+        github_issue="https://github.com/mitodl/agent-kit/issues/1",
+    )
+    assert updated["title"] == "new title"
+    assert updated["description"] == "new"
+    assert set(updated["tags"]) == {"y", "z"}
+    assert updated["github_issue"].endswith("/issues/1")
+
+
+@requires_omnigraph
+def test_project_update_leaves_omitted_fields_alone(server):
+    proj = server.workflow_project_create(
+        title="keep me", description="keep this too", tags=["t"]
+    )
+    server.workflow_project_advance(proj["slug"], phase="spec")
+
+    updated = server.workflow_project_update(proj["slug"], github_issue="i")
+    assert updated["title"] == "keep me"
+    assert updated["description"] == "keep this too"
+    assert updated["tags"] == ["t"]
+    assert updated["phase"] == "spec"  # untouched: advance() owns phase
+
+
+@requires_omnigraph
+def test_project_update_repos_replace_and_delta(server):
+    a, b, c = (f"https://github.com/x/{n}" for n in ("a", "b", "c"))
+    proj = server.workflow_project_create(title="repos", description="d", repos=[a])
+
+    replaced = server.workflow_project_update(proj["slug"], repos=[b])
+    assert replaced["repos"] == [b]
+
+    added = server.workflow_project_update(proj["slug"], add_repos=[a, c])
+    assert set(added["repos"]) == {a, b, c}
+
+    # A repo can be removed — repos are a plain list field, not append-only edges.
+    removed = server.workflow_project_update(proj["slug"], remove_repos=[b])
+    assert set(removed["repos"]) == {a, c}
+    assert proj["slug"] not in {p["slug"] for p in server.workflow_project_list(repo=b)}
+    assert proj["slug"] in {p["slug"] for p in server.workflow_project_list(repo=c)}
+
+
+@requires_omnigraph
+def test_project_update_canonicalises_repo_case(server):
+    canonical = "https://github.com/mitodl/agent-kit"
+    proj = server.workflow_project_create(title="case", description="d")
+    updated = server.workflow_project_update(
+        proj["slug"], add_repos=["https://GitHub.com/MITodl/Agent-Kit"]
+    )
+    assert canonical in updated["repos"]
+
+    # ...and a differently-cased removal still matches what's stored.
+    cleared = server.workflow_project_update(
+        proj["slug"], remove_repos=["https://github.com/MITODL/agent-kit"]
+    )
+    assert canonical not in (cleared["repos"] or [])
+
+
+@requires_omnigraph
+def test_project_update_can_abandon_and_revive(server):
+    proj = server.workflow_project_create(title="abandon", description="d")
+    assert (
+        server.workflow_project_update(proj["slug"], status="abandoned")["status"]
+        == "abandoned"
+    )
+    assert proj["slug"] not in {p["slug"] for p in server.workflow_project_list()}
+    assert proj["slug"] in {
+        p["slug"] for p in server.workflow_project_list(status="abandoned")
+    }
+
+    assert (
+        server.workflow_project_update(proj["slug"], status="active")["status"]
+        == "active"
+    )
+
+
+@requires_omnigraph
+def test_project_update_missing_slug_returns_none(server):
+    assert server.workflow_project_update("wp-nope") is None
+
+
+# ── migrate dedupe-sessions ──────────────────────────────────────────────────
+#
+# Sessions minted before workflow_session_start became re-entrant. Sharing a
+# session_id is not enough to call two sessions duplicates — one id spans
+# several working stints — so the migration keys on overlapping in time.
+
+
+def _plant_session(srv, project_slug, session_id, started_at, ended_at, summary):
+    """Write a session row directly, the way the pre-upsert tool used to."""
+    slug = f"ws-{project_slug}-{uuid.uuid4().hex[:6]}"
+    srv.client.change(
+        "mutations.gq",
+        "insert_workflow_session",
+        {
+            "slug": slug,
+            "project_slug": project_slug,
+            "session_id": session_id,
+            "repo": None,
+            "phase": "implementation",
+            "summary": "",
+            "author": "test",
+            "tags": None,
+            "started_at": started_at,
+        },
+    )
+    srv.client.change(
+        "mutations.gq", "link_belongs_to", {"from": slug, "to": project_slug}
+    )
+    if ended_at:
+        srv.client.change(
+            "mutations.gq",
+            "update_workflow_session_end",
+            {
+                "slug": slug,
+                "summary": summary,
+                "tools_used": None,
+                "files_changed": None,
+                "ended_at": ended_at,
+            },
+        )
+    return slug
+
+
+@requires_omnigraph
+def test_dedupe_marks_overlapping_empty_sessions(server):
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="dedupe overlap", description="d")
+    sid = uuid.uuid4().hex
+    real = _plant_session(srv, proj["slug"], sid, "2026-01-01T10:00:00Z", None, "")
+    dup1 = _plant_session(srv, proj["slug"], sid, "2026-01-01T10:05:00Z", None, "")
+    dup2 = _plant_session(srv, proj["slug"], sid, "2026-01-01T10:09:00Z", None, "")
+
+    dry = srv.migrate_dedupe_sessions()
+    assert dry["applied"] is False
+    assert dry["marked"] == {dup1: real, dup2: real}
+    # Dry run wrote nothing.
+    assert (
+        len(
+            srv.client.read(
+                "read.gq", "list_sessions_by_project", {"project_slug": proj["slug"]}
+            )
+        )
+        == 3
+    )
+
+    applied = srv.migrate_dedupe_sessions(apply=True)
+    assert applied["marked"] == {dup1: real, dup2: real}
+    assert len(srv._project_sessions(proj["slug"])) == 1
+
+    # Idempotent: the marked rows are skipped on a second pass.
+    assert srv.migrate_dedupe_sessions(apply=True)["marked"] == {}
+
+
+@requires_omnigraph
+def test_dedupe_leaves_sequential_stints_alone(server):
+    """Eight sessions under one $CLAUDE_SESSION_ID, each closed before the next
+    began and each with its own summary — the real shape in the corpus. None of
+    them is a duplicate and none may be touched."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="dedupe stints", description="d")
+    sid = uuid.uuid4().hex
+    for hour in range(8):
+        _plant_session(
+            srv,
+            proj["slug"],
+            sid,
+            f"2026-01-01T{hour + 1:02d}:00:00Z",
+            f"2026-01-01T{hour + 1:02d}:30:00Z",
+            f"stint {hour}",
+        )
+
+    assert srv.migrate_dedupe_sessions(apply=True)["marked"] == {}
+    assert len(srv._project_sessions(proj["slug"])) == 8
+
+
+@requires_omnigraph
+def test_dedupe_keeps_the_fullest_summary_and_reports_ambiguity(server):
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="dedupe ambiguous", description="d")
+    sid = uuid.uuid4().hex
+    # An anchor that never ended, so everything after overlaps it.
+    empty = _plant_session(srv, proj["slug"], sid, "2026-02-01T10:00:00Z", None, "")
+    short = _plant_session(
+        srv, proj["slug"], sid, "2026-02-01T10:01:00Z", "2026-02-01T10:20:00Z", "brief"
+    )
+    full = _plant_session(
+        srv,
+        proj["slug"],
+        sid,
+        "2026-02-01T10:02:00Z",
+        "2026-02-01T10:40:00Z",
+        "a much fuller account of what this session actually did",
+    )
+
+    result = srv.migrate_dedupe_sessions(apply=True)
+    # Only the summary-less session is auto-marked; the two that wrote real
+    # summaries are reported for a human instead of guessed at.
+    assert result["marked"] == {empty: full}
+    assert len(result["needs_review"]) == 1
+    reviewed = {s["slug"] for s in result["needs_review"][0]["sessions"]}
+    assert reviewed == {short, full}
+
+    # ...and the human's judgement is applied with extra_marks.
+    manual = srv.migrate_dedupe_sessions(apply=True, extra_marks={short: full})
+    assert manual["marked"] == {short: full}
+    assert [s["slug"] for s in srv._project_sessions(proj["slug"])] == [full]
+
+
+@requires_omnigraph
+def test_dedupe_rejects_bogus_extra_marks(server):
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="dedupe bogus", description="d")
+    real = _plant_session(
+        srv, proj["slug"], uuid.uuid4().hex, "2026-03-01T10:00:00Z", None, ""
+    )
+    with pytest.raises(RuntimeError, match="no such session"):
+        srv.migrate_dedupe_sessions(apply=True, extra_marks={"ws-nope": real})
+    with pytest.raises(RuntimeError, match="cannot supersede itself"):
+        srv.migrate_dedupe_sessions(apply=True, extra_marks={real: real})
+
+
+@requires_omnigraph
+def test_dedupe_ignores_the_stop_hook_placeholder_summary(server):
+    """An auto-closed session carries a placeholder saying only that it ended;
+    that must not count as content worth keeping."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="dedupe autoclose", description="d")
+    sid = uuid.uuid4().hex
+    anchor = _plant_session(srv, proj["slug"], sid, "2026-04-01T10:00:00Z", None, "")
+    auto = _plant_session(
+        srv,
+        proj["slug"],
+        sid,
+        "2026-04-01T10:01:00Z",
+        "2026-04-01T10:02:00Z",
+        "Session ended (auto-closed by Stop hook — call workflow_session_end "
+        "explicitly for a better summary)",
+    )
+    result = srv.migrate_dedupe_sessions(apply=True)
+    assert result["marked"] == {auto: anchor}
+    assert result["needs_review"] == []
+
+
+@requires_omnigraph
+def test_dedupe_follows_transitive_overlap_chains(server):
+    """Overlap is transitive. s1 has ended by the time s3 starts, but s2 — itself
+    a retry — is still open, so the fixed workflow_session_start would have
+    handed back s2's handle and s3 would never have existed. Comparing only
+    against the run's first session would miss it."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="dedupe chain", description="d")
+    sid = uuid.uuid4().hex
+    s1 = _plant_session(
+        srv, proj["slug"], sid, "2026-05-01T10:00:00Z", "2026-05-01T10:10:00Z", "real"
+    )
+    s2 = _plant_session(
+        srv, proj["slug"], sid, "2026-05-01T10:05:00Z", "2026-05-01T10:20:00Z", ""
+    )
+    s3 = _plant_session(
+        srv, proj["slug"], sid, "2026-05-01T10:12:00Z", "2026-05-01T10:15:00Z", ""
+    )
+    # s3 starts after s1 ended — only s2's still-open window links it to the run.
+    result = srv.migrate_dedupe_sessions(apply=True)
+    assert result["marked"] == {s2: s1, s3: s1}
+    assert [s["slug"] for s in srv._project_sessions(proj["slug"])] == [s1]
+
+
+@requires_omnigraph
+def test_dedupe_run_ends_when_every_member_has_closed(server):
+    """The mirror of the chain case: once the whole run has closed, the next
+    session is a new stint, not a duplicate — however long the run ran."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="dedupe chain end", description="d")
+    sid = uuid.uuid4().hex
+    s1 = _plant_session(
+        srv, proj["slug"], sid, "2026-06-01T10:00:00Z", "2026-06-01T10:10:00Z", "first"
+    )
+    dup = _plant_session(
+        srv, proj["slug"], sid, "2026-06-01T10:05:00Z", "2026-06-01T10:20:00Z", ""
+    )
+    later = _plant_session(
+        srv, proj["slug"], sid, "2026-06-01T10:25:00Z", "2026-06-01T10:40:00Z", "second"
+    )
+    result = srv.migrate_dedupe_sessions(apply=True)
+    assert result["marked"] == {dup: s1}
+    assert sorted(s["slug"] for s in srv._project_sessions(proj["slug"])) == sorted(
+        [s1, later]
+    )
+
+
+@requires_omnigraph
+def test_concurrent_session_starts_collapse_to_one_handle(
+    server, tmp_state_dir, monkeypatch
+):
+    """The check-then-insert isn't atomic, so two simultaneous starts can both
+    find no open session and both insert. Simulated by blinding the pre-insert
+    check for the first call only — the second then runs for real, sees both
+    rows, and both callers come back with the same handle."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="race", description="d")
+    sid = uuid.uuid4().hex
+
+    # Blind only the first two checks — a blanket monkeypatch.undo() would also
+    # revert the conftest fixture's redirect of srv.client to the throwaway graph.
+    real_check = srv._open_session_for_key
+    calls = {"n": 0}
+
+    def _blind_first_two(*args, **kwargs):
+        calls["n"] += 1
+        return None if calls["n"] <= 2 else real_check(*args, **kwargs)
+
+    monkeypatch.setattr(srv, "_open_session_for_key", _blind_first_two)
+    racer_a = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+    racer_b = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+
+    # Both raced past the check and inserted, but converge on one handle.
+    assert racer_b["session_slug"] == racer_a["session_slug"]
+
+    # Two rows exist; exactly one is live, and it's the earlier of the two.
+    rows = srv.client.read(
+        "read.gq", "sessions_for_key", {"project_slug": proj["slug"], "session_id": sid}
+    )
+    assert len(rows) == 2
+    live = [r for r in rows if not r.get("superseded_by")]
+    assert [r["slug"] for r in live] == [racer_a["session_slug"]]
+    assert len(srv._project_sessions(proj["slug"])) == 1
+
+    # A later, non-racing call still finds the surviving session.
+    third = server.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+    assert third["existed"] is True
+    assert third["session_slug"] == racer_a["session_slug"]
+
+    # ...and the collapsed duplicate never reaches the trace.
+    server.workflow_session_end(racer_a["session_slug"], summary="the real work")
+    done = server.workflow_project_complete(
+        proj["slug"], outcome="one session, not two"
+    )
+    assert server.workflow_trace_get(done["trace_slug"])["session_count"] == 1
+
+
+# ── witan session sweep ──────────────────────────────────────────────────────
+
+
+def _patch_cli_server(monkeypatch, srv):
+    """Point the CLI's `_srv()` at the test server and capture console output.
+
+    Dispatching through `_srv()` is the load-bearing part: a direct
+    OmnigraphClient would only ever work locally, which is the bug that created
+    the leaked-session backlog in the first place.
+    """
+    from witan.cli import _common
+
+    monkeypatch.setattr(_common, "_server", srv)
+    printed = []
+    monkeypatch.setattr(
+        _common.console, "print", lambda *a, **kw: printed.append(str(a[0]))
+    )
+    return printed
+
+
+def test_parse_duration_accepts_units_and_bare_seconds():
+    from witan.cli.session import _parse_duration
+
+    assert _parse_duration("6h") == 21600
+    assert _parse_duration("30m") == 1800
+    assert _parse_duration("2d") == 172800
+    assert _parse_duration("45s") == 45
+    assert _parse_duration("90") == 90
+    with pytest.raises(ValueError, match="could not parse duration"):
+        _parse_duration("soon")
+    # A negative age puts the cutoff in the FUTURE, which would make every open
+    # session look stale — so `--older-than -1h --yes` would sweep the lot.
+    for negative in ("-1h", "-30m", "-5"):
+        with pytest.raises(ValueError, match="cannot be negative"):
+            _parse_duration(negative)
+
+
+@requires_omnigraph
+def test_session_list_open_only_excludes_ended_and_superseded(server, tmp_state_dir):
+    proj = server.workflow_project_create(title="sweepable", description="x")
+    open_s = server.workflow_session_start(proj["slug"], "sid-open", "implementation")
+    ended = server.workflow_session_start(proj["slug"], "sid-ended", "implementation")
+    server.workflow_session_end(ended["session_slug"], summary="done")
+
+    all_rows = server.workflow_session_list(project_slug=proj["slug"])
+    assert {r["slug"] for r in all_rows} == {
+        open_s["session_slug"],
+        ended["session_slug"],
+    }
+    # The by-project query filters ON project_slug and so omits the column;
+    # the tool puts it back so both code paths return one row shape.
+    assert all(r["project_slug"] == proj["slug"] for r in all_rows)
+
+    open_rows = server.workflow_session_list(project_slug=proj["slug"], open_only=True)
+    assert [r["slug"] for r in open_rows] == [open_s["session_slug"]]
+
+
+@requires_omnigraph
+def test_session_sweep_is_dry_by_default(server, tmp_state_dir, monkeypatch):
+    """The whole point of the default: it must not write."""
+    from witan.cli import session as session_cli
+
+    printed = _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="dry", description="x")
+    server.workflow_session_start(proj["slug"], "sid-1", "implementation")
+
+    session_cli.session_sweep(older_than="0s", project=proj["slug"])
+
+    assert "dry run" in "\n".join(printed)
+    assert server.workflow_session_list(project_slug=proj["slug"], open_only=True)
+
+
+@requires_omnigraph
+def test_session_sweep_closes_with_yes(server, tmp_state_dir, monkeypatch):
+    from witan.cli import session as session_cli
+
+    _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="wet", description="x")
+    started = server.workflow_session_start(proj["slug"], "sid-1", "implementation")
+
+    session_cli.session_sweep(older_than="0s", project=proj["slug"], yes=True)
+
+    assert server.workflow_session_list(project_slug=proj["slug"], open_only=True) == []
+    rows = server.workflow_session_list(project_slug=proj["slug"])
+    swept = next(r for r in rows if r["slug"] == started["session_slug"])
+    assert swept["ended_at"]
+    # The summary must be honest that this was a sweep, not a real checkpoint.
+    assert "sweep" in swept["summary"]
+
+
+@requires_omnigraph
+def test_session_sweep_leaves_sessions_younger_than_the_threshold(
+    server, tmp_state_dir, monkeypatch
+):
+    """Guards the one legitimately-running session against a sweep."""
+    from witan.cli import session as session_cli
+
+    printed = _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="young", description="x")
+    server.workflow_session_start(proj["slug"], "sid-live", "implementation")
+
+    session_cli.session_sweep(older_than="6h", project=proj["slug"], yes=True)
+
+    assert "No sessions" in "\n".join(printed)
+    assert server.workflow_session_list(project_slug=proj["slug"], open_only=True)
+
+
+@requires_omnigraph
+def test_session_sweep_is_idempotent(server, tmp_state_dir, monkeypatch):
+    """Re-closing an already-closed session just re-stamps ended_at."""
+    from witan.cli import session as session_cli
+
+    _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="twice", description="x")
+    server.workflow_session_start(proj["slug"], "sid-1", "implementation")
+
+    session_cli.session_sweep(older_than="0s", project=proj["slug"], yes=True)
+    session_cli.session_sweep(older_than="0s", project=proj["slug"], yes=True)
+
+    assert server.workflow_session_list(project_slug=proj["slug"], open_only=True) == []
+
+
+@requires_omnigraph
+def test_session_sweep_clears_the_local_handle(server, tmp_state_dir, monkeypatch):
+    """Otherwise a later Stop hook tries to re-close a session we just swept."""
+    from witan import session_state
+    from witan.cli import session as session_cli
+
+    _patch_cli_server(monkeypatch, server)
+    proj = server.workflow_project_create(title="handles", description="x")
+    started = server.workflow_session_start(proj["slug"], "sid-h", "implementation")
+    session_state.write_handle("sid-h", dict(started))
+
+    session_cli.session_sweep(older_than="0s", project=proj["slug"], yes=True)
+
+    assert session_state.read_handle("sid-h") is None

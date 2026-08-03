@@ -12,7 +12,9 @@ and will miss dynamic dispatch and produce occasional false links.
 import functools
 import hashlib
 import importlib
+import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,10 +23,12 @@ from witan_core import now_iso
 from . import bridge as bridge_module
 from . import bridge_extractors
 from . import config as cfg_module
+from . import identity as identity_module
 from . import package_map
 from . import repo as repo_module
+from . import views
 from .bridge_extractors import ParsedBinding
-from .graph import OmnigraphClient
+from .graph import OmnigraphClient, check_writable, owns_view
 from .store import ensure_store
 
 # ── Language support ──────────────────────────────────────────────
@@ -241,6 +245,11 @@ class IndexStats:
     edges: int = 0
     bindings: int = 0
     errors: int = 0
+    purged: int = 0
+    """Files dropped from the store because they are no longer part of the
+    repo — deleted, or newly excluded (a nested checkout, a skipped
+    directory). Full-repo runs only; reported so a mass cleanup is visible
+    rather than silent."""
 
 
 # ── Public entry points ───────────────────────────────────────────
@@ -268,22 +277,32 @@ def index_path(
         slug = (target if target.is_dir() else target.parent).name
     base = repo_root or (target if target.is_dir() else target.parent)
 
-    # Non-default git branches index onto the same-named omnigraph branch,
-    # forked from main on first write (docs/BRANCH_INDEXING.md), so in-flight
-    # work never overwrites the shared main view and stays visible per-branch.
-    branch = repo_module.store_branch(base) if repo_root else None
+    # Non-default git branches index onto their own omnigraph branch, forked
+    # from main on first write (docs/BRANCH_INDEXING.md), so in-flight work
+    # never overwrites the shared main view and stays visible per-branch. The
+    # view is named for its writer as well as the git branch
+    # (:mod:`witan_code.views`): on a shared graph the git branch alone is not
+    # a unique key — two checkouts on `feature-x` are two working trees — and
+    # the un-namespaced name is what let them overwrite each other.
+    actor = identity_module.actor_id()
+    git_branch = repo_module.store_branch(base) if repo_root else None
+    branch = views.repo_view(git_branch, actor=actor) if git_branch else None
 
     store = ensure_store(slug, cfg)
-    client = OmnigraphClient(str(store), cfg.queries_dir, branch=branch)
+    client = store.client(cfg, branch=branch)
+    check_writable(
+        is_remote=client.is_remote, branch=branch, cfg=cfg, slug=slug, actor=actor
+    )
     # The hash read below never forks; create the branch before reading.
     client.ensure_branch()
 
     # One query for all existing file hashes → the incremental skip check is
-    # in-memory, not a query per file.
+    # in-memory, not a query per file. Read even under `force` (where the
+    # hashes go unused): a full-repo run also needs the stored file set to
+    # find rows for files that are no longer part of the repo.
     existing: dict[str, str] = {}
-    if not force:
-        for row in client.read("code_read.gq", "all_file_hashes", {}):
-            existing[row["slug"]] = row.get("content_hash")
+    for row in client.read("code_read.gq", "all_file_hashes", {}):
+        existing[row["slug"]] = row.get("content_hash")
 
     stats = IndexStats()
     records: list[dict] = []
@@ -291,7 +310,21 @@ def index_path(
     bindings: list[ParsedBinding] = []
     touched_files: list[str] = []
 
-    for path in _collect_files(target):
+    # A directory the walk could not read makes `collected` incomplete in a way
+    # that is invisible from the result alone — and the purge below reads
+    # "missing from the collected set" as "no longer part of the repo".
+    walk_errors: list[OSError] = []
+    collected = _collect_files(target, on_error=walk_errors.append)
+    for exc in walk_errors:
+        stats.errors += 1
+        print(f"codegraph: could not read {exc.filename}: {exc}", file=sys.stderr)
+
+    # Every file the repo should have indexed, changed or not — the authority
+    # for the purge below, which `touched_files` is not (an incremental run
+    # touches only what changed).
+    indexed_rel = {_relative_path(p, base) for p in collected}
+
+    for path in collected:
         stats.scanned += 1
         try:
             result = _parse_for_index(path, base, slug, existing, force=force)
@@ -310,10 +343,38 @@ def index_path(
         touched_files.append(parsed.path)
         stats.indexed += 1
 
+    full_repo = target.is_dir() and target.resolve() == base.resolve()
+    can_purge = _may_purge(
+        full_repo=full_repo,
+        repo_root=repo_root,
+        walk_errors=walk_errors,
+        client=client,
+        branch=branch,
+        cfg=cfg,
+        actor=actor,
+    )
+
     # Drop stale data for changed files (new files have nothing to delete), then
     # bulk-load every node and edge in a single omnigraph call.
     for file_id in reindexed_file_ids:
         _delete_file_data(file_id, client)
+
+    # A full-repo run also drops files the repo no longer has. Membership is
+    # decided by the collected set, NOT by whether the file still exists on
+    # disk: a linked worktree's files are very much on disk, they simply
+    # aren't this repo's to index (see `_is_nested_checkout`). Without this,
+    # excluding a path stops adding rows but leaves every row already written
+    # — which is how a store ends up majority stale copies of itself.
+    # Subpath runs are exempt: everything outside the subpath is legitimately
+    # absent from `indexed_rel` and must not be treated as stale.
+    if can_purge:
+        prefix = f"{slug}#"
+        for file_id in sorted(existing):
+            rel = file_id[len(prefix) :] if file_id.startswith(prefix) else None
+            if rel is not None and rel not in indexed_rel:
+                _delete_file_data(file_id, client)
+                stats.purged += 1
+
     client.load(_dedupe(records), mode="merge")
 
     # Cross-repo bridge — a SEPARATE phase after the per-repo store write, so the
@@ -326,7 +387,6 @@ def index_path(
     # (docs/BRANCH_INDEXING.md § Bridge store) rather than skipping the bridge
     # entirely: the shared main view still never sees in-flight bindings, but
     # they're no longer dropped on the floor either.
-    full_repo = target.is_dir() and target.resolve() == base.resolve()
     if full_repo:
         bindings.extend(bridge_extractors.extract_repo_bindings(base, slug))
     try:
@@ -338,7 +398,9 @@ def index_path(
             touched_files=tuple(touched_files),
             identity=package_map.load(base, slug),
             base=base,
-            branch=branch,
+            branch=git_branch,
+            actor=actor,
+            indexed_files=frozenset(indexed_rel) if can_purge else None,
         )
     except Exception as exc:  # noqa: BLE001 — bridge is best-effort, never fatal
         print(f"codegraph: bridge update failed: {exc}", file=sys.stderr)
@@ -371,19 +433,109 @@ def _dedupe(records: list[dict]) -> list[dict]:
     return out
 
 
-def _collect_files(target: Path) -> list[Path]:
+def _may_purge(
+    *,
+    full_repo: bool,
+    repo_root: Path | None,
+    walk_errors: list[OSError],
+    client: OmnigraphClient,
+    branch: str | None,
+    cfg: cfg_module.Config,
+    actor: str | None,
+) -> bool:
+    """Whether this run is entitled to delete rows for files it did not collect.
+
+    Purging is the one destructive thing an index does, so it asks for more
+    than the run being a full-repo one. Every clause answers the same question
+    — is this machine's file listing authoritative for the view being written?
+
+    - ``full_repo``: a subpath run legitimately collects a fraction of the repo.
+    - ``repo_root``: without a git root, ``base`` falls back to the target
+      directory, making ``full_repo`` true for ANY directory — index a
+      subdirectory then and every path stored relative to the real root looks
+      stale.
+    - ``walk_errors``: a directory the walk could not read is indistinguishable
+      from one that was deleted, so its files would go while sitting on disk.
+    - :func:`~witan_code.graph.owns_view`: the same predicate that decides
+      whether this process may WRITE the view at all, because deleting from a
+      view you do not own is the more destructive half of that. It answers
+      "CI owns the shared default view" and "an actor owns its own branch
+      views" in one place — the earlier "remote and not the designated writer"
+      rule got the first right and the second wrong, refusing a developer the
+      purge of their OWN branch view, where deleted files therefore lingered.
+    """
+    return (
+        full_repo
+        and repo_root is not None
+        and not walk_errors
+        and owns_view(is_remote=client.is_remote, branch=branch, cfg=cfg, actor=actor)
+    )
+
+
+def _relative_path(path: Path, base: Path) -> str:
+    """A file's repo-relative path — the second half of its ``repo#rel`` id.
+
+    Shared by the parse path and the stale-file purge so the two agree on what
+    identifies a file; a mismatch there would purge rows that were just written.
+    """
+    try:
+        return path.resolve().relative_to(base.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _is_nested_checkout(path: Path) -> bool:
+    """Whether ``path`` is the root of a *different* git checkout.
+
+    A `.git` entry inside a subdirectory means that subtree belongs to another
+    repository — a linked worktree (`.claude/worktrees/<name>/`, where `.git`
+    is a *file* pointing back at the parent's `.git/worktrees/`), a submodule
+    (also a `.git` file), or a plain clone someone dropped in. Its files are
+    that repo's, and indexing them here attributes them to this one.
+    """
+    return (path / ".git").exists()
+
+
+def _collect_files(
+    target: Path, *, on_error: Callable[[OSError], None] | None = None
+) -> list[Path]:
+    """Every indexable file under ``target``, sorted.
+
+    ``on_error`` is handed any directory that could not be read. ``os.walk``
+    swallows those silently by default, which is fine for indexing (skip what
+    you can't read) but NOT for the purge that consumes this list: an
+    unreadable subtree would look like a set of deleted files and take their
+    rows with it. ``index_path`` passes a collector and declines to purge when
+    anything fired.
+    """
     if target.is_file():
         return [target] if target.suffix in _EXT_TO_SPEC else []
 
     out: list[Path] = []
-    for path in target.rglob("*"):
-        if path.is_dir():
-            continue
-        if any(part in _SKIP_DIRS for part in path.parts):
-            continue
-        if path.suffix in _EXT_TO_SPEC:
-            out.append(path)
-    return out
+    for root, dirs, files in os.walk(target, onerror=on_error):
+        root_path = Path(root)
+        # Prune in place, so a skipped directory is never descended into at
+        # all. The previous rglob("*") walked every file under node_modules/
+        # .venv/.git and discarded them afterwards; this also makes the
+        # nested-checkout test cheap, since it runs once per surviving
+        # directory rather than once per file.
+        #
+        # `target` itself is never a pruning candidate (only entries in
+        # `dirs` are), so indexing a repo root — or a path *inside* a
+        # worktree, which is how the hooks index while an agent works there —
+        # still works. Only descending into one from outside is refused.
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in _SKIP_DIRS and not _is_nested_checkout(root_path / d)
+        ]
+        for name in files:
+            path = root_path / name
+            if path.suffix in _EXT_TO_SPEC:
+                out.append(path)
+    # os.walk's directory order is arbitrary; sort so a run is reproducible
+    # and `_dedupe`'s first-wins tie-break is stable across runs.
+    return sorted(out)
 
 
 # ── Per-file indexing ─────────────────────────────────────────────
@@ -402,10 +554,7 @@ def _parse_for_index(
     raw = path.read_bytes()
     content_hash = hashlib.sha256(raw).hexdigest()
 
-    try:
-        rel = path.resolve().relative_to(base.resolve()).as_posix()
-    except ValueError:
-        rel = path.name
+    rel = _relative_path(path, base)
     file_id = f"{slug}#{rel}"
 
     if not force and existing.get(file_id) == content_hash:

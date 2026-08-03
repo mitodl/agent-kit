@@ -143,6 +143,34 @@ query all_file_hashes() {
     limit 1000000
 }
 
+// How many files are indexed, without materializing a row per file.
+// `code_indexed_repos` and the UserPromptSubmit status block only ever need
+// the number, and going through all_file_hashes for it both allocates the
+// whole result and silently undercounts a store past its 1,000,000-row cap.
+// Note the projected column is named after the match variable ($f) on a
+// populated store but "?" on an empty one, so callers read it positionally.
+
+query count_files() {
+    match {
+        $f: CodeFile
+    }
+    return { count($f) }
+}
+
+// Which repo this graph holds. Only a CLUSTER graph needs to ask: a local
+// store carries its repo URI in a sidecar file, but a graph on the shared
+// omnigraph-server has nowhere to put one and its `code-<slug>` id does not
+// invert back to a URI. Every CodeFile in a graph carries the same repo, so
+// one row answers it. Read positionally, like count_files.
+
+query indexed_repo() {
+    match {
+        $f: CodeFile
+    }
+    return { $f.repo }
+    limit 1
+}
+
 // Symbol ids defined by a file — needed to delete their outgoing edges
 // before reindexing the file.
 

@@ -6,6 +6,124 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Added
+
+- **Connect-failure retry for a restarting omnigraph-server** — a remote call
+  that cannot establish a connection now backs off and retries on its own
+  budget (~42s, jittered) instead of failing the MCP tool call outright.
+  Restarts of the deployed data tier are routine, not exceptional: it hashes
+  its bearer-token map once at boot, so adding a user to `witan-users` bounces
+  the Deployment (ol-infrastructure wires that through the Vault Secrets
+  Operator's `rolloutRestartTargets`), and that Deployment is `replicas=1` +
+  `strategy=Recreate` — a hard gap with no endpoint, not a rolling one.
+
+  Only connection-*establishment* failures (`tcp connect error`, `dns error`)
+  are retried. Those provably never reached the server, so re-running is as
+  safe for a `mutate` as for a `query`. Mid-flight failures — connection
+  reset, timeout, 5xx — are deliberately excluded: the write may already have
+  committed, and silently re-applying it is worse than surfacing the error.
+  The budget is independent of both `_MAX_ATTEMPTS` and `surface_conflict`;
+  there is no conflict to surface when the request never left the process.
+
+## [0.7.0] - 2026-08-01
+
+### Added
+
+- **`schema_apply` / `schema_apply_if_changed` / `schema_stamp_path` in
+  `witan_core.omnigraph`** — the mtime-stamped schema re-apply, lifted out of
+  witan-code so witan-council can use the same one. Both servers face the same
+  problem (an existing local store must pick up additive schema changes without
+  paying a subprocess on every hot-path call) and both need the same failure
+  behavior: no `check=True`, stamp only on success, so a failed apply degrades
+  and is retried rather than taking down a server that runs its ensure at
+  import time. `witan_code.store`'s private `_schema_apply*` helpers are gone;
+  they had no callers outside that module.
+
+- **`witan_core.identity`** — `derive_actor_id()`, the ADR-0004 Keycloak
+  `sub` → `act-<id>` mapping, moved up from witan-council. witan maps the
+  claim server-side off a validated JWT to route a request to the caller's
+  omnigraph client; witan-code maps the same claim client-side off its cached
+  OIDC token to name the code-graph branch views it owns. A view named by one
+  derivation and authorized against another is a bug with no symptom until
+  two users collide on it, so there is one function. witan-council's
+  `witan.identity` re-exports it.
+- **`witan_core.identity.ActorTokenResolver`** — the actor id → provisioned
+  omnigraph bearer token half of the same mapping, moved up from
+  witan-council for the same reason as the id derivation: witan-code now
+  resolves it too. Under ADR-0005 path c the deployed MCP tier performs a
+  remote indexer's code-graph writes as the *caller*, so both servers look up
+  tokens in the same file, in the same process, when `witan serve` mounts
+  witan-code's tools into witan's own server. It stays server-side either way
+  — a CLI never reads the provisioned token map. `witan.identity` re-exports
+  it unchanged.
+- **`DeviceAuth.cached_claims()`** — the claims of the cached access token,
+  offline and expiry-blind. Callers that need to *call* a deployment use
+  `get_valid_token()`; a caller that only needs to know who the user is
+  (witan-code, naming its branch views) must not pay a network round trip, or
+  block, to learn it — and `sub` does not change when a token expires.
+
+## [0.6.0] - 2026-07-31
+
+### Added
+
+- **`witan_core.remote.config`** — `RemoteConfig` plus `resolve_remote_config()`,
+  the "which deployment, and how do I authenticate to it" half of ADR-0005 path
+  a. It had stayed behind in witan-council even though it carried nothing
+  witan-council-specific, so witan-code could not reach a deployment at all
+  without copying it. Both servers now keep only their own target *selection*
+  and delegate the env > target > config.toml resolution here, so the two CLIs
+  read the same `WITAN_REMOTE_URL` / `WITAN_OIDC_*` keys off the same
+  `[targets.<name>]` block — one deployment, one configuration.
+- **`remote.oidc.cache_path()` / `device_auth()` / `DEFAULT_CACHE_PATH`** — the
+  shared `~/.config/witan/tokens.json` location (and its `WITAN_TOKEN_CACHE`
+  override), previously a private copy in witan-council. Entries are keyed by
+  `(issuer, client_id)` and both CLIs default to the `witan-cli` client id, so
+  one `witan login` authenticates both.
+
+### Changed
+
+- `RemoteConfig` is a frozen dataclass rather than a pydantic model. Every field
+  arrives as a string from the environment or TOML, so there was nothing to
+  coerce, and `witan_core.remote` keeps its dependency surface honest
+  (`httpx2` + `fastmcp`, no pydantic). Construction and attribute access are
+  unchanged; `.model_dump()` and friends are gone.
+
+## [0.5.0] - 2026-07-30
+
+### Added
+
+- **MRTR elicitation.** `elicit.confirm` / `elicit.text` now pick their wire
+  mechanism per request: multi-round-trip (MCP 2026-07-28, SEP-2322) on a
+  connection whose client advertises elicitation, `ctx.elicit` on the handshake
+  eras, and the caller's default when neither is possible. This fixes
+  elicitation being silently dead on 2026-07-28 — that era removed the
+  server→client back-channel, so `ctx.elicit` raises there and the previous
+  blanket `except Exception` turned every prompt into its default. A server must
+  register the new `MRTRElicitationMiddleware` for the MRTR path to work.
+- **`witan_core.caching`** — the shared `ttlMs`/`cacheScope` hint a server
+  declares on its list results (SEP-2549). 300s at `private` scope; see the
+  module docstring for why `public` is the wrong default when a server holds
+  per-actor data.
+- **`RemoteMCPProxy` answers elicitation prompts.** New `_elicitation_handler()`
+  hook, defaulting to `console_elicitation_handler`, which prompts on the
+  terminal. Previously a prompt raised by a deployment could never be answered
+  over the CLI.
+
+### Changed
+
+- **The proxy honors the server's `ttlMs`** for its cached tool list, instead of
+  holding it for the whole process lifetime.
+
+### Notes
+
+- Still `fastmcp>=3.4.2,<5`. The 4.x-only features above degrade on 3.4.x rather
+  than requiring it: MRTR is selected per connection, and the cache hint is
+  omitted when the installed FastMCP has no `cache_ttl` argument. Requiring
+  FastMCP 4 outright is deferred until 4.0 leaves pre-release, because
+  `uv tool install` will not resolve a transitively-pulled pre-release.
+
 ## [0.4.0] - 2026-07-21
 
 ### Changed

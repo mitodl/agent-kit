@@ -192,7 +192,7 @@ def test_resolve_store_expands_user(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / "g.omni").mkdir()
     resolved = cli_module._resolve_store("~/g.omni")
-    assert resolved == tmp_path / "g.omni"
+    assert resolved.local_path == tmp_path / "g.omni"
 
 
 def test_resolve_store_bridge_flag(tmp_path, monkeypatch):
@@ -204,7 +204,7 @@ def test_resolve_store_bridge_flag(tmp_path, monkeypatch):
     bridge.mkdir()
 
     resolved = cli_module._resolve_store(None, bridge=True)
-    assert resolved == bridge
+    assert resolved.local_path == bridge
 
 
 def test_resolve_store_defaults_to_current_repo(tmp_path, monkeypatch):
@@ -216,7 +216,55 @@ def test_resolve_store_defaults_to_current_repo(tmp_path, monkeypatch):
     store = cfg_module.store_path("https://github.com/test/cg", tmp_path)
     store.mkdir()
 
-    assert cli_module._resolve_store(None) == store
+    assert cli_module._resolve_store(None).local_path == store
+
+
+def test_resolve_store_refuses_a_cluster_graph(tmp_path, monkeypatch, capsys):
+    """`optimize`/`cleanup` are direct-storage commands — they reject
+    `--server`, and compacting the shared storage root is the cluster's job,
+    not every client's at the end of every session."""
+    from witan_code import cli as cli_module
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+
+    assert cli_module._resolve_store(None) is None
+    assert "server-side" in capsys.readouterr().out
+
+
+def test_resolve_store_refuses_an_explicit_server_url(monkeypatch, capsys):
+    """`--store https://…` must reach the cluster refusal, not be mistaken for
+    a missing directory.
+
+    `Path("https://host").expanduser()` collapses the `//` to `/`, so wrapping
+    an explicit --store in Path left `https:/host` failing the http(s) test.
+    The refusal never fired for the exact input it was written for; the user
+    got "No store at https:/host" instead. Nothing exercised this path, which
+    is why it shipped.
+    """
+    from witan_code import cli as cli_module
+
+    monkeypatch.delenv("WITAN_CODE_SERVER", raising=False)
+
+    assert cli_module._resolve_store("https://omnigraph.test") is None
+    out = capsys.readouterr().out
+    assert "server-side" in out
+    # Exact match on the leading token rather than `url in out`: the URL has to
+    # survive verbatim AND lead the message, which a containment check would
+    # not pin (and which CodeQL reasonably flags as URL-substring matching).
+    # A collapsed `https:/…` or a trailing "(graph None)" both fail this.
+    assert out.split()[0] == "https://omnigraph.test"
+    assert "graph None" not in out
+
+
+def test_resolve_store_still_expands_a_tilde_path(tmp_path, monkeypatch):
+    """The URL carve-out must not cost `--store ~/…` its expansion."""
+    from witan_code import cli as cli_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "g.omni").mkdir()
+
+    assert cli_module._resolve_store("~/g.omni").local_path == tmp_path / "g.omni"
 
 
 def test_checkpoint_spawns_for_repo_and_bridge_stores(tmp_path, monkeypatch):

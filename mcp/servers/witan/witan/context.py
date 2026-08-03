@@ -12,11 +12,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import time
 import traceback
-from datetime import datetime, timezone
 from pathlib import Path
 
 from . import readiness
@@ -231,7 +229,9 @@ def inject_context(
         try:
             for s in client.read("read.gq", "list_all_sessions", {}):
                 p_slug = s.get("project_slug")
-                if p_slug:
+                # Skip retry-minted duplicates so the per-phase staleness count
+                # ("18 sessions in implementation") reflects real working stints.
+                if p_slug and not s.get("superseded_by"):
                     sessions_by_project.setdefault(p_slug, []).append(s)
         except Exception:  # noqa: BLE001
             if debug:
@@ -485,61 +485,6 @@ def _detect_repo() -> str | None:
     return repo_module.normalise(raw) if raw else None
 
 
-# ── Session checkpoint (Stop hook) ────────────────────────────────────────────
-
-
-def session_checkpoint(
-    graph_uri: str,
-    queries_dir: Path,
-    token: str | None,
-    graph_id: str | None = None,
-) -> None:
-    """Auto-close the active WorkflowSession when the agent stops.
-
-    Reads the state file written by ``workflow_session_start``. No-op when
-    the file is absent (session was already closed explicitly).
-    """
-    session_id = os.environ.get("CLAUDE_SESSION_ID", "")
-    if not session_id:
-        return
-
-    state_file = session_state.session_state_path(session_id)
-    if not state_file.exists():
-        return
-
-    try:
-        state = json.loads(state_file.read_text())
-        session_slug = state.get("session_slug", "")
-        if not session_slug:
-            state_file.unlink(missing_ok=True)
-            return
-
-        project_dir = os.environ.get("CLAUDE_PROJECT_DIR", str(Path.cwd()))
-        try:
-            changed = subprocess.check_output(
-                ["git", "-C", project_dir, "diff", "--name-only", "HEAD"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).splitlines()[:50]
-        except subprocess.CalledProcessError:
-            changed = []
-
-        client = OmnigraphClient(graph_uri, queries_dir, token, graph_id=graph_id)
-        client.change(
-            "mutations.gq",
-            "update_workflow_session_end",
-            {
-                "slug": session_slug,
-                "summary": (
-                    "Session ended (auto-closed by Stop hook — "
-                    "call workflow_session_end explicitly for a better summary)"
-                ),
-                "tools_used": None,
-                "files_changed": changed or None,
-                "ended_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-    except Exception:  # noqa: BLE001
-        pass
-    finally:
-        state_file.unlink(missing_ok=True)
+# The Stop hook's session auto-close lives in ``witan.cli.hooks`` — it dispatches
+# through ``_srv()`` so it reaches the deployment when one is configured, which a
+# direct OmnigraphClient write here could not.

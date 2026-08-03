@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from witan_core.config_file import load_toml as _load_toml_shared
+from witan_core.remote.config import RemoteConfig, resolve_remote_config
 from witan_core.target_config import (
     local_project_path,
     match_target,
@@ -32,11 +33,41 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "witan" / "config.toml"
 # resolves to this name.
 BRIDGE_STORE_NAME = "_bridge.omni"
 
+# ── Index roles ──────────────────────────────────────────────────────────────
+#
+# On the shared omnigraph cluster a per-repo code graph is one graph for the
+# whole team, and its default-branch view is indexed by CI. Everyone else reads
+# it. This role says which side of that line the current process is on.
+INDEX_ROLE_CLIENT = "client"
+"""The default: reads the shared default-branch view, never writes it."""
+INDEX_ROLE_CI = "ci"
+"""The designated writer of the shared default-branch view."""
+INDEX_ROLES = frozenset({INDEX_ROLE_CLIENT, INDEX_ROLE_CI})
+
+# ── Store transports ─────────────────────────────────────────────────────────
+#
+# HOW a cluster code graph is reached, as opposed to WHERE it is. The
+# omnigraph-server holding the graphs is ClusterIP-only and stays that way
+# (DECIDED 2026-08-01), so which of these applies is a question of where the
+# writer runs, not of what it is writing.
+CODE_TRANSPORT_DIRECT = "direct"
+"""Address the omnigraph-server itself (``code_server``). In-cluster only:
+the CI indexer and maintenance jobs, which share the cluster network."""
+CODE_TRANSPORT_MCP = "mcp"
+"""Write through the deployed witan MCP tier (``remote_url``) — the one
+externally-reachable boundary, which resolves the actor from the caller's JWT
+and applies the view-ownership guard server-side (ADR-0005 path c). For every
+writer outside the cluster: a developer's checkout, an agent."""
+CODE_TRANSPORTS = frozenset({CODE_TRANSPORT_DIRECT, CODE_TRANSPORT_MCP})
+
 
 @dataclass(frozen=True)
 class Config:
     code_dir: Path
-    """Directory holding per-repo code stores (one ``<slug>.omni`` each)."""
+    """Directory holding per-repo code stores (one ``<slug>.omni`` each).
+
+    Only consulted when :attr:`code_server` is unset — a cluster deployment
+    addresses graphs on the server, not directories on this machine."""
 
     author: str
     """Attribution string (carried for parity with Layer 1; unused on inserts)."""
@@ -53,13 +84,91 @@ class Config:
     target_name: str | None = None
     """Name of the matched [targets.<name>] section, or None for global defaults."""
 
+    index_role: str = INDEX_ROLE_CLIENT
+    """Who this process is acting as when it indexes. See :data:`INDEX_ROLES`."""
+
+    code_server: str | None = None
+    """Base URL of the deployed omnigraph-server holding the code graphs.
+
+    Set, every code graph is a graph ON THAT SERVER — ``--server <url> --graph
+    <id>``, with the id from :func:`graph_id` — and :attr:`code_dir` goes
+    unused. Unset (the default), every code graph is a local ``<slug>.omni``
+    directory under :attr:`code_dir`.
+
+    This is the DATA tier and is independent of ``remote_url`` (ADR 0005 path
+    a), which routes read *tools* through the deployed witan MCP endpoint.
+    Indexing needs a git checkout, so the indexer always runs locally; what
+    this setting changes is where it writes. Either tier can be remote without
+    the other."""
+
+    code_token: str | None = None
+    """Bearer token presented to :attr:`code_server`. Unused for local stores.
+
+    Per-actor: omnigraph-server resolves the writer from this token, and the
+    Cedar policies gate branch-view writes on the actor it resolves to."""
+
+    code_transport: str = CODE_TRANSPORT_DIRECT
+    """How a cluster code graph is reached. See :data:`CODE_TRANSPORTS`.
+
+    ``mcp`` makes the deployed witan MCP endpoint (``remote_url``) the store's
+    address, so :attr:`code_server` and :attr:`code_token` go unused — the
+    deployment holds both, and resolves the caller's own omnigraph identity
+    from their JWT. This is the setting a developer outside the cluster needs;
+    ``direct`` (the default) is for writers that share the cluster network."""
+
+    @property
+    def is_cluster(self) -> bool:
+        """Whether code graphs live on a shared omnigraph-server.
+
+        True either way it is reached: ``mcp`` puts the MCP tier in front of
+        the same shared graphs, and everything that turns on this — view
+        ownership, CI owning the default view — is a property of the graph
+        being shared, not of the route to it.
+        """
+        return self.code_server is not None or self.code_transport == CODE_TRANSPORT_MCP
+
+    @property
+    def is_designated_writer(self) -> bool:
+        """Whether this process may write a SHARED graph's default-branch view.
+
+        Writer authority is a role, not a transport. "Refuse writes when the
+        store is remote" cannot be applied unconditionally: the CI indexer is
+        remote too and is the one actor that must write, so a blanket refusal
+        would block exactly the writer the design depends on.
+        """
+        return self.index_role == INDEX_ROLE_CI
+
 
 class _Target(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
     code_dir: str | None = None
+    code_server: str | None = None
+    """omnigraph-server base URL for this target's code graphs — the DATA tier.
+    Distinct from ``remote_url`` below (the tool tier); see
+    ``Config.code_server``."""
+    code_token: str | None = None
+    code_transport: str | None = None
+    """``mcp`` routes this target's code-graph writes through ``remote_url``
+    instead of addressing ``code_server`` directly. See
+    :data:`CODE_TRANSPORTS`."""
     author: str | None = None
+    remote_url: str | None = None
+    """Overrides WITAN_REMOTE_URL — routes this target's read commands through
+    a deployed witan MCP endpoint instead of the local stores. Same four keys
+    witan (witan-council) reads off the same target: the deployment mounts both
+    tool surfaces on one endpoint, so one block routes both CLIs. See
+    ``load_remote_config()`` and ADR 0005."""
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_audience: str | None = None
+    index_role: str | None = None
+    """``ci`` designates this target's indexer as the writer of the shared
+    default-branch view. See :data:`INDEX_ROLES` and ``Config.index_role``."""
+    actor: str | None = None
+    """Overrides the OIDC-derived identity that owns this target's branch
+    views — an ``act-…`` id or a raw ``sub``. See ``witan_code.identity``."""
     match_orgs: list[str] = Field(default_factory=list)
     match_repos: list[str] = Field(default_factory=list)
     match_hosts: list[str] = Field(default_factory=list)
@@ -92,11 +201,53 @@ def _first(*values: str | None, default: str | None = None) -> str | None:
     return default
 
 
+def _select_target(target: str | None) -> tuple[dict, _Target | None]:
+    """Load config.toml and pick the target block that applies.
+
+    ``target`` arg > ``WITAN_TARGET`` env var > auto-detect by repo/local
+    checkout path. Returns ``(file_cfg, selected_or_None)``; raises ValueError
+    for an explicitly-requested target that is not defined.
+    """
+    file_cfg = _load_toml()
+    targets = _parse_targets(file_cfg)
+
+    explicit = target or os.environ.get("WITAN_TARGET")
+    if explicit:
+        selected = next((t for t in targets if t.name == explicit), None)
+        if selected is None:
+            available = ", ".join(t.name for t in targets) or "(none defined)"
+            raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
+        return file_cfg, selected
+    return file_cfg, match_target(
+        targets, repo_uri=repo_module.detect(), local_path=local_project_path()
+    )
+
+
+def load_remote_config(target: str | None = None) -> RemoteConfig | None:
+    """Resolve RemoteConfig from env > named target > global config.toml > default.
+
+    Target selection is exactly ``load()``'s, and the keys are exactly the ones
+    witan (witan-council) reads — ``WITAN_REMOTE_URL`` / ``WITAN_OIDC_*``, or
+    ``remote_url``/``oidc_issuer``/``oidc_client_id``/``oidc_audience`` on the
+    matched ``[targets.<name>]`` block. `witan serve` mounts this server's
+    ``code_*`` tools into the witan MCP server with no prefix, so one endpoint
+    and one login serve both CLIs; configuring the deployment once routes both.
+
+    Returns ``None`` when no URL is configured from any source — the default,
+    in-process path over the local stores. Raises ValueError when a URL is
+    configured without an issuer, or for an unknown explicit target.
+    """
+    file_cfg, selected = _select_target(target)
+    return resolve_remote_config(file_cfg, selected)
+
+
 def load(target: str | None = None) -> Config:
     """Load config from config.toml + environment, selecting a named target if applicable.
 
     Resolution order (highest -> lowest precedence):
-    1. Environment variables (WITAN_CODE_DIR, WITAN_AUTHOR)
+    1. Environment variables (WITAN_CODE_DIR, WITAN_CODE_SERVER,
+       WITAN_CODE_TOKEN, WITAN_CODE_TRANSPORT, WITAN_AUTHOR,
+       WITAN_CODE_INDEX_ROLE)
     2. Named target: ``target`` arg > WITAN_TARGET env var > auto-detect by
        repo or local checkout path
     3. Global values in config.toml
@@ -109,21 +260,12 @@ def load(target: str | None = None) -> Config:
     docstring for the full ``match_paths``/``match_repos``/``match_hosts``/
     ``match_orgs`` precedence (shared logic: ``witan_core.target_config``).
 
-    Raises ValueError for an explicitly-requested target that is not defined.
+    Raises ValueError for an explicitly-requested target that is not defined,
+    for an ``index_role`` that is not one of :data:`INDEX_ROLES`, for a
+    ``code_transport`` that is not one of :data:`CODE_TRANSPORTS`, or for a
+    ``code_server`` that is not an http(s) URL.
     """
-    file_cfg = _load_toml()
-    targets = _parse_targets(file_cfg)
-
-    explicit = target or os.environ.get("WITAN_TARGET")
-    if explicit:
-        selected = next((t for t in targets if t.name == explicit), None)
-        if selected is None:
-            available = ", ".join(t.name for t in targets) or "(none defined)"
-            raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
-    else:
-        selected = match_target(
-            targets, repo_uri=repo_module.detect(), local_path=local_project_path()
-        )
+    file_cfg, selected = _select_target(target)
 
     raw_code_dir = _first(
         os.environ.get("WITAN_CODE_DIR"),
@@ -132,8 +274,57 @@ def load(target: str | None = None) -> Config:
         default=str(_DEFAULT_CODE_DIR),
     )
 
+    # Rejected rather than defaulted: a typo here decides whether the shared
+    # default-branch view is writable, and both ways of getting it wrong are
+    # bad — silently demoting the CI indexer to a reader leaves the shared view
+    # frozen with no error to explain it.
+    index_role = _first(
+        os.environ.get("WITAN_CODE_INDEX_ROLE"),
+        selected.index_role if selected else None,
+        file_cfg.get("index_role"),
+        default=INDEX_ROLE_CLIENT,
+    )
+    if index_role not in INDEX_ROLES:
+        known = ", ".join(sorted(INDEX_ROLES))
+        raise ValueError(f"Unknown index_role {index_role!r}. Known roles: {known}")
+
+    code_server = _first(
+        os.environ.get("WITAN_CODE_SERVER"),
+        selected.code_server if selected else None,
+        file_cfg.get("code_server"),
+    )
+    if code_server is not None:
+        code_server = code_server.rstrip("/")
+        if not code_server.startswith(("http://", "https://")):
+            raise ValueError(
+                f"code_server must be an http(s) omnigraph-server URL, got "
+                f"{code_server!r}. A local store directory goes in code_dir."
+            )
+
+    # Rejected rather than defaulted, for the same reason index_role is: an
+    # unrecognized value here silently sends every write down the other route,
+    # and "direct" from outside the cluster fails as an unreachable host rather
+    # than as a configuration error.
+    code_transport = _first(
+        os.environ.get("WITAN_CODE_TRANSPORT"),
+        selected.code_transport if selected else None,
+        file_cfg.get("code_transport"),
+        default=CODE_TRANSPORT_DIRECT,
+    )
+    if code_transport not in CODE_TRANSPORTS:
+        known = ", ".join(sorted(CODE_TRANSPORTS))
+        raise ValueError(
+            f"Unknown code_transport {code_transport!r}. Known transports: {known}"
+        )
+
     return Config(
         code_dir=Path(raw_code_dir).expanduser(),
+        code_server=code_server,
+        code_token=_first(
+            os.environ.get("WITAN_CODE_TOKEN"),
+            selected.code_token if selected else None,
+            file_cfg.get("code_token"),
+        ),
         author=_first(
             os.environ.get("WITAN_AUTHOR"),
             selected.author if selected else None,
@@ -145,6 +336,8 @@ def load(target: str | None = None) -> Config:
         schema_file=_SCHEMA_FILE,
         bridge_schema_file=_BRIDGE_SCHEMA_FILE,
         target_name=selected.name if selected else None,
+        index_role=index_role,
+        code_transport=code_transport,
     )
 
 
@@ -166,7 +359,7 @@ def sanitize_slug(slug: str) -> str:
 # repo-URI → graph-id function.
 #
 # SHARED CONTRACT — this exact algorithm is mirrored by ol-infrastructure's
-# Pulumi provisioning (toolhive_witan/data_tier.py, which declares each
+# Pulumi provisioning (applications/omnigraph/data_tier.py, which declares each
 # `code-<repo>` graph in the cluster.yaml ConfigMap). witan-code selects the
 # `--graph` id and provisioning declares the same id; they MUST agree
 # byte-for-byte or a client will address a graph the cluster never created. Any

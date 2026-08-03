@@ -56,7 +56,7 @@ server.
 
 | Flag | Type | Default | Env var | Description |
 |---|---|---|---|---|
-| `--transport` | `stdio\|http\|streamable-http\|sse` | `stdio` | `WITAN_MCP_TRANSPORT` | MCP transport. `stdio` for local (Claude Desktop, `uvx`); the others bind a network listener |
+| `--transport` | `stdio\|http\|streamable-http` | `stdio` | `WITAN_MCP_TRANSPORT` | MCP transport. `stdio` for local (Claude Desktop, `uvx`); the others bind a network listener. The legacy HTTP+SSE transport is not offered — MCP 2026-07-28 deprecates it |
 | `--host` | str | `127.0.0.1` | `WITAN_MCP_HOST` | Interface to bind for HTTP transports (`0.0.0.0` inside a container) |
 | `--port` | int | `8000` | `WITAN_MCP_PORT` | Port to bind for HTTP transports |
 | `--path` | str | `/mcp` | `WITAN_MCP_PATH` | URL path the MCP endpoint is served on (HTTP transports only) |
@@ -86,6 +86,13 @@ With those set, `_srv()` transparently dispatches every command over MCP —
 unchanged. Admin/migration commands (`witan apply-schema`, `witan migrate …`,
 `merge-store`) are **not** available remotely — they have no per-user identity
 and run in-cluster as `svc-witan-admin` (ADR-0005 path b).
+
+Two arguments the deployed server cannot resolve for itself are filled in
+client-side before dispatch: `repo` (it has no git checkout) and `session_slug`
+(the protocol carries no session state, and a replica shares no filesystem with
+your agent). The latter comes from the handle `witan session start` parked under
+`$CLAUDE_SESSION_ID`, so memories written remotely keep their `SessionProduced`
+provenance. Pass either explicitly to override.
 
 ```bash
 export WITAN_REMOTE_URL=https://witan.example.org/mcp
@@ -440,6 +447,41 @@ isn't applied yet (`migrate schema` first). No flags.
 witan migrate topics
 ```
 
+### `migrate dedupe-sessions`
+
+Reconcile `WorkflowSession` nodes that a pre-upsert `workflow_session_start`
+duplicated. Every call used to mint a node, so a hook retry, a transport
+reconnect, or a deliberate re-call (once the only way to widen a project's repo
+set) left extra sessions sharing one `session_id` — and
+`workflow_project_complete` counts every linked session into its trace.
+
+Sharing a `session_id` is not on its own evidence of duplication: one
+`$CLAUDE_SESSION_ID` routinely spans several working stints, each closed with
+its own summary. So only sessions that **overlap in time** are considered, and
+within an overlapping run only the members with no summary of their own are
+marked `superseded_by` the survivor. A marked session keeps its row and its
+edges; it is simply skipped by every aggregate read. Runs where every member
+wrote a real summary are printed for review rather than guessed at — resolve
+those with `--supersede`.
+
+Dry by default. Idempotent. Deliberately **not** part of `migrate all`: unlike
+the other migrations this one makes a judgment call about corpus content.
+
+Needs `migrate schema` first — the mark is stored in a `superseded_by` field
+added alongside this command, and every session read now selects it, so an
+existing store must be reconciled before it will serve them.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--apply` | bool | `False` | Write the marks instead of only reporting them |
+| `--supersede` | list | — | `<duplicate-slug>=<survivor-slug>` pairs to mark regardless of the automatic rule; repeatable |
+
+```bash
+witan migrate dedupe-sessions                       # report only
+witan migrate dedupe-sessions --apply
+witan migrate dedupe-sessions --apply --supersede ws-dup-abc123=ws-real-def456
+```
+
 ### `migrate all`
 
 Run the full bring-up: `migrate schema` then `migrate topics`. Both steps
@@ -463,9 +505,12 @@ current git repo to stdout, for the `UserPromptSubmit` hook
 
 ### `session-checkpoint`
 
-Auto-close the active WorkflowSession on agent stop: reads the state file
-written by `workflow_session_start` and records an end timestamp. No-op if
-that file is absent (Stop hook). No flags.
+Auto-close the active WorkflowSession on agent stop: reads back the session
+handle `workflow_session_start` returned (persisted client-side under
+`$CLAUDE_SESSION_ID`) and passes its `session_slug` to `workflow_session_end`.
+The call is dispatched the same way every other CLI command is, so it reaches
+the deployment when `WITAN_REMOTE_URL` is set. No-op if there is no handle —
+the session was already closed explicitly (Stop hook). No flags.
 
 ## `code` (witan-code only)
 

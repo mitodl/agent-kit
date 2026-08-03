@@ -1,8 +1,8 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 #
 # witan — the MCP tier (ADR-0009). Packages the `witan` umbrella CLI (which
 # mounts `witan code` from witan-code) and runs it as a streamable-HTTP MCP
-# server. The toolhive_witan Pulumi stack hosts this behind the ToolHive
+# server. The `witan` Pulumi stack hosts this behind the ToolHive
 # operator and points it at the omnigraph-server data tier over the cluster
 # network (WITAN_MEMORY_URI).
 #
@@ -20,10 +20,10 @@ ARG PYTHON_VERSION=3.14
 ARG OMNIGRAPH_VERSION=0.8.1
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
-ARG WITAN_VERSION=0.4.0
+ARG WITAN_VERSION=0.8.0
 
 # ── Fetch the pinned omnigraph CLI binary (checksum-verified) ─────────────────
-FROM debian:trixie-slim AS omnigraph-fetch
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS omnigraph-fetch
 ARG OMNIGRAPH_VERSION
 ARG TARGETARCH=amd64
 RUN apt-get update \
@@ -86,7 +86,19 @@ LABEL org.opencontainers.image.title="witan" \
 
 RUN useradd --uid 1000 --user-group --create-home witan
 
+# git is not optional here even for the MCP tier: witan-code shells out to it
+# to resolve a checkout's repo URI, current branch, and root (witan_code/repo.py
+# — git is the only correct parser of its own config, worktrees included). The
+# CI indexer entrypoint below also clones with it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=omnigraph-fetch /out/omnigraph /usr/local/bin/omnigraph
+# The CI code-graph indexer (ol-infrastructure `applications/witan/ci_indexer.py`
+# runs it as a CronJob). Shipped in this image rather than its own so the
+# process writing a shared code graph is the same build as the one serving it.
+COPY --chmod=0755 docker/witan-ci-index.sh /usr/local/bin/witan-ci-index
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /src /src
 
@@ -97,11 +109,17 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /src
 USER witan
 
-# omnigraph must resolve on PATH (OmnigraphClient constructs at import).
-RUN witan --help >/dev/null && omnigraph --version
+# omnigraph must resolve on PATH (OmnigraphClient constructs at import), and
+# `witan code` must be mounted — the CI indexer entrypoint is nothing but that
+# subcommand in a loop, and an image without witan-code installed would fail
+# only once the CronJob first fired.
+RUN witan --help >/dev/null && witan code --help >/dev/null && omnigraph --version && git --version
 
 EXPOSE 8000
 ENTRYPOINT ["witan"]
-# Overridden by the toolhive_witan MCPServer `args`; this default documents the
-# deployed invocation and keeps the image runnable standalone.
+# Overridden by the `witan` stack's MCPServer `args`; this default documents the
+# deployed invocation and keeps the image runnable standalone. The transport
+# serves both protocol eras: a 2026-07-28 client is answered statelessly (no
+# handshake, no Mcp-Session-Id, so replicas need no session affinity), an older
+# one still gets the handshake. See mcp/servers/witan/docs/adr/0006.
 CMD ["serve", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000"]

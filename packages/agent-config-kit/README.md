@@ -56,7 +56,10 @@ env = { WITAN_AUTHOR = "team" }
 [mcp_servers.hosted-tool]
 kind = "remote"
 url = "https://example.com/mcp"
-transport = "streamable-http"      # "sse" | "http" | "streamable-http"
+transport = "streamable-http"      # "http" | "streamable-http"; "sse" is
+                                   # accepted for third-party servers that only
+                                   # speak it, but warns (deprecated by MCP
+                                   # 2026-07-28, 12-month offramp)
 
 [[hooks]]
 kind = "declarative"

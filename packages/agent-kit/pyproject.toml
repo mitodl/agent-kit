@@ -1,6 +1,6 @@
 [project]
 name = "ol-agent-kit"
-version = "0.1.1"
+version = "0.1.3"
 description = "Meta-package: installs the full mitodl agent-kit toolkit (agent-config-kit's agent-kit CLI + witan + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -11,8 +11,11 @@ classifiers = [
 ]
 dependencies = [
     "agent-config-kit[cli]>=0.3.7",
-    "witan-council>=0.2.0",
-    "witan-code>=0.2.0",
+    # Floored at the releases that speak MCP 2026-07-28 (MRTR elicitation, the
+    # tasks extension, cacheable list results). Still no upper bound, so a fresh
+    # install keeps picking up newer releases of either server automatically.
+    "witan-council>=0.7.2",
+    "witan-code>=0.8.0",
 ]
 
 [project.urls]
@@ -48,7 +51,7 @@ witan-code = { workspace = true }
 packages = ["agent_kit"]
 
 [tool.bumpversion]
-current_version = "0.1.1"
+current_version = "0.1.3"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

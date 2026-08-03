@@ -46,9 +46,10 @@ index. See the main [README](../README.md) for the full two-layer table.
   computed at read time, no cross-repo edge ever stored; see
   [STAGE2_STITCHING.md](STAGE2_STITCHING.md) and
   [SYMBOL_TABLE.md](SYMBOL_TABLE.md).
-- **Branch-aware indexing** — a non-default git branch indexes onto a
-  same-named omnigraph branch so in-flight work never overwrites the shared
-  `main` view; see [BRANCH_INDEXING.md](BRANCH_INDEXING.md).
+- **Branch-aware indexing** — a non-default git branch indexes onto its own
+  view, named for its writer as well as the branch, so in-flight work never
+  overwrites the shared `main` view nor another checkout of the same branch;
+  see [BRANCH_INDEXING.md](BRANCH_INDEXING.md).
 - **Dependency visualization** — `witan-code deps` prints a text summary and
   can emit an interactive HTML force-directed graph of cross-repo links.
 
@@ -209,14 +210,20 @@ Don't re-derive the mechanics here — see:
   Generic env names (`DEBUG`, `PORT`, `SECRET_KEY`, …) are deliberately
   excluded from cross-repo impact fan-out.
 - **A feature-branch checkout doesn't see the same symbols as `main`.** Git
-  branches other than the default index onto a same-named omnigraph branch,
-  forked from `main` on first write — reads from that checkout follow the
-  branch automatically. Branch names are sanitized (`[^A-Za-z0-9._-]` →
-  `_`); a branch literally named `main` in a `master`-default repo maps to
-  `_main`, and a detached HEAD checkout writes to a `_detached` scratch
-  branch rather than ever touching `main`. `witan-code branches` lists what
-  exists per store; `--prune` deletes the current repo's branch stores whose
-  git branch is gone. See [BRANCH_INDEXING.md](BRANCH_INDEXING.md).
+  branches other than the default index onto their own view, forked from
+  `main` on first write — reads from that checkout follow the branch
+  automatically. Branch names are sanitized (`[^A-Za-z0-9._-]` → `_`); a
+  branch literally named `main` in a `master`-default repo maps to `_main`,
+  and a detached HEAD checkout writes to a `_detached` scratch branch rather
+  than ever touching `main`. `witan-code branches` lists what exists per
+  store; `--prune` deletes the current repo's views whose git branch is gone.
+  See [BRANCH_INDEXING.md](BRANCH_INDEXING.md).
+- **A teammate's in-flight work isn't in my results.** Each writer gets their
+  own view of a shared branch (`act-<them>/feature-x`), so you see yours, not
+  theirs. `witan-code branches --branch feature-x` lists every writer's view
+  of that branch; pass one back as `--branch act-<them>/feature_x` (or as the
+  `branch` argument of `code_find_definition` / `code_search_symbol` /
+  `code_symbols_in_file`) to read it.
 - **Caller/impact results look wrong or incomplete.** `Calls`, `References`,
   `Imports`, and `Inherits` are **heuristic** — syntactic name resolution
   that prefers same-file definitions. Dynamic dispatch, re-exports,

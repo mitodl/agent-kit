@@ -129,8 +129,9 @@ def _migrate_storage(old_binary: str | None, yes: bool) -> None:
 def schema() -> None:
     """Apply the bundled schema to the configured store (idempotent).
 
-    Reconciles an existing store with the current schema (new nodes/edges/fields)
-    — ``_ensure_graph`` only applies schema when first creating a store.
+    Reconciles an existing store with the current schema (new nodes/edges/fields).
+    Startup now does this on its own when ``schema.pg`` changes; this forces the
+    apply regardless of the mtime stamp.
     """
     _apply_schema()
 
@@ -224,6 +225,87 @@ def repo_keys() -> None:
     (witan-code); prints which repos need `witan-code reindex` instead.
     """
     _repo_keys()
+
+
+@migrate_app.command(name="dedupe-sessions")
+def dedupe_sessions(
+    *,
+    apply: bool = False,
+    supersede: list[str] | None = None,
+) -> None:
+    """Flag WorkflowSessions a pre-upsert ``workflow_session_start`` duplicated.
+
+    Reports overlapping sessions that share a ``session_id`` — the signature of
+    a hook retry or transport reconnect — and marks the ones carrying no
+    summary as ``superseded_by`` the surviving session, so trace assembly and
+    the context hook's counts stop double-counting them. Nothing is deleted.
+
+    Dry by default: prints what it would do and changes nothing until
+    ``--apply``. Sessions that share a ``session_id`` but ran one after another
+    are left alone — one session id legitimately spans several working stints.
+    Runs where every member wrote a real summary are reported rather than
+    guessed at; resolve those with ``--supersede``.
+
+    Deliberately not part of ``migrate all``: unlike the other migrations this
+    one makes a judgment call about corpus content, so it should be read before
+    it's applied.
+
+    Parameters
+    ----------
+    apply:
+        Write the marks instead of only reporting them.
+    supersede:
+        ``<duplicate-slug>=<survivor-slug>`` pairs to mark regardless of the
+        automatic rule. Repeatable.
+    """
+    extra: dict[str, str] = {}
+    for pair in supersede or []:
+        dup, sep, survivor = pair.partition("=")
+        if not sep or not dup.strip() or not survivor.strip():
+            console.print(
+                f"[red]--supersede expects <duplicate-slug>=<survivor-slug>, got {pair!r}[/red]"
+            )
+            raise SystemExit(1)
+        extra[dup.strip()] = survivor.strip()
+
+    try:
+        result = _srv().migrate_dedupe_sessions(apply=apply, extra_marks=extra or None)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
+
+    marked = result["marked"]
+    console.print(f"Scanned {result['sessions_scanned']} session(s).")
+    if marked:
+        verb = "Marked" if result["applied"] else "[yellow]Would mark[/yellow]"
+        console.print(f"{verb} {len(marked)} duplicate session(s):")
+        for dup, survivor in marked.items():
+            console.print(f"  {dup} -> {survivor}")
+    else:
+        console.print("No duplicate sessions to mark.")
+
+    for run in result["needs_review"]:
+        console.print(
+            f"\n[yellow]Needs review[/yellow] — {run['project_slug']} / "
+            f"{run['session_id']}: overlapping sessions that each wrote a real "
+            "summary. Resolve with --supersede <dup>=<survivor> if they are "
+            "in fact one session:"
+        )
+        for sess in run["sessions"]:
+            console.print(f"  {sess['slug']}  {sess['started_at']}")
+            console.print(f"    {sess['summary']}")
+
+    if result["sealed_traces"]:
+        console.print(
+            "\n[yellow]These projects already have a sealed WorkflowTrace, whose "
+            "session_count was computed before the marks above and is immutable "
+            "by design — the trace stays over-counted:[/yellow]"
+        )
+        for project_slug in result["sealed_traces"]:
+            console.print(f"  {project_slug}")
+
+    if marked and not result["applied"]:
+        console.print("\n[dim]Dry run — re-run with --apply to write.[/dim]")
 
 
 @migrate_app.command(name="all")

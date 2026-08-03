@@ -99,6 +99,13 @@ no content); `memory_get` a slug for its full content.
 
 ### `memory_store` — record something worth remembering
 
+If a workflow session is running, pass the `session_slug` that
+`workflow_session_start` returned. That is what links the memory to the project's
+session history (the `SessionProduced` provenance edge); against the deployed
+service, the argument is the *only* way the server can know which session is
+calling, so omitting it silently loses the link. The `session_linked` field in the
+result tells you whether it landed.
+
 **Store a `pattern`** after solving a problem in a non-obvious way, or when
 you apply a team convention that should be made explicit:
 

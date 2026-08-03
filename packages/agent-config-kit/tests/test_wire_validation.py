@@ -4,6 +4,8 @@ generated from real published (or, where unpublished, hand-authored) JSON
 Schemas per spec D6. Catches adapter/schema drift.
 """
 
+import pytest
+
 from agent_config_kit.adapters import claude, copilot, opencode, pi
 from agent_config_kit.adapters._wire.claude_settings import HookMatcher
 from agent_config_kit.adapters._wire.copilot_mcp import CopilotMcpServer
@@ -84,7 +86,10 @@ def test_opencode_serialized_remote_entry_is_schema_valid():
 
 
 def test_copilot_serialized_remote_entry_is_schema_valid_and_has_no_leaked_fields():
-    remote = RemoteServer(url="https://example.com/mcp", transport="sse")
+    # transport="sse" is deprecated but still supported for third-party servers
+    # that only speak it — the warning is asserted in test_models.py.
+    with pytest.deprecated_call():
+        remote = RemoteServer(url="https://example.com/mcp", transport="sse")
     entry = copilot.serialize_mcp(remote)
 
     CopilotMcpServer.model_validate(entry)

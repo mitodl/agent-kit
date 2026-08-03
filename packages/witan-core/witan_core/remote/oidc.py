@@ -12,7 +12,7 @@ IdP's JWKS. :func:`decode_claims` is display-only.
 
 Server-specific policy is bound by the caller: the token-cache location and the
 ``login_hint`` woven into "run ``…``" messages are constructor args, so this
-module is server-agnostic. Requires the ``remote`` extra (``httpx``).
+module is server-agnostic. Requires the ``remote`` extra (``httpx2``).
 """
 
 from __future__ import annotations
@@ -24,17 +24,26 @@ import time
 from pathlib import Path
 from typing import Callable, Protocol
 
-import httpx
+import httpx2
 
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 _EXPIRY_SKEW_S = 30
 
 
+DEFAULT_CACHE_PATH = Path.home() / ".config" / "witan" / "tokens.json"
+"""Where both CLIs cache their tokens, overridable with ``WITAN_TOKEN_CACHE``.
+
+Shared on purpose, next to the shared ``~/.config/witan/config.toml``: entries
+are keyed by ``(issuer, client_id)``, so one ``witan login`` covers every CLI
+pointing at the same deployment under the same client id.
+"""
+
+
 class OidcEndpoint(Protocol):
     """The client's view of a deployment the device grant authenticates to.
 
-    Structural — any object with these attributes works (e.g. witan-council's
-    ``RemoteConfig`` pydantic model).
+    Structural — any object with these attributes works (e.g.
+    :class:`witan_core.remote.config.RemoteConfig`).
     """
 
     url: str
@@ -55,7 +64,7 @@ class NeedsLogin(RemoteAuthError):
     """
 
 
-def _json(resp: httpx.Response, what: str) -> dict:
+def _json(resp: httpx2.Response, what: str) -> dict:
     """Parse a response body as JSON, or raise a clean RemoteAuthError.
 
     A provider (or an HTML proxy error in front of it) can return a 2xx with a
@@ -70,7 +79,7 @@ def _json(resp: httpx.Response, what: str) -> dict:
         ) from exc
 
 
-def _json_safe(resp: httpx.Response) -> dict:
+def _json_safe(resp: httpx2.Response) -> dict:
     """Best-effort dict parse for error bodies — never raises, {} on failure."""
     try:
         data = resp.json()
@@ -79,22 +88,48 @@ def _json_safe(resp: httpx.Response) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def discover_endpoints(issuer: str, *, client: httpx.Client | None = None) -> dict:
-    """Fetch the realm's OIDC metadata (device + token endpoints)."""
+def discover_endpoints(issuer: str, *, client: httpx2.Client | None = None) -> dict:
+    """Fetch the realm's OIDC metadata (device + token endpoints).
+
+    The document's own ``issuer`` must match the one we asked for (RFC 8414 §3.3,
+    and the mix-up defense RFC 9207 generalises). Without that check a hijacked or
+    misconfigured metadata document can point the device grant at a *different*
+    authorization server's endpoints while the client still believes it is talking
+    to the configured issuer — so the user approves a code, and the token comes
+    from an AS nobody vetted.
+    """
     url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
     owns = client is None
-    client = client or httpx.Client(timeout=15)
+    client = client or httpx2.Client(timeout=15)
     try:
         resp = client.get(url)
         resp.raise_for_status()
         meta = _json(resp, "OIDC metadata endpoint")
-    except httpx.HTTPError as exc:
+    except httpx2.HTTPError as exc:
         raise RemoteAuthError(
             f"Could not fetch OIDC metadata from {url}: {exc}"
         ) from exc
     finally:
         if owns:
             client.close()
+    # A 200 whose body is a JSON array or scalar (an HTML-ish proxy page that
+    # happens to parse, a misrouted endpoint) would make the .get() below raise
+    # AttributeError. The endpoint-presence loop that used to run first tolerated
+    # a list, so guard explicitly to keep the clean RemoteAuthError.
+    if not isinstance(meta, dict):
+        raise RemoteAuthError(
+            f"OIDC metadata endpoint at {url} returned {type(meta).__name__}, "
+            "not a JSON object."
+        )
+    advertised = meta.get("issuer")
+    # Compare the way the URL above was built — a trailing slash is not a
+    # different issuer, but anything else is.
+    if not isinstance(advertised, str) or advertised.rstrip("/") != issuer.rstrip("/"):
+        raise RemoteAuthError(
+            f"OIDC metadata from {url} advertises issuer {advertised!r}, which does "
+            f"not match the configured issuer {issuer!r}. Refusing to continue — "
+            "this is how an authorization-server mix-up attack presents."
+        )
     for key in ("device_authorization_endpoint", "token_endpoint"):
         if key not in meta:
             raise RemoteAuthError(
@@ -212,7 +247,7 @@ class DeviceAuth:
         self,
         *,
         on_prompt: Callable[[dict], None],
-        client: httpx.Client | None = None,
+        client: httpx2.Client | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> dict:
         """Run the device-authorization grant end to end and cache the token.
@@ -222,7 +257,7 @@ class DeviceAuth:
         wait. Returns the decoded JWT claims of the freshly-minted access token.
         """
         owns = client is None
-        client = client or httpx.Client(timeout=15)
+        client = client or httpx2.Client(timeout=15)
         try:
             meta = discover_endpoints(self._cfg.oidc_issuer, client=client)
             req = {**self._auth_params(), "scope": "openid"}
@@ -254,7 +289,7 @@ class DeviceAuth:
                     f"Device authorization failed: {err or tok.text!r}"
                 )
             raise RemoteAuthError("Device code expired before it was approved.")
-        except httpx.HTTPError as exc:
+        except httpx2.HTTPError as exc:
             raise RemoteAuthError(
                 f"Device authorization request failed: {exc}"
             ) from exc
@@ -262,7 +297,7 @@ class DeviceAuth:
             if owns:
                 client.close()
 
-    def _refresh(self, refresh_token: str, client: httpx.Client) -> dict:
+    def _refresh(self, refresh_token: str, client: httpx2.Client) -> dict:
         meta = discover_endpoints(self._cfg.oidc_issuer, client=client)
         resp = client.post(
             meta["token_endpoint"],
@@ -278,7 +313,7 @@ class DeviceAuth:
             )
         return self._store_token(_json(resp, "token endpoint"))
 
-    def get_valid_token(self, *, client: httpx.Client | None = None) -> str:
+    def get_valid_token(self, *, client: httpx2.Client | None = None) -> str:
         """Return a currently-valid access token, refreshing if needed.
 
         Raises :class:`NeedsLogin` when there is no cached token, or the cached
@@ -296,13 +331,29 @@ class DeviceAuth:
                 f"Session expired — run `{self._login_hint}` to re-authenticate."
             )
         owns = client is None
-        client = client or httpx.Client(timeout=15)
+        client = client or httpx2.Client(timeout=15)
         try:
             refreshed = self._refresh(entry["refresh_token"], client)
         finally:
             if owns:
                 client.close()
         return refreshed["access_token"]
+
+    def cached_claims(self) -> dict:
+        """Claims of the cached access token for this deployment, or ``{}``.
+
+        Deliberately offline and expiry-blind, unlike
+        :meth:`get_valid_token`: the only thing read through here is *who the
+        user is* (``sub``), which does not change when a token expires and is
+        still the right answer while a refresh is pending. Callers that need
+        to actually *call* the deployment use ``get_valid_token``; callers
+        that only need an identity — witan-code naming the branch views it
+        owns — must not pay a network round trip, or block, to learn it.
+        """
+        entry = self._load_cache().get(self._cache_key())
+        if not entry:
+            return {}
+        return decode_claims(entry.get("access_token", ""))
 
     def logout(self) -> bool:
         """Drop the cached token for this deployment. True if one existed."""
@@ -315,3 +366,21 @@ class DeviceAuth:
     def token_provider(self) -> Callable[[], str]:
         """A zero-arg callable the proxy calls per request to get a fresh token."""
         return lambda: self.get_valid_token()
+
+
+def cache_path() -> Path:
+    """The token-cache location: ``$WITAN_TOKEN_CACHE`` or :data:`DEFAULT_CACHE_PATH`.
+
+    ``~`` is expanded, matching every other path setting in these packages
+    (``code_dir``, ``--store``). A shell expands ``~`` before the variable is
+    ever set, but a value from a config file, Docker ``ENV``, or a systemd unit
+    does not — and without this that override would silently create a directory
+    literally named ``~`` under the cwd.
+    """
+    override = os.environ.get("WITAN_TOKEN_CACHE")
+    return Path(override).expanduser() if override else DEFAULT_CACHE_PATH
+
+
+def device_auth(endpoint: OidcEndpoint, *, login_hint: str) -> DeviceAuth:
+    """A :class:`DeviceAuth` on the shared token cache, hinting ``login_hint``."""
+    return DeviceAuth(endpoint, cache_path(), login_hint=login_hint)

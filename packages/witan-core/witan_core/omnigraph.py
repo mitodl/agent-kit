@@ -4,9 +4,10 @@ Both servers drive the ``omnigraph`` binary the same way: store addressing that
 picks ``--store <uri>`` for local/s3 stores and ``--server <url> --graph <id>``
 for a deployed omnigraph-server (omnigraph 0.8.1 rejects an http(s) ``--store``),
 a per-store advisory write lock for local stores, a retry/repair loop for
-optimistic-concurrency drift, a self-backoff for the deployed omnigraph-server's
-per-actor admission cap, and named read/mutate queries. That LOCAL-vs-REMOTE-
-generic surface lives here; each server subclasses to add its own tail:
+optimistic-concurrency drift, self-backoff for the deployed omnigraph-server's
+per-actor admission cap and for the window in which it is restarting, and named
+read/mutate queries. That LOCAL-vs-REMOTE-generic surface lives here; each
+server subclasses to add its own tail:
 
 - ``witan`` adds a write ``guard`` + ``surface_conflict`` (CAS task claims),
   ``apply_schema``, and the storage-version friendly-error hint.
@@ -69,6 +70,47 @@ _ADMISSION_CAP_MAX_ATTEMPTS = 6
 _ADMISSION_CAP_BASE_DELAY = 0.25
 _ADMISSION_CAP_MAX_DELAY = 4.0
 
+# The deployed omnigraph-server goes away entirely for a stretch on every
+# restart, and restarts are routine: adding a user to the actor-tokens map is
+# a restart, because the server hashes OMNIGRAPH_SERVER_BEARER_TOKENS_FILE once
+# at boot and never re-reads it (upstream has no SIGHUP/admin reload — see
+# ol-infrastructure task tk-omnigraph-server-actor-token-hot-reload-...-0e878a,
+# which resolves that by having the Vault Secrets Operator rolling-restart the
+# Deployment whenever the token map changes). The data tier is deliberately
+# replicas=1 + strategy=Recreate (its storage is strict-single-version, so two
+# binaries must never hold the same S3 store), so that restart is a hard gap
+# with no endpoint at all — not a rolling one. Without this, every concurrent
+# MCP tool call in that window fails outright.
+#
+# ONLY connection-*establishment* failures are retried. Those provably never
+# reached the server, so re-running is safe for a mutate as much as a read. A
+# mid-flight failure (connection reset, request timeout, 5xx) is deliberately
+# NOT matched: the write may already have committed, and silently re-applying
+# it is worse than surfacing the error — the same reasoning that makes
+# `surface_conflict` exist.
+_UNAVAILABLE_MARKERS = ("tcp connect error", "dns error")
+_UNAVAILABLE_MAX_ATTEMPTS = 12
+_UNAVAILABLE_BASE_DELAY = 0.5
+_UNAVAILABLE_MAX_DELAY = 5.0
+
+# How a bearer token reaches the omnigraph CLI. Per its token-resolution order
+# (docs/user/cli/reference.md): a server-name-specific `OMNIGRAPH_TOKEN_<NAME>`,
+# then a `[<name>]` section in ~/.omnigraph/credentials, then THIS as the
+# default fallback for any server. No subcommand takes a token flag — only
+# `omnigraph login` does — so the env fallback is the only per-invocation form.
+#
+# That matters: witan resolves a DIFFERENT per-actor token per request
+# (ADR-0004), and a credentials file is process-global state that concurrent
+# requests for two actors would race. An env var set on each subprocess does
+# not, which is why this stays a per-call `env` rather than a login at startup.
+#
+# NOT to be confused with the SERVER-side `OMNIGRAPH_SERVER_BEARER_TOKENS_FILE`
+# (plural, a file: the {actor_id: token} map omnigraph-server boots from). This
+# was previously spelled `OMNIGRAPH_SERVER_BEARER_TOKEN`, derived from that name
+# by analogy — a variable the CLI has never read, which left every remote call
+# from both servers unauthenticated and crash-looped the deployed migration Job.
+BEARER_TOKEN_ENV_VAR = "OMNIGRAPH_BEARER_TOKEN"
+
 # A deployed omnigraph-server is reached over http(s); local files and s3://
 # roots are opened directly. Only http(s) needs the `--server`/`--graph`
 # addressing split — s3:// keeps `--store` (omnigraph opens it directly).
@@ -77,6 +119,81 @@ _SERVER_SCHEMES = ("http://", "https://")
 # (the engine reserves them) and no path separators — see the naming decision
 # in memory pf-decision-cluster-graph-names-track-package.
 _GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
+
+
+def schema_stamp_path(store: Path) -> Path:
+    """Sidecar recording the schema file's mtime as of the last successful apply."""
+    return store.parent / f"{store.name}.schema_mtime"
+
+
+def schema_apply(binary: str, schema_file: Path, store: Path) -> bool:
+    """``omnigraph schema apply`` against a local store. Returns whether it worked.
+
+    Deliberately no ``check=True``. Both callers run this on a path that must
+    not be able to take down a working store's process — witan's
+    ``_ensure_graph`` runs at import time, so a raise here fails ``witan serve``
+    at startup rather than degrading. The stamp is only written on success, so
+    a failed apply is simply retried on the next call.
+
+    A non-zero exit is not the only way this fails: ``subprocess.run`` itself
+    raises ``OSError`` when the binary is missing or not executable, which
+    would escape the same "cannot raise" path that dropping ``check=True``
+    exists to protect. Both become ``False``.
+    """
+    try:
+        res = subprocess.run(
+            [binary, "schema", "apply", "--schema", str(schema_file), str(store)],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    if res.returncode != 0:
+        return False
+    try:
+        schema_stamp_path(store).write_text(str(schema_file.stat().st_mtime))
+    except OSError:
+        # A read-only or full parent directory just means the next call
+        # re-applies. `schema apply` is idempotent, so that is the correct
+        # failure direction — never let stamping fail the apply itself.
+        pass
+    return True
+
+
+def schema_apply_if_changed(binary: str, schema_file: Path, store: Path) -> bool:
+    """Re-apply the schema to an existing store, but only if the file changed.
+
+    This is what picks up ADDITIVE schema changes (new node types, new fields)
+    on a store that was created by an older version. Without it, a store is
+    schema-applied only at creation and silently stays one revision behind
+    forever, which surfaces as a query erroring or quietly returning nothing.
+
+    ``schema apply`` is idempotent but costs a subprocess, and callers sit on
+    hot paths (a per-tool-call ensure, a per-file reindex), so the schema
+    file's mtime is stamped next to the store and the apply is skipped while it
+    matches. Returns ``True`` when the store is known-current.
+
+    Neither filesystem read may raise, for the same import-time reason as
+    :func:`schema_apply`, and the two failures mean different things. An
+    unstattable schema file leaves nothing to apply, so it is ``False`` without
+    a subprocess. An unreadable stamp only means the last-applied mtime is
+    unknown — which is exactly the "might be stale" case — so it falls through
+    to a re-apply rather than assuming current. Erring toward a redundant
+    idempotent apply is the safe direction; erring toward skipping one silently
+    leaves the store a schema revision behind, which is the bug this exists to
+    fix.
+    """
+    stamp = schema_stamp_path(store)
+    try:
+        current_mtime = str(schema_file.stat().st_mtime)
+    except OSError:
+        return False
+    try:
+        if stamp.exists() and stamp.read_text().strip() == current_mtime:
+            return True
+    except OSError:
+        pass
+    return schema_apply(binary, schema_file, store)
 
 
 def _split_server_uri(graph_uri: str, graph_id: str | None) -> tuple[str, str]:
@@ -114,13 +231,23 @@ def _split_server_uri(graph_uri: str, graph_id: str | None) -> tuple[str, str]:
     return server_url, resolved
 
 
-def _admission_cap_backoff(attempt: int) -> float:
+def _jittered_backoff(attempt: int, base: float, cap: float) -> float:
     """Exponential backoff with jitter — plain exponential backoff makes
-    concurrent retries from the same burst (the actual trigger case here)
-    retry in lockstep and re-collide on the cap; jitter breaks that up."""
-    delay = _ADMISSION_CAP_BASE_DELAY * (2 ** (attempt - 1))
+    concurrent retries from the same burst (the actual trigger case for both
+    callers below) retry in lockstep and re-collide; jitter breaks that up."""
+    delay = base * (2 ** (attempt - 1))
     jitter = random.uniform(0, 0.1 * delay)
-    return min(delay + jitter, _ADMISSION_CAP_MAX_DELAY)
+    return min(delay + jitter, cap)
+
+
+def _admission_cap_backoff(attempt: int) -> float:
+    return _jittered_backoff(
+        attempt, _ADMISSION_CAP_BASE_DELAY, _ADMISSION_CAP_MAX_DELAY
+    )
+
+
+def _unavailable_backoff(attempt: int) -> float:
+    return _jittered_backoff(attempt, _UNAVAILABLE_BASE_DELAY, _UNAVAILABLE_MAX_DELAY)
 
 
 class OmnigraphConflict(RuntimeError):
@@ -317,13 +444,26 @@ class OmnigraphClient:
         """Run an omnigraph CLI command under the write lock (for writes) with the
         retry/repair loop for optimistic-concurrency conflicts."""
         env = dict(os.environ)
-        if self.token:
-            env["OMNIGRAPH_SERVER_BEARER_TOKEN"] = self.token
+        if not self.is_remote:
+            # A local path or an s3:// root is opened directly — there is no
+            # server to present a bearer token to, and s3 authenticates with AWS
+            # credentials instead. `env` is a copy of os.environ, so an ambient
+            # token exported for cluster use would otherwise ride along into
+            # every local subprocess: propagating a secret to a process that
+            # has no use for it. Strip it rather than merely not setting it.
+            env.pop(BEARER_TOKEN_ENV_VAR, None)
+        elif self.token:
+            env[BEARER_TOKEN_ENV_VAR] = self.token
+        # A remote store with no explicit token deliberately keeps whatever the
+        # environment already carries: that is the CLI's own documented fallback
+        # (see BEARER_TOKEN_ENV_VAR), and `export OMNIGRAPH_BEARER_TOKEN=…` with
+        # no token in config is a supported way to drive it.
 
         lock_fh = self._acquire_write_lock(is_write)
         try:
             attempt = 0
             admission_cap_attempt = 0
+            unavailable_attempt = 0
             while True:
                 try:
                     result = subprocess.run(
@@ -341,6 +481,21 @@ class OmnigraphClient:
                     raise RuntimeError(
                         _friendly_storage_error(err, self._STORAGE_MISMATCH_HINT)
                     ) from None
+                if self.is_remote and any(m in err_lower for m in _UNAVAILABLE_MARKERS):
+                    # Its own budget, like the admission cap below: this is a
+                    # gap in the server's availability, not a conflict over the
+                    # graph, so it neither consumes _MAX_ATTEMPTS nor honours
+                    # surface_conflict (there is no conflict to surface — the
+                    # request never left this process).
+                    unavailable_attempt += 1
+                    if unavailable_attempt < _UNAVAILABLE_MAX_ATTEMPTS:
+                        time.sleep(_unavailable_backoff(unavailable_attempt))
+                        continue
+                    raise RuntimeError(
+                        f"omnigraph {label} failed after "
+                        f"{_UNAVAILABLE_MAX_ATTEMPTS} attempts — could not "
+                        f"connect to {self.server_url}:\n{err.strip()}"
+                    )
                 if any(m in err_lower for m in _ADMISSION_CAP_MARKERS):
                     # Independent budget/backoff from the drift retries below —
                     # doesn't consume _MAX_ATTEMPTS and ignores surface_conflict.

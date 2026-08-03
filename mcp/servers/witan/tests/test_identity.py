@@ -1,11 +1,18 @@
-"""Unit tests for witan.identity (ADR 0004) — no Keycloak/omnigraph binary required."""
+"""Unit tests for witan.identity (ADR 0004) — no Keycloak/omnigraph binary required.
+
+Both names witan.identity exports live in ``witan_core.identity``, shared with
+witan-code (which resolves the same actors and the same tokens server-side for
+the code-graph writes it serves — ADR-0005 path c). They are exercised through
+witan's re-export, which is the surface this server uses; the one test that
+reaches for module internals patches them where they are defined.
+"""
 
 import json
 import threading
 
 import pytest
 
-import witan.identity as identity_module
+import witan_core.identity as identity_module
 from witan.identity import ActorTokenResolver, derive_actor_id
 
 

@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.6.0"
+version = "0.10.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -11,12 +11,22 @@ classifiers = [
 ]
 dependencies = [
     "agent-config-kit>=0.4,<1",
-    "witan-core[cli]>=0.2,<1",
-    "fastmcp>=3.4.2,<4",
+    # `remote`: the ADR-0005 client stack (OIDC device grant + MCP-client
+    # proxy) behind `witan-code login` and the read commands' remote mode.
+    # Costs nothing extra in practice — fastmcp is already required here and
+    # itself depends on httpx2, the extra's only other dependency.
+    "witan-core[cli,remote]>=0.7,<1",
+    "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled
     # in by fastmcp, declared explicitly since config.py imports it directly.
     "pydantic>=2,<3",
+    # RS256 signing for the GitHub App JWT the CI indexer exchanges for a
+    # clone credential (github_app.py). Reaches the environment anyway via
+    # fastmcp -> authlib -> joserfc, but that chain is nobody's contract: a
+    # fastmcp release that drops authlib would break private-repo cloning at
+    # runtime, in a CronJob, rather than at resolve time here.
+    "joserfc>=1.0,<2",
     # Pinned to 0.25.x: tree-sitter 0.26.0 has a use-after-free in its pyo3 Node
     # binding that segfaults (exit 139) under the heavy .parent()/.children()
     # churn _walk_defs does on real-world-sized files — deterministically on the
@@ -43,6 +53,14 @@ dependencies = [
     "rich>=13",
 ]
 
+[project.optional-dependencies]
+# The io.modelcontextprotocol/tasks extension (SEP-2663), which lets a client
+# poll a long `code_reindex` instead of holding the tool call open. Optional
+# because it exists only for fastmcp 4.x while the pin above still spans 3.4.x,
+# and because it pulls a Docket/Redis stack that the default in-process
+# `memory://` backend does not need. server.py registers it when importable.
+tasks = ["fastmcp-tasks>=4.0.0b1,<5"]
+
 [project.urls]
 Homepage = "https://github.com/mitodl/agent-kit/tree/main/mcp/servers/witan-code"
 Repository = "https://github.com/mitodl/agent-kit"
@@ -65,7 +83,13 @@ agent-config-kit = { workspace = true }
 witan-core = { workspace = true }
 
 [dependency-groups]
-test = ["pytest>=8"]
+# fastmcp-tasks: the `tasks` extra. Without it CI would only ever exercise the
+# extension-absent branch, and `code_reindex`'s task declaration would go
+# untested — the failure mode there is the server refusing to start at all.
+# cryptography: test_github_app generates a throwaway RSA key so the JWT path
+# is exercised for real rather than mocked. joserfc requires it at runtime, so
+# this only makes an existing import explicit.
+test = ["pytest>=8", "fastmcp-tasks>=4.0.0b1,<5", "cryptography"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -75,7 +99,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 [tool.bumpversion]
-current_version = "0.6.0"
+current_version = "0.9.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

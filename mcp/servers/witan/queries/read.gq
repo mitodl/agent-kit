@@ -517,6 +517,10 @@ query get_workflow_project_by_slug($slug: String) {
 
 // ── Workflow Sessions ─────────────────────────────────────────────
 
+// Every listing below returns `superseded_by` so callers can drop the
+// duplicates `witan migrate dedupe-sessions` marked. The engine has no
+// where-clause, so that filter lives in Python (`_live_sessions`).
+
 query list_sessions_by_project($project_slug: String) {
     match {
         $s: WorkflowSession { project_slug: $project_slug }
@@ -524,7 +528,21 @@ query list_sessions_by_project($project_slug: String) {
     return {
         $s.slug, $s.session_id, $s.phase, $s.summary,
         $s.tools_used, $s.files_changed,
-        $s.started_at, $s.ended_at
+        $s.started_at, $s.ended_at, $s.superseded_by
+    }
+    order { $s.started_at asc }
+}
+
+// The sessions already recorded for one (project, session_id) pair — the
+// idempotency check `workflow_session_start` runs before minting a node. Both
+// fields are @index'd, so this is a keyed lookup rather than a scan.
+query sessions_for_key($project_slug: String, $session_id: String) {
+    match {
+        $s: WorkflowSession { project_slug: $project_slug, session_id: $session_id }
+    }
+    return {
+        $s.slug, $s.session_id, $s.repo, $s.phase, $s.tags,
+        $s.started_at, $s.ended_at, $s.superseded_by
     }
     order { $s.started_at asc }
 }
@@ -538,7 +556,7 @@ query list_all_sessions() {
     }
     return {
         $s.slug, $s.project_slug, $s.phase, $s.summary,
-        $s.started_at, $s.ended_at
+        $s.started_at, $s.ended_at, $s.superseded_by
     }
     order { $s.started_at asc }
 }
@@ -550,6 +568,20 @@ query list_all_sessions_repo() {
         $s: WorkflowSession
     }
     return { $s.slug, $s.repo }
+    limit 10000
+}
+
+// The `witan migrate dedupe-sessions` scan: enough of every session to group
+// by (project_slug, session_id) and decide which ones a retry minted.
+query list_all_sessions_key() {
+    match {
+        $s: WorkflowSession
+    }
+    return {
+        $s.slug, $s.project_slug, $s.session_id, $s.summary,
+        $s.started_at, $s.ended_at, $s.superseded_by
+    }
+    order { $s.started_at asc }
     limit 10000
 }
 

@@ -23,7 +23,7 @@ set -eu
 
 # Discover the cluster config dir from the `--cluster <dir>` argument we forward
 # to omnigraph-server, so this stays in lockstep with the deployment's args
-# (the toolhive_witan Pulumi stack passes `--cluster /etc/omnigraph/cluster`).
+# (the `omnigraph` Pulumi stack passes `--cluster /etc/omnigraph/cluster`).
 cluster_arg=""
 prev=""
 for arg in "$@"; do

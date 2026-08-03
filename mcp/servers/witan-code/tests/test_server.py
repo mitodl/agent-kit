@@ -71,3 +71,78 @@ def test_tools_return_empty_without_store(monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "cfg", cfg_mod.load())
     srv._clients.clear()
     assert _fn(srv.code_find_definition)("anything") == []
+
+
+# ── Store/bridge introspection tools ──────────────────────────────────────────
+# These back `witan-code repos` / `branches` / `symbols` / `deps`, which route
+# through the tool surface so they work against a deployment too (ADR 0005).
+
+
+@requires_stack
+def test_indexed_repos_and_branches_report_the_store(sample_repo, monkeypatch):
+    from witan_code import config as cfg_mod
+    from witan_code import server as srv
+
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+    _fn(srv.code_reindex)(path=str(sample_repo))
+
+    repos = _fn(srv.code_indexed_repos)()
+    assert [r["repo"] for r in repos] == ["https://github.com/test/cg"]
+    assert repos[0]["files"] >= 1
+    assert repos[0]["bytes"] > 0
+    assert repos[0]["last_indexed"] > 0
+
+    branches = _fn(srv.code_indexed_branches)()
+    assert [b["repo"] for b in branches] == ["https://github.com/test/cg"]
+    # The default view is not an in-flight branch view, so it is not listed.
+    assert branches[0]["views"] == []
+
+
+@requires_stack
+def test_indexed_repos_is_empty_without_any_store(monkeypatch, tmp_path):
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "empty"))
+    from witan_code import config as cfg_mod
+    from witan_code import server as srv
+
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+    assert _fn(srv.code_indexed_repos)() == []
+    assert _fn(srv.code_indexed_branches)() == []
+
+
+@requires_stack
+def test_repo_symbols_and_dependencies_read_the_bridge(sample_repo, monkeypatch):
+    from witan_code import config as cfg_mod
+    from witan_code import server as srv
+
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+    srv._git_context.clear()
+    _fn(srv.code_reindex)(path=str(sample_repo))
+
+    rows = _fn(srv.code_repo_symbols)(repo="https://github.com/test/cg")
+    assert all(r["repo"] == "https://github.com/test/cg" for r in rows)
+    # Filters compose without touching the store's own query.
+    exported = _fn(srv.code_repo_symbols)(
+        repo="https://github.com/test/cg", role="exported"
+    )
+    assert all(r["role"] == "exported" for r in exported)
+
+    deps = _fn(srv.code_repo_dependencies)()
+    assert set(deps) == {"repos", "edges"}
+    assert isinstance(deps["edges"], list)
+
+
+@requires_stack
+def test_repo_symbols_without_a_repo_is_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("WITAN_REPO", "")
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "empty"))
+    monkeypatch.chdir(tmp_path)
+    from witan_code import config as cfg_mod
+    from witan_code import server as srv
+
+    monkeypatch.setattr(srv, "cfg", cfg_mod.load())
+    srv._clients.clear()
+    srv._git_context.clear()
+    assert _fn(srv.code_repo_symbols)() == []

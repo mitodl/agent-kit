@@ -73,6 +73,9 @@ def lint_bundle(path: Path) -> list[str]:
         rules = []
 
     seen_ids: set[str] = set()
+    # Whether any rule leans on the protected/unprotected split, which is
+    # meaningless without a `protected_branches` list to split on.
+    saw_split_scope = False
     # A bundle is either a server bundle (graph_list) or a per-graph bundle; the
     # two action classes must not be mixed (omnigraph rejects that at load).
     saw_server_action = False
@@ -124,8 +127,12 @@ def lint_bundle(path: Path) -> list[str]:
         if has_bs and has_tbs:
             errors.append(f"{where}: set branch_scope OR target_branch_scope, not both")
         for key in ("branch_scope", "target_branch_scope"):
-            if key in allow and allow[key] not in SCOPE_VALUES:
+            if key not in allow:
+                continue
+            if allow[key] not in SCOPE_VALUES:
                 errors.append(f"{where}: `{key}` must be one of {sorted(SCOPE_VALUES)}")
+            elif allow[key] != "any":
+                saw_split_scope = True
         # An action must get the scope kind it actually reads (mirrors omnigraph).
         for action in actions:
             if has_bs and action not in BRANCH_SCOPE_ACTIONS:
@@ -134,6 +141,17 @@ def lint_bundle(path: Path) -> list[str]:
                 errors.append(
                     f"{where}: action `{action}` does not take target_branch_scope"
                 )
+
+    # An empty `protected_branches` inverts every rule that scopes on it, and
+    # does so silently: `unprotected` starts matching every branch and
+    # `protected` matches none, so "users write WIP branches only" becomes
+    # "users write main" and "CI merges into main" stops working. A bundle that
+    # never uses the split (server.policy.yaml) legitimately has no list.
+    if saw_split_scope and not protected:
+        errors.append(
+            f"{path.name}: rules scope on protected/unprotected but "
+            "`protected_branches` is empty — every branch would be unprotected"
+        )
 
     if saw_server_action and saw_graph_action:
         errors.append(

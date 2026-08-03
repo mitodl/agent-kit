@@ -301,17 +301,116 @@ symlink alternative:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `WITAN_CODE_DIR` | `~/.local/share/witan/code` | directory of per-repo `<slug>.omni` stores |
+| `WITAN_CODE_DIR` | `~/.local/share/witan/code` | directory of per-repo `<slug>.omni` stores. Unused when `WITAN_CODE_SERVER` is set |
+| `WITAN_CODE_SERVER` | — | base URL of the deployed omnigraph-server holding the code graphs. Set, every code graph is a graph on that server (`--server <url> --graph code-<repo>`) instead of a local directory. Reachable from inside the cluster only — intended for CI/in-cluster indexers, not laptops. See [Shared cluster graphs](#shared-cluster-graphs) |
+| `WITAN_CODE_TOKEN` | — | bearer token presented to `WITAN_CODE_SERVER`. Per-actor: the server resolves the writer from it |
+| `WITAN_CODE_TRANSPORT` | `direct` | how a cluster code graph is reached. `mcp` writes through the deployed witan MCP endpoint (`WITAN_REMOTE_URL`) instead of addressing the omnigraph-server — the supported path from outside the cluster. See [Writing through the MCP tier](#writing-through-the-mcp-tier) |
 | `WITAN_AUTHOR` / `USER` | `unknown` | attribution string |
 | `WITAN_REPO` | — | override the detected repo slug |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` (daily) | throttle window (seconds) for `checkpoint`'s opportunistic store compaction; `0` disables it |
+| `WITAN_CODE_INDEX_ROLE` | `client` | `ci` designates this process the writer of a shared graph's default-branch view. Only meaningful against a shared cluster graph; local stores are unaffected. See [Branch indexing](docs/BRANCH_INDEXING.md#who-may-write-the-shared-default-branch-view) |
+| `WITAN_ACTOR` | derived from the `witan login` session | the identity that owns the branch views this process writes; an `act-…` id or a raw OIDC `sub`. For a non-interactive writer (CI, a maintenance job). See [Branch indexing](docs/BRANCH_INDEXING.md#per-writer-branch-views) |
 | `WITAN_CONFIG` | `~/.config/witan/config.toml` | config file path (see below) |
 | `WITAN_TARGET` | — | force a named `[targets.<name>]` block instead of auto-detecting one |
+| `WITAN_REMOTE_URL` | — | a deployed witan MCP endpoint; routes the read commands through it (see [Remote mode](#remote-mode)) |
+| `WITAN_OIDC_ISSUER` | — | Keycloak realm `witan-code login` authenticates against. Required whenever `WITAN_REMOTE_URL` is set |
+| `WITAN_OIDC_CLIENT_ID` | `witan-cli` | public OIDC client id for the device grant. Shared with witan on purpose — see [Remote mode](#remote-mode) |
+| `WITAN_OIDC_AUDIENCE` | — | audience/resource to request, matching the deployment's expected `aud` claim |
+| `WITAN_TOKEN_CACHE` | `~/.config/witan/tokens.json` | where the 0600 token cache lives (shared with witan) |
 
 The store URI for a repo is `<dir>/<sanitized-slug>.omni`, where the slug's `/`
 and `:` are replaced with `_`. The shared cross-repo bridge lives alongside them
 at `<dir>/_bridge.omni` and is created lazily on the first index that yields any
 bindings.
+
+### Shared cluster graphs
+
+Set `code_server` (env `WITAN_CODE_SERVER`) and each repo's code graph is
+instead a graph on the deployed omnigraph-server, addressed as `--server <url>
+--graph <id>` with the id from `witan_code.config.graph_id()` — e.g.
+`https://github.com/mitodl/ol-django` → `code-github-com-mitodl-ol-django`.
+The bridge graph is the fixed `code-bridge`. That id function is a contract
+shared byte-for-byte with ol-infrastructure's provisioning
+(`applications/omnigraph/data_tier.py`), which is what *declares* the graphs
+and applies their schema; this client never creates one, and indexing a repo
+the cluster has no graph for fails immediately with the id it expected and the
+ids the server actually serves.
+
+This is the **data tier** and is independent of `remote_url`
+([Remote mode](#remote-mode)), which routes read *tools* through a deployed
+witan MCP endpoint. Indexing needs a git checkout, so the indexer always runs
+locally; `code_server` only changes where it writes. Either tier can be remote
+without the other.
+
+> **Who this is for.** `code_server` addresses the omnigraph-server
+> *directly*, which only works from inside the cluster — the data tier is a
+> ClusterIP service with no external route, while the witan MCP tier is the
+> one that is publicly exposed. So:
+>
+> - **CI / in-cluster indexers** use `code_server` as documented here.
+> - **Everyone else** sets `code_transport = "mcp"` and writes through the
+>   deployed witan endpoint — see below.
+>
+> Do not configure `code_server` on a laptop: it needs a `kubectl
+> port-forward` and is not the supported path. Reads are unaffected either way.
+
+### Writing through the MCP tier
+
+`code_transport = "mcp"` (env `WITAN_CODE_TRANSPORT`) makes the deployed witan
+endpoint — the same `remote_url` the read commands already use — the address
+of every code graph. It is the supported way to index onto the cluster from a
+machine that is not in it:
+
+```toml
+[targets.hosted]
+remote_url = "https://witan.example.org/mcp"
+oidc_issuer = "https://sso.example.org/realms/ol-platform-engineering"
+code_transport = "mcp"
+match_orgs = ["ol-platform-engineering"]
+```
+
+Then `witan-code index` runs exactly as it always has — parsing your working
+tree locally, because that is the part that needs a checkout — and its store
+operations travel to the deployment, which performs them against the cluster
+graph *as you*: it resolves your actor from the JWT `witan-code login`
+obtained and looks up your own omnigraph token (ADR-0004). Nothing about
+your local process decides who the write is attributed to.
+
+Two consequences follow from that, and they are the point rather than
+limitations:
+
+- **You can only write views you own.** The deployment applies the same
+  ownership rule the client does (`[<actor>/]<branch>`, see
+  [Branch indexing](docs/BRANCH_INDEXING.md)) — but against the actor in your
+  token, so naming someone else's view is refused rather than honoured.
+- **You cannot write the shared default-branch view through this path at
+  all.** Its single writer is the CI indexer, which runs in-cluster. Index a
+  non-default git branch, which is what a developer is doing anyway.
+
+Store maintenance (`optimize`/`cleanup`) and stale-view reaping are refused
+here too: they run inside the cluster against the storage root, not from
+whichever machine indexed last.
+
+Requires `remote_url` + `oidc_issuer` (a bare `code_transport = "mcp"` with no
+endpoint is a configuration error, not a silent fall back to a local store).
+The indexer holds one connection open for the run rather than one per store
+operation; the per-prompt hook block, being a fresh process each time, pays a
+connection and a round trip or two per prompt, and stays silent if the
+deployment is unreachable or the login has expired.
+
+Two things a cluster graph cannot answer, and doesn't pretend to:
+
+- **Size and last-modified** are properties of a store directory. `witan-code
+  repos` and `code_indexed_repos` report `?`/null for both rather than a
+  plausible zero; `files` stays real, since it is a query.
+- **Compaction.** `witan-code optimize`/`cleanup` refuse a cluster graph —
+  they are direct-storage commands, and compacting the shared storage root is
+  the cluster's own scheduled job, not every client's at the end of every
+  session.
+
+Who may write which view on a shared graph is a separate question, answered by
+`index_role` and the per-writer view naming — see
+[Branch indexing](docs/BRANCH_INDEXING.md).
 
 ### config.toml
 
@@ -322,14 +421,29 @@ CLI `--target` flag yet), or auto-detection against the current
 repo/checkout (`match_paths` > `match_repos` > `match_hosts` > `match_orgs`
 — see witan's README/`witan/config.py` docstring for the full precedence).
 Because the file is shared, one target block can carry witan's
-`server`/`graph`/`token` alongside `code_dir` under
-the same name — each server reads only the fields it knows:
+`server`/`graph`/`token` alongside witan-code's `code_dir` (or
+`code_server`/`code_token`) under the same name — each server reads only the
+fields it knows:
 
 ```toml
 [targets.work]
 server = "http://witan.internal:8080"  # witan (witan-council)
 code_dir = "/mnt/work/witan-code"      # witan-code
 match_orgs = ["myorg"]
+
+[targets.cluster]
+# The shared data tier: code graphs live on the deployed omnigraph-server,
+# one `code-<repo>` graph each. For a CI or in-cluster indexer — the server is
+# not reachable from a laptop. See Shared cluster graphs.
+code_server = "https://omnigraph.example.org"
+code_token = "..."
+match_orgs = ["ol-platform-engineering"]
+
+[targets.hosted]
+# remote_url/oidc_* route BOTH CLIs at one deployed endpoint — see Remote mode.
+remote_url = "https://witan.example.org/mcp"
+oidc_issuer = "https://sso.example.org/realms/ol-platform-engineering"
+match_orgs = ["ol-platform-engineering"]
 ```
 
 Environment variables always win over `config.toml`.
@@ -362,6 +476,18 @@ that repo's bridge branch overlay instead of `main` — see
 | `code_interface_consumers(kind, key)` | repos that **consume** it (`endpoint` keys are normalized from raw paths) |
 | `code_cross_repo_impact(symbol_id)` | the symbol's own bindings + every binding for those same contracts in **other** repos |
 | `code_interface_search(query, kind=None)` | BM25 search over interface bindings by normalized key |
+| `code_precise_edges(repo=None)` | Stage-2 cross-repo edges resolved by canonical symbol string |
+| `code_unresolved_symbols(repo=None)` | external references with no precise match (indexing-coverage gaps) |
+| `code_repo_symbols(repo=None, role=None, scheme=None)` | a repo's symbol table — what it exports, what it expects |
+| `code_repo_dependencies(kind=None, repo=None)` | the whole "repo A depends on repo B" graph (`{repos, edges}`) |
+
+Coverage tools (which stores exist at all — read the store directory, not the
+graph):
+
+| Tool | Returns |
+|------|---------|
+| `code_indexed_repos()` | every indexed repo with file count, size, and last-indexed timestamp |
+| `code_indexed_branches(branch=None)` | the in-flight branch views each repo's store carries, and who owns each; pass a git branch to see every writer's view of it |
 
 ## CLI
 
@@ -372,10 +498,13 @@ that repo's bridge branch overlay instead of `main` — see
 - `index [PATH]` — incremental; skips files whose content hash is unchanged.
 - `reindex [PATH]` — force rebuild a path.
 - `repos` — list all indexed repos with file count, symbol count, and store size.
-- `branches [--prune]` — list omnigraph branches per store; `--prune` deletes
-  the current repo's store branches whose git branch is gone (plus
-  `_detached`). Non-default git branches index onto same-named omnigraph
-  branches so in-flight work never overwrites the shared `main` view — see
+- `branches [--branch B] [--prune]` — list the in-flight branch views per
+  store; `--branch` shows every writer's view of one git branch (how you find
+  a teammate's WIP — pass a listed view name to a read command's `--branch`),
+  `--prune` deletes the current repo's views whose git branch is gone (plus
+  `_detached`). A non-default git branch indexes onto its own view, named for
+  its writer as well as the branch, so in-flight work neither overwrites the
+  shared `main` view nor another checkout of the same branch — see
   [docs/BRANCH_INDEXING.md](docs/BRANCH_INDEXING.md).
 - `deps [--kind K] [--repo SUBSTR] [--html PATH] [--open-browser]` —
   visualize cross-repo dependencies from the bridge store. Prints a Rich
@@ -405,9 +534,46 @@ that repo's bridge branch overlay instead of `main` — see
 - `checkpoint` — opportunistically compact the current repo's store and the
   bridge store if due (see [Hooks](#hooks)); registered as the `Stop` hook,
   not usually run by hand.
+- `login` / `logout` / `whoami` — authenticate to a deployed witan service
+  (see [Remote mode](#remote-mode)); no-ops with nothing configured.
 
 Both print a summary: files scanned/indexed/skipped, symbols, edges, errors. A
 parse failure on one file logs to stderr and continues.
+
+## Remote mode
+
+The deployed witan service mounts this server's `code_*` tools into its own
+FastMCP server with no prefix (`witan serve`), so one endpoint serves both tool
+surfaces. Point the CLI at it and the **read** commands query the deployment's
+code graphs instead of this machine's stores — witan-council's ADR-0005 path a,
+same mechanism ([`docs/adr/0005`](../witan/docs/adr/0005-secure-cli-path-into-deployed-witan.md)):
+
+```bash
+export WITAN_REMOTE_URL=https://witan.example.org/mcp
+export WITAN_OIDC_ISSUER=https://sso.example.org/realms/ol-platform-engineering
+witan-code login          # OIDC device grant; approve in a browser
+witan-code repos          # now answers about the deployment's stores
+```
+
+Or put `remote_url`/`oidc_issuer`/`oidc_client_id`/`oidc_audience` on a
+`[targets.<name>]` block, alongside that target's `code_dir` — the same four
+keys witan reads, so one block routes both CLIs.
+
+Which commands move:
+
+| Local **and** remote | Local only |
+|---|---|
+| `symbols`, `deps`, `stitch`, `repos`, `branches` | `index`, `reindex`, `optimize`, `cleanup`, `checkpoint`, `branches --prune`, the four hooks |
+
+Indexing and store maintenance need the git checkout and the store files on
+disk, so they always run against this machine and ignore `WITAN_REMOTE_URL`
+entirely.
+
+The token cache (`~/.config/witan/tokens.json`) and the default client id
+(`witan-cli`) are shared with the `witan` CLI, and cache entries are keyed by
+`(issuer, client id)` — so **one login covers both**. If you have already run
+`witan login` against the same deployment, `witan-code login` is unnecessary;
+conversely `witan-code logout` also logs `witan` out.
 
 ## Store compaction
 
@@ -467,7 +633,11 @@ A Pi equivalent of all four lives in one extension,
 - **`witan-code inject-context`** (`UserPromptSubmit`) — prints a short status
   block: whether the current repo is indexed (file count, last-updated time),
   or that a background index from `session-init` is still running (checking
-  the same lock path above), plus a nudge to prefer `code_*` tools over grep.
+  the same lock path above), how many *other* repos are indexed (so the agent
+  can tell "no cross-repo consumers" from "no cross-repo data"), and the
+  `ToolSearch` call that makes the `code_*` tools callable when the harness
+  delivers them deferred — followed by a `code_find_definition` →
+  `code_callers`/`code_impact` call template.
   Independent of `witan`'s own `inject-context` hook (no cross-package
   coupling) — register it alone for a witan-code-only install. Prints
   nothing when the repo has neither a store nor an index in flight.
@@ -481,9 +651,38 @@ Manual install: register the bare commands directly under the matching event
 in `settings.json` (see the linked README for the exact JSON) — there are no
 scripts to symlink.
 
+## What gets indexed
+
+The walk skips the usual noise directories (`.git`, `node_modules`, `.venv`,
+`__pycache__`, `dist`, `build`, the various caches) and — importantly — does
+not descend into a **nested checkout**: any subdirectory containing a `.git`
+entry belongs to a different repository. That covers linked worktrees
+(`.claude/worktrees/<name>/`, where `.git` is a *file*, not a directory),
+submodules, and plain clones dropped inside the tree. Their files are that
+repo's; indexing them here would attribute them to this one and leave the
+store serving stale copies of itself under a second set of paths.
+
+Indexing *from inside* a worktree still works normally — only descending into
+one from the parent is refused — so the hooks keep indexing while an agent
+works on a branch.
+
 ## Incremental indexing
 
 Each `CodeFile` stores a sha256 `contentHash`. On reindex, if the hash is
 unchanged the file is skipped. Otherwise its `Symbol`s and `CodeFile` are
 deleted (as separate `delete.gq` calls — Omnigraph cannot mix deletes with
 inserts in one query) and then re-parsed and re-inserted.
+
+A **full-repo** index additionally purges rows for files the repo no longer
+has — deleted, or newly excluded by the rules above. Membership is decided by
+the set of files just collected, not by whether the file still exists on disk:
+a linked worktree's files are very much on disk, they simply aren't this
+repo's. The count is reported as `purged=N` when non-zero. Purging requires a
+confirmed git root; indexing a subpath, a single file (the reindex hook), a
+directory that isn't a git checkout, or a directory the walk could not fully
+read never purges.
+
+Nor does a **shared cluster graph** (`is_remote`). There the default branch is
+indexed by CI and everyone else reads it — reconciling it against one
+developer's working tree (a sparse checkout, a stale one, uncommitted
+deletions) would purge files for every other user of that graph.

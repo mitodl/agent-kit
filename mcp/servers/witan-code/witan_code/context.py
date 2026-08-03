@@ -9,17 +9,32 @@ Tells the agent whether the current repo has a code graph ready to query (and
 its rough size/freshness) — without this, an agent has no signal that
 ``code_*`` tools exist or are populated, short of trying one and seeing what
 comes back.
+
+The block deliberately names the *unlock step* rather than stating a
+preference. Measured over 50 sessions in this repo that received the earlier
+"prefer ``code_search_symbol`` ... over grep" wording: the ``code_*`` tools
+arrived DEFERRED (names only, no schema — a ``ToolSearch`` round-trip short of
+callable) in 50 of 50, while Grep/Read/Glob were always loaded. Those sessions
+produced 5 ``code_*`` calls against 802 Grep/Read/Glob/Explore calls, and 46 of
+50 never called a ``code_*`` tool at all. A preference for a tool the agent
+cannot see in its tool list is not actionable, so the block leads with the
+``ToolSearch`` that makes the tools callable and then gives a call template to
+fill in.
+
+Kept short on purpose: this is prepended to *every* prompt, so tokens spent
+here are spent for the life of every session.
 """
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import os
 from pathlib import Path
 
 from . import config as cfg_module
 from . import repo as repo_module
-from .cli import _code_store_stats, _dir_stats
+from . import store as store_module
 
 # Matches the lock directory hooks.session_init() creates around a background
 # SessionStart index, so this hook can report "indexing in progress" instead
@@ -53,6 +68,38 @@ def indexing_in_progress() -> bool:
     return _lock_path(_project_dir()).is_dir()
 
 
+# The one query form that survives not knowing the MCP server's tool prefix.
+# `select:` needs exact names (`mcp__witan__code_find_definition`), but the
+# prefix depends on what the user named the server in their MCP config, and a
+# bare `select:code_find_definition` matches nothing. The `+code_` form
+# requires "code_" in the name and ranks by the remaining terms, so it resolves
+# under any prefix and puts the three workhorse tools first.
+_TOOLSEARCH_QUERY = '`ToolSearch(query="+code_ find_definition callers impact")`'
+
+
+def _coverage_line(store: store_module.StoreRef, cfg: cfg_module.Config) -> str:
+    """One line on how many OTHER repos are indexed.
+
+    This is the fact an agent cannot infer and gets silently wrong in one
+    direction: with no other repo indexed, ``code_interface_consumers`` and
+    friends return ``[]`` for everything, which is indistinguishable from a
+    genuine "nothing consumes this". Cheap — a glob locally, one cached graph
+    listing on the cluster; no store reads either way.
+    """
+    try:
+        others = [ref for ref in store_module.per_repo_stores(cfg) if ref != store]
+    except OSError:  # degrade to silence, never blank the block
+        return ""
+    if not others:
+        return (
+            "No other repo is indexed: `code_interface_*` return `[]` here — "
+            "absence of data, not absence of consumers."
+        )
+    return (
+        f"{len(others)} other repos indexed, so cross-repo `code_interface_*` resolve."
+    )
+
+
 def inject_context() -> str:
     """A short markdown status block, or "" when there's nothing worth saying.
 
@@ -64,10 +111,10 @@ def inject_context() -> str:
     if slug is None:
         return ""
 
-    store = cfg_module.store_path(slug, cfg.code_dir)
+    store = store_module.store_for_repo(slug, cfg)
     in_progress = indexing_in_progress()
 
-    if not store.exists():
+    if not store.exists(cfg):
         if not in_progress:
             return ""
         return (
@@ -77,22 +124,34 @@ def inject_context() -> str:
             "finishes.\n"
         )
 
-    repo_uri, file_count = _code_store_stats(store)
+    repo_uri = store_module.repo_for_store(store, cfg)
+    files = store_module.file_count(store, cfg)
+    # No freshness line for a cluster graph: mtime is a property of a store
+    # directory and there isn't one. Same degraded rendering as a mid-walk
+    # failure — the block is worth having without it.
     try:
-        _, last_indexed = _dir_stats(store)
-        freshness = f", last updated {last_indexed}"
+        _, mtime = store.stats()
     except OSError:  # e.g. a file vanished mid-walk — degrade, don't blank the block
+        mtime = None
+    if mtime is None:
         freshness = ""
+    else:
+        stamp = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        freshness = f", last updated {stamp}"
     lines = [
         "## Code Graph",
         "",
-        f"`{repo_uri}` is indexed: {file_count} files{freshness}.",
+        f"`{repo_uri}` is indexed: {'?' if files is None else files} files{freshness}.",
     ]
     if in_progress:
         lines.append("A background reindex is currently running.")
+    coverage = _coverage_line(store, cfg)
+    if coverage:
+        lines.append(coverage)
     lines.append(
-        "Prefer `code_search_symbol` / `code_find_definition` / "
-        "`code_find_references` / `code_callers` / `code_impact` over grep "
-        "for symbol lookups, call graphs, and change-impact analysis."
+        "`code_*` tools may not be in your tool list — load them with "
+        f"{_TOOLSEARCH_QUERY}, then use them instead of grep: "
+        '`code_find_definition(name="X")` → `symbol_id` → `code_callers` / '
+        "`code_impact` (blast radius before editing). More: `/witan-code`."
     )
     return "\n".join(lines) + "\n"

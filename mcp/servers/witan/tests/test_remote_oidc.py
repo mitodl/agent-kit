@@ -14,7 +14,7 @@ import json
 import stat
 import time
 
-import httpx
+import httpx2
 import pytest
 
 from witan.config import RemoteConfig
@@ -44,43 +44,48 @@ def _jwt(claims: dict) -> str:
 
 def _seed_cache(cfg: RemoteConfig, entry: dict) -> None:
     """Write a cache entry directly, keyed the way the core keys it."""
-    path = oidc._cache_path()
+    path = oidc.cache_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     key = f"{cfg.oidc_issuer}|{cfg.oidc_client_id}"
     path.write_text(json.dumps({key: entry}), encoding="utf-8")
 
 
 _META = {
+    # A real metadata document always echoes its own issuer, and
+    # witan_core.remote.oidc.discover_endpoints now requires it to match the one
+    # we asked for (RFC 9207 hardening). Keep in sync with the `cfg` fixture's
+    # oidc_issuer above — these tests drive the core through witan's shim.
+    "issuer": "https://sso.example.org/realms/ol",
     "device_authorization_endpoint": "https://sso.example.org/dev",
     "token_endpoint": "https://sso.example.org/token",
 }
 
 
-def _client(handler) -> httpx.Client:
-    return httpx.Client(transport=httpx.MockTransport(handler))
+def _client(handler) -> httpx2.Client:
+    return httpx2.Client(transport=httpx2.MockTransport(handler))
 
 
 def test_default_cache_path_is_under_config_witan(monkeypatch):
     monkeypatch.delenv("WITAN_TOKEN_CACHE", raising=False)
-    assert oidc._cache_path().as_posix().endswith(".config/witan/tokens.json")
+    assert oidc.cache_path().as_posix().endswith(".config/witan/tokens.json")
 
 
 def test_env_override_redirects_cache(tmp_path):
     # The autouse fixture points WITAN_TOKEN_CACHE at tmp_path.
-    assert oidc._cache_path() == tmp_path / "tokens.json"
+    assert oidc.cache_path() == tmp_path / "tokens.json"
 
 
 def test_login_round_trips_through_shim_and_caches(cfg, tmp_path):
     access = _jwt({"sub": "u-1", "preferred_username": "alice"})
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         if str(req.url) == _META["device_authorization_endpoint"]:
-            return httpx.Response(
+            return httpx2.Response(
                 200, json={"device_code": "d", "user_code": "WXYZ", "expires_in": 300}
             )
-        return httpx.Response(200, json={"access_token": access, "expires_in": 300})
+        return httpx2.Response(200, json={"access_token": access, "expires_in": 300})
 
     claims = oidc.login(
         cfg, on_prompt=lambda _d: None, client=_client(handler), sleep=lambda _s: None
@@ -109,11 +114,11 @@ def test_refresh_uses_cached_entry_at_witan_path(cfg):
         },
     )
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         if req.url.path.endswith("openid-configuration"):
-            return httpx.Response(200, json=_META)
+            return httpx2.Response(200, json=_META)
         assert "grant_type=refresh_token" in req.content.decode()
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={"access_token": fresh, "refresh_token": "r-new", "expires_in": 300},
         )

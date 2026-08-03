@@ -20,7 +20,8 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
-from witan_core import normalise, now_iso
+from witan_core import caching, normalise, now_iso
+from witan_core.omnigraph import schema_apply, schema_apply_if_changed
 
 from . import config as cfg_module
 from . import elicit
@@ -37,17 +38,46 @@ _SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "schema.pg"
 
 
 def _ensure_graph(graph_uri: str) -> None:
-    """Initialise the local graph if it does not yet exist.
+    """Initialise the local graph, and keep its schema current.
 
     No-op for remote (http/s3) URIs — those are assumed to be managed
-    externally. Local stores are created and schema-applied automatically
-    so `witan serve` and `witan <cmd>` work on a fresh machine without a
-    separate install step.
+    externally. A deployment's schema is applied by provisioning, and against a
+    server ``schema apply`` takes the ``--server <url> --graph <id>`` form
+    rather than the local positional one, so there is nothing correct to do here.
+
+    Local stores are created and schema-applied automatically so `witan serve`
+    and `witan <cmd>` work on a fresh machine without a separate install step.
+    An EXISTING store is re-applied when ``schema.pg`` has changed since the
+    last apply, which is what picks up additive changes (new node types, new
+    fields) after a version bump — previously that only happened if the user
+    knew to run `witan migrate`, the `apply_schema` admin tool, or `install.sh`,
+    and until they did, queries against the newer schema erred or silently
+    returned nothing.
+
+    The re-apply deliberately cannot raise: this runs at import time
+    (``_ensure_graph(cfg.graph_uri)`` below), so a failure would take down
+    `witan serve` at startup. A failed apply leaves the stamp unwritten and is
+    retried next time. That includes locating the binary — ``_find_binary``
+    raises when omnigraph is not on PATH, so for an EXISTING store a missing
+    binary degrades to "skip the re-apply" rather than propagating. (Import
+    still fails a few lines below, where the ``OmnigraphClient`` constructor
+    resolves the same binary — so this changes which error a user sees, not
+    whether witan works without omnigraph installed. It keeps this function's
+    contract honest, and keeps the other caller, ``merge_store``, from
+    inheriting a raise it does not expect.)
+
+    Creation keeps ``check=True``, and lets a missing binary raise — a store
+    that does not exist yet has nothing to degrade to.
     """
     if graph_uri.startswith(("http://", "https://", "s3://")):
         return
     store = Path(graph_uri).expanduser()
     if store.exists():
+        try:
+            binary = OmnigraphClient._find_binary()
+        except RuntimeError:
+            return
+        schema_apply_if_changed(binary, _SCHEMA_FILE, store)
         return
     binary = OmnigraphClient._find_binary()
     store.parent.mkdir(parents=True, exist_ok=True)
@@ -57,12 +87,7 @@ def _ensure_graph(graph_uri: str) -> None:
         capture_output=True,
         text=True,
     )
-    subprocess.run(
-        [binary, "schema", "apply", "--schema", str(_SCHEMA_FILE), str(store)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    schema_apply(binary, _SCHEMA_FILE, store)
 
 
 cfg = cfg_module.load()
@@ -143,6 +168,40 @@ def _resolve_client() -> OmnigraphClient:
     return _actor_clients[actor_id]
 
 
+def _current_author() -> str:
+    """The identity to attribute this request's writes to.
+
+    Sibling of :func:`_resolve_client`, which routes a write to the caller's
+    omnigraph client but never touches the ``author`` *value*. Without this,
+    every node a deployment writes carries the server container's configured
+    author, so ``workflow_trace_list(author=…)`` filters on a field with one
+    value deployment-wide and mined traces carry no usable provenance.
+
+    Local stdio use keeps ``cfg.author`` (``WITAN_AUTHOR`` / git config /
+    ``$USER``), which is already the right answer there. Same discriminator as
+    ``_resolve_client`` / ``_is_local_stdio``; ``get_access_token()`` returning
+    ``None`` under a deployment means an admin/migration CLI call rather than a
+    tool request, which likewise has no caller identity to attribute.
+
+    Prefers ``preferred_username`` so the value stays human-readable for author
+    filters and the ranking author-trust config, falling back to ``email`` and
+    then to the derived ``act-<sub>`` — the same id the token-mapping layer
+    uses, so attribution degrades to opaque-but-correct rather than to the
+    wrong user.
+    """
+    if _is_local_stdio():
+        return cfg.author
+    token = get_access_token()
+    if token is None:
+        return cfg.author
+    claims = token.claims
+    for claim in ("preferred_username", "email"):
+        value = claims.get(claim)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return derive_actor_id(claims.get("sub", ""))
+
+
 class _ActorScopedClient:
     """Proxy that delegates every attribute access to ``_resolve_client()``.
 
@@ -162,9 +221,11 @@ client = _ActorScopedClient()
 def apply_schema() -> dict:
     """Apply the bundled ``schema.pg`` to the configured store (idempotent).
 
-    Reconciles an EXISTING store with the current schema — ``_ensure_graph`` only
-    schema-applies when first *creating* a store, so additive changes (new
-    nodes/edges/fields) never reach an already-created store without this.
+    Reconciles an EXISTING store with the current schema. ``_ensure_graph`` now
+    does this automatically when ``schema.pg``'s mtime changes, so this is the
+    explicit escape hatch for the cases the mtime stamp cannot see: a store
+    whose stamp is current but whose schema is not (a restored backup, a
+    hand-edited stamp), or a re-apply forced without touching the file.
 
     Routes through ``OmnigraphClient`` so it holds the same per-store write lock +
     retry/repair as any other write. Returns ``{"store", "output"}``; raises
@@ -223,16 +284,35 @@ mcp = FastMCP(
         'override it, or repo="" to operate across all repos. When a list tool '
         "detects no repo and none is passed, it returns slim records (slug, kind, "
         "title, tags — no content); memory_get a slug for the full memory.\n\n"
-        "Updating memory: to replace an outdated memory, store the new one then "
+        "Changing memory — pick by what is actually wrong:\n"
+        "  a field is wrong (wrong repo, typo'd title) → memory_update(slug, …); "
+        "only the fields you pass change\n"
+        "  the knowledge changed → memory_store the new one, then "
         'memory_link(from_slug=<new>, to_slug=<old>, kind="supersedes") — the old '
         "one is hidden from default reads but kept (include_superseded=True to "
-        "see it).\n\n"
+        "see it)\n"
+        "  it should never have existed (accidental duplicate, test write) → "
+        "memory_delete(slug, confirm=True); author-only, hard delete\n"
+        "  it contains a secret → rotate the credential. memory_delete removes it "
+        "from the current graph but not from history, and no tool can erase "
+        "that.\n\n"
+        "Naming: the task_* tools track work items (task_create, task_claim, "
+        "task_ready, …) and have nothing to do with MCP's own tasks/* extension "
+        "for long-running calls. A task_* slug is a unit of work someone is "
+        "assigned; an MCP task id is a handle on a call still executing.\n\n"
         "Errors: a lookup that finds nothing returns null/empty, never raises; an "
         "invalid-but-well-formed mutation (self-link, self-block, claim "
         "contention) returns a status object with a reason; only malformed input "
         "raises."
     ),
+    # Let clients cache this server's ~37-tool list instead of re-listing it
+    # every session. Scope stays private: memory reads are per-actor.
+    **caching.hint_kwargs(),
 )
+
+# Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
+# server→client back-channel to run them on. Inert on the handshake eras.
+mcp.add_middleware(elicit.MRTRElicitationMiddleware())
 
 # ── Helpers ───────────────────────────────────────────────────────
 
@@ -435,6 +515,182 @@ def migrate_topics() -> dict:
         "memories_scanned": len(rows),
         "topics_created": topics_created,
         "edges_created": edges_created,
+    }
+
+
+_AUTOCLOSE_PREFIX = "Session ended (auto-closed by Stop hook"
+
+
+def _has_own_summary(session: dict) -> bool:
+    """True when a session carries a summary someone actually wrote.
+
+    The Stop hook's auto-close placeholder is treated as no summary: it says
+    only that the session ended, so a session carrying it holds nothing the
+    corpus would lose.
+    """
+    summary = (session.get("summary") or "").strip()
+    return bool(summary) and not summary.startswith(_AUTOCLOSE_PREFIX)
+
+
+def _overlap_runs(sessions: list[dict]) -> list[list[dict]]:
+    """Split one (project, session_id) group into runs of overlapping sessions.
+
+    A run is a session plus every later one that started while **any** member of
+    the run was still open — exactly the condition ``workflow_session_start``
+    now refuses to create. A session starting after every member has ended opens
+    a new run instead: it's the next working stint of the same
+    ``$CLAUDE_SESSION_ID``, not a duplicate. Single-element runs are dropped;
+    they have nothing to reconcile.
+
+    Overlap is transitive, hence tracking the run's furthest end rather than
+    comparing against its first session: given s1 [10:00-10:10] and a retry
+    s2 [10:05-10:20], a third session starting 10:12 is still a duplicate — s1
+    had ended, but s2 was open, so the fixed ``workflow_session_start`` would
+    have handed back s2's handle. A member that never ended (``has_open``)
+    leaves the run open indefinitely.
+    """
+    runs: list[list[dict]] = []
+    current: list[dict] = []
+    has_open = False
+    max_end = ""
+
+    for s in sorted(sessions, key=lambda r: r.get("started_at") or ""):
+        overlaps = has_open or (s.get("started_at") or "") < max_end
+        if current and not overlaps:
+            if len(current) > 1:
+                runs.append(current)
+            current, has_open, max_end = [], False, ""
+        current.append(s)
+        end = s.get("ended_at")
+        if end:
+            max_end = max(max_end, end)
+        else:
+            has_open = True
+    if len(current) > 1:
+        runs.append(current)
+    return runs
+
+
+def migrate_dedupe_sessions(
+    apply: bool = False, extra_marks: dict[str, str] | None = None
+) -> dict:
+    """Reconcile WorkflowSessions a pre-upsert ``workflow_session_start`` minted.
+
+    Before that fix, every call minted a node, so a hook retry, a transport
+    reconnect, or a deliberate re-call (the only way there was to widen a
+    project's repo set) left extra sessions sharing one ``session_id``.
+    ``workflow_project_complete`` counts every linked session into its trace,
+    so those extras inflate the corpus.
+
+    Sharing a ``session_id`` is *not* on its own evidence of duplication: one
+    ``$CLAUDE_SESSION_ID`` routinely spans several working stints, each closed
+    with its own summary. So this only considers sessions that **overlap in
+    time** — the retry signature — and within an overlapping run only flags
+    members with no summary of their own, keeping whichever member has the
+    fullest summary as the survivor. A run whose members all wrote real
+    summaries is left completely alone and reported for a human to judge;
+    ``extra_marks`` is how that judgment gets applied.
+
+    Nothing is deleted: a flagged session keeps its row and its edges and only
+    gains ``superseded_by``, which every aggregate read then skips.
+
+    Dry by default — pass ``apply=True`` to write. Idempotent: an
+    already-flagged session is skipped, and re-running finds nothing new.
+
+    Parameters
+    ----------
+    apply:
+        Write the ``superseded_by`` marks. Without it, only report.
+    extra_marks:
+        ``{duplicate_slug: survivor_slug}`` to mark regardless of the automatic
+        rule — for the ambiguous runs reported as needing review.
+    """
+    try:
+        rows = client.read("read.gq", "list_all_sessions_key", {})
+    except RuntimeError as exc:
+        # A store that hasn't applied the schema since `superseded_by` was added
+        # raises an opaque engine type error. Say what to run instead.
+        if "superseded_by" in str(exc):
+            raise RuntimeError(
+                "This store predates the WorkflowSession.superseded_by field. "
+                "Run `witan migrate schema` first."
+            ) from None
+        raise
+
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        if row.get("superseded_by"):
+            continue
+        key = (row.get("project_slug") or "", row.get("session_id") or "")
+        groups.setdefault(key, []).append(row)
+
+    marks: dict[str, str] = {}
+    needs_review: list[dict] = []
+    for (project_slug, session_id), group in groups.items():
+        if len(group) < 2:
+            continue
+        for run in _overlap_runs(group):
+            with_summary = [s for s in run if _has_own_summary(s)]
+            # Survivor: the fullest account of the work, else the earliest.
+            survivor = (
+                max(with_summary, key=lambda s: len(s.get("summary") or ""))
+                if with_summary
+                else run[0]
+            )
+            for s in run:
+                if s["slug"] != survivor["slug"] and not _has_own_summary(s):
+                    marks[s["slug"]] = survivor["slug"]
+            if len(with_summary) > 1:
+                needs_review.append(
+                    {
+                        "project_slug": project_slug,
+                        "session_id": session_id,
+                        "sessions": [
+                            {
+                                "slug": s["slug"],
+                                "started_at": s.get("started_at"),
+                                "ended_at": s.get("ended_at"),
+                                "summary": (s.get("summary") or "")[:160],
+                            }
+                            for s in run
+                            if _has_own_summary(s)
+                        ],
+                    }
+                )
+
+    by_slug = {r["slug"]: r for r in rows}
+    for dup_slug, survivor_slug in (extra_marks or {}).items():
+        if dup_slug not in by_slug:
+            raise RuntimeError(f"no such session: {dup_slug}")
+        if survivor_slug not in by_slug:
+            raise RuntimeError(f"no such session: {survivor_slug}")
+        if dup_slug == survivor_slug:
+            raise RuntimeError(f"a session cannot supersede itself: {dup_slug}")
+        marks[dup_slug] = survivor_slug
+
+    # A project whose trace is already sealed can't be recounted — the trace is
+    # immutable by design. Report it so the skew is at least known.
+    sealed: list[str] = []
+    if marks:
+        affected = {by_slug[dup]["project_slug"] for dup in marks if dup in by_slug}
+        for project_slug in sorted(p for p in affected if p):
+            if client.read("read.gq", "get_trace", {"slug": f"wt-{project_slug}"}):
+                sealed.append(project_slug)
+
+    if apply:
+        for dup_slug, survivor_slug in marks.items():
+            client.change(
+                "mutations.gq",
+                "update_workflow_session_superseded",
+                {"slug": dup_slug, "superseded_by": survivor_slug},
+            )
+
+    return {
+        "sessions_scanned": len(rows),
+        "marked": marks,
+        "needs_review": needs_review,
+        "sealed_traces": sealed,
+        "applied": apply,
     }
 
 
@@ -1366,6 +1622,36 @@ def memory_list(
     return [_slim_memory(r) for r in unscoped]
 
 
+def _update_memory(slug: str, changes: dict) -> dict | None:
+    """Read a memory, merge ``changes`` over its mutable fields, write it back.
+
+    ``update_memory`` replaces every field it is given, so a partial update MUST
+    merge onto the current row — passing only the changed fields would blank the
+    omitted ones. Same read-merge-write shape as :func:`_update_task` and as the
+    ``migrate_repo_keys`` rewrite. Returns the updated node or ``None``.
+    """
+    rows = client.read("read.gq", "get_memory", {"slug": slug})
+    if not rows:
+        return None
+    current = rows[0]
+    merged = {
+        "slug": slug,
+        "title": changes.get("title", current.get("title")),
+        "content": changes.get("content", current.get("content")),
+        "repo": changes.get("repo", current.get("repo")),
+        "language": changes.get("language", current.get("language")),
+        "category": changes.get("category", current.get("category")),
+        "severity": changes.get("severity", current.get("severity")),
+        "tags": changes.get("tags", current.get("tags")),
+        "symbol_refs": changes.get("symbol_refs", current.get("symbol_refs")),
+        "confidence": changes.get("confidence", current.get("confidence")),
+        "updated_at": now_iso(),
+    }
+    client.change("mutations.gq", "update_memory", merged)
+    rows = client.read("read.gq", "get_memory", {"slug": slug})
+    return rows[0] if rows else None
+
+
 def _store_memory(
     kind: MemoryKind,
     title: str,
@@ -1378,6 +1664,7 @@ def _store_memory(
     tags: list[str] | None = None,
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
+    session_slug: str | None = None,
 ) -> dict:
     """Create a Memory node — shared by memory_store and workflow_trace_mine."""
     if isinstance(tags, str):
@@ -1400,7 +1687,7 @@ def _store_memory(
             "language": language,
             "category": category,
             "severity": severity,
-            "author": cfg.author,
+            "author": _current_author(),
             "tags": tags,
             "symbol_refs": symbol_refs,
             "confidence": confidence,
@@ -1416,11 +1703,14 @@ def _store_memory(
     for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
         _tag_memory(slug, tag, "topic")
 
-    # Provenance: record which session produced this memory (best-effort). The
-    # engine validates edge endpoints, so a stale /tmp state file pointing at a
+    # Provenance: record which session produced this memory (best-effort). An
+    # explicitly-threaded handle wins — it is the only source a deployed replica
+    # has, since MCP 2026-07-28 carries no session state and the replica shares
+    # no filesystem with the agent. Local stdio falls back to the parked handle.
+    # The engine validates edge endpoints, so a stale handle pointing at a
     # session that no longer exists in the store would raise — swallow it so a
     # provenance failure never blocks the memory write.
-    active = _active_session_slug()
+    active = session_slug or _active_session_slug()
     session_linked = False
     if active:
         try:
@@ -1448,7 +1738,8 @@ def _store_memory(
         result["note"] = (
             "Stored without an active workflow session, so it is not linked to a "
             "project (no SessionProduced provenance). Call workflow_session_start "
-            "first if this memory should roll up to the project's history."
+            "first if this memory should roll up to the project's history, and "
+            "pass the session_slug it returns."
         )
     return result
 
@@ -1465,6 +1756,7 @@ async def memory_store(
     tags: list[str] | None = None,
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
+    session_slug: str | None = None,
     ctx: Context | None = None,
 ) -> dict:
     """
@@ -1506,6 +1798,12 @@ async def memory_store(
     confidence:
         Optional author/agent trust in this memory, 0.0–1.0. Feeds the search
         re-rank; omitted memories use the configured default.
+    session_slug:
+        The ``ws-`` handle returned by ``workflow_session_start``, recording
+        which session produced this memory. Pass it whenever you have one: the
+        protocol carries no session state, so against a deployed service this is
+        the only way the ``SessionProduced`` provenance edge can be created.
+        Omit it under a local stdio server, which finds the handle itself.
     """
     # When no repo is known (not passed, and detection finds none), offer to
     # scope it rather than silently persisting an unscoped node. Falls back to
@@ -1522,6 +1820,7 @@ async def memory_store(
         tags=tags,
         symbol_refs=symbol_refs,
         confidence=confidence,
+        session_slug=session_slug,
     )
 
 
@@ -1545,6 +1844,135 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
     if include_topics:
         node["topics"] = client.read("read.gq", "topics_for_memory", {"slug": slug})
     return node
+
+
+@mcp.tool
+def memory_update(
+    slug: str,
+    title: str | None = None,
+    content: str | None = None,
+    repo: str | None = None,
+    language: str | None = None,
+    category: str | None = None,
+    severity: Literal["info", "warning", "critical"] | None = None,
+    tags: list[str] | None = None,
+    symbol_refs: list[str] | None = None,
+    confidence: float | None = None,
+) -> dict | None:
+    """
+    Correct a memory's fields in place. Only non-null arguments are applied.
+
+    This is the repair tool for a memory whose *content was always meant to be
+    what you are about to write* — a wrong ``repo`` (so it never showed up in
+    repo-scoped reads), a typo'd title, a missing tag. Returns the updated node,
+    or ``null`` if no memory has that slug.
+
+    Which tool to reach for:
+
+    - a field is wrong → ``memory_update`` (this one)
+    - the knowledge itself changed → ``memory_store`` the new one, then
+      ``memory_link(kind="supersedes")``; the old one stays readable as history
+    - it should never have existed (accidental duplicate, test write) →
+      ``memory_delete``
+    - it contains secret material → **rotate the credential.** Neither this tool
+      nor ``memory_delete`` erases the old value from the graph's history.
+
+    ``kind`` is deliberately not updatable: a memory that turns out to be a
+    different kind is a different memory — store it and supersede this one.
+    """
+    if isinstance(tags, str):
+        tags = [tags]
+    if isinstance(symbol_refs, str):
+        symbol_refs = [symbol_refs]
+    changes = {
+        key: value
+        for key, value in (
+            ("title", title),
+            ("content", content),
+            # Case-fold, as every other repo-key write path does. Correcting a
+            # mis-scoped memory is the headline use of this tool, and a repo key
+            # that doesn't match what repo.detect() returns just mis-scopes it
+            # again, differently.
+            ("repo", normalise(repo) if repo else repo),
+            ("language", language),
+            ("category", category),
+            ("severity", severity),
+            ("tags", tags),
+            ("symbol_refs", symbol_refs),
+            ("confidence", confidence),
+        )
+        if value is not None
+    }
+    updated = _update_memory(slug, changes)
+    if updated is None:
+        return None
+
+    # Keep the Topic traversal surface in step with the string list, same
+    # dual-write as _store_memory. Tags *removed* here keep their Tagged edge:
+    # edges cannot be individually retracted, and deleting the Topic to drop one
+    # would take out every other memory's edge to it. The string list stays
+    # authoritative for what the memory claims to be tagged with.
+    for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
+        _tag_memory(slug, tag, "topic")
+    return updated
+
+
+@mcp.tool
+def memory_delete(slug: str, confirm: bool = False) -> dict:
+    """
+    Hard-delete a memory. Graph hygiene only — NOT a way to erase secrets.
+
+    Use when a memory should never have existed: an accidental duplicate, a test
+    write, a node created against the wrong graph. For anything else prefer
+    ``memory_update`` (a field is wrong) or ``memory_store`` +
+    ``memory_link(kind="supersedes")`` (the knowledge changed) — superseding is
+    the soft delete, and it keeps the history legible.
+
+    **This does not erase content.** The row remains fully readable, content
+    included, from any prior commit of the graph. If a memory captured a
+    credential, the fix is to **rotate the credential**; scrubbing history is an
+    admin ``omnigraph cleanup``, which no MCP tool performs.
+
+    Deleting a node also removes its incident edges in both directions (that is
+    the only way an edge can be removed at all), so a deleted memory leaves no
+    dangling ``Supersedes``/``RelatedTo``/``Tagged`` behind. Topic nodes on the
+    far end of a ``Tagged`` edge survive and may be left with no memories.
+
+    Parameters
+    ----------
+    confirm:
+        Must be ``True``. Without it this is a no-op returning
+        ``{"deleted": False, "reason": ...}``.
+
+    Returns the deleted node's full fields under ``memory`` so an accidental
+    delete can be re-stored straight from this result. Refuses (again as a
+    no-op) when the caller is not the memory's author.
+    """
+    rows = client.read("read.gq", "get_memory", {"slug": slug})
+    if not rows:
+        return {"slug": slug, "deleted": False, "reason": "no such memory"}
+    node = rows[0]
+
+    if not confirm:
+        return {
+            "slug": slug,
+            "deleted": False,
+            "reason": "pass confirm=True to delete; this cannot be undone from "
+            "the tool surface",
+            "memory": node,
+        }
+
+    author = _current_author()
+    if node.get("author") != author:
+        return {
+            "slug": slug,
+            "deleted": False,
+            "reason": f"authored by {node.get('author')!r}, not {author!r}; only "
+            "the author can delete a memory",
+        }
+
+    client.change("mutations.gq", "delete_memory", {"slug": slug})
+    return {"slug": slug, "deleted": True, "memory": node}
 
 
 @mcp.tool
@@ -1848,33 +2276,33 @@ def _advance_advisory(prev_phase: str | None, new_phase: str) -> str | None:
     return None
 
 
-# Session-state path lives in ``session_state`` (shared with the Stop hook so
-# the writer and reader can't diverge under a custom TMPDIR).
-_STATE_FILE_PREFIX = session_state.STATE_FILE_PREFIX
-_session_state_path = session_state.session_state_path
+def _is_local_stdio() -> bool:
+    """True when this process is the user's own stdio server, not a deployment.
+
+    Only then does the server share a filesystem (and a ``$CLAUDE_SESSION_ID``)
+    with the agent whose Stop hook reads the session handle. ``oidc_issuer`` is
+    the same discriminator ``_resolve_client`` uses for per-user isolation.
+    """
+    return not identity_cfg.oidc_issuer
 
 
 def _active_session_slug() -> str | None:
     """The WorkflowSession slug for the current agent session, or None.
 
-    Reads the state file ``workflow_session_start`` wrote, keyed by
-    ``$CLAUDE_SESSION_ID``. Fails soft on any missing-env/read/parse error —
-    provenance is best-effort and must never block a memory write.
+    Reads the handle stored locally under ``$CLAUDE_SESSION_ID``. Fails soft on
+    any missing-env/read/parse error — provenance is best-effort and must never
+    block a memory write.
+
+    Local-stdio only: a deployed replica shares neither the filesystem nor the
+    agent's session id, so there is nothing to read. Under a deployment the
+    handle instead arrives as the caller's ``session_slug`` argument (injected by
+    ``RemoteMCPProxy._resolve_session_slug`` for CLI call sites), which is why
+    this is the *fallback* in ``_store_memory`` rather than its only source.
     """
-    session_id = os.environ.get("CLAUDE_SESSION_ID")
-    # Validate before building a path with it: reject anything that isn't a plain
-    # session id so a crafted value can't redirect the read outside the temp dir.
-    if not session_id or not re.fullmatch(r"[A-Za-z0-9_.-]+", session_id):
+    if not _is_local_stdio():
         return None
-    try:
-        state = json.loads(_session_state_path(session_id).read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    # A corrupt file can be valid JSON but not an object (e.g. `[]`/`null`);
-    # guard so .get() can't raise AttributeError and break the write.
-    if not isinstance(state, dict):
-        return None
-    return state.get("session_slug") or None
+    handle = session_state.read_handle(os.environ.get("CLAUDE_SESSION_ID") or "")
+    return (handle or {}).get("session_slug") or None
 
 
 @mcp.tool
@@ -1909,7 +2337,11 @@ def workflow_project_create(
     repos:
         Canonical repo URIs this project spans. The current repo (detected from
         ``.git/config``) is added automatically. Omit entirely when creating a
-        repo-less "floating" project from outside any git repo.
+        repo-less "floating" project from outside any git repo. Guessing here is
+        fine — a project's real blast radius is rarely known at creation. The
+        set can be corrected at any time with ``workflow_project_update``
+        (``repos`` to replace it, ``add_repos``/``remove_repos`` to nudge it),
+        and it also grows on its own as sessions run in new repos.
     github_issue:
         URL of the GitHub issue tracking this work.
         e.g. ``github.com/mitodl/ol-django/issues/847``.
@@ -1930,7 +2362,7 @@ def workflow_project_create(
             "repos": repo_set or None,
             "status": "active",
             "phase": phase,
-            "author": cfg.author,
+            "author": _current_author(),
             "tags": tags,
             "github_issue": github_issue,
             "github_pr": None,
@@ -1965,6 +2397,27 @@ def workflow_project_get(slug: str) -> dict | None:
     return project
 
 
+def _live_sessions(rows: list[dict]) -> list[dict]:
+    """Drop sessions a retry minted, which ``migrate dedupe-sessions`` flagged.
+
+    Every aggregate over sessions — trace assembly, resume summary, per-phase
+    staleness counts — runs through this, so a duplicate that predates the
+    ``workflow_session_start`` upsert can't inflate the corpus. The engine has
+    no where-clause, hence a Python filter over the full listing rather than a
+    query-level one.
+    """
+    return [r for r in rows if not r.get("superseded_by")]
+
+
+def _project_sessions(project_slug: str) -> list[dict]:
+    """A project's real sessions, ordered ``started_at`` asc."""
+    return _live_sessions(
+        client.read(
+            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+        )
+    )
+
+
 def _latest_session_summary(project_slug: str) -> dict | None:
     """The most-recently-started session for a project, condensed for resume.
 
@@ -1973,9 +2426,7 @@ def _latest_session_summary(project_slug: str) -> dict | None:
     sessions yet. Shared by ``workflow_project_status`` and the context hook so
     "where things stand" reads the same everywhere.
     """
-    sessions = client.read(
-        "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
-    )
+    sessions = _project_sessions(project_slug)
     if not sessions:
         return None
     latest = sessions[-1]
@@ -2079,6 +2530,105 @@ def workflow_project_list(
         rows = [r for r in rows if _project_is_ready(r, status_cache)]
 
     return rows
+
+
+@mcp.tool
+def workflow_project_update(
+    slug: str,
+    title: str | None = None,
+    description: str | None = None,
+    repos: list[str] | None = None,
+    add_repos: list[str] | None = None,
+    remove_repos: list[str] | None = None,
+    tags: list[str] | None = None,
+    github_issue: str | None = None,
+    status: Literal["active", "abandoned"] | None = None,
+) -> dict | None:
+    """
+    Correct a project's metadata after creation.
+
+    The escape hatch for everything ``workflow_project_advance`` (phase,
+    ``github_pr``), ``workflow_project_complete`` (completion) and
+    ``workflow_project_block``/``_unblock`` (dependencies) don't cover. Every
+    parameter is optional and only what you pass is touched; omitting a field
+    leaves it exactly as it was, so this can never blank something by accident.
+    Returns the updated project, or ``None`` if the slug doesn't exist.
+
+    The common case is repos. A project's real blast radius is rarely known
+    during discovery, and until the set is right, repo-scoped recall from the
+    repos where the work actually lands won't surface the project at all. Pass
+    ``repos`` to replace the set wholesale, or ``add_repos``/``remove_repos`` to
+    nudge it (both may be passed together; removals are applied after
+    additions). Repos are a plain list field on the project node, not edges, so
+    a removal really removes — unlike ``workflow_project_unblock``, which can
+    only update its denormalized field because omnigraph edges are append-only.
+
+    Two things this deliberately can't do:
+
+    - **Set the phase.** ``workflow_project_advance`` stays the only route, so
+      a transition is always seen by its ordering check. It does allow going
+      backwards (with a confirmation), which is how a phase set in error gets
+      corrected — this tool would just bypass the prompt.
+    - **Complete a project.** ``status`` accepts ``abandoned`` (for work that
+      stopped without an outcome) and ``active`` (to revive it), but not
+      ``completed``: that belongs to ``workflow_project_complete``, which seals
+      a corpus trace. Nothing should mint a trace without a narrative.
+
+    Parameters
+    ----------
+    slug:
+        The ``wp-`` slug of the project to update.
+    title:
+        Replacement short name.
+    description:
+        Replacement description.
+    repos:
+        Replace the repo set wholesale with these canonical URIs.
+    add_repos:
+        Canonical repo URIs to add to the set.
+    remove_repos:
+        Canonical repo URIs to drop from the set.
+    tags:
+        Replacement tag list. Pass ``[]`` to clear.
+    github_issue:
+        URL of the GitHub issue tracking this work.
+    status:
+        ``active`` | ``abandoned``.
+    """
+    rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    if not rows:
+        return None
+    current = rows[0]
+
+    # Canonicalize every caller-supplied repo the same way `repo.detect` does,
+    # so a differently-cased spelling of a repo already in the set updates that
+    # entry instead of adding a near-duplicate beside it — and so `remove_repos`
+    # matches what's actually stored.
+    def _canon(values: list[str] | None) -> list[str]:
+        return _merge_repos([normalise(r) for r in values or [] if r])
+
+    base = _canon(repos) if repos is not None else _project_repos(current)
+    dropped = set(_canon(remove_repos))
+    new_repos = [r for r in _merge_repos(base, _canon(add_repos)) if r not in dropped]
+
+    payload = {
+        "slug": slug,
+        "title": title if title is not None else current.get("title"),
+        "description": (
+            description if description is not None else current.get("description")
+        ),
+        "repos": new_repos or None,
+        "status": status if status is not None else current.get("status", "active"),
+        "tags": (tags if tags is not None else current.get("tags")) or None,
+        "github_issue": (
+            github_issue if github_issue is not None else current.get("github_issue")
+        ),
+        "updated_at": now_iso(),
+    }
+    client.change("mutations.gq", "update_workflow_project_fields", payload)
+
+    updated = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    return updated[0] if updated else payload
 
 
 @mcp.tool
@@ -2197,9 +2747,7 @@ async def workflow_project_complete(
     project_rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     project = project_rows[0] if project_rows else {}
 
-    sessions = client.read(
-        "read.gq", "list_sessions_by_project", {"project_slug": slug}
-    )
+    sessions = _project_sessions(slug)
 
     session_count = len(sessions)
     phases_seen = list(
@@ -2233,7 +2781,7 @@ async def workflow_project_complete(
             "outcome": outcome,
             "lessons_slug": None,
             "patterns_slug": None,
-            "author": cfg.author,
+            "author": _current_author(),
             "tags": project.get("tags"),
             "created_at": now,
         },
@@ -2300,9 +2848,7 @@ def workflow_project_memories(
 
     by_session: dict[str, list[dict]] = {}
     if group_by_session:
-        sessions = client.read(
-            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
-        )
+        sessions = _project_sessions(project_slug)
         for session in sessions:
             produced = client.read(
                 "read.gq",
@@ -2464,6 +3010,7 @@ def workflow_trace_mine(
     trace_slug: str,
     patterns: list[dict] | None = None,
     lessons: list[dict] | None = None,
+    session_slug: str | None = None,
 ) -> dict:
     """
     Turn a completed WorkflowTrace into reusable Pattern/Lesson Memory nodes.
@@ -2493,6 +3040,9 @@ def workflow_trace_mine(
         Proposed lesson memories to create on this call. Each dict needs
         ``title`` and ``content``; may also include ``repo``, ``severity``,
         and ``tags``.
+    session_slug:
+        The ``ws-`` handle from ``workflow_session_start``, recorded as the
+        provenance of every memory mined on this call — see ``memory_store``.
 
     Returns
     -------
@@ -2511,11 +3061,7 @@ def workflow_trace_mine(
         lessons = [lessons]
 
     if patterns is None and lessons is None:
-        sessions = client.read(
-            "read.gq",
-            "list_sessions_by_project",
-            {"project_slug": trace["project_slug"]},
-        )
+        sessions = _project_sessions(trace["project_slug"])
         return {"trace": trace, "sessions": sessions}
 
     for label, specs in (("pattern", patterns), ("lesson", lessons)):
@@ -2537,6 +3083,7 @@ def workflow_trace_mine(
             repo=spec.get("repo"),
             language=spec.get("language"),
             tags=spec.get("tags"),
+            session_slug=session_slug,
         )["slug"]
         for spec in patterns or []
     ]
@@ -2548,6 +3095,7 @@ def workflow_trace_mine(
             repo=spec.get("repo"),
             severity=spec.get("severity"),
             tags=spec.get("tags"),
+            session_slug=session_slug,
         )["slug"]
         for spec in lessons or []
     ]
@@ -2701,6 +3249,85 @@ def _project_is_ready(p: dict, status_cache: dict[str, str]) -> bool:
     )
 
 
+def _open_session_for_key(project_slug: str, session_id: str) -> dict | None:
+    """The still-open session already recorded for this (project, session_id).
+
+    "Still open" — ``ended_at`` unset — is deliberately narrower than the pair
+    alone. The pair is *not* unique in practice: one ``$CLAUDE_SESSION_ID``
+    routinely spans several working stints, each closed with its own summary
+    (the corpus has clusters of eight such sessions, each a distinct piece of
+    work). Keying idempotency on the pair alone would fold those into one node
+    and destroy seven summaries. A retry, reconnect or replica failover, by
+    contrast, always re-fires *before* the first call was ended — so an open
+    session with the same pair is the duplicate this must not mint, and a closed
+    one is a finished stint this must not touch.
+
+    Sessions already flagged by ``witan migrate dedupe-sessions`` are skipped;
+    the newest open match wins if somehow several survive.
+    """
+    rows = client.read(
+        "read.gq",
+        "sessions_for_key",
+        {"project_slug": project_slug, "session_id": session_id},
+    )
+    open_rows = [
+        r for r in rows if not r.get("ended_at") and not r.get("superseded_by")
+    ]
+    return open_rows[-1] if open_rows else None
+
+
+def _dedupe_open_sessions(
+    project_slug: str, session_id: str, slug: str, started_at: str
+) -> tuple[str, str]:
+    """Collapse open sessions a concurrent start raced into existence.
+
+    The check-then-insert above is not atomic: two starts for one
+    (project, session_id) — a client retrying while the first request is still
+    in flight, or two replicas handling the same retry — can both find no open
+    session and both insert. The engine can't arbitrate that the way it does for
+    ``task_claim``: optimistic concurrency detects competing writes to *one*
+    row, and these are two rows under two freshly-minted slugs.
+
+    So resolve it after the fact. Writes serialize through the store, and a
+    reader sees every write that preceded it, so the racer who inserted second
+    necessarily sees both rows. It keeps the earliest-started as canonical and
+    supersedes the rest — a rule both racers compute identically, so they
+    converge on the same handle no matter which of them observes the collision.
+    Returns the (possibly reassigned) slug and its start time.
+
+    Costs one extra read per *new* session; the re-entrant path never reaches
+    here. Best-effort: a failure to read or mark leaves the duplicate for
+    ``witan migrate dedupe-sessions``, and must not fail the session start.
+    """
+    try:
+        rows = client.read(
+            "read.gq",
+            "sessions_for_key",
+            {"project_slug": project_slug, "session_id": session_id},
+        )
+    except RuntimeError:
+        return slug, started_at
+
+    open_rows = [
+        r for r in rows if not r.get("ended_at") and not r.get("superseded_by")
+    ]
+    if len(open_rows) < 2:
+        return slug, started_at
+
+    canonical = min(open_rows, key=lambda r: r.get("started_at") or "")
+    for row in open_rows:
+        if row["slug"] != canonical["slug"]:
+            try:
+                client.change(
+                    "mutations.gq",
+                    "update_workflow_session_superseded",
+                    {"slug": row["slug"], "superseded_by": canonical["slug"]},
+                )
+            except RuntimeError:
+                pass
+    return canonical["slug"], canonical.get("started_at") or started_at
+
+
 @mcp.tool
 def workflow_session_start(
     project_slug: str,
@@ -2718,8 +3345,32 @@ def workflow_session_start(
     session id — ``$CLAUDE_SESSION_ID`` on Claude Code, or any stable unique
     string for the session otherwise.
 
-    Also writes a state file to ``/tmp`` so the ``Stop`` hook can close the
-    session automatically if ``workflow_session_end`` is not called explicitly.
+    Returns an explicit session handle (``session_slug``, ``project_slug``,
+    ``phase``, ``session_id``, ``started_at``). Hold on to it and pass
+    ``session_slug`` back to ``workflow_session_end`` — the handle is the only
+    thing that ties the two calls together, since the protocol carries no session
+    state of its own and consecutive calls may land on different replicas.
+
+    **Re-entrant.** Calling again for a (``project_slug``, ``session_id``) whose
+    session is still open returns that same handle with ``existed: true``
+    instead of minting a second node — so a hook retry, a transport reconnect,
+    or the replica failover the paragraph above warns about can't silently
+    duplicate a session. Any newly-supplied ``repo`` and ``tags`` are merged
+    into the existing session; ``phase`` is left at what the first call set (use
+    ``workflow_project_advance`` to move a project's phase). Once a session has
+    been ended, the same ``session_id`` starts a fresh session — one
+    ``$CLAUDE_SESSION_ID`` legitimately spans several working stints.
+
+    Two *simultaneous* starts (a client retrying while the first request is
+    still in flight) can still both insert, since the check and the insert are
+    not one atomic operation. That is resolved immediately after the fact rather
+    than left for the migration to find — see ``_dedupe_open_sessions``. Both
+    racers return the same handle.
+
+    Because the repo accretion below runs on the re-entrant path too, calling
+    this once per repo remains a valid way to widen a project's repo set — but
+    ``workflow_project_update(add_repos=[...])`` does it directly, without
+    needing a session at all.
 
     When a repo is detected and the checkout is on a git branch, also
     upserts a ``CodeBranch`` (repo, branch) and links it ``ForProject`` to
@@ -2740,29 +3391,51 @@ def workflow_session_start(
         Optional tags.
     """
     now = now_iso()
-    slug = _make_slug("workflow_session", project_slug)
     detected_repo = repo_module.detect(override=repo)
+    existing = _open_session_for_key(project_slug, session_id)
 
-    client.change(
-        "mutations.gq",
-        "insert_workflow_session",
-        {
-            "slug": slug,
-            "project_slug": project_slug,
-            "session_id": session_id,
-            "repo": detected_repo,
-            "phase": phase,
-            "summary": "",
-            "author": cfg.author,
-            "tags": tags,
-            "started_at": now,
-        },
-    )
-    client.change(
-        "mutations.gq",
-        "link_belongs_to",
-        {"from": slug, "to": project_slug},
-    )
+    if existing:
+        slug = existing["slug"]
+        # Merge, never clear: a repeat call that omits repo/tags must not wipe
+        # what the first one recorded.
+        merged_repo = detected_repo or existing.get("repo")
+        merged_tags = list(
+            dict.fromkeys([*(existing.get("tags") or []), *(tags or [])])
+        )
+        if merged_repo != existing.get("repo") or merged_tags != (
+            existing.get("tags") or []
+        ):
+            client.change(
+                "mutations.gq",
+                "update_workflow_session_meta",
+                {"slug": slug, "repo": merged_repo, "tags": merged_tags or None},
+            )
+        phase = existing.get("phase") or phase
+        started_at = existing.get("started_at") or now
+    else:
+        slug = _make_slug("workflow_session", project_slug)
+        started_at = now
+        client.change(
+            "mutations.gq",
+            "insert_workflow_session",
+            {
+                "slug": slug,
+                "project_slug": project_slug,
+                "session_id": session_id,
+                "repo": detected_repo,
+                "phase": phase,
+                "summary": "",
+                "author": _current_author(),
+                "tags": tags,
+                "started_at": now,
+            },
+        )
+        client.change(
+            "mutations.gq",
+            "link_belongs_to",
+            {"from": slug, "to": project_slug},
+        )
+        slug, started_at = _dedupe_open_sessions(project_slug, session_id, slug, now)
 
     # Accrete this session's repo into the project's repo set, so a project's
     # association grows as it's worked across repos without explicit declaration.
@@ -2785,15 +3458,23 @@ def workflow_session_start(
 
     _track_code_branch(detected_repo, project_slug=project_slug)
 
-    # Write state file so Stop hook can close this session
-    state = {"session_slug": slug, "project_slug": project_slug, "started_at": now}
-    state_path = _session_state_path(session_id)
-    try:
-        state_path.write_text(json.dumps(state))
-    except OSError:
-        pass
+    handle = {
+        "session_slug": slug,
+        "project_slug": project_slug,
+        "phase": phase,
+        "session_id": session_id,
+        "started_at": started_at,
+        "existed": existing is not None,
+    }
+    # Convenience only, and only when the server is the user's own stdio process:
+    # then it shares a filesystem with the Stop hook, so it can park the handle
+    # itself and a bare `workflow_session_start` tool call still auto-closes. A
+    # deployed replica shares nothing with the hook — the client persists the
+    # returned handle instead (``witan session start``). See ``session_state``.
+    if _is_local_stdio():
+        session_state.write_handle(session_id, handle)
 
-    return {"session_slug": slug, "project_slug": project_slug, "phase": phase}
+    return handle
 
 
 @mcp.tool
@@ -2839,18 +3520,56 @@ def workflow_session_end(
         },
     )
 
-    # Clean up state file for any session_id that maps to this slug
-    # (best-effort; Stop hook will also attempt cleanup)
-    for state_file in session_state.iter_session_state_files():
-        try:
-            data = json.loads(state_file.read_text())
-            if data.get("session_slug") == session_slug:
-                state_file.unlink(missing_ok=True)
-                break
-        except (OSError, json.JSONDecodeError):
-            continue
+    # Drop the local handle so the Stop hook doesn't re-close this session.
+    # Local-stdio only — a deployed replica would be scanning its own container's
+    # temp dir, where the client's handle was never written; the client clears
+    # its own copy (``witan session end`` / ``witan session-checkpoint``).
+    if _is_local_stdio():
+        session_state.clear_handle_for_slug(session_slug)
 
     return {"session_slug": session_slug, "ended_at": now}
+
+
+@mcp.tool
+def workflow_session_list(
+    project_slug: str | None = None,
+    open_only: bool = False,
+) -> list[dict]:
+    """
+    List workflow sessions, newest last.
+
+    Mainly for finding sessions that leaked open — one whose agent died, or
+    whose Stop hook could not reach the graph. An open session is not cosmetic:
+    ``workflow_project_complete`` folds every linked session into the corpus
+    trace, so one with no ``ended_at`` inflates ``session_count``, contributes
+    its phase while having recorded nothing, carries no handoff summary, and
+    cannot extend ``duration`` (computed from ``max(ended_at)``). It is also
+    what drives the context hook's "N sessions in <phase>" staleness nag.
+
+    Use ``witan session sweep`` to close them in bulk.
+
+    Parameters
+    ----------
+    project_slug:
+        Restrict to one project's sessions. Omit for every project.
+    open_only:
+        Only sessions with no ``ended_at``. Superseded sessions (deduped by
+        ``witan migrate dedupe-sessions``) are always excluded — they are
+        already skipped by every aggregate read and are not leaks.
+    """
+    if project_slug:
+        rows = client.read(
+            "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+        )
+        # That query filters ON project_slug so it doesn't return the column.
+        # Put it back, so a caller sees one row shape either way.
+        rows = [{**r, "project_slug": project_slug} for r in rows]
+    else:
+        rows = client.read("read.gq", "list_all_sessions", {})
+    rows = [r for r in rows if not r.get("superseded_by")]
+    if open_only:
+        rows = [r for r in rows if not r.get("ended_at")]
+    return rows
 
 
 # ── Task Tracking Tools ───────────────────────────────────────────
@@ -3014,7 +3733,7 @@ async def task_create(
             "blocked_by": blocked_by,
             "assignee": None,
             "external_uri": external_uri,
-            "author": cfg.author,
+            "author": _current_author(),
             "symbol_refs": symbol_refs,
             "tags": tags,
             "created_at": now,
@@ -3233,9 +3952,10 @@ async def task_claim(
     slug:
         The ``tk-`` slug to claim.
     assignee:
-        Holder identity. Defaults to the configured author; parallel agents under
-        one identity should pass a distinct id (e.g. a session id) so claims don't
-        collide.
+        Holder identity. Defaults to the calling user (the JWT's
+        ``preferred_username`` when deployed, the configured author locally);
+        parallel agents under one identity should pass a distinct id (e.g. a
+        session id) so claims don't collide.
     force:
         Steal the task even if another holder's lease is still valid.
     """
@@ -3244,7 +3964,7 @@ async def task_claim(
     # last-write-wins (see docs/adr/0003 and the claim loop below). On success
     # also upserts a CodeBranch for the checkout's repo+branch and links it
     # WorksOn this task (best-effort).
-    holder = assignee or cfg.author
+    holder = assignee or _current_author()
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
@@ -3364,13 +4084,14 @@ def task_release(
     slug:
         The ``tk-`` slug to release.
     assignee:
-        Holder identity releasing the task. Defaults to the configured author.
+        Holder identity releasing the task. Defaults to the calling user, same
+        resolution as ``task_claim``'s ``assignee``.
     status:
         Status to return the task to (default ``open``).
     force:
         Release even if held by a different assignee.
     """
-    holder = assignee or cfg.author
+    holder = assignee or _current_author()
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None

@@ -5,14 +5,18 @@ from pathlib import Path
 from typing import Literal
 
 from fastmcp import Context, FastMCP
+from witan_core import caching
 
 from . import bridge_extractors
 from . import config as cfg_module
 from . import elicit
+from . import identity as identity_module
 from . import indexer
+from . import ingest
 from . import repo as repo_module
 from . import stitch
 from . import store as store_module
+from . import views
 from .graph import OmnigraphClient
 
 # ── Startup ───────────────────────────────────────────────────────
@@ -36,10 +40,14 @@ mcp = FastMCP(
         "scope to one repo, or omit it when outside any repo to fan out across "
         "every indexed repo.\n\n"
         "Branch semantics: name-routed tools (code_find_definition, "
-        "code_search_symbol, code_symbols_in_file) accept `branch`. The default "
-        "follows the current checkout's branch ONLY when querying the current "
-        "detected repo; when you pass `repo` for a different repo and omit "
-        "`branch`, you read that store's default (main) view — pass `branch` "
+        "code_search_symbol, code_symbols_in_file) accept `branch` — either a "
+        "git branch name, or a specific writer's view of one (`act-bob/feature_x`, "
+        "as listed by code_indexed_branches). A branch has one view per writer, "
+        "so reads prefer this process's own and fall back to another's; naming a "
+        "view reads exactly that agent's in-flight work. The default follows the "
+        "current checkout's branch ONLY when querying the current detected repo; "
+        "when you pass `repo` for a different repo and omit `branch`, you read "
+        "that store's default (main) view — pass `branch` "
         "explicitly to target another view. Id-routed tools (code_find_references "
         "/ callers / impact / cross_repo_impact) take no `branch`: `symbol_id` "
         "does not encode a branch, so they read the default view of the id's "
@@ -50,7 +58,33 @@ mcp = FastMCP(
         "Calls/References edges are heuristic (syntactic name resolution), not a "
         "precise call graph; code_find_references includes code_callers."
     ),
+    # Let clients cache this server's tool list instead of re-listing it every
+    # session. Scope stays private: a code graph is scoped to its repos.
+    **caching.hint_kwargs(),
 )
+
+# Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
+# server→client back-channel to run them on. Inert on the handshake eras.
+mcp.add_middleware(elicit.MRTRElicitationMiddleware())
+
+# The `io.modelcontextprotocol/tasks` extension (SEP-2663), which lets a client
+# take a handle on a long `code_reindex` and poll it instead of holding a tool
+# call open for minutes. Optional (`witan-code[tasks]`): it exists only for
+# fastmcp 4.x, and this package still supports the 3.4.x end of its pin. The
+# flag has to gate the tool declaration too — a `task=True` tool refuses to
+# serve at all when the extension is missing, rather than degrading.
+#
+# Note the backend defaults to in-process `memory://`, which is what a per-repo
+# stdio server wants. A multi-replica deployment polling through a round-robin
+# LB would need a shared Docket backend (FASTMCP_DOCKET_URL) — moot today, since
+# indexing needs a git checkout the deployment doesn't have.
+try:
+    from fastmcp_tasks import TasksExtension
+except ImportError:
+    TASKS_ENABLED = False
+else:
+    TASKS_ENABLED = True
+    mcp.add_extension(TasksExtension())
 
 # Client cache keyed by "store path|branch" ("" = main).
 _clients: dict[str, OmnigraphClient] = {}
@@ -93,47 +127,89 @@ def _cached_store_branch() -> str | None:
     return _cached_git("store_branch", repo_module.store_branch)
 
 
-def _client_for_path(path, branch: str | None = None) -> OmnigraphClient:
-    key = f"{path}|{branch or ''}"
+def _client_for_ref(ref, branch: str | None = None) -> OmnigraphClient:
+    key = f"{ref}|{branch or ''}"
     if key not in _clients:
-        _clients[key] = OmnigraphClient(str(path), cfg.queries_dir, branch=branch)
+        _clients[key] = ref.client(cfg, branch=branch)
     return _clients[key]
 
 
-def _branch_in_store(path, branch: str) -> bool:
-    key = str(path)
+def _branch_in_store(ref, branch: str) -> bool:
+    key = str(ref)
     cached = _store_branches.get(key)
     if cached is not None:
         stamp, branches = cached
         if time.monotonic() - stamp < _BRANCH_CACHE_TTL and branch in branches:
             return True
     try:
-        branches = frozenset(_client_for_path(path).list_branches())
+        branches = frozenset(_client_for_ref(ref).list_branches())
     except Exception:  # noqa: BLE001 — degrade to main on any listing failure
         return False
     _store_branches[key] = (time.monotonic(), branches)
     return branch in branches
 
 
+def _known_branches(store) -> list[str]:
+    """``store``'s branch names as of the last listing — no subprocess of its own.
+
+    Only meaningful right after a ``_branch_in_store`` miss, which is the one
+    path that reaches it: a miss re-lists and refreshes this cache (or fails,
+    leaving nothing, which degrades to main). Listing again here would double
+    the ``branch list`` subprocesses on every read that falls back.
+    """
+    cached = _store_branches.get(str(store))
+    return sorted(cached[1]) if cached else []
+
+
 def _resolve_branch(store, repo: str, requested: str | None) -> str | None:
     """Effective omnigraph branch for a read: None = the store's main branch.
 
-    An explicit ``requested`` branch is used when it exists in the store
-    (else main — degrade, don't error). With no request, a query against the
-    *current* repo follows the checkout's branch so an agent working on a
-    feature branch sees its own in-flight view by default.
+    An explicit ``requested`` value is either a full view name (it carries a
+    ``/``, so it names one specific writer's view — that is how an agent reads
+    a *teammate's* in-flight work, the payoff of keeping branch views on the
+    shared graph) or a git branch name, which resolves to this process's own
+    view of it and then, failing that, to anyone's. Unknown either way it
+    degrades to main rather than erroring.
+
+    With no request, a query against the *current* repo follows the checkout's
+    branch, again preferring this process's own view: an agent on a feature
+    branch sees what it itself indexed, not a colleague's half-written state.
     """
     if requested:
+        # Only an actor prefix tells a view name from a git branch — a git
+        # branch may contain "/" itself (`feature/new-api`) — and a name that
+        # looks like a view but isn't in this store falls through to being
+        # read as a branch rather than silently degrading to main.
+        if views.owner(requested) and _branch_in_store(store, requested):
+            return requested
         # Same git→store mapping as indexing, so a request for branch "main"
-        # in a master-default repo routes to its "_main" store branch rather
-        # than the store's default view.
-        b = repo_module.branch_store_name(requested)
-        return b if _branch_in_store(store, b) else None
+        # in a master-default repo routes to its "_main" views rather than the
+        # store's default view.
+        return _view_for_branch(store, repo_module.branch_store_name(requested))
     if repo == _cached_detect():
         b = _cached_store_branch()
-        if b and _branch_in_store(store, b):
-            return b
+        if b:
+            return _view_for_branch(store, b)
     return None
+
+
+def _view_for_branch(store, branch: str) -> str | None:
+    """This actor's view of ``branch`` in ``store``, else any, else main.
+
+    ``branch`` is the sanitized component, already mapped by the caller (see
+    ``views.views_for_branch``).
+
+    Falling back to another writer's view is deliberate: before a developer
+    has indexed a branch themselves, the closest thing to "the code on
+    feature-x" is whatever view of feature-x does exist, and reading — unlike
+    writing — is not the operation that needs an owner. Ties break by actor id
+    so the choice is at least stable between calls.
+    """
+    mine = views.repo_view(branch, actor=identity_module.actor_id())
+    if _branch_in_store(store, mine):
+        return mine
+    candidates = views.views_for_branch(_known_branches(store), branch)
+    return candidates[0].name if candidates else None
 
 
 def _client_for_repo(repo: str, branch: str | None = None) -> OmnigraphClient | None:
@@ -141,7 +217,7 @@ def _client_for_repo(repo: str, branch: str | None = None) -> OmnigraphClient | 
     store = store_module.store_for_repo(repo, cfg)
     if not store.exists():
         return None
-    return _client_for_path(store, _resolve_branch(store, repo, branch))
+    return _client_for_ref(store, _resolve_branch(store, repo, branch))
 
 
 def _client_for_symbol(symbol_id: str) -> OmnigraphClient | None:
@@ -151,14 +227,7 @@ def _client_for_symbol(symbol_id: str) -> OmnigraphClient | None:
 
 def _all_clients() -> list[OmnigraphClient]:
     """A client per indexed per-repo store (excludes the shared bridge store)."""
-    if not cfg.code_dir.exists():
-        return []
-    bridge = store_module.bridge_store(cfg).name
-    return [
-        _client_for_path(p)
-        for p in sorted(cfg.code_dir.glob("*.omni"))
-        if p.name != bridge
-    ]
+    return [_client_for_ref(ref) for ref in store_module.per_repo_stores(cfg)]
 
 
 def _resolve_clients(
@@ -180,10 +249,6 @@ def _resolve_clients(
     return _all_clients()
 
 
-def _bridge_branch_name(repo: str, branch: str) -> str:
-    return f"{cfg_module.sanitize_slug(repo)}/{branch}"
-
-
 def _resolve_bridge_branch(store, repo: str | None) -> str | None:
     """Effective bridge branch for reads scoped to ``repo``: None = bridge main.
 
@@ -193,14 +258,22 @@ def _resolve_bridge_branch(store, repo: str | None) -> str | None:
     automatically when ``repo`` is the checkout's own detected repo — an
     agent asking about some other repo's symbol while sitting elsewhere
     should not silently pick up an unrelated overlay branch.
+
+    It mirrors the owner preference too: this actor's overlay first, then any
+    writer's overlay of the same repo+branch.
     """
     if repo is None or repo != _cached_detect():
         return None
     branch = _cached_store_branch()
     if not branch:
         return None
-    bridge_branch = _bridge_branch_name(repo, branch)
-    return bridge_branch if _branch_in_store(store, bridge_branch) else None
+    mine = views.bridge_view(branch, repo, actor=identity_module.actor_id())
+    if _branch_in_store(store, mine):
+        return mine
+    candidates = views.views_for_branch(
+        _known_branches(store), branch, bridge=True, repo=repo
+    )
+    return candidates[0].name if candidates else None
 
 
 def _bridge_client(repo: str | None = None) -> OmnigraphClient | None:
@@ -217,7 +290,7 @@ def _bridge_client(repo: str | None = None) -> OmnigraphClient | None:
         return None
     if repo is None:
         repo = _cached_detect()
-    return _client_for_path(store, _resolve_bridge_branch(store, repo))
+    return _client_for_ref(store, _resolve_bridge_branch(store, repo))
 
 
 async def _confirm_and_reindex(
@@ -796,6 +869,177 @@ async def code_unresolved_symbols(
 
 
 @mcp.tool
+async def code_repo_symbols(
+    repo: str | None = None,
+    role: Literal["exported", "external"] | None = None,
+    scheme: str | None = None,
+    ctx: Context | None = None,
+) -> list[dict]:
+    """
+    A repo's cross-repo symbol table (docs/SYMBOL_TABLE.md).
+
+    One row per (role, symbol): ``exported`` rows are the repo's public
+    contract surface — what other repos can resolve against — and ``external``
+    rows are the unresolved references Stage 2 joins against other repos'
+    exports. Use it to see what a repo publishes and what it expects from the
+    rest of the SOA; ``code_precise_edges`` is the resolved join over the same
+    table.
+
+    Parameters
+    ----------
+    repo:
+        Canonical repo URI. Defaults to the current detected repo.
+    role:
+        Filter to ``exported`` or ``external`` rows.
+    scheme:
+        Filter to one symbol scheme (``http``/``env``/``pkg``/``svc``).
+    """
+    if repo is None:
+        repo = _cached_detect()
+    if repo is None:
+        return []
+    client = _bridge_client(repo=repo)
+    if client is None:
+        client = await _confirm_and_reindex_bridge(ctx)
+        if client is None:
+            return []
+    rows = client.read("bridge.gq", "repo_symbols", {"repo": repo})
+    return [
+        r
+        for r in rows
+        if (role is None or r.get("role") == role)
+        and (scheme is None or r.get("scheme") == scheme)
+    ]
+
+
+@mcp.tool
+async def code_repo_dependencies(
+    kind: BindingKind | None = None,
+    repo: str | None = None,
+    min_precision: PrecisionTier = "heuristic",
+    ctx: Context | None = None,
+) -> dict:
+    """
+    The repo-to-repo dependency graph over every indexed repo.
+
+    Aggregates the bridge store's interface bindings into "repo A depends on
+    repo B" links (A consumes a contract B provides; for ``service`` bindings,
+    the deploying repo depends on what it deploys). Returns
+    ``{"repos": [...], "edges": [{consumer, provider, weight, kinds,
+    contracts}]}`` — the coarse, whole-SOA view, where
+    ``code_interface_providers``/``_consumers`` answer about one contract key.
+
+    Parameters
+    ----------
+    kind:
+        Filter to one contract kind (``env_var``/``package``/``service``/``endpoint``).
+    repo:
+        Keep only links touching a repo whose URI contains this substring.
+    min_precision:
+        ``heuristic`` (default) | ``precise`` — see server instructions.
+    """
+    from . import visualize
+
+    client = _bridge_client()
+    if client is None:
+        client = await _confirm_and_reindex_bridge(ctx)
+        if client is None:
+            return {"repos": [], "edges": []}
+    rows = client.read("bridge.gq", "all_bindings", {})
+    repo_symbol_rows = (
+        client.read("bridge.gq", "all_repo_symbols", {})
+        if min_precision == "precise"
+        else None
+    )
+    graph = visualize.build_graph(
+        rows,
+        kind=kind,
+        repo=repo,
+        min_precision=min_precision,
+        repo_symbol_rows=repo_symbol_rows,
+    )
+    return visualize.as_payload(graph)
+
+
+@mcp.tool
+def code_indexed_repos() -> list[dict]:
+    """
+    The repositories that have a code graph indexed, and how big each is.
+
+    Use it to check coverage before trusting a negative result — a symbol
+    search returning nothing means something different when the repo in
+    question was never indexed. ``files`` is None for a store that could not be
+    read; ``last_indexed`` is a Unix timestamp.
+
+    ``bytes`` and ``last_indexed`` are both null for a graph on the shared
+    omnigraph-server: they describe a directory on this machine, and a client
+    of a shared graph has neither the directory nor any business reporting the
+    server's disk. ``files`` stays real — it is a query, not a walk.
+    """
+    out: list[dict] = []
+    for ref in store_module.per_repo_stores(cfg):
+        size, mtime = ref.stats()
+        out.append(
+            {
+                "repo": store_module.repo_for_store(ref, cfg),
+                "files": store_module.file_count(ref, cfg),
+                "bytes": size,
+                "last_indexed": mtime,
+            }
+        )
+    return out
+
+
+@mcp.tool
+def code_indexed_branches(branch: str | None = None) -> list[dict]:
+    """
+    The in-flight branch views each indexed repo's store carries, and who owns each.
+
+    A non-default git branch is indexed onto its own store view, named for the
+    writer as well as the branch (docs/BRANCH_INDEXING.md), so several people
+    — or an agent and its human, or one developer in two worktrees — can each
+    have a view of the same branch without overwriting one another.
+
+    Pass ``branch`` (a raw git branch name) to see every writer's view of that
+    one branch: this is how you find a teammate's in-flight work. Feed a
+    returned ``view`` straight back as the ``branch`` argument of
+    code_find_definition / code_search_symbol / code_symbols_in_file to read
+    it. Omit ``branch`` to list everything.
+
+    Each row is ``{repo, views}``, where a view is
+    ``{view, branch, actor}`` — ``view`` the name to pass back, ``branch`` the
+    sanitized git branch it is a view of, ``actor`` its owner (null on a
+    single-writer local store). ``views`` is null for a store that could not be
+    listed.
+    """
+    wanted = repo_module.branch_store_name(branch) if branch else None
+    out: list[dict] = []
+    for ref in store_module.per_repo_stores(cfg):
+        try:
+            names = _client_for_ref(ref).list_branches()
+        except Exception:  # noqa: BLE001 — one bad store shouldn't abort the list
+            out.append({"repo": store_module.repo_for_store(ref, cfg), "views": None})
+            continue
+        if wanted:
+            found = views.views_for_branch(names, wanted)
+        else:
+            found = sorted(
+                (views.parse_view(n) for n in names if n != "main"),
+                key=lambda v: (v.branch, v.actor or ""),
+            )
+        out.append(
+            {
+                "repo": store_module.repo_for_store(ref, cfg),
+                "views": [
+                    {"view": v.name, "branch": v.branch, "actor": v.actor}
+                    for v in found
+                ],
+            }
+        )
+    return out
+
+
+@mcp.tool
 async def code_interface_search(
     query: str,
     kind: BindingKind | None = None,
@@ -831,14 +1075,20 @@ async def code_interface_search(
     return _filter_by_precision(rows, min_precision)
 
 
-@mcp.tool
-def code_reindex(path: str | None = None, force: bool = False) -> dict:
+@mcp.tool(task=TASKS_ENABLED)
+async def code_reindex(path: str | None = None, force: bool = False) -> dict:
     """
     Index (or re-index) the current repo, or a subpath of it.
 
     Incremental by default — unchanged files (matching content hash) are
     skipped. Lazily creates the per-repo store on first run. Returns a summary of
     files scanned/indexed/skipped and symbols/edges written.
+
+    A full rebuild runs for minutes on a large repo, so this tool accepts
+    task-augmented execution (`io.modelcontextprotocol/tasks`): a client that
+    asks for it gets a task handle back immediately and polls `tasks/get`,
+    instead of holding one tool call open for the whole index. Asking is the
+    client's choice — omit it and the call runs to completion as it always has.
 
     Parameters
     ----------
@@ -849,7 +1099,9 @@ def code_reindex(path: str | None = None, force: bool = False) -> dict:
         Re-index every file regardless of content hash.
     """
     target = Path(path) if path else (repo_module.root() or Path.cwd())
-    stats = indexer.index_path(target, force=force, config=cfg)
+    # Off the event loop: indexing is CPU- and IO-bound and would otherwise
+    # stall every other request on this server for its whole run.
+    stats = await asyncio.to_thread(indexer.index_path, target, force=force, config=cfg)
     return {
         "path": str(target),
         "scanned": stats.scanned,
@@ -859,4 +1111,127 @@ def code_reindex(path: str | None = None, force: bool = False) -> dict:
         "edges": stats.edges,
         "bindings": stats.bindings,
         "errors": stats.errors,
+        "purged": stats.purged,
     }
+
+
+# ── Store tier (machine-facing) ───────────────────────────────────
+#
+# The four store operations a remote indexer performs, served on its behalf
+# against the cluster graphs this deployment can reach and it cannot
+# (:mod:`witan_code.ingest`). Not for agents: they carry no code-graph meaning
+# on their own, and `code_store_mutate` runs named mutations. Registered only
+# where a remote indexer can exist — see `ingest.store_tools_enabled`.
+
+
+def code_store_read(
+    graph: str,
+    query: str,
+    name: str,
+    params: dict | None = None,
+    view: str | None = None,
+) -> list[dict]:
+    """
+    Run a bundled named read query against a code graph. Machine-facing.
+
+    Parameters
+    ----------
+    graph:
+        Canonical repo URI, or ``bridge`` for the cross-repo bridge graph.
+    query:
+        Bundled query file (e.g. ``code_read.gq``).
+    name:
+        Named query within that file.
+    params:
+        Query parameters.
+    view:
+        Branch view to read; omit for the graph's default (main) view.
+    """
+    return ingest.read(graph, view, query, name, params or {})
+
+
+def code_store_mutate(
+    graph: str,
+    query: str,
+    name: str,
+    params: dict | None = None,
+    view: str | None = None,
+) -> dict:
+    """
+    Run a bundled named mutation against a code graph view you own. Machine-facing.
+
+    Refused unless the request's own identity owns ``view`` — see
+    docs/BRANCH_INDEXING.md. Same arguments as ``code_store_read``.
+    """
+    ingest.mutate(graph, view, query, name, params or {})
+    return {"graph": graph, "view": view, "query": f"{query}:{name}"}
+
+
+def code_store_load(
+    graph: str,
+    records: list[dict],
+    mode: str = "merge",
+    view: str | None = None,
+) -> dict:
+    """
+    Bulk-load node/edge records into a code graph view you own. Machine-facing.
+
+    ``records`` are JSONL-shaped: ``{"type": Node, "data": {…}}`` for a node,
+    ``{"edge": Edge, "from": key, "to": key}`` for an edge. Refused unless the
+    request's own identity owns ``view``.
+    """
+    return {"written": ingest.load_records(graph, view, records, mode)}
+
+
+def code_store_open(graph: str, view: str) -> dict:
+    """
+    Create a branch view (forked from main) if it does not exist. Machine-facing.
+
+    Refused unless the request's own identity owns ``view``.
+    """
+    return {"view": ingest.open_view(graph, view)}
+
+
+def code_store_views(graph: str) -> list[str]:
+    """Every branch view on a code graph, ``main`` included. Machine-facing."""
+    return ingest.views(graph)
+
+
+def code_store_graphs() -> list[str]:
+    """
+    Canonical repo URI of every per-repo code graph served here. Machine-facing.
+
+    The bridge graph is not listed: it is one fixed graph, addressed by name.
+    """
+    return ingest.graphs()
+
+
+_STORE_TOOLS = (
+    code_store_read,
+    code_store_mutate,
+    code_store_load,
+    code_store_open,
+    code_store_views,
+    code_store_graphs,
+)
+_store_tools_registered = False
+
+
+def register_store_tools() -> None:
+    """Add the store tools to this server's surface. Idempotent.
+
+    Called at import where a remote indexer can exist. Exposed as a function
+    because whether these are registered is a property of the *process*, not
+    of the module, and a test serving them in-memory has to be able to say so
+    after the import that decided otherwise.
+    """
+    global _store_tools_registered
+    if _store_tools_registered:
+        return
+    for tool in _STORE_TOOLS:
+        mcp.tool(tool)
+    _store_tools_registered = True
+
+
+if ingest.store_tools_enabled():
+    register_store_tools()

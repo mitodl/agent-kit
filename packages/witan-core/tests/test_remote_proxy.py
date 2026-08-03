@@ -8,23 +8,33 @@ resolver hook, the None-dropping, and the admin/unknown refusal wording.
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
 import pytest
 
-from witan_core.remote.proxy import RemoteMCPProxy, RemoteToolUnavailable
+from witan_core.remote.proxy import (
+    RemoteMCPProxy,
+    RemoteToolUnavailable,
+    _tool_input_schema,
+    console_elicitation_handler,
+)
 
 
 class _Proxy(RemoteMCPProxy):
     """A proxy whose policy hooks are set, with arg-map schema pre-seeded."""
 
-    def __init__(self, *, repo=None, admin=frozenset()):
+    def __init__(self, *, repo=None, admin=frozenset(), session=None):
         super().__init__("http://unused/mcp", lambda: "tok")
         self._repo = repo
         self._admin = admin
+        self._session = session
         # Pre-seed the tool schema so _map_args needs no network.
         self._param_names = {
             "task_get": ["slug"],
             "task_ready": ["repo"],
             "task_create": ["title", "description", "repo"],
+            "memory_store": ["kind", "title", "content", "repo", "session_slug"],
         }
 
     def _is_admin_tool(self, name):
@@ -38,6 +48,53 @@ class _Proxy(RemoteMCPProxy):
 
     def _resolve_repo(self):
         return self._repo
+
+    def _resolve_session_slug(self):
+        return self._session
+
+
+# ── cross-version tool-schema access ──────────────────────────────────────
+# `fastmcp>=3.4.2,<5` spans the MCP SDK v1→v2 rename of `Tool.inputSchema` to
+# `input_schema`. Any single CI run installs exactly one of those, so these
+# stand in for the shapes rather than the real Tool class — otherwise the
+# version CI doesn't happen to resolve goes permanently untested.
+
+SCHEMA = {"properties": {"slug": {"type": "string"}}}
+
+
+class _LegacyTool:
+    """fastmcp 3.4.x: camelCase only."""
+
+    inputSchema = SCHEMA
+
+
+class _ModernTool:
+    """fastmcp 4.x: snake_case, with the old name kept as a warning shim."""
+
+    input_schema = SCHEMA
+
+    @property
+    def inputSchema(self):
+        raise AssertionError(
+            "read the deprecated camelCase field on a v2 tool (it warns)"
+        )
+
+
+def test_input_schema_read_from_legacy_camel_case_field():
+    assert _tool_input_schema(_LegacyTool()) == SCHEMA
+
+
+def test_input_schema_prefers_the_modern_field_and_never_reads_the_alias():
+    # _ModernTool raises if the deprecated camelCase alias is touched, so this
+    # fails loudly if the fallback order is ever inverted.
+    assert _tool_input_schema(_ModernTool()) == SCHEMA
+
+
+def test_param_name_extraction_works_on_both_shapes():
+    # The expression _invoke actually builds _param_names with.
+    for tool in (_LegacyTool(), _ModernTool()):
+        names = list(_tool_input_schema(tool).get("properties", {}).keys())
+        assert names == ["slug"]
 
 
 def test_positional_arg_maps_to_param_name():
@@ -59,6 +116,30 @@ def test_repo_empty_string_sentinel_is_preserved():
     p = _Proxy(repo="https://other/repo")
     # "" (all repos) must NOT be replaced by detection.
     assert p._map_args("task_ready", (), {"repo": ""})["repo"] == ""
+
+
+def test_session_slug_is_injected_when_omitted():
+    # The protocol carries no session state, so provenance depends on the client
+    # sending the handle it holds.
+    p = _Proxy(session="ws-abc")
+    out = p._map_args("memory_store", ("lesson", "t", "c"), {})
+    assert out["session_slug"] == "ws-abc"
+
+
+def test_explicit_session_slug_is_not_overwritten():
+    p = _Proxy(session="ws-ambient")
+    out = p._map_args("memory_store", ("lesson", "t", "c"), {"session_slug": "ws-mine"})
+    assert out["session_slug"] == "ws-mine"
+
+
+def test_session_slug_dropped_when_no_active_session():
+    p = _Proxy(session=None)
+    assert "session_slug" not in p._map_args("memory_store", ("lesson", "t", "c"), {})
+
+
+def test_session_slug_not_added_to_tools_without_the_param():
+    p = _Proxy(session="ws-abc")
+    assert "session_slug" not in p._map_args("task_ready", (), {"repo": ""})
 
 
 def test_none_optionals_are_dropped():
@@ -98,3 +179,210 @@ def test_dunder_attributes_are_not_intercepted():
     p = _Proxy()
     with pytest.raises(AttributeError):
         p.__wrapped__
+
+
+# ── answering a deployed server's elicitation prompt ──────────────────────
+# A person is at the terminal, so the CLI can put the ask to them instead of
+# degrading to the tool's default the way an agent-hosted client does.
+
+
+class _Tty:
+    def isatty(self):
+        return True
+
+
+def _ask(monkeypatch, answer, *, boolean, tty=True):
+    """Run the console handler with ``answer`` typed at the prompt."""
+    monkeypatch.setattr("sys.stdin", _Tty() if tty else None)
+    if isinstance(answer, type) and issubclass(answer, BaseException):
+
+        def _input(_prompt):
+            raise answer
+
+    else:
+
+        def _input(_prompt):
+            return answer
+
+    monkeypatch.setattr("builtins.input", _input)
+    field = {"type": "boolean" if boolean else "string"}
+    params = SimpleNamespace(
+        requested_schema={"type": "object", "properties": {"value": field}}
+    )
+    return asyncio.run(console_elicitation_handler("Proceed?", None, params, None))
+
+
+def test_typed_answers_are_accepted(monkeypatch):
+    assert _ask(monkeypatch, "y", boolean=True).content == {"value": True}
+    assert _ask(monkeypatch, "YES", boolean=True).content == {"value": True}
+    # anything that isn't a yes is a no — not a decline, which would instead
+    # hand the tool its unsupported-client default.
+    assert _ask(monkeypatch, "n", boolean=True).content == {"value": False}
+    assert _ask(monkeypatch, "  a value  ", boolean=False).content == {
+        "value": "a value"
+    }
+
+
+@pytest.mark.parametrize("answer", ["", "   ", EOFError, KeyboardInterrupt])
+def test_no_answer_declines(monkeypatch, answer):
+    # Blank, Ctrl-D, and Ctrl-C all mean "don't ask me", which every witan call
+    # site maps onto the same default a client that can't elicit would get.
+    assert _ask(monkeypatch, answer, boolean=True).action == "decline"
+
+
+def test_without_a_terminal_declines_without_reading_stdin(monkeypatch):
+    def _fail(_prompt):
+        raise AssertionError("must not read stdin when there is no terminal")
+
+    monkeypatch.setattr("sys.stdin", None)
+    monkeypatch.setattr("builtins.input", _fail)
+    params = SimpleNamespace(
+        requested_schema={"properties": {"value": {"type": "boolean"}}}
+    )
+    result = asyncio.run(console_elicitation_handler("Proceed?", None, params, None))
+    assert result.action == "decline"
+
+
+def test_client_is_built_with_the_handler(monkeypatch):
+    # Advertising the capability is what makes a deployed tool ask at all, so a
+    # proxy that dropped the handler would silently get the defaults instead.
+    # Asserted on the constructor kwarg rather than a Client attribute, which
+    # differs across the fastmcp 3.4.x/4.x range this package supports.
+    built = {}
+    monkeypatch.setattr(
+        "witan_core.remote.proxy.Client",
+        lambda transport, **kwargs: built.update(kwargs) or object(),
+    )
+    _Proxy()._new_client("tok")
+    assert built["elicitation_handler"] is console_elicitation_handler
+
+
+# ── honoring the server's cache directive ─────────────────────────────────
+# The tool list used to be held for the whole process lifetime — a guess. MCP
+# 2026-07-28 has the server state how long its list results stay fresh, so the
+# proxy holds it for exactly that long instead.
+
+
+class _CountingProxy(RemoteMCPProxy):
+    """A proxy wired to an in-memory server, counting its tools/list calls."""
+
+    def __init__(self, server, mode="auto"):
+        super().__init__("http://unused/mcp", lambda: "tok")
+        self._server = server
+        self._mode = mode
+        self.lists = 0
+
+    def _new_client(self, token):
+        from fastmcp import Client
+
+        client = Client(self._server, mode=self._mode)
+        original = client.list_tools_mcp
+
+        async def _counted(*args, **kwargs):
+            self.lists += 1
+            return await original(*args, **kwargs)
+
+        client.list_tools_mcp = _counted
+        return client
+
+
+def _echo_server(**cache_kwargs):
+    from fastmcp import FastMCP
+
+    server = FastMCP("cache-test", **cache_kwargs)
+
+    @server.tool
+    def echo(value: str) -> str:
+        """Echo the value back."""
+        return value
+
+    return server
+
+
+def test_declared_ttl_bounds_how_long_the_list_is_held(monkeypatch):
+    from witan_core import caching
+
+    proxy = _CountingProxy(_echo_server(**caching.hint_kwargs(ttl_seconds=300)))
+    assert proxy.echo("a") == "a"
+    assert proxy.lists == 1
+
+    # Inside the window the cached list is reused...
+    assert proxy.echo("b") == "b"
+    assert proxy.lists == 1
+
+    # ...and past it the proxy re-lists rather than serving a stale surface.
+    expiry = proxy._param_names_expiry
+    monkeypatch.setattr("time.monotonic", lambda: expiry + 1)
+    assert proxy.echo("c") == "c"
+    assert proxy.lists == 2
+
+
+def test_a_zero_ttl_is_an_instruction_not_a_missing_value():
+    # A 2026-07-28 server that sets no hint still sends ttlMs=0, which says
+    # "do not cache this" — so the proxy re-reads rather than treating the
+    # absence of a *configured* hint as permission to hold the list forever.
+    proxy = _CountingProxy(_echo_server())
+    assert proxy.echo("a") == "a"
+    assert proxy.echo("b") == "b"
+    assert proxy.lists == 2
+
+
+def test_connection_without_the_field_keeps_the_process_lifetime_cache():
+    # A handshake-era peer carries no ttlMs at all, so there is nothing to
+    # honor — hold the list as the proxy always did rather than adding a
+    # round trip to every call.
+    import math
+
+    proxy = _CountingProxy(_echo_server(), mode="legacy")
+    assert proxy.echo("a") == "a"
+    assert proxy._param_names_expiry == math.inf
+    assert proxy.echo("b") == "b"
+    assert proxy.lists == 1
+
+
+class _PagedProxy(RemoteMCPProxy):
+    """A proxy whose tools/list is a canned sequence of pages."""
+
+    def __init__(self, pages):
+        super().__init__("http://unused/mcp", lambda: "tok")
+        self._pages = pages
+
+    async def refresh(self):
+        proxy = self
+
+        class _Client:
+            async def list_tools_mcp(self, cursor=None):
+                index = 0 if cursor is None else int(cursor)
+                return proxy._pages[index]
+
+        await self._refresh_param_names(_Client())
+
+
+def _page(ttl_ms, next_cursor, *, declared=True):
+    """One tools/list page, with `ttl_ms` either declared on the wire or not."""
+    fields = {"ttl_ms"} if declared else set()
+    return SimpleNamespace(
+        tools=[
+            SimpleNamespace(input_schema={"properties": {"value": {}}}, name="echo")
+        ],
+        ttl_ms=ttl_ms,
+        next_cursor=next_cursor,
+        model_fields_set=fields,
+    )
+
+
+def test_shortest_declared_ttl_across_pages_wins(monkeypatch):
+    monkeypatch.setattr("time.monotonic", lambda: 1000.0)
+    # Shorter TTL first, so reading only the last page gives the wrong answer.
+    proxy = _PagedProxy([_page(60_000, "1"), _page(300_000, None)])
+    asyncio.run(proxy.refresh())
+    assert proxy._param_names_expiry == 1000.0 + 60.0
+
+
+def test_a_later_undeclared_page_cannot_upgrade_a_ttl_to_forever(monkeypatch):
+    # Reading only the last page would turn "cache me for 5 minutes" into
+    # "cache me forever" — the one direction that is unsafe.
+    monkeypatch.setattr("time.monotonic", lambda: 1000.0)
+    proxy = _PagedProxy([_page(300_000, "1"), _page(0, None, declared=False)])
+    asyncio.run(proxy.refresh())
+    assert proxy._param_names_expiry == 1000.0 + 300.0

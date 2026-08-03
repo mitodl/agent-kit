@@ -105,9 +105,13 @@ def _project_show(slug: str) -> None:
         console.print(f"  blocks: {', '.join(p['blocks'])}")
     console.print(f"\n{p.get('description') or '(no description)'}\n")
 
-    sessions = s.client.read(
-        "read.gq", "list_sessions_by_project", {"project_slug": slug}
-    )
+    sessions = [
+        sess
+        for sess in s.client.read(
+            "read.gq", "list_sessions_by_project", {"project_slug": slug}
+        )
+        if not sess.get("superseded_by")
+    ]
     console.print(f"  sessions: {len(sessions)}")
     for sess in sessions:
         console.print(
@@ -331,6 +335,83 @@ def project_create(
     if result.get("repos"):
         console.print(f"  repos: {', '.join(_short_repo(r) for r in result['repos'])}")
     console.print(f"  phase: {result['phase']}")
+
+
+@project_app.command(name="update")
+def project_update(
+    slug: str,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    repos: list[str] | None = None,
+    add_repo: list[str] | None = None,
+    remove_repo: list[str] | None = None,
+    tags: list[str] | None = None,
+    github_issue: str | None = None,
+    status: str | None = None,
+) -> None:
+    """Correct a project's metadata after creation.
+
+    Only what you pass is touched, so this can never blank a field by accident.
+
+    The common case is repos: a project's real blast radius is rarely known
+    during discovery, and until the set is right, the project doesn't surface
+    in the injected context of the repos where the work actually lands.
+
+    Two things this deliberately can't do, matching the MCP tool. It can't set
+    the phase — ``project advance`` stays the only route, so a transition is
+    always seen by its ordering check (it allows going backwards, which is how
+    a phase set in error gets corrected). And it can't complete a project:
+    ``--status`` takes ``active`` or ``abandoned``, but ``completed`` belongs to
+    ``project complete``, which seals a corpus trace. Nothing should mint a
+    trace without a narrative.
+
+    Parameters
+    ----------
+    slug: Project ``wp-`` slug.
+    title: Replacement short name.
+    description: Replacement description.
+    repos: Replace the repo set wholesale.
+    add_repo: Repo URIs to add (repeatable, or comma-separated).
+    remove_repo: Repo URIs to drop (repeatable, or comma-separated). Applied
+        after additions.
+    tags: Replacement tags.
+    github_issue: Replacement tracking issue URL.
+    status: ``active`` or ``abandoned``.
+    """
+    if status is not None and status not in ("active", "abandoned"):
+        console.print(
+            f"[red]--status must be 'active' or 'abandoned', not {status!r}.[/red]"
+            + (
+                "\nUse `witan project complete` to complete a project — it seals "
+                "the corpus trace, which needs an outcome narrative."
+                if status == "completed"
+                else ""
+            )
+        )
+        raise SystemExit(1)
+
+    s = _srv()
+    result = _fn(s.workflow_project_update)(
+        slug=slug,
+        title=title,
+        description=description,
+        repos=_split_csv(repos),
+        add_repos=_split_csv(add_repo),
+        remove_repos=_split_csv(remove_repo),
+        tags=_split_csv(tags),
+        github_issue=github_issue,
+        status=status,
+    )
+    if result is None:
+        console.print(f"[red]No project {slug}.[/red]")
+        raise SystemExit(1)
+
+    console.print(f"[green]Updated[/green] [bold]{slug}[/bold]")
+    console.print(f"  title: {escape(result.get('title') or '')}")
+    if result.get("repos"):
+        console.print(f"  repos: {', '.join(_short_repo(r) for r in result['repos'])}")
+    console.print(f"  phase: {result.get('phase')}  status: {result.get('status')}")
 
 
 @project_app.command(name="advance")

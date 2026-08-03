@@ -52,7 +52,7 @@ except ImportError:
 def serve(
     *,
     transport: Annotated[
-        Literal["stdio", "http", "streamable-http", "sse"],
+        Literal["stdio", "http", "streamable-http"],
         cyclopts.Parameter(env_var="WITAN_MCP_TRANSPORT"),
     ] = "stdio",
     host: Annotated[str, cyclopts.Parameter(env_var="WITAN_MCP_HOST")] = "127.0.0.1",
@@ -69,10 +69,13 @@ def serve(
     ``--transport streamable-http`` (or set ``WITAN_MCP_TRANSPORT``) to expose an
     HTTP endpoint for a shared, deployed service — this is what ToolHive hosts.
 
+    The legacy HTTP+SSE transport is not offered: MCP 2026-07-28 deprecates it
+    with a 12-month offramp, and witan has no deployment on it to carry over.
+
     Parameters
     ----------
-    transport: MCP transport. ``stdio`` for local; ``streamable-http``/``http``/
-        ``sse`` bind a network listener. Env: ``WITAN_MCP_TRANSPORT``.
+    transport: MCP transport. ``stdio`` for local; ``streamable-http`` (or its
+        ``http`` alias) binds a network listener. Env: ``WITAN_MCP_TRANSPORT``.
     host: Interface to bind for HTTP transports. ``0.0.0.0`` inside a container.
         Env: ``WITAN_MCP_HOST``.
     port: Port to bind for HTTP transports. Env: ``WITAN_MCP_PORT``.
@@ -84,7 +87,7 @@ def serve(
     try:
         from witan_code.server import mcp as code_mcp
 
-        witan_mcp.mount(code_mcp, prefix=None)
+        witan_mcp.mount(code_mcp)
     except ImportError:
         pass
 

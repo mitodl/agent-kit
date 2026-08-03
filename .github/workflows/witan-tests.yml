@@ -1,16 +1,29 @@
 name: witan tests
 
+# Path-filter rule: a workflow must trigger on every workspace dependency it
+# resolves, not just its own directory, plus the workspace resolution inputs
+# (root pyproject.toml `members` and uv.lock — `uv sync` walks up to the
+# workspace root, so those govern what every package resolves). Otherwise a
+# change to a shared package is green on its own tests alone.
 on:
   push:
     branches: [main]
     paths:
       - "mcp/servers/witan/**"
       - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "packages/agent-config-kit/**"
+      - "uv.lock"
+      - "pyproject.toml"
       - ".github/workflows/witan-tests.yml"
   pull_request:
     paths:
       - "mcp/servers/witan/**"
       - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "packages/agent-config-kit/**"
+      - "uv.lock"
+      - "pyproject.toml"
       - ".github/workflows/witan-tests.yml"
 
 permissions:
@@ -25,7 +38,7 @@ jobs:
         working-directory: mcp/servers/witan
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
@@ -63,7 +76,7 @@ jobs:
         working-directory: mcp/servers/witan
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
@@ -100,7 +113,7 @@ jobs:
         working-directory: mcp/servers/witan-code
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:

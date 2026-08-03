@@ -8,7 +8,11 @@
 - Related: `docs/adr/0002-witan-cedar-authorization-bundle.md` (D1 — per-user
   `witan-users` group); ol-infrastructure
   `docs/adr/0009-deploy-witan-as-shared-multi-tenant-mcp-service.md`;
-  `tk-ol-infrastructure-toolhive-witan-pulumi-stack-e843b3`
+  `tk-ol-infrastructure-toolhive-witan-pulumi-stack-e843b3`;
+  `docs/adr/0006-stateless-mcp-protocol-era.md` (the JWT→actor mapping below is
+  unchanged by the stateless era — it reads the token on each request and never
+  depended on session state — but the `streamable-http` connection it describes
+  no longer carries a handshake or a session id)
 
 ## Context
 
@@ -182,7 +186,7 @@ specifically uses ToolHive's *other* scenario ("Embedded auth server" →
 upstream-token-swap, vMCP-scoped JWT only) — but generalizes that
 configuration choice into "ToolHive's embedded broker does not propagate
 end-user identity to the backend container," which overstates it: a
-*different* toolhive_witan configuration could plausibly get per-user JWT
+*different* `witan`-stack configuration could plausibly get per-user JWT
 forwarding, Cedar authz, or RFC 8693 token exchange from ToolHive itself,
 narrowing or removing the need for D1's own `JWTVerifier` path. This wasn't
 a "future ToolHive release" scenario as line 139 speculated — the capability
@@ -197,13 +201,13 @@ otherwise overlap) is tracked as a separate decision, not resolved here:
 ### Resolution (2026-07-10) — keep D1–D4 as designed; fix the ToolHive scenario, not the code
 
 `tk-revisit-adr-0004-adr-0009-per-user-identity-desi-e9005a` is resolved as:
-**adopt ToolHive's "External OIDC provider" scenario for `toolhive_witan`'s
+**adopt ToolHive's "External OIDC provider" scenario for the `witan` stack's
 auth config; do not adopt ToolHive's Cedar authorizer or RFC 8693 token
 exchange; make no code change to D1–D4.**
 
 - **Identity propagation.** The "Forces" section's mistake was inferring a
   platform limitation from `toolhive_swe`'s specific scenario
-  ("Embedded auth server" → upstream-token-swap). `toolhive_witan` doesn't
+  ("Embedded auth server" → upstream-token-swap). The `witan` stack doesn't
   have to use that scenario. Configuring it instead with ToolHive's
   "External OIDC provider" scenario makes ToolHive forward the client's
   genuine Keycloak-issued JWT to the backend container unmodified — which is
@@ -230,7 +234,53 @@ exchange; make no code change to D1–D4.**
   pre-filtering (e.g. rate-limiting a tool before it reaches witan at all)
   shows up.
 - **Follow-up.** The ol-infrastructure side of this decision — configuring
-  `toolhive_witan`'s `MCPServer`/`VirtualMCPServer` with the "External OIDC
+  the `witan` stack's `MCPServer`/`VirtualMCPServer` with the "External OIDC
   provider" scenario instead of copying `toolhive_swe`'s "Embedded auth
   server" pattern — is recorded in ADR-0009's own resolution addendum and in
   `tk-ol-infrastructure-toolhive-witan-pulumi-stack-e843b3`.
+
+### Addendum (2026-07-31) — D5: the `author` field is resolved per request, not from config
+
+D1–D4 decided *which omnigraph client* performs a write. They said nothing
+about the `author` value the write carries, and the gap showed up once the
+per-request wiring landed: `cfg.author` is module-level, evaluated once at
+process startup, so under a deployment every `Memory`, `WorkflowProject`,
+`WorkflowTrace`, `WorkflowSession`, and `Task` was attributed to the server
+container's own identity. Writes were routed per user while `author` stayed a
+single constant deployment-wide — enough to make `workflow_trace_list(author=…)`
+an inert filter, flatten the ranking layer's author-trust signal, and strip
+mined corpus traces of the provenance that is the point of their being a shared
+team artifact.
+
+**Decision.** A `_current_author()` helper, sibling to `_resolve_client()` and
+gated by the same `_is_local_stdio()` discriminator, resolves the identity at
+call time from the request's validated JWT.
+
+- **Local stdio keeps `cfg.author`.** `WITAN_AUTHOR` / `git config user.name` /
+  `$USER` is already the right answer when the server is the user's own
+  process. Unchanged behaviour, not a fallback that happens to work.
+- **Deployed calls without a token also keep `cfg.author`.** Same reasoning as
+  `_resolve_client`: FastMCP rejects unauthenticated tool requests, so a
+  missing token means an admin/migration CLI call inside the container, which
+  has no caller identity to attribute.
+- **Otherwise, prefer `preferred_username`, then `email`, then `act-<sub>`.**
+  Readability is the deciding factor: `author` is consumed by human-facing
+  author filters and by the author-trust ranking config, and neither has a
+  name-resolution step that could turn a UUID back into a person. The derived
+  actor id — the same one D2 defines — is the last resort, so attribution
+  degrades to opaque-but-correct rather than to the wrong user.
+
+**Rejected: a separate `actor_id` field alongside `author`.** It would survive
+a Keycloak username change, which reusing `author` does not, but it costs a
+schema change across five node types plus the insert mutations, the read
+projections, and the read models — a large surface for a failure mode
+(a renamed user's older nodes keep the old name) that is cosmetic in an
+internal team corpus. Revisit if attribution ever needs to be authoritative
+rather than descriptive.
+
+`task_claim` / `task_release` default their holder to the same helper, so the
+multi-user default is the calling user rather than one shared identity that
+every parallel agent would collide on.
+
+No backfill: this lands before the service carries production traffic, so
+there are no nodes written under the old uniform-author behaviour.

@@ -89,7 +89,7 @@ export WITAN_AUTHOR="Your Name"
 |---|---|---|---|
 | `WITAN_MEMORY_URI` | No | `~/.local/share/witan/graph.omni` | Graph URI — local path, `s3://`, or `http://` |
 | `WITAN_MEMORY_TOKEN` | Only for `http://` | — | Bearer token for remote server auth |
-| `WITAN_AUTHOR` | No | `$USER` | Attribution on every insert |
+| `WITAN_AUTHOR` | No | `$USER` | Attribution on every insert. Local stdio only — a deployed server attributes each write to the calling user's JWT instead (see [ADR-0004](docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md)) |
 | `WITAN_REPO` | No | — | Repo slug override (bypasses git detection) |
 | `WITAN_SCAN_ENABLED` | No | `true` | Write-path secret/PII scanning; set to `false` to opt out — see [Write-path content scanning](docs/write-path-scanning.md) |
 | `WITAN_OPTIMIZE_INTERVAL` | No | `86400` | Throttle window (seconds) for the Stop hook's opportunistic background store compaction; `0` disables it |
@@ -125,13 +125,14 @@ See [`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](./witan/sk
 | `workflow_project_create` | Create a new project (`wp-` slug) to track an engineering objective |
 | `workflow_project_get` | Fetch a single project by slug |
 | `workflow_project_list` | List projects filtered by repo, status, or phase; defaults to active |
+| `workflow_project_update` | Correct title/description/repos/tags/issue post-creation, or mark a project abandoned |
 | `workflow_project_advance` | Advance a project to the next phase (discovery → spec → implementation → delivery) |
 | `workflow_project_complete` | Mark project done; assembles a `WorkflowTrace` corpus record from all sessions |
 | `workflow_project_link_memory` | Attach a memory (pattern/lesson/project_fact) to a project via an `Informed` edge |
 | `workflow_project_block` | Declare that one project must complete before another can begin |
 | `workflow_project_unblock` | Remove a project dependency declared with `workflow_project_block` |
 | `workflow_project_get_blockers` | Return all projects currently blocking the given project |
-| `workflow_session_start` | Link the current agent session to a project; writes a state file for the Stop hook |
+| `workflow_session_start` | Link the current agent session to a project; writes a state file for the Stop hook. Re-entrant — a retry returns the open session rather than minting a second one |
 | `workflow_session_end` | Close the session with a summary, tools used, and files changed |
 | `workflow_trace_get` | Fetch a completed project's corpus `WorkflowTrace` by its `wt-`/`wp-` slug |
 

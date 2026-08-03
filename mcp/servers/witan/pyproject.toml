@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.6.0"
+version = "0.9.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -15,17 +15,18 @@ keywords = [
 ]
 classifiers = ["Programming Language :: Python :: 3"]
 dependencies = [
-  "fastmcp>=3.4.2,<4",
+  "fastmcp>=3.4.2,<5",
   "cyclopts>=4,<5",
   "rich>=13",
   "pydantic>=2,<3",
   "agent-config-kit>=0.4,<1",
-  "witan-core[cli,remote]>=0.2,<1",
+  "witan-core[cli,remote]>=0.7,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
-  # login (ADR 0005). Also a transitive fastmcp dep, but relied on directly.
-  "httpx>=0.27",
+  # login (ADR 0005). Also fastmcp's own HTTP client dep (Pydantic's
+  # httpx2 fork), relied on directly rather than adding classic httpx too.
+  "httpx2>=2.5",
 ]
 
 [project.urls]
@@ -64,7 +65,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.6.0"
+current_version = "0.8.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

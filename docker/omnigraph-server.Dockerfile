@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 #
 # omnigraph-server — witan's data tier (ADR-0009 decision point 2 / option 3).
 #
@@ -10,7 +10,7 @@
 # on boot). All three cluster schemas are baked under ${OMNIGRAPH_CLUSTER_DIR}/:
 # schema.pg (the `council` memory/work graph), code-schema.pg (per-repo
 # `code-<repo>` graphs), and bridge-schema.pg (the shared `code-bridge` graph).
-# The toolhive_witan Pulumi stack mounts a generated cluster.yaml alongside them
+# The `omnigraph` Pulumi stack mounts a generated cluster.yaml alongside them
 # via a ConfigMap `subPath` (single-file overlay) precisely so it does not
 # shadow these baked-in schemas.
 #
@@ -25,7 +25,7 @@
 ARG OMNIGRAPH_VERSION=0.8.1
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
-FROM debian:trixie-slim AS fetch
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS fetch
 ARG OMNIGRAPH_VERSION
 ARG TARGETARCH=amd64
 RUN apt-get update \
@@ -53,7 +53,7 @@ RUN set -eux; \
     /out/omnigraph --version
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-FROM debian:trixie-slim AS runtime
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
 ARG OMNIGRAPH_VERSION
 LABEL org.opencontainers.image.title="omnigraph-server" \
       org.opencontainers.image.description="witan data tier — S3-backed omnigraph graph server" \
@@ -74,7 +74,7 @@ COPY docker/omnigraph-server-entrypoint.sh /usr/local/bin/omnigraph-server-entry
 # cluster.yaml (added at deploy time), and the ephemeral `__cluster/` state the
 # entrypoint's `cluster import`/`apply` writes — so it must be owned by the
 # non-root runtime user. Keep this path in lockstep with CLUSTER_CONFIG_DIR in
-# ol-infrastructure src/ol_infrastructure/applications/toolhive_witan/data_tier.py.
+# ol-infrastructure src/ol_infrastructure/applications/omnigraph/data_tier.py.
 ENV OMNIGRAPH_CLUSTER_DIR=/etc/omnigraph/cluster
 RUN mkdir -p "${OMNIGRAPH_CLUSTER_DIR}" \
     && chmod +x /usr/local/bin/omnigraph-server-entrypoint.sh
@@ -91,7 +91,7 @@ RUN chown -R omnigraph:omnigraph /etc/omnigraph
 USER omnigraph
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/omnigraph-server-entrypoint.sh"]
-# Overridden by the toolhive_witan Deployment's `args`
+# Overridden by the `omnigraph` stack's Deployment `args`
 # (--cluster /etc/omnigraph/cluster --bind 0.0.0.0:8080); this default keeps the
 # image runnable standalone and documents the expected invocation.
 CMD ["--cluster", "/etc/omnigraph/cluster", "--bind", "0.0.0.0:8080"]

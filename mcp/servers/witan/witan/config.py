@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from witan_core.config_file import load_toml as _load_toml_shared
+from witan_core.remote.config import RemoteConfig, resolve_remote_config
 from witan_core.target_config import (
     local_project_path,
     match_target,
@@ -141,6 +142,8 @@ class IdentityConfig(BaseModel):
     Sourced entirely from ``WITAN_OIDC_*``/``WITAN_ACTOR_TOKENS_FILE`` env
     vars — this is deployment/ops config for the shared ``streamable-http``
     service, not something an individual local user sets in config.toml.
+    Unaffected by the stateless 2026-07-28 era (ADR-0006): the mapping reads
+    the JWT on every request and never depended on session state.
     ``oidc_issuer`` unset means the deployed-auth path is disabled entirely
     (local ``stdio`` usage never sets it).
     """
@@ -190,50 +193,6 @@ def load_identity_config() -> IdentityConfig:
     )
 
 
-class RemoteConfig(BaseModel):
-    """Client-side config for the CLI's remote MCP-client mode (ADR 0005, path a).
-
-    Opt-in: no configured ``url`` means the CLI runs its in-process path
-    exactly as before. When set, ``witan.cli._common._srv()`` routes every
-    command through the deployed witan MCP endpoint over ``streamable-http``,
-    authenticated with a per-user Keycloak JWT (device-code flow, see
-    ``witan/remote/oidc.py``).
-
-    Resolved by ``load_remote_config()`` the same way as ``Config`` — env var
-    > named ``[targets.<name>]`` override > global config.toml value >
-    default — so different orgs/repos/checkouts can point at different
-    deployed witan services under the same target that already routes their
-    omnigraph store (``server``/``graph``/``token``).
-
-    These name the *client's* view of the deployment and are deliberately
-    separate from the server-side ``IdentityConfig`` triple
-    (``WITAN_ACTOR_TOKENS_FILE`` et al.), which the CLI user never sets.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    url: str
-    """The deployed witan MCP endpoint, e.g. https://witan.example.org/mcp."""
-
-    oidc_issuer: str
-    """Keycloak realm issuer URL — where ``witan login`` discovers the device
-    authorization and token endpoints."""
-
-    oidc_client_id: str = "witan-cli"
-    """Public OIDC client id registered for the device grant."""
-
-    oidc_audience: str | None = None
-    """Optional audience/resource to request, matching the deployment's
-    ``WITAN_OIDC_AUDIENCE``. When set it is sent as the ``audience`` parameter
-    on the device-auth and token requests (``witan_core.remote.oidc.DeviceAuth._auth_params``);
-    Keycloak realms with an audience mapper honor it to stamp the ``aud`` claim
-    the server validates, and realms without one ignore it harmlessly."""
-
-    target_name: str | None = None
-    """Name of the matched [targets.<name>] section that supplied any of the
-    above, or None when resolved from env vars/global config.toml alone."""
-
-
 def load_remote_config(target: str | None = None) -> RemoteConfig | None:
     """Resolve RemoteConfig from env > named target > global config.toml > default.
 
@@ -244,7 +203,9 @@ def load_remote_config(target: str | None = None) -> RemoteConfig | None:
     can carry ``remote_url``/``oidc_issuer``/``oidc_client_id``/
     ``oidc_audience`` alongside its omnigraph ``server``/``graph``/``token``,
     so one target routes both the store and which deployed witan service the
-    CLI talks to.
+    CLI talks to. witan-code's CLI reads the same keys off the same target
+    (``witan_code.config.load_remote_config``) — the deployment mounts both
+    tool surfaces on one endpoint.
 
     Returns ``None`` when no ``url`` is configured from any source
     (in-process mode). Raises ``ValueError`` if a URL is configured without an
@@ -266,42 +227,7 @@ def load_remote_config(target: str | None = None) -> RemoteConfig | None:
             targets, repo_uri=repo_module.detect(), local_path=local_project_path()
         )
 
-    url = _first(
-        os.environ.get("WITAN_REMOTE_URL"),
-        selected.remote_url if selected else None,
-        file_cfg.get("remote_url"),
-    )
-    if not url:
-        return None
-    issuer = _first(
-        os.environ.get("WITAN_OIDC_ISSUER"),
-        selected.oidc_issuer if selected else None,
-        file_cfg.get("oidc_issuer"),
-    )
-    if not issuer:
-        raise ValueError(
-            "A remote witan URL is configured but no OIDC issuer is — the "
-            "CLI cannot obtain a Keycloak JWT to authenticate the remote MCP "
-            "connection. Set WITAN_OIDC_ISSUER (or oidc_issuer in "
-            "config.toml / the matched target), and if the deployment checks "
-            "it, WITAN_OIDC_AUDIENCE — or unset the remote URL."
-        )
-    return RemoteConfig(
-        url=url,
-        oidc_issuer=issuer,
-        oidc_client_id=_first(
-            os.environ.get("WITAN_OIDC_CLIENT_ID"),
-            selected.oidc_client_id if selected else None,
-            file_cfg.get("oidc_client_id"),
-            default="witan-cli",
-        ),
-        oidc_audience=_first(
-            os.environ.get("WITAN_OIDC_AUDIENCE"),
-            selected.oidc_audience if selected else None,
-            file_cfg.get("oidc_audience"),
-        ),
-        target_name=selected.name if selected else None,
-    )
+    return resolve_remote_config(file_cfg, selected)
 
 
 ScanAction = Literal["block", "redact", "warn"]
@@ -601,7 +527,9 @@ def default_config_toml() -> str:
 # witan-code reads this same file, so a target can also carry `code_dir`. A
 # target can also carry remote_url/oidc_issuer/oidc_client_id/oidc_audience
 # to point the CLI at a deployed witan service instead of running in-process
-# (see RemoteConfig/load_remote_config() in witan/config.py, ADR 0005).
+# (see witan_core.remote.config.RemoteConfig, ADR 0005). Those four keys route
+# BOTH CLIs — `witan` and `witan-code` — since the deployment serves both tool
+# surfaces on one endpoint.
 #
 # [targets.work]
 # server = "http://witan.internal:8080"

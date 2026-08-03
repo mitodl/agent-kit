@@ -2,8 +2,19 @@
 
 Exposed standalone as ``witan-code`` and mounted as ``witan code`` (see
 pyproject ``[project.scripts]``).
+
+Read commands (``symbols``, ``deps``, ``stitch``, ``repos``, ``branches``)
+dispatch through :func:`_srv`, which is the ``witan_code.server`` module
+in-process by default and a ``RemoteServerProxy`` when a deployed endpoint is
+configured (ADR 0005, path a) — so the same command reads the local stores or a
+deployment's without any call site knowing which. Write and maintenance
+commands (``index``, ``reindex``, ``optimize``, ``cleanup``, ``checkpoint``,
+the hooks) need the checkout and the store files on disk, so they stay local
+unconditionally.
 """
 
+import asyncio
+import inspect
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -26,6 +37,68 @@ app = make_app(
 )
 
 BindingKind = Literal["env_var", "package", "service", "endpoint"]
+
+_server = None
+
+
+def _srv():
+    """Return the tool provider the read commands dispatch through.
+
+    In-process ``witan_code.server`` by default; a network-dispatching
+    ``RemoteServerProxy`` when ``WITAN_REMOTE_URL`` (or a matched target's
+    ``remote_url``) is set. The proxy mirrors the server module's tool surface,
+    so every call site is identical either way.
+    """
+    global _server
+    if _server is None:
+        from . import config as cfg_module
+
+        # A misconfigured remote (e.g. WITAN_REMOTE_URL without
+        # WITAN_OIDC_ISSUER) raises ValueError here; surface it as a clean CLI
+        # error rather than letting a traceback escape every read command.
+        try:
+            remote = cfg_module.load_remote_config()
+        except ValueError as exc:
+            print(exc)
+            raise SystemExit(1) from None
+        if remote is not None:
+            from .remote.oidc import default_token_provider
+            from .remote.proxy import RemoteServerProxy
+
+            _server = RemoteServerProxy(remote, default_token_provider(remote))
+        else:
+            from . import server as server_module
+
+            _server = server_module
+    return _server
+
+
+def _fn(tool):
+    """Unwrap a FastMCP-decorated tool to a directly-callable function.
+
+    Tools that gained MCP elicitation are ``async def`` (they take a
+    ``ctx: Context`` FastMCP injects). The CLI calls them directly, not through
+    an MCP client, so wrap a coroutine tool to run to completion via
+    ``asyncio.run`` — with no ctx it falls back to its non-interactive default,
+    which is the right behavior for a plain ``witan-code …`` command. The
+    remote proxy's attributes are already plain callables, so this is a no-op
+    against it.
+    """
+    fn = getattr(tool, "fn", tool)
+    if inspect.iscoroutinefunction(fn):
+
+        def runner(*args, **kwargs):
+            return asyncio.run(fn(*args, **kwargs))
+
+        return runner
+    return fn
+
+
+def _is_remote() -> bool:
+    """Whether reads are currently dispatching to a deployment."""
+    from . import server as server_module
+
+    return _srv() is not server_module
 
 
 def _render_table(
@@ -101,31 +174,12 @@ def deps(
         this command has always shown). `precise` keeps only edges also
         covered by a Stage-2 canonical-symbol join — see `witan code stitch`.
     """
-    from . import config as cfg_module
-    from . import store as store_module
     from . import visualize
-    from .graph import OmnigraphClient
 
-    cfg = cfg_module.load()
-    store = store_module.bridge_store(cfg)
-    if not store.exists():
-        print("No bridge store yet — run `witan code index` in your repos first.")
-        return
-
-    client = OmnigraphClient(str(store), cfg.queries_dir)
-    rows = client.read("bridge.gq", "all_bindings", {})
-    repo_symbol_rows = (
-        client.read("bridge.gq", "all_repo_symbols", {})
-        if min_precision == "precise"
-        else None
+    payload = _fn(_srv().code_repo_dependencies)(
+        kind=kind, repo=repo, min_precision=min_precision
     )
-    graph = visualize.build_graph(
-        rows,
-        kind=kind,
-        repo=repo,
-        min_precision=min_precision,
-        repo_symbol_rows=repo_symbol_rows,
-    )
+    graph = visualize.from_payload(payload)
     visualize.render_rich(graph)
 
     if html is not None:
@@ -160,33 +214,17 @@ def symbols(
     """
     from rich.console import Console
 
-    from . import config as cfg_module
     from . import repo as repo_module
-    from . import store as store_module
-    from .graph import OmnigraphClient
 
     console = Console()
-    cfg = cfg_module.load()
-    store = store_module.bridge_store(cfg)
-    if not store.exists():
-        console.print(
-            "No bridge store yet — run `witan code index` in your repos first."
-        )
-        return
-
+    # Resolved here, not server-side: a deployment has no checkout to detect
+    # from, and the table title names the repo either way.
     repo = repo or repo_module.detect()
     if not repo:
         console.print("No repo detected — pass --repo <canonical URI>.")
         return
 
-    client = OmnigraphClient(str(store), cfg.queries_dir)
-    rows = client.read("bridge.gq", "repo_symbols", {"repo": repo})
-    rows = [
-        r
-        for r in rows
-        if (role is None or r.get("role") == role)
-        and (scheme is None or r.get("scheme") == scheme)
-    ]
+    rows = _fn(_srv().code_repo_symbols)(repo=repo, role=role, scheme=scheme)
     if not rows:
         console.print(f"[dim]No symbol table rows for {repo}.[/dim]")
         return
@@ -235,42 +273,24 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
     """
     from rich.console import Console
 
-    from . import config as cfg_module
-    from . import store as store_module
-    from . import stitch as stitch_module
-    from .graph import OmnigraphClient
-
     console = Console()
-    cfg = cfg_module.load()
-    store = store_module.bridge_store(cfg)
-    if not store.exists():
-        console.print(
-            "No bridge store yet — run `witan code index` in your repos first."
-        )
-        return
-
-    client = OmnigraphClient(str(store), cfg.queries_dir)
-    rows = client.read("bridge.gq", "all_repo_symbols", {})
-    edges, unresolved_rows = stitch_module.resolve(rows)
 
     if unresolved:
-        if repo is not None:
-            unresolved_rows = [r for r in unresolved_rows if r["repo"] == repo]
+        unresolved_rows = _fn(_srv().code_unresolved_symbols)(repo=repo)
         if not unresolved_rows:
             console.print("[dim]No unresolved external symbols.[/dim]")
             return
-        table_rows: list[dict[str, object]] = []
-        for r in sorted(
-            unresolved_rows, key=lambda r: (r["repo"] or "", r["symbol"] or "")
-        ):
-            table_rows.append(
-                {
-                    "repo": r["repo"] or "",
-                    "symbol": r["symbol"] or "",
-                    "kind": r["kind"] or "",
-                    "refs": r.get("n_refs"),
-                }
+        table_rows: list[dict[str, object]] = [
+            {
+                "repo": r["repo"] or "",
+                "symbol": r["symbol"] or "",
+                "kind": r["kind"] or "",
+                "refs": r.get("n_refs"),
+            }
+            for r in sorted(
+                unresolved_rows, key=lambda r: (r["repo"] or "", r["symbol"] or "")
             )
+        ]
         _render_table(
             title="Unresolved external symbols",
             columns=["repo", "symbol", "kind", "refs"],
@@ -278,23 +298,26 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
         )
         return
 
-    if repo is not None:
-        edges = [e for e in edges if repo in (e.consumer_repo, e.provider_repo)]
+    edges = _fn(_srv().code_precise_edges)(repo=repo)
     if not edges:
         console.print("[dim]No precise cross-repo edges.[/dim]")
         return
     table_rows = [
         {
-            "consumer": e.consumer_repo or "",
-            "provider": e.provider_repo or "",
-            "kind": e.kind or "",
-            "matches": e.match_count,
-            "preferred": "yes" if e.preferred else "",
-            "ambiguous": "yes" if e.ambiguous_version else "",
+            "consumer": e["consumer_repo"] or "",
+            "provider": e["provider_repo"] or "",
+            "kind": e["kind"] or "",
+            "matches": e["match_count"],
+            "preferred": "yes" if e["preferred"] else "",
+            "ambiguous": "yes" if e["ambiguous_version"] else "",
         }
         for e in sorted(
             edges,
-            key=lambda e: (e.consumer_repo or "", e.provider_repo or "", e.kind or ""),
+            key=lambda e: (
+                e["consumer_repo"] or "",
+                e["provider_repo"] or "",
+                e["kind"] or "",
+            ),
         )
     ]
     _render_table(
@@ -332,37 +355,59 @@ def serve() -> None:
     mcp.run()
 
 
-def _resolve_store(store: str | None, *, bridge: bool = False) -> Path | None:
-    """Resolve a store path — explicit, the shared bridge, or the current
-    repo's — printing and returning ``None`` if it doesn't exist yet (nothing
-    to compact). Expands ``~`` in an explicit path so ``--store ~/…`` isn't
-    treated as missing.
+def _resolve_store(store: str | None, *, bridge: bool = False):
+    """Resolve a store to compact — explicit, the shared bridge, or the current
+    repo's — printing and returning ``None`` if there is nothing to compact.
+    Expands ``~`` in an explicit path so ``--store ~/…`` isn't treated as
+    missing.
+
+    A cluster graph is refused rather than resolved: ``optimize``/``cleanup``
+    are direct-storage commands (they reject ``--server``) and compacting the
+    shared store is the cluster's own job, run against the S3 root by a
+    maintenance CronJob, not by whichever client happened to finish a session.
+
+    An explicit ``--store`` is only run through ``Path`` when it is NOT a URL:
+    ``Path("https://host").expanduser()`` collapses the ``//`` to ``/``, which
+    left ``https:/host`` failing the http(s) test and being refused as a
+    missing local directory — the one input the cluster refusal above exists
+    to catch.
     """
     from . import config as cfg_module
     from . import repo as repo_module
+    from . import store as store_module
 
     cfg = cfg_module.load()
     if store is not None:
-        path = Path(store).expanduser()
+        raw = (
+            store
+            if store.startswith(("http://", "https://"))
+            else str(Path(store).expanduser())
+        )
+        ref = store_module.StoreRef(raw)
     elif bridge:
-        path = cfg_module.bridge_store_path(cfg.code_dir)
+        ref = store_module.bridge_store(cfg)
     else:
         slug = repo_module.detect()
         if slug is None:
             print("No repo detected — pass --store PATH or --bridge.")
             return None
-        path = cfg_module.store_path(slug, cfg.code_dir)
-    if not path.exists():
-        print(f"No store at {path} — nothing to do.")
+        ref = store_module.store_for_repo(slug, cfg)
+    if ref.is_remote:
+        print(
+            f"{ref} is a shared cluster graph — compaction runs server-side "
+            "against the storage root, not from a client. Nothing to do here."
+        )
         return None
-    return path
+    if not ref.exists():
+        print(f"No store at {ref} — nothing to do.")
+        return None
+    return ref
 
 
-def _maintenance_client(store: Path):
+def _maintenance_client(ref):
     from . import config as cfg_module
-    from .graph import OmnigraphClient
 
-    return OmnigraphClient(str(store), cfg_module.load().queries_dir)
+    return ref.client(cfg_module.load())
 
 
 @app.command
@@ -378,11 +423,11 @@ def optimize(*, store: str | None = None, bridge: bool = False) -> None:
     store: Store path to optimize (default: the current repo's store).
     bridge: Optimize the shared cross-repo bridge store instead.
     """
-    path = _resolve_store(store, bridge=bridge)
-    if path is None:
+    ref = _resolve_store(store, bridge=bridge)
+    if ref is None:
         return
-    print(f"Optimizing {path} …")
-    _maintenance_client(path).optimize()
+    print(f"Optimizing {ref} …")
+    _maintenance_client(ref).optimize()
     print("Optimized. (run `witan-code cleanup` to reclaim disk)")
 
 
@@ -409,20 +454,135 @@ def cleanup(
     older_than: Also keep versions newer than this Go-style duration (e.g. 7d).
     yes: Confirm the destructive operation (required to actually run).
     """
-    path = _resolve_store(store, bridge=bridge)
-    if path is None:
+    ref = _resolve_store(store, bridge=bridge)
+    if ref is None:
         return
     if not yes:
         print(
             f"cleanup is destructive — would keep the {keep} most recent "
             f"version(s) per table"
             + (f" and anything newer than {older_than}" if older_than else "")
-            + f" in {path}.\nRe-run with --yes to proceed."
+            + f" in {ref}.\nRe-run with --yes to proceed."
         )
         return
-    print(f"Cleaning up {path} (keep={keep}) …")
-    _maintenance_client(path).cleanup(keep=keep, older_than=older_than)
+    print(f"Cleaning up {ref} (keep={keep}) …")
+    _maintenance_client(ref).cleanup(keep=keep, older_than=older_than)
     print("Cleaned up.")
+
+
+@app.command(name="reap-views")
+def reap_views(
+    *,
+    store: str | None = None,
+    graph: str | None = None,
+    max_idle_days: float | None = None,
+    apply: bool = False,
+) -> None:
+    """Delete branch views nobody has written in a long time (**destructive**).
+
+    On a shared cluster graph every developer's every git branch gets a view of
+    its own, and nothing ever removes one — this is what bounds that. Views are
+    re-derivable caches, so a reaped view costs its owner a reindex, not work.
+
+    Distinct from ``branches --prune``, which asks whether *this checkout* still
+    has the git branch and so only makes sense against a store this machine
+    alone writes. This asks how long ago a view was last written, which a shared
+    graph can answer for every writer. A view with no writes of its own is never
+    reaped: it holds nothing, and there is no creation timestamp to age it by.
+
+    Reports by default; ``--apply`` is what deletes. On a shared graph deleting
+    requires ``WITAN_CODE_INDEX_ROLE=ci`` — Cedar grants ``branch_delete`` to
+    the CI indexer alone, and refusing here makes that a clear local error
+    rather than a server denial.
+
+    Parameters
+    ----------
+    store: Graph to sweep — a store path, or an ``http(s)://`` omnigraph-server
+        URL. Default: every store this config resolves to (cluster graphs when
+        ``code_server`` is set, else the local ones), the shared bridge
+        included.
+    graph: Cluster graph id, when ``--store`` is a server URL that doesn't
+        encode one as ``.../graphs/<id>``.
+    max_idle_days: Reap views idle at least this long (default: 14, or
+        ``WITAN_CODE_VIEW_MAX_IDLE_DAYS``). ``0`` disables reaping.
+    apply: Actually delete. Without it, nothing is written.
+    """
+    from . import config as cfg_module
+    from . import reaper as reaper_module
+    from . import store as store_module
+    from .graph import OmnigraphClient
+
+    cfg = cfg_module.load()
+    if store is None and cfg.code_transport == cfg_module.CODE_TRANSPORT_MCP:
+        # Same shape as optimize/cleanup's refusal: reaping reads each view's
+        # commit log and deletes branches, neither of which the MCP tier serves
+        # — it is the cluster's own scheduled job, run with the CI role.
+        print(
+            "Code graphs are reached through the deployed witan endpoint "
+            f"({cfg.target_name or 'code_transport = mcp'}), which does not "
+            "serve view reaping — it runs in-cluster, as the CI indexer. "
+            "Nothing to do here."
+        )
+        return
+    try:
+        idle = reaper_module.max_idle_days() if max_idle_days is None else max_idle_days
+    except ValueError as exc:
+        print(exc)
+        raise SystemExit(1) from None
+
+    if store is not None:
+        targets = [(store, OmnigraphClient(store, cfg.queries_dir, graph_id=graph))]
+    else:
+        refs = [
+            *store_module.per_repo_stores(cfg),
+            store_module.bridge_store(cfg),
+        ]
+        targets = [(str(r), r.client(cfg)) for r in refs if r.exists(cfg)]
+    if not targets:
+        print("No code-graph stores — nothing to reap.")
+        return
+    if idle <= 0:
+        print(
+            f"Reaping is disabled ({reaper_module.MAX_IDLE_ENV_VAR}=0) — "
+            f"{len(targets)} store(s) left untouched."
+        )
+        return
+
+    failed_graphs = 0
+    for name, client in targets:
+        try:
+            report = reaper_module.reap(
+                client, graph=name, max_idle=idle, apply=apply, cfg=cfg
+            )
+        except PermissionError as exc:
+            print(exc)
+            raise SystemExit(1) from None
+        except RuntimeError as exc:
+            # A graph that can't be surveyed (unreadable store, unexpected
+            # omnigraph output) must not strand the others — but it must not
+            # pass for a clean sweep either, so it shows up in the exit code.
+            print(f"{name}: FAILED to survey — {exc}")
+            failed_graphs += 1
+            continue
+        _print_reap_report(report, idle=idle)
+
+    if not apply:
+        print("\n(report only — re-run with --apply to delete)")
+    if failed_graphs:
+        raise SystemExit(1)
+
+
+def _print_reap_report(report, *, idle: float) -> None:
+    print(
+        f"{report.graph}: {report.scanned} view(s), {len(report.stale)} idle ≥{idle:g}d"
+    )
+    deleted = set(report.deleted)
+    for age in report.stale:
+        verb = "reaped" if age.view in deleted else "stale "
+        days = age.idle_days(report.now)
+        print(f"  {verb} {age.view} (owner {age.owner or 'nobody'}, idle {days:.1f}d)")
+    for view, err in report.failed:
+        print(f"  FAILED {view}: {err}")
 
 
 @app.command
@@ -435,26 +595,26 @@ def checkpoint() -> None:
     and non-blocking: always exits 0 and never raises, so a maintenance
     failure can't fail the Stop hook. Registered as the bare ``Stop`` hook
     command; not usually run by hand.
+
+    A no-op against cluster graphs — ``maintenance.due()`` never fires for a
+    remote store, since compacting the shared storage root is the cluster's
+    job rather than every client's at the end of every session.
     """
     from . import config as cfg_module
     from . import maintenance as maintenance_module
     from . import repo as repo_module
+    from . import store as store_module
 
     cfg = cfg_module.load()
     slug = repo_module.detect()
+    refs = [store_module.bridge_store(cfg)]
     if slug is not None:
+        refs.insert(0, store_module.store_for_repo(slug, cfg))
+    for ref in refs:
         try:
-            maintenance_module.spawn_background_optimize(
-                cfg_module.store_path(slug, cfg.code_dir)
-            )
+            maintenance_module.spawn_background_optimize(ref.uri)
         except Exception:  # noqa: BLE001 — maintenance must never fail the hook
             pass
-    try:
-        maintenance_module.spawn_background_optimize(
-            cfg_module.bridge_store_path(cfg.code_dir)
-        )
-    except Exception:  # noqa: BLE001 — maintenance must never fail the hook
-        pass
 
 
 @app.command(name="session-init")
@@ -568,65 +728,95 @@ def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:
         f"scanned={stats.scanned} indexed={stats.indexed} "
         f"skipped={stats.skipped} symbols={stats.symbols} "
         f"edges={stats.edges} bindings={stats.bindings} errors={stats.errors}"
+        # Only when it happened: a purge is newsworthy (rows were deleted),
+        # but printing purged=0 on every routine index is noise.
+        + (f" purged={stats.purged}" if stats.purged else "")
     )
 
 
 @app.command
-def branches(*, prune: bool = False) -> None:
-    """List omnigraph branches per indexed repo store.
+def branches(*, branch: str | None = None, prune: bool = False) -> None:
+    """List the in-flight branch views per indexed repo store, and who owns each.
 
-    Non-default git branches index onto same-named omnigraph branches
-    (docs/BRANCH_INDEXING.md). Branch stores are re-derivable caches, so
-    lifecycle is deletion, not merge.
+    A non-default git branch is indexed onto its own view, named for its
+    writer as well as the branch (docs/BRANCH_INDEXING.md), so two checkouts
+    of the same branch do not overwrite each other. Views are re-derivable
+    caches, so lifecycle is deletion, not merge.
 
     Parameters
     ----------
+    branch:
+        Show only views of this git branch — every writer's, which is how you
+        find a teammate's in-flight work. Pass a listed view name to
+        ``--branch`` on the read commands to query it.
     prune:
-        Delete the CURRENT repo's store branches whose git branch no longer
-        exists locally, plus the ``_detached`` scratch branch. Other repos'
-        stores are only listed (their git refs aren't visible from here).
+        Delete the CURRENT repo's views whose git branch no longer exists
+        locally, plus the ``_detached`` scratch view. Other repos' stores are
+        only listed (their git refs aren't visible from here). Local stores
+        only, on both counts below: pruning reads this machine's git refs as
+        the authority, which is true of a store only this machine writes and
+        false of a shared cluster graph.
     """
-    from . import config as cfg_module
     from . import repo as repo_module
-    from .graph import OmnigraphClient
 
-    cfg = cfg_module.load()
-    if not cfg.code_dir.is_dir():
-        print(f"No code stores at {cfg.code_dir}.")
+    # Listing works against a deployment; pruning does not. It compares store
+    # branches against this machine's git refs and then deletes — neither of
+    # which a deployed replica's stores have any business following.
+    if prune and _is_remote():
+        print(
+            "--prune deletes branches from the LOCAL stores, which a deployed "
+            "witan service does not share. Unset WITAN_REMOTE_URL to prune."
+        )
+        raise SystemExit(1)
+
+    rows = _fn(_srv().code_indexed_branches)(branch=branch)
+    if not rows:
+        print("No indexed repositories.")
         return
 
     current_slug = repo_module.detect()
-    current_store = (
-        cfg_module.store_path(current_slug, cfg.code_dir) if current_slug else None
-    )
     git_branches = repo_module.local_branches() if prune else None
 
-    stores = [
-        p
-        for p in sorted(cfg.code_dir.glob("*.omni"))
-        if p.name != cfg_module.BRIDGE_STORE_NAME
-    ]
-    for store in stores:
-        client = OmnigraphClient(str(store), cfg.queries_dir)
-        try:
-            names = client.list_branches()
-        except Exception as exc:  # noqa: BLE001 — one bad store shouldn't abort
-            print(f"{_store_repo(store)}: <error: {exc}>")
+    for row in rows:
+        repo_uri, found = row["repo"], row["views"]
+        if found is None:
+            print(f"{repo_uri}: <error: store could not be listed>")
             continue
-        extra = [n for n in names if n != "main"]
-        print(f"{_store_repo(store)}: main" + ("," + ",".join(extra) if extra else ""))
+        names = [v["view"] for v in found]
+        print(f"{repo_uri}: main" + ("," + ",".join(names) if names else ""))
 
-        if not (
-            prune
-            and current_store is not None
-            and store == current_store
-            and git_branches is not None
-        ):
+        if not (prune and repo_uri == current_slug and git_branches is not None):
             continue
-        for name in extra:
-            if name == repo_module.DETACHED_BRANCH or name not in git_branches:
-                client.delete_branch(name)
-                print(f"  pruned {name}")
+        client = _branch_client(repo_uri)
+        # A shared cluster graph's branches are not this machine's git refs to
+        # follow. "This checkout doesn't have that branch" and "that branch is
+        # gone" are indistinguishable from here, so one user pruning would
+        # delete another user's in-flight branch view. Distinct from the
+        # `_is_remote()` check above: that one is about where the READ tools
+        # dispatch, this one about where the STORE lives — either can be remote
+        # without the other.
+        if client.is_remote:
+            print(
+                f"{repo_uri}: refusing to prune a shared graph — its branches "
+                "belong to every user of it, not to this checkout's git refs."
+            )
+            continue
+        # Match on the branch component, not the view name: a view carries its
+        # writer as well, and `git_branches` only knows about branches.
+        for view in found:
+            gone = view["branch"] not in git_branches
+            if view["branch"] == repo_module.DETACHED_BRANCH or gone:
+                client.delete_branch(view["view"])
+                print(f"  pruned {view['view']}")
+
+
+def _branch_client(repo_uri: str):
+    """A client on ``repo_uri``'s store, for branch listing/deletion."""
+    from . import config as cfg_module
+    from . import store as store_module
+
+    cfg = cfg_module.load()
+    return store_module.store_for_repo(repo_uri, cfg).client(cfg)
 
 
 # ── Indexed repositories ─────────────────────────────────────────────────────
@@ -637,35 +827,24 @@ def repos() -> None:
     """List the repositories that have a code graph indexed."""
     from rich.console import Console
 
-    from . import config as cfg_module
-
-    console = Console()
-    code_dir = cfg_module.load().code_dir
-    if not code_dir.is_dir():
-        console.print(f"[dim]No code stores at {code_dir}.[/dim]")
+    rows = _fn(_srv().code_indexed_repos)()
+    if not rows:
+        Console().print("[dim]No indexed repositories.[/dim]")
         return
-    # Exclude the shared cross-repo bridge store — it isn't a repo.
-    stores = [
-        p
-        for p in sorted(code_dir.glob("*.omni"))
-        if p.name != cfg_module.BRIDGE_STORE_NAME
+
+    table_rows: list[dict[str, object]] = [
+        {
+            "repo": r["repo"],
+            "files": "?" if r["files"] is None else str(r["files"]),
+            # Both are null for a cluster graph — they describe a store
+            # directory, which a client of a shared graph does not have.
+            "size": _human_size(r["bytes"]),
+            # The tool returns an epoch, so a remote deployment's stores render
+            # in the reader's timezone rather than the server's.
+            "last indexed": _human_time(r["last_indexed"]),
+        }
+        for r in rows
     ]
-    if not stores:
-        console.print(f"[dim]No indexed repositories in {code_dir}.[/dim]")
-        return
-
-    table_rows: list[dict[str, object]] = []
-    for store in stores:
-        repo_uri, file_count = _code_store_stats(store)
-        size, mtime = _dir_stats(store)
-        table_rows.append(
-            {
-                "repo": repo_uri,
-                "files": file_count,
-                "size": _human_size(size),
-                "last indexed": mtime,
-            }
-        )
     _render_table(
         title="Indexed repositories",
         columns=["repo", "files", "size", "last indexed"],
@@ -674,62 +853,125 @@ def repos() -> None:
     )
 
 
-def _code_store_stats(store: Path) -> tuple[str, str]:
-    """Return (repo_uri, file_count); repo URI comes from the sidecar."""
-    repo_uri = _store_repo(store)
+# ── Remote auth (ADR 0005, path a) ───────────────────────────────────────────
+
+
+def _remote_or_exit():
+    from . import config as cfg_module
+
     try:
-        from . import config as cfg_module
-        from .graph import OmnigraphClient
-
-        client = OmnigraphClient(str(store), cfg_module.load().queries_dir)
-        rows = client.read("code_read.gq", "all_file_hashes", {})
-        return repo_uri, str(len(rows))
-    except Exception:  # noqa: BLE001 — degrade gracefully
-        return repo_uri, "?"
-
-
-def _store_repo(store: Path) -> str:
-    """Canonical repo URI for a store: the exact sidecar if present, else a
-    best-effort reconstruction from the (lossily) sanitized filename."""
-    from . import store as store_module
-
-    sidecar = store_module.repo_sidecar(store)
-    if sidecar.exists():
-        return sidecar.read_text().strip()
-    return _repo_from_stem(store.stem)
+        remote = cfg_module.load_remote_config()
+    except ValueError as exc:
+        print(exc)
+        raise SystemExit(1) from None
+    if remote is None:
+        print(
+            "Remote mode is not configured. Set WITAN_REMOTE_URL (and "
+            "WITAN_OIDC_ISSUER) to point the CLI at a deployed witan service."
+        )
+        raise SystemExit(1)
+    return remote
 
 
-def _repo_from_stem(stem: str) -> str:
-    """Best-effort canonical repo URI from a sanitized store filename.
+@app.command
+def login() -> None:
+    """Authenticate to the deployed witan service via the OIDC device grant.
 
-    The store name is ``sanitize_slug(repo)`` (``[/:]+`` collapsed to ``_``), so
-    a 0-file store has no CodeFile to read the exact repo from. For the common
-    ``scheme://host/path`` slug, reconstruct it: ``https_github.com_org_repo`` →
-    ``https://github.com/org/repo``. A schemeless local slug is returned as-is.
+    Prints a verification URL and a user code; approve it in a browser, and the
+    resulting token is cached (mode 0600) and refreshed automatically for
+    subsequent `witan-code …` commands.
+
+    The cache is shared with the `witan` CLI and keyed by (issuer, client id),
+    so if you already ran `witan login` against the same deployment you do not
+    need this at all — and running it here also logs `witan` in.
     """
-    for scheme in ("https", "http", "ssh"):
-        prefix = f"{scheme}_"
-        if stem.startswith(prefix):
-            return f"{scheme}://{stem[len(prefix) :].replace('_', '/')}"
-    return stem
+    from rich.console import Console
+
+    from .remote import oidc
+
+    console = Console()
+    remote = _remote_or_exit()
+
+    def _prompt(device: dict) -> None:
+        complete = device.get("verification_uri_complete")
+        uri = device.get("verification_uri", "")
+        code = device.get("user_code", "")
+        console.print("\n[bold]Authenticate witan-code CLI[/bold]")
+        if complete:
+            console.print(f"  Open: [cyan underline]{complete}[/cyan underline]")
+        console.print(
+            f"  Or go to [cyan underline]{uri}[/cyan underline] and enter "
+            f"code [bold]{code}[/bold]\n  Waiting for approval…"
+        )
+
+    try:
+        claims = oidc.login(remote, on_prompt=_prompt)
+    except oidc.RemoteAuthError as exc:
+        console.print(f"[red]Login failed:[/red] {exc}")
+        raise SystemExit(1) from None
+    who = claims.get("preferred_username") or claims.get("sub", "?")
+    console.print(f"[green]Logged in[/green] as [bold]{who}[/bold] → {remote.url}")
 
 
-def _dir_stats(path: Path) -> tuple[int, str]:
-    """Return (total_bytes, last-modified string) in a single directory walk."""
+@app.command
+def logout() -> None:
+    """Forget the cached token for the configured deployment.
+
+    The cache is shared with the `witan` CLI, so this logs both out.
+    """
+    from rich.console import Console
+
+    from .remote import oidc
+
+    console = Console()
+    remote = _remote_or_exit()
+    if oidc.logout(remote):
+        console.print(f"[green]Logged out[/green] of {remote.url}")
+    else:
+        console.print("[yellow]No cached session to clear.[/yellow]")
+
+
+@app.command
+def whoami() -> None:
+    """Show the identity the CLI presents to the deployed witan service."""
+    from datetime import datetime, timezone
+
+    from rich.console import Console
+
+    from .remote import oidc
+
+    console = Console()
+    remote = _remote_or_exit()
+    try:
+        token = oidc.get_valid_token(remote)
+    except oidc.NeedsLogin as exc:
+        console.print(f"[yellow]{exc}[/yellow]")
+        raise SystemExit(1) from None
+    claims = oidc.decode_claims(token)
+    if remote.target_name:
+        console.print(f"[bold]Target[/bold]    {remote.target_name}")
+    console.print(f"[bold]Endpoint[/bold]  {remote.url}")
+    console.print(f"[bold]User[/bold]      {claims.get('preferred_username', '?')}")
+    if claims.get("email"):
+        console.print(f"[bold]Email[/bold]     {claims['email']}")
+    console.print(f"[bold]sub[/bold]       {claims.get('sub', '')}")
+    exp = claims.get("exp")
+    if exp:
+        when = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()
+        console.print(f"[bold]Expires[/bold]   {when}")
+
+
+def _human_time(epoch: float | None) -> str:
     import datetime
 
-    total = 0
-    latest = path.stat().st_mtime
-    for f in path.rglob("*"):
-        if f.is_file():
-            st = f.stat()
-            total += st.st_size
-            if st.st_mtime > latest:
-                latest = st.st_mtime
-    return total, datetime.datetime.fromtimestamp(latest).strftime("%Y-%m-%d %H:%M")
+    if epoch is None:
+        return "?"
+    return datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
 
 
-def _human_size(n: int) -> str:
+def _human_size(n: int | None) -> str:
+    if n is None:
+        return "?"
     size = float(n)
     for unit in ("B", "KB", "MB", "GB"):
         if size < 1024 or unit == "GB":
