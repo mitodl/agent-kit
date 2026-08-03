@@ -401,6 +401,114 @@ def test_inflight_cap_ignores_surface_conflict(monkeypatch):
         )
 
 
+# ── server-unavailable (restart window) backoff ───────────────────
+
+# Verbatim stderr from `omnigraph query --server http://127.0.0.1:<dead-port>`
+# (omnigraph 0.8.1), ANSI codes and all — the markers have to survive the
+# colour spans the CLI wraps each cause line in.
+_CONNECT_REFUSED_STDERR = (
+    "Error: \n"
+    "   0: \x1b[91merror sending request for url "
+    "(http://127.0.0.1:59999/graphs/council/read)\x1b[0m\n"
+    "   1: \x1b[91mclient error (Connect)\x1b[0m\n"
+    "   2: \x1b[91mtcp connect error\x1b[0m\n"
+    "   3: \x1b[91mConnection refused (os error 111)\x1b[0m\n"
+)
+
+
+def test_unavailable_backoff_adds_bounded_jitter():
+    delay = og._UNAVAILABLE_BASE_DELAY * (2 ** (3 - 1))  # attempt=3
+    for _ in range(50):
+        backoff = og._unavailable_backoff(3)
+        assert delay <= backoff <= delay * 1.1
+    assert og._unavailable_backoff(20) == og._UNAVAILABLE_MAX_DELAY
+
+
+def test_connect_failure_retries_until_server_returns(monkeypatch):
+    """The restart window: the server is simply absent, then comes back."""
+    client = _client(monkeypatch)
+    calls = {"n": 0}
+    sleeps = []
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 4:
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr=_CONNECT_REFUSED_STDERR
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    monkeypatch.setattr(og.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(og.random, "uniform", lambda a, b: 0.0)  # no jitter
+
+    out = client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert out == "ok"
+    assert calls["n"] == 4
+    assert sleeps == [0.5, 1.0, 2.0]  # base 0.5s, doubling — independent oracle
+
+
+def test_connect_failure_budget_outlasts_a_recreate_restart():
+    """The whole point is riding out a pod restart, so the budget has to cover
+    one: terminate + boot + a readiness probe that only starts polling after 5s
+    and repeats every 10s. Assert the wall-clock the schedule actually buys."""
+    total = sum(
+        min(og._UNAVAILABLE_BASE_DELAY * 2 ** (i - 1), og._UNAVAILABLE_MAX_DELAY)
+        for i in range(1, og._UNAVAILABLE_MAX_ATTEMPTS)
+    )
+    assert total >= 40  # noqa: PLR2004
+
+
+def test_connect_failure_gives_up_after_its_own_budget(monkeypatch):
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+
+    with pytest.raises(
+        RuntimeError, match="could not connect to https://graph.example"
+    ):
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+    assert calls["n"] == og._UNAVAILABLE_MAX_ATTEMPTS
+
+
+def test_connect_failure_ignores_surface_conflict(monkeypatch):
+    """There is no conflict to surface — the request never left this process."""
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+
+    with pytest.raises(RuntimeError, match="could not connect"):
+        client._execute(
+            ["omnigraph", "mutate"], "mutate", is_write=True, surface_conflict=True
+        )
+    assert calls["n"] == og._UNAVAILABLE_MAX_ATTEMPTS
+
+
+def test_midflight_failure_is_not_retried(monkeypatch):
+    """A reset/timeout after the request was sent may have committed the write.
+    Deliberately excluded from _UNAVAILABLE_MARKERS — fail loudly instead."""
+    client = _client(monkeypatch)
+    calls = _stub_run(
+        monkeypatch,
+        returncode=1,
+        stderr="error sending request for url (...): connection reset by peer",
+    )
+
+    with pytest.raises(RuntimeError, match="failed"):
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert calls["n"] == 1
+
+
+def test_local_store_does_not_take_the_unavailable_path(monkeypatch):
+    """`tcp connect error` from a local store is not a restarting server, so it
+    must not be retried on the remote budget."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient("/var/lib/witan/graph.omni", Path("/queries"))
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+
+    with pytest.raises(RuntimeError, match="failed"):
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+    assert calls["n"] == 1
+
+
 # ── schema apply + mtime stamp ─────────────────────────────────────
 
 

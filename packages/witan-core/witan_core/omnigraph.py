@@ -4,9 +4,10 @@ Both servers drive the ``omnigraph`` binary the same way: store addressing that
 picks ``--store <uri>`` for local/s3 stores and ``--server <url> --graph <id>``
 for a deployed omnigraph-server (omnigraph 0.8.1 rejects an http(s) ``--store``),
 a per-store advisory write lock for local stores, a retry/repair loop for
-optimistic-concurrency drift, a self-backoff for the deployed omnigraph-server's
-per-actor admission cap, and named read/mutate queries. That LOCAL-vs-REMOTE-
-generic surface lives here; each server subclasses to add its own tail:
+optimistic-concurrency drift, self-backoff for the deployed omnigraph-server's
+per-actor admission cap and for the window in which it is restarting, and named
+read/mutate queries. That LOCAL-vs-REMOTE-generic surface lives here; each
+server subclasses to add its own tail:
 
 - ``witan`` adds a write ``guard`` + ``surface_conflict`` (CAS task claims),
   ``apply_schema``, and the storage-version friendly-error hint.
@@ -68,6 +69,29 @@ _ADMISSION_CAP_MARKERS = ("in-flight count cap", "byte budget exceeded")
 _ADMISSION_CAP_MAX_ATTEMPTS = 6
 _ADMISSION_CAP_BASE_DELAY = 0.25
 _ADMISSION_CAP_MAX_DELAY = 4.0
+
+# The deployed omnigraph-server goes away entirely for a stretch on every
+# restart, and restarts are routine: adding a user to the actor-tokens map is
+# a restart, because the server hashes OMNIGRAPH_SERVER_BEARER_TOKENS_FILE once
+# at boot and never re-reads it (upstream has no SIGHUP/admin reload — see
+# ol-infrastructure task tk-omnigraph-server-actor-token-hot-reload-...-0e878a,
+# which resolves that by having the Vault Secrets Operator rolling-restart the
+# Deployment whenever the token map changes). The data tier is deliberately
+# replicas=1 + strategy=Recreate (its storage is strict-single-version, so two
+# binaries must never hold the same S3 store), so that restart is a hard gap
+# with no endpoint at all — not a rolling one. Without this, every concurrent
+# MCP tool call in that window fails outright.
+#
+# ONLY connection-*establishment* failures are retried. Those provably never
+# reached the server, so re-running is safe for a mutate as much as a read. A
+# mid-flight failure (connection reset, request timeout, 5xx) is deliberately
+# NOT matched: the write may already have committed, and silently re-applying
+# it is worse than surfacing the error — the same reasoning that makes
+# `surface_conflict` exist.
+_UNAVAILABLE_MARKERS = ("tcp connect error", "dns error")
+_UNAVAILABLE_MAX_ATTEMPTS = 12
+_UNAVAILABLE_BASE_DELAY = 0.5
+_UNAVAILABLE_MAX_DELAY = 5.0
 
 # How a bearer token reaches the omnigraph CLI. Per its token-resolution order
 # (docs/user/cli/reference.md): a server-name-specific `OMNIGRAPH_TOKEN_<NAME>`,
@@ -207,13 +231,23 @@ def _split_server_uri(graph_uri: str, graph_id: str | None) -> tuple[str, str]:
     return server_url, resolved
 
 
-def _admission_cap_backoff(attempt: int) -> float:
+def _jittered_backoff(attempt: int, base: float, cap: float) -> float:
     """Exponential backoff with jitter — plain exponential backoff makes
-    concurrent retries from the same burst (the actual trigger case here)
-    retry in lockstep and re-collide on the cap; jitter breaks that up."""
-    delay = _ADMISSION_CAP_BASE_DELAY * (2 ** (attempt - 1))
+    concurrent retries from the same burst (the actual trigger case for both
+    callers below) retry in lockstep and re-collide; jitter breaks that up."""
+    delay = base * (2 ** (attempt - 1))
     jitter = random.uniform(0, 0.1 * delay)
-    return min(delay + jitter, _ADMISSION_CAP_MAX_DELAY)
+    return min(delay + jitter, cap)
+
+
+def _admission_cap_backoff(attempt: int) -> float:
+    return _jittered_backoff(
+        attempt, _ADMISSION_CAP_BASE_DELAY, _ADMISSION_CAP_MAX_DELAY
+    )
+
+
+def _unavailable_backoff(attempt: int) -> float:
+    return _jittered_backoff(attempt, _UNAVAILABLE_BASE_DELAY, _UNAVAILABLE_MAX_DELAY)
 
 
 class OmnigraphConflict(RuntimeError):
@@ -429,6 +463,7 @@ class OmnigraphClient:
         try:
             attempt = 0
             admission_cap_attempt = 0
+            unavailable_attempt = 0
             while True:
                 try:
                     result = subprocess.run(
@@ -446,6 +481,21 @@ class OmnigraphClient:
                     raise RuntimeError(
                         _friendly_storage_error(err, self._STORAGE_MISMATCH_HINT)
                     ) from None
+                if self.is_remote and any(m in err_lower for m in _UNAVAILABLE_MARKERS):
+                    # Its own budget, like the admission cap below: this is a
+                    # gap in the server's availability, not a conflict over the
+                    # graph, so it neither consumes _MAX_ATTEMPTS nor honours
+                    # surface_conflict (there is no conflict to surface — the
+                    # request never left this process).
+                    unavailable_attempt += 1
+                    if unavailable_attempt < _UNAVAILABLE_MAX_ATTEMPTS:
+                        time.sleep(_unavailable_backoff(unavailable_attempt))
+                        continue
+                    raise RuntimeError(
+                        f"omnigraph {label} failed after "
+                        f"{_UNAVAILABLE_MAX_ATTEMPTS} attempts — could not "
+                        f"connect to {self.server_url}:\n{err.strip()}"
+                    )
                 if any(m in err_lower for m in _ADMISSION_CAP_MARKERS):
                     # Independent budget/backoff from the drift retries below —
                     # doesn't consume _MAX_ATTEMPTS and ignores surface_conflict.

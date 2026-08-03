@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Added
+
+- **Connect-failure retry for a restarting omnigraph-server** — a remote call
+  that cannot establish a connection now backs off and retries on its own
+  budget (~42s, jittered) instead of failing the MCP tool call outright.
+  Restarts of the deployed data tier are routine, not exceptional: it hashes
+  its bearer-token map once at boot, so adding a user to `witan-users` bounces
+  the Deployment (ol-infrastructure wires that through the Vault Secrets
+  Operator's `rolloutRestartTargets`), and that Deployment is `replicas=1` +
+  `strategy=Recreate` — a hard gap with no endpoint, not a rolling one.
+
+  Only connection-*establishment* failures (`tcp connect error`, `dns error`)
+  are retried. Those provably never reached the server, so re-running is as
+  safe for a `mutate` as for a `query`. Mid-flight failures — connection
+  reset, timeout, 5xx — are deliberately excluded: the write may already have
+  committed, and silently re-applying it is worse than surfacing the error.
+  The budget is independent of both `_MAX_ATTEMPTS` and `surface_conflict`;
+  there is no conflict to surface when the request never left the process.
+
 ## [0.7.0] - 2026-08-01
 
 ### Added
