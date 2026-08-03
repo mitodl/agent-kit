@@ -3,8 +3,8 @@ name: generate-standup
 description: >
   Generates a daily standup post from GitHub activity and agent session
   history, and posts it to the mitodl/hq Check-ins discussion. Use when asked
-  to write, generate, or post a daily standup — fetches PR, issue, and
-  code-review activity via the gh CLI, queries recent agent sessions, asks
+  to write, generate, or post a daily standup — fetches PR, issue, discussion,
+  and code-review activity via the gh CLI, queries recent agent sessions, asks
   clarifying questions about timing and off-GitHub work, renders the standup
   in the team's standard format, and posts it as a discussion comment with
   user confirmation.
@@ -87,12 +87,16 @@ be guessed — see [Timestamp discipline](#timestamp-discipline) and
 | `createdAt` | when it was opened |
 | `updatedAt` | last touched — the search window is built on this |
 | `closedAt` | when it closed/merged; `null` while open |
-| `reviewDecision` | `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or `null` (no review requested or left). Open authored PRs only. |
-| `reviewRequests` | logins/teams with a review still pending. Open authored PRs only. |
+| `isDraft` | PRs only |
+| `needs_review` | **authored PRs only.** `true` iff a human still owes a first review. Already accounts for draft status, approval, requested changes, and bot reviewers — use it as-is; do not re-derive it. |
+| `reviewDecision` | `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or `null` (nobody has reviewed). Open authored PRs only. Use for *framing*, not for the needs-review decision. |
+| `reviewRequests` | human logins/team slugs with a review still pending; bots filtered out. Open authored PRs only. |
+| `review_state_unknown` | `true` if the review lookup failed. Say the state is unknown rather than guessing. |
 
-Entries in `discussions_opened` and `discussion_comments` carry `createdAt`,
-`url`, `repository`, and `category`; comments add `discussion_title`,
-`discussion_url`, and `excerpt`.
+Entries in `discussions_opened` and `discussion_comments` both carry
+`repository`, `category`, `url`, and `createdAt` as plain strings, plus
+`number`/`title` and `discussion_number`/`discussion_title` respectively.
+Comments add `discussion_url` and `excerpt`.
 
 ---
 
@@ -206,11 +210,13 @@ From the user's `timing` answer, determine:
 
 - **Done (past section):** Any PR or issue with `updatedAt` on
   `report_date`. Include both merged and still-open items that were
-  actively worked on that day (merged PRs have `state == "merged"`).
+  actively worked on that day (merged PRs have `state == "merged"`). This
+  decides *inclusion* only — see [Timestamp discipline](#timestamp-discipline)
+  before choosing the verb you attach to it.
 - **Planned (future section):** Open PRs and issues the user is continuing,
   plus anything explicitly stated in user answers. Omit items with no
   `updatedAt` since `meta.since` (stale).
-- **Announcements:** authored PRs that genuinely still need human review — see
+- **Announcements:** authored PRs with `needs_review: true` — see
   [Which PRs actually need review](#which-prs-actually-need-review) below.
   Also every entry in `discussions_opened` with `createdAt` on `report_date`
   (**opening a new discussion is always announcement-worthy** — it's a request
@@ -229,8 +235,10 @@ From the user's `timing` answer, determine:
 `updatedAt` is only the search window. It says an item was *touched* in the
 window — nothing more. A PR opened last week and merged today has an
 `updatedAt` of today, and so does one opened today; they are not the same
-report. **Every verb in the post must be licensed by the field that actually
-means that verb:**
+report. **Every lifecycle verb you attach to a PR or issue — opened, merged,
+closed, reviewed — must be licensed by the field that actually means that
+verb.** (Verbs in the user's own `off_github` / `extra_context` notes are theirs;
+don't second-guess those against GitHub fields.)
 
 | To write… | The item must have… |
 |-----------|---------------------|
@@ -244,23 +252,38 @@ in the week and merged today, the post says *merged* — not *opened*. When only
 `updatedAt` falls on `report_date`, "worked on" is the strongest available
 claim; reach for a specific verb only with the timestamp to back it.
 
-Timestamps are UTC, so evening work in a US timezone lands on the next UTC
-date. If an item's timestamp is within a few hours of UTC midnight, say which
-day you placed it on rather than asserting it silently.
+**Timestamps are UTC; `report_date` is a US Eastern calendar day.** Convert
+before comparing — Eastern is UTC−4 in DST, UTC−5 otherwise. A `2026-07-31T00:51Z`
+comment was 8:51pm Eastern on **July 30**, so matching on the UTC date prefix
+files a Thursday evening's work under Friday. Anything timestamped before ~04:00Z
+belongs to the previous Eastern day. When a converted item lands on a different
+day than its UTC prefix suggests, say which day you placed it on.
 
 ### Which PRs actually need review
 
-Use `reviewDecision`, and only `reviewDecision`. "Open" does not mean "needs
-review", and a **"needs review" label or project field is not evidence** —
-reviewers routinely approve a PR and forget to clear the label.
+**Announce exactly the authored PRs with `needs_review: true`.** Nothing else
+qualifies. "Open" does not mean "needs review", and a **"needs review" label or
+project field is not evidence** — reviewers routinely approve a PR and forget to
+clear the label. The script already folded in draft status, approval, requested
+changes, and bot reviewers, so do not rebuild that logic from `reviewDecision`;
+every hand-rolled version of it gets a case wrong.
 
-| `reviewDecision` | Bucket | Framing |
-|------------------|--------|---------|
-| `null` / `REVIEW_REQUIRED` | Announcements | needs review — name `reviewRequests` handles if any are pending |
-| `CHANGES_REQUESTED` | Planned | the ball is with the author: "address feedback on …" |
-| `APPROVED` | Neither, or Planned | nobody owes a review; mention only as ready-to-merge, if at all |
+Use `reviewDecision` only to *phrase* the bullet:
 
-Never put an `APPROVED` PR under "needs review".
+| `reviewDecision` | Framing |
+|------------------|---------|
+| `null` / `REVIEW_REQUIRED` | needs review — name pending `reviewRequests` handles if any |
+| `CHANGES_REQUESTED` | the ball is with the author: "address feedback on …" (Planned, not Announcements) |
+| `APPROVED` | mention as ready-to-merge, if at all |
+
+Two caveats worth stating in the draft rather than papering over:
+
+- `APPROVED` **survives new commits.** An approval from before the author's
+  latest push still reads `APPROVED`, so a stale approval is indistinguishable
+  from a current one here. If you know the PR moved after approval, say it may
+  need another look.
+- `review_state_unknown: true` means the lookup failed. Report the state as
+  unknown; do not fall back to "open, so it needs review".
 
 **Incorporating agent sessions:**
 
@@ -313,7 +336,11 @@ _<Display Name>_
   the work involved investigation/discussion not captured in a link).
 - **Prefer natural phrasing over templated phrasing:** avoid mechanical bullets
   like `worked on <url>` when a clearer summary is available. Preserve the
-  user's own wording and concerns wherever possible.
+  user's own wording and concerns wherever possible. **Add the detail to the
+  description, never by upgrading the verb** past what
+  [Timestamp discipline](#timestamp-discipline) licenses — if only `updatedAt`
+  falls on `report_date`, "worked on" stays, and the *rest* of the bullet
+  carries the specifics.
 - **Use nested bullets when helpful:** a parent bullet like `Reviewed a bunch
   of PRs:` or an issue link followed by indented explanation often reads better
   than a flat list of disconnected one-liners.
@@ -388,11 +415,13 @@ Tobias Macey
 - PRs needing review:
   - [ol-infrastructure #4659: add Archive/Deep Archive access tier support to OLBucket](https://github.com/mitodl/ol-infrastructure/pull/4659)
   - [ol-data-platform #2238: automate Iceberg table maintenance across the lakehouse](https://github.com/mitodl/ol-data-platform/pull/2238)
+- [ol-infrastructure #4640](https://github.com/mitodl/ol-infrastructure/pull/4640) is approved and ready to merge
 
 > What did I work on yesterday?
 
 - Worked on addressing the hanging open issue for Dagster assets using Polars to read Iceberg tables
 - Opened https://github.com/mitodl/ol-infrastructure/pull/4659 for S3 cost optimization
+- Laid out the two options for Iceberg table maintenance scheduling — leaning toward a single Dagster schedule over per-table sensors: https://github.com/mitodl/hq/discussions/12488#discussioncomment-17801234
 
 > What am I working on today?
 

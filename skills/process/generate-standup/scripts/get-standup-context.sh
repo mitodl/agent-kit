@@ -120,10 +120,15 @@ _search_prs() {
 	done) | jq -s "add | unique_by(.url) | $_NULL_CLOSED"
 }
 
-# Add reviewDecision + reviewRequests to each open PR in an authored-PR list.
+# Add review state to each open PR in an authored-PR list, and reduce it to a
+# single `needs_review` boolean.
+#
 # `gh search` cannot return review state, so every open PR needs its own lookup.
-# This is the only reliable "does it still need review" signal: "needs review"
-# labels and project fields go stale when reviewers forget to clear them.
+# The boolean exists because reviewDecision alone is a footgun: gh reports it as
+# "" (not null) when nobody has reviewed, a draft PR still reports
+# REVIEW_REQUIRED, and merged PRs have no value at all — so any rule phrased in
+# terms of the raw field mis-buckets something. Decide it here, once, rather
+# than restating the conditions at the call site.
 _enrich_review_state() {
 	local prs="$1"
 	local open_urls
@@ -135,19 +140,43 @@ _enrich_review_state() {
 
 	local details="[]" detail
 	while IFS= read -r url; do
-		detail="$(gh pr view "$url" --json url,reviewDecision,reviewRequests 2>/dev/null || echo '{}')"
+		# On lookup failure emit just the url, so the merge below can mark the
+		# PR review_state_unknown instead of silently omitting the fields.
+		detail="$(gh pr view "$url" --json url,reviewDecision,reviewRequests 2>/dev/null ||
+			jq -n --arg u "$url" '{url: $u}')"
 		details="$(jq -s 'add' <<<"$details"$'\n'"[$detail]")"
 	done <<<"$open_urls"
 
-	# reviewDecision is null when no review has been requested or left at all.
-	jq -s '.[0] as $prs | .[1] as $details
+	# gh emits reviewDecision as "" where GraphQL would say null, so normalize
+	# before comparing. Bot review requests are dropped: an automated reviewer
+	# pending does not mean a human owes one.
+	jq -s --argjson bots '["copilot-pull-request-reviewer","copilot","gemini-code-assist","renovate","dependabot","sentry-io","sentry"]' '
+    def is_bot: ascii_downcase | rtrimstr("[bot]") | IN($bots[]);
+    .[0] as $prs | .[1] as $details
     | $prs | map(
         . as $pr
-        | (($details[] | select(.url == $pr.url)) // null) as $d
-        | if $d then $pr + {
-            reviewDecision: ($d.reviewDecision // null),
-            reviewRequests: [($d.reviewRequests // [])[] | .login // .slug // .name]
-          } else $pr end
+        # first(…) to take one match, // null because first(empty) yields no
+        # output at all — without it, map drops every PR lacking a detail row.
+        | (first($details[] | select(.url == $pr.url)) // null) as $d
+        # $d is null exactly when the PR is not open (only open PRs are looked
+        # up), so nobody owes a review on it.
+        | if $d == null then $pr + {needs_review: false}
+          else
+            (if ($d.reviewDecision // "") == "" then null else $d.reviewDecision end) as $decision
+            | ($d | has("reviewDecision") | not) as $unknown
+            | $pr + {
+                reviewDecision: $decision,
+                reviewRequests: [($d.reviewRequests // [])[]
+                                 | (.login // .slug // .name)
+                                 | select(is_bot | not)],
+                review_state_unknown: $unknown,
+                needs_review: (
+                  if $unknown or ($pr.isDraft // false) then false
+                  else $decision == null or $decision == "REVIEW_REQUIRED"
+                  end
+                )
+              }
+          end
       )' <<<"$prs"$'\n'"$details"
 }
 
@@ -162,7 +191,7 @@ _search_issues() {
 			--json number,title,state,url,createdAt,updatedAt,closedAt,author \
 			--limit 50 2>/dev/null || echo "[]"
 	done) | jq -s "add | unique_by(.url) | $_NULL_CLOSED | "'map(select(
-    (.author.login? // "" | test("\\\\[bot\\\\]$|^renovate$|^dependabot$"; "i") | not) and
+    (.author.login? // "" | test("\\[bot\\]$|^renovate$|^dependabot$"; "i") | not) and
     (.title | test("^Dependency Dashboard$|^Renovate Dashboard|^Action Required: Fix Renovate"; "") | not)
   ))'
 }
@@ -174,12 +203,28 @@ _org_qualifier() {
 	echo "${q% }"
 }
 
+# Echo $1 if it is a JSON array, else "[]".
+#
+# Guards the --argjson calls at the bottom: `gh api graphql` exits non-zero
+# whenever the response carries an `errors` array *even when `data` is
+# populated* (a SAML-gated org, a lost-access repo, a timeout on a nested
+# connection). Under `set -o pipefail` a `cmd | jq || echo "[]"` chain then
+# appends "[]" to output jq has already written, and --argjson rejects the
+# two-value result — losing the whole run over a partial failure. So capture
+# first, filter second, and validate here.
+_json_array() {
+	jq -e 'if type == "array" then . else error end' <<<"${1:-}" 2>/dev/null || echo '[]'
+}
+
 # Discussions the user OPENED in the window, any category, any org.
 # Opening a new discussion is announcement-worthy, so this is deliberately not
 # narrowed to the RFC category — design work lands in Ideas and elsewhere too.
+# Check-ins is excluded for the same reason as in _discussion_comments: the
+# standup should not announce the thread it is being posted to.
 _discussions_opened() {
+	local raw
 	# shellcheck disable=SC2016  # $q is a GraphQL variable, bound via -f q=
-	gh api graphql -f query='
+	raw="$(gh api graphql -f query='
   query($q: String!) {
     search(query: $q, type: DISCUSSION, first: 50) {
       nodes { ... on Discussion {
@@ -188,8 +233,13 @@ _discussions_opened() {
         repository { nameWithOwner }
       } }
     }
-  }' -f q="$(_org_qualifier) author:${USERNAME} created:>=${SINCE%T*}" 2>/dev/null |
-		jq '[.data.search.nodes[] | select(. != null)]' 2>/dev/null || echo "[]"
+  }' -f q="$(_org_qualifier) author:${USERNAME} sort:updated-desc created:>=${SINCE%T*}" 2>/dev/null || true)"
+
+	_json_array "$(jq '[.data.search.nodes[]?
+      | select(. != null and .category.name != "Check-ins")
+      | { repository: .repository.nameWithOwner,
+          number, title, url, createdAt,
+          category: .category.name }]' <<<"${raw:-null}" 2>/dev/null || true)"
 }
 
 # Discussion comments (and replies) the user left in the window.
@@ -198,8 +248,9 @@ _discussions_opened() {
 # Check-ins is excluded — those are standup posts, and reporting them would be
 # circular.
 _discussion_comments() {
+	local raw
 	# shellcheck disable=SC2016  # $q is a GraphQL variable, bound via -f q=
-	gh api graphql -f query='
+	raw="$(gh api graphql -f query='
   query($q: String!) {
     search(query: $q, type: DISCUSSION, first: 25) {
       nodes { ... on Discussion {
@@ -214,12 +265,13 @@ _discussion_comments() {
         }
       } }
     }
-  }' -f q="$(_org_qualifier) commenter:${USERNAME} updated:>=${SINCE%T*}" 2>/dev/null |
-		jq --arg username "$USERNAME" --arg since "$SINCE" '
-      [ .data.search.nodes[]
+  }' -f q="$(_org_qualifier) commenter:${USERNAME} sort:updated-desc updated:>=${SINCE%T*}" 2>/dev/null || true)"
+
+	_json_array "$(jq --arg username "$USERNAME" --arg since "$SINCE" '
+      [ .data.search.nodes[]?
         | select(. != null and .category.name != "Check-ins")
         | . as $d
-        | [ .comments.nodes[], .comments.nodes[].replies.nodes[] ]
+        | [ .comments.nodes[]?, .comments.nodes[]?.replies.nodes[]? ]
         | .[]
         | select(.author.login == $username and .createdAt >= $since)
         | { repository: $d.repository.nameWithOwner,
@@ -230,7 +282,7 @@ _discussion_comments() {
             createdAt: .createdAt,
             url: .url,
             excerpt: (.bodyText[:300] | gsub("\\s+"; " ")) }
-      ]' 2>/dev/null || echo "[]"
+      ]' <<<"${raw:-null}" 2>/dev/null || true)"
 }
 
 # Fetch the most recent Check-ins discussion from mitodl/hq (post target)
@@ -257,12 +309,21 @@ _checkin_discussion() {
 
 echo "Fetching GitHub activity for @${USERNAME} (since=${SINCE}, today=${TODAY}) …" >&2
 
-PRS_AUTHORED="$(_enrich_review_state "$(_search_prs "--author" "$SINCE")")"
+# Kept as separate statements: nesting the search inside the enrichment call
+# would discard the search's exit status, so `set -e` could not see it fail.
+PRS_AUTHORED="$(_search_prs "--author" "$SINCE")"
+PRS_AUTHORED="$(_enrich_review_state "$PRS_AUTHORED")"
 PRS_REVIEWED="$(_search_prs "--reviewed-by" "$SINCE")"
 ISSUES="$(_search_issues "$SINCE")"
 DISCUSSIONS_OPENED="$(_discussions_opened)"
 DISCUSSION_COMMENTS="$(_discussion_comments)"
 CHECKIN_DISCUSSION="$(_checkin_discussion)"
+
+# Final guard: --argjson dies on an empty or malformed value, which would throw
+# away an otherwise complete run.
+PRS_AUTHORED="$(_json_array "$PRS_AUTHORED")"
+PRS_REVIEWED="$(_json_array "$PRS_REVIEWED")"
+ISSUES="$(_json_array "$ISSUES")"
 
 # ── Emit JSON ─────────────────────────────────────────────────────────────────
 
