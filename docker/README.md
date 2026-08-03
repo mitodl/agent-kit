@@ -60,7 +60,11 @@ operation, and a full-repo index makes thousands of them. Shipping it in the
 the same build as the one serving it.
 
 Required env: `WITAN_CODE_CI_REPOS`, `WITAN_CODE_SERVER` (the omnigraph-server
-base URL), `WITAN_CODE_TOKEN` (the `svc-witan-ci` bearer token).
+base URL), `WITAN_CODE_TOKEN` (the `svc-witan-ci` bearer token). The last two
+are required rather than defaulted because witan-code's response to a missing
+server is to index into a local `.omni` directory and report success — inside
+a pod whose filesystem is then discarded, while the shared graph goes stale.
+`WITAN_CODE_CI_ALLOW_LOCAL_STORE=1` waives them for testing the script itself.
 
 ## `omnigraph-server` image
 

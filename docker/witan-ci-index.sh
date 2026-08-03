@@ -32,13 +32,34 @@
 #
 # Environment:
 #   WITAN_CODE_CI_REPOS    (required) whitespace-separated canonical repo URIs
-#   WITAN_CODE_SERVER      omnigraph-server base URL
-#   WITAN_CODE_TOKEN       the svc-witan-ci bearer token
+#   WITAN_CODE_SERVER      (required) omnigraph-server base URL
+#   WITAN_CODE_TOKEN       (required) the svc-witan-ci bearer token
 #   WITAN_CODE_CI_WORKDIR  scratch dir for checkouts (default /tmp/witan-ci-index)
+#   WITAN_CODE_CI_ALLOW_LOCAL_STORE=1
+#                          waive the two requirements above and index into
+#                          local .omni directories. For testing this script;
+#                          never for the deployed job.
 
 set -eu
 
 : "${WITAN_CODE_CI_REPOS:?set it to the whitespace-separated repo URIs to index}"
+
+# Required, because the way witan-code handles their absence is to succeed.
+# With no server configured, `witan code index` resolves each repo to a local
+# `<slug>.omni` directory, creates it, indexes into it, and reports the usual
+# scanned/indexed counts — inside a container whose filesystem is discarded
+# when the pod exits, while the shared graphs this job exists to write go one
+# more interval stale. An empty value does it too: witan_code.config._first
+# skips falsy values, so a secret that synced blank is the same as no secret.
+#
+# Checking for them here is exact rather than approximate: this image ships no
+# config.toml and sets no WITAN_CONFIG, so the environment is the only place
+# witan-code can learn about a server, and what the shell can see is all
+# there is.
+if [ "${WITAN_CODE_CI_ALLOW_LOCAL_STORE:-}" != "1" ]; then
+    : "${WITAN_CODE_SERVER:?set it to the omnigraph-server base URL (or set WITAN_CODE_CI_ALLOW_LOCAL_STORE=1 to index into local stores)}"
+    : "${WITAN_CODE_TOKEN:?set it to the omnigraph bearer token for this indexer (or set WITAN_CODE_CI_ALLOW_LOCAL_STORE=1 to index into local stores)}"
+fi
 
 # Declared, never inferred: witan-code treats the role as the authority on who
 # may write a shared default view, so the job asserts it here rather than
@@ -54,6 +75,28 @@ export WITAN_CODE_INDEX_ROLE
 unset WITAN_REPO
 
 workdir="${WITAN_CODE_CI_WORKDIR:-/tmp/witan-ci-index}"
+
+# This path is `rm -rf`'d twice per run and once per repo, so it is checked
+# rather than trusted. Required: absolute, at least two components deep, no
+# `..` or empty component. That rejects `/`, a bare `/tmp` (a shared directory
+# this script has no business emptying), and anything that could climb out of
+# where it was pointed. The deployment passes a constant, so this fires only
+# for a mistake — which is exactly the case where the cost of not noticing is
+# unbounded.
+case "${workdir}" in
+    *..* | *//*)
+        echo "witan-ci-index: refusing WITAN_CODE_CI_WORKDIR=${workdir}:" \
+             "no '..' or empty path components" >&2
+        exit 1
+        ;;
+    /*/?*) ;;
+    *)
+        echo "witan-ci-index: refusing WITAN_CODE_CI_WORKDIR=${workdir}:" \
+             "must be an absolute path at least two components deep" >&2
+        exit 1
+        ;;
+esac
+
 rm -rf "${workdir}"
 mkdir -p "${workdir}"
 
