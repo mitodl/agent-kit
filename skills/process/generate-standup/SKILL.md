@@ -48,10 +48,11 @@ The script outputs a JSON object:
     "since": "string"
   },
   "checkin_discussion": { "id", "number", "title", "url", "createdAt" },
-  "prs_authored":    [...],
-  "prs_reviewed":    [...],
-  "issues":          [...],
-  "rfc_discussions": [...]
+  "prs_authored":        [...],
+  "prs_reviewed":        [...],
+  "issues":              [...],
+  "discussions_opened":  [...],
+  "discussion_comments": [...]
 }
 ```
 
@@ -62,11 +63,45 @@ The script outputs a JSON object:
 - `meta.since` is midnight UTC on `meta.yesterday` — the fetch window start.
 - `checkin_discussion` is the most recent Check-ins discussion in `mitodl/hq`.
   Keep its `id` (GraphQL node ID) and `url` for Steps 4–5.
+- `discussions_opened` — discussions the user **opened** in the window, any
+  category. Opening one is announcement-worthy; see Step 3.
+- `discussion_comments` — comments and replies the user left in the window,
+  with a `url` deep-linked to the comment and a 300-char `excerpt`. Check-ins
+  threads are excluded (those are standup posts — reporting them is circular).
 - Do **not** infer or fabricate activity beyond what the script returns.
+
+**Why "most recent Check-ins discussion" is the right post target.** The thread
+for day D is created on D-1 at ~15:38 UTC, and standup is at **9:15am ET
+(~13:15 UTC)**. So a BOD post finds D's thread as the newest — D+1's does not
+exist yet — and an EOD post finds D+1's, which is where an end-of-day report
+belongs since the team reads it at the next morning's standup. Both are
+correct; **do not "fix" this selection to title-match the date.**
+
+Every PR and issue carries three timestamps and each still-open authored PR
+carries its review state. These fields exist so that no claim in the post has to
+be guessed — see [Timestamp discipline](#timestamp-discipline) and
+[Which PRs actually need review](#which-prs-actually-need-review) in Step 3.
+
+| Field | Meaning |
+|-------|---------|
+| `createdAt` | when it was opened |
+| `updatedAt` | last touched — the search window is built on this |
+| `closedAt` | when it closed/merged; `null` while open |
+| `reviewDecision` | `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or `null` (no review requested or left). Open authored PRs only. |
+| `reviewRequests` | logins/teams with a review still pending. Open authored PRs only. |
+
+Entries in `discussions_opened` and `discussion_comments` carry `createdAt`,
+`url`, `repository`, and `category`; comments add `discussion_title`,
+`discussion_url`, and `excerpt`.
 
 ---
 
 ## Step 1b — Query agent session history
+
+**If the `sql` tool is unavailable in this harness, skip this step and say so
+explicitly in the message that presents the draft** — up front, not as a
+trailing footnote. Off-GitHub work is then entirely unrepresented, and the user
+is the only one who can fill that gap (the `off_github` field in Step 2).
 
 Using the `sql` tool (`database: "session_store"`), fetch agent sessions
 active since `meta.since`:
@@ -175,11 +210,57 @@ From the user's `timing` answer, determine:
 - **Planned (future section):** Open PRs and issues the user is continuing,
   plus anything explicitly stated in user answers. Omit items with no
   `updatedAt` since `meta.since` (stale).
-- **Announcements:** PRs authored by the user that are still open and need
-  human review (exclude bots: Copilot, Gemini, Renovate, Dependabot, Sentry).
-  Also include RFC discussions created today, blockers, and OOO info.
+- **Announcements:** authored PRs that genuinely still need human review — see
+  [Which PRs actually need review](#which-prs-actually-need-review) below.
+  Also every entry in `discussions_opened` with `createdAt` on `report_date`
+  (**opening a new discussion is always announcement-worthy** — it's a request
+  for the team's attention, regardless of category), plus blockers and OOO info.
+- **Discussion comments (past section):** entries in `discussion_comments` with
+  `createdAt` on `report_date` belong under done work. These are frequently
+  substantive design work with no PR or issue attached, so they are easy to drop
+  — don't. Summarize from the `excerpt` and link the comment `url` (the deep
+  link), not just the parent thread. A long comment laying out a proposal is
+  worth a real sentence, not "commented on #12502".
 - **Deduplication:** A PR in both `prs_authored` and `prs_reviewed` → list
   once under the most relevant bucket.
+
+### Timestamp discipline
+
+`updatedAt` is only the search window. It says an item was *touched* in the
+window — nothing more. A PR opened last week and merged today has an
+`updatedAt` of today, and so does one opened today; they are not the same
+report. **Every verb in the post must be licensed by the field that actually
+means that verb:**
+
+| To write… | The item must have… |
+|-----------|---------------------|
+| "opened", "filed", "put up" | `createdAt` on `report_date` |
+| "merged", "shipped", "landed" | `state == "merged"` **and** `closedAt` on `report_date` |
+| "closed" | `state == "closed"` and `closedAt` on `report_date` |
+| "reviewed", "worked on", "picked up again" | `updatedAt` on `report_date` — the only claim `updatedAt` alone supports |
+
+Check the field before writing the verb, not after. If a PR was opened earlier
+in the week and merged today, the post says *merged* — not *opened*. When only
+`updatedAt` falls on `report_date`, "worked on" is the strongest available
+claim; reach for a specific verb only with the timestamp to back it.
+
+Timestamps are UTC, so evening work in a US timezone lands on the next UTC
+date. If an item's timestamp is within a few hours of UTC midnight, say which
+day you placed it on rather than asserting it silently.
+
+### Which PRs actually need review
+
+Use `reviewDecision`, and only `reviewDecision`. "Open" does not mean "needs
+review", and a **"needs review" label or project field is not evidence** —
+reviewers routinely approve a PR and forget to clear the label.
+
+| `reviewDecision` | Bucket | Framing |
+|------------------|--------|---------|
+| `null` / `REVIEW_REQUIRED` | Announcements | needs review — name `reviewRequests` handles if any are pending |
+| `CHANGES_REQUESTED` | Planned | the ball is with the author: "address feedback on …" |
+| `APPROVED` | Neither, or Planned | nobody owes a review; mention only as ready-to-merge, if at all |
+
+Never put an `APPROVED` PR under "needs review".
 
 **Incorporating agent sessions:**
 
