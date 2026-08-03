@@ -86,7 +86,19 @@ LABEL org.opencontainers.image.title="witan" \
 
 RUN useradd --uid 1000 --user-group --create-home witan
 
+# git is not optional here even for the MCP tier: witan-code shells out to it
+# to resolve a checkout's repo URI, current branch, and root (witan_code/repo.py
+# — git is the only correct parser of its own config, worktrees included). The
+# CI indexer entrypoint below also clones with it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=omnigraph-fetch /out/omnigraph /usr/local/bin/omnigraph
+# The CI code-graph indexer (ol-infrastructure `applications/witan/ci_indexer.py`
+# runs it as a CronJob). Shipped in this image rather than its own so the
+# process writing a shared code graph is the same build as the one serving it.
+COPY --chmod=0755 docker/witan-ci-index.sh /usr/local/bin/witan-ci-index
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /src /src
 
@@ -97,8 +109,11 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /src
 USER witan
 
-# omnigraph must resolve on PATH (OmnigraphClient constructs at import).
-RUN witan --help >/dev/null && omnigraph --version
+# omnigraph must resolve on PATH (OmnigraphClient constructs at import), and
+# `witan code` must be mounted — the CI indexer entrypoint is nothing but that
+# subcommand in a loop, and an image without witan-code installed would fail
+# only once the CronJob first fired.
+RUN witan --help >/dev/null && witan code --help >/dev/null && omnigraph --version && git --version
 
 EXPOSE 8000
 ENTRYPOINT ["witan"]
