@@ -11,8 +11,9 @@ a MINOR bump may include breaking changes).
 ### Added
 
 - **Connect-failure retry for a restarting omnigraph-server** — a remote call
-  that cannot establish a connection now backs off and retries on its own
-  budget (~42s, jittered) instead of failing the MCP tool call outright.
+  that cannot establish a connection now backs off and retries against a
+  150s wall-clock deadline, jittered, instead of failing the MCP tool call
+  outright.
   Restarts of the deployed data tier are routine, not exceptional: it hashes
   its bearer-token map once at boot, so adding a user to `witan-users` bounces
   the Deployment (ol-infrastructure wires that through the Vault Secrets
@@ -26,6 +27,22 @@ a MINOR bump may include breaking changes).
   committed, and silently re-applying it is worse than surfacing the error.
   The budget is independent of both `_MAX_ATTEMPTS` and `surface_conflict`;
   there is no conflict to surface when the request never left the process.
+
+  The budget is a wall-clock deadline rather than an attempt count. It shipped
+  as an attempt count first, and that framing is what made it wrong: 12
+  attempts of capped backoff sums to ~42s, and its test asserted that sum was
+  `>= 40` — a threshold with no provenance, which passed while being shorter
+  than the thing it was supposed to outlast. Validating against the CI
+  deployment measured two real restarts at **52s and 61s**, so the client was
+  giving up mid-restart. The deadline is now 150s and the test asserts against
+  the measured outage, driven through `_execute`, rather than against the
+  schedule's own arithmetic.
+
+  For anyone tuning this: of that ~60s, 30s is the full
+  `terminationGracePeriodSeconds` — the server does not exit on `SIGTERM` and
+  is `SIGKILL`ed at the deadline, every time, exactly — and the rest is the
+  binary opening its S3-backed graphs (the port is still unbound ~19s in)
+  before the readiness probe can pass.
 
 ## [0.7.0] - 2026-08-01
 

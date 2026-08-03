@@ -88,10 +88,29 @@ _ADMISSION_CAP_MAX_DELAY = 4.0
 # NOT matched: the write may already have committed, and silently re-applying
 # it is worse than surfacing the error — the same reasoning that makes
 # `surface_conflict` exist.
+# The budget is a WALL-CLOCK DEADLINE, not an attempt count. It was originally
+# an attempt count, and that framing is what got it wrong: 12 attempts of
+# capped exponential backoff sums to ~42s, which reads fine until you ask the
+# only question that matters — "is it longer than a restart?" It was not.
+#
+# Measured against the CI deployment (2026-08-03, two independent restarts of
+# the real Deployment, one triggered by adding a token and one by removing it):
+#
+#     old container killed -> new pod scheduled    30s   terminationGracePeriod
+#     scheduled -> container started                1s
+#     container started -> Ready                21-30s   boot + readiness probe
+#     TOTAL UNREACHABLE                         52s, 61s
+#
+# The 30s termination is the full grace period every time, exactly, because the
+# server does not exit on SIGTERM and is SIGKILLed at the deadline. The boot
+# half is the binary opening its S3-backed graphs — the port is still unbound
+# ~19s in. Neither half is going to get dramatically faster, so the deadline is
+# set well above the observed worst case rather than hugged to it: a slower
+# node, a cold image pull, or a larger graph all push the real number up.
 _UNAVAILABLE_MARKERS = ("tcp connect error", "dns error")
-_UNAVAILABLE_MAX_ATTEMPTS = 12
+_UNAVAILABLE_MAX_WAIT = 150.0
 _UNAVAILABLE_BASE_DELAY = 0.5
-_UNAVAILABLE_MAX_DELAY = 5.0
+_UNAVAILABLE_MAX_DELAY = 10.0
 
 # How a bearer token reaches the omnigraph CLI. Per its token-resolution order
 # (docs/user/cli/reference.md): a server-name-specific `OMNIGRAPH_TOKEN_<NAME>`,
@@ -464,6 +483,7 @@ class OmnigraphClient:
             attempt = 0
             admission_cap_attempt = 0
             unavailable_attempt = 0
+            unavailable_deadline: float | None = None
             while True:
                 try:
                     result = subprocess.run(
@@ -487,14 +507,23 @@ class OmnigraphClient:
                     # graph, so it neither consumes _MAX_ATTEMPTS nor honours
                     # surface_conflict (there is no conflict to surface — the
                     # request never left this process).
+                    #
+                    # The deadline is measured from the FIRST connect failure,
+                    # not from entry, so a call that spent time on unrelated
+                    # drift retries still gets the full restart-length window.
+                    now = time.monotonic()
+                    if unavailable_deadline is None:
+                        unavailable_deadline = now + _UNAVAILABLE_MAX_WAIT
                     unavailable_attempt += 1
-                    if unavailable_attempt < _UNAVAILABLE_MAX_ATTEMPTS:
-                        time.sleep(_unavailable_backoff(unavailable_attempt))
+                    delay = _unavailable_backoff(unavailable_attempt)
+                    if now + delay < unavailable_deadline:
+                        time.sleep(delay)
                         continue
+                    waited = _UNAVAILABLE_MAX_WAIT - (unavailable_deadline - now)
                     raise RuntimeError(
-                        f"omnigraph {label} failed after "
-                        f"{_UNAVAILABLE_MAX_ATTEMPTS} attempts — could not "
-                        f"connect to {self.server_url}:\n{err.strip()}"
+                        f"omnigraph {label} failed after {unavailable_attempt} "
+                        f"attempts over {waited:.0f}s — could not connect to "
+                        f"{self.server_url}:\n{err.strip()}"
                     )
                 if any(m in err_lower for m in _ADMISSION_CAP_MARKERS):
                     # Independent budget/backoff from the drift retries below —
