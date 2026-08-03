@@ -33,6 +33,34 @@ docker build -f docker/omnigraph-server.Dockerfile -t omnigraph-server:${GIT_TAG
   `witan` stack's `MCPServer` overrides `args`; env (`WITAN_OIDC_ISSUER`,
   `WITAN_OIDC_AUDIENCE`, `WITAN_ACTOR_TOKENS_FILE`, `WITAN_MEMORY_URI`,
   `WITAN_MEMORY_TOKEN`) is supplied by the stack.
+- Installs `git`. witan-code shells out to it to resolve a checkout's repo URI,
+  branch, and root (`witan_code/repo.py`), and the CI indexer below clones with
+  it.
+- Also carries [`witan-ci-index`](./witan-ci-index.sh), the **CI code-graph
+  indexer** — see below. Same image, different entrypoint.
+
+### `witan-ci-index` (CI code-graph indexer)
+
+Every repo's shared code graph has exactly one writer entitled to its default
+(`main`) view, and this script is it: witan-code refuses that write, and the
+stale-file purge that goes with it, from any process that has not declared
+`WITAN_CODE_INDEX_ROLE=ci`. Run as a Kubernetes CronJob by ol-infrastructure's
+`applications/witan/ci_indexer.py`, overriding this image's entrypoint.
+
+It sweeps `WITAN_CODE_CI_REPOS` (whitespace-separated canonical repo URIs),
+shallow-cloning each repo's default branch in turn and running
+`witan code index .` against the cluster graph. A repo that fails to clone or
+index does not abort the sweep; the script exits non-zero if any did.
+
+It runs **in-cluster** rather than in GitHub Actions because omnigraph-server
+is ClusterIP-only and deliberately has no HTTPRoute — outside the cluster a
+code graph is reachable only through the MCP tier, at one round trip per store
+operation, and a full-repo index makes thousands of them. Shipping it in the
+`witan` image rather than its own keeps the process writing a shared graph on
+the same build as the one serving it.
+
+Required env: `WITAN_CODE_CI_REPOS`, `WITAN_CODE_SERVER` (the omnigraph-server
+base URL), `WITAN_CODE_TOKEN` (the `svc-witan-ci` bearer token).
 
 ## `omnigraph-server` image
 
