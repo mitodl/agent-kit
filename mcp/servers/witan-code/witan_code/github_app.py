@@ -49,6 +49,15 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # httpx2 stays a runtime import inside the App path only
+    import httpx2
+
+# Module name for the usage string. Not `__spec__.name`: `__spec__` is None
+# when this file is run as a script rather than with `-m`, which would turn
+# the bad-argument path into an AttributeError instead of the usage message.
+_MODULE = "witan_code.github_app"
 
 __all__ = [
     "AppCredentials",
@@ -134,8 +143,12 @@ def from_env(env: dict[str, str] | None = None) -> AppCredentials | None:
 
     key_file = Path(present[KEY_FILE_ENV_VAR])  # type: ignore[arg-type]
     try:
-        private_key = key_file.read_text()
-    except OSError as exc:
+        # UnicodeError alongside OSError: a PEM is ASCII, so non-UTF-8 bytes
+        # mean the mount is not the file this expects — a truncated or binary
+        # Secret. That deserves the same explicit message as an unreadable
+        # path rather than an unhandled traceback out of a CronJob.
+        private_key = key_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
         raise GitHubAppError(
             f"Cannot read the GitHub App private key at {key_file}: {exc}"
         ) from exc
@@ -187,7 +200,7 @@ def app_jwt(credentials: AppCredentials, *, now: int | None = None) -> str:
 def installation_token(
     credentials: AppCredentials,
     *,
-    client: object | None = None,
+    client: httpx2.Client | None = None,
     api_url: str = GITHUB_API_URL,
     now: int | None = None,
 ) -> str:
@@ -196,9 +209,15 @@ def installation_token(
     ``client`` takes an ``httpx2.Client`` when a caller has one to reuse or a
     test has one to fake; otherwise one is built per call, which is what the
     once-per-repo caller wants anyway.
+
+    A client this function created is closed before returning, and one passed
+    in is left alone — the ``owns`` convention ``witan_core.remote.oidc``
+    uses. The entrypoint mints one token per process, so nothing leaks there
+    either way, but a long-lived caller would accumulate open connections.
     """
     import httpx2
 
+    owns = client is None
     http = client or httpx2.Client(timeout=_HTTP_TIMEOUT)
     url = (
         f"{api_url.rstrip('/')}/app/installations/"
@@ -215,6 +234,9 @@ def installation_token(
         )
     except httpx2.HTTPError as exc:
         raise GitHubAppError(f"Could not reach {url}: {exc}") from exc
+    finally:
+        if owns:
+            http.close()
 
     if response.status_code != _HTTP_CREATED:
         raise GitHubAppError(
@@ -254,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     check_only = argv == ["--check"]
     if argv and not check_only:
-        print(f"usage: python -m {__spec__.name} [--check]", file=sys.stderr)
+        print(f"usage: python -m {_MODULE} [--check]", file=sys.stderr)
         return EXIT_ERROR
 
     try:

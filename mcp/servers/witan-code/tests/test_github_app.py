@@ -143,6 +143,40 @@ def test_installation_token_raises_when_github_is_unreachable(credentials):
         installation_token(credentials, client=_client(handler))
 
 
+def test_installation_token_leaves_a_caller_supplied_client_open(credentials):
+    """A client the caller owns is theirs to close, even on the error path."""
+
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(201, json={"token": "ghs_secret"})
+
+    client = _client(handler)
+    installation_token(credentials, client=client)
+    assert not client.is_closed
+
+
+def test_installation_token_closes_a_client_it_created(credentials, monkeypatch):
+    """Otherwise a long-lived caller accumulates connections per call."""
+    created: list[httpx2.Client] = []
+    real_client = httpx2.Client
+
+    def spy(*args, **kwargs):
+        client = real_client(
+            *args,
+            **kwargs,
+            transport=httpx2.MockTransport(
+                lambda _: httpx2.Response(201, json={"token": "ghs_secret"})
+            ),
+        )
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(httpx2, "Client", spy)
+    installation_token(credentials)
+
+    assert len(created) == 1
+    assert created[0].is_closed
+
+
 # ── from_env ──────────────────────────────────────────────────────────────────
 
 
@@ -190,6 +224,14 @@ def test_from_env_rejects_an_empty_key_file(tmp_path, pem):
 def test_from_env_rejects_a_missing_key_file(tmp_path, pem):
     with pytest.raises(GitHubAppError, match="Cannot read"):
         from_env(_env(tmp_path, pem, **{KEY_FILE_ENV_VAR: str(tmp_path / "nope.pem")}))
+
+
+def test_from_env_rejects_a_non_utf8_key_file(tmp_path, pem):
+    """A truncated or binary mount, which a PEM never is — same clear error."""
+    env = _env(tmp_path, pem)
+    (tmp_path / "app.pem").write_bytes(b"\xff\xfe not a pem \x00")
+    with pytest.raises(GitHubAppError, match="Cannot read"):
+        from_env(env)
 
 
 def test_credentials_repr_does_not_leak_the_key(credentials):
