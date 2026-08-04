@@ -483,7 +483,7 @@ class OmnigraphClient:
             attempt = 0
             admission_cap_attempt = 0
             unavailable_attempt = 0
-            unavailable_deadline: float | None = None
+            unavailable_started: float | None = None
             while True:
                 try:
                     result = subprocess.run(
@@ -508,21 +508,33 @@ class OmnigraphClient:
                     # surface_conflict (there is no conflict to surface — the
                     # request never left this process).
                     #
-                    # The deadline is measured from the FIRST connect failure,
-                    # not from entry, so a call that spent time on unrelated
-                    # drift retries still gets the full restart-length window.
+                    # Elapsed is measured from the FIRST connect failure, not
+                    # from entry, so a call that spent time on unrelated drift
+                    # retries still gets the full restart-length window.
+                    #
+                    # The final sleep is CLAMPED to the time remaining rather
+                    # than skipped for overshooting, so the budget is spent to
+                    # the last second and the deadline itself gets one more
+                    # attempt. Raising early instead would silently shorten the
+                    # window by up to _UNAVAILABLE_MAX_DELAY — the same species
+                    # of "the constant does not mean what it says" bug this
+                    # budget was rewritten to fix.
                     now = time.monotonic()
-                    if unavailable_deadline is None:
-                        unavailable_deadline = now + _UNAVAILABLE_MAX_WAIT
+                    if unavailable_started is None:
+                        unavailable_started = now
                     unavailable_attempt += 1
-                    delay = _unavailable_backoff(unavailable_attempt)
-                    if now + delay < unavailable_deadline:
-                        time.sleep(delay)
+                    elapsed = now - unavailable_started
+                    if elapsed < _UNAVAILABLE_MAX_WAIT:
+                        time.sleep(
+                            min(
+                                _unavailable_backoff(unavailable_attempt),
+                                _UNAVAILABLE_MAX_WAIT - elapsed,
+                            )
+                        )
                         continue
-                    waited = _UNAVAILABLE_MAX_WAIT - (unavailable_deadline - now)
                     raise RuntimeError(
                         f"omnigraph {label} failed after {unavailable_attempt} "
-                        f"attempts over {waited:.0f}s — could not connect to "
+                        f"attempts over {elapsed:.0f}s — could not connect to "
                         f"{self.server_url}:\n{err.strip()}"
                     )
                 if any(m in err_lower for m in _ADMISSION_CAP_MARKERS):

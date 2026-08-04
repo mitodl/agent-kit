@@ -521,10 +521,40 @@ def test_connect_failure_gives_up_after_its_own_budget(monkeypatch):
         RuntimeError, match="could not connect to https://graph.example"
     ):
         client._execute(["omnigraph", "query"], "query", is_write=False)
-    # Bounded by wall clock, not a fixed attempt count.
-    assert sum(sleeps) <= og._UNAVAILABLE_MAX_WAIT
-    assert sum(sleeps) > og._UNAVAILABLE_MAX_WAIT - og._UNAVAILABLE_MAX_DELAY
+    # Bounded by wall clock, not a fixed attempt count — and it spends the
+    # WHOLE budget. An earlier version skipped the last sleep whenever the
+    # next backoff would overshoot the deadline, which quietly cut the
+    # effective window to 145.5s of the configured 150s.
+    assert sum(sleeps) == pytest.approx(og._UNAVAILABLE_MAX_WAIT)
     assert calls["n"] > _MEASURED_RESTART_OUTAGE_SECONDS / og._UNAVAILABLE_MAX_DELAY
+
+
+def test_final_retry_lands_on_the_deadline_not_before_it(monkeypatch):
+    """The budget must be spent to the last second, including one attempt at
+    the deadline itself — a server that comes back at T-1s inside the window
+    has to be caught, not missed because the next backoff would overshoot."""
+    client = _client(monkeypatch)
+    # Comes back with 1s of budget left: inside the window by any reading, but
+    # far past the last un-clamped backoff boundary (145.5s).
+    back_at = 1000.0 + og._UNAVAILABLE_MAX_WAIT - 1
+    now = [1000.0]
+
+    def fake_run(cmd, **kwargs):
+        if now[0] < back_at:
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr=_CONNECT_REFUSED_STDERR
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="back", stderr="")
+
+    def fake_sleep(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    monkeypatch.setattr(og.time, "sleep", fake_sleep)
+    monkeypatch.setattr(og.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(og.random, "uniform", lambda a, b: 0.0)
+
+    assert client._execute(["omnigraph", "query"], "query", is_write=False) == "back"
 
 
 def test_connect_failure_ignores_surface_conflict(monkeypatch):
