@@ -3,8 +3,8 @@ name: generate-standup
 description: >
   Generates a daily standup post from GitHub activity and agent session
   history, and posts it to the mitodl/hq Check-ins discussion. Use when asked
-  to write, generate, or post a daily standup — fetches PR, issue, and
-  code-review activity via the gh CLI, queries recent agent sessions, asks
+  to write, generate, or post a daily standup — fetches PR, issue, discussion,
+  and code-review activity via the gh CLI, queries recent agent sessions, asks
   clarifying questions about timing and off-GitHub work, renders the standup
   in the team's standard format, and posts it as a discussion comment with
   user confirmation.
@@ -48,10 +48,11 @@ The script outputs a JSON object:
     "since": "string"
   },
   "checkin_discussion": { "id", "number", "title", "url", "createdAt" },
-  "prs_authored":    [...],
-  "prs_reviewed":    [...],
-  "issues":          [...],
-  "rfc_discussions": [...]
+  "prs_authored":        [...],
+  "prs_reviewed":        [...],
+  "issues":              [...],
+  "discussions_opened":  [...],
+  "discussion_comments": [...]
 }
 ```
 
@@ -62,7 +63,42 @@ The script outputs a JSON object:
 - `meta.since` is midnight UTC on `meta.yesterday` — the fetch window start.
 - `checkin_discussion` is the most recent Check-ins discussion in `mitodl/hq`.
   Keep its `id` (GraphQL node ID) and `url` for Steps 4–5.
+- `discussions_opened` — discussions the user **opened** in the window, any
+  category. Opening one is announcement-worthy; see Step 3.
+- `discussion_comments` — comments and replies the user left in the window,
+  with a `url` deep-linked to the comment and a 300-char `excerpt`. Check-ins
+  threads are excluded (those are standup posts — reporting them is circular).
 - Do **not** infer or fabricate activity beyond what the script returns.
+
+**Why "most recent Check-ins discussion" is the right post target.** The thread
+for day D is created on D-1, mid-afternoon UTC, and standup is at **9:15am ET
+(~13:15 UTC)**. So a BOD post finds D's thread as the newest — D+1's does not
+exist yet — and an EOD post finds D+1's, which is where an end-of-day report
+belongs since the team reads it at the next morning's standup. Both are
+correct; **do not "fix" this selection to title-match the date.**
+
+Every PR and issue carries three timestamps and each still-open authored PR
+carries its review state. These fields exist so that no claim in the post has to
+be guessed — see [Timestamp discipline](#timestamp-discipline) and
+[Which PRs actually need review](#which-prs-actually-need-review) in Step 3.
+
+| Field | Meaning |
+|-------|---------|
+| `createdAt` | when it was opened |
+| `updatedAt` | last touched — the search window is built on this |
+| `closedAt` | when it closed/merged; `null` while open |
+| `state` | lowercase. PRs: `open`, `merged`, or `closed` (closed-unmerged). Issues: `open` or `closed` |
+| `isDraft` | PRs only |
+| `author.login` | issues only — **not** necessarily the user; see the authorship note in Step 3 |
+| `needs_review` | **authored PRs only.** `true` iff a human still owes a review. Already accounts for draft status, approval, requested changes, and bot reviewers — use it as-is; do not re-derive it. |
+| `reviewDecision` | `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or `null` (nobody has reviewed). Open authored PRs only. Use for *framing*, not for the needs-review decision. |
+| `reviewRequests` | human logins/team slugs with a review still pending; bots filtered out. Open authored PRs only. |
+| `review_state_unknown` | `true` if the review lookup failed. Say the state is unknown rather than guessing. |
+
+Entries in `discussions_opened` and `discussion_comments` both carry
+`repository`, `category`, `url`, and `createdAt` as plain strings, plus
+`number`/`title` and `discussion_number`/`discussion_title` respectively.
+Comments add `discussion_url` and `excerpt`.
 
 ---
 
@@ -94,7 +130,10 @@ through these options in order and use the first one that applies:
    most recent assistant text as a proxy summary of what happened.
 4. **None of the above available or discoverable.** Skip this step
    entirely and proceed with GitHub-only data — do not fabricate session
-   activity.
+   activity. **Say so in the message presenting the draft**, up front rather
+   than as a trailing footnote: off-GitHub work is then entirely
+   unrepresented, and the user is the only one who can fill that gap (the
+   `off_github` field in Step 2).
 
 Whichever source applies, normalize each session you find into a common
 shape before moving on — `repository` (or `null` if none), `branch` (or
@@ -170,19 +209,114 @@ From the user's `timing` answer, determine:
 | EOD    | `meta.today`             | `meta.tomorrow`           | `What did I work on today?` | `What am I working on tomorrow?` |
 | BOD    | `meta.yesterday`         | `meta.today`              | `What did I work on yesterday?` | `What am I working on today?` |
 
+**Timezones, before any date comparison below.** `meta.today` is the **UTC**
+date at script run time, and GitHub's timestamps are UTC too — but the workday
+being reported is US Eastern. Convert item timestamps to Eastern (UTC−4 in DST,
+UTC−5 otherwise) and compare those against `report_date`: a
+`2026-07-31T00:51Z` comment was 8:51pm Eastern on **July 30**, so matching the
+raw UTC prefix files a Thursday evening's work under Friday. Anything before
+04:00Z (05:00Z outside DST) belongs to the previous Eastern day.
+
+One case the conversion can't fix: for an EOD post after ~8pm ET, `meta.today`
+is *already tomorrow's* Eastern date, so nothing will match `report_date`. Re-run
+the script with `-t <the Eastern date>` instead of working around it.
+
+This governs **inclusion and verb choice alike**. When a converted item lands on
+a different day than its UTC prefix suggests, note which day you placed it on in
+the message presenting the draft — not in the post itself.
+
 **Bucketing rules:**
 
 - **Done (past section):** Any PR or issue with `updatedAt` on
   `report_date`. Include both merged and still-open items that were
-  actively worked on that day (merged PRs have `state == "merged"`).
+  actively worked on that day (merged PRs have `state == "merged"`). This
+  decides *inclusion* only — see [Timestamp discipline](#timestamp-discipline)
+  before choosing the verb you attach to it.
 - **Planned (future section):** Open PRs and issues the user is continuing,
   plus anything explicitly stated in user answers. Omit items with no
   `updatedAt` since `meta.since` (stale).
-- **Announcements:** PRs authored by the user that are still open and need
-  human review (exclude bots: Copilot, Gemini, Renovate, Dependabot, Sentry).
-  Also include RFC discussions created today, blockers, and OOO info.
+- **Announcements:** authored PRs with `needs_review: true` — see
+  [Which PRs actually need review](#which-prs-actually-need-review) below.
+  Also every entry in `discussions_opened` with `createdAt` on `report_date`
+  (**opening a new discussion is always announcement-worthy** — it's a request
+  for the team's attention, regardless of category), plus blockers and OOO info.
+- **Discussion comments (past section):** entries in `discussion_comments` with
+  `createdAt` on `report_date` belong under done work. These are frequently
+  substantive design work with no PR or issue attached, so they are easy to drop
+  — don't. Summarize from the `excerpt` and link the comment `url` (the deep
+  link), not just the parent thread. A long comment laying out a proposal is
+  worth a real sentence, not "commented on
+  https://github.com/mitodl/hq/discussions/12502".
 - **Deduplication:** A PR in both `prs_authored` and `prs_reviewed` → list
   once under the most relevant bucket.
+
+### Timestamp discipline
+
+`updatedAt` is only the search window. It says an item was *touched* in the
+window — nothing more. A PR opened last week and merged today has an
+`updatedAt` of today, and so does one opened today; they are not the same
+report. **Every lifecycle verb you attach to a PR or issue — opened, merged,
+closed, reviewed — must be licensed by the field that actually means that
+verb.** (Verbs in the user's own `off_github` / `extra_context` notes are theirs;
+don't second-guess those against GitHub fields.)
+
+| To write… | The item must have… |
+|-----------|---------------------|
+| "opened", "filed", "put up" | `createdAt` on `report_date` |
+| "merged", "shipped", "landed" | `state == "merged"` **and** `closedAt` on `report_date` |
+| "closed" | `state == "closed"` and `closedAt` on `report_date` |
+| "worked on", "picked up again" | `updatedAt` on `report_date` — the only claim `updatedAt` alone supports |
+
+Check the field before writing the verb, not after. When only `updatedAt` falls
+on `report_date`, "worked on" is the strongest available claim; reach for a
+specific verb only with the timestamp to back it.
+
+**Authorship is a second check, separate from the timestamp.** Only
+`prs_authored` is author-scoped. `prs_reviewed` is every PR you have *ever*
+reviewed, and `issues` uses `involves:`, so it includes issues other people filed
+that you merely commented on — both buckets routinely contain items someone else
+opened, merged, or closed on `report_date`, satisfying the table exactly. Outside
+`prs_authored`, confirm `author.login == meta.username` before "opened"/"filed",
+and never write "merged"/"shipped"/"closed" at all: you reviewed or commented on
+it, someone else landed it.
+
+**"Reviewed" is not licensed by `updatedAt`.** `prs_reviewed` matches PRs you
+reviewed at any time in the past, and `updatedAt` moves whenever anyone touches
+the PR — so a PR you reviewed weeks ago surfaces in today's window because
+someone else pushed to it. The data carries no timestamp for *your* review. Say
+"reviewed" only when the user's own notes say so, or after checking
+`gh pr view <url> --json reviews` for a `submittedAt` on `report_date`.
+Otherwise the item is "worked on", or omitted.
+
+### Which PRs actually need review
+
+**The PRs you describe as needing review are exactly the authored PRs with
+`needs_review: true`** — no additions, no substitutions. "Open" does not mean
+"needs review", and a **"needs review" label or project field is not evidence** —
+reviewers routinely approve a PR and forget to clear the label. The script already
+folded in draft status, approval, requested changes, and bot reviewers, so do not
+rebuild that logic from `reviewDecision`.
+
+Other PRs may still appear in announcements under a *different* claim — approved
+and ready to merge, review state unknown, or a specific request the user made in
+Step 2 — but never as "needs review".
+
+Use `reviewDecision` only to *phrase* the bullet:
+
+| `reviewDecision` | Framing |
+|------------------|---------|
+| `null` / `REVIEW_REQUIRED` | needs review — name pending `reviewRequests` handles if any |
+| `CHANGES_REQUESTED` | the ball is with the author: "address feedback on …" (Planned, not Announcements) |
+| `APPROVED` | mention as ready-to-merge, if at all |
+
+Two caveats:
+
+- `APPROVED` **survives new commits.** An approval from before the author's
+  latest push still reads `APPROVED`, so a stale approval is indistinguishable
+  from a current one here. If you know the PR moved after approval, say it may
+  need another look.
+- `review_state_unknown: true` means the lookup failed. Report the state as
+  unknown; do not fall back to "open, so it needs review".
 
 **Incorporating agent sessions:**
 
@@ -242,7 +376,11 @@ _<Display Name>_
   the work involved investigation/discussion not captured in a link).
 - **Prefer natural phrasing over templated phrasing:** avoid mechanical bullets
   like `worked on <url>` when a clearer summary is available. Preserve the
-  user's own wording and concerns wherever possible.
+  user's own wording and concerns wherever possible. **Add the detail to the
+  description, never by upgrading the verb** past what
+  [Timestamp discipline](#timestamp-discipline) licenses — if only `updatedAt`
+  falls on `report_date`, "worked on" stays, and the *rest* of the bullet
+  carries the specifics.
 - **Use nested bullets when helpful:** a parent bullet like `Reviewed a bunch
   of PRs:` or an issue link followed by indented explanation often reads better
   than a flat list of disconnected one-liners.
@@ -317,11 +455,13 @@ Tobias Macey
 - PRs needing review:
   - ol-infrastructure: add Archive/Deep Archive access tier support to OLBucket — https://github.com/mitodl/ol-infrastructure/pull/4659
   - ol-data-platform: automate Iceberg table maintenance across the lakehouse — https://github.com/mitodl/ol-data-platform/pull/2238
+- ol-infrastructure: approved and ready to merge — https://github.com/mitodl/ol-infrastructure/pull/4640
 
 > What did I work on yesterday?
 
 - Worked on addressing the hanging open issue for Dagster assets using Polars to read Iceberg tables
 - Opened https://github.com/mitodl/ol-infrastructure/pull/4659 for S3 cost optimization
+- Laid out the two options for Iceberg table maintenance scheduling — leaning toward a single Dagster schedule over per-table sensors: https://github.com/mitodl/hq/discussions/12488#discussioncomment-17801234
 
 > What am I working on today?
 
