@@ -125,16 +125,18 @@ _search_prs() {
 #
 # `gh search` cannot return review state, so every open PR needs its own lookup.
 # The boolean exists because reviewDecision alone is a footgun: gh reports it as
-# "" (not null) when nobody has reviewed, a draft PR still reports
-# REVIEW_REQUIRED, and merged PRs have no value at all — so any rule phrased in
-# terms of the raw field mis-buckets something. Decide it here, once, rather
-# than restating the conditions at the call site.
+# "" (not null) when nobody has reviewed, and a draft PR still reports
+# REVIEW_REQUIRED — so any rule phrased in terms of the raw field mis-buckets
+# something. Decide it here, once, rather than restating the conditions at the
+# call site.
 _enrich_review_state() {
 	local prs="$1"
 	local open_urls
 	open_urls="$(jq -r '.[] | select(.state == "open") | .url' <<<"$prs")"
 	if [[ -z "$open_urls" ]]; then
-		echo "$prs"
+		# Still emit the documented field, so a merged-only run doesn't leave
+		# `needs_review` absent where the caller was promised a boolean.
+		jq 'map(. + {needs_review: false})' <<<"$prs"
 		return
 	fi
 
@@ -151,7 +153,11 @@ _enrich_review_state() {
 	# before comparing. Bot review requests are dropped: an automated reviewer
 	# pending does not mean a human owes one.
 	jq -s --argjson bots '["copilot-pull-request-reviewer","copilot","gemini-code-assist","renovate","dependabot","sentry-io","sentry"]' '
-    def is_bot: ascii_downcase | rtrimstr("[bot]") | IN($bots[]);
+    # The `[bot]` suffix is the general signal; the list catches the ones that
+    # request review under a bare login. Testing the suffix first matters —
+    # rtrimstr alone throws the signal away before comparing, so anything off
+    # the list (claude[bot], coderabbitai[bot]) would read as a human.
+    def is_bot: ascii_downcase | (endswith("[bot]") or (rtrimstr("[bot]") | IN($bots[])));
     .[0] as $prs | .[1] as $details
     | $prs | map(
         . as $pr
@@ -166,9 +172,12 @@ _enrich_review_state() {
             | ($d | has("reviewDecision") | not) as $unknown
             | $pr + {
                 reviewDecision: $decision,
+                # select(. != null …) first: a reviewer node with none of the
+                # three name fields would otherwise reach ascii_downcase as
+                # null and abort the whole run.
                 reviewRequests: [($d.reviewRequests // [])[]
                                  | (.login // .slug // .name)
-                                 | select(is_bot | not)],
+                                 | select(. != null and (is_bot | not))],
                 review_state_unknown: $unknown,
                 needs_review: (
                   if $unknown or ($pr.isDraft // false) then false
@@ -203,7 +212,7 @@ _org_qualifier() {
 	echo "${q% }"
 }
 
-# Echo $1 if it is a JSON array, else "[]".
+# Echo $1 if it is exactly one JSON array, else "[]".
 #
 # Guards the --argjson calls at the bottom: `gh api graphql` exits non-zero
 # whenever the response carries an `errors` array *even when `data` is
@@ -212,8 +221,29 @@ _org_qualifier() {
 # appends "[]" to output jq has already written, and --argjson rejects the
 # two-value result — losing the whole run over a partial failure. So capture
 # first, filter second, and validate here.
+#
+# -s (slurp) is what makes this a real guard rather than a restatement of the
+# bug: it rejects multi-document input, and a parse error under -s produces no
+# output at all, so the `|| echo '[]'` fallback cannot append to a partial write.
 _json_array() {
-	jq -e 'if type == "array" then . else error end' <<<"${1:-}" 2>/dev/null || echo '[]'
+	jq -se 'if length == 1 and (.[0] | type) == "array" then .[0] else error end' \
+		<<<"${1:-}" 2>/dev/null || echo '[]'
+}
+
+# Warn on stderr when a GraphQL response carries an `errors` array.
+#
+# A nested connection that trips RESOURCE_LIMITS_EXCEEDED still returns 200 with
+# `data` present — but every field it was asked for comes back null, which the
+# filters below then discard as "no matches". Undercounting silently is worse
+# than a noisy run, so say something rather than emitting a plausible [].
+_warn_graphql_errors() {
+	local raw="$1" label="$2" msgs
+	msgs="$(jq -r '[.errors[]?.message] | unique | map("  - " + .) | .[]' \
+		<<<"${raw:-null}" 2>/dev/null || true)"
+	if [[ -n "$msgs" ]]; then
+		printf 'Warning: %s query returned errors; results may be incomplete:\n%s\n' \
+			"$label" "$msgs" >&2
+	fi
 }
 
 # Discussions the user OPENED in the window, any category, any org.
@@ -234,6 +264,7 @@ _discussions_opened() {
       } }
     }
   }' -f q="$(_org_qualifier) author:${USERNAME} sort:updated-desc created:>=${SINCE%T*}" 2>/dev/null || true)"
+	_warn_graphql_errors "$raw" "discussions-opened"
 
 	_json_array "$(jq '[.data.search.nodes[]?
       | select(. != null and .category.name != "Check-ins")
@@ -246,7 +277,14 @@ _discussions_opened() {
 # Substantive design work often lives in a comment on someone else's thread and
 # has no PR or issue attached, so it is invisible without this.
 # Check-ins is excluded — those are standup posts, and reporting them would be
-# circular.
+# circular. It cannot move server-side: `category:` only works in DISCUSSION
+# search alongside `repo:`, and this query is org-scoped.
+#
+# The nested `last:` values are a node budget, not a preference. GitHub bills
+# 25 × 20 × (1 + 10) ≈ 5.5k nodes here; past ~10k the connection trips
+# RESOURCE_LIMITS_EXCEEDED, which returns 200 with every requested field nulled
+# rather than failing outright. Raising any of the three numbers needs a
+# measurement, not a guess.
 _discussion_comments() {
 	local raw
 	# shellcheck disable=SC2016  # $q is a GraphQL variable, bound via -f q=
@@ -257,15 +295,16 @@ _discussion_comments() {
         number title url
         category { name }
         repository { nameWithOwner }
-        comments(last: 30) {
+        comments(last: 20) {
           nodes {
             author { login } createdAt url bodyText
-            replies(last: 30) { nodes { author { login } createdAt url bodyText } }
+            replies(last: 10) { nodes { author { login } createdAt url bodyText } }
           }
         }
       } }
     }
   }' -f q="$(_org_qualifier) commenter:${USERNAME} sort:updated-desc updated:>=${SINCE%T*}" 2>/dev/null || true)"
+	_warn_graphql_errors "$raw" "discussion-comments"
 
 	_json_array "$(jq --arg username "$USERNAME" --arg since "$SINCE" '
       [ .data.search.nodes[]?
@@ -281,7 +320,7 @@ _discussion_comments() {
             category: $d.category.name,
             createdAt: .createdAt,
             url: .url,
-            excerpt: (.bodyText[:300] | gsub("\\s+"; " ")) }
+            excerpt: ((.bodyText // "")[:300] | gsub("\\s+"; " ")) }
       ]' <<<"${raw:-null}" 2>/dev/null || true)"
 }
 

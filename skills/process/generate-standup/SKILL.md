@@ -71,7 +71,7 @@ The script outputs a JSON object:
 - Do **not** infer or fabricate activity beyond what the script returns.
 
 **Why "most recent Check-ins discussion" is the right post target.** The thread
-for day D is created on D-1 at ~15:38 UTC, and standup is at **9:15am ET
+for day D is created on D-1, mid-afternoon UTC, and standup is at **9:15am ET
 (~13:15 UTC)**. So a BOD post finds D's thread as the newest — D+1's does not
 exist yet — and an EOD post finds D+1's, which is where an end-of-day report
 belongs since the team reads it at the next morning's standup. Both are
@@ -87,8 +87,10 @@ be guessed — see [Timestamp discipline](#timestamp-discipline) and
 | `createdAt` | when it was opened |
 | `updatedAt` | last touched — the search window is built on this |
 | `closedAt` | when it closed/merged; `null` while open |
+| `state` | lowercase. PRs: `open`, `merged`, or `closed` (closed-unmerged). Issues: `open` or `closed` |
 | `isDraft` | PRs only |
-| `needs_review` | **authored PRs only.** `true` iff a human still owes a first review. Already accounts for draft status, approval, requested changes, and bot reviewers — use it as-is; do not re-derive it. |
+| `author.login` | issues only — **not** necessarily the user; see the authorship note in Step 3 |
+| `needs_review` | **authored PRs only.** `true` iff a human still owes a review. Already accounts for draft status, approval, requested changes, and bot reviewers — use it as-is; do not re-derive it. |
 | `reviewDecision` | `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, or `null` (nobody has reviewed). Open authored PRs only. Use for *framing*, not for the needs-review decision. |
 | `reviewRequests` | human logins/team slugs with a review still pending; bots filtered out. Open authored PRs only. |
 | `review_state_unknown` | `true` if the review lookup failed. Say the state is unknown rather than guessing. |
@@ -207,6 +209,22 @@ From the user's `timing` answer, determine:
 | EOD    | `meta.today`             | `meta.tomorrow`           | `What did I work on today?` | `What am I working on tomorrow?` |
 | BOD    | `meta.yesterday`         | `meta.today`              | `What did I work on yesterday?` | `What am I working on today?` |
 
+**Timezones, before any date comparison below.** `meta.today` is the **UTC**
+date at script run time, and GitHub's timestamps are UTC too — but the workday
+being reported is US Eastern. Convert item timestamps to Eastern (UTC−4 in DST,
+UTC−5 otherwise) and compare those against `report_date`: a
+`2026-07-31T00:51Z` comment was 8:51pm Eastern on **July 30**, so matching the
+raw UTC prefix files a Thursday evening's work under Friday. Anything before
+04:00Z (05:00Z outside DST) belongs to the previous Eastern day.
+
+One case the conversion can't fix: for an EOD post after ~8pm ET, `meta.today`
+is *already tomorrow's* Eastern date, so nothing will match `report_date`. Re-run
+the script with `-t <the Eastern date>` instead of working around it.
+
+This governs **inclusion and verb choice alike**. When a converted item lands on
+a different day than its UTC prefix suggests, note which day you placed it on in
+the message presenting the draft — not in the post itself.
+
 **Bucketing rules:**
 
 - **Done (past section):** Any PR or issue with `updatedAt` on
@@ -227,7 +245,8 @@ From the user's `timing` answer, determine:
   substantive design work with no PR or issue attached, so they are easy to drop
   — don't. Summarize from the `excerpt` and link the comment `url` (the deep
   link), not just the parent thread. A long comment laying out a proposal is
-  worth a real sentence, not "commented on #12502".
+  worth a real sentence, not "commented on
+  https://github.com/mitodl/hq/discussions/12502".
 - **Deduplication:** A PR in both `prs_authored` and `prs_reviewed` → list
   once under the most relevant bucket.
 
@@ -246,28 +265,41 @@ don't second-guess those against GitHub fields.)
 | "opened", "filed", "put up" | `createdAt` on `report_date` |
 | "merged", "shipped", "landed" | `state == "merged"` **and** `closedAt` on `report_date` |
 | "closed" | `state == "closed"` and `closedAt` on `report_date` |
-| "reviewed", "worked on", "picked up again" | `updatedAt` on `report_date` — the only claim `updatedAt` alone supports |
+| "worked on", "picked up again" | `updatedAt` on `report_date` — the only claim `updatedAt` alone supports |
 
-Check the field before writing the verb, not after. If a PR was opened earlier
-in the week and merged today, the post says *merged* — not *opened*. When only
-`updatedAt` falls on `report_date`, "worked on" is the strongest available
-claim; reach for a specific verb only with the timestamp to back it.
+Check the field before writing the verb, not after. When only `updatedAt` falls
+on `report_date`, "worked on" is the strongest available claim; reach for a
+specific verb only with the timestamp to back it.
 
-**Timestamps are UTC; `report_date` is a US Eastern calendar day.** Convert
-before comparing — Eastern is UTC−4 in DST, UTC−5 otherwise. A `2026-07-31T00:51Z`
-comment was 8:51pm Eastern on **July 30**, so matching on the UTC date prefix
-files a Thursday evening's work under Friday. Anything timestamped before ~04:00Z
-belongs to the previous Eastern day. When a converted item lands on a different
-day than its UTC prefix suggests, say which day you placed it on.
+**Authorship is a second check, separate from the timestamp.** Only
+`prs_authored` is author-scoped. `prs_reviewed` is every PR you have *ever*
+reviewed, and `issues` uses `involves:`, so it includes issues other people filed
+that you merely commented on — both buckets routinely contain items someone else
+opened, merged, or closed on `report_date`, satisfying the table exactly. Outside
+`prs_authored`, confirm `author.login == meta.username` before "opened"/"filed",
+and never write "merged"/"shipped"/"closed" at all: you reviewed or commented on
+it, someone else landed it.
+
+**"Reviewed" is not licensed by `updatedAt`.** `prs_reviewed` matches PRs you
+reviewed at any time in the past, and `updatedAt` moves whenever anyone touches
+the PR — so a PR you reviewed weeks ago surfaces in today's window because
+someone else pushed to it. The data carries no timestamp for *your* review. Say
+"reviewed" only when the user's own notes say so, or after checking
+`gh pr view <url> --json reviews` for a `submittedAt` on `report_date`.
+Otherwise the item is "worked on", or omitted.
 
 ### Which PRs actually need review
 
-**Announce exactly the authored PRs with `needs_review: true`.** Nothing else
-qualifies. "Open" does not mean "needs review", and a **"needs review" label or
-project field is not evidence** — reviewers routinely approve a PR and forget to
-clear the label. The script already folded in draft status, approval, requested
-changes, and bot reviewers, so do not rebuild that logic from `reviewDecision`;
-every hand-rolled version of it gets a case wrong.
+**The PRs you describe as needing review are exactly the authored PRs with
+`needs_review: true`** — no additions, no substitutions. "Open" does not mean
+"needs review", and a **"needs review" label or project field is not evidence** —
+reviewers routinely approve a PR and forget to clear the label. The script already
+folded in draft status, approval, requested changes, and bot reviewers, so do not
+rebuild that logic from `reviewDecision`.
+
+Other PRs may still appear in announcements under a *different* claim — approved
+and ready to merge, review state unknown, or a specific request the user made in
+Step 2 — but never as "needs review".
 
 Use `reviewDecision` only to *phrase* the bullet:
 
@@ -277,7 +309,7 @@ Use `reviewDecision` only to *phrase* the bullet:
 | `CHANGES_REQUESTED` | the ball is with the author: "address feedback on …" (Planned, not Announcements) |
 | `APPROVED` | mention as ready-to-merge, if at all |
 
-Two caveats worth stating in the draft rather than papering over:
+Two caveats:
 
 - `APPROVED` **survives new commits.** An approval from before the author's
   latest push still reads `APPROVED`, so a stale approval is indistinguishable
