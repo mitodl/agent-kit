@@ -33,6 +33,8 @@ from fastmcp.client.auth import BearerAuth
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
+from .. import chunking
+
 __all__ = [
     "RemoteStoreClient",
     "RemoteStoreUnsupported",
@@ -251,16 +253,39 @@ class RemoteStoreClient:
                 query_file, query_name, params, surface_conflict=surface_conflict
             )
 
-    def load(self, records: list[dict], mode: str = "merge") -> None:
+    def load(
+        self,
+        records: list[dict],
+        mode: str = "merge",
+        *,
+        max_bytes: int = chunking.LOAD_MAX_BYTES,
+    ) -> None:
+        """Bulk-load records through the MCP tier's ``code_store_load``.
+
+        Chunked on the same terms as :meth:`graph.OmnigraphClient.load`, for the
+        same reason one layer down: ``code_store_load`` hands the records to an
+        ``omnigraph load`` on the server side, so a repo-scale call runs into
+        the same buffered-body ceiling. This transport adds one of its own — the
+        records ride as a JSON tool parameter over the MCP session — which the
+        byte budget bounds as well.
+
+        ``overwrite`` is not chunked here either; see the note there.
+        """
         if not records:
             return
-        self._session.call(
-            "code_store_load",
-            graph=self.graph,
-            records=records,
-            mode=mode,
-            view=self.branch,
+        batches = (
+            [records]
+            if mode == "overwrite"
+            else chunking.chunk_records(records, max_bytes)
         )
+        for batch in batches:
+            self._session.call(
+                "code_store_load",
+                graph=self.graph,
+                records=batch,
+                mode=mode,
+                view=self.branch,
+            )
 
     def ensure_branch(self) -> None:
         if self.branch is None:
