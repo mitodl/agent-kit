@@ -54,9 +54,13 @@ def chunk_records(
     if max_bytes < 1:
         msg = f"max_bytes must be >= 1, got {max_bytes}"
         raise ValueError(msg)
-    materialized = list(records)
-    nodes = [record for record in materialized if "type" in record]
-    edges = [record for record in materialized if "type" not in record]
+    # Partitioned in ONE pass: a repo-scale index passes hundreds of thousands
+    # of records, and materializing the input before splitting it held two full
+    # pointer lists at once for no benefit.
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    for record in records:
+        (nodes if "type" in record else edges).append(record)
     for group in (nodes, edges):
         yield from _batches(group, max_bytes)
 
