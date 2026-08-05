@@ -56,6 +56,12 @@ jobs:
         if: steps.check.outputs.new == 'true'
         run: uv sync --frozen --group test
 
+      - name: Install omnigraph binary
+        # requires_stack-marked indexer tests and the cluster-graph probe tests
+        # need the real binary — see tests/conftest.py.
+        if: steps.check.outputs.new == 'true'
+        run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
+
       - name: Run tests
         if: steps.check.outputs.new == 'true'
         run: uv run pytest
