@@ -61,14 +61,21 @@ LABEL org.opencontainers.image.title="omnigraph-server" \
       org.opencontainers.image.version="${OMNIGRAPH_VERSION}"
 
 # ca-certificates: the omnigraph binaries talk to S3 over TLS.
+# python3-minimal + python3-yaml: the entrypoint renders the Cedar bundles'
+# group membership from the mounted actor-token map before converging (see
+# policy/render_groups.py). Deliberately a real YAML parser rather than a
+# sed/awk rewrite of a file that decides who can write the graph — a silent
+# mis-render here denies every user at once.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates python3-minimal python3-yaml \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --user-group --create-home omnigraph
 
 COPY --from=fetch /out/omnigraph /usr/local/bin/omnigraph
 COPY --from=fetch /out/omnigraph-server /usr/local/bin/omnigraph-server
 COPY docker/omnigraph-server-entrypoint.sh /usr/local/bin/omnigraph-server-entrypoint.sh
+COPY mcp/servers/witan/policy/render_groups.py /usr/local/bin/render-policy-groups.py
 
 # The cluster config dir holds the baked-in schema.pg, the ConfigMap-mounted
 # cluster.yaml (added at deploy time), and the ephemeral `__cluster/` state the
@@ -77,7 +84,8 @@ COPY docker/omnigraph-server-entrypoint.sh /usr/local/bin/omnigraph-server-entry
 # ol-infrastructure src/ol_infrastructure/applications/omnigraph/data_tier.py.
 ENV OMNIGRAPH_CLUSTER_DIR=/etc/omnigraph/cluster
 RUN mkdir -p "${OMNIGRAPH_CLUSTER_DIR}" \
-    && chmod +x /usr/local/bin/omnigraph-server-entrypoint.sh
+    && chmod +x /usr/local/bin/omnigraph-server-entrypoint.sh \
+    && chmod +x /usr/local/bin/render-policy-groups.py
 # All three cluster schemas are baked in: schema.pg (witan memory/work graph →
 # the `council` graph), code-schema.pg (per-repo `code-<repo>` graphs), and
 # bridge-schema.pg (the shared `code-bridge` graph). The deploy-time cluster.yaml
@@ -86,6 +94,17 @@ RUN mkdir -p "${OMNIGRAPH_CLUSTER_DIR}" \
 COPY mcp/servers/witan/schema/schema.pg /etc/omnigraph/cluster/schema.pg
 COPY mcp/servers/witan-code/witan_code/schema/code-schema.pg /etc/omnigraph/cluster/code-schema.pg
 COPY mcp/servers/witan-code/witan_code/schema/bridge-schema.pg /etc/omnigraph/cluster/bridge-schema.pg
+# The four Cedar bundles, baked alongside the schemas for the same reason: the
+# `omnigraph` Pulumi stack has no access to this tree at apply time, and these
+# are agent-kit's tested deliverable (policy/tests/*.tests.yaml). The deploy-time
+# cluster.yaml references them by these paths via its `policies:` block. Their
+# committed `groups:` are fixtures — the entrypoint rewrites membership from the
+# mounted actor-token map before `cluster apply`, so what ships in the image is
+# never what is enforced.
+COPY mcp/servers/witan/policy/memory.policy.yaml /etc/omnigraph/cluster/memory.policy.yaml
+COPY mcp/servers/witan/policy/code-graph.policy.yaml /etc/omnigraph/cluster/code-graph.policy.yaml
+COPY mcp/servers/witan/policy/bridge.policy.yaml /etc/omnigraph/cluster/bridge.policy.yaml
+COPY mcp/servers/witan/policy/server.policy.yaml /etc/omnigraph/cluster/server.policy.yaml
 RUN chown -R omnigraph:omnigraph /etc/omnigraph
 
 USER omnigraph
