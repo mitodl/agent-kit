@@ -13,10 +13,12 @@ a MINOR bump may include breaking changes).
 - **`ActorTokenResolver`'s unprovisioned-actor error no longer names a
   `witan-users` Keycloak group** — there isn't one, and the message was
   sending operators off to check a group membership that does not exist. The
-  deployed pipeline provisions every enabled human user of the Keycloak realm
-  (ol-infrastructure `applications/omnigraph/token_sync.py`), so the message
-  now points at the two things actually worth checking: whether the account is
-  disabled, and whether it is in the realm at all. `witan-users` remains the
+  deployed pipeline provisions every enabled, non-service-account user of the
+  Keycloak realm (ol-infrastructure `applications/omnigraph/token_sync.py`), so
+  the message now points at the three things actually worth checking: whether
+  the account is disabled, whether it is in the realm at all, and whether it is
+  a service account (which the realm does contain, and which the pipeline
+  deliberately skips). `witan-users` remains the
   name of the *Cedar* group in `policy/`, which is what it always was — see
   the 2026-08-05 addendum to witan ADR-0004.
 

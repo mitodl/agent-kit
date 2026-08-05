@@ -90,14 +90,18 @@ class ActorTokenResolver:
         if actor_id not in self._cache:
             # Deliberately does not name a `witan-users` Keycloak group as the
             # thing to check: there isn't one. The pipeline provisions every
-            # enabled human user of the Keycloak realm (ADR-0004 D3 addendum,
-            # 2026-08-05), so "am I in the group?" is the wrong question to
-            # send an operator off to answer.
+            # enabled, non-service-account user of the Keycloak realm (ADR-0004
+            # D3 addendum, 2026-08-05), so "am I in the group?" is the wrong
+            # question to send an operator off to answer. The three causes below
+            # are that contract's three ways of not being satisfied — a service
+            # account is enabled and present, so omitting it would make this
+            # message actively misleading for the one caller it fits.
             raise LookupError(
                 f"No omnigraph bearer token provisioned for actor {actor_id!r} "
                 f"in {self.path}. The Keycloak→token provisioning pipeline may "
-                "not have caught up yet, or this account is disabled or absent "
-                "from the Keycloak realm."
+                "not have caught up yet, or this account is disabled, absent "
+                "from the Keycloak realm, or a service account (which the "
+                "pipeline deliberately does not provision)."
             )
         return self._cache[actor_id]
 
