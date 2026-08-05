@@ -140,6 +140,149 @@ _SERVER_SCHEMES = ("http://", "https://")
 _GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
 
 
+# ── Mutation batching ────────────────────────────────────────────────────────
+#
+# The commit unit is the `omnigraph mutate` INVOCATION, not the statement: a
+# query body may hold many statements and they all land in one Lance version.
+# That is the only batching the query language offers — there is no row-array
+# parameter (`$rows: [Memory]` is a parse error, "expected base_type") and no
+# loop form (`for $r in $rows` is "expected query_body"), so statement count is
+# fixed when the query text is written. A batch whose arity varies per call —
+# a memory with 0..N tags — therefore cannot be a static entry in a `.gq` file,
+# and has to be assembled here and passed inline with `-e`.
+#
+# Measured on omnigraph 0.8.1, 20 Topic rows into a fresh store: 20 separate
+# mutates cost 1.85s / 20 manifest versions / 25 fragments; one 20-statement
+# mutate cost 0.095s / 1 manifest version / 6 fragments. Edges may reference
+# nodes inserted earlier in the SAME body (endpoint validation resolves against
+# the in-flight statements), which is what lets a node and its edges share a
+# commit rather than needing one each.
+#
+# Rather than restating each mutation's field list in Python — duplicating what
+# `mutations.gq` already says, and dropping out of `omnigraph lint`'s reach —
+# the bodies are spliced out of the .gq source and concatenated. Each step's
+# parameters are renamed with a per-step prefix so two steps that both take
+# `$slug` don't collide.
+_QUERY_DECL_RE = re.compile(r"\bquery\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTILINE)
+_PARAM_REF_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
+
+def _match_delimited(text: str, start: int, open_ch: str, close_ch: str) -> int:
+    """Index just past the ``open_ch`` at ``start``'s matching ``close_ch``.
+
+    A depth counter rather than a regex because both the parameter list and the
+    body nest: `insert Memory { … }` puts braces inside the query's own braces.
+    String literals are skipped so a brace or paren inside one is not counted.
+    """
+    depth = 0
+    i = start
+    while i < len(text):
+        ch = text[i]
+        if ch == '"':
+            i += 1
+            while i < len(text) and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise ValueError(f"unbalanced {open_ch}{close_ch} in query source")
+
+
+def parse_query(source: str, name: str) -> tuple[str, str]:
+    """Return ``(param_decls, body)`` for the named query in ``.gq`` ``source``.
+
+    ``param_decls`` is the text between the parentheses and ``body`` the text
+    between the braces, both verbatim so the caller can splice them. Comments
+    are stripped first: a `//` line inside a body would otherwise swallow the
+    statements that follow it once everything is joined onto fewer lines.
+    """
+    source = _LINE_COMMENT_RE.sub("", source)
+    for match in _QUERY_DECL_RE.finditer(source):
+        if match.group(1) != name:
+            continue
+        params_end = _match_delimited(source, match.end() - 1, "(", ")")
+        params = source[match.end() : params_end - 1]
+        body_start = source.index("{", params_end)
+        body_end = _match_delimited(source, body_start, "{", "}")
+        return params.strip(), source[body_start + 1 : body_end - 1].strip()
+    raise KeyError(f"query {name!r} not found in source")
+
+
+def compose_batch(
+    steps: list[tuple[str, str, dict]],
+    read_source: Callable[[str], str],
+    *,
+    query_name: str = "witan_batch",
+) -> tuple[str, dict]:
+    """Splice ``steps`` into one multi-statement GQ query.
+
+    Each step is ``(query_file, query_name, params)``. Returns the GQ source and
+    the merged parameter dict, ready for ``mutate -e <gq> <query_name>``.
+
+    Parameters are prefixed with the step's 0-based position — `$slug` in the
+    FIRST step becomes `$s0_slug`, in the second `$s1_slug` — so steps reusing a
+    name stay independent.
+
+    Every declared parameter must be supplied, exactly as ``change`` already
+    requires — optional fields are passed explicitly as ``None``. A declaration
+    cannot simply be dropped when a caller omits it, because the body still
+    references it; checking here names the missing parameter instead of leaving
+    omnigraph to report an unbound variable in generated source.
+    """
+    decls: list[str] = []
+    bodies: list[str] = []
+    merged: dict = {}
+    for index, (query_file, name, params) in enumerate(steps):
+        prefix = f"s{index}_"
+        raw_decls, body = parse_query(read_source(query_file), name)
+        declared = {
+            m.group(1)
+            for d in _split_decls(raw_decls)
+            if (m := _PARAM_REF_RE.search(d))
+        }
+        if missing := declared - set(params):
+            raise KeyError(f"{name} missing parameter(s): {', '.join(sorted(missing))}")
+
+        def rename(match: re.Match, prefix: str = prefix) -> str:
+            return f"${prefix}{match.group(1)}"
+
+        decls += [_PARAM_REF_RE.sub(rename, d) for d in _split_decls(raw_decls)]
+        bodies.append(_PARAM_REF_RE.sub(rename, body))
+        merged.update({f"{prefix}{k}": v for k, v in params.items()})
+    joined = "\n".join(f"    {line}" for b in bodies for line in b.splitlines())
+    return f"query {query_name}({', '.join(decls)}) {{\n{joined}\n}}\n", merged
+
+
+def _split_decls(raw: str) -> list[str]:
+    """Split a parameter-declaration list on top-level commas.
+
+    Not a plain ``split(",")``: a list type (`$tags: [String]?`) has no comma
+    inside today, but a defaulted or nested declaration would, and getting this
+    wrong silently mangles a parameter name.
+    """
+    parts: list[str] = []
+    depth = 0
+    current = ""
+    for ch in raw:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        parts.append(current.strip())
+    return parts
+
+
 def schema_stamp_path(store: Path) -> Path:
     """Sidecar recording the schema file's mtime as of the last successful apply."""
     return store.parent / f"{store.name}.schema_mtime"
@@ -392,6 +535,62 @@ class OmnigraphClient:
             "--query",
             str(self.queries_dir / query_file),
             query_name,
+            "--params",
+            json.dumps(params),
+            surface_conflict=surface_conflict,
+        )
+
+    def change_many(
+        self,
+        steps: list[tuple[str, str, dict]],
+        *,
+        surface_conflict: bool = False,
+    ) -> None:
+        """Run several named mutations as ONE commit.
+
+        ``steps`` is ``[(query_file, query_name, params), …]``, the same triples
+        ``change`` takes one at a time. They are spliced into a single
+        multi-statement query (see ``compose_batch``) and run as one ``mutate``,
+        so N rows cost one Lance version instead of N — which is both ~19x
+        faster and the difference between a store that fragments and one that
+        does not.
+
+        ORDER IS PRESERVED AND SIGNIFICANT: an edge statement may reference a
+        node inserted by an earlier step, so a node must come before its edges.
+
+        NOT for a compare-and-swap. A batch commits or fails whole, so a
+        conflict cannot be attributed to one step — ``task_claim`` and anything
+        else that needs to detect losing a race must stay on ``change``.
+
+        A single step is passed straight through to ``change`` rather than
+        wrapped: the composed form would be equivalent, but the direct path
+        keeps the named query in the error message and skips the splice.
+        """
+        if not steps:
+            return
+        if len(steps) == 1:
+            query_file, name, params = steps[0]
+            self.change(query_file, name, params, surface_conflict=surface_conflict)
+            return
+        if self.guard is not None:
+            steps = [(f, n, self.guard(n, p)) for f, n, p in steps]
+        # Read each .gq once, not once per step: the steps of a batch nearly
+        # always come from the same file (a memory and all its tags are
+        # mutations.gq), and re-reading it per step would put avoidable I/O on
+        # the path whose whole purpose is to be faster.
+        sources: dict[str, str] = {}
+
+        def read_source(query_file: str) -> str:
+            if query_file not in sources:
+                sources[query_file] = (self.queries_dir / query_file).read_text()
+            return sources[query_file]
+
+        source, params = compose_batch(steps, read_source)
+        self._run(
+            "mutate",
+            "-e",
+            source,
+            "witan_batch",
             "--params",
             json.dumps(params),
             surface_conflict=surface_conflict,
