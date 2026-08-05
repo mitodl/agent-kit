@@ -209,8 +209,12 @@ def test_a_graph_the_cluster_does_not_declare_fails_on_the_first_call(monkeypatc
     from witan_code import store as store_module
 
     monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.example.org")
-    monkeypatch.setattr(store_module, "cluster_graphs", lambda *_a, **_kw: frozenset())
-    with pytest.raises(store_module.ClusterGraphMissing, match="not registered"):
+
+    def _not_served(self):
+        raise RuntimeError(f"graph '{self.graph_id}' not found")
+
+    monkeypatch.setattr(store_module.OmnigraphClient, "list_branches", _not_served)
+    with pytest.raises(store_module.ClusterGraphMissing, match="not served"):
         ingest.read(
             "https://github.com/test/never-provisioned",
             None,
