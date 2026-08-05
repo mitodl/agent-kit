@@ -25,6 +25,19 @@ def _built_client(monkeypatch, uri, **kwargs):
     return OmnigraphClient(uri, Path("/queries"), **kwargs)
 
 
+def _force_cli(monkeypatch):
+    """Pin a remote client to the CLI subprocess for tests that assert argv/env.
+
+    A remote store now prefers the pooled HTTP transport for `query`/`mutate`
+    (see omnigraph_http), so a test reaching the subprocess *through* `read()`
+    would otherwise stop exercising the thing it names. The CLI path is not
+    legacy — it is still the only way to `load`, `branch`, `optimize`, `cleanup`,
+    `schema apply` or `repair` — so these contracts keep mattering, and the
+    escape hatch is the supported way to select it.
+    """
+    monkeypatch.setenv(og.HTTP_TRANSPORT_ENV_VAR, "0")
+
+
 def test_local_store_addressed_with_store_flag(monkeypatch):
     client = _built_client(monkeypatch, "/var/lib/witan/graph.omni", graph_id="council")
     assert client.is_remote is False
@@ -85,6 +98,7 @@ def test_remote_rejects_underscore_graph_id(monkeypatch):
 
 
 def test_remote_run_builds_server_graph_command(monkeypatch):
+    _force_cli(monkeypatch)
     client = _built_client(monkeypatch, "http://host:8080", graph_id="council")
     captured = {}
 
@@ -115,6 +129,7 @@ def test_remote_run_builds_server_graph_command(monkeypatch):
 
 
 def test_token_is_delivered_in_the_env_var_the_cli_actually_reads(monkeypatch):
+    _force_cli(monkeypatch)
     client = _built_client(
         monkeypatch, "http://host:8080", graph_id="council", token="t"
     )
@@ -136,6 +151,7 @@ def test_token_is_delivered_in_the_env_var_the_cli_actually_reads(monkeypatch):
 
 def _token_seen_by_subprocess(monkeypatch, uri, *, token=None, ambient=None):
     """What the CLI subprocess would see in the token var for this address."""
+    _force_cli(monkeypatch)
     if ambient is None:
         monkeypatch.delenv("OMNIGRAPH_BEARER_TOKEN", raising=False)
     else:
@@ -204,6 +220,7 @@ def test_each_call_gets_its_own_env_so_per_actor_tokens_cannot_race(monkeypatch)
         seen.append(kwargs["env"].get("OMNIGRAPH_BEARER_TOKEN"))
         return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
 
+    _force_cli(monkeypatch)
     monkeypatch.setattr(og.subprocess, "run", fake_run)
     for token in ("actor-a-token", "actor-b-token"):
         _built_client(
