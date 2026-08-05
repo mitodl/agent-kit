@@ -8,6 +8,8 @@ store, an unreadable one, a dangling symlink) worth pinning explicitly.
 import os
 from pathlib import Path
 
+import pytest
+
 from witan_code import store as store_module
 
 from .conftest import requires_stack
@@ -123,7 +125,48 @@ def test_dir_stats_does_not_descend_into_symlinked_directories(tmp_path):
 # there.
 
 
+class _FakeClient:
+    """Stands in for the per-graph client the cluster probe goes through.
+
+    Records every ``list_branches`` call so a test can pin WHICH question was
+    asked — the whole bug this path was rewritten for was asking the
+    server-scoped one.
+    """
+
+    calls: list[tuple[str, str | None, bool]] = []
+
+    def __init__(
+        self,
+        uri,
+        queries_dir,
+        *,
+        token=None,
+        branch=None,
+        graph_id=None,
+        connect_retry=True,
+    ):  # noqa: PLR0913
+        self.uri, self.graph_id, self.connect_retry = uri, graph_id, connect_retry
+        self.served: frozenset[str] = frozenset()
+        self.error: Exception | None = None
+
+    def list_branches(self):
+        type(self).calls.append((self.uri, self.graph_id, self.connect_retry))
+        if self.error is not None:
+            raise self.error
+        if self.graph_id not in self.served:
+            raise RuntimeError(
+                f"omnigraph branch failed (exit 1):\ngraph '{self.graph_id}' not found"
+            )
+        return ["main"]
+
+
 def _cluster(monkeypatch, *graphs: str, url: str = "https://omnigraph.test"):
+    """Point config at a cluster serving exactly ``graphs``.
+
+    Stubs both questions a caller can ask: the graph-scoped branch listing the
+    existence probe uses, and the server-scoped registry ``per_repo_stores``
+    enumerates from.
+    """
     monkeypatch.setenv("WITAN_CODE_SERVER", url)
     monkeypatch.setattr(
         store_module, "cluster_graphs", lambda *a, **kw: frozenset(graphs)
@@ -131,6 +174,14 @@ def _cluster(monkeypatch, *graphs: str, url: str = "https://omnigraph.test"):
     monkeypatch.setattr(
         store_module, "safe_cluster_graphs", lambda *a, **kw: frozenset(graphs)
     )
+    _FakeClient.calls = []
+
+    def _build(*args, **kwargs):
+        client = _FakeClient(*args, **kwargs)
+        client.served = frozenset(graphs)
+        return client
+
+    monkeypatch.setattr(store_module, "OmnigraphClient", _build)
 
 
 # The exact stderr omnigraph 0.8.1 produced against the deployed CI server when
@@ -157,25 +208,78 @@ def _failing_graphs_list(
     store_module.reset_graph_cache()
 
 
-def test_unreachable_server_is_not_reported_as_an_unprovisioned_graph(monkeypatch):
-    """An auth failure and "that graph does not exist" are the same empty
-    listing. Collapsing them sent the first live run to check provisioning for
-    what was really a missing bearer token."""
-    import pytest
+def _unreachable_client(monkeypatch, exc: Exception):
+    """Make the graph-scoped probe fail with ``exc`` (no graphs stubbed)."""
+    _FakeClient.calls = []
 
+    def _build(*args, **kwargs):
+        client = _FakeClient(*args, **kwargs)
+        client.error = exc
+        return client
+
+    monkeypatch.setattr(store_module, "OmnigraphClient", _build)
+
+
+def test_the_existence_probe_is_graph_scoped_not_server_scoped(monkeypatch):
+    """REGRESSION: `graphs list` is a management-surface action that omnigraph
+    closes by default, so depending on it here failed every environment's
+    indexer before it parsed a file. The question "is MY graph served" is
+    graph-scoped and answerable with `read`, which every actor holds."""
+    from witan_code import config as cfg_module
+
+    repo = "https://github.com/mitodl/ol-django"
+    _cluster(monkeypatch, cfg_module.graph_id(repo))
+    # Enumerating must not even be attempted on the write path — the deployed
+    # server cannot answer it.
+    monkeypatch.setattr(
+        store_module,
+        "cluster_graphs",
+        lambda *a, **kw: pytest.fail("ensure_store must not call `graphs list`"),
+    )
+    cfg = cfg_module.load()
+
+    store_module.ensure_store(repo, cfg)
+
+    assert _FakeClient.calls == [
+        ("https://omnigraph.test", cfg_module.graph_id(repo), True)
+    ]
+
+
+def test_the_write_path_probe_waits_out_a_restarting_server(monkeypatch):
+    """`ensure_store` guards a whole index run, so an unreachable server is
+    worth riding out — unlike a listing, which degrades to "no" instead."""
+    from witan_code import config as cfg_module
+
+    repo = "https://github.com/mitodl/ol-django"
+    _cluster(monkeypatch, cfg_module.graph_id(repo))
+    cfg = cfg_module.load()
+
+    store_module.ensure_store(repo, cfg)
+    assert [c[2] for c in _FakeClient.calls] == [True]
+
+    _FakeClient.calls = []
+    store_module.store_for_repo(repo, cfg).exists(cfg)
+    assert [c[2] for c in _FakeClient.calls] == [False]
+
+
+def test_unreachable_server_is_not_reported_as_an_unprovisioned_graph(monkeypatch):
+    """An auth failure and "that graph does not exist" are the same failed
+    probe. Collapsing them sent the first live run to check provisioning for
+    what was really a missing bearer token."""
     from witan_code import config as cfg_module
 
     monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    _unreachable_client(
+        monkeypatch,
+        RuntimeError("omnigraph branch failed (exit 1):\nmissing bearer token"),
+    )
     cfg = cfg_module.load()
-    _failing_graphs_list(monkeypatch)
 
     with pytest.raises(store_module.ClusterUnreachable) as exc:
         store_module.ensure_store("https://github.com/mitodl/agent-kit", cfg)
 
     message = str(exc.value)
     assert "missing bearer token" in message  # the server's own words survive
-    assert "\x1b[" not in message  # ...without the ANSI codes
-    assert "Location:" not in message  # ...or the Rust backtrace boilerplate
     assert "data_tier.py" not in message  # and WITHOUT blaming provisioning
 
 
@@ -185,11 +289,12 @@ def test_listings_still_degrade_when_the_server_cannot_be_asked(monkeypatch):
     from witan_code import config as cfg_module
 
     monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    _failing_graphs_list(monkeypatch)  # the enumerating half, still a subprocess
+    _unreachable_client(monkeypatch, RuntimeError("tcp connect error"))
     cfg = cfg_module.load()
-    _failing_graphs_list(monkeypatch)
 
     assert store_module.per_repo_stores(cfg) == []
-    assert not store_module.store_for_repo("https://github.com/x/y", cfg).exists()
+    assert not store_module.store_for_repo("https://github.com/x/y", cfg).exists(cfg)
 
 
 def test_a_failed_listing_is_not_cached(monkeypatch):
@@ -281,11 +386,11 @@ def test_per_repo_stores_lists_the_clusters_code_graphs(monkeypatch):
     ]
 
 
-def test_ensure_store_names_the_declared_graphs_when_one_is_missing(monkeypatch):
-    """The error has to say what the server DOES serve — the usual cause is a
-    graph id that drifted from provisioning's, which is invisible otherwise."""
-    import pytest
-
+def test_ensure_store_names_the_graph_it_wanted_when_it_is_not_served(monkeypatch):
+    """The error has to name the graph id it asked for — the usual cause is an
+    id that drifted from provisioning's, which is invisible otherwise. It can
+    no longer also list what the server DOES serve: that needs `graphs list`,
+    the surface this path was rewritten to stop depending on."""
     from witan_code import config as cfg_module
 
     _cluster(monkeypatch, "code-github-com-mitodl-ol-django")
@@ -296,7 +401,6 @@ def test_ensure_store_names_the_declared_graphs_when_one_is_missing(monkeypatch)
 
     message = str(exc.value)
     assert "code-github-com-test-never-provisioned" in message
-    assert "code-github-com-mitodl-ol-django" in message
     assert "data_tier.py" in message
 
 

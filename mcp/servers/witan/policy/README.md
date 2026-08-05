@@ -156,6 +156,26 @@ allow/deny assertions.
 ## Server-level bundle (`server.policy.yaml`)
 
 `graph_list` is server-scoped (bound to `Omnigraph::Server::"root"`).
+
+**Applying this bundle does not by itself make `graphs list` usable.** Two
+independent gates, both measured against 0.8.1 (2026-08-05):
+
+1. Without any bundle, the server refuses outright — "server-scoped actions
+   require an explicit cluster policy bundle applied with `omnigraph cluster
+   apply` … the management surface is closed by default in every runtime state,
+   including `--unauthenticated`". This bundle fixes that one.
+2. *With* the bundle and a granted token, the server answers but the **CLI**
+   then refuses to print it: `server scope '<url>' has N graphs: pass --graph
+   <id> to select one`. `graphs list` has no working invocation against a
+   multi-graph server (`--uri` is retired: "a remote graph must be addressed
+   with `--server <url>`"). Upstream bug; nothing here fixes it.
+
+Consequence for clients: **nothing on a write path may depend on enumeration.**
+witan-code asks the graph-scoped question instead — `branch list --graph <id>`,
+needing only `read` — see `witan_code.store.probe_cluster_graph`. Depending on
+`graphs list` is what left every environment's code-graph indexer failing before
+it parsed a single file.
+
 omnigraph 0.8.1's offline `policy validate`/`policy test` load every applied
 bundle under the **per-graph** engine, which (a) rejects `graph_list` in a graph
 bundle and (b) fans a `[cluster]`-scoped bundle onto every graph, tripping the
@@ -170,6 +190,19 @@ runtime. `tests/server.tests.yaml` documents the intended allow/deny decisions
 for when a server-scope semantic-validation path lands upstream.
 
 ## Deploying (ol-infrastructure)
+
+**Applying any bundle is a hard cutover to authenticated-everything.** Measured
+against omnigraph 0.8.1 (2026-08-05): a `policies:` block in cluster.yaml makes
+`omnigraph-server` *refuse to boot* without bearer tokens —
+
+> policy file is configured but no bearer tokens — every request would 401
+> because no token can ever match.
+
+— and once it does boot, an actor with no token 401s and an actor with a token
+but no grant gets `policy denied action '…' for unknown actor '…'`. So the
+token map has to be complete and mounted **before** the first bundle is applied,
+not alongside it. Deploy order per environment: provision every actor's token →
+verify the map → apply the bundle → restart. There is no partial mode.
 
 The deployed `cluster.yaml` (templated by ol-infrastructure, **not** the fixture
 here) must:

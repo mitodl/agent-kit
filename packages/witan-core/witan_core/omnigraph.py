@@ -312,11 +312,19 @@ class OmnigraphClient:
         token: str | None = None,
         guard: Callable[[str, dict], dict] | None = None,
         graph_id: str | None = None,
+        connect_retry: bool = True,
     ) -> None:
         self.graph_uri = graph_uri
         self.queries_dir = queries_dir
         self.token = token
         self.guard = guard
+        # Whether a remote call rides out an unreachable server for the full
+        # _UNAVAILABLE_MAX_WAIT budget. On by default: that budget exists so an
+        # ordinary call survives a server restart instead of failing the whole
+        # run. Turn it OFF for a call whose answer *degrades* rather than fails
+        # — a listing, an existence check — where waiting 150s to report "no"
+        # is strictly worse than reporting it now.
+        self.connect_retry = connect_retry
         # http(s) stores are a remote omnigraph-server, addressed with
         # `--server <url> --graph <id>`; local paths and s3:// roots keep
         # `--store <uri>`. Resolve the split once at construction so a bad
@@ -501,7 +509,11 @@ class OmnigraphClient:
                     raise RuntimeError(
                         _friendly_storage_error(err, self._STORAGE_MISMATCH_HINT)
                     ) from None
-                if self.is_remote and any(m in err_lower for m in _UNAVAILABLE_MARKERS):
+                if (
+                    self.is_remote
+                    and self.connect_retry
+                    and any(m in err_lower for m in _UNAVAILABLE_MARKERS)
+                ):
                     # Its own budget, like the admission cap below: this is a
                     # gap in the server's availability, not a conflict over the
                     # graph, so it neither consumes _MAX_ATTEMPTS nor honours

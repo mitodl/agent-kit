@@ -392,9 +392,11 @@ def test_index_path_refuses_a_shared_default_branch_view(tmp_path, monkeypatch):
 def _cluster_cfg(monkeypatch, repo: str, **env: str):
     """Config addressing a (stubbed) cluster that has ``repo``'s graph declared.
 
-    ``graphs list`` is the one thing a client genuinely cannot do without a
-    server; everything downstream of it — the graph id, the ``--server/--graph``
-    split, the write guard — is exercised for real.
+    Reaching the server is the one thing a client genuinely cannot do without
+    one, so only the probe's single round trip is stubbed — on the real client
+    class, so everything downstream of it (the graph id, the
+    ``--server/--graph`` split, the token, the write guard) is exercised for
+    real.
     """
     from witan_code import config as cfg_module
     from witan_code import store as store_mod
@@ -403,7 +405,15 @@ def _cluster_cfg(monkeypatch, repo: str, **env: str):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     declared = frozenset({cfg_module.graph_id(repo), cfg_module.BRIDGE_GRAPH_ID})
-    monkeypatch.setattr(store_mod, "cluster_graphs", lambda *a, **kw: declared)
+
+    def _list_branches(self):
+        if self.graph_id not in declared:
+            # The server's own words for a graph it does not serve — the string
+            # `probe_cluster_graph` keys "not provisioned" off of.
+            raise RuntimeError(f"graph '{self.graph_id}' not found")
+        return ["main"]
+
+    monkeypatch.setattr(store_mod.OmnigraphClient, "list_branches", _list_branches)
     return cfg_module.load()
 
 

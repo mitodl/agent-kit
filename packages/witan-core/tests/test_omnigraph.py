@@ -584,6 +584,21 @@ def test_midflight_failure_is_not_retried(monkeypatch):
     assert calls["n"] == 1
 
 
+def test_connect_retry_off_fails_immediately(monkeypatch):
+    """A caller whose answer DEGRADES — an existence check, a listing — must
+    not spend the restart budget to report "no". 150s to say a graph might not
+    be there is worse than saying it now."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient(
+        "https://graph.example", Path("/queries"), graph_id="g", connect_retry=False
+    )
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+
+    with pytest.raises(RuntimeError, match="failed"):
+        client._execute(["omnigraph", "branch"], "branch", is_write=False)
+    assert calls["n"] == 1
+
+
 def test_local_store_does_not_take_the_unavailable_path(monkeypatch):
     """`tcp connect error` from a local store is not a restarting server, so it
     must not be retried on the remote budget."""

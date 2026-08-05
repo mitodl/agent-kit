@@ -48,17 +48,17 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class ClusterGraphMissing(RuntimeError):
-    """A cluster graph witan-code needs is not registered with the server."""
+    """A cluster graph witan-code needs is not served by the server."""
 
 
 class ClusterUnreachable(RuntimeError):
-    """The omnigraph-server could not be asked what graphs it has.
+    """The omnigraph-server could not be asked about a graph at all.
 
     Distinct from :class:`ClusterGraphMissing` on purpose. "The server says
     that graph does not exist" and "I could not reach the server" are the same
-    empty listing, and collapsing them sends you to check provisioning for
-    what is really a bad token or a closed port — which is exactly what
-    happened the first time this ran against the live CI cluster.
+    failed probe, and collapsing them sends you to check provisioning for what
+    is really a bad token or a closed port — which is exactly what happened the
+    first time this ran against the live CI cluster.
     """
 
 
@@ -122,9 +122,13 @@ class StoreRef:
         self,
         config: cfg_module.Config | None = None,
         branch: str | None = None,
+        connect_retry: bool = True,
     ):
         cfg = config or cfg_module.load()
         if self.via_mcp is not None:
+            # No connect_retry counterpart: the MCP tier's own session handles
+            # transport, and a tool call has no omnigraph-CLI retry budget to
+            # opt out of.
             from .remote.store import RemoteStoreClient  # noqa: PLC0415
 
             return RemoteStoreClient(self.via_mcp, mcp_session(cfg), branch=branch)
@@ -134,32 +138,32 @@ class StoreRef:
             token=self.token,
             branch=branch,
             graph_id=self.graph_id,
+            connect_retry=connect_retry,
         )
 
     def exists(self, config: cfg_module.Config | None = None) -> bool:
         """Whether this graph is there to be read.
 
-        Locally that is the store directory; on the cluster it is registration
-        with the server (``omnigraph graphs list``), which is what provisioning
-        creates. A registered-but-empty graph exists — callers distinguish that
-        with :func:`file_count`, exactly as they do for a freshly-init'd local
-        store.
+        Locally that is the store directory; on the cluster it is whether the
+        server serves this graph id, which is what provisioning creates. A
+        registered-but-empty graph exists — callers distinguish that with
+        :func:`file_count`, exactly as they do for a freshly-init'd local store.
 
-        A server that cannot be reached answers ``False`` here, since a read
-        path has nothing better to do with it; the write path calls
-        :func:`cluster_graphs` directly so it can tell the two apart. Through
-        the MCP tier the same question is a tool call — the deployment holds
-        the registry, and a client has no listing of its own to consult.
+        Asked the same way in both cluster forms: list the graph's own branches
+        (see :func:`probe_cluster_graph`). A server that cannot be reached
+        answers ``False`` here, since a read path has nothing better to do with
+        it; the write path calls :func:`probe_cluster_graph` directly so it can
+        tell the two apart — and, unlike this, waits for a restarting server
+        rather than calling it absent. Hence ``connect_retry=False``: a read
+        path that degrades to "no" should say so now, not in 150s.
         """
-        if self.via_mcp is not None:
-            try:
-                self.client(config).list_branches()
-            except Exception:  # noqa: BLE001 — same degrade-to-False as above
-                return False
-            return True
         if not self.is_remote:
             return Path(self.uri).exists()
-        return self.graph_id in safe_cluster_graphs(self.uri, self.token)
+        try:
+            self.client(config, connect_retry=False).list_branches()
+        except Exception:  # noqa: BLE001 — a read path degrades to "no"
+            return False
+        return True
 
     def stats(self) -> tuple[int | None, float | None]:
         """``(total_bytes, latest mtime)``, or ``(None, None)`` on the cluster.
@@ -177,11 +181,32 @@ class StoreRef:
 def cluster_graphs(server_url: str, token: str | None = None) -> frozenset[str]:
     """Graph ids registered with the omnigraph-server at ``server_url``.
 
+    ENUMERATION ONLY, and best-effort: nothing on a write path may depend on
+    this. ``graphs list`` is a *server-scoped* action, and on omnigraph 0.8.1 it
+    fails against the deployed cluster two independent ways:
+
+    1. The management surface is closed by default — "server-scoped actions
+       require an explicit cluster policy bundle applied with ``omnigraph
+       cluster apply``" — in every runtime state, ``--unauthenticated``
+       included. The deployed cluster.yaml declares no ``policies:`` block yet,
+       and adding one is a hard cutover to authenticated-everything (the server
+       refuses to boot with a policy but no bearer tokens), gated behind the
+       per-environment token rollout.
+    2. Even with the bundle applied and a token that *is* granted ``graph_list``,
+       the 0.8.1 CLI then refuses to print the listing it just fetched: "server
+       scope '<url>' has N graphs: pass --graph <id> to select one". There is no
+       working invocation for a multi-graph server (``--uri`` is retired: "a
+       remote graph must be addressed with ``--server <url>``").
+
+    So on the cluster this answers the empty set today, and the callers that
+    remain are the ones a blank listing merely degrades — see
+    :func:`safe_cluster_graphs`. Asking whether one *known* graph is served is a
+    different, graph-scoped question with a working answer:
+    :func:`probe_cluster_graph`.
+
     Raises :class:`ClusterUnreachable` when the server could not be asked, so
     that an auth failure or a closed port cannot masquerade as a server that
-    genuinely has no graphs. Callers that only need a listing catch it and
-    degrade (see :func:`safe_cluster_graphs`); ``ensure_store`` lets it
-    propagate, because a write that continues past it writes nowhere.
+    genuinely has no graphs.
 
     A successful-but-empty answer is cached; a failure is not, so a transient
     outage doesn't pin an error for the whole TTL.
@@ -354,22 +379,15 @@ def ensure_store(slug: str, config: cfg_module.Config | None = None) -> StoreRef
     Locally that means creating it: ``omnigraph init --schema <schema>
     <store>``, mirroring install.sh.
 
-    On the cluster it means CHECKING it. A client cannot create a cluster graph
-    — ``init`` is a direct-storage command that rejects ``--server``, and the
-    set of graphs is declared by provisioning (ol-infrastructure
-    ``applications/omnigraph/data_tier.py``), which applies their schema too.
-    So the client's job is to fail loudly when the graph it is about to write
-    is not one the cluster knows: the alternative is a run that turns thousands
-    of symbols into one error per subprocess and reports success having written
-    nothing.
+    On the cluster it means CHECKING it — :func:`probe_cluster_graph`, the same
+    graph-scoped probe for both cluster forms (direct ``--server/--graph`` and
+    through the MCP tier). Provisioning declares the graphs and applies their
+    schema; the client's job is only to fail loudly when the graph it is about
+    to write is not one the cluster serves.
     """
     cfg = config or cfg_module.load()
-    if _via_mcp(cfg):
-        return _verify_served_graph(
-            store_for_repo(slug, cfg), f"{slug}'s code graph", cfg
-        )
-    if cfg.code_server:
-        return _verify_cluster_graph(
+    if _via_mcp(cfg) or cfg.code_server:
+        return probe_cluster_graph(
             store_for_repo(slug, cfg), f"{slug}'s code graph", cfg
         )
 
@@ -409,10 +427,8 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     builds the FTS index on ``key_norm`` that ``search_bindings`` needs.
     """
     cfg = config or cfg_module.load()
-    if _via_mcp(cfg):
-        return _verify_served_graph(bridge_store(cfg), "the bridge graph", cfg)
-    if cfg.code_server:
-        return _verify_cluster_graph(bridge_store(cfg), "the bridge graph", cfg)
+    if _via_mcp(cfg) or cfg.code_server:
+        return probe_cluster_graph(bridge_store(cfg), "the bridge graph", cfg)
 
     store = cfg_module.bridge_store_path(cfg.code_dir)
     binary = _binary()
@@ -433,49 +449,56 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     return StoreRef(str(store))
 
 
-def _verify_served_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> StoreRef:
-    """Check that the deployment serves ``ref`` before a write starts.
+_NOT_FOUND_RE = re.compile(r"graph '[^']*' not found", re.IGNORECASE)
 
-    The MCP-tier counterpart of :func:`_verify_cluster_graph`, and there for
-    the same reason: the client cannot create a cluster graph, so a run that
-    proceeds past a missing one turns thousands of records into one error per
-    call and reports success having written nothing. Listing the graph's views
-    is the cheapest question that has to reach the store to be answered.
 
-    Unlike the direct path, this does not distinguish "not registered" from
-    "unreachable": the tool call fails either way, and the deployment's own
-    message says which — it is the side that can tell.
+def probe_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> StoreRef:
+    """Check that the cluster serves ``ref`` before a write starts.
+
+    The client cannot create a cluster graph — ``init`` is a direct-storage
+    command that rejects ``--server``, and the set of graphs is declared by
+    provisioning — so a run that proceeds past a missing one turns thousands of
+    records into one error per subprocess and reports success having written
+    nothing.
+
+    Asks a GRAPH-scoped question (``branch list --graph <id>``, the cheapest
+    one that has to reach the store to be answered) rather than the
+    server-scoped ``graphs list``. That is not a detail: ``graphs list`` is a
+    management-surface action that no ordinary client can use against the
+    deployed cluster (see :func:`cluster_graphs` for the two ways it fails),
+    and depending on it here is what left every environment's indexer failing
+    before it parsed a single file. Listing one graph's branches needs only
+    ``read`` on that graph, which every actor the v1 Cedar bundle grants — CI,
+    users, service and admin alike — already holds.
+
+    It also inherits :class:`~witan_core.omnigraph.OmnigraphClient`'s
+    connect-retry budget, so a server mid-restart is ridden out rather than
+    counted as an absent graph.
+
+    Still distinguishes the two failures the previous ``graphs list`` path
+    distinguished, because they send you to different places: the server says
+    ``graph '<id>' not found`` for one it does not serve, and anything else
+    (a closed port, a rejected token) is :class:`ClusterUnreachable`.
     """
     try:
         ref.client(cfg).list_branches()
-    except Exception as exc:  # noqa: BLE001 — re-raised with the address
+    except Exception as exc:  # noqa: BLE001 — re-raised as one of two kinds
+        if not _NOT_FOUND_RE.search(str(exc)):
+            raise ClusterUnreachable(
+                f"{what} at {ref} could not be read: {exc}"
+            ) from exc
+        unset = (
+            f"code_server on target [{cfg.target_name}]"
+            if cfg.target_name
+            else "WITAN_CODE_SERVER / code_server"
+        )
         raise ClusterGraphMissing(
-            f"{what} could not be reached through the witan MCP endpoint at "
-            f"{ref.uri}: {exc}"
+            f"{what} is not served by the omnigraph-server at {ref}.\n"
+            "Cluster graphs are declared by provisioning (ol-infrastructure "
+            "applications/omnigraph/data_tier.py), not created by this client — "
+            f"add the graph there, or unset {unset} to index locally."
         ) from exc
     return ref
-
-
-def _verify_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> StoreRef:
-    # Deliberately NOT ref.exists(): that folds an unreachable server into
-    # "absent", and the message below would then blame provisioning for what
-    # is really a bad token or a closed port. Let ClusterUnreachable through.
-    declared = cluster_graphs(ref.uri, ref.token)
-    if ref.graph_id in declared:
-        return ref
-    known = ", ".join(sorted(declared)) or "(none)"
-    unset = (
-        f"code_server on target [{cfg.target_name}]"
-        if cfg.target_name
-        else "WITAN_CODE_SERVER / code_server"
-    )
-    raise ClusterGraphMissing(
-        f"{what} is not registered with the omnigraph-server at {ref.uri}: "
-        f"expected graph {ref.graph_id!r}; the server serves {known}.\n"
-        "Cluster graphs are declared by provisioning (ol-infrastructure "
-        "applications/omnigraph/data_tier.py), not created by this client — "
-        f"add the graph there, or unset {unset} to index locally."
-    )
 
 
 def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
@@ -486,6 +509,12 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
     never-indexed repo shows up here with 0 files. That is the honest answer to
     the question these listings exist to settle ("would a cross-repo query have
     found this?"): the graph is queryable and empty, not absent.
+
+    Enumerating is the one thing that genuinely needs the server-scoped
+    ``graphs list``, so on the direct path it is empty until that surface works
+    (:func:`cluster_graphs`). A blank *listing* is a degraded answer, not a
+    broken write — which is exactly why nothing on the write path may ask this
+    question. Through the MCP tier the deployment answers it instead, and does.
     """
     cfg = config or cfg_module.load()
     if _via_mcp(cfg):
