@@ -100,10 +100,13 @@ _BRANCH_CACHE_TTL = 30.0
 # per-repo AND bridge read that follows "the current checkout" calls them.
 # A short TTL amortizes a burst of tool calls within one agent turn (the
 # common case) while still picking up a branch switch within a couple
-# seconds — long-lived enough to matter for latency, short enough that no
-# test needs to know about it (git state changes mid-test would otherwise
-# read stale for the TTL window; tests that switch branches mid-test must
-# call ``_git_context.clear()``).
+# seconds. Tests DO have to know about it: the TTL outlives a single test, so
+# it leaks across test boundaries and a later test's WITAN_REPO/branch setup
+# is silently ignored inside the window. Whether that lands depends on how
+# fast the preceding tests ran, which makes it a race rather than a reliable
+# failure. The autouse ``_fresh_git_context`` fixture clears it between tests;
+# tests that change git state *mid-test* must still call
+# ``_git_context.clear()`` themselves.
 _git_context: dict[str, tuple[float, str | None]] = {}
 _GIT_CONTEXT_TTL = 2.0
 
