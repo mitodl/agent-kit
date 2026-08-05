@@ -284,3 +284,53 @@ every parallel agent would collide on.
 
 No backfill: this lands before the service carries production traffic, so
 there are no nodes written under the old uniform-author behaviour.
+
+### Addendum (2026-08-05) — D3's "Keycloak `witan-users` group/role membership" was a misnomer; there is no such Keycloak group
+
+D3 above tells the provisioning pipeline to walk "the Keycloak `witan-users`
+group/role membership". Read literally that is an instruction to create a
+Keycloak group named `witan-users`, and when the pipeline was finally built
+(ol-infrastructure PR #5253) it was read exactly that way and one was created.
+It has since been removed. Recording why, because the wording will keep
+producing the same mistake otherwise.
+
+**`witan-users` is a Cedar group, not a Keycloak one.** ADR-0002 D1 defines it
+as one of three groups in *witan's own policy bundles*, holding one `act-<sub>`
+per authenticated human, with membership "templated by ol-infrastructure
+(Keycloak claims for `witan-users`)". That is the accurate statement of the
+contract: the Cedar group is populated *from* Keycloak, by whatever query
+identifies witan's users. D3 then narrowed "Keycloak claims" to "the Keycloak
+`witan-users` group/role membership" — inventing a same-named Keycloak object
+that ADR-0002 never called for. The name collision is what makes the invention
+look mandatory.
+
+**What the pipeline actually walks: every enabled, non-service-account user of
+the `ol-platform-engineering` realm.** That realm has
+`registration_allowed=False`, no identity-provider brokering and no federation,
+so its membership is hand-managed and already exactly the intended audience. A
+Keycloak group inside it would be a second gate on an already-gated population,
+and its failure mode is the bad one — somebody joins the realm, nobody adds
+them to the group, and they hit D3's own fail-closed path with an error that
+reads like a provisioning lag rather than a missing group membership.
+
+**Trade accepted, not overlooked:** realm access is now witan access. There is
+no way to revoke witan while leaving that realm's other applications
+(jupyterhub, superset, opik) intact. If that requirement ever appears, a
+Keycloak group is the right answer — but it should be added deliberately, for
+that reason, rather than because this sentence implied one already existed.
+
+**One consequence worth carrying into any reimplementation:** enumerating a
+realm returns each confidential client's own service account as an ordinary
+user (`service-account-<client-id>`). Minting a human's interactive read/write
+token for them would hand every such client the Cedar rights a person has under
+`witan-users`, so they must be filtered — `serviceAccountClientId` is the
+authoritative signal. The non-human actors that *should* hold tokens
+(`witan-ci`, `witan-service`, per ADR-0002 D1) are declared in SOPS and merged
+in, never discovered from Keycloak.
+
+Only D3's description of the provisioning *source* is corrected here. The
+decision itself — tokens pre-provisioned out-of-band, witan looks up and never
+mints, fail closed on a missing actor id — is unchanged, as is the Consequences
+section's cross-repo contract: a drift between who Keycloak says is a witan
+user and who has a token in the file still surfaces as a hard lookup failure
+for that user, not a silent downgrade.

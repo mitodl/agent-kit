@@ -8,6 +8,20 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **`ActorTokenResolver`'s unprovisioned-actor error no longer names a
+  `witan-users` Keycloak group** — there isn't one, and the message was
+  sending operators off to check a group membership that does not exist. The
+  deployed pipeline provisions every enabled, non-service-account user of the
+  Keycloak realm (ol-infrastructure `applications/omnigraph/token_sync.py`), so
+  the message now points at the three things actually worth checking: whether
+  the account is disabled, whether it is in the realm at all, and whether it is
+  a service account (which the realm does contain, and which the pipeline
+  deliberately skips). `witan-users` remains the
+  name of the *Cedar* group in `policy/`, which is what it always was — see
+  the 2026-08-05 addendum to witan ADR-0004.
+
 ### Added
 
 - **Connect-failure retry for a restarting omnigraph-server** — a remote call
@@ -15,7 +29,7 @@ a MINOR bump may include breaking changes).
   150s wall-clock deadline, jittered, instead of failing the MCP tool call
   outright.
   Restarts of the deployed data tier are routine, not exceptional: it hashes
-  its bearer-token map once at boot, so adding a user to `witan-users` bounces
+  its bearer-token map once at boot, so provisioning a new user bounces
   the Deployment (ol-infrastructure wires that through the Vault Secrets
   Operator's `rolloutRestartTargets`), and that Deployment is `replicas=1` +
   `strategy=Recreate` — a hard gap with no endpoint, not a rolling one.
