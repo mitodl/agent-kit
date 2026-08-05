@@ -56,6 +56,25 @@ def _fresh_identity():
     identity.reset_cache()
 
 
+@pytest.fixture(autouse=True)
+def _fresh_git_context():
+    """Forget the memoized git context between tests.
+
+    ``server._git_context`` caches ``detect()``/``store_branch()`` for
+    ``_GIT_CONTEXT_TTL`` (2s) to amortize git subprocesses across one agent
+    turn. Across tests that TTL is a *race*: a test that sets ``WITAN_REPO``
+    within 2s of an earlier one gets the earlier test's repo, and its own
+    ``monkeypatch.setenv`` is silently ignored. Whether that lands depends on
+    how fast the preceding tests ran, which is why it reproduced locally and
+    not in CI.
+    """
+    from witan_code import server
+
+    server._git_context.clear()
+    yield
+    server._git_context.clear()
+
+
 @pytest.fixture
 def sample_repo(tmp_path, monkeypatch):
     """A tiny source tree plus a configured, isolated code store."""

@@ -9,6 +9,7 @@ from witan_code import repo as repo_module
 from .conftest import SAMPLE, requires_stack
 
 REPO = "https://github.com/test/cg"
+LEAKED_REPO = "https://github.com/test/leaked-git-context"
 
 
 def _git(base, *args):
@@ -292,6 +293,27 @@ def test_cached_git_refreshes_after_ttl(monkeypatch):
         "a",
     )
     assert srv._cached_detect() == "b"
+
+
+# These two run as a pair, in order: the first leaves residue the second must
+# not see. Without the autouse ``_fresh_git_context`` fixture the second fails,
+# because the 2s TTL has not expired between two adjacent tests. That is the
+# exact mechanism that made test_crossrepo's fan-out collapse to one repo.
+def test_git_context_survives_within_a_test(monkeypatch):
+    from witan_code import server as srv
+
+    monkeypatch.setattr(srv.repo_module, "detect", lambda: LEAKED_REPO)
+    assert srv._cached_detect() == LEAKED_REPO
+    assert srv._git_context["detect"][1] == LEAKED_REPO
+
+
+def test_git_context_does_not_leak_into_the_next_test():
+    """The previous test's memoized repo must not be visible here."""
+    from witan_code import server as srv
+
+    assert srv._git_context == {}, (
+        "a previous test's git context leaked; _fresh_git_context must clear it"
+    )
 
 
 @requires_stack
