@@ -224,8 +224,9 @@ def compose_batch(
     Each step is ``(query_file, query_name, params)``. Returns the GQ source and
     the merged parameter dict, ready for ``mutate -e <gq> <query_name>``.
 
-    Parameters are prefixed per step (`$slug` in step 2 becomes `$s2_slug`), so
-    steps reusing a name stay independent.
+    Parameters are prefixed with the step's 0-based position — `$slug` in the
+    FIRST step becomes `$s0_slug`, in the second `$s1_slug` — so steps reusing a
+    name stay independent.
 
     Every declared parameter must be supplied, exactly as ``change`` already
     requires — optional fields are passed explicitly as ``None``. A declaration
@@ -573,9 +574,18 @@ class OmnigraphClient:
             return
         if self.guard is not None:
             steps = [(f, n, self.guard(n, p)) for f, n, p in steps]
-        source, params = compose_batch(
-            steps, lambda f: (self.queries_dir / f).read_text()
-        )
+        # Read each .gq once, not once per step: the steps of a batch nearly
+        # always come from the same file (a memory and all its tags are
+        # mutations.gq), and re-reading it per step would put avoidable I/O on
+        # the path whose whole purpose is to be faster.
+        sources: dict[str, str] = {}
+
+        def read_source(query_file: str) -> str:
+            if query_file not in sources:
+                sources[query_file] = (self.queries_dir / query_file).read_text()
+            return sources[query_file]
+
+        source, params = compose_batch(steps, read_source)
         self._run(
             "mutate",
             "-e",

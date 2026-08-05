@@ -113,6 +113,25 @@ def test_compose_batch_names_a_missing_parameter():
         )
 
 
+def test_compose_batch_prefixes_from_zero():
+    # `$slug` in the FIRST step is `$s0_slug`, not `$s1_slug` — the prefix is
+    # the 0-based position, and getting this backwards makes composed params
+    # unreadable when debugging
+    _, params = og.compose_batch(
+        [
+            ("m.gq", "link_to", {"from": "a", "to": "b"}),
+            ("m.gq", "link_to", {"from": "c", "to": "d"}),
+        ],
+        _source,
+    )
+    assert params == {
+        "s0_from": "a",
+        "s0_to": "b",
+        "s1_from": "c",
+        "s1_to": "d",
+    }
+
+
 # ── the client method ──────────────────────────────────────────────
 
 
@@ -129,6 +148,29 @@ def test_change_many_issues_one_mutate_for_many_steps(monkeypatch, tmp_path):
     assert len(calls) == 1
     inline = calls[0][calls[0].index("-e") + 1]
     assert inline.count("insert ") == 2
+
+
+def test_change_many_reads_each_query_file_once(monkeypatch, tmp_path):
+    # every step of a real batch comes from the same .gq; re-reading it per
+    # step would put avoidable I/O on the path that exists to be faster
+    client = _client(monkeypatch, tmp_path)
+    _record(monkeypatch, [])
+    reads: list[str] = []
+    real_read_text = Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        reads.append(self.name)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+    client.change_many(
+        [
+            ("m.gq", "insert_thing", {"slug": "a", "tags": None, "note": None}),
+            ("m.gq", "link_to", {"from": "a", "to": "a"}),
+            ("m.gq", "link_to", {"from": "a", "to": "a"}),
+        ]
+    )
+    assert reads.count("m.gq") == 1
 
 
 def test_change_many_preserves_step_order(monkeypatch, tmp_path):
