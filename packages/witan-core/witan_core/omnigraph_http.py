@@ -228,12 +228,23 @@ class PooledTransport:
     ) -> Outcome:
         """POST ``payload`` as JSON to ``path`` and classify the result.
 
-        ``idempotent`` says whether re-sending is safe, and controls exactly one
-        behaviour: a *reused* connection that dies before any response byte
-        arrives is retried once on a fresh connection when idempotent, and
-        surfaced when not. That is the stale-keep-alive case, where the request
-        may or may not have reached the server; for a read the ambiguity does not
-        matter, and for a mutate it very much does.
+        ``idempotent`` says whether re-sending is safe, and it is what decides
+        every ambiguous case:
+
+        - A failure during ``connect()`` is pre-send no matter what the caller
+          is doing, so it is ``UNAVAILABLE`` (retryable) for reads and writes
+          alike. This is the only failure that can be classified without
+          consulting ``idempotent``.
+        - A failure once the request is in flight — ``request()``,
+          ``getresponse()`` or ``read()`` — is ``UNAVAILABLE`` only when
+          idempotent, and ``FATAL`` otherwise. Being the connection's opener
+          proves nothing here: ``connect()`` returning means the TCP handshake
+          completed, not that the request was never written, and by
+          ``getresponse()`` it definitely was.
+        - A *reused* connection dying before any response byte additionally
+          gets one immediate retry on a fresh connection when idempotent. That
+          is the stale-keep-alive case, and it is a fast path, not a different
+          safety rule.
         """
         body = json.dumps(payload)
         headers = {
@@ -273,8 +284,20 @@ class PooledTransport:
                     # the caller said so; a fresh connection is what the retry
                     # gets, since _discard cleared the pooled one.
                     continue
+                # MID-FLIGHT. Everything in the `try` above is past the point of
+                # no return: `request()` writes to the socket, `getresponse()`
+                # means it was written, and `read()` means the server already
+                # answered. So the write may have committed, and `UNAVAILABLE`
+                # would hand it to a retry loop that re-sends it.
+                #
+                # Whether THIS call opened the connection is irrelevant here —
+                # `connect()` succeeding says the handshake completed, not that
+                # nothing was sent. Keying on that (rather than on `idempotent`)
+                # was a real bug: it let a fresh-connection mutate be silently
+                # re-applied, which is the exact thing `surface_conflict` exists
+                # to prevent, one layer lower where no caller can opt out.
                 return Outcome(
-                    kind=UNAVAILABLE if not reused else FATAL,
+                    kind=UNAVAILABLE if idempotent else FATAL,
                     error=f"request to {self.server_url}{path} failed: {exc}",
                 )
 

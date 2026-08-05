@@ -1037,8 +1037,16 @@ class OmnigraphClient:
                     # Its own budget, like the admission cap below: this is a
                     # gap in the server's availability, not a conflict over the
                     # graph, so it neither consumes _MAX_ATTEMPTS nor honours
-                    # surface_conflict (there is no conflict to surface — the
-                    # request never left this process).
+                    # surface_conflict (there is no conflict to surface).
+                    #
+                    # Reaching here means re-running is known safe. For a WRITE
+                    # that is because the request provably never left this
+                    # process (the CLI's "tcp connect error", or a failure
+                    # during the transport's explicit `connect()`); a write
+                    # whose fate is ambiguous is classified FATAL by both
+                    # transports and never arrives here. Reads may also arrive
+                    # here from a mid-flight failure, which is fine precisely
+                    # because repeating a query changes nothing.
                     #
                     # Elapsed is measured from the FIRST connect failure, not
                     # from entry, so a call that spent time on unrelated drift

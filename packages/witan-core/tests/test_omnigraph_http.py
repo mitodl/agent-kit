@@ -202,10 +202,47 @@ def test_dns_failure_is_unavailable(_fake_http):
     assert transport.query("council", "q", {}, None).kind == ogh.UNAVAILABLE
 
 
-def test_midflight_failure_on_a_fresh_connection_is_unavailable(_fake_http):
-    """Nothing was sent — `connect()` succeeded and `request()` failed on a
-    connection this call opened, so there is no committed-write ambiguity."""
+def test_midflight_failure_on_a_write_is_fatal_even_on_a_fresh_connection(_fake_http):
+    """Opening the connection yourself does NOT make a mid-flight failure safe.
+
+    `connect()` returning means the TCP handshake completed, not that the
+    request was never written — and this same `except` also covers
+    `getresponse()` and `read()`, by which point it definitely was and the
+    server may already have committed it. Classifying this as UNAVAILABLE hands
+    the write to a retry loop that re-sends it, silently, one layer below where
+    `surface_conflict` would let a caller object.
+    """
     _fake_http.script = [ConnectionResetError("reset")]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    assert transport.mutate("council", "q", {}, None).kind == ogh.FATAL
+
+
+def test_midflight_failure_on_a_read_is_unavailable(_fake_http):
+    """The complement: re-running a query is harmless, so a read may ride the
+    restart budget rather than failing a whole tool call over a blip."""
+    _fake_http.script = [ConnectionResetError("reset")]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    assert transport.query("council", "q", {}, None).kind == ogh.UNAVAILABLE
+
+
+def test_a_write_is_never_retried_after_the_response_began(_fake_http):
+    """The most dangerous shape: the server ANSWERED and we failed reading the
+    body. The mutation is committed; a retry would apply it twice."""
+    _fake_http.script = [ConnectionResetError("reset while reading body")]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    outcome = transport.mutate("council", "q", {}, None)
+
+    assert outcome.kind == ogh.FATAL
+    assert len(_fake_http.created) == 1, "must not open a second connection"
+
+
+def test_connect_failure_stays_retryable_for_a_write(_fake_http):
+    """The one case that IS provably pre-send, and must not be lost to the fix
+    above — otherwise a routine server restart fails every write outright."""
+    _fake_http.connect_error = ConnectionRefusedError("connection refused")
     transport = ogh.PooledTransport("http://host:8080")
 
     assert transport.mutate("council", "q", {}, None).kind == ogh.UNAVAILABLE
