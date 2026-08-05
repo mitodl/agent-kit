@@ -22,6 +22,10 @@ from .bridge_extractors import (
 from .graph import OmnigraphClient, check_writable
 from .store import bridge_store, ensure_bridge_store
 
+# Delete statements per commit when purging a repo's bindings. The composed
+# query is a single argv element, so a full-repo purge has to be capped.
+_PURGE_BATCH_SIZE = 500
+
 
 def write_bindings(
     bindings: list[ParsedBinding],
@@ -126,10 +130,17 @@ def write_bindings(
             for r in all_rows
             if r.get("repo") == repo and r.get("file") and _gone(r["file"])
         }
-    for rel in sorted(purge_files):
-        client.change(
-            "bridge.gq", "delete_bindings_in_file", {"repo_file": f"{repo}|{rel}"}
-        )
+    # One commit for the whole purge, not one per file: this runs over every
+    # touched file on each index, and a commit apiece fragments the bridge store
+    # the same way the per-file deletes did the per-repo one. Chunked because the
+    # composed query rides in argv and a full-repo purge is unbounded.
+    client.change_many(
+        [
+            ("bridge.gq", "delete_bindings_in_file", {"repo_file": f"{repo}|{rel}"})
+            for rel in sorted(purge_files)
+        ],
+        chunk_size=_PURGE_BATCH_SIZE,
+    )
 
     # Collect store-level context for confidence adjustments.
     # provider_keys: (repo, key_norm) pairs so the self_provided_key penalty

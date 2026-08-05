@@ -38,6 +38,12 @@ from .store import ensure_store
 
 _QUERIES_TS_DIR = Path(__file__).parent / "queries_ts"
 
+# Delete statements per commit when clearing reindexed/purged files. A full-repo
+# reindex can touch thousands of files, and the composed query rides in argv, so
+# the batch has to be capped rather than built whole. Two statements per file, so
+# this is 250 files per commit.
+_DELETE_BATCH_SIZE = 500
+
 
 @dataclass(frozen=True)
 class LanguageSpec:
@@ -355,9 +361,13 @@ def index_path(
     )
 
     # Drop stale data for changed files (new files have nothing to delete), then
-    # bulk-load every node and edge in a single omnigraph call.
+    # bulk-load every node and edge in a single omnigraph call. The deletes are
+    # collected rather than issued per file: two commits per changed file made a
+    # reindex the single largest fragmentation source in the store, which is
+    # exactly what the bulk load below exists to avoid on the insert side.
+    delete_steps: list[tuple[str, str, dict]] = []
     for file_id in reindexed_file_ids:
-        _delete_file_data(file_id, client)
+        delete_steps += _delete_file_steps(file_id)
 
     # A full-repo run also drops files the repo no longer has. Membership is
     # decided by the collected set, NOT by whether the file still exists on
@@ -372,9 +382,10 @@ def index_path(
         for file_id in sorted(existing):
             rel = file_id[len(prefix) :] if file_id.startswith(prefix) else None
             if rel is not None and rel not in indexed_rel:
-                _delete_file_data(file_id, client)
+                delete_steps += _delete_file_steps(file_id)
                 stats.purged += 1
 
+    client.change_many(delete_steps, chunk_size=_DELETE_BATCH_SIZE)
     client.load(_dedupe(records), mode="merge")
 
     # Cross-repo bridge — a SEPARATE phase after the per-repo store write, so the
@@ -566,10 +577,18 @@ def _parse_for_index(
     return parsed, (file_id in existing)
 
 
-def _delete_file_data(file_id: str, client: OmnigraphClient) -> None:
-    # Deletes must not be mixed with inserts; run as standalone change() calls.
-    client.change("delete.gq", "delete_symbols_in_file", {"file_id": file_id})
-    client.change("delete.gq", "delete_file", {"id": file_id})
+def _delete_file_steps(file_id: str) -> list[tuple[str, str, dict]]:
+    """The two deletes that clear one file's rows, as batchable steps.
+
+    Deletes must not be mixed with inserts — the engine rejects a body that is
+    both constructive and destructive — which is why these stay separate from
+    the ``load()`` that follows. They batch freely with OTHER deletes though, so
+    every file's deletes go into one commit rather than two apiece.
+    """
+    return [
+        ("delete.gq", "delete_symbols_in_file", {"file_id": file_id}),
+        ("delete.gq", "delete_file", {"id": file_id}),
+    ]
 
 
 def _edge(edge_type: str, from_id: str, to_id: str) -> dict:

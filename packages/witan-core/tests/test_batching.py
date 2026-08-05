@@ -173,6 +173,41 @@ def test_change_many_reads_each_query_file_once(monkeypatch, tmp_path):
     assert reads.count("m.gq") == 1
 
 
+def _three(client, calls, monkeypatch, **kwargs):
+    _record(monkeypatch, calls)
+    client.change_many(
+        [("m.gq", "link_to", {"from": str(i), "to": str(i)}) for i in range(3)],
+        **kwargs,
+    )
+
+
+def test_change_many_chunks_at_the_requested_size(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    _three(client, calls, monkeypatch, chunk_size=2)
+    # 3 steps at 2 per commit -> a 2-statement batch, then a single-step call
+    assert len(calls) == 2
+
+
+def test_change_many_ignores_a_chunk_size_larger_than_the_batch(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    _three(client, calls, monkeypatch, chunk_size=10)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_change_many_rejects_a_chunk_size_below_one(monkeypatch, tmp_path, bad):
+    # -1 is the dangerous one: `range(0, n, -1)` is EMPTY, so without this
+    # guard the call would return normally having written NOTHING. 0 raises on
+    # its own, but as an opaque range() error far from the caller.
+    client = _client(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    with pytest.raises(ValueError, match="chunk_size must be >= 1"):
+        _three(client, calls, monkeypatch, chunk_size=bad)
+    assert calls == []
+
+
 def test_change_many_preserves_step_order(monkeypatch, tmp_path):
     # an edge resolves its endpoints against the statements AHEAD of it, so a
     # reordering batcher would break every node-then-edge caller

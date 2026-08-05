@@ -424,37 +424,42 @@ def _topic_slug(kind: str, name: str) -> str:
     return f"tp-{kind}-{sanitised}"
 
 
-def _upsert_topic(name: str, kind: str) -> tuple[str, bool]:
-    """Return the Topic slug for (name, kind), creating it if absent.
+def _upsert_topic_steps(
+    name: str, kind: str
+) -> tuple[str, list[tuple[str, str, dict]]]:
+    """Return the Topic slug for (name, kind) and the steps that create it.
 
-    The second element is ``True`` when the node was newly inserted — lets callers
-    (e.g. ``migrate_topics``) count creations without a second ``get_topic`` read.
+    The steps are empty when the Topic already exists, which is also how callers
+    (e.g. ``migrate_topics``) count creations without a second ``get_topic``
+    read. The existence read happens here; only the write is deferred, so the
+    caller can commit it alongside whatever else it is writing.
     """
     slug = _topic_slug(kind, name)
     if client.read("read.gq", "get_topic", {"slug": slug}):
-        return slug, False
-    client.change(
-        "mutations.gq",
-        "insert_topic",
-        {"slug": slug, "name": name, "kind": kind, "created_at": now_iso()},
-    )
-    return slug, True
+        return slug, []
+    return slug, [
+        (
+            "mutations.gq",
+            "insert_topic",
+            {"slug": slug, "name": name, "kind": kind, "created_at": now_iso()},
+        )
+    ]
 
 
-def _resolve_topic(ref: str) -> str | None:
-    """Resolve a topic reference to a slug, creating the Topic if needed.
+def _resolve_topic_steps(ref: str) -> tuple[str | None, list[tuple[str, str, dict]]]:
+    """Resolve a topic reference to a slug, with the steps to create it if needed.
 
     ``ref`` is either an existing Topic slug (``tp-...``) or a ``name:kind`` spec
-    (e.g. ``cryptography:topic`` or ``GET /api/v1/courses/:contract``). Returns the
-    slug, or ``None`` when ``ref`` is a slug that does not resolve to a Topic.
+    (e.g. ``cryptography:topic`` or ``GET /api/v1/courses/:contract``). The slug is
+    ``None`` when ``ref`` is a slug that does not resolve to a Topic.
     """
     # Only a tp- slug can resolve directly; skip the read for a name:kind spec.
     if ref.startswith("tp-") and client.read("read.gq", "get_topic", {"slug": ref}):
-        return ref
+        return ref, []
     name, sep, kind = ref.rpartition(":")
     if sep and kind in ("topic", "contract", "symbol", "entity") and name:
-        return _upsert_topic(name, kind)[0]
-    return None
+        return _upsert_topic_steps(name, kind)
+    return None, []
 
 
 def _lookup_topic_slug(topic: str) -> str | None:
@@ -470,36 +475,23 @@ def _lookup_topic_slug(topic: str) -> str | None:
     return None
 
 
-def _tag_memory(memory_slug: str, name: str, kind: str) -> str:
-    """Upsert a Topic and link the memory to it. Returns the topic slug."""
-    topic_slug, _ = _upsert_topic(name, kind)
-    client.change(
-        "mutations.gq", "link_tagged", {"from": memory_slug, "to": topic_slug}
-    )
-    return topic_slug
-
-
 def _tag_memory_steps(
     memory_slug: str, name: str, kind: str
 ) -> list[tuple[str, str, dict]]:
-    """``_tag_memory`` as batchable steps rather than immediate writes.
+    """Upsert a Topic and link ``memory_slug`` to it, as batchable steps."""
+    slug, steps = _upsert_topic_steps(name, kind)
+    return [*steps, ("mutations.gq", "link_tagged", {"from": memory_slug, "to": slug})]
 
-    The existence read stays here — it decides whether a Topic insert is needed
-    at all — but the writes are handed back for the caller to commit alongside
-    whatever else it is writing.
-    """
-    slug = _topic_slug(kind, name)
-    steps: list[tuple[str, str, dict]] = []
-    if not client.read("read.gq", "get_topic", {"slug": slug}):
-        steps.append(
-            (
-                "mutations.gq",
-                "insert_topic",
-                {"slug": slug, "name": name, "kind": kind, "created_at": now_iso()},
-            )
-        )
-    steps.append(("mutations.gq", "link_tagged", {"from": memory_slug, "to": slug}))
-    return steps
+
+# Statements per commit in the topic backfill. Bounds the inline GQ body — the
+# composed query is passed as an argv element, so this trades a handful of extra
+# commits for staying well clear of ARG_MAX and any server payload cap.
+#
+# A SOFT threshold, checked between memories rather than between statements: a
+# chunk may overshoot by up to one memory's worth of steps. Keeping each
+# memory's steps together is worth more than an exact cap, and the overshoot is
+# bounded by how many tags one memory can carry.
+_MIGRATE_BATCH_SIZE = 100
 
 
 def migrate_topics() -> dict:
@@ -514,6 +506,20 @@ def migrate_topics() -> dict:
     topics_created = 0
     edges_created = 0
     seen_topics: set[str] = set()
+    # This sweeps the WHOLE store, so writing per row is how a backfill leaves
+    # behind the fragmented store the batching exists to avoid — a few hundred
+    # memories is a few hundred Lance versions. Steps are flushed in bounded
+    # chunks rather than one batch: the composed query is inline argv, so an
+    # unbounded body would eventually exceed the command-line/payload limit.
+    # Chunks commit in order and a Topic insert is always appended before the
+    # edges naming it, so a topic never lands in a later chunk than its edge.
+    steps: list[tuple[str, str, dict]] = []
+
+    def flush() -> None:
+        if steps:
+            client.change_many(list(steps))
+            steps.clear()
+
     for row in rows:
         slug = row["slug"]
         existing = {
@@ -523,17 +529,19 @@ def migrate_topics() -> dict:
         for tag in dict.fromkeys(t for t in (row.get("tags") or []) if t.strip()):
             topic_slug = _topic_slug("topic", tag)
             if topic_slug not in seen_topics:
-                _, created = _upsert_topic(tag, "topic")
-                if created:
+                _, create_steps = _upsert_topic_steps(tag, "topic")
+                if create_steps:
                     topics_created += 1
+                    steps += create_steps
                 seen_topics.add(topic_slug)
             if topic_slug not in existing:
-                client.change(
-                    "mutations.gq",
-                    "link_tagged",
-                    {"from": slug, "to": topic_slug},
+                steps.append(
+                    ("mutations.gq", "link_tagged", {"from": slug, "to": topic_slug})
                 )
                 edges_created += 1
+        if len(steps) >= _MIGRATE_BATCH_SIZE:
+            flush()
+    flush()
     return {
         "memories_scanned": len(rows),
         "topics_created": topics_created,
@@ -1952,8 +1960,10 @@ def memory_update(
     # edges cannot be individually retracted, and deleting the Topic to drop one
     # would take out every other memory's edge to it. The string list stays
     # authoritative for what the memory claims to be tagged with.
+    steps: list[tuple[str, str, dict]] = []
     for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
-        _tag_memory(slug, tag, "topic")
+        steps += _tag_memory_steps(slug, tag, "topic")
+    client.change_many(steps)
     return updated
 
 
@@ -2057,7 +2067,7 @@ async def memory_link(
                 "linked": False,
                 "missing": [from_slug],
             }
-        topic_slug = _resolve_topic(to_slug)
+        topic_slug, topic_steps = _resolve_topic_steps(to_slug)
         if topic_slug is None:
             return {
                 "from": from_slug,
@@ -2066,8 +2076,11 @@ async def memory_link(
                 "linked": False,
                 "missing": [to_slug],
             }
-        client.change(
-            "mutations.gq", "link_tagged", {"from": from_slug, "to": topic_slug}
+        client.change_many(
+            [
+                *topic_steps,
+                ("mutations.gq", "link_tagged", {"from": from_slug, "to": topic_slug}),
+            ]
         )
         return {"from": from_slug, "to": topic_slug, "kind": kind, "linked": True}
 
@@ -2806,30 +2819,30 @@ async def workflow_project_complete(
             except (ValueError, TypeError):
                 pass
 
-    client.change(
-        "mutations.gq",
-        "insert_workflow_trace",
-        {
-            "slug": trace_slug,
-            "project_slug": slug,
-            "repos": _project_repos(project) or None,
-            "title": project.get("title", slug),
-            "description": project.get("description", ""),
-            "session_count": session_count,
-            "phases": phases_seen,
-            "duration": duration,
-            "outcome": outcome,
-            "lessons_slug": None,
-            "patterns_slug": None,
-            "author": _current_author(),
-            "tags": project.get("tags"),
-            "created_at": now,
-        },
-    )
-    client.change(
-        "mutations.gq",
-        "link_produced",
-        {"from": slug, "to": trace_slug},
+    client.change_many(
+        [
+            (
+                "mutations.gq",
+                "insert_workflow_trace",
+                {
+                    "slug": trace_slug,
+                    "project_slug": slug,
+                    "repos": _project_repos(project) or None,
+                    "title": project.get("title", slug),
+                    "description": project.get("description", ""),
+                    "session_count": session_count,
+                    "phases": phases_seen,
+                    "duration": duration,
+                    "outcome": outcome,
+                    "lessons_slug": None,
+                    "patterns_slug": None,
+                    "author": _current_author(),
+                    "tags": project.get("tags"),
+                    "created_at": now,
+                },
+            ),
+            ("mutations.gq", "link_produced", {"from": slug, "to": trace_slug}),
+        ]
     )
 
     return {"project_slug": slug, "trace_slug": trace_slug, "existed": False}
@@ -3455,25 +3468,29 @@ def workflow_session_start(
     else:
         slug = _make_slug("workflow_session", project_slug)
         started_at = now
-        client.change(
-            "mutations.gq",
-            "insert_workflow_session",
-            {
-                "slug": slug,
-                "project_slug": project_slug,
-                "session_id": session_id,
-                "repo": detected_repo,
-                "phase": phase,
-                "summary": "",
-                "author": _current_author(),
-                "tags": tags,
-                "started_at": now,
-            },
-        )
-        client.change(
-            "mutations.gq",
-            "link_belongs_to",
-            {"from": slug, "to": project_slug},
+        client.change_many(
+            [
+                (
+                    "mutations.gq",
+                    "insert_workflow_session",
+                    {
+                        "slug": slug,
+                        "project_slug": project_slug,
+                        "session_id": session_id,
+                        "repo": detected_repo,
+                        "phase": phase,
+                        "summary": "",
+                        "author": _current_author(),
+                        "tags": tags,
+                        "started_at": now,
+                    },
+                ),
+                (
+                    "mutations.gq",
+                    "link_belongs_to",
+                    {"from": slug, "to": project_slug},
+                ),
+            ]
         )
         slug, started_at = _dedupe_open_sessions(project_slug, session_id, slug, now)
 
@@ -3757,43 +3774,52 @@ async def task_create(
             status = "blocked"
             break
 
-    client.change(
-        "mutations.gq",
-        "insert_task",
-        {
-            "slug": slug,
-            "title": title,
-            "description": description,
-            "repo": detected_repo,
-            "type": type,
-            "status": status,
-            "priority": priority,
-            "project_slug": project_slug,
-            "parent_slug": parent,
-            "blocked_by": blocked_by,
-            "assignee": None,
-            "external_uri": external_uri,
-            "author": _current_author(),
-            "symbol_refs": symbol_refs,
-            "tags": tags,
-            "created_at": now,
-            "updated_at": now,
-            "claimed_at": None,
-        },
-    )
-
+    # One commit for the task and every edge it arrives with — a task created
+    # with a project, a parent and two blockers was five Lance versions. The
+    # node is first because each edge below resolves an endpoint against it.
+    steps: list[tuple[str, str, dict]] = [
+        (
+            "mutations.gq",
+            "insert_task",
+            {
+                "slug": slug,
+                "title": title,
+                "description": description,
+                "repo": detected_repo,
+                "type": type,
+                "status": status,
+                "priority": priority,
+                "project_slug": project_slug,
+                "parent_slug": parent,
+                "blocked_by": blocked_by,
+                "assignee": None,
+                "external_uri": external_uri,
+                "author": _current_author(),
+                "symbol_refs": symbol_refs,
+                "tags": tags,
+                "created_at": now,
+                "updated_at": now,
+                "claimed_at": None,
+            },
+        )
+    ]
     if project_slug:
-        client.change(
-            "mutations.gq", "link_task_belongs_to", {"from": slug, "to": project_slug}
+        steps.append(
+            (
+                "mutations.gq",
+                "link_task_belongs_to",
+                {"from": slug, "to": project_slug},
+            )
         )
     if parent:
-        client.change("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
+        steps.append(("mutations.gq", "link_parent_of", {"from": parent, "to": slug}))
     for blocker in blocked_by or []:
-        client.change("mutations.gq", "link_blocks", {"from": blocker, "to": slug})
+        steps.append(("mutations.gq", "link_blocks", {"from": blocker, "to": slug}))
     for source in discovered_from or []:
-        client.change(
-            "mutations.gq", "link_discovered_from", {"from": slug, "to": source}
+        steps.append(
+            ("mutations.gq", "link_discovered_from", {"from": slug, "to": source})
         )
+    client.change_many(steps)
 
     return {"slug": slug, "status": status, "repo": detected_repo}
 
