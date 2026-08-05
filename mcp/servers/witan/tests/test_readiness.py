@@ -44,9 +44,45 @@ def test_lease_expired_tolerates_naive_timestamp():
     assert readiness.lease_expired(naive_old) is True
 
 
-def test_in_progress_missing_claim_is_pickable():
-    # No claimed_at → lease treated as expired → reclaimable.
+def test_in_progress_missing_claim_and_no_updated_at_is_pickable():
+    # No claimed_at and no updated_at fallback either → nothing to judge a lease
+    # against → treated as expired → reclaimable (legacy/hand-edited row).
     assert readiness.status_pickable({"status": "in_progress", "claimed_at": None})
+
+
+def test_in_progress_unleased_but_recently_updated_is_not_pickable():
+    # This is the regression this task fixes: task_update(status="in_progress")
+    # never stamped claimed_at, so a task started seconds ago via that path used
+    # to read as instantly and permanently free. It must fall back to updated_at
+    # and be treated as held while recent.
+    task = {
+        "status": "in_progress",
+        "claimed_at": None,
+        "updated_at": _iso(0),
+    }
+    assert not readiness.status_pickable(task)
+
+
+def test_in_progress_unleased_and_stale_updated_at_is_reclaimable():
+    # The abandonment path must not regress: no claimed_at, but updated_at is
+    # older than the lease window → the holder likely crashed → reclaimable.
+    task = {
+        "status": "in_progress",
+        "claimed_at": None,
+        "updated_at": _iso(-(readiness.CLAIM_LEASE_SECONDS + 60)),
+    }
+    assert readiness.status_pickable(task)
+
+
+def test_claimed_at_takes_precedence_over_updated_at():
+    # A stale updated_at must not override a fresh claimed_at (e.g. a renewed
+    # claim on a task whose other fields haven't otherwise changed recently).
+    task = {
+        "status": "in_progress",
+        "claimed_at": _iso(0),
+        "updated_at": _iso(-(readiness.CLAIM_LEASE_SECONDS + 60)),
+    }
+    assert not readiness.status_pickable(task)
 
 
 def test_is_ready_requires_all_blockers_closed():
@@ -74,9 +110,18 @@ def test_filter_ready_orders_by_priority_and_reclaims_expired():
             "priority": "p0",
             "claimed_at": _iso(0),
         },
+        {
+            # task_update(status="in_progress") path: no claimed_at, but started
+            # (updated_at) recently. Must read as held, not free.
+            "slug": "tk-unleased-recent",
+            "status": "in_progress",
+            "priority": "p0",
+            "claimed_at": None,
+            "updated_at": _iso(0),
+        },
     ]
     got = [t["slug"] for t in readiness.filter_ready(tasks)]
-    # closed and freshly-held excluded; ordered p0, p1, p3.
+    # closed, freshly-held, and freshly-started-unleased excluded; ordered p0, p1, p3.
     assert got == ["tk-p0", "tk-stale", "tk-p3"]
 
 

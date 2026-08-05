@@ -221,6 +221,56 @@ def test_expired_lease_is_reclaimable(server, monkeypatch):
     assert server.task_get(t["slug"])["assignee"] == "agentB"
 
 
+@requires_omnigraph
+def test_task_update_to_in_progress_stamps_claimed_at(server):
+    # Regression: task_update(status="in_progress") — the /witan-task skill's,
+    # the CLI's, and every "mark this started" path's route — used to leave
+    # claimed_at null forever, which made the task read as instantly and
+    # permanently free (see test_readiness.py for the unit-level case).
+    t = server.task_create(title="marked started", description="x")
+    server.task_update(t["slug"], status="in_progress")
+    node = server.task_get(t["slug"])
+    assert node["status"] == "in_progress"
+    assert node["claimed_at"] is not None
+
+
+@requires_omnigraph
+def test_unleased_recent_in_progress_is_not_ready_or_claimable(server):
+    """A task moved to in_progress with no assignee on record (e.g. a legacy row
+    written before task_update stamped claimed_at) must still read as held while
+    recently touched — not as free just because nobody can be named as holder."""
+    from witan import server as srv
+
+    t = server.task_create(title="ghost claim", description="x")
+    srv._update_task(t["slug"], {"status": "in_progress", "claimed_at": None})
+    node = server.task_get(t["slug"])
+    assert node["assignee"] is None
+    assert node["claimed_at"] is None
+
+    assert t["slug"] not in {r["slug"] for r in server.task_ready()}
+
+    c = server.task_claim(t["slug"], assignee="agentB")
+    assert c["claimed"] is False
+
+
+@requires_omnigraph
+def test_unleased_stale_in_progress_is_still_reclaimable(server, monkeypatch):
+    """The abandonment recovery path must not regress: an in_progress task with
+    no claimed_at whose updated_at is older than the lease window is genuinely
+    abandoned and must resurface as ready/claimable."""
+    from witan import readiness
+    from witan import server as srv
+
+    monkeypatch.setattr(readiness, "CLAIM_LEASE_SECONDS", -1)
+
+    t = server.task_create(title="abandoned ghost", description="x")
+    srv._update_task(t["slug"], {"status": "in_progress", "claimed_at": None})
+
+    assert t["slug"] in {r["slug"] for r in server.task_ready()}
+    c = server.task_claim(t["slug"], assignee="agentB")
+    assert c["claimed"] is True
+
+
 # ── Best-effort CAS: conflict detection & post-write verification ───────
 
 
