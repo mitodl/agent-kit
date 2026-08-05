@@ -77,6 +77,17 @@ id = "actionlint"
 priority = 10
 files = "^\\.github/workflows/.*\\.ya?ml$"
 
+# ── GitHub Actions: zizmor (priority 10, parallel with shellcheck) ────────────
+
+[[repos]]
+repo = "https://github.com/zizmorcore/zizmor-pre-commit"
+rev = "v1.29.0"
+
+[[repos.hooks]]
+id = "zizmor"
+priority = 10
+args = ["--no-progress", "--min-severity=high", "--min-confidence=medium"]
+
 # ── Secrets: gitleaks (priority 10, parallel with shellcheck) ─────────────────
 # Comprehensive secret scanning; complements the builtin detect-private-key.
 # Checks staged changes only (gitleaks protect).
