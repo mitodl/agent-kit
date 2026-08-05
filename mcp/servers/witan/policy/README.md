@@ -207,13 +207,14 @@ verify the map → apply the bundle → restart. There is no partial mode.
 The deployed `cluster.yaml` (templated by ol-infrastructure, **not** the fixture
 here) must:
 
-1. Enumerate the real graphs: `memory`, `bridge`, and one
+1. Enumerate the real graphs: `council`, `code-bridge`, and one
    `sanitize_slug(repo)` per indexed repo.
 2. Wire the four bundles via `policies:` + `applies_to`, listing **every**
-   real code-graph id in `code-graph.policy.yaml`'s `applies_to`.
-3. Template each bundle's `groups:` membership from Keycloak claims
-   (`witan-users` = per-user actors; `witan-ci` = `act-svc-witan-ci`).
-4. Gate maintenance ops (`repair`/`optimize`/`cleanup`) with **AWS IAM** on the
+   real code-graph id in `code-graph.policy.yaml`'s `applies_to`. The bundles
+   are baked into the omnigraph-server image alongside the `.pg` schemas
+   (`docker/omnigraph-server.Dockerfile`), for the same reason the schemas are:
+   the Pulumi stack has no access to this tree at apply time.
+3. Gate maintenance ops (`repair`/`optimize`/`cleanup`) with **AWS IAM** on the
    backing bucket — Cedar cannot.
 5. **Schedule the stale-view reaper.** `witan-ci`'s `branch_delete` grant is
    authorization for a job that has to actually run: every developer's every git
@@ -222,3 +223,44 @@ here) must:
    `WITAN_CODE_INDEX_ROLE=ci` and the `svc-witan-ci` token, per graph, on a
    schedule (`WITAN_CODE_VIEW_MAX_IDLE_DAYS`, default 14). See
    `docs/adr/0006-code-graph-branch-ownership-and-reaping.md` D5.
+
+### Group membership is rendered at boot, not at deploy time
+
+`groups:` is **not** templated by Pulumi. `policy/render_groups.py` rewrites
+every bundle's membership from the mounted actor-token map
+(`OMNIGRAPH_SERVER_BEARER_TOKENS_FILE`), and
+`docker/omnigraph-server-entrypoint.sh` runs it immediately before
+`omnigraph cluster apply`.
+
+The reason is that `witan-users` has to track the actor set the hourly
+`witan-token-sync` CronJob writes to `secret-operations/witan/actor-tokens`.
+Pulumi cannot see that set — the job owns the Vault path, not the stack — so a
+Pulumi-rendered list is stale by construction: a user provisioned at 10:00 would
+authenticate and then be denied everything until the next deploy, which reads as
+a broken client rather than a missing grant. The `actor-tokens`
+VaultStaticSecret declares `rolloutRestartTargets: [omnigraph-server]`, so the
+server already restarts on exactly the event that changes the actor set;
+rendering on that path means the token map and the policy can never disagree.
+
+**The `act-` prefix is the trap.** Humans are `act-<slug>`
+(`witan_core.identity.derive_actor_id`), but the service accounts in the token
+map are **not** prefixed — they are `svc-witan-ci` and `svc-witan-admin`. The
+ids committed here (`act-svc-witan-ci`, …) are fixtures for `policy test` and
+match nothing in a deployed cluster; applying a bundle unrendered would
+authenticate the CI and break-glass identities and then deny them everything.
+The mapping the renderer applies:
+
+| token-map id      | group           |
+| ----------------- | --------------- |
+| `act-*`           | `witan-users`   |
+| `svc-witan-ci`    | `witan-ci`      |
+| `svc-witan`       | `witan-service` |
+| `svc-witan-admin` | `witan-admin`   |
+
+`svc-witan` is **not provisioned in any environment yet**
+(`tk-provision-act-svc-witan-…`), so `witan-service` renders as an empty list and
+its rules grant nobody — deliberate, and logged as a warning on every boot so it
+stays visible. Adding a group to a bundle without adding it to the renderer's
+`KNOWN_GROUPS` fails the boot rather than rendering an empty group that silently
+denies its members; `tests/../test_render_groups.py` pins that against the real
+committed bundles.

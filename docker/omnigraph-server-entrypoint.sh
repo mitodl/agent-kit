@@ -51,6 +51,41 @@ case "${cluster_dir}" in
         # first boot, else refresh to re-observe the existing ledger; then apply
         # converges (graph creation on first boot, schema updates thereafter,
         # a no-op once converged).
+        # Render Cedar group membership from the live actor-token map before
+        # converging. The bundles ship with fixture ids (act-alice, and service
+        # accounts under an `act-` prefix the real token map does not use), so
+        # applying them unrendered would authenticate svc-witan-ci and
+        # svc-witan-admin and then deny them everything.
+        #
+        # Done here rather than at deploy time because `witan-users` has to
+        # track the hourly token-sync job's output, which Pulumi cannot see.
+        # The actor-tokens VaultStaticSecret restarts this Deployment whenever
+        # that map changes, so rendering on the restart path keeps the policy
+        # and the token map in permanent agreement. See policy/render_groups.py.
+        #
+        # Skipped when either side is absent: an image without bundles, or a
+        # deployment with no bearer tokens, is the pre-policy default-deny
+        # configuration and must keep booting exactly as before.
+        tokens_file="${OMNIGRAPH_SERVER_BEARER_TOKENS_FILE:-}"
+        bundles=""
+        for bundle in "${cluster_dir}"/*.policy.yaml; do
+            [ -f "${bundle}" ] && bundles="${bundles} ${bundle}"
+        done
+        if [ -n "${bundles}" ] && [ -n "${tokens_file}" ] && [ -f "${tokens_file}" ]; then
+            echo "omnigraph-server: rendering policy group membership from ${tokens_file}"
+            # Unquoted on purpose: ${bundles} is a space-separated path list.
+            # shellcheck disable=SC2086
+            python3 /usr/local/bin/render-policy-groups.py \
+                --tokens "${tokens_file}" ${bundles}
+        elif [ -n "${bundles}" ]; then
+            # Bundles present but no token map: omnigraph-server would refuse to
+            # boot anyway ("policy file is configured but no bearer tokens").
+            # Fail here instead, where the reason is legible.
+            echo "omnigraph-server: policy bundles present but no bearer-token map" \
+                 "(OMNIGRAPH_SERVER_BEARER_TOKENS_FILE unset or missing); refusing to converge" >&2
+            exit 1
+        fi
+
         if omnigraph cluster import --config "${cluster_dir}" >/dev/null 2>&1; then
             echo "omnigraph-server: initialized cluster state (first boot)"
         else
