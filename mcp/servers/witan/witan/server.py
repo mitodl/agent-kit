@@ -479,6 +479,29 @@ def _tag_memory(memory_slug: str, name: str, kind: str) -> str:
     return topic_slug
 
 
+def _tag_memory_steps(
+    memory_slug: str, name: str, kind: str
+) -> list[tuple[str, str, dict]]:
+    """``_tag_memory`` as batchable steps rather than immediate writes.
+
+    The existence read stays here — it decides whether a Topic insert is needed
+    at all — but the writes are handed back for the caller to commit alongside
+    whatever else it is writing.
+    """
+    slug = _topic_slug(kind, name)
+    steps: list[tuple[str, str, dict]] = []
+    if not client.read("read.gq", "get_topic", {"slug": slug}):
+        steps.append(
+            (
+                "mutations.gq",
+                "insert_topic",
+                {"slug": slug, "name": name, "kind": kind, "created_at": now_iso()},
+            )
+        )
+    steps.append(("mutations.gq", "link_tagged", {"from": memory_slug, "to": slug}))
+    return steps
+
+
 def migrate_topics() -> dict:
     """One-shot, idempotent backfill: promote every memory ``tag`` to a
     ``Topic{kind:"topic"}`` + ``Tagged`` edge.
@@ -1675,54 +1698,71 @@ def _store_memory(
     slug = _make_slug(kind, title)
     detected_repo = repo_module.detect(override=repo)
 
-    client.change(
-        "mutations.gq",
-        "insert_memory",
-        {
-            "slug": slug,
-            "kind": kind,
-            "title": title,
-            "content": content,
-            "repo": detected_repo,
-            "language": language,
-            "category": category,
-            "severity": severity,
-            "author": _current_author(),
-            "tags": tags,
-            "symbol_refs": symbol_refs,
-            "confidence": confidence,
-            "created_at": now,
-            "updated_at": now,
-        },
-    )
+    # The whole memory — node, its topics, its edges — is ONE commit. Every
+    # separate `mutate` is a separate Lance version, and a store accumulating a
+    # version per row is what drove point reads to 167ms in the PR #180 spike.
+    # Order matters: `insert Tagged` resolves its endpoints against the
+    # statements ahead of it, so the Memory and each Topic must precede the edge
+    # that references them.
+    steps: list[tuple[str, str, dict]] = [
+        (
+            "mutations.gq",
+            "insert_memory",
+            {
+                "slug": slug,
+                "kind": kind,
+                "title": title,
+                "content": content,
+                "repo": detected_repo,
+                "language": language,
+                "category": category,
+                "severity": severity,
+                "author": _current_author(),
+                "tags": tags,
+                "symbol_refs": symbol_refs,
+                "confidence": confidence,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+    ]
 
     # Dual-write tags → Topic{kind:"topic"} + Tagged edge. The string list stays
     # the source of truth for old readers; the Topic graph is the new traversal
     # surface. Idempotent on the topic slug, so shared tags reuse one node. Skip
     # blank tags and dedup so neither drives redundant upsert/link calls.
     for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
-        _tag_memory(slug, tag, "topic")
+        steps += _tag_memory_steps(slug, tag, "topic")
 
     # Provenance: record which session produced this memory (best-effort). An
     # explicitly-threaded handle wins — it is the only source a deployed replica
     # has, since MCP 2026-07-28 carries no session state and the replica shares
     # no filesystem with the agent. Local stdio falls back to the parked handle.
     # The engine validates edge endpoints, so a stale handle pointing at a
-    # session that no longer exists in the store would raise — swallow it so a
-    # provenance failure never blocks the memory write.
+    # session that no longer exists in the store would raise. Since the batch
+    # commits or fails WHOLE, that would now take the memory down with it — so
+    # on failure the batch is retried without the provenance edge. Nothing
+    # committed on the failed attempt, which is what makes the retry clean.
     active = session_slug or _active_session_slug()
     session_linked = False
     if active:
         try:
-            client.change(
-                "mutations.gq",
-                "link_session_produced",
-                {"from": active, "to": slug},
+            client.change_many(
+                [
+                    *steps,
+                    (
+                        "mutations.gq",
+                        "link_session_produced",
+                        {"from": active, "to": slug},
+                    ),
+                ]
             )
             _invalidate_edge_index()  # SessionProduced feeds corroboration
             session_linked = True
         except RuntimeError:
-            pass
+            client.change_many(steps)
+    else:
+        client.change_many(steps)
 
     result = {
         "slug": slug,
