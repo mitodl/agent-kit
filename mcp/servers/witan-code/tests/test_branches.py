@@ -300,8 +300,16 @@ def test_cached_git_refreshes_after_ttl(monkeypatch):
 # because the 2s TTL has not expired between two adjacent tests. That is the
 # exact mechanism that made test_crossrepo's fan-out collapse to one repo.
 def test_git_context_survives_within_a_test(monkeypatch):
+    # Seed from a known-clean state rather than inheriting whatever the
+    # preceding test memoized: test_cached_git_refreshes_after_ttl leaves a
+    # fresh "b" behind, which within the 2s TTL would make _cached_detect()
+    # below return "b" and fail this test for the wrong reason. That matters
+    # precisely when the autouse fixture is toggled off to check that the pair
+    # still detects its removal — the residue the next test sees must
+    # provably be LEAKED_REPO, set here, and not an unrelated predecessor's.
     from witan_code import server as srv
 
+    srv._git_context.clear()
     monkeypatch.setattr(srv.repo_module, "detect", lambda: LEAKED_REPO)
     assert srv._cached_detect() == LEAKED_REPO
     assert srv._git_context["detect"][1] == LEAKED_REPO
