@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import shutil
 import socket
 import threading
@@ -723,3 +724,42 @@ def test_two_actors_tokens_do_not_race_through_the_shared_pool(
 
     sent = [r["headers"]["Authorization"] for r in _fake_http.created[0].requests]
     assert sent == ["Bearer actor-a-token", "Bearer actor-b-token"]
+
+
+# ── against a real server (opt-in) ────────────────────────────────────
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WITAN_TEST_OMNIGRAPH_SERVER"),
+    reason="set WITAN_TEST_OMNIGRAPH_SERVER=<url> to check the HTTP path live",
+)
+def test_live_server_answers_the_pooled_transport(monkeypatch):
+    """The only check that catches the SHAPE of the API drifting.
+
+    Everything above drives a fake socket, so it pins our side of the contract
+    and nothing else — a server that moved the endpoint, renamed the error
+    envelope, or stopped accepting an inline query would pass every one of them.
+    This asserts the two things the transport actually depends on: that
+    `/graphs/<id>/query` is where a query goes, and that a rejected token comes
+    back as a classifiable error rather than something we would read as fatal.
+
+    Opt-in because it needs a reachable server; point it at a port-forward:
+        kubectl -n omnigraph port-forward svc/omnigraph-server 18080:8080
+        WITAN_TEST_OMNIGRAPH_SERVER=http://127.0.0.1:18080 pytest -k live_server
+
+    Deliberately uses a BOGUS token: the endpoint and the error envelope are
+    what is under test, and a test that needed a real credential could not run
+    anywhere useful.
+    """
+    monkeypatch.undo()  # drop the fake-socket patches; talk to the real thing
+    transport = ogh.PooledTransport(os.environ["WITAN_TEST_OMNIGRAPH_SERVER"])
+    graph = os.environ.get("WITAN_TEST_OMNIGRAPH_GRAPH", "council")
+
+    outcome = transport.query(graph, "query q() {\n    return 1\n}\n", {}, "bogus")
+
+    assert outcome.kind != ogh.OK, "a bogus token must not be accepted"
+    assert outcome.status in (401, 403), (
+        f"expected an auth rejection, got HTTP {outcome.status}: {outcome.error}. "
+        "A 404 here means the query endpoint moved and the transport is "
+        "addressing a path the server no longer serves."
+    )
