@@ -26,7 +26,7 @@ bearer tokens via `OMNIGRAPH_SERVER_BEARER_TOKENS_FILE`, and the real
 `mcp/servers/witan/policy/` Cedar bundles applied — serving a `council` graph
 populated through witan's own client. Three paths compared on the same server:
 
-| | what it measures |
+| path | what it measures |
 | --- | --- |
 | **A** `omnigraph --version` | fork/exec + binary startup floor, no graph work |
 | **B** `OmnigraphClient.read/change` | today's path: subprocess + HTTP + graph op |
@@ -123,7 +123,9 @@ is not running against the deployed S3 stores, every witan read is paying a
    - `POST /graphs/<id>/query` — `{"query": <gq text>, "params": {…}}` →
      `{"rows": […], "columns": […], "row_count": N}`
    - `POST /graphs/<id>/mutate` — same body →
-     `{"affected_nodes": N, "affected_edges": N, "actor_id": …}`
+     `{"affected_nodes": <int>, "affected_edges": <int>, "actor_id": …}`
+     (independent counts — a single-node `insert_memory` returns
+     `affected_nodes: 1, affected_edges: 0`)
    - `GET /graphs` — the graph listing, Cedar-gated on `graph_list`
    - Bearer token in `Authorization`; the server resolves the actor from it,
      exactly as it does for the CLI.
