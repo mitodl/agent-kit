@@ -92,3 +92,34 @@ cases:
     action: read
     branch: main
     expect: deny
+
+  # ── Break-glass maintenance (ADR-0005 path b) ──────────────────────────────
+  # Same read + schema grant as the per-repo code graphs, for the same reason:
+  # the bridge is derived by the indexer, so there is nothing here worth
+  # hand-editing and no view whose owner Cedar can verify.
+  - id: admin-reads-bridge
+    actor: act-svc-witan-admin
+    action: read
+    branch: main
+    expect: allow
+  # Same reason as `admin-invokes-code`: cross-repo diagnosis runs the saved
+  # queries, and `read` passing does not prove `invoke_query` still does.
+  - id: admin-invokes-bridge
+    actor: act-svc-witan-admin
+    action: invoke_query
+    expect: allow
+  - id: admin-schema-applies-bridge
+    actor: act-svc-witan-admin
+    action: schema_apply
+    target_branch: main
+    expect: allow
+  - id: admin-cannot-write-bridge
+    actor: act-svc-witan-admin
+    action: change
+    branch: main
+    expect: deny
+  - id: admin-cannot-delete-a-users-bridge-view
+    actor: act-svc-witan-admin
+    action: branch_delete
+    target_branch: act-alice/mitodl-ol-django/feature-x
+    expect: deny

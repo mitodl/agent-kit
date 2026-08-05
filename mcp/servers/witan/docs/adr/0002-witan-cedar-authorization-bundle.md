@@ -47,6 +47,8 @@ Confirmed against omnigraph `docs/user/operations/policy.md`, the
 
 ### D1 — Three groups: per-user humans + two distinct service accounts
 
+*(Four as of the 2026-08-05 amendment at the end of this section.)*
+
 - `witan-users` — one `act-<sub>` per authenticated human, from the Keycloak claim.
 - `witan-ci` (`act-svc-witan-ci`) — the code-graph **data** pipeline
   (reindex-on-merge + WIP-branch lifecycle).
@@ -60,7 +62,14 @@ Confirmed against omnigraph `docs/user/operations/policy.md`, the
 
 Group **names** are stable and identical across bundles; **membership** is
 templated by ol-infrastructure (Keycloak claims for `witan-users`,
-Vault-provisioned tokens for the two service accounts), not committed.
+Vault-provisioned tokens for the service accounts), not committed.
+
+**Amended 2026-08-05 — a fourth group, `witan-admin`.** See the amendment to D4
+below: the break-glass maintenance principal of
+[ADR 0005](0005-secure-cli-path-into-deployed-witan.md) path (b),
+`act-svc-witan-admin`, needs Cedar rules after all, because the operations it
+exists for (`witan migrate topics` / `repo-keys` / `merge`, a forced schema
+apply) go through the **server**, not direct storage.
 
 ### D2 — One bundle per graph scope, mapped to the layer topology
 
@@ -91,7 +100,8 @@ Vault-provisioned tokens for the two service accounts), not committed.
 ### D3 — Server-level `graph_list` is a deploy-time bundle, structurally linted
 
 `server.policy.yaml` (`graph_list`, `applies_to: [cluster]`) grants graph
-enumeration to all three groups. Because the 0.8.1 offline CLI has no server-scope
+enumeration to all four groups (`witan-admin` added 2026-08-05 — see D1).
+Because the 0.8.1 offline CLI has no server-scope
 *semantic*-validation path (`policy validate`/`test` load under the per-graph
 engine), it is applied and enforced by `omnigraph-server` at boot/runtime rather
 than exercised by `policy test`. It is still gated in CI: `lint_bundles.py`
@@ -108,12 +118,45 @@ AWS IAM on the backing bucket. There is no `svc-witan-admin` Cedar principal.
 (Schema application — `schema_apply` — *is* Cedar-gateable and is owned by
 `witan-service`; only the storage-maintenance ops fall to IAM.)
 
+**Amended 2026-08-05 — there IS a `svc-witan-admin` Cedar principal, for a
+different class of maintenance.** The original wording conflated two things that
+happen to share the word "maintenance":
+
+- **Storage** maintenance (`repair`/`optimize`/`cleanup`) — still IAM-only, still
+  correct as written. These commands reject `--server` outright and reach the S3
+  store behind the running server's back, so no policy engine is in the path.
+  They run as the omnigraph stack's CronJobs
+  (ol-infrastructure `applications/omnigraph/maintenance.py`).
+- **Data and schema** maintenance (`witan migrate topics` / `migrate repo-keys` /
+  `migrate merge`, and a forced `witan migrate schema`) — goes **through the
+  server**, so Cedar *is* in the path and default-deny applies. Something has to
+  be granted, and the only alternatives to a purpose-made principal were both
+  worse: run these as `svc-witan-ci` (the code-graph pipeline, which has no
+  business on the memory graph, and which the in-cluster migration Job was in
+  fact borrowing) or as `svc-witan-service` (which would have to gain `change` on
+  the memory graph, widening the credential the whole serving tier holds).
+
+So `witan-admin` (`act-svc-witan-admin`) is added to all four bundles, with the
+narrowest grant the operations need: on the memory graph
+`read`/`export`/`invoke_query`/`change` + `schema_apply` (the backfills rewrite
+rows in place, and this graph is writable by every human user anyway, so the only
+thing it adds over a user actor is schema); on the code and bridge graphs
+`read`/`export`/`invoke_query` + `schema_apply` **only** — no `change`,
+`branch_merge`, or `branch_delete`, because those graphs are re-derivable, their
+promotion into `main` is CI's, and Cedar cannot tell whose WIP view a delete
+targets. `witan-ci` remains the only holder of `branch_delete`.
+
+The token is provisioned in ol-infrastructure's omnigraph stack and mounted only
+into in-cluster Jobs; no human ever holds it (`witan login` gets an operator
+their own `act-<sub>`). See `policy/README.md` § "Non-human actors" and
+ol-infrastructure `docs/witan-admin-break-glass-runbook.md`.
+
 ### D5 — CI validates and unit-tests the bundle against the real binary
 
 `policy/check.sh` (1) runs `lint_bundles.py` — a structural lint of all four
 bundles including the server bundle; (2) converges a fixture cluster
 (`policy/cluster.yaml`, stub graphs `memory`/`code_example`/`bridge`) and runs
-`omnigraph policy validate`; (3) runs 54 declarative `policy test` cases across
+`omnigraph policy validate`; (3) runs 71 declarative `policy test` cases across
 the three per-graph bundles. It runs as the `witan (Cedar policy bundle)` job in
 `witan-tests.yml`. The fixture is a test harness; the deployed cluster.yaml is
 templated by ol-infrastructure.

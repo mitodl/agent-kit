@@ -20,6 +20,18 @@
 # default, service-owned operation applied on boot — not a per-user permission
 # and not the reindex pipeline. See policy/README.md § "Non-human actors".
 #
+# witan-admin (act-svc-witan-admin) is the break-glass maintenance principal of
+# ADR-0005 path (b) — the in-cluster Job that runs `witan migrate …`. THIS is
+# the graph its grants actually cost something on, and the cost is deliberately
+# accepted: `witan migrate topics` / `migrate repo-keys` / `migrate merge`
+# rewrite existing Memory/Task rows in place, so they need `change`, and Cedar
+# cannot scope a write to "rows nobody else owns" (finest scope is graph +
+# branch). The mitigating fact is that this graph is team-shared and writable by
+# every witan-user already: `change` here grants the admin nothing a human user
+# does not have. What it adds over a user is `schema_apply` — and what it does
+# NOT get, on any graph, is `branch_delete`. See code-graph.policy.yaml for the
+# much narrower grant it gets on the derived graphs.
+#
 # Group membership is templated by ol-infrastructure — see server.policy.yaml.
 version: 1
 
@@ -27,6 +39,10 @@ groups:
   witan-users: [act-alice, act-bob]
   # The witan MCP service's own account. Owns schema/migrations across graphs.
   witan-service: [act-svc-witan]
+  # Break-glass maintenance principal (ADR-0005 path b). Provisioned in the
+  # omnigraph Pulumi stack; used only by in-cluster Jobs, never by a human's
+  # laptop — an operator's own per-user actor is what `witan login` gets them.
+  witan-admin: [act-svc-witan-admin]
 
 # Flat/single-branch, but store `main` is declared protected so schema_apply is
 # scoped to `protected` — the same uniform invariant as the code and bridge
@@ -61,5 +77,31 @@ rules:
   - id: service-schema-memory
     allow:
       actors: { group: witan-service }
+      actions: [schema_apply]
+      target_branch_scope: protected
+  # Break-glass maintenance (ADR-0005 path b), the full set of what the
+  # in-cluster migration Job runs: read the current state, rewrite rows the
+  # backfills touch, and force a schema apply when the service's own boot-time
+  # convergence is not the path being used. `invoke_query` is here because the
+  # migrations read through witan's saved .gq queries, not raw scans.
+  - id: admin-read-memory
+    allow:
+      actors: { group: witan-admin }
+      actions: [read, export]
+      branch_scope: any
+  - id: admin-invoke-memory
+    allow:
+      actors: { group: witan-admin }
+      actions: [invoke_query]
+  # See the header: unavoidable for the in-place backfills, and no more than
+  # every witan-user already holds on this one graph.
+  - id: admin-write-memory
+    allow:
+      actors: { group: witan-admin }
+      actions: [change]
+      branch_scope: any
+  - id: admin-schema-memory
+    allow:
+      actors: { group: witan-admin }
       actions: [schema_apply]
       target_branch_scope: protected

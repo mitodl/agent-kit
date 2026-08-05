@@ -29,6 +29,9 @@ groups:
   witan-ci: [act-svc-witan-ci]
   # The witan MCP service's own account: owns the bridge schema/migrations.
   witan-service: [act-svc-witan]
+  # Break-glass maintenance principal (ADR-0005 path b): read + schema only,
+  # same reasoning as code-graph.policy.yaml — the bridge is derived too.
+  witan-admin: [act-svc-witan-admin]
 
 # The committed cross-repo projection. Protecting it does two jobs: it keeps
 # `schema_apply` scopable to `protected` (the uniform invariant — schema always
@@ -92,5 +95,25 @@ rules:
   - id: service-schema-bridge
     allow:
       actors: { group: witan-service }
+      actions: [schema_apply]
+      target_branch_scope: protected
+  # Break-glass maintenance (ADR-0005 path b): read to diagnose, force a schema
+  # convergence when the service cannot. No `change` / `branch_merge` /
+  # `branch_delete` — the bridge is rebuilt by the indexer, so nothing here is
+  # worth hand-editing, and a view's owner is as unprovable here as it is on the
+  # per-repo graphs. See code-graph.policy.yaml's admin rules for the full
+  # reasoning.
+  - id: admin-read-bridge
+    allow:
+      actors: { group: witan-admin }
+      actions: [read, export]
+      branch_scope: any
+  - id: admin-invoke-bridge
+    allow:
+      actors: { group: witan-admin }
+      actions: [invoke_query]
+  - id: admin-schema-bridge
+    allow:
+      actors: { group: witan-admin }
       actions: [schema_apply]
       target_branch_scope: protected

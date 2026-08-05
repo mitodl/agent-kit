@@ -14,3 +14,8 @@ cases:
     actor: act-nobody
     action: graph_list
     expect: deny
+  # Break-glass maintenance sweeps graph-by-graph, so it enumerates them.
+  - id: admin-can-list-graphs
+    actor: act-svc-witan-admin
+    action: graph_list
+    expect: allow

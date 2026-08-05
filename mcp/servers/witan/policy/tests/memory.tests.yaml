@@ -46,3 +46,36 @@ cases:
     action: read
     branch: main
     expect: deny
+
+  # ── Break-glass maintenance (ADR-0005 path b) ──────────────────────────────
+  # This is the graph the admin principal has real power on, and these cases are
+  # what "only the maintenance verbs it needs" resolves to once `witan migrate
+  # topics` / `repo-keys` / `merge` are the operations being authorized: they
+  # rewrite existing rows, so `change` is not optional. It buys nothing a human
+  # user does not already hold here (see the bundle header) — except schema.
+  - id: admin-reads-memory
+    actor: act-svc-witan-admin
+    action: read
+    branch: main
+    expect: allow
+  - id: admin-invokes-memory
+    actor: act-svc-witan-admin
+    action: invoke_query
+    expect: allow
+  - id: admin-writes-memory
+    actor: act-svc-witan-admin
+    action: change
+    branch: main
+    expect: allow
+  - id: admin-schema-applies-memory
+    actor: act-svc-witan-admin
+    action: schema_apply
+    target_branch: main
+    expect: allow
+  # Not granted anywhere, to anyone, on this graph: nothing about maintenance
+  # needs to delete the single branch the whole work graph lives on.
+  - id: admin-cannot-delete-memory-main
+    actor: act-svc-witan-admin
+    action: branch_delete
+    target_branch: main
+    expect: deny

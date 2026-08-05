@@ -45,8 +45,8 @@ crate — the constraints that shaped this bundle:
 
 ## Actors and groups
 
-Three groups. Humans are **per-user** actors — identity is per-user, not
-per-team, per `docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md`; the two
+Four groups. Humans are **per-user** actors — identity is per-user, not
+per-team, per `docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md`; the three
 non-human actors are single service accounts:
 
 | Group           | Members                                            | Role |
@@ -54,16 +54,17 @@ non-human actors are single service accounts:
 | `witan-users`   | one `act-<sub>` per authenticated human (Keycloak) | interactive read/write |
 | `witan-ci`      | `act-svc-witan-ci`                                  | code-graph **data** pipeline |
 | `witan-service` | `act-svc-witan`                                     | the MCP service's own account: **schema** owner |
+| `witan-admin`   | `act-svc-witan-admin`                               | **break-glass** in-cluster maintenance (ADR-0005 path b) |
 
 The `act-*` ids committed here are **illustrative fixtures**. In the deployed
 cluster, ol-infrastructure templates the real membership from Keycloak claims
-(for `witan-users`) and Vault-provisioned service tokens (for the two service
+(for `witan-users`) and Vault-provisioned service tokens (for the three service
 accounts). Keep the group **names** identical across bundle files — only the
 membership lists are templated.
 
 ### Non-human actors
 
-Two distinct non-human identities, deliberately kept separate:
+Three distinct non-human identities, deliberately kept separate:
 
 - **`witan-ci` (`act-svc-witan-ci`) — the code-graph data pipeline.** Owns the
   canonical `main` index for each repo: reindex-on-merge (`change` any branch,
@@ -80,15 +81,37 @@ Two distinct non-human identities, deliberately kept separate:
   per-user permission and not the reindex pipeline. It gets `read` to decide
   whether a migration is needed, and `schema_apply`; nothing else. (`omnigraph
   repair`/`optimize`/`cleanup` remain outside Cedar entirely → AWS IAM.)
+- **`witan-admin` (`act-svc-witan-admin`) — break-glass maintenance.** The
+  principal the in-cluster maintenance Job authenticates as: `witan migrate
+  topics` / `migrate repo-keys` / `migrate merge` / a forced `schema` apply, none
+  of which are `@mcp.tool` and none of which have a per-user identity to scope
+  (`docs/adr/0005-secure-cli-path-into-deployed-witan.md` path b). Its grant is
+  **asymmetric by graph, and that asymmetry is the whole design**:
+  - On the **memory** graph it gets `read`/`export`/`invoke_query`/`change` +
+    `schema_apply`. `change` is unavoidable — the backfills rewrite existing rows
+    in place, and Cedar's finest scope is graph + branch, so "only rows nobody
+    else owns" cannot be expressed. It costs nothing: this graph is team-shared
+    and every `witan-users` member can already write all of it, so the only thing
+    the admin adds over a human is `schema_apply`.
+  - On the **code** and **bridge** graphs it gets `read`/`export`/`invoke_query` +
+    `schema_apply` and **nothing else**. No `change` (a code graph is
+    re-derivable — the fix for a bad index is a reindex, by CI or the view's own
+    writer), no `branch_merge` (promotion into the reviewed `main` is a
+    deliberate CI act with a git merge behind it), no `branch_delete` (Cedar
+    cannot tell whose view a delete targets, so the grant would make one token a
+    way to destroy every developer's in-flight index).
+  - Never held by a human. An operator working interactively authenticates with
+    `witan login` as their own `act-<sub>` (ADR-0005 path a); the admin token
+    lives only in the cluster, mounted into Jobs.
 
 ## The bundles
 
 | File                     | applies_to        | Grants                                                                                       |
 | ------------------------ | ----------------- | -------------------------------------------------------------------------------------------- |
-| `memory.policy.yaml`     | `[memory]`        | users: read/export/change/invoke on the flat shared work graph. service: read + schema_apply. (no CI)  |
-| `code-graph.policy.yaml` | per-repo graph ids | users: read/invoke anywhere, change + `branch_create` on **unprotected** (WIP) branches only. CI: read/change + merge into protected `main` + WIP branch lifecycle incl. `branch_delete`. service: read + schema_apply. |
-| `bridge.policy.yaml`     | `[bridge]`        | users: read/export/invoke anywhere, change + `branch_create` on unprotected WIP views. CI: read/change any + WIP branch lifecycle. service: schema_apply. |
-| `server.policy.yaml`     | `[cluster]`       | users: graph_list. *(Not in the CI harness — see below.)*                                    |
+| `memory.policy.yaml`     | `[memory]`        | users: read/export/invoke + change on the flat shared work graph. service: read/export + schema_apply. admin: read/export/invoke/change + schema_apply. (no CI)  |
+| `code-graph.policy.yaml` | per-repo graph ids | users: read/export/invoke anywhere, change + `branch_create` on **unprotected** (WIP) branches only. CI: read/export/change + merge into protected `main` + WIP branch lifecycle incl. `branch_delete`. service: read/export + schema_apply. admin: read/export/invoke + schema_apply only. |
+| `bridge.policy.yaml`     | `[bridge]`        | users: read/export/invoke anywhere, change + `branch_create` on unprotected WIP views. CI: read/export/change any + WIP branch lifecycle. service: read/export + schema_apply. admin: read/export/invoke + schema_apply only. |
+| `server.policy.yaml`     | `[cluster]`       | graph_list, to all four groups. *(Not in the CI harness — see below.)*                        |
 
 ### Layer topology → graph mapping
 
@@ -116,13 +139,13 @@ Two distinct non-human identities, deliberately kept separate:
 uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 export PATH="$HOME/.local/bin:$PATH"
 
-./policy/check.sh          # lint all 4 bundles, validate 3, run 54 test cases
+./policy/check.sh          # lint all 4 bundles, validate 3, run 71 test cases
 ```
 
 `check.sh` does three things: (1) `lint_bundles.py` — a structural lint of
 **every** bundle including `server.policy.yaml` (group references resolve,
 actions are known, scopes match their actions, allow-only); (2) `policy
-validate` on the three per-graph bundles; (3) `policy test` — 54 declarative
+validate` on the three per-graph bundles; (3) `policy test` — 71 declarative
 allow/deny cases. It runs in CI as the `witan (Cedar policy bundle)` job in
 `.github/workflows/witan-tests.yml`. `cluster.yaml` here is a **CI test
 harness**, not the deployed config — it wires the bundles onto three stub graphs
