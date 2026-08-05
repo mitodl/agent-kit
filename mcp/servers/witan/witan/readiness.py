@@ -48,14 +48,16 @@ def status_pickable(task: dict, *, now: datetime | None = None) -> bool:
     pickable once its lease has lapsed (the holder likely crashed). ``closed``
     is never pickable.
 
-    ``claimed_at`` is only stamped by ``task_claim``; a task moved to
-    ``in_progress`` through ``task_update`` (the skill/CLI "mark started" path)
-    has no claim timestamp at all. Treating that as "no lease → free" would make
-    it pickable from the instant it starts, forever — exactly the double-work
-    bug this function exists to prevent. So when there is no ``claimed_at`` we
-    fall back to ``updated_at`` (stamped on every write, including the status
-    transition itself): recently started reads as held, and only a task that
-    has sat untouched past the lease window reads as abandoned/reclaimable.
+    ``claimed_at`` is stamped by both ``task_claim`` and ``task_update`` (when
+    it sets ``status="in_progress"``), but a legacy row written before either
+    did so — or one hand-edited directly in the store — can still be
+    ``in_progress`` with no claim timestamp at all. Treating that as "no lease
+    → free" would make it pickable from the instant it starts, forever —
+    exactly the double-work bug this function exists to prevent. So when there
+    is no ``claimed_at`` we fall back to ``updated_at`` (stamped on every
+    write, including the status transition itself): recently started reads as
+    held, and only a task that has sat untouched past the lease window reads
+    as abandoned/reclaimable.
     """
     status = task.get("status")
     if status == "in_progress":

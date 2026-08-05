@@ -251,6 +251,9 @@ def test_unleased_recent_in_progress_is_not_ready_or_claimable(server):
 
     c = server.task_claim(t["slug"], assignee="agentB")
     assert c["claimed"] is False
+    # held_by must be a stable placeholder, not None — a null held_by is
+    # ambiguous to API consumers (not held vs. held by an unknown holder).
+    assert c["held_by"] == srv._UNKNOWN_HOLDER
 
 
 @requires_omnigraph
