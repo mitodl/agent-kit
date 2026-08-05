@@ -224,6 +224,33 @@ class RemoteStoreClient:
             view=self.branch,
         )
 
+    def change_many(
+        self,
+        steps: list[tuple[str, str, dict]],
+        *,
+        surface_conflict: bool = False,
+        chunk_size: int | None = None,
+    ) -> None:
+        """Signature parity with the subprocess client — but NOT batched.
+
+        The subprocess client collapses steps into one multi-statement ``mutate``
+        and therefore one Lance version. This transport cannot: ``code_store_mutate``
+        takes a query FILE plus a name and resolves it server-side, so there is no
+        way to hand it a composed body. Each step stays its own call, and its own
+        commit, exactly as before.
+
+        That makes this the one remaining per-row writer. Closing it needs a
+        batch endpoint on the MCP tier — tracked in
+        ``tk-batch-endpoint-for-the-witan-code-mcp-write-tier-22f089``.
+
+        ``chunk_size`` is accepted and ignored: there is no composed argv to cap
+        when every step is already its own request.
+        """
+        for query_file, query_name, params in steps:
+            self.change(
+                query_file, query_name, params, surface_conflict=surface_conflict
+            )
+
     def load(self, records: list[dict], mode: str = "merge") -> None:
         if not records:
             return

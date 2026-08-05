@@ -545,6 +545,7 @@ class OmnigraphClient:
         steps: list[tuple[str, str, dict]],
         *,
         surface_conflict: bool = False,
+        chunk_size: int | None = None,
     ) -> None:
         """Run several named mutations as ONE commit.
 
@@ -558,15 +559,33 @@ class OmnigraphClient:
         ORDER IS PRESERVED AND SIGNIFICANT: an edge statement may reference a
         node inserted by an earlier step, so a node must come before its edges.
 
+        A query is deliberately constructive OR destructive, never both — the
+        engine rejects a body mixing inserts/updates with deletes. Deletes batch
+        freely with other deletes; just keep them in their own call.
+
         NOT for a compare-and-swap. A batch commits or fails whole, so a
         conflict cannot be attributed to one step — ``task_claim`` and anything
         else that needs to detect losing a race must stay on ``change``.
+
+        ``chunk_size`` splits the work into that many statements per commit.
+        The composed query is passed as a single argv element, so a caller with
+        an unbounded number of steps (a repo reindex, a store-wide backfill)
+        must cap it or eventually exceed ARG_MAX / a server payload limit. It is
+        opt-in because it TRADES AWAY ATOMICITY: chunks commit independently and
+        a failure part-way leaves the earlier ones applied.
 
         A single step is passed straight through to ``change`` rather than
         wrapped: the composed form would be equivalent, but the direct path
         keeps the named query in the error message and skips the splice.
         """
         if not steps:
+            return
+        if chunk_size is not None and len(steps) > chunk_size:
+            for start in range(0, len(steps), chunk_size):
+                self.change_many(
+                    steps[start : start + chunk_size],
+                    surface_conflict=surface_conflict,
+                )
             return
         if len(steps) == 1:
             query_file, name, params = steps[0]
