@@ -13,12 +13,13 @@
 #
 # GROUP MEMBERSHIP IS TEMPLATED. The `act-*` ids below are illustrative. In the
 # deployed cluster, ol-infrastructure populates `witan-users` from the Keycloak
-# group/role claim (one act-<sub> per authenticated human) and the two service
+# group/role claim (one act-<sub> per authenticated human) and the three service
 # accounts from Vault-provisioned tokens. Keep the group NAMES identical across
 # the bundle files — only the membership lists are templated.
 #
 # See policy/README.md § "Non-human actors" for witan-ci (code-graph data
-# pipeline) vs witan-service (the MCP service's own schema-owner account).
+# pipeline) vs witan-service (the MCP service's own schema-owner account) vs
+# witan-admin (the break-glass maintenance principal, ADR-0005 path b).
 version: 1
 
 groups:

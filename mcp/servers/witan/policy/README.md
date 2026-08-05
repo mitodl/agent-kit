@@ -108,10 +108,10 @@ Three distinct non-human identities, deliberately kept separate:
 
 | File                     | applies_to        | Grants                                                                                       |
 | ------------------------ | ----------------- | -------------------------------------------------------------------------------------------- |
-| `memory.policy.yaml`     | `[memory]`        | users: read/export/change/invoke on the flat shared work graph. service: read + schema_apply. admin: read/invoke/change + schema_apply. (no CI)  |
-| `code-graph.policy.yaml` | per-repo graph ids | users: read/invoke anywhere, change + `branch_create` on **unprotected** (WIP) branches only. CI: read/change + merge into protected `main` + WIP branch lifecycle incl. `branch_delete`. service: read + schema_apply. admin: read/invoke + schema_apply only. |
-| `bridge.policy.yaml`     | `[bridge]`        | users: read/export/invoke anywhere, change + `branch_create` on unprotected WIP views. CI: read/change any + WIP branch lifecycle. service: schema_apply. admin: read/invoke + schema_apply only. |
-| `server.policy.yaml`     | `[cluster]`       | users: graph_list. *(Not in the CI harness — see below.)*                                    |
+| `memory.policy.yaml`     | `[memory]`        | users: read/export/invoke + change on the flat shared work graph. service: read/export + schema_apply. admin: read/export/invoke/change + schema_apply. (no CI)  |
+| `code-graph.policy.yaml` | per-repo graph ids | users: read/export/invoke anywhere, change + `branch_create` on **unprotected** (WIP) branches only. CI: read/export/change + merge into protected `main` + WIP branch lifecycle incl. `branch_delete`. service: read/export + schema_apply. admin: read/export/invoke + schema_apply only. |
+| `bridge.policy.yaml`     | `[bridge]`        | users: read/export/invoke anywhere, change + `branch_create` on unprotected WIP views. CI: read/export/change any + WIP branch lifecycle. service: read/export + schema_apply. admin: read/export/invoke + schema_apply only. |
+| `server.policy.yaml`     | `[cluster]`       | graph_list, to all four groups. *(Not in the CI harness — see below.)*                        |
 
 ### Layer topology → graph mapping
 
@@ -139,13 +139,13 @@ Three distinct non-human identities, deliberately kept separate:
 uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 export PATH="$HOME/.local/bin:$PATH"
 
-./policy/check.sh          # lint all 4 bundles, validate 3, run 69 test cases
+./policy/check.sh          # lint all 4 bundles, validate 3, run 71 test cases
 ```
 
 `check.sh` does three things: (1) `lint_bundles.py` — a structural lint of
 **every** bundle including `server.policy.yaml` (group references resolve,
 actions are known, scopes match their actions, allow-only); (2) `policy
-validate` on the three per-graph bundles; (3) `policy test` — 69 declarative
+validate` on the three per-graph bundles; (3) `policy test` — 71 declarative
 allow/deny cases. It runs in CI as the `witan (Cedar policy bundle)` job in
 `.github/workflows/witan-tests.yml`. `cluster.yaml` here is a **CI test
 harness**, not the deployed config — it wires the bundles onto three stub graphs

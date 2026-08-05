@@ -156,7 +156,7 @@ ol-infrastructure `docs/witan-admin-break-glass-runbook.md`.
 `policy/check.sh` (1) runs `lint_bundles.py` — a structural lint of all four
 bundles including the server bundle; (2) converges a fixture cluster
 (`policy/cluster.yaml`, stub graphs `memory`/`code_example`/`bridge`) and runs
-`omnigraph policy validate`; (3) runs 69 declarative `policy test` cases across
+`omnigraph policy validate`; (3) runs 71 declarative `policy test` cases across
 the three per-graph bundles. It runs as the `witan (Cedar policy bundle)` job in
 `witan-tests.yml`. The fixture is a test harness; the deployed cluster.yaml is
 templated by ol-infrastructure.

@@ -204,6 +204,13 @@ cases:
     action: read
     branch: act-alice/feature-x
     expect: allow
+  # Diagnosis on a code graph goes through the saved .gq queries, not raw scans,
+  # so losing this would silently break break-glass reads while `read` still
+  # passed — which is why it gets its own case rather than riding on the above.
+  - id: admin-invokes-code
+    actor: act-svc-witan-admin
+    action: invoke_query
+    expect: allow
   - id: admin-schema-applies-code
     actor: act-svc-witan-admin
     action: schema_apply

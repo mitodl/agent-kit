@@ -102,6 +102,12 @@ cases:
     action: read
     branch: main
     expect: allow
+  # Same reason as `admin-invokes-code`: cross-repo diagnosis runs the saved
+  # queries, and `read` passing does not prove `invoke_query` still does.
+  - id: admin-invokes-bridge
+    actor: act-svc-witan-admin
+    action: invoke_query
+    expect: allow
   - id: admin-schema-applies-bridge
     actor: act-svc-witan-admin
     action: schema_apply
