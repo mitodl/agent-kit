@@ -193,3 +193,43 @@ cases:
     action: change
     branch: act-alice/feature-x
     expect: deny
+
+  # ── Break-glass maintenance (ADR-0005 path b) ──────────────────────────────
+  # Read + schema only. The denials below are the substance of the principal:
+  # a code graph is re-derivable, so break-glass never needs to edit, promote,
+  # or destroy one — and the admin token is the one credential in the cluster
+  # that could otherwise do all three across every repo at once.
+  - id: admin-reads-code-any-branch
+    actor: act-svc-witan-admin
+    action: read
+    branch: act-alice/feature-x
+    expect: allow
+  - id: admin-schema-applies-code
+    actor: act-svc-witan-admin
+    action: schema_apply
+    target_branch: main
+    expect: allow
+  - id: admin-cannot-write-code-main
+    actor: act-svc-witan-admin
+    action: change
+    branch: main
+    expect: deny
+  # Not even a WIP view: the fix for a bad index is a reindex by its writer.
+  - id: admin-cannot-write-a-users-view
+    actor: act-svc-witan-admin
+    action: change
+    branch: act-alice/feature-x
+    expect: deny
+  # Promotion into the reviewed index stays CI's, with a git merge behind it.
+  - id: admin-cannot-merge-into-code-main
+    actor: act-svc-witan-admin
+    action: branch_merge
+    target_branch: main
+    expect: deny
+  # Cedar cannot tell whose view a delete targets, so granting this would make
+  # the admin token a way to destroy any developer's in-flight index.
+  - id: admin-cannot-delete-a-users-view
+    actor: act-svc-witan-admin
+    action: branch_delete
+    target_branch: act-alice/feature-x
+    expect: deny

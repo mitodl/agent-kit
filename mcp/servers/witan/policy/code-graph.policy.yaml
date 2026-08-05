@@ -42,6 +42,9 @@ groups:
   witan-ci: [act-svc-witan-ci]
   # The witan MCP service's own account: owns the code-graph schema/migrations.
   witan-service: [act-svc-witan]
+  # Break-glass maintenance principal (ADR-0005 path b). Deliberately WEAKER
+  # here than on the memory graph — see the admin rules at the bottom.
+  witan-admin: [act-svc-witan-admin]
 
 protected_branches: [main]
 
@@ -118,5 +121,36 @@ rules:
   - id: service-schema-code
     allow:
       actors: { group: witan-service }
+      actions: [schema_apply]
+      target_branch_scope: protected
+  # Break-glass maintenance (ADR-0005 path b) gets READ + SCHEMA ONLY here, and
+  # that asymmetry with its memory-graph grant is the point of the principal.
+  #
+  # No `change`: every row in a code graph is re-derivable by reindexing a
+  # checkout, so there is no maintenance operation that has to edit one in
+  # place — the fix for a bad index is a reindex, which is CI's (or the
+  # writer's own WIP view's) job. No `branch_merge`: promotion of a WIP view
+  # into protected `main` is a deliberate CI act with a git merge behind it, not
+  # something an operator should be able to do out of band. No `branch_delete`:
+  # the reaper is CI's, and Cedar cannot tell whose view a delete is aimed at
+  # (see the header), so the admin token would be a way to destroy any
+  # developer's in-flight index.
+  #
+  # What is left is what break-glass actually needs on a derived graph: read it
+  # to diagnose, and force a schema convergence when the service's own boot-time
+  # apply is not the path available (e.g. mid-upgrade, or the service is down
+  # BECAUSE its schema is stale).
+  - id: admin-read-code
+    allow:
+      actors: { group: witan-admin }
+      actions: [read, export]
+      branch_scope: any
+  - id: admin-invoke-code
+    allow:
+      actors: { group: witan-admin }
+      actions: [invoke_query]
+  - id: admin-schema-code
+    allow:
+      actors: { group: witan-admin }
       actions: [schema_apply]
       target_branch_scope: protected

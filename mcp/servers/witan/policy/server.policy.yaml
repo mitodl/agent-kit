@@ -28,6 +28,8 @@ groups:
   witan-ci: [act-svc-witan-ci]
   # The MCP service's own account (schema owner); enumerates graphs to migrate.
   witan-service: [act-svc-witan]
+  # Break-glass maintenance principal (ADR-0005 path b).
+  witan-admin: [act-svc-witan-admin]
 
 rules:
   - id: users-can-list-graphs
@@ -41,4 +43,11 @@ rules:
   - id: service-can-list-graphs
     allow:
       actors: { group: witan-service }
+      actions: [graph_list]
+  # Break-glass maintenance sweeps a graph at a time, so it has to be able to
+  # ask which graphs exist rather than carry a hand-maintained list that drifts
+  # from the cluster's own.
+  - id: admin-can-list-graphs
+    allow:
+      actors: { group: witan-admin }
       actions: [graph_list]
