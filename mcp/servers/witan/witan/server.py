@@ -363,6 +363,13 @@ _KIND_PREFIX = {
 _CLAIM_LEASE_SECONDS = readiness.CLAIM_LEASE_SECONDS
 _lease_expired = readiness.lease_expired
 
+# A task can be held (in_progress, lease not expired) with no assignee on
+# record — e.g. moved to in_progress via task_update rather than task_claim.
+# ``held_by: None`` in that case is ambiguous to API consumers (does it mean
+# "not held" or "held, holder unknown"?), so every held_by response field uses
+# this stable placeholder instead of the raw (possibly-None) holder.
+_UNKNOWN_HOLDER = "unknown (no assignee on record)"
+
 # Bounded re-tries for the best-effort CAS claim loop: on each surfaced
 # optimistic-concurrency conflict we re-read and either bail (a rival won) or
 # re-attempt the claim. Small, since a claim conflicting this many times in a row
@@ -3955,6 +3962,11 @@ def task_update(
         changes["status"] = status
         if status == "closed":
             changes["closed_at"] = now_iso()
+        elif status == "in_progress":
+            # Stamp a lease here too, not just in task_claim, so "started" has one
+            # representation (see readiness.status_pickable's updated_at fallback
+            # for stores/rows written before this existed).
+            changes["claimed_at"] = now_iso()
 
     updated = _update_task(slug, changes)
 
@@ -4051,14 +4063,20 @@ async def task_claim(
 
     current_holder = task.get("assignee")
     claimed_at = task.get("claimed_at")
-    held = status == "in_progress" and current_holder and not _lease_expired(claimed_at)
+    # Being unable to name the holder is not evidence there isn't one: a task
+    # moved to in_progress via task_update (no task_claim call) has no assignee
+    # and no claimed_at, but is still someone's work-in-progress until its lease
+    # (falling back to updated_at, same as readiness.status_pickable) lapses.
+    lease_started_at = claimed_at or task.get("updated_at")
+    held = status == "in_progress" and not _lease_expired(lease_started_at)
     if held and current_holder != holder and not force:
         # Offer to steal instead of a flat refusal. Headless/unsupported clients
         # get the historical behavior (no steal); an explicit confirm proceeds as
         # if ``force`` had been passed.
+        holder_desc = current_holder or _UNKNOWN_HOLDER
         stole = await elicit.confirm(
             ctx,
-            f"Task {slug} is held by {current_holder} (claimed {claimed_at}). "
+            f"Task {slug} is held by {holder_desc} (claimed {claimed_at}). "
             "Steal the claim?",
             default_when_unsupported=False,
             title="Steal claim?",
@@ -4068,7 +4086,7 @@ async def task_claim(
                 "slug": slug,
                 "claimed": False,
                 "reason": "held",
-                "held_by": current_holder,
+                "held_by": holder_desc,
                 "claimed_at": claimed_at,
             }
         force = True
@@ -4089,18 +4107,18 @@ async def task_claim(
             rows = client.read("read.gq", "get_task", {"slug": slug})
             fresh = rows[0] if rows else {}
             rival = fresh.get("assignee")
+            fresh_lease_started_at = fresh.get("claimed_at") or fresh.get("updated_at")
             if (
                 fresh.get("status") == "in_progress"
-                and rival
                 and rival != holder
-                and not _lease_expired(fresh.get("claimed_at"))
+                and not _lease_expired(fresh_lease_started_at)
                 and not force
             ):
                 return {
                     "slug": slug,
                     "claimed": False,
                     "reason": "lost_race",
-                    "held_by": rival,
+                    "held_by": rival or _UNKNOWN_HOLDER,
                     "claimed_at": fresh.get("claimed_at"),
                 }
             # The conflict was unrelated (or the rival's lease has lapsed) —
@@ -4118,7 +4136,7 @@ async def task_claim(
             "slug": slug,
             "claimed": False,
             "reason": "lost_race",
-            "held_by": winner,
+            "held_by": winner or _UNKNOWN_HOLDER,
             "claimed_at": rows[0].get("claimed_at") if rows else None,
         }
     _track_code_branch(repo_module.detect(), task_slug=slug)
@@ -4177,12 +4195,17 @@ def task_ready(
     limit: int = 20,
 ) -> list[dict]:
     """
-    Return ready-to-work tasks: not-yet-started tasks whose blockers are all closed.
+    Return ready-to-work tasks: pickable tasks whose blockers are all closed.
 
-    A task is ready when its status is ``open`` or ``blocked`` (i.e. nobody is on it
-    yet and it is not closed) AND every task in its ``blocked_by`` list is closed.
-    This is the core coordination primitive — call it to pick the next actionable
-    item without manual triage. Results are ordered by priority (``p0`` first).
+    A task is ready when its status is ``open``/``blocked`` (nobody is on it yet
+    and it is not closed), OR ``in_progress`` with an expired lease (the holder
+    likely abandoned it — see ``readiness.status_pickable``), AND every task in
+    its ``blocked_by`` list is closed. A returned ``in_progress`` task is
+    therefore a reclaim, not fresh work — check ``assignee``/``claimed_at``
+    (falling back to ``updated_at`` when ``claimed_at`` is null, e.g. a legacy
+    row) before starting it. This is the core coordination primitive — call it
+    to pick the next actionable item without manual triage. Results are
+    ordered by priority (``p0`` first).
 
     Parameters
     ----------
