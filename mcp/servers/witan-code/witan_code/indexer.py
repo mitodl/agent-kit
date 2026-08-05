@@ -44,6 +44,12 @@ _QUERIES_TS_DIR = Path(__file__).parent / "queries_ts"
 # this is 250 files per commit.
 _DELETE_BATCH_SIZE = 500
 
+# Stand-in written into CodeFile.content_hash for the duration of a load, so a
+# run that fails part-way leaves nothing the incremental skip check will match.
+# Any non-sha256 string does; this one is obvious in a store dump. See
+# `_defer_content_hashes`.
+_PENDING_CONTENT_HASH = "pending"
+
 
 @dataclass(frozen=True)
 class LanguageSpec:
@@ -386,7 +392,13 @@ def index_path(
                 stats.purged += 1
 
     client.change_many(delete_steps, chunk_size=_DELETE_BATCH_SIZE)
-    client.load(_dedupe(records), mode="merge")
+    # Two loads, not one: the second commits the content hashes the first held
+    # back, so a load that dies part-way is re-done rather than skipped forever.
+    # See `_defer_content_hashes`.
+    deduped = _dedupe(records)
+    real_hash_rows = _defer_content_hashes(deduped)
+    client.load(deduped, mode="merge")
+    client.load(real_hash_rows, mode="merge")
 
     # Cross-repo bridge — a SEPARATE phase after the per-repo store write, so the
     # two stores' write locks never nest. A full-repo index (target is the repo
@@ -417,6 +429,40 @@ def index_path(
         print(f"codegraph: bridge update failed: {exc}", file=sys.stderr)
 
     return stats
+
+
+def _defer_content_hashes(records: list[dict]) -> list[dict]:
+    """Hold every CodeFile's ``content_hash`` back until the load has landed.
+
+    Mutates the CodeFile rows in ``records`` to carry ``_PENDING_CONTENT_HASH``
+    and returns copies carrying the REAL hashes, to be loaded once the main load
+    succeeds.
+
+    WHY THIS EXISTS. ``index_path`` deletes a changed file's rows and reloads
+    them. While that reload was one atomic ``load``, a failure left the file
+    with no recorded hash at all, so the next run re-indexed it — failure was
+    self-healing, for free. Chunking the load (``chunking.chunk_records``) takes
+    that away: the nodes land, hash and all, in an early batch, and if a later
+    batch fails then ``_parse_for_index``'s ``existing.get(file_id) ==
+    content_hash`` check SKIPS the file on every subsequent run. Its symbols
+    would be present and its edges permanently missing, silently, until someone
+    thought to force a full reindex. Chunking also raises the odds of a
+    part-way failure, since it turns one request into several.
+
+    The sentinel restores the old behaviour: it can never equal a real hash (a
+    64-char sha256 hexdigest), so a file whose hashes were never committed is
+    simply re-indexed. Nothing else reads ``content_hash`` — only this check and
+    the informational ``get_file`` query — so a row briefly carrying the
+    sentinel is accurate: that file does need re-indexing.
+    """
+    real_rows: list[dict] = []
+    for record in records:
+        if record.get("type") != "CodeFile":
+            continue
+        data = record["data"]
+        real_rows.append({"type": "CodeFile", "data": dict(data)})
+        data["content_hash"] = _PENDING_CONTENT_HASH
+    return real_rows
 
 
 def _dedupe(records: list[dict]) -> list[dict]:

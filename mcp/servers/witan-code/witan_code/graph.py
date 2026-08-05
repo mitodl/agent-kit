@@ -15,6 +15,7 @@ from pathlib import Path
 
 from witan_core.omnigraph import OmnigraphClient as _BaseOmnigraphClient
 
+from . import chunking
 from . import config as cfg_module
 from . import identity as identity_module
 from . import views
@@ -140,16 +141,50 @@ class OmnigraphClient(_BaseOmnigraphClient):
             connect_retry=connect_retry,
         )
 
-    def load(self, records: list[dict], mode: str = "merge") -> None:
-        """Bulk-load node/edge records via one ``omnigraph load`` call.
+    def load(
+        self,
+        records: list[dict],
+        mode: str = "merge",
+        *,
+        max_bytes: int = chunking.LOAD_MAX_BYTES,
+    ) -> None:
+        """Bulk-load node/edge records via ``omnigraph load``.
 
         Each record is a JSONL line: ``{"type": Node, "data": {...}}`` for a
         node or ``{"edge": Edge, "from": key, "to": key}`` for an edge. This
-        replaces thousands of per-record ``mutate`` subprocesses with a single
-        invocation — essential for indexing large repositories.
+        replaces thousands of per-record ``mutate`` subprocesses — essential for
+        indexing large repositories.
+
+        Against a ``--server`` the CLI POSTs the data file as ONE request body,
+        so a repo-scale load is split into batches under ``max_bytes`` — see
+        :mod:`witan_code.chunking` for the 413 this avoids, and for why every
+        node has to be written before any edge. A local store reads the file
+        directly and has no such limit, but chunking there costs only a few
+        extra Lance versions, which ``omnigraph optimize`` reclaims — not worth
+        a second code path.
+
+        ★ ``overwrite`` IS DELIBERATELY NEVER CHUNKED. Measured against 0.8.1,
+        that mode TRUNCATES the node type rather than replacing matching rows:
+        loading one CodeFile row with ``--mode overwrite`` into a store already
+        holding a different one left ``rows=1``, not 2. Split it and every batch
+        would erase the one before it, so it stays a single call and an
+        oversized one keeps failing loudly at the server.
+
+        ATOMICITY IS TRADED AWAY for the chunked modes, exactly as
+        ``change_many(chunk_size=...)`` does: batches commit independently and a
+        failure part-way leaves the earlier ones applied. Callers depending on
+        all-or-nothing must handle it — ``indexer.index_path`` does, by holding
+        each file's ``content_hash`` back until every batch has landed.
         """
         if not records:
             return
+        if mode == "overwrite":
+            self._load_batch(records, mode)
+            return
+        for batch in chunking.chunk_records(records, max_bytes):
+            self._load_batch(batch, mode)
+
+    def _load_batch(self, records: list[dict], mode: str) -> None:
         fd, tmp = tempfile.mkstemp(suffix=".jsonl", prefix="codegraph-load-")
         try:
             with os.fdopen(fd, "w") as fh:
