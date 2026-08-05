@@ -449,7 +449,21 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     return StoreRef(str(store))
 
 
-_NOT_FOUND_RE = re.compile(r"graph '[^']*' not found", re.IGNORECASE)
+# Wording that means "the graph is not there" rather than "I could not ask".
+#
+# Two phrasings because there are two hops. Directly against omnigraph-server
+# the CLI reports `graph '<id>' not found`. Through the MCP tier the deployment
+# runs THIS function on its own direct connection and relays its refusal as the
+# tool error, so what comes back is the second string — the one raised below.
+# The self-reference is deliberate: it is one message, and
+# `test_a_relayed_refusal_survives_the_mcp_round_trip` pins that the two stay
+# in step. Matching only the CLI's wording would file every missing graph
+# reached through the deployment as unreachable, which is the exact confusion
+# these two exception types exist to prevent.
+_NOT_SERVED = "is not served by the omnigraph-server"
+_NOT_FOUND_RE = re.compile(
+    rf"graph '[^']*' not found|{re.escape(_NOT_SERVED)}", re.IGNORECASE
+)
 
 
 def probe_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> StoreRef:
@@ -471,14 +485,18 @@ def probe_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> Sto
     ``read`` on that graph, which every actor the v1 Cedar bundle grants — CI,
     users, service and admin alike — already holds.
 
-    It also inherits :class:`~witan_core.omnigraph.OmnigraphClient`'s
-    connect-retry budget, so a server mid-restart is ridden out rather than
-    counted as an absent graph.
+    On the DIRECT path it also inherits
+    :class:`~witan_core.omnigraph.OmnigraphClient`'s connect-retry budget, so a
+    server mid-restart is ridden out rather than counted as an absent graph.
+    Through the MCP tier there is no such budget to inherit — that transport is
+    an HTTP session, not an omnigraph subprocess — and the deployment does its
+    own waiting on its own direct connection.
 
     Still distinguishes the two failures the previous ``graphs list`` path
-    distinguished, because they send you to different places: the server says
-    ``graph '<id>' not found`` for one it does not serve, and anything else
-    (a closed port, a rejected token) is :class:`ClusterUnreachable`.
+    distinguished, because they send you to different places: an absent graph
+    (:data:`_NOT_FOUND_RE`, either hop's wording) is
+    :class:`ClusterGraphMissing`, and anything else — a closed port, a rejected
+    token — is :class:`ClusterUnreachable`.
     """
     try:
         ref.client(cfg).list_branches()
@@ -487,18 +505,28 @@ def probe_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> Sto
             raise ClusterUnreachable(
                 f"{what} at {ref} could not be read: {exc}"
             ) from exc
-        unset = (
-            f"code_server on target [{cfg.target_name}]"
-            if cfg.target_name
-            else "WITAN_CODE_SERVER / code_server"
-        )
         raise ClusterGraphMissing(
-            f"{what} is not served by the omnigraph-server at {ref}.\n"
+            f"{what} {_NOT_SERVED} at {ref}.\n"
             "Cluster graphs are declared by provisioning (ol-infrastructure "
             "applications/omnigraph/data_tier.py), not created by this client — "
-            f"add the graph there, or unset {unset} to index locally."
+            f"add the graph there, or {_index_locally_hint(cfg)} to index locally."
         ) from exc
     return ref
+
+
+def _index_locally_hint(cfg: cfg_module.Config) -> str:
+    """What to unset to fall back to a local store, for THIS transport.
+
+    ``code_server`` is not what routes an MCP-tier client — ``code_transport``
+    is, and its endpoint comes from ``remote_url`` — so naming ``code_server``
+    there sends the reader to unset a setting that is not in play.
+    """
+    on_target = f" on target [{cfg.target_name}]" if cfg.target_name else ""
+    if _via_mcp(cfg):
+        return f"unset code_transport{on_target or ' / WITAN_CODE_TRANSPORT'}"
+    if cfg.target_name:
+        return f"unset code_server{on_target}"
+    return "unset WITAN_CODE_SERVER / code_server"
 
 
 def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:

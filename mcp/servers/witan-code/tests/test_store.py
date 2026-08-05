@@ -297,6 +297,55 @@ def test_listings_still_degrade_when_the_server_cannot_be_asked(monkeypatch):
     assert not store_module.store_for_repo("https://github.com/x/y", cfg).exists(cfg)
 
 
+def test_a_relayed_refusal_survives_the_mcp_round_trip(monkeypatch):
+    """Through the MCP tier the deployment runs `probe_cluster_graph` on its
+    own direct connection and relays ITS refusal as the tool error — so the
+    message this function raises has to be one it also recognizes. Matching
+    only the omnigraph CLI's wording filed every missing graph reached through
+    the deployment as merely unreachable."""
+    from witan_code import config as cfg_module
+
+    _cluster(monkeypatch, "code-github-com-mitodl-ol-django")
+    cfg = cfg_module.load()
+
+    with pytest.raises(store_module.ClusterGraphMissing) as direct:
+        store_module.ensure_store("https://github.com/test/never-provisioned", cfg)
+
+    # Exactly what the deployment would hand back, verbatim.
+    _unreachable_client(monkeypatch, RuntimeError(str(direct.value)))
+
+    with pytest.raises(store_module.ClusterGraphMissing):
+        store_module.ensure_store("https://github.com/test/never-provisioned", cfg)
+
+
+def test_the_local_fallback_hint_names_the_setting_actually_routing(monkeypatch):
+    """`code_server` is not what routes an MCP-tier client — `code_transport`
+    is — so naming it there sends the reader to unset something inert."""
+    from witan_code import config as cfg_module
+
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    monkeypatch.setenv("WITAN_CODE_TRANSPORT", cfg_module.CODE_TRANSPORT_MCP)
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.test")
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.test/realms/ol")
+
+    # The real RemoteStoreClient over a session that refuses — so this goes
+    # through the MCP transport, not the subprocess one.
+    class _Session:
+        url = "https://witan.test"
+
+        def call(self, *_args, **_kwargs):
+            raise RuntimeError("graph 'whatever' not found")
+
+    monkeypatch.setattr(store_module, "mcp_session", lambda *a, **kw: _Session())
+    cfg = cfg_module.load()
+
+    with pytest.raises(store_module.ClusterGraphMissing) as exc:
+        store_module.ensure_store("https://github.com/test/nope", cfg)
+
+    assert "code_transport" in str(exc.value)
+    assert "code_server" not in str(exc.value)
+
+
 def test_a_failed_listing_is_not_cached(monkeypatch):
     """A transient outage must not pin an error for the whole TTL — the next
     call has to be able to succeed."""
