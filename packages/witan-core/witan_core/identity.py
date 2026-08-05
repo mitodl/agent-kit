@@ -79,8 +79,8 @@ class ActorTokenResolver:
         """Return the bearer token provisioned for ``actor_id``.
 
         Raises ``LookupError`` if no token exists for this actor even after a
-        reload — the provisioning pipeline hasn't caught up, or the actor was
-        never a member of ``witan-users``. Never falls back to a default
+        reload — the provisioning pipeline hasn't caught up, or this identity
+        is not one the pipeline provisions for. Never falls back to a default
         identity.
         """
         if actor_id not in self._cache:
@@ -88,10 +88,16 @@ class ActorTokenResolver:
                 if actor_id not in self._cache:
                     self._load()
         if actor_id not in self._cache:
+            # Deliberately does not name a `witan-users` Keycloak group as the
+            # thing to check: there isn't one. The pipeline provisions every
+            # enabled human user of the Keycloak realm (ADR-0004 D3 addendum,
+            # 2026-08-05), so "am I in the group?" is the wrong question to
+            # send an operator off to answer.
             raise LookupError(
                 f"No omnigraph bearer token provisioned for actor {actor_id!r} "
                 f"in {self.path}. The Keycloak→token provisioning pipeline may "
-                "not have caught up yet, or this actor is not a witan-users member."
+                "not have caught up yet, or this account is disabled or absent "
+                "from the Keycloak realm."
             )
         return self._cache[actor_id]
 
