@@ -567,7 +567,8 @@ class OmnigraphClient:
         conflict cannot be attributed to one step — ``task_claim`` and anything
         else that needs to detect losing a race must stay on ``change``.
 
-        ``chunk_size`` splits the work into that many statements per commit.
+        ``chunk_size`` splits the work into that many statements per commit and
+        must be >= 1.
         The composed query is passed as a single argv element, so a caller with
         an unbounded number of steps (a repo reindex, a store-wide backfill)
         must cap it or eventually exceed ARG_MAX / a server payload limit. It is
@@ -580,6 +581,12 @@ class OmnigraphClient:
         """
         if not steps:
             return
+        if chunk_size is not None and chunk_size < 1:
+            # Not a redundant type check: `range(0, n, -1)` is EMPTY, so a
+            # negative size would skip the loop, return normally, and silently
+            # drop every write. Zero raises, but as an opaque "range() arg 3
+            # must not be zero" far from the caller that chose the value.
+            raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
         if chunk_size is not None and len(steps) > chunk_size:
             for start in range(0, len(steps), chunk_size):
                 self.change_many(
