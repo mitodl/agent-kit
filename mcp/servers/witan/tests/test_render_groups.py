@@ -164,6 +164,25 @@ class TestRenderBundle:
         with pytest.raises(RenderError, match="not a policy bundle"):
             render_groups.render_bundle(path, {})
 
+    def test_malformed_yaml_is_a_render_error(self, tmp_path):
+        """A traceback in a pod log is a much worse boot failure than a line."""
+        path = tmp_path / "memory.policy.yaml"
+        path.write_text("groups: [unclosed\n")
+        with pytest.raises(RenderError, match="cannot read or parse"):
+            render_groups.render_bundle(path, {})
+
+    def test_unreadable_file_is_a_render_error(self, tmp_path):
+        with pytest.raises(RenderError, match="cannot read or parse"):
+            render_groups.render_bundle(tmp_path / "absent.policy.yaml", {})
+
+    @pytest.mark.parametrize("groups_value", [["a", "b"], "witan-users", 3])
+    def test_non_mapping_groups_is_a_render_error(self, tmp_path, groups_value):
+        """A list would render indices as group names; a string, characters."""
+        path = tmp_path / "memory.policy.yaml"
+        path.write_text(yaml.safe_dump({"version": 1, "groups": groups_value}))
+        with pytest.raises(RenderError, match="must be a mapping"):
+            render_groups.render_bundle(path, {})
+
     def test_render_is_idempotent(self, tmp_path):
         """Every restart re-renders; the second pass must be a no-op."""
         bundle = write_bundle(tmp_path, "memory.policy.yaml", {"witan-users": ["a"]})

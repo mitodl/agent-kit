@@ -130,9 +130,25 @@ def render_bundle(path: Path, groups: dict[str, list[str]]) -> list[str]:
     code-graph pipeline has no role in the work graph), and adding a group a
     bundle never references would be noise at best.
     """
-    doc = yaml.safe_load(path.read_text())
+    try:
+        doc = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError) as exc:
+        # Everything on this path has to surface as a RenderError: the caller
+        # turns those into a one-line boot failure, where a bare traceback in a
+        # pod log is far less legible than the sentence explaining it.
+        msg = f"{path.name}: cannot read or parse bundle: {exc}"
+        raise RenderError(msg) from exc
     if not isinstance(doc, dict) or "groups" not in doc:
         msg = f"{path.name}: not a policy bundle (no top-level `groups`)"
+        raise RenderError(msg)
+    if not isinstance(doc["groups"], dict):
+        # A list or scalar here would otherwise reach `list()` and produce
+        # either indices or characters as group names, and render a bundle that
+        # grants nobody anything.
+        msg = (
+            f"{path.name}: `groups` must be a mapping of name -> members, "
+            f"got {type(doc['groups']).__name__}"
+        )
         raise RenderError(msg)
     declared = list(doc["groups"])
     unknown = sorted(set(declared) - KNOWN_GROUPS)
@@ -144,7 +160,11 @@ def render_bundle(path: Path, groups: dict[str, list[str]]) -> list[str]:
         )
         raise RenderError(msg)
     doc["groups"] = {name: groups[name] for name in declared}
-    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    try:
+        path.write_text(yaml.safe_dump(doc, sort_keys=False))
+    except OSError as exc:
+        msg = f"{path.name}: cannot write rendered bundle: {exc}"
+        raise RenderError(msg) from exc
     return declared
 
 

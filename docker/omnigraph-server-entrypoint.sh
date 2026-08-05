@@ -63,9 +63,13 @@ case "${cluster_dir}" in
         # that map changes, so rendering on the restart path keeps the policy
         # and the token map in permanent agreement. See policy/render_groups.py.
         #
-        # Skipped when either side is absent: an image without bundles, or a
-        # deployment with no bearer tokens, is the pre-policy default-deny
-        # configuration and must keep booting exactly as before.
+        # No bundles in the image: skip silently. That is the pre-policy
+        # default-deny configuration and it must keep booting exactly as
+        # before.
+        #
+        # Bundles but no token map: FAIL. omnigraph-server would refuse to boot
+        # on it anyway, so the only choice is where the operator reads the
+        # reason — here, or three layers down in the server's own startup.
         tokens_file="${OMNIGRAPH_SERVER_BEARER_TOKENS_FILE:-}"
         bundles=""
         for bundle in "${cluster_dir}"/*.policy.yaml; do
