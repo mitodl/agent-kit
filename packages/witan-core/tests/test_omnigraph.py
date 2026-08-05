@@ -416,6 +416,36 @@ _CONNECT_REFUSED_STDERR = (
 )
 
 
+# Longest outage measured against the real CI deployment (2026-08-03): two
+# separate restarts of the omnigraph-server Deployment, one triggered by adding
+# a token to the map and one by removing it, from the moment the old container
+# was killed to the moment the new pod reported Ready.
+#
+#     killed 21:20:21Z -> Ready 21:21:22Z   61s
+#     killed 21:33:36Z -> Ready 21:34:28Z   52s
+_MEASURED_RESTART_OUTAGE_SECONDS = 61
+
+
+def _fake_clock(monkeypatch, *, jitter=False):
+    """Stub sleep so it advances a fake monotonic clock instead of blocking.
+
+    The budget is a wall-clock deadline, so a no-op sleep would spin forever —
+    the clock has to move for the loop to terminate. Returns the sleep log.
+    """
+    sleeps = []
+    now = [1000.0]
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(og.time, "sleep", fake_sleep)
+    monkeypatch.setattr(og.time, "monotonic", lambda: now[0])
+    if not jitter:
+        monkeypatch.setattr(og.random, "uniform", lambda a, b: 0.0)
+    return sleeps
+
+
 def test_unavailable_backoff_adds_bounded_jitter():
     delay = og._UNAVAILABLE_BASE_DELAY * (2 ** (3 - 1))  # attempt=3
     for _ in range(50):
@@ -428,7 +458,6 @@ def test_connect_failure_retries_until_server_returns(monkeypatch):
     """The restart window: the server is simply absent, then comes back."""
     client = _client(monkeypatch)
     calls = {"n": 0}
-    sleeps = []
 
     def fake_run(cmd, **kwargs):
         calls["n"] += 1
@@ -439,8 +468,7 @@ def test_connect_failure_retries_until_server_returns(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
 
     monkeypatch.setattr(og.subprocess, "run", fake_run)
-    monkeypatch.setattr(og.time, "sleep", lambda s: sleeps.append(s))
-    monkeypatch.setattr(og.random, "uniform", lambda a, b: 0.0)  # no jitter
+    sleeps = _fake_clock(monkeypatch)
 
     out = client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
     assert out == "ok"
@@ -448,38 +476,97 @@ def test_connect_failure_retries_until_server_returns(monkeypatch):
     assert sleeps == [0.5, 1.0, 2.0]  # base 0.5s, doubling — independent oracle
 
 
-def test_connect_failure_budget_outlasts_a_recreate_restart():
-    """The whole point is riding out a pod restart, so the budget has to cover
-    one: terminate + boot + a readiness probe that only starts polling after 5s
-    and repeats every 10s. Assert the wall-clock the schedule actually buys."""
-    total = sum(
-        min(og._UNAVAILABLE_BASE_DELAY * 2 ** (i - 1), og._UNAVAILABLE_MAX_DELAY)
-        for i in range(1, og._UNAVAILABLE_MAX_ATTEMPTS)
-    )
-    assert total >= 40  # noqa: PLR2004
+def test_budget_outlasts_a_real_measured_restart(monkeypatch):
+    """The regression guard that the original attempt-count budget failed.
+
+    The first version of this budget was 12 attempts of capped backoff — ~42s —
+    and its test asserted that sum was ">= 40", a number with no provenance.
+    It passed while being wrong: the real outage is 52-61s, so the client gave
+    up mid-restart. Assert against the MEASURED outage instead of the
+    schedule's own arithmetic, and drive it through _execute so the deadline
+    logic is what's under test rather than a formula reimplemented here.
+    """
+    client = _client(monkeypatch)
+    outage_end = 1000.0 + _MEASURED_RESTART_OUTAGE_SECONDS
+    calls = {"n": 0}
+    now = [1000.0]
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if now[0] < outage_end:  # server still down
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr=_CONNECT_REFUSED_STDERR
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="back", stderr="")
+
+    def fake_sleep(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    monkeypatch.setattr(og.time, "sleep", fake_sleep)
+    monkeypatch.setattr(og.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(og.random, "uniform", lambda a, b: 0.0)
+
+    assert client._execute(["omnigraph", "query"], "query", is_write=False) == "back"
+    # And with real headroom left over, not scraping the deadline.
+    assert now[0] - 1000.0 < og._UNAVAILABLE_MAX_WAIT * 0.75
 
 
 def test_connect_failure_gives_up_after_its_own_budget(monkeypatch):
     client = _client(monkeypatch)
     calls = _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+    sleeps = _fake_clock(monkeypatch)
 
     with pytest.raises(
         RuntimeError, match="could not connect to https://graph.example"
     ):
         client._execute(["omnigraph", "query"], "query", is_write=False)
-    assert calls["n"] == og._UNAVAILABLE_MAX_ATTEMPTS
+    # Bounded by wall clock, not a fixed attempt count — and it spends the
+    # WHOLE budget. An earlier version skipped the last sleep whenever the
+    # next backoff would overshoot the deadline, which quietly cut the
+    # effective window to 145.5s of the configured 150s.
+    assert sum(sleeps) == pytest.approx(og._UNAVAILABLE_MAX_WAIT)
+    assert calls["n"] > _MEASURED_RESTART_OUTAGE_SECONDS / og._UNAVAILABLE_MAX_DELAY
+
+
+def test_final_retry_lands_on_the_deadline_not_before_it(monkeypatch):
+    """The budget must be spent to the last second, including one attempt at
+    the deadline itself — a server that comes back at T-1s inside the window
+    has to be caught, not missed because the next backoff would overshoot."""
+    client = _client(monkeypatch)
+    # Comes back with 1s of budget left: inside the window by any reading, but
+    # far past the last un-clamped backoff boundary (145.5s).
+    back_at = 1000.0 + og._UNAVAILABLE_MAX_WAIT - 1
+    now = [1000.0]
+
+    def fake_run(cmd, **kwargs):
+        if now[0] < back_at:
+            return subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr=_CONNECT_REFUSED_STDERR
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="back", stderr="")
+
+    def fake_sleep(seconds):
+        now[0] += seconds
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    monkeypatch.setattr(og.time, "sleep", fake_sleep)
+    monkeypatch.setattr(og.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(og.random, "uniform", lambda a, b: 0.0)
+
+    assert client._execute(["omnigraph", "query"], "query", is_write=False) == "back"
 
 
 def test_connect_failure_ignores_surface_conflict(monkeypatch):
     """There is no conflict to surface — the request never left this process."""
     client = _client(monkeypatch)
-    calls = _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+    _stub_run(monkeypatch, returncode=1, stderr=_CONNECT_REFUSED_STDERR)
+    _fake_clock(monkeypatch)
 
     with pytest.raises(RuntimeError, match="could not connect"):
         client._execute(
             ["omnigraph", "mutate"], "mutate", is_write=True, surface_conflict=True
         )
-    assert calls["n"] == og._UNAVAILABLE_MAX_ATTEMPTS
 
 
 def test_midflight_failure_is_not_retried(monkeypatch):
