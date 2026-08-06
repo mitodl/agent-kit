@@ -29,9 +29,13 @@ from witan_core.observability.logging import get_logger
 
 log = get_logger(__name__)
 
-_tracing_configured = False
-_metrics_configured = False
 _instrumented = False
+# The providers this module installed, or None. Held rather than tracked with a
+# bare "already ran" flag so a repeat call can return the provider in effect:
+# otherwise "already configured" and "not configured" are both None and a caller
+# cannot tell them apart.
+_tracer_provider: Any | None = None
+_meter_provider: Any | None = None
 
 
 def _endpoint() -> str | None:
@@ -79,15 +83,20 @@ def _use_grpc() -> bool:
 
 
 def configure_tracing() -> Any | None:
-    """Install a ``TracerProvider``. Returns it, or ``None`` when not configured.
+    """Install a ``TracerProvider``. Returns the one in effect, or ``None``.
 
-    With no endpoint set — every local CLI run, every stdio session — no provider
-    is installed at all. The OTel API's default no-op tracer then makes every
-    span in the codebase free, so instrumentation can be written unconditionally.
+    Idempotent, and a repeat call returns the *same* provider rather than
+    ``None`` — so the return value always answers "what is installed", not "did
+    this particular call do the installing".
+
+    ``None`` means genuinely no provider: with no endpoint set — every local CLI
+    run, every stdio session — nothing is installed at all. The OTel API's
+    default no-op tracer then makes every span in the codebase free, so
+    instrumentation can be written unconditionally at the call sites.
     """
-    global _tracing_configured  # noqa: PLW0603 - module-level once-only guard
-    if _tracing_configured:
-        return None
+    global _tracer_provider  # noqa: PLW0603 - module-level singleton
+    if _tracer_provider is not None:
+        return _tracer_provider
     if not _endpoint():
         return None
     try:
@@ -126,21 +135,23 @@ def configure_tracing() -> Any | None:
     except Exception:  # noqa: BLE001 - telemetry must never be fatal
         log.warning("otel.tracing_setup_failed", exc_info=True)
         return None
-    _tracing_configured = True
+    _tracer_provider = provider
     return provider
 
 
 def configure_metrics() -> Any | None:
-    """Install a ``MeterProvider``. Returns it, or ``None`` when not configured.
+    """Install a ``MeterProvider``. Returns the one in effect, or ``None``.
+
+    Same idempotency contract as :func:`configure_tracing`.
 
     Beyond the reference package. The shared tier's open questions — how often
     per-actor admission caps are hit, how many distinct actors are writing at
     once, the Cedar denial rate — are all counters, and reconstructing counters
     by scraping log lines is exactly the fragility this module exists to remove.
     """
-    global _metrics_configured  # noqa: PLW0603 - module-level once-only guard
-    if _metrics_configured:
-        return None
+    global _meter_provider  # noqa: PLW0603 - module-level singleton
+    if _meter_provider is not None:
+        return _meter_provider
     if not _endpoint():
         return None
     try:
@@ -163,7 +174,7 @@ def configure_metrics() -> Any | None:
     except Exception:  # noqa: BLE001 - telemetry must never be fatal
         log.warning("otel.metrics_setup_failed", exc_info=True)
         return None
-    _metrics_configured = True
+    _meter_provider = provider
     return provider
 
 
@@ -211,9 +222,9 @@ def reset_telemetry() -> None:
     test's captured output and breaks it. Reaching for the private globals is
     what the OTel SDK's own test suite does for the same reason.
     """
-    global _tracing_configured, _metrics_configured, _instrumented  # noqa: PLW0603
-    _tracing_configured = False
-    _metrics_configured = False
+    global _tracer_provider, _meter_provider, _instrumented  # noqa: PLW0603
+    _tracer_provider = None
+    _meter_provider = None
     _instrumented = False
     try:
         from opentelemetry import metrics, trace

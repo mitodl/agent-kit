@@ -248,6 +248,19 @@ def test_metrics_are_configured_with_an_endpoint(monkeypatch, _fast_exporter):
     _shutdown(provider)
 
 
+def test_repeat_calls_return_the_same_provider(monkeypatch, _fast_exporter):
+    # The return value answers "what is installed", not "did this call install
+    # it". A guard that returned None on the second call would make "already
+    # configured" and "not configured" indistinguishable to the caller.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    first = configure_tracing()
+    assert configure_tracing() is first
+    first_meter = configure_metrics()
+    assert configure_metrics() is first_meter
+    _shutdown(first)
+    _shutdown(first_meter)
+
+
 def test_signal_specific_endpoint_is_honored(monkeypatch, _fast_exporter):
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     monkeypatch.setenv(
