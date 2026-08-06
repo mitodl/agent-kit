@@ -754,22 +754,34 @@ def test_hook_writes_nothing_to_stdout_in_a_fresh_process(tmp_path):
         ctx.inject_context("/nonexistent/graph.omni", ".", None, debug=True)
         """
     )
+    # Inherit the real environment rather than building one from scratch: the
+    # subprocess still needs whatever makes Python work here (locale, cert
+    # paths, uv/venv resolution), and a hand-built dict would fail for reasons
+    # that have nothing to do with what is being asserted.
+    env = os.environ.copy()
+    # But strip witan/OTel configuration the developer's shell may already
+    # carry, so the run is driven only by what this test sets — a stray
+    # WITAN_TARGET or WITAN_LOG_LEVEL=ERROR would otherwise quietly change what
+    # the hook does, or silence it into passing vacuously.
+    for key in [
+        k for k in env if k.startswith(("WITAN_", "OTEL_")) or k == "LOG_LEVEL"
+    ]:
+        del env[key]
+    env |= {
+        "WITAN_CONFIG": str(cfg_file),
+        "WITAN_TARGET": "does-not-exist",
+        "WITAN_CONTEXT_TTL": "not-a-number",
+        "WITAN_REPO": "",
+        # DEBUG so the debug-level degradations are emitted rather than
+        # filtered out, which would make this pass vacuously.
+        "WITAN_LOG_LEVEL": "DEBUG",
+    }
     result = subprocess.run(
         [sys.executable, "-c", program],
         capture_output=True,
         text=True,
         check=False,
-        env={
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": os.environ.get("HOME", ""),
-            "WITAN_CONFIG": str(cfg_file),
-            "WITAN_TARGET": "does-not-exist",
-            "WITAN_CONTEXT_TTL": "not-a-number",
-            "WITAN_REPO": "",
-            # DEBUG so the debug-level degradations are emitted rather than
-            # filtered out, which would make this pass vacuously.
-            "WITAN_LOG_LEVEL": "DEBUG",
-        },
+        env=env,
     )
 
     assert result.stdout == "", f"hook wrote to stdout: {result.stdout!r}"
