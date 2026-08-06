@@ -82,6 +82,13 @@ def serve(
     path: URL path the MCP endpoint is served on (HTTP transports only).
         Env: ``WITAN_MCP_PATH``.
     """
+    # Before the server import, so anything logged while the module initialises
+    # (auth wiring, store resolution) lands in the configured pipeline rather
+    # than on an unconfigured root logger.
+    from witan_core.observability import configure_observability
+
+    configure_observability()
+
     from ..server import mcp as witan_mcp
 
     try:

@@ -6,6 +6,7 @@ from typing import Literal
 
 from fastmcp import Context, FastMCP
 from witan_core import caching
+from witan_core.observability.middleware import ObservabilityMiddleware
 
 from . import bridge_extractors
 from . import config as cfg_module
@@ -62,6 +63,10 @@ mcp = FastMCP(
     # session. Scope stays private: a code graph is scoped to its repos.
     **caching.hint_kwargs(),
 )
+
+# Registered FIRST so it ends up OUTERMOST — see the note in
+# witan_core.observability.middleware about why it must sit outside MRTR.
+mcp.add_middleware(ObservabilityMiddleware())
 
 # Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
 # server→client back-channel to run them on. Inert on the handshake eras.

@@ -349,7 +349,16 @@ def inject_context_cmd() -> None:
 
 @app.command
 def serve() -> None:
-    """Run the code-graph MCP server standalone (code_* tools only)."""
+    """Run the code-graph MCP server standalone (code_* tools only).
+
+    When witan-code is mounted into the umbrella ``witan serve`` instead, that
+    command has already configured observability; the call here is idempotent so
+    the standalone path gets it too without double-configuring the combined one.
+    """
+    from witan_core.observability import configure_observability
+
+    configure_observability()
+
     from .server import mcp
 
     mcp.run()

@@ -21,6 +21,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
 from witan_core import caching, normalise, now_iso
+from witan_core.observability.middleware import ObservabilityMiddleware
 from witan_core.omnigraph import schema_apply, schema_apply_if_changed
 
 from . import config as cfg_module
@@ -309,6 +310,12 @@ mcp = FastMCP(
     # every session. Scope stays private: memory reads are per-actor.
     **caching.hint_kwargs(),
 )
+
+# Registered FIRST so it ends up OUTERMOST — fastmcp composes its chain with
+# `reversed(self.middleware)`. It has to sit outside MRTR below, which turns a
+# raised InputRequired into a *successful* result: from inside, every ordinary
+# elicitation would be recorded as a failed tool call.
+mcp.add_middleware(ObservabilityMiddleware())
 
 # Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
 # server→client back-channel to run them on. Inert on the handshake eras.
