@@ -5,6 +5,7 @@
 - Deciders: witan platform owners
 - Tracking: task `tk-no-usable-transport-for-a-local-shared-store-mig-afbf18`,
   task `tk-remote-server-registration-local-remote-user-dat-dc753c`,
+  task `tk-un-defer-adr-0007-d5-merge-through-the-witan-mcp-f1e5a1` (D5),
   project `wp-witan-multi-user-service-deployment-dcf6ee`
 - Supersedes: —
 - Amends: `0005-secure-cli-path-into-deployed-witan.md` (path (b) gains a
@@ -120,20 +121,41 @@ policy-unmediated boundary next to the MCP tier — the same reasoning that
 rejected it for witan-code's writes in ADR-0005 (c). Listed here so it is
 rejected deliberately rather than forgotten.
 
-### D5 — Deferred: a bulk-import tool on the MCP tier
+### D5 — Accepted, sequenced after this change: merge through the MCP tier
 
-The self-service shape would mirror ADR-0005 (c): mediated store operations
-through the MCP tier, authorized per-actor server-side, exactly as
-`code_store_load` does for the code graph. `merge_store`'s `_parse_export`
-already emits the record shape `load_records` accepts, so the pieces fit.
+The self-service shape mirrors ADR-0005 (c): mediated store operations through
+the MCP tier, authorized per-actor server-side, exactly as `code_store_load`
+does for the code graph. `merge_store`'s `_parse_export` already emits the
+record shape `load_records` accepts, so the pieces fit.
 
-Deliberately not built now. It is a new server-side tool plus a reconciling
-client (the merge must *export the target* too, so `load` alone is not enough),
-to serve a one-time cutover for a handful of users that D1–D3 already cover.
-Revisit if repeated or scheduled merges become a real need — the runbook's
-claim that `merge` is safe to run on a schedule is true of the command, but a
-scheduled merge into the shared graph has nobody to run it as except the admin
-principal.
+**Amended 2026-08-06, before this ADR merged.** This section originally
+deferred that shape. The maintainer's decision is that `merge_store` is the
+right method and that it must route through the MCP tier rather than shell out
+to omnigraph — so D5 is the intended end state, not a someday-maybe. D1–D3
+stand as the operator path and as the prerequisite: the export-as-source
+handling added here is exactly what the client half ships.
+
+Sequenced after this change rather than folded into it, because it rewrites
+the same function and would conflict. Tracked as
+`tk-un-defer-adr-0007-d5-merge-through-the-witan-mcp-f1e5a1`.
+
+One correction to the cost this section originally quoted. "A reconciling
+client (the merge must *export the target* too, so `load` alone is not enough)"
+is true of a bare `load` tool, but not of a merge-shaped one: the deployed
+witan already holds an `OmnigraphClient` on the target graph, so the **server**
+does both halves. The client ships only source rows; the server reads its own
+target, applies the same `_reconcile_timestamp` rule, and writes through its
+normal client. Batching is the real work, and there is precedent to reuse
+rather than reinvent — `code_store_load`, plus the chunked bulk load (#184) and
+the batched MCP write tier (#189).
+
+The argument for doing it is not convenience. Under D1–D3 every merge lands in
+the omnigraph audit trail as `svc-witan-admin` (see Consequences); routing
+through the MCP tier is what puts Cedar and the per-request actor in the path,
+which is the premise of the shared deployment. It also removes the operator
+from a step a user should be able to do alone, and makes the runbook's
+"safe to run on a schedule" claim actually actionable — today a scheduled merge
+has nobody to run it as except the admin principal.
 
 ## Consequences
 
@@ -153,8 +175,8 @@ principal.
   their own question.
 - **Attribution is admin-level at the omnigraph layer.** Rows keep their witan
   `author`, but the omnigraph audit trail records the merge as
-  `svc-witan-admin`. Acceptable for a one-time cutover; it is one of the things
-  D5 would fix.
+  `svc-witan-admin`. Acceptable for a one-time cutover, and the main thing D5
+  fixes — it is why D5 is sequenced next rather than left open-ended.
 - **No change to the default path.** With a local store configured, every
   command behaves exactly as before — the addressing helper returns the same
   `--store <uri>` it always did.
