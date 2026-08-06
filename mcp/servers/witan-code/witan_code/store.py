@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -566,6 +567,45 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
         for p in sorted(cfg.code_dir.glob("*.omni"))
         if p.name != cfg_module.BRIDGE_STORE_NAME
     ]
+
+
+def map_refs(refs: list[StoreRef], fn, *, max_workers: int = 8) -> list:
+    """``[fn(ref) for ref in refs]``, run concurrently, in the original order.
+
+    Every per-graph listing question — which repo is this, how many files, what
+    branch views does it carry — is one round trip per graph, and on the cluster
+    those graphs live on S3 where a single read is ~150-350 ms. Serially that is
+    seconds: `code_indexed_repos` measured **5.7 s** across 14 CI graphs on
+    2026-08-06, of which the graph listing itself was 13 ms and the per-graph
+    queries were 99.8%.
+
+    They are independent reads against different graphs, so the wait is almost
+    entirely S3 latency and parallelizes nearly linearly. Measured against the
+    deployed CI tier, same 14 graphs, results byte-identical at every width:
+
+        workers=1   6366 ms    1.00x
+        workers=4   1456 ms    4.37x
+        workers=8    686 ms    9.28x
+        workers=14   501 ms   12.70x
+
+    Capped at 8 to match :func:`server._fan_out`, which fans the same kind of
+    read across the same graphs — one concurrency story for the package rather
+    than two numbers to reconcile. 8 already takes the common case under a
+    second, and the marginal graph is cheap to add.
+
+    ORDER IS PRESERVED, unlike ``_fan_out``'s ``as_completed`` flattening: these
+    callers zip results back against ``refs`` positionally, so a completion-order
+    result would silently attribute one graph's file count to another. That is
+    why this is a separate helper rather than a generalization of that one.
+
+    Exceptions propagate. Every current ``fn`` already degrades internally (a
+    listing must not fail on one bad graph), so a raise here means something
+    the caller genuinely should not paper over.
+    """
+    if len(refs) <= 1:
+        return [fn(ref) for ref in refs]
+    with ThreadPoolExecutor(max_workers=min(len(refs), max_workers)) as pool:
+        return list(pool.map(fn, refs))
 
 
 def repo_sidecar(store: Path) -> Path:

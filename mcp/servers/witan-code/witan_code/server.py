@@ -979,18 +979,17 @@ def code_indexed_repos() -> list[dict]:
     of a shared graph has neither the directory nor any business reporting the
     server's disk. ``files`` stays real — it is a query, not a walk.
     """
-    out: list[dict] = []
-    for ref in store_module.per_repo_stores(cfg):
+
+    def describe(ref) -> dict:
         size, mtime = ref.stats()
-        out.append(
-            {
-                "repo": store_module.repo_for_store(ref, cfg),
-                "files": store_module.file_count(ref, cfg),
-                "bytes": size,
-                "last_indexed": mtime,
-            }
-        )
-    return out
+        return {
+            "repo": store_module.repo_for_store(ref, cfg),
+            "files": store_module.file_count(ref, cfg),
+            "bytes": size,
+            "last_indexed": mtime,
+        }
+
+    return store_module.map_refs(store_module.per_repo_stores(cfg), describe)
 
 
 @mcp.tool
@@ -1016,13 +1015,12 @@ def code_indexed_branches(branch: str | None = None) -> list[dict]:
     listed.
     """
     wanted = repo_module.branch_store_name(branch) if branch else None
-    out: list[dict] = []
-    for ref in store_module.per_repo_stores(cfg):
+
+    def describe(ref) -> dict:
         try:
             names = _client_for_ref(ref).list_branches()
         except Exception:  # noqa: BLE001 — one bad store shouldn't abort the list
-            out.append({"repo": store_module.repo_for_store(ref, cfg), "views": None})
-            continue
+            return {"repo": store_module.repo_for_store(ref, cfg), "views": None}
         if wanted:
             found = views.views_for_branch(names, wanted)
         else:
@@ -1030,16 +1028,14 @@ def code_indexed_branches(branch: str | None = None) -> list[dict]:
                 (views.parse_view(n) for n in names if n != "main"),
                 key=lambda v: (v.branch, v.actor or ""),
             )
-        out.append(
-            {
-                "repo": store_module.repo_for_store(ref, cfg),
-                "views": [
-                    {"view": v.name, "branch": v.branch, "actor": v.actor}
-                    for v in found
-                ],
-            }
-        )
-    return out
+        return {
+            "repo": store_module.repo_for_store(ref, cfg),
+            "views": [
+                {"view": v.name, "branch": v.branch, "actor": v.actor} for v in found
+            ],
+        }
+
+    return store_module.map_refs(store_module.per_repo_stores(cfg), describe)
 
 
 @mcp.tool

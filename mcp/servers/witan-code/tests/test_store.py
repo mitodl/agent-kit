@@ -6,6 +6,8 @@ store, an unreadable one, a dangling symlink) worth pinning explicitly.
 """
 
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -686,3 +688,87 @@ def test_graph_cache_key_does_not_retain_the_raw_token():
         "http://server:8080",
         None,
     )
+
+
+# ── map_refs ──────────────────────────────────────────────────────────────────
+#
+# The per-graph listing questions are one round trip each against S3-backed
+# graphs (~150-350 ms), so `code_indexed_repos` measured 5.7 s across 14 CI
+# graphs before this. These pin the two properties that make concurrency safe
+# here: order, and that it actually runs concurrently.
+
+
+def _refs(n):
+    return [store_module.StoreRef("https://srv", f"code-g{i}") for i in range(n)]
+
+
+def test_map_refs_preserves_order_regardless_of_completion_order():
+    """THE reason this is not `_fan_out`.
+
+    Callers zip results back against `refs` positionally, so a completion-order
+    result would attribute one graph's file count to another — a wrong answer,
+    not a slow one. The sleep is inverted against position so the first ref
+    finishes last; `as_completed` semantics would fail this.
+    """
+    refs = _refs(6)
+
+    def slow_by_position(ref):
+        index = int(ref.graph_id.removeprefix("code-g"))
+        time.sleep((6 - index) * 0.02)
+        return ref.graph_id
+
+    assert store_module.map_refs(refs, slow_by_position) == [r.graph_id for r in refs]
+
+
+def test_map_refs_actually_runs_concurrently():
+    """A serial implementation passes every other test here, so pin the wall
+    clock: 8 refs blocking 0.1s each is ~0.8s serially and ~0.1s at width 8."""
+    refs = _refs(8)
+    start = time.perf_counter()
+    store_module.map_refs(refs, lambda _ref: time.sleep(0.1))
+    elapsed = time.perf_counter() - start
+    assert elapsed < 0.4, f"took {elapsed:.2f}s — looks serial"
+
+
+def test_map_refs_caps_width_and_does_not_over_subscribe():
+    """Capped at 8 to match `_fan_out`. 20 refs must not open 20 connections."""
+    live = []
+    peak = 0
+    lock = threading.Lock()
+
+    def track(_ref):
+        nonlocal peak
+        with lock:
+            live.append(1)
+            peak = max(peak, len(live))
+        time.sleep(0.02)
+        with lock:
+            live.pop()
+
+    store_module.map_refs(_refs(20), track)
+    assert peak <= 8, f"peak concurrency {peak} exceeded the cap"
+
+
+def test_map_refs_skips_the_pool_for_zero_or_one_ref():
+    """The single-repo case is the common one locally; a thread pool for one
+    item is pure overhead."""
+    assert store_module.map_refs([], lambda _r: pytest.fail("should not run")) == []
+
+    calling_threads = []
+    store_module.map_refs(
+        _refs(1), lambda _r: calling_threads.append(threading.current_thread())
+    )
+    assert calling_threads == [threading.current_thread()], "ran off the main thread"
+
+
+def test_map_refs_propagates_an_exception():
+    """Every current `fn` degrades internally, so a raise here is something the
+    caller should not paper over."""
+
+    def boom(ref):
+        if ref.graph_id == "code-g2":
+            raise RuntimeError("graph exploded")
+        return ref.graph_id
+
+    with pytest.raises(RuntimeError, match="graph exploded"):
+        store_module.map_refs(_refs(4), boom)

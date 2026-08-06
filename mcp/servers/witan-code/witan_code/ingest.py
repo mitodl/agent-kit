@@ -411,7 +411,7 @@ def graphs() -> list[str]:
     list — it is one fixed graph, addressed as :data:`BRIDGE`.
     """
     cfg = _config()
-    return [
-        store_module.repo_for_store(ref, cfg)
-        for ref in store_module.per_repo_stores(cfg)
-    ]
+    return store_module.map_refs(
+        store_module.per_repo_stores(cfg),
+        lambda ref: store_module.repo_for_store(ref, cfg),
+    )
