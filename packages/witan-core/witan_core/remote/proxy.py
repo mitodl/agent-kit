@@ -267,17 +267,26 @@ class RemoteMCPProxy:
             # Positional arguments cannot be mapped onto an MCP call. The wire
             # format is a name->value object, and the only ordering information
             # available here is the input schema's `properties`, which is an
-            # unordered map by JSON Schema specification — FastMCP happens to
-            # emit it alphabetically. Binding by that order silently sent
+            # unordered map by JSON Schema specification, and servers disagree
+            # on what they emit. Binding by that order silently sent
             # `memory_search(query)` as `include_superseded`, and swapped
             # same-typed pairs like `workflow_project_block(slug, blocks_slug)`
             # without any error at all. Refuse instead of guessing: a caller
             # that must be fixed should find out here, not in the graph.
+            #
+            # A tool can legitimately declare no parameters at all
+            # (`code_indexed_repos`), where "Accepted names: ." would say
+            # nothing — name the real problem instead.
+            accepted = (
+                f"Accepted names: {', '.join(names)}."
+                if names
+                else "This tool accepts no arguments."
+            )
             raise RemoteToolUnavailable(
                 f"`{name}` was called with {len(args)} positional argument(s). "
                 "Remote tool calls must pass every argument by keyword — MCP "
                 "carries arguments by name and the protocol defines no "
-                f"parameter order. Accepted names: {', '.join(names)}."
+                f"parameter order. {accepted}"
             )
         arguments = dict(kwargs)
         # The deployed server has no git checkout, so it cannot resolve

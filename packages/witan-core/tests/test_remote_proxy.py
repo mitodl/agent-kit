@@ -45,6 +45,9 @@ class _Proxy(RemoteMCPProxy):
             "task_ready": ["repo"],
             "task_create": ["description", "repo", "title"],
             "memory_store": ["content", "kind", "repo", "session_slug", "title"],
+            # A real zero-parameter tool — witan-code's `code_indexed_repos`
+            # declares no properties at all.
+            "code_indexed_repos": [],
         }
 
     def _is_admin_tool(self, name):
@@ -128,6 +131,19 @@ def test_refusal_names_the_accepted_parameters():
     p = _Proxy()
     with pytest.raises(RemoteToolUnavailable, match="content, kind, repo"):
         p._map_args("memory_store", ("lesson",), {})
+
+
+def test_refusal_on_a_zero_parameter_tool_says_so():
+    # `code_indexed_repos` declares no properties, so listing accepted names
+    # would render as "Accepted names: ." — say what is actually wrong instead.
+    p = _Proxy()
+    with pytest.raises(RemoteToolUnavailable, match="accepts no arguments"):
+        p._map_args("code_indexed_repos", ("oops",), {})
+
+
+def test_zero_parameter_tool_still_works_with_no_args():
+    p = _Proxy()
+    assert p._map_args("code_indexed_repos", (), {}) == {}
 
 
 def test_fixture_order_differs_from_signature_order():
