@@ -497,6 +497,55 @@ query link_addresses($from: String, $to: String) {
     insert Addresses { from: $from, to: $to }
 }
 
+// ── Task edge removal ──────────────────────────────────────────────
+// Edges ARE deletable (omnigraph 0.8.1) — an earlier belief that they were
+// append-only was wrong. But an edge delete takes exactly ONE predicate:
+// `where from = $x and to = $y` (and the `,` / `&&` spellings) all fail to
+// parse. So each edge type exposes a delete keyed on either endpoint, and the
+// server picks whichever side matches fewer edges, then re-inserts the ones
+// that should survive. See `_unlink_edge` in server.py for why that is safe
+// enough and where it is not.
+
+query unlink_blocks_by_to($to: String) {
+    delete Blocks where to = $to
+}
+
+query unlink_blocks_by_from($from: String) {
+    delete Blocks where from = $from
+}
+
+query unlink_parent_of_by_to($to: String) {
+    delete ParentOf where to = $to
+}
+
+query unlink_parent_of_by_from($from: String) {
+    delete ParentOf where from = $from
+}
+
+query unlink_discovered_from_by_to($to: String) {
+    delete DiscoveredFrom where to = $to
+}
+
+query unlink_discovered_from_by_from($from: String) {
+    delete DiscoveredFrom where from = $from
+}
+
+query unlink_addresses_by_to($to: String) {
+    delete Addresses where to = $to
+}
+
+query unlink_addresses_by_from($from: String) {
+    delete Addresses where from = $from
+}
+
+query unlink_project_blocks_by_to($to: String) {
+    delete ProjectBlocks where to = $to
+}
+
+query unlink_project_blocks_by_from($from: String) {
+    delete ProjectBlocks where from = $from
+}
+
 query link_closes($from: String, $to: String) {
     insert Closes { from: $from, to: $to }
 }

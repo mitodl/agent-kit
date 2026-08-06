@@ -853,6 +853,102 @@ query task_code_branches($task_slug: String) {
     return { $b.slug, $b.repo, $b.branch, $b.status, $b.updated_at }
 }
 
+// ── Edge enumeration, for removal ─────────────────────────────────
+// `task_unlink` deletes an edge by ONE endpoint (the mutation language allows
+// no compound predicate — see mutations.gq), so the server must first know
+// every edge on both sides: it deletes the side with fewer matches, then
+// re-inserts the survivors. Each pair returns the OTHER endpoint's slug.
+
+query blocks_from_slugs($to: String) {
+    match {
+        $a: Task
+        $b: Task { slug: $to }
+        $a blocks $b
+    }
+    return { $a.slug }
+}
+
+query blocks_to_slugs($from: String) {
+    match {
+        $a: Task { slug: $from }
+        $b: Task
+        $a blocks $b
+    }
+    return { $b.slug }
+}
+
+query parent_of_from_slugs($to: String) {
+    match {
+        $a: Task
+        $b: Task { slug: $to }
+        $a parentof $b
+    }
+    return { $a.slug }
+}
+
+query parent_of_to_slugs($from: String) {
+    match {
+        $a: Task { slug: $from }
+        $b: Task
+        $a parentof $b
+    }
+    return { $b.slug }
+}
+
+query discovered_from_from_slugs($to: String) {
+    match {
+        $a: Task
+        $b: Task { slug: $to }
+        $a discoveredfrom $b
+    }
+    return { $a.slug }
+}
+
+query discovered_from_to_slugs($from: String) {
+    match {
+        $a: Task { slug: $from }
+        $b: Task
+        $a discoveredfrom $b
+    }
+    return { $b.slug }
+}
+
+query addresses_from_slugs($to: String) {
+    match {
+        $a: Task
+        $m: Memory { slug: $to }
+        $a addresses $m
+    }
+    return { $a.slug }
+}
+
+query addresses_to_slugs($from: String) {
+    match {
+        $a: Task { slug: $from }
+        $m: Memory
+        $a addresses $m
+    }
+    return { $m.slug }
+}
+
+query project_blocks_from_slugs($to: String) {
+    match {
+        $a: WorkflowProject
+        $b: WorkflowProject { slug: $to }
+        $a projectblocks $b
+    }
+    return { $a.slug }
+}
+
+query project_blocks_to_slugs($from: String) {
+    match {
+        $a: WorkflowProject { slug: $from }
+        $b: WorkflowProject
+        $a projectblocks $b
+    }
+    return { $b.slug }
+}
+
 // Existence checks so repeated workflow_session_start/task_claim calls for
 // the same branch don't pile up duplicate edges.
 query code_branch_works_on_edge($branch_slug: String, $task_slug: String) {

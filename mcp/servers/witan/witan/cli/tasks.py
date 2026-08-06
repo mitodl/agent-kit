@@ -414,6 +414,33 @@ def task_link_cmd(from_slug: str, to_slug: str, kind: TaskLinkKind) -> None:
     console.print(f"[green]Linked[/green] {from_slug} —[{kind}]→ {to_slug}")
 
 
+@task_app.command(name="unlink")
+def task_unlink_cmd(from_slug: str, to_slug: str, kind: TaskLinkKind) -> None:
+    """Remove a link between two tasks (or a task and a memory).
+
+    The inverse of ``link``, with the same ``from``/``to`` meanings. Use it
+    when a link was recorded backwards or against the wrong slug; removing a
+    ``blocks`` link is how a wrongly-blocked task becomes ready again.
+
+    Reports plainly when there was no such link — that is a no-op, not an
+    error, so re-running is safe.
+
+    Parameters
+    ----------
+    from_slug: Source ``tk-`` slug.
+    to_slug: Target ``tk-`` (or memory) slug.
+    kind: blocks | parent | discovered_from | addresses.
+    """
+    s = _srv()
+    result = _fn(s.task_unlink)(from_slug=from_slug, to_slug=to_slug, kind=kind)
+    if result.get("removed"):
+        console.print(f"[green]Unlinked[/green] {from_slug} —[{kind}]→ {to_slug}")
+    else:
+        console.print(
+            f"[yellow]No {kind} link[/yellow] {from_slug} → {to_slug}; nothing to do."
+        )
+
+
 @task_app.command(name="run")
 def task_run(
     slug: str | None = None,

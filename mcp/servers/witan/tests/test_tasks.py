@@ -126,6 +126,181 @@ def test_update_to_closed_unblocks_dependents(server):
     assert b["slug"] in {t["slug"] for t in server.task_ready()}
 
 
+# ── Unlinking (task_unlink) ────────────────────────────────────────
+
+
+@requires_omnigraph
+def test_unlink_blocks_clears_field_and_reopens(server):
+    a = server.task_create(title="blocker", description="x")
+    b = server.task_create(title="blocked", description="y")
+    server.task_link(a["slug"], b["slug"], kind="blocks")
+    assert server.task_get(b["slug"])["status"] == "blocked"
+
+    res = server.task_unlink(a["slug"], b["slug"], kind="blocks")
+    assert res["removed"] is True
+    nb = server.task_get(b["slug"])
+    assert not (nb["blocked_by"] or [])
+    # Nothing open is holding it any more, so it is ready work again.
+    assert nb["status"] == "open"
+    assert b["slug"] in {t["slug"] for t in server.task_ready()}
+
+
+@requires_omnigraph
+def test_unlink_one_of_several_blockers_keeps_the_rest(server):
+    """Several blockers on the target, one removed.
+
+    `from` has a single outbound edge here, so this takes the delete-by-`from`
+    path with nothing to re-insert. `test_unlink_reinserts_survivors` is the
+    one that exercises re-insertion.
+    """
+    a = server.task_create(title="blocker A", description="x")
+    b = server.task_create(title="blocker B", description="x")
+    c = server.task_create(title="blocker C", description="x")
+    t = server.task_create(title="target", description="y")
+    for blocker in (a, b, c):
+        server.task_link(blocker["slug"], t["slug"], kind="blocks")
+
+    server.task_unlink(b["slug"], t["slug"], kind="blocks")
+
+    node = server.task_get(t["slug"])
+    assert set(node["blocked_by"] or []) == {a["slug"], c["slug"]}
+    # Still genuinely blocked — two open blockers remain.
+    assert node["status"] == "blocked"
+    assert t["slug"] not in {x["slug"] for x in server.task_ready()}
+
+
+@requires_omnigraph
+def test_unlink_leaves_other_tasks_edges_alone(server):
+    """Deleting by the shared endpoint must not disturb an unrelated task that
+    happens to share a blocker."""
+    blocker = server.task_create(title="shared blocker", description="x")
+    keep = server.task_create(title="keeps its blocker", description="y")
+    drop = server.task_create(title="loses its blocker", description="z")
+    server.task_link(blocker["slug"], keep["slug"], kind="blocks")
+    server.task_link(blocker["slug"], drop["slug"], kind="blocks")
+
+    server.task_unlink(blocker["slug"], drop["slug"], kind="blocks")
+
+    assert blocker["slug"] in (server.task_get(keep["slug"])["blocked_by"] or [])
+    assert not (server.task_get(drop["slug"])["blocked_by"] or [])
+
+
+@requires_omnigraph
+def test_unlink_reinserts_survivors(server):
+    """The re-insert branch, which only runs when BOTH endpoints are crowded.
+
+    A single-predicate delete takes out every edge on the chosen endpoint, so
+    when that endpoint has more than the target edge the rest must be put back.
+    Shape: `b` blocks two tasks, and the target is blocked by three — so the
+    smaller side (`b`'s two outbound edges) is deleted and one is restored.
+    The other tests all happen to have a side of size one and never reach here.
+    """
+    a = server.task_create(title="blocker A", description="x")
+    b = server.task_create(title="blocker B", description="x")
+    c = server.task_create(title="blocker C", description="x")
+    target = server.task_create(title="target", description="y")
+    other = server.task_create(title="also blocked by B", description="y")
+
+    for blocker in (a, b, c):
+        server.task_link(blocker["slug"], target["slug"], kind="blocks")
+    server.task_link(b["slug"], other["slug"], kind="blocks")
+
+    server.task_unlink(b["slug"], target["slug"], kind="blocks")
+
+    # The intended edge is gone.
+    assert set(server.task_get(target["slug"])["blocked_by"] or []) == {
+        a["slug"],
+        c["slug"],
+    }
+    # And the sibling edge deleted as collateral came back.
+    assert b["slug"] in (server.task_get(other["slug"])["blocked_by"] or [])
+    assert server.task_get(other["slug"])["status"] == "blocked"
+    # Re-running finds nothing, proving the restore did not duplicate it.
+    assert (
+        server.task_unlink(b["slug"], target["slug"], kind="blocks")["removed"] is False
+    )
+    assert (
+        server.task_unlink(b["slug"], other["slug"], kind="blocks")["removed"] is True
+    )
+
+
+@requires_omnigraph
+def test_unlink_is_idempotent_and_reports_absence(server):
+    a = server.task_create(title="A", description="x")
+    b = server.task_create(title="B", description="y")
+    # Never linked at all.
+    assert server.task_unlink(a["slug"], b["slug"], kind="blocks")["removed"] is False
+
+    server.task_link(a["slug"], b["slug"], kind="blocks")
+    assert server.task_unlink(a["slug"], b["slug"], kind="blocks")["removed"] is True
+    # Second removal is a no-op, not an error.
+    assert server.task_unlink(a["slug"], b["slug"], kind="blocks")["removed"] is False
+
+
+@requires_omnigraph
+def test_unlink_wrong_direction_leaves_the_correct_edge(server):
+    """The case this was built for: a link recorded backwards, removed without
+    disturbing the correct one pointing the other way."""
+    a = server.task_create(title="real blocker", description="x")
+    b = server.task_create(title="blocked", description="y")
+    server.task_link(a["slug"], b["slug"], kind="blocks")  # correct
+    server.task_link(b["slug"], a["slug"], kind="blocks")  # backwards
+
+    server.task_unlink(b["slug"], a["slug"], kind="blocks")
+
+    assert not (server.task_get(a["slug"])["blocked_by"] or [])
+    assert a["slug"] in (server.task_get(b["slug"])["blocked_by"] or [])
+
+
+@requires_omnigraph
+def test_unlink_parent_clears_parent_slug(server):
+    epic = server.task_create(title="epic", description="x", type="epic")
+    child = server.task_create(title="child", description="y", parent=epic["slug"])
+    assert server.task_get(child["slug"])["parent_slug"] == epic["slug"]
+
+    server.task_unlink(epic["slug"], child["slug"], kind="parent")
+
+    assert server.task_get(child["slug"])["parent_slug"] is None
+    assert child["slug"] not in {
+        t["slug"] for t in server.task_list(parent=epic["slug"])
+    }
+
+
+@requires_omnigraph
+def test_unlink_addresses_removes_the_memory_link(server):
+    t = server.task_create(title="fixes it", description="x")
+    m = server.memory_store(kind="lesson", title="a lesson", content="c")
+    server.task_link(t["slug"], m["slug"], kind="addresses")
+
+    def seeded_by_task() -> set[str]:
+        # `recall(task=…)` seeds from the memories a task Addresses, so it is
+        # the observable surface for this edge.
+        return {x["slug"] for x in server.recall(task=t["slug"])["memories"]}
+
+    assert m["slug"] in seeded_by_task()
+
+    res = server.task_unlink(t["slug"], m["slug"], kind="addresses")
+    assert res["removed"] is True
+    assert m["slug"] not in seeded_by_task()
+
+
+@requires_omnigraph
+def test_project_unblock_deletes_the_edge_not_just_the_field(server):
+    a = server.workflow_project_create(title="PA", description="d")
+    b = server.workflow_project_create(title="PB", description="d")
+    server.workflow_project_block(slug=a["slug"], blocks_slug=b["slug"])
+    assert a["slug"] in (server.workflow_project_get(b["slug"])["blocked_by"] or [])
+
+    server.workflow_project_unblock(slug=a["slug"], blocks_slug=b["slug"])
+
+    assert not (server.workflow_project_get(b["slug"])["blocked_by"] or [])
+    # The edge is gone too, so re-blocking then unblocking stays consistent
+    # rather than accumulating duplicates.
+    server.workflow_project_block(slug=a["slug"], blocks_slug=b["slug"])
+    server.workflow_project_unblock(slug=a["slug"], blocks_slug=b["slug"])
+    assert not (server.workflow_project_get(b["slug"])["blocked_by"] or [])
+
+
 @requires_omnigraph
 def test_link_closed_blocker_does_not_block(server):
     a = server.task_create(title="closed", description="x")
