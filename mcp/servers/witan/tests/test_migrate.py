@@ -360,6 +360,24 @@ def test_merge_from_a_missing_export_file_names_the_file(server, tmp_path):
         srv.merge_store(str(tmp_path / "nope.jsonl"))
 
 
+def test_merge_from_a_remote_export_says_to_download_it(server):
+    """A remote `.jsonl` is a different mistake from a missing one, and
+    "no such export file" would point at the wrong problem.
+
+    An export is bytes, not a store: witan has no credentials for the bucket
+    holding it and no reason to grow any, so the answer is "download it with
+    whatever already has access", not "check the path".
+    """
+    from witan import server as srv
+
+    for uri in (
+        "s3://ol-data-witan-ci/alice.jsonl",
+        "https://example.invalid/alice.jsonl",
+    ):
+        with pytest.raises(RuntimeError, match="does not fetch remote ones"):
+            srv.merge_store(uri)
+
+
 def test_merge_addresses_a_remote_target_as_server_and_graph(server, tmp_path):
     """A deployed graph is `--server <url> --graph <id>`, never `--store`.
 

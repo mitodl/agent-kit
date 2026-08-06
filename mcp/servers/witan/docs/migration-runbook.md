@@ -98,11 +98,17 @@ witan migrate merge alice-export.jsonl --target http://127.0.0.1:8080/graphs/cou
 ```
 
 `source` accepts a plain local path, `s3://`, an explicit `file://` local URI,
-an `http(s)://` omnigraph-server — or **the path to an `omnigraph export`
+an `http(s)://` omnigraph-server — or **the path to a local `omnigraph export`
 JSONL**. Anything ending `.jsonl` is read as an export rather than
 re-exported; the suffix is unambiguous, since a store is always a directory.
 That form is what crosses machine boundaries, per the "never `mv`" rule at the
 top: a `.omni` directory cannot be copied, but its export can.
+
+An export must be a readable local file — `merge` never fetches one over the
+network. An export is bytes rather than a store, so a remote one is downloaded
+by whatever already holds credentials for it (`aws s3 cp …`, `curl`) and passed
+as a path; a `s3://…/x.jsonl` source is refused with that instruction rather
+than a misleading "no such file".
 
 `target` takes the same set and defaults to your configured store. A missing
 local `target` is auto-created; a missing remote `target` is assumed to

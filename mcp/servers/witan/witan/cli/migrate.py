@@ -190,11 +190,12 @@ def merge(
     ----------
     source:
         Store URI to merge from (local path, ``s3://``, ``file://``, or an
-        ``http(s)://`` omnigraph-server), or the path to an ``omnigraph
-        export`` JSONL — anything ending ``.jsonl`` is read as an export
-        rather than re-exported. Use the export form to merge a store from
-        another machine: Lance embeds absolute paths, so a ``.omni``
-        directory cannot be copied, but its export can.
+        ``http(s)://`` omnigraph-server), or the path to a *local*
+        ``omnigraph export`` JSONL — anything ending ``.jsonl`` is read as an
+        export rather than re-exported, and is never fetched remotely. Use the
+        export form to merge a store from another machine: Lance embeds
+        absolute paths, so a ``.omni`` directory cannot be copied, but its
+        export can.
     target:
         Store URI to merge into. Defaults to the configured store. Created
         automatically if it's a local path that doesn't exist yet. A deployed

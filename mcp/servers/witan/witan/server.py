@@ -1260,6 +1260,29 @@ def _is_export_file(source: str) -> bool:
     return source.endswith(".jsonl")
 
 
+def _check_export_source(source: str) -> None:
+    """Fail with a message that points at the real problem for a bad export path.
+
+    An export is bytes, not a store, so witan does not fetch one — the two ways
+    a ``.jsonl`` source goes wrong need different answers, and the generic
+    "no such file" sends a remote URI in the wrong direction entirely.
+    """
+    if source.startswith(("http://", "https://", "s3://")):
+        raise RuntimeError(
+            f"{source}: a `.jsonl` source is read as an `omnigraph export` "
+            "file, and witan does not fetch remote ones — it has no "
+            "credentials for them and an export is bytes, not a store. "
+            "Download it with whatever already has access (e.g. `aws s3 cp "
+            f"{source} ./export.jsonl`) and pass the local path."
+        )
+    if not Path(source).is_file():
+        raise RuntimeError(
+            f"{source}: no such export file. A `.jsonl` source is read as an "
+            "`omnigraph export`, not a store — produce one with "
+            f"`omnigraph export --store <store> > {source}`."
+        )
+
+
 def merge_store(
     source: str, *, target: str | None = None, dry_run: bool = False
 ) -> dict:
@@ -1286,7 +1309,8 @@ def merge_store(
         What to merge from: a store URI (local path, ``s3://``, ``file://``, or
         an ``http(s)://`` omnigraph-server), or the path to an
         ``omnigraph export`` JSONL — anything ending ``.jsonl`` is read as an
-        export and not re-exported. The export form is the one that crosses
+        export and not re-exported, and must be a readable *local* file (witan
+        fetches no remote exports). The export form is the one that crosses
         machines: a Lance ``.omni`` directory embeds absolute paths and cannot
         be copied, so handing a store to another host (or into a cluster pod)
         means handing over its export.
@@ -1319,12 +1343,8 @@ def merge_store(
     if target.startswith("file://"):
         target = target[len("file://") :]
     from_export = _is_export_file(source)
-    if from_export and not Path(source).is_file():
-        raise RuntimeError(
-            f"{source}: no such export file. A `.jsonl` source is read as an "
-            "`omnigraph export`, not a store — produce one with "
-            f"`omnigraph export --store <store> > {source}`."
-        )
+    if from_export:
+        _check_export_source(source)
 
     _ensure_graph(target)
     binary = client._binary

@@ -455,7 +455,7 @@ already-merged target loads nothing.
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
-| `SOURCE` (positional) | str | required | A store URI (local path, `s3://`, `file://`, or an `http(s)://` omnigraph-server) **or** the path to an `omnigraph export` JSONL — anything ending `.jsonl` is read as an export rather than re-exported |
+| `SOURCE` (positional) | str | required | A store URI (local path, `s3://`, `file://`, or an `http(s)://` omnigraph-server) **or** the path to a *local* `omnigraph export` JSONL — anything ending `.jsonl` is read as an export rather than re-exported, and is never fetched remotely (download it yourself and pass the path) |
 | `--target` | str \| None | configured store | Store URI to merge into. A missing local target is created and schema-applied; a missing remote one is assumed to exist |
 | `--dry-run` | bool | `False` | Print the per-slug decision (`added`/`updated`/`kept-target`) without writing |
 
