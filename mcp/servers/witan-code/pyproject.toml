@@ -15,10 +15,12 @@ dependencies = [
     # proxy) behind `witan-code login` and the read commands' remote mode.
     # Costs nothing extra in practice — fastmcp is already required here and
     # itself depends on httpx2, the extra's only other dependency.
-    # >=0.8: the batched reindex deletes call OmnigraphClient.change_many with
-    # chunk_size, neither of which 0.7 has. A looser floor lets an external
-    # install resolve a witan-core that fails on the first reindex.
-    "witan-core[cli,remote]>=0.8,<1",
+    # >=0.9: server.py imports witan_core.observability.middleware at module
+    # scope, which 0.8 does not have. A looser floor lets an external install
+    # resolve a witan-core the server cannot even import. (>=0.8 was already
+    # required for OmnigraphClient.change_many with chunk_size on the batched
+    # reindex deletes.)
+    "witan-core[cli,remote,observability]>=0.9,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled

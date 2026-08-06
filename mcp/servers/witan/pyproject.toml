@@ -20,10 +20,11 @@ dependencies = [
   "rich>=13",
   "pydantic>=2,<3",
   "agent-config-kit>=0.4,<1",
-  # >=0.8: the batched-write path calls OmnigraphClient.change_many, which
-  # 0.7 does not have. A looser floor lets an external install resolve a
-  # witan-core that fails at the first memory_store.
-  "witan-core[cli,remote]>=0.8,<1",
+  # >=0.9: server.py imports witan_core.observability.middleware at module
+  # scope, which 0.8 does not have. A looser floor lets an external install
+  # resolve a witan-core the server cannot even import. (>=0.8 was already
+  # required for OmnigraphClient.change_many on the batched-write path.)
+  "witan-core[cli,remote,observability]>=0.9,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
