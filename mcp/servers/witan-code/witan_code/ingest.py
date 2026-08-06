@@ -48,12 +48,17 @@ Mediated, not arbitrary: ``query`` names a file bundled in this package's
 same named queries the in-process path can run, on a graph resolved from a
 repo URI rather than from anything the caller sends.
 
-The cost is round trips — one per store operation, and a full-repo index makes
-thousands. That is the same subprocess-per-call shape the local path already
-has, plus a network hop; the CI indexer (the one writer that does full-repo
-runs routinely) runs in-cluster and keeps the direct ``code_server`` path, so
-what crosses this boundary is developer-branch reindexes of what changed. See
-tk-spike-subprocess-per-call-overhead-for-remote-om-d6ceac.
+The cost is round trips. That is the same subprocess-per-call shape the local
+path already has, plus a network hop; the CI indexer (the one writer that does
+full-repo runs routinely) runs in-cluster and keeps the direct ``code_server``
+path, so what crosses this boundary is developer-branch reindexes of what
+changed. See tk-spike-subprocess-per-call-overhead-for-remote-om-d6ceac.
+
+Which is why the tools are not strictly one-per-store-operation:
+:func:`mutate_many` mirrors ``OmnigraphClient.change_many``, because a reindex
+emits two deletes per changed file and one call apiece made the round trips —
+and the Lance versions — scale with the repo. The splice stays here, where
+``queries_dir`` is, so the client still sends only named queries and params.
 """
 
 from __future__ import annotations
@@ -283,6 +288,53 @@ def mutate(graph: str, view: str | None, query: str, name: str, params: dict) ->
     client = _client(graph, view, cfg, actor)
     _authorize(graph, view, cfg, actor)
     client.change(_query_path(cfg, query), name, params)
+
+
+def mutate_many(graph: str, view: str | None, steps: list[dict]) -> int:
+    """Run several named mutations against ``graph``'s ``view`` as ONE commit.
+
+    ``steps`` is ``[{"query": file, "name": named, "params": {…}}, …]`` — the
+    wire form of the triples :func:`mutate` takes one at a time. They are handed
+    to the server-side client's ``change_many``, which splices them into a
+    single multi-statement mutation, so N rows cost one Lance version instead of
+    N. Returns the number of steps applied.
+
+    WHY THE STEPS ARRIVE AS PARAMS AND NOT AS A COMPOSED BODY. The splice needs
+    each named query's source, which lives in this server's ``queries_dir``; the
+    client has no business composing GQ, and a tool that accepted an inline body
+    would let a caller send arbitrary GQ through a surface Cedar scopes by named
+    query. So the client sends only what it already sends today — file, name,
+    params — and the composition stays here.
+
+    ORDER IS PRESERVED AND SIGNIFICANT: an edge statement may reference a node
+    an earlier step inserted. Every step is validated before any of them runs,
+    so a bad file name in the middle of a batch refuses the whole batch rather
+    than committing its prefix.
+
+    NOT for a compare-and-swap, for the same reason ``change_many`` is not: the
+    batch commits or fails whole, so a conflict cannot be attributed to a step.
+    """
+    cfg = _config()
+    actor = request_actor()
+    client = _client(graph, view, cfg, actor)
+    _authorize(graph, view, cfg, actor)
+    triples = [
+        (
+            _query_path(cfg, _step_field(step, "query")),
+            _step_field(step, "name"),
+            step.get("params") or {},
+        )
+        for step in steps
+    ]
+    client.change_many(triples)
+    return len(triples)
+
+
+def _step_field(step: dict, field: str) -> str:
+    value = step.get(field)
+    if not isinstance(value, str) or not value:
+        raise IngestRefused(f"Every step needs a non-empty {field!r}; got {value!r}.")
+    return value
 
 
 def load_records(

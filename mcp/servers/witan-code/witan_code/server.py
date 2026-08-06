@@ -1170,6 +1170,26 @@ def code_store_mutate(
     return {"graph": graph, "view": view, "query": f"{query}:{name}"}
 
 
+def code_store_mutate_many(
+    graph: str,
+    steps: list[dict],
+    view: str | None = None,
+) -> dict:
+    """
+    Run several bundled named mutations as ONE commit. Machine-facing.
+
+    ``steps`` is ``[{"query": file, "name": named, "params": {…}}, …]`` — the
+    batch form of ``code_store_mutate``, run in order and committed once, so a
+    reindex's per-file deletes cost one Lance version instead of one apiece.
+    Refused unless the request's own identity owns ``view``.
+    """
+    return {
+        "graph": graph,
+        "view": view,
+        "applied": ingest.mutate_many(graph, view, steps),
+    }
+
+
 def code_store_load(
     graph: str,
     records: list[dict],
@@ -1212,6 +1232,7 @@ def code_store_graphs() -> list[str]:
 _STORE_TOOLS = (
     code_store_read,
     code_store_mutate,
+    code_store_mutate_many,
     code_store_load,
     code_store_open,
     code_store_views,
