@@ -128,6 +128,50 @@ class TestRenderBundle:
         assert set(doc["groups"]) == {"witan-users", "witan-admin"}
         assert doc["groups"]["witan-admin"] == ["svc-witan-admin"]
 
+    def test_unprovisioned_group_is_dropped_not_written_empty(self, tmp_path):
+        """omnigraph refuses to boot on an empty group — it must not be emitted.
+
+        This is what crash-looped CI: `witan-service` rendered as `[]` and
+        omnigraph-server exited with "policy group 'witan-service' must not be
+        empty" on every restart.
+        """
+        bundle = tmp_path / "memory.policy.yaml"
+        bundle.write_text(
+            yaml.safe_dump(
+                {
+                    "version": 1,
+                    "groups": {"witan-users": ["act-alice"], "witan-service": ["x"]},
+                    "rules": [
+                        {
+                            "id": "users-read",
+                            "allow": {
+                                "actors": {"group": "witan-users"},
+                                "actions": ["read"],
+                            },
+                        },
+                        {
+                            "id": "service-schema",
+                            "allow": {
+                                "actors": {"group": "witan-service"},
+                                "actions": ["schema_apply"],
+                            },
+                        },
+                    ],
+                }
+            )
+        )
+        groups = render_groups.classify_actors(list(LIVE_TOKEN_MAP))
+
+        written = render_groups.render_bundle(bundle, groups)
+
+        doc = yaml.safe_load(bundle.read_text())
+        assert written == ["witan-users"]
+        assert "witan-service" not in doc["groups"]
+        assert all(members for members in doc["groups"].values())
+        # The rule naming the dropped group must go too — an undefined-group
+        # reference is the same boot failure with a less obvious cause.
+        assert [r["id"] for r in doc["rules"]] == ["users-read"]
+
     def test_fixture_ids_are_replaced(self, tmp_path):
         """The committed fixtures must not survive into the applied bundle."""
         bundle = write_bundle(
