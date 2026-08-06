@@ -15,9 +15,9 @@ from ..remote import oidc
 from ._common import app, console
 
 
-def _remote_or_exit() -> cfg_module.RemoteConfig:
+def _remote_or_exit(target: str | None = None) -> cfg_module.RemoteConfig:
     try:
-        remote = cfg_module.load_remote_config()
+        remote = cfg_module.load_remote_config(target=target)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(1) from None
@@ -32,14 +32,20 @@ def _remote_or_exit() -> cfg_module.RemoteConfig:
 
 
 @app.command
-def login() -> None:
+def login(*, target: str | None = None) -> None:
     """Authenticate to the deployed witan service via the OIDC device grant.
 
     Prints a verification URL and a user code; approve it in a browser, and the
     resulting token is cached (mode 0600) and refreshed automatically for
     subsequent ``witan …`` commands.
+
+    Parameters
+    ----------
+    target: Named ``[targets.<name>]`` block to authenticate against. Needed for
+        a target with no ``match_*`` criteria, which never selects itself. Also
+        settable via ``WITAN_TARGET``.
     """
-    remote = _remote_or_exit()
+    remote = _remote_or_exit(target)
 
     def _prompt(device: dict) -> None:
         complete = device.get("verification_uri_complete")
@@ -63,9 +69,14 @@ def login() -> None:
 
 
 @app.command
-def logout() -> None:
-    """Forget the cached token for the configured deployment."""
-    remote = _remote_or_exit()
+def logout(*, target: str | None = None) -> None:
+    """Forget the cached token for the configured deployment.
+
+    Parameters
+    ----------
+    target: Named ``[targets.<name>]`` block to log out of.
+    """
+    remote = _remote_or_exit(target)
     if oidc.logout(remote):
         console.print(f"[green]Logged out[/green] of {remote.url}")
     else:
@@ -73,9 +84,14 @@ def logout() -> None:
 
 
 @app.command
-def whoami() -> None:
-    """Show the identity the CLI presents to the deployed witan service."""
-    remote = _remote_or_exit()
+def whoami(*, target: str | None = None) -> None:
+    """Show the identity the CLI presents to the deployed witan service.
+
+    Parameters
+    ----------
+    target: Named ``[targets.<name>]`` block to report on.
+    """
+    remote = _remote_or_exit(target)
     try:
         token = oidc.get_valid_token(remote)
     except oidc.NeedsLogin as exc:
