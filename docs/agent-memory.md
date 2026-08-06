@@ -1193,14 +1193,27 @@ export AWS_S3_FORCE_PATH_STYLE=true
 
 ### Remote Team Server
 
-The shared mode. An `omnigraph-server` process runs in your infrastructure,
-pointed at an S3-backed graph. Each team member sets two env vars:
+An `omnigraph-server` process runs in your infrastructure, pointed at an
+S3-backed graph, and clients address the data tier directly:
 
 ```bash
 export WITAN_MEMORY_URI=http://witan.internal:8080
+export WITAN_MEMORY_GRAPH=council
 export WITAN_MEMORY_TOKEN=<bearer-token>
 export WITAN_AUTHOR="Alice Smith"
 ```
+
+> **This is the low-level mode, not how a person joins a shared deployment.**
+> One bearer token means one coarse principal: no per-user identity, no
+> per-user audit trail, and Cedar can only distinguish whoever holds that
+> token. It is how an in-cluster maintenance job or a single-tenant self-hosted
+> setup connects.
+>
+> The multi-user shape puts an MCP tier in front, so each person authenticates
+> as themselves (Keycloak JWT → `act-<sub>` → that actor's own omnigraph
+> token). That is what mitodl runs, and joining it is
+> [`deployed-witan-onboarding.md`](../mcp/servers/witan/docs/deployed-witan-onboarding.md)
+> — a `[targets.*]` block and `witan login`, not these env vars.
 
 **Deploying the server:**
 
@@ -1243,20 +1256,25 @@ See `docs/user/operations/policy.md` and `docs/user/clusters/config.md` in
 full cluster-config and Cedar-policy-bundle reference — Cedar authorization
 there is graph+branch scoped only, not per-node-type.
 
-**Promoting a local graph to S3:**
+**Promoting a local graph to a shared store:**
+
+Use `witan migrate merge`, not raw `omnigraph load` — the raw form is a silent
+last-loaded-wins overwrite on any slug collision, with no error and exit 0:
 
 ```bash
-# Export your local memories to JSONL
-omnigraph export \
-  ~/.local/share/witan/graph.omni \
-  > memories.jsonl
-
-# Load them into the S3-backed graph
-omnigraph load \
-  --data memories.jsonl \
-  --mode merge \
-  s3://mitodl-agent-memory/graph.omni
+# preview the per-slug decisions first
+witan migrate merge ~/.local/share/witan/graph.omni --target <target> --dry-run
+witan migrate merge ~/.local/share/witan/graph.omni --target <target>
 ```
+
+For the **deployed** multi-tenant service the target is not reachable from a
+laptop at all — the data tier is ClusterIP-only, so the merge runs in-cluster
+from a handed-over export. That procedure is
+[`mcp/servers/witan/docs/migration-runbook.md` § Local → shared](../mcp/servers/witan/docs/migration-runbook.md#local--shared-the-cutover),
+with the reasoning in
+[witan ADR-0007](../mcp/servers/witan/docs/adr/0007-local-to-shared-store-migration-transport.md).
+Pointing your own CLI at that service is
+[`deployed-witan-onboarding.md`](../mcp/servers/witan/docs/deployed-witan-onboarding.md).
 
 ---
 

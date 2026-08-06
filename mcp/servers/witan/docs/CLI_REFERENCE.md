@@ -73,6 +73,13 @@ as your own Keycloak-authenticated user — inheriting the same per-user Cedar
 scoping and audit trail as the agent traffic — set `WITAN_REMOTE_URL` and log
 in. See [ADR-0005](adr/0005-secure-cli-path-into-deployed-witan.md).
 
+For joining an actual deployment, prefer a named `[targets.*]` block over these
+env vars (it scopes the deployment to the repos it covers, and routes
+`witan-code` with it) — see
+[**Pointing your CLI and agent at the deployed witan**](deployed-witan-onboarding.md).
+A configured-but-unreachable remote **hard-fails**; it never falls back to your
+local store, since a silent fallback would split the corpus in two.
+
 | Env var | Required | Description |
 |---|---|---|
 | `WITAN_REMOTE_URL` | yes (to enable) | The deployed MCP endpoint, e.g. `https://witan.example.org/mcp` |
@@ -435,6 +442,39 @@ rebuilt by hand.
 ```bash
 witan migrate storage --yes
 ```
+
+### `migrate merge SOURCE`
+
+Merge another store's data into this store, newest-record-wins on slug
+collisions. For every node present in both (matched on type + slug) it keeps
+whichever has the newer timestamp, rather than `omnigraph load --mode merge`'s
+raw last-loaded-wins overwrite, which ignores content entirely. Rows only in
+the source are added; rows only in the target are untouched; edge rows have no
+slug and pass through unreconciled. Repeatable — re-running against an
+already-merged target loads nothing.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `SOURCE` (positional) | str | required | A store URI (local path, `s3://`, `file://`, or an `http(s)://` omnigraph-server) **or** the path to an `omnigraph export` JSONL — anything ending `.jsonl` is read as an export rather than re-exported |
+| `--target` | str \| None | configured store | Store URI to merge into. A missing local target is created and schema-applied; a missing remote one is assumed to exist |
+| `--dry-run` | bool | `False` | Print the per-slug decision (`added`/`updated`/`kept-target`) without writing |
+
+A `.jsonl` source is how a store crosses machines: Lance embeds absolute paths,
+so a `.omni` directory cannot be copied, tarred, or streamed into a pod — only
+its export can. A deployed graph is addressed as a server, not a store
+(`http(s)://<host>:<port>/graphs/<graph-id>`), since omnigraph 0.8.1 rejects an
+http(s) `--store`.
+
+```bash
+witan migrate merge ~/.local/share/witan-laptop-b/graph.omni --dry-run
+witan migrate merge old-machine.omni --target new-machine.omni
+witan migrate merge alice-export.jsonl --target http://127.0.0.1:8080/graphs/council
+```
+
+Moving a local store onto the deployed service is a distinct procedure — the
+data tier is ClusterIP-only, so the merge runs in-cluster from a handed-over
+export. See [the migration runbook](migration-runbook.md#local--shared-the-cutover)
+and [ADR-0007](adr/0007-local-to-shared-store-migration-transport.md).
 
 ### `migrate topics`
 

@@ -72,6 +72,54 @@ def test_remote_graph_id_parsed_from_uri_path(monkeypatch):
     assert client.graph_id == "code"
 
 
+def test_store_cli_args_addresses_a_store_with_no_client():
+    """The free-function form, for a tool driving a store it holds no client
+    for — `witan migrate merge` addresses a source and a target through one
+    client's binary, and hardcoding `--store` there is what made a deployed
+    graph unreachable from the merge path."""
+    assert og.store_cli_args("/var/lib/witan/graph.omni") == [
+        "--store",
+        "/var/lib/witan/graph.omni",
+    ]
+    assert og.store_cli_args("s3://bucket/graph") == ["--store", "s3://bucket/graph"]
+    assert og.store_cli_args("http://host:8080", "council") == [
+        "--server",
+        "http://host:8080",
+        "--graph",
+        "council",
+    ]
+    # A remote store can be named completely in one argument, which is what
+    # lets `--target` take a deployed graph with no second flag.
+    assert og.store_cli_args("http://host:8080/graphs/council") == [
+        "--server",
+        "http://host:8080",
+        "--graph",
+        "council",
+    ]
+
+
+def test_store_subprocess_env_strips_an_ambient_token_for_a_local_store(monkeypatch):
+    """A local path or s3:// root has no server to present a token to, so an
+    ambient one is removed rather than merely not set — otherwise a token
+    exported for cluster use rides into every local subprocess."""
+    monkeypatch.setenv(og.BEARER_TOKEN_ENV_VAR, "ambient-secret")
+
+    local = og.store_subprocess_env("/var/lib/witan/graph.omni")
+    assert og.BEARER_TOKEN_ENV_VAR not in local
+
+    s3 = og.store_subprocess_env("s3://bucket/graph", "explicit")
+    assert og.BEARER_TOKEN_ENV_VAR not in s3
+
+    # A remote store takes the explicit token when given...
+    remote = og.store_subprocess_env("http://host:8080", "explicit")
+    assert remote[og.BEARER_TOKEN_ENV_VAR] == "explicit"
+
+    # ...and otherwise inherits the ambient one, the CLI's documented fallback
+    # and the spelling an in-cluster maintenance pod relies on.
+    inherited = og.store_subprocess_env("http://host:8080")
+    assert inherited[og.BEARER_TOKEN_ENV_VAR] == "ambient-secret"
+
+
 def test_explicit_graph_id_overrides_uri_path(monkeypatch):
     client = _built_client(
         monkeypatch, "http://host:8080/graphs/ignored", graph_id="council"

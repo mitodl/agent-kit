@@ -516,6 +516,45 @@ def _split_server_uri(graph_uri: str, graph_id: str | None) -> tuple[str, str]:
     return server_url, resolved
 
 
+def store_cli_args(graph_uri: str, graph_id: str | None = None) -> list[str]:
+    """The CLI flags addressing ``graph_uri``, for a store with no client.
+
+    The free-function form of :meth:`OmnigraphClient._store_args`, which
+    delegates here. It exists because a tool can legitimately need to address a
+    store it holds no client for — ``witan migrate merge`` drives *two* stores
+    (a source and a target) through one client's binary, and hardcoding
+    ``--store`` there is what made a deployed graph unreachable from the merge
+    path: omnigraph 0.8.1 rejects an http(s) ``--store``, so a remote target
+    failed at the first ``export``.
+
+    A remote graph id may come from ``graph_id`` or be encoded in the URI as
+    ``.../graphs/<id>`` — the latter is what lets a caller name a remote store
+    completely in one argument, with no second flag to thread through.
+    """
+    if graph_uri.startswith(_SERVER_SCHEMES):
+        server_url, resolved = _split_server_uri(graph_uri, graph_id)
+        return ["--server", server_url, "--graph", resolved]
+    return ["--store", graph_uri]
+
+
+def store_subprocess_env(graph_uri: str, token: str | None = None) -> dict:
+    """The subprocess environment for an omnigraph CLI call against ``graph_uri``.
+
+    The free-function form of :meth:`OmnigraphClient._subprocess_env`, with the
+    same two rules: a local path or ``s3://`` root has no server to authenticate
+    to, so an ambient bearer token is *stripped* rather than merely unset (it
+    would otherwise leak into a subprocess with no use for it); a remote store
+    takes ``token`` when given and otherwise inherits whatever the environment
+    already carries, which is the CLI's own documented fallback.
+    """
+    env = dict(os.environ)
+    if not graph_uri.startswith(_SERVER_SCHEMES):
+        env.pop(BEARER_TOKEN_ENV_VAR, None)
+    elif token:
+        env[BEARER_TOKEN_ENV_VAR] = token
+    return env
+
+
 def _jittered_backoff(attempt: int, base: float, cap: float) -> float:
     """Exponential backoff with jitter — plain exponential backoff makes
     concurrent retries from the same burst (the actual trigger case for both
@@ -919,10 +958,12 @@ class OmnigraphClient:
         """The CLI flags that address this store. A remote omnigraph-server
         (http(s)) is ``--server <url> --graph <id>`` (omnigraph 0.8.1 rejects an
         http(s) ``--store``); local paths and s3:// roots are ``--store <uri>``.
+
+        Passes the already-resolved ``graph_id`` rather than re-deriving it, so
+        a client built from a bare server URL plus ``WITAN_MEMORY_GRAPH`` keeps
+        addressing the same graph.
         """
-        if self.is_remote:
-            return ["--server", self.server_url, "--graph", self.graph_id]
-        return ["--store", self.graph_uri]
+        return store_cli_args(self.graph_uri, self.graph_id)
 
     def _run(self, subcommand: str, *args: str, surface_conflict: bool = False) -> str:
         quiet = ["--quiet"] if subcommand in _WRITE_SUBCOMMANDS else []
@@ -975,22 +1016,15 @@ class OmnigraphClient:
         )
 
     def _subprocess_env(self) -> dict:
-        env = dict(os.environ)
-        if not self.is_remote:
-            # A local path or an s3:// root is opened directly — there is no
-            # server to present a bearer token to, and s3 authenticates with AWS
-            # credentials instead. `env` is a copy of os.environ, so an ambient
-            # token exported for cluster use would otherwise ride along into
-            # every local subprocess: propagating a secret to a process that
-            # has no use for it. Strip it rather than merely not setting it.
-            env.pop(BEARER_TOKEN_ENV_VAR, None)
-        elif self.token:
-            env[BEARER_TOKEN_ENV_VAR] = self.token
-        # A remote store with no explicit token deliberately keeps whatever the
-        # environment already carries: that is the CLI's own documented fallback
-        # (see BEARER_TOKEN_ENV_VAR), and `export OMNIGRAPH_BEARER_TOKEN=…` with
-        # no token in config is a supported way to drive it.
-        return env
+        # A local path or an s3:// root is opened directly — there is no server
+        # to present a bearer token to, and s3 authenticates with AWS
+        # credentials instead, so an ambient token is stripped rather than
+        # merely not set. A remote store with no explicit token deliberately
+        # keeps whatever the environment already carries: that is the CLI's own
+        # documented fallback (see BEARER_TOKEN_ENV_VAR), and `export
+        # OMNIGRAPH_BEARER_TOKEN=…` with no token in config is a supported way
+        # to drive it. Both rules live in `store_subprocess_env`.
+        return store_subprocess_env(self.graph_uri, self.token)
 
     def _with_retry_policy(
         self,

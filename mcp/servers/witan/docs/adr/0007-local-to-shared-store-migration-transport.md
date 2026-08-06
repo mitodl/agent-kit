@@ -1,0 +1,160 @@
+# 7. Transport for a local → shared store migration
+
+- Status: Accepted
+- Date: 2026-08-06
+- Deciders: witan platform owners
+- Tracking: task `tk-no-usable-transport-for-a-local-shared-store-mig-afbf18`,
+  task `tk-remote-server-registration-local-remote-user-dat-dc753c`,
+  project `wp-witan-multi-user-service-deployment-dcf6ee`
+- Supersedes: —
+- Amends: `0005-secure-cli-path-into-deployed-witan.md` (path (b) gains a
+  concrete data-movement procedure; the ADR provisioned the principal but never
+  said how bytes reach it)
+- Related: `0002-witan-cedar-authorization-bundle.md`;
+  `0004-keycloak-jwt-per-user-actor-mapping.md`; ol-infrastructure
+  `docs/adr/0009-deploy-witan-as-shared-multi-tenant-mcp-service.md` (the
+  ClusterIP-only data tier this works within) and
+  `docs/witan-admin-break-glass-runbook.md`; `docs/migration-runbook.md`
+
+## Context
+
+The migration *procedure* was built and tested; the *transport* to the deployed
+graph was not. `witan migrate merge <source> --target <target>` exports both
+sides, reconciles node collisions on `updated_at` rather than last-write-wins,
+and is idempotent — the hard part, and it works. But it addressed every store
+as `--store <uri>`, and none of the reachable spellings of "the deployed graph"
+survive that:
+
+1. **`--target s3://ol-data-witan-<env>`** — the bucket's only IAM grant is the
+   `omnigraph-server` ServiceAccount's IRSA role, in the `omnigraph` namespace
+   (ol-infrastructure `applications/omnigraph/data_tier.py`). No human IAM path
+   to it is declared anywhere, and minting one would route writes around the
+   bearer-token/Cedar model ADR-0009 exists to establish.
+2. **`--target http://omnigraph-server.omnigraph.svc.cluster.local:8080`** —
+   ClusterIP only, never exposed (ADR-0009 decision point 2). *And*, even from
+   inside the cluster, this failed: omnigraph 0.8.1 rejects an http(s)
+   `--store` outright. A remote graph is addressable only as
+   `--server <url> --graph <id>`.
+3. **Through the public MCP endpoint** (`witan.ol.mit.edu`) — `merge_store` is
+   in `_ADMIN_ONLY` and is not an `@mcp.tool` at all, deliberately: a bulk
+   store merge has no per-user identity to scope (ADR-0005 path b).
+
+Point 2 is the one that mattered most, because it was not a policy limit but a
+plain defect. The in-cluster maintenance pods that *do* have the right network
+position and credential — `witan-break-glass` and the pre-deploy migration Job
+— are configured with `WITAN_MEMORY_URI` pointed at the ClusterIP server
+(ol-infrastructure `applications/witan/break_glass.py`). So the sanctioned
+break-glass path already ran with a remote-addressed store, and
+`witan migrate merge` was the one command in the image that could not use it.
+`OmnigraphClient._store_args()` had encoded the correct rule since the 0.8.1
+upgrade; `merge_store` simply bypassed it.
+
+The second gap is the one nobody had written down: **a store cannot travel.**
+Lance embeds absolute paths, so a user's `~/.local/share/witan/graph.omni`
+cannot be copied to another machine, streamed into a pod, or staged in a
+bucket. Only its `omnigraph export` output can. The break-glass runbook
+acknowledged this and told operators to "copy it in or export/load it through
+S3 first" — but the break-glass pod declares no volume and no ServiceAccount,
+so it holds neither S3 credentials nor an `aws` binary. The advice was not
+executable, and `witan migrate merge` had no way to consume an export file
+even once one arrived.
+
+## Decision
+
+**Make the existing in-cluster path work, rather than building a new one.**
+Two changes to `merge_store`, no new infrastructure, no new server surface:
+
+### D1 — Address each store the way the omnigraph CLI requires
+
+`merge_store` resolves the source and the target independently through
+`witan_core.omnigraph.store_cli_args()` / `store_subprocess_env()` — the
+free-function forms of the client's own `_store_args`/`_subprocess_env`, which
+now delegate to them so there is one implementation of the rule. A local path
+or `s3://` root stays `--store <uri>`; an `http(s)://` store becomes
+`--server <url> --graph <id>`, with the graph id taken from the configured
+`WITAN_MEMORY_GRAPH` or written inline as `http://host:8080/graphs/<id>`.
+
+The bearer token travels with it: a remote store gets the configured token when
+the URI names the configured store (the in-cluster case, where
+`WITAN_MEMORY_TOKEN` is the pod's only credential) and otherwise inherits the
+ambient `OMNIGRAPH_BEARER_TOKEN`. A local store has an ambient token *stripped*
+rather than merely unset — it has no server to present one to, and a token
+exported for cluster use should not ride into an unrelated subprocess.
+
+### D2 — Accept an `omnigraph export` JSONL as the merge source
+
+Any `source` ending `.jsonl` is read as an export rather than re-exported. The
+suffix is unambiguous — an omnigraph store is a Lance *directory*, never a file
+— so this needs no flag. This is what makes the export, the only transportable
+form of a store, a first-class input to the merge.
+
+It also makes the established file-ingress idiom sufficient. There is no
+volume, PVC, or bucket path into the maintenance pods, but there is
+`kubectl exec -i`, already proven for exactly this in ol-infrastructure's
+storage-format upgrade runbook:
+
+```bash
+kubectl -n witan exec -i job/witan-bg-<id> -- sh -c 'cat > /tmp/alice.jsonl' < alice.jsonl
+```
+
+### D3 — The resulting supported route
+
+A user exports locally and hands the file over; an operator streams it into a
+break-glass pod and merges. Full procedure in `docs/migration-runbook.md`
+§ "Local → shared". Every write lands as `svc-witan-admin`, which is correct:
+a bulk store merge is an administrative act, and witan's own `author` field on
+each row preserves who actually wrote it.
+
+For a user with cluster credentials, the same two commands work over a
+`kubectl port-forward` to the data tier, with a `--target
+http://127.0.0.1:8080/graphs/council`. That is a convenience, not a second
+supported path — it needs the actor's own bearer token out of the
+`actor-tokens` Secret, which most users cannot read.
+
+### D4 — Rejected: exposing the data tier
+
+Putting omnigraph-server behind an authenticated ingress so `--server` works
+from a laptop would make this fully self-service. It reverses ADR-0009's
+explicit "the data tier is never exposed" and adds a second,
+policy-unmediated boundary next to the MCP tier — the same reasoning that
+rejected it for witan-code's writes in ADR-0005 (c). Listed here so it is
+rejected deliberately rather than forgotten.
+
+### D5 — Deferred: a bulk-import tool on the MCP tier
+
+The self-service shape would mirror ADR-0005 (c): mediated store operations
+through the MCP tier, authorized per-actor server-side, exactly as
+`code_store_load` does for the code graph. `merge_store`'s `_parse_export`
+already emits the record shape `load_records` accepts, so the pieces fit.
+
+Deliberately not built now. It is a new server-side tool plus a reconciling
+client (the merge must *export the target* too, so `load` alone is not enough),
+to serve a one-time cutover for a handful of users that D1–D3 already cover.
+Revisit if repeated or scheduled merges become a real need — the runbook's
+claim that `merge` is safe to run on a schedule is true of the command, but a
+scheduled merge into the shared graph has nobody to run it as except the admin
+principal.
+
+## Consequences
+
+- **`witan migrate merge` reaches a deployed graph.** The in-cluster
+  break-glass path (ADR-0005 b) is now executable end to end, which it was not
+  before, and the `witan-break-glass` pod needs no redefinition to support it.
+- **The runbook's headline example changed.** `--target s3://witan-shared/…`
+  described a target nobody outside the cluster can write to; it is replaced
+  with the export → `kubectl exec -i` → merge procedure.
+- **`store_cli_args`/`store_subprocess_env` are public witan-core API.** The
+  addressing rule was previously private to `OmnigraphClient` and re-implemented
+  inline in six places; the two that mattered now share one function. The
+  remaining inline `("http://", "https://", "s3://")` checks are a *different*
+  predicate (is this store lockable / is it a local path) and were left alone —
+  note that `OmnigraphClient.is_remote` treats `s3://` as **not** remote while
+  `maintenance.REMOTE_PREFIXES` treats it as remote, and both are correct for
+  their own question.
+- **Attribution is admin-level at the omnigraph layer.** Rows keep their witan
+  `author`, but the omnigraph audit trail records the merge as
+  `svc-witan-admin`. Acceptable for a one-time cutover; it is one of the things
+  D5 would fix.
+- **No change to the default path.** With a local store configured, every
+  command behaves exactly as before — the addressing helper returns the same
+  `--store <uri>` it always did.

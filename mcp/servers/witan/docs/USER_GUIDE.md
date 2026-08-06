@@ -190,13 +190,24 @@ Three ways to point witan at a store, in increasing order of shared-ness:
 - **Local RustFS** — an S3-compatible store running in Docker on your
   machine, for exercising the remote-server code path without standing up
   real infrastructure: `RUSTFS=1 ./install.sh`.
-- **Remote team server** — point every agent at one shared HTTP endpoint:
-  `WITAN_MEMORY_URI=http://witan.internal:8080` +
-  `WITAN_MEMORY_TOKEN=<bearer-token>`.
+- **Deployed service (shared, multi-user)** — the team mode. Your CLI and
+  agent become MCP clients of a deployed endpoint, authenticated with your own
+  Keycloak identity, with per-actor Cedar authorization over one shared graph.
+  Configured with a `[targets.*]` block plus `witan login`.
 
-See [`docs/agent-memory.md` § Operating Modes](../../../../docs/agent-memory.md#6-operating-modes)
-for full deployment steps, the graph schema, and the export/load procedure
-for migrating a local graph onto a shared server.
+To join a deployed service, follow
+[**Pointing your CLI and agent at the deployed witan**](deployed-witan-onboarding.md),
+and migrate the history you already have with the
+[migration runbook](migration-runbook.md#local--shared-the-cutover). Sequence
+the two together — a store you keep writing to after its export was taken has
+a tail nobody will merge.
+
+Note that pointing `WITAN_MEMORY_URI` straight at an omnigraph-server is a
+*different*, lower-level mode: it addresses the data tier directly with a
+shared bearer token and no per-user identity. That is how a self-hosted or
+in-cluster maintenance process connects, not how a person does. See
+[`docs/agent-memory.md` § Operating Modes](../../../../docs/agent-memory.md#6-operating-modes)
+for the graph schema and server-deployment mechanics.
 
 `config.toml` can also define named `[targets.*]` sections that route
 different repos/orgs at different stores (e.g. work vs. personal) — see the

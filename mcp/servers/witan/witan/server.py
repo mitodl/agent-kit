@@ -22,7 +22,12 @@ from fastmcp.server.dependencies import get_access_token
 
 from witan_core import caching, normalise, now_iso
 from witan_core.observability.middleware import ObservabilityMiddleware
-from witan_core.omnigraph import schema_apply, schema_apply_if_changed
+from witan_core.omnigraph import (
+    schema_apply,
+    schema_apply_if_changed,
+    store_cli_args,
+    store_subprocess_env,
+)
 
 from . import config as cfg_module
 from . import elicit
@@ -972,18 +977,23 @@ def _find_pre_upgrade_binary(current_binary: str) -> str | None:
     return None
 
 
-def _run_omnigraph(cmd: list[str], *, label: str, stdout=None) -> str:
+def _run_omnigraph(cmd: list[str], *, label: str, stdout=None, env=None) -> str:
     """Run an omnigraph subcommand.
 
     When ``stdout`` is an open file, output streams straight there (so a
     large ``export`` never sits fully buffered in memory) and ``""`` is
     returned; otherwise stdout is captured and returned as a string.
+
+    ``env`` carries the bearer token when the addressed store is a remote
+    omnigraph-server; ``None`` inherits this process's environment, which is
+    right for a local store (see ``store_subprocess_env``).
     """
     result = subprocess.run(
         cmd,
         stdout=stdout if stdout is not None else subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -1221,6 +1231,35 @@ def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
     return nodes, edges
 
 
+def _store_address(uri: str) -> tuple[list[str], dict]:
+    """The ``omnigraph`` CLI flags and subprocess env addressing ``uri``.
+
+    A store the merge path touches is not necessarily the configured one, so
+    this resolves each side independently. The configured store's own token is
+    reused when ``uri`` names it (the in-cluster maintenance case, where
+    ``WITAN_MEMORY_TOKEN`` is the only credential in the pod); any *other*
+    remote store falls back to the ambient ``OMNIGRAPH_BEARER_TOKEN``, the
+    omnigraph CLI's documented spelling.
+    """
+    token = client.token if uri == client.graph_uri else None
+    graph_id = client.graph_id if uri == client.graph_uri else None
+    return store_cli_args(uri, graph_id), store_subprocess_env(uri, token)
+
+
+def _is_export_file(source: str) -> bool:
+    """Whether ``source`` names an ``omnigraph export`` JSONL rather than a store.
+
+    A ``.jsonl`` suffix is unambiguous — an omnigraph store is a Lance
+    *directory*, never a file — so this needs no flag. It matters because a
+    JSONL export is the only *transportable* form of a store: Lance embeds
+    absolute paths, so a ``.omni`` directory cannot be copied to another
+    machine or streamed into a pod, while its export can (`kubectl exec -i …
+    'cat > /tmp/x.jsonl'`). Merging from an export is what makes the
+    local → deployed cutover executable at all.
+    """
+    return source.endswith(".jsonl")
+
+
 def merge_store(
     source: str, *, target: str | None = None, dry_run: bool = False
 ) -> dict:
@@ -1244,13 +1283,22 @@ def merge_store(
     Parameters
     ----------
     source:
-        Store URI to merge from (local path, ``s3://``, or ``file://``).
+        What to merge from: a store URI (local path, ``s3://``, ``file://``, or
+        an ``http(s)://`` omnigraph-server), or the path to an
+        ``omnigraph export`` JSONL — anything ending ``.jsonl`` is read as an
+        export and not re-exported. The export form is the one that crosses
+        machines: a Lance ``.omni`` directory embeds absolute paths and cannot
+        be copied, so handing a store to another host (or into a cluster pod)
+        means handing over its export.
     target:
         Store URI to merge into. Defaults to the configured store. Created
         (schema-applied, empty) automatically if it's a local path that
         doesn't exist yet — same as ``witan serve``/``witan <cmd>`` on a
         fresh machine; no-op for a remote ``s3://``/``http(s)://`` target,
-        which is assumed to already exist.
+        which is assumed to already exist. An ``http(s)://`` target names a
+        deployed omnigraph-server and carries its graph id either from the
+        configured ``WITAN_MEMORY_GRAPH`` (when it *is* the configured store)
+        or inline as ``http://host:8080/graphs/<id>``.
     dry_run:
         Compute and return the reconciliation decisions without loading
         anything.
@@ -1270,8 +1318,17 @@ def merge_store(
     target = target or client.graph_uri
     if target.startswith("file://"):
         target = target[len("file://") :]
+    from_export = _is_export_file(source)
+    if from_export and not Path(source).is_file():
+        raise RuntimeError(
+            f"{source}: no such export file. A `.jsonl` source is read as an "
+            "`omnigraph export`, not a store — produce one with "
+            f"`omnigraph export --store <store> > {source}`."
+        )
+
     _ensure_graph(target)
     binary = client._binary
+    target_args, target_env = _store_address(target)
 
     local_lock = None
     try:
@@ -1280,20 +1337,26 @@ def merge_store(
 
         with tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp:
             tmp_path = Path(tmp)
-            source_file = tmp_path / "source.jsonl"
             target_file = tmp_path / "target.jsonl"
 
-            with open(source_file, "w", encoding="utf-8") as f:
-                _run_omnigraph(
-                    [binary, "export", "--store", source],
-                    label="export (source)",
-                    stdout=f,
-                )
+            if from_export:
+                source_file = Path(source)
+            else:
+                source_file = tmp_path / "source.jsonl"
+                source_args, source_env = _store_address(source)
+                with open(source_file, "w", encoding="utf-8") as f:
+                    _run_omnigraph(
+                        [binary, "export", *source_args],
+                        label="export (source)",
+                        stdout=f,
+                        env=source_env,
+                    )
             with open(target_file, "w", encoding="utf-8") as f:
                 _run_omnigraph(
-                    [binary, "export", "--store", target],
+                    [binary, "export", *target_args],
                     label="export (target)",
                     stdout=f,
+                    env=target_env,
                 )
 
             source_nodes, source_edges = _parse_export(source_file)
@@ -1370,14 +1433,14 @@ def merge_store(
                 [
                     binary,
                     "load",
-                    "--store",
-                    target,
+                    *target_args,
                     "--data",
                     str(reconciled_file),
                     "--mode",
                     "merge",
                 ],
                 label="load (reconciled)",
+                env=target_env,
             )
     finally:
         if local_lock is not None:
