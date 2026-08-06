@@ -707,27 +707,54 @@ def test_map_refs_preserves_order_regardless_of_completion_order():
 
     Callers zip results back against `refs` positionally, so a completion-order
     result would attribute one graph's file count to another — a wrong answer,
-    not a slow one. The sleep is inverted against position so the first ref
-    finishes last; `as_completed` semantics would fail this.
-    """
-    refs = _refs(6)
+    not a slow one.
 
-    def slow_by_position(ref):
+    Completion order is inverted by a chain of Events rather than by staggered
+    sleeps: each task waits for its successor to finish before finishing
+    itself, so the last ref provably completes first and the first completes
+    last. Sleeps would only make that ordering *likely* — and a run where they
+    landed in order would silently PASS against an `as_completed`
+    implementation, which is the one thing this test exists to catch.
+    """
+    refs = _refs(4)
+    done = [threading.Event() for _ in refs]
+
+    def finish_in_reverse(ref):
         index = int(ref.graph_id.removeprefix("code-g"))
-        time.sleep((6 - index) * 0.02)
+        if index + 1 < len(refs):
+            assert done[index + 1].wait(timeout=5), "successor never finished"
+        done[index].set()
         return ref.graph_id
 
-    assert store_module.map_refs(refs, slow_by_position) == [r.graph_id for r in refs]
+    assert store_module.map_refs(refs, finish_in_reverse, max_workers=len(refs)) == [
+        r.graph_id for r in refs
+    ]
 
 
 def test_map_refs_actually_runs_concurrently():
-    """A serial implementation passes every other test here, so pin the wall
-    clock: 8 refs blocking 0.1s each is ~0.8s serially and ~0.1s at width 8."""
-    refs = _refs(8)
-    start = time.perf_counter()
-    store_module.map_refs(refs, lambda _ref: time.sleep(0.1))
-    elapsed = time.perf_counter() - start
-    assert elapsed < 0.4, f"took {elapsed:.2f}s — looks serial"
+    """A serial implementation passes every other test here, so pin the one
+    property they cannot: that the work genuinely overlaps.
+
+    A rendezvous rather than a stopwatch. ``Barrier(len(refs))`` clears only
+    when every task is inside ``fn`` at the same instant, which IS the claim —
+    where an elapsed-time threshold only infers it, and infers it from a number
+    tuned on an idle machine. A serial implementation never gets a second task
+    to the barrier and fails on its timeout; a slow-but-concurrent CI runner
+    still passes, because arriving late is not arriving alone.
+
+    ``max_workers`` is passed explicitly so the parties count cannot drift away
+    from the pool width if the default cap changes — the cap has its own test.
+    """
+    refs = _refs(4)
+    barrier = threading.Barrier(len(refs), timeout=5)
+
+    def rendezvous(_ref):
+        barrier.wait()
+        return True
+
+    assert store_module.map_refs(refs, rendezvous, max_workers=len(refs)) == [
+        True
+    ] * len(refs)
 
 
 def test_map_refs_caps_width_and_does_not_over_subscribe():
