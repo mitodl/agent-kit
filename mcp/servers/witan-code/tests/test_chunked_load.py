@@ -13,7 +13,7 @@ import json
 import pytest
 
 from witan_code import indexer
-from witan_code.chunking import LOAD_MAX_BYTES, chunk_records
+from witan_core.chunking import LOAD_MAX_BYTES, chunk_records
 
 from .conftest import requires_stack
 

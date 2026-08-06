@@ -150,10 +150,15 @@ is not an outage — re-run `witan login`.
   on the memory graph and on their own code-graph branch views, but *not* on a
   code graph's protected `main` — that one is CI's, and the refusal is
   deliberate.
-- **`witan migrate …` is refused.** Correct: schema and store maintenance have
-  no per-user identity to scope, so they run in-cluster as `svc-witan-admin`
-  (ADR-0005 path b). See the
+- **`witan migrate schema`/`topics`/`repo-keys` are refused.** Correct: those
+  have no per-user identity to scope, so they run in-cluster as
+  `svc-witan-admin` (ADR-0005 path b). **`witan migrate merge` is the
+  exception** — it has a per-actor form and is how you bring your own history
+  across. See the
   [migration runbook](migration-runbook.md#local--shared-the-cutover).
+- **`witan migrate merge --target …` is refused.** Against a deployment the
+  target is the deployment's own graph, resolved server-side. Unset
+  `remote_url` to merge between stores you address yourself.
 - **witan-code went remote and you didn't want it to.** Expected — one endpoint
   serves both tool surfaces, so the four `remote_*`/`oidc_*` keys route both
   CLIs. Indexing stays local either way (it needs your checkout); only reads

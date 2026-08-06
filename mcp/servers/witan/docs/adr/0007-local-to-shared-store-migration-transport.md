@@ -121,41 +121,53 @@ policy-unmediated boundary next to the MCP tier — the same reasoning that
 rejected it for witan-code's writes in ADR-0005 (c). Listed here so it is
 rejected deliberately rather than forgotten.
 
-### D5 — Accepted, sequenced after this change: merge through the MCP tier
+### D5 — The default path: merge through the MCP tier
 
-The self-service shape mirrors ADR-0005 (c): mediated store operations through
-the MCP tier, authorized per-actor server-side, exactly as `code_store_load`
-does for the code graph. `merge_store`'s `_parse_export` already emits the
-record shape `load_records` accepts, so the pieces fit.
+**Implemented 2026-08-06, in this change.** The self-service shape mirrors
+ADR-0005 (c): mediated store operations through the MCP tier, authorized
+per-actor server-side, exactly as `code_store_load` does for the code graph.
 
-**Amended 2026-08-06, before this ADR merged.** This section originally
-deferred that shape. The maintainer's decision is that `merge_store` is the
-right method and that it must route through the MCP tier rather than shell out
-to omnigraph — so D5 is the intended end state, not a someday-maybe. D1–D3
-stand as the operator path and as the prerequisite: the export-as-source
-handling added here is exactly what the client half ships.
+The argument is not convenience. Under D1–D3 every merge lands in the omnigraph
+audit trail as `svc-witan-admin`; routing through the MCP tier is what puts
+Cedar and the per-request actor in the path, which is the premise of the shared
+deployment. It also removes the operator from a step a user should be able to
+do alone, and makes "safe to run on a schedule" actionable — under D1–D3 a
+scheduled merge has nobody to run it as except the admin principal.
 
-Sequenced after this change rather than folded into it, because it rewrites
-the same function and would conflict. Tracked as
-`tk-un-defer-adr-0007-d5-merge-through-the-witan-mcp-f1e5a1`.
+The split of work is what keeps this small:
 
-One correction to the cost this section originally quoted. "A reconciling
+- **`store_merge(rows, dry_run)`** — a real `@mcp.tool`, so every store call in
+  it goes through the module-level `client`, which re-resolves to *this
+  request's* actor on each access (`_ActorScopedClient` → `_resolve_client`,
+  ADR-0004). There is no service account behind it. The server reconciles the
+  batch against the graph it already holds a client on, and writes the winners.
+- **`RemoteServerProxy.merge_store`** — an explicit method, not a
+  `__getattr__` dispatch, because this is not one tool call: the source is
+  exported *client-side* (the deployment shares no filesystem with the caller)
+  and shipped in `chunk_records` batches. The CLI call site is unchanged, so
+  `witan migrate merge` reads identically in both modes.
+- **One reconciliation rule.** Both transports call `_reconcile_nodes`; a row's
+  fate must not depend on which one carried it.
+
+The cost quoted before this was built was wrong in a useful way. "A reconciling
 client (the merge must *export the target* too, so `load` alone is not enough)"
-is true of a bare `load` tool, but not of a merge-shaped one: the deployed
-witan already holds an `OmnigraphClient` on the target graph, so the **server**
-does both halves. The client ships only source rows; the server reads its own
-target, applies the same `_reconcile_timestamp` rule, and writes through its
-normal client. Batching is the real work, and there is precedent to reuse
-rather than reinvent — `code_store_load`, plus the chunked bulk load (#184) and
-the batched MCP write tier (#189).
+is true of a bare `load` tool, not of a merge-shaped one: the deployed witan
+already holds an `OmnigraphClient` on the target, so the **server** does both
+halves and only source rows cross the wire. Batching was the real work, and it
+was reused rather than reinvented — `chunk_records` moved from witan-code to
+`witan_core.chunking` (same 413 ceiling, same node-before-edge rule), and
+`load_batch` moved to the base `OmnigraphClient`.
 
-The argument for doing it is not convenience. Under D1–D3 every merge lands in
-the omnigraph audit trail as `svc-witan-admin` (see Consequences); routing
-through the MCP tier is what puts Cedar and the per-request actor in the path,
-which is the premise of the shared deployment. It also removes the operator
-from a step a user should be able to do alone, and makes the runbook's
-"safe to run on a schedule" claim actually actionable — today a scheduled merge
-has nobody to run it as except the admin principal.
+`merge_store` therefore leaves `_ADMIN_ONLY`. The in-process function of the
+same name stays for D1–D3 and is still not a tool: two transports for one
+operation, which is why they share a name and a call site.
+
+**What this does not do.** `--target` is refused over a deployment — the target
+is that deployment's own graph, resolved server-side, since a client never
+names a store address (ADR-0005 c). And batches commit independently, so a
+failure part-way leaves earlier batches applied; that is recoverable by
+re-running rather than atomic, because reconciliation makes a re-sent row lose
+to its own already-applied copy.
 
 ## Consequences
 
@@ -173,10 +185,15 @@ has nobody to run it as except the admin principal.
   note that `OmnigraphClient.is_remote` treats `s3://` as **not** remote while
   `maintenance.REMOTE_PREFIXES` treats it as remote, and both are correct for
   their own question.
-- **Attribution is admin-level at the omnigraph layer.** Rows keep their witan
-  `author`, but the omnigraph audit trail records the merge as
-  `svc-witan-admin`. Acceptable for a one-time cutover, and the main thing D5
-  fixes — it is why D5 is sequenced next rather than left open-ended.
+- **Attribution is per-actor on the D5 path, admin-level on the D1–D3 one.**
+  Through the MCP tier the omnigraph audit trail records the merge as the
+  calling user's `act-<sub>`, and Cedar evaluates it as them. The in-cluster
+  path still records `svc-witan-admin` — correct for a bulk administrative
+  act, and the reason D1–D3 is now the fallback rather than the default.
+- **`witan_core.chunking` and `OmnigraphClient.load_batch` are shared API.**
+  Both moved up from witan-code, which now imports them: the merge hits the
+  same buffered-body ceiling an index does, so the split rule and the
+  node-before-edge ordering live in one place rather than two.
 - **No change to the default path.** With a local store configured, every
   command behaves exactly as before — the addressing helper returns the same
   `--store <uri>` it always did.

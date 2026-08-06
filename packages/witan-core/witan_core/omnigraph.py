@@ -55,6 +55,7 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -953,6 +954,33 @@ class OmnigraphClient:
             is_write=is_write,
             surface_conflict=surface_conflict,
         )
+
+    def load_batch(self, records: list[dict], mode: str = "merge") -> None:
+        """Bulk-load one batch of node/edge records via ``omnigraph load``.
+
+        Each record is a JSONL line: ``{"type": Node, "data": {...}}`` for a
+        node or ``{"edge": Edge, "from": key, "to": key}`` for an edge. One
+        subprocess replaces a ``mutate`` per record.
+
+        Deliberately **one** batch and no splitting — a caller writing to a
+        deployed server must bound the batch itself with
+        :func:`witan_core.chunking.chunk_records`, because what a batch may
+        contain depends on the caller's record graph (every node before any
+        edge) and on ``mode`` (``overwrite`` truncates the node type, so it can
+        never be split). Encoding either here would make this primitive lie to
+        one of its callers.
+        """
+        if not records:
+            return
+        fd, tmp = tempfile.mkstemp(suffix=".jsonl", prefix="omnigraph-load-")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                for record in records:
+                    fh.write(json.dumps(record))
+                    fh.write("\n")
+            self._run("load", "--data", tmp, "--mode", mode)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
 
     def _store_args(self) -> list[str]:
         """The CLI flags that address this store. A remote omnigraph-server

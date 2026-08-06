@@ -1231,6 +1231,53 @@ def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
     return nodes, edges
 
 
+def _reconcile_nodes(
+    source_nodes: dict[tuple[str, str], dict],
+    target_nodes: dict[tuple[str, str], dict],
+) -> tuple[list[dict], list[dict]]:
+    """Newest-record-wins reconciliation: ``(decisions, rows to write)``.
+
+    The single implementation of the merge rule, shared by the in-process path
+    (``merge_store``, which exports both stores itself) and the MCP-tier path
+    (``store_merge``, where the source rows arrive over the wire and the target
+    is the deployed graph). They must not drift: a row's fate should not depend
+    on which transport carried it.
+    """
+    decisions: list[dict] = []
+    winners: list[dict] = []
+    for (row_type, slug), row in source_nodes.items():
+        existing = target_nodes.get((row_type, slug))
+        if existing is None:
+            decisions.append({"type": row_type, "slug": slug, "decision": "added"})
+            winners.append(row)
+            continue
+        src_ts = _reconcile_timestamp(row_type, row["data"])
+        dst_ts = _reconcile_timestamp(row_type, existing["data"])
+        src_dt = _parse_ts(src_ts)
+        dst_dt = _parse_ts(dst_ts)
+        won = src_dt is not None and (dst_dt is None or src_dt > dst_dt)
+        decisions.append(
+            {
+                "type": row_type,
+                "slug": slug,
+                "decision": "updated" if won else "kept-target",
+                "source_ts": src_ts,
+                "target_ts": dst_ts,
+            }
+        )
+        if won:
+            winners.append(row)
+    return decisions, winners
+
+
+def _decision_counts(decisions: list[dict]) -> dict:
+    return {
+        "added": sum(1 for d in decisions if d["decision"] == "added"),
+        "updated": sum(1 for d in decisions if d["decision"] == "updated"),
+        "kept_target": sum(1 for d in decisions if d["decision"] == "kept-target"),
+    }
+
+
 def _store_address(uri: str) -> tuple[list[str], dict]:
     """The ``omnigraph`` CLI flags and subprocess env addressing ``uri``.
 
@@ -1418,49 +1465,8 @@ def merge_store(
             source_nodes, source_edges = _parse_export(source_file)
             target_nodes, _ = _parse_export(target_file)
 
-            decisions = []
-            winners: list[dict] = []
-            for (row_type, slug), row in source_nodes.items():
-                existing = target_nodes.get((row_type, slug))
-                if existing is None:
-                    decisions.append(
-                        {"type": row_type, "slug": slug, "decision": "added"}
-                    )
-                    winners.append(row)
-                    continue
-                src_ts = _reconcile_timestamp(row_type, row["data"])
-                dst_ts = _reconcile_timestamp(row_type, existing["data"])
-                src_dt = _parse_ts(src_ts)
-                dst_dt = _parse_ts(dst_ts)
-                if src_dt is not None and (dst_dt is None or src_dt > dst_dt):
-                    decisions.append(
-                        {
-                            "type": row_type,
-                            "slug": slug,
-                            "decision": "updated",
-                            "source_ts": src_ts,
-                            "target_ts": dst_ts,
-                        }
-                    )
-                    winners.append(row)
-                else:
-                    decisions.append(
-                        {
-                            "type": row_type,
-                            "slug": slug,
-                            "decision": "kept-target",
-                            "source_ts": src_ts,
-                            "target_ts": dst_ts,
-                        }
-                    )
-
-            counts = {
-                "added": sum(1 for d in decisions if d["decision"] == "added"),
-                "updated": sum(1 for d in decisions if d["decision"] == "updated"),
-                "kept_target": sum(
-                    1 for d in decisions if d["decision"] == "kept-target"
-                ),
-            }
+            decisions, winners = _reconcile_nodes(source_nodes, target_nodes)
+            counts = _decision_counts(decisions)
 
             if dry_run:
                 return {
@@ -1509,6 +1515,90 @@ def merge_store(
         "decisions": decisions,
         "rows_loaded": len(to_load),
         "output": load_out.strip(),
+        **counts,
+    }
+
+
+@mcp.tool
+def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
+    """Merge a batch of exported rows into this deployment's graph, as you.
+
+    The MCP-tier half of ``witan migrate merge`` (ADR-0007 D5). A client
+    exports its own store, splits the rows into batches, and calls this once
+    per batch; the server reconciles each batch against its own graph and
+    writes the winners. That keeps the whole cutover inside the per-actor
+    identity and Cedar model — the write is authorized as the calling user,
+    not as ``svc-witan-admin``, which is the difference between this and the
+    in-cluster path (ADR-0005 b).
+
+    Every store operation here goes through the module-level ``client``, which
+    re-resolves to *this request's* actor on each access. There is no service
+    account behind it: an actor with no provisioned omnigraph token is refused
+    rather than served under one, and a row type the caller's Cedar grant does
+    not cover fails at the data tier.
+
+    ``rows`` are ``omnigraph export`` records — ``{"type": Node, "data": {…}}``
+    for a node, ``{"edge": Edge, "from": …, "to": …}`` for an edge — the shape
+    ``merge_store``'s own export parsing produces. Nodes are reconciled
+    newest-record-wins per ``(type, slug)`` against what this graph already
+    holds, by the *same* ``_reconcile_nodes`` the in-process path uses. Edges
+    carry no slug and pass through additively, exactly as they do there.
+
+    **Batching is the caller's job, and the caller must send every node before
+    any edge** (``witan_core.chunking.chunk_records`` does both). Batches commit
+    independently, so a failure part-way leaves earlier ones applied — which is
+    safe to recover from by simply re-running, since reconciliation makes a
+    re-sent row lose to its own already-applied copy. It is not, however,
+    atomic, and a caller needing all-or-nothing has to arrange that itself.
+
+    Returns this batch's per-row ``decisions`` plus ``added``/``updated``/
+    ``kept_target`` counts, and ``rows_loaded``. With ``dry_run`` the decisions
+    are computed and nothing is written.
+    """
+    if not rows:
+        return {
+            "decisions": [],
+            "rows_loaded": 0,
+            "dry_run": dry_run,
+            **_decision_counts([]),
+        }
+
+    source_nodes: dict[tuple[str, str], dict] = {}
+    source_edges: list[dict] = []
+    for row in rows:
+        row_type = row.get("type")
+        if not row_type:
+            source_edges.append(row)
+            continue
+        slug = (row.get("data") or {}).get("slug")
+        if slug:
+            source_nodes[(row_type, slug)] = row
+        else:
+            source_edges.append(row)
+
+    with tempfile.TemporaryDirectory(prefix="witan-store-merge-") as tmp:
+        target_file = Path(tmp) / "target.jsonl"
+        with open(target_file, "w", encoding="utf-8") as f:
+            _run_omnigraph(
+                [client._binary, "export", *client._store_args()],
+                label="export (deployed graph)",
+                stdout=f,
+                env=client._subprocess_env(),
+            )
+        target_nodes, _ = _parse_export(target_file)
+
+    decisions, winners = _reconcile_nodes(source_nodes, target_nodes)
+    counts = _decision_counts(decisions)
+
+    if dry_run:
+        return {"dry_run": True, "decisions": decisions, "rows_loaded": 0, **counts}
+
+    to_load = winners + source_edges
+    client.load_batch(to_load, "merge")
+    return {
+        "dry_run": False,
+        "decisions": decisions,
+        "rows_loaded": len(to_load),
         **counts,
     }
 

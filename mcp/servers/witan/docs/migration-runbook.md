@@ -249,21 +249,56 @@ different records, one is about to silently disappear — this is exactly what
 
 ## Local → shared: the cutover
 
-Moving your local store onto the deployed service (ADR-0009) is the one
-scenario with a network boundary in the middle, and two constraints shape the
-whole procedure:
+Moving your local store onto the deployed service (ADR-0009). **Do it
+yourself** — no kubectl, no port-forward, no AWS credentials:
 
-- **The data tier is ClusterIP-only** and never exposed (ADR-0009). The merge
-  therefore runs *inside* the cluster, as `svc-witan-admin`, via the
-  `witan-break-glass` pod (ADR-0005 path b). The public MCP endpoint is not an
-  alternative — `merge_store` is `_ADMIN_ONLY` and deliberately not a tool.
+```bash
+witan login                                            # once, if you haven't
+witan migrate merge ~/.local/share/witan/graph.omni --dry-run
+witan migrate merge ~/.local/share/witan/graph.omni
+```
+
+With a deployment configured (`remote_url`, see
+[`deployed-witan-onboarding.md`](deployed-witan-onboarding.md)), `merge`
+exports your store locally and ships the rows through the deployment's
+`store_merge` tool in batches. The server reconciles each batch against the
+shared graph and writes the winners — **as you**, using your own actor's
+credential, evaluated by Cedar like any other write you make. That is the point
+of this path: under the in-cluster alternative below every row lands in the
+audit trail as `svc-witan-admin`.
+
+Two things behave differently here than against a local store:
+
+- **`--target` is refused.** The target is the deployment's own graph, resolved
+  server-side; a client never names a store address. Unset `remote_url` to
+  merge between stores you address yourself.
+- **Batches commit independently.** A failure part-way leaves earlier batches
+  applied. Just re-run — reconciliation makes an already-applied row lose to
+  its own copy, so nothing double-writes. It is recoverable, not atomic.
+
+Verify with `witan memory show <a-slug-you-recognise>`, then run
+`witan migrate repo-keys` and `witan migrate topics` **once** after everyone
+has merged — those are in-cluster admin commands (below), not self-service.
+
+Keep your local store until you have verified. It is the backup.
+
+### Fallback: the in-cluster path
+
+Use this when the MCP tier is unavailable, or for a bulk merge on someone
+else's behalf. Two constraints shape it:
+
+- **The data tier is ClusterIP-only** and never exposed (ADR-0009), so the
+  merge runs *inside* the cluster as `svc-witan-admin` via the
+  `witan-break-glass` pod (ADR-0005 path b).
 - **Your store cannot travel.** Lance embeds absolute paths, so
   `~/.local/share/witan/graph.omni` cannot be copied, tarred, or staged in a
   bucket. Its export can, and that is what you hand over.
 
-See [ADR-0007](adr/0007-local-to-shared-store-migration-transport.md) for why
-this shape and not another, and ol-infrastructure's
-`docs/witan-admin-break-glass-runbook.md` for the pod itself.
+Every write lands as `svc-witan-admin` rather than as the user, which is why
+this is the fallback. See
+[ADR-0007](adr/0007-local-to-shared-store-migration-transport.md) for the full
+reasoning, and ol-infrastructure's `docs/witan-admin-break-glass-runbook.md`
+for the pod itself.
 
 ### 1. You: export your store
 

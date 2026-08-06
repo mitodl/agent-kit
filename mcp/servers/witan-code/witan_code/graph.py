@@ -9,13 +9,11 @@ bulk ``load`` used to write thousands of symbol/edge records in one call.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 
 from witan_core.omnigraph import OmnigraphClient as _BaseOmnigraphClient
 
-from . import chunking
+from witan_core import chunking
 from . import config as cfg_module
 from . import identity as identity_module
 from . import views
@@ -157,7 +155,7 @@ class OmnigraphClient(_BaseOmnigraphClient):
 
         Against a ``--server`` the CLI POSTs the data file as ONE request body,
         so a repo-scale load is split into batches under ``max_bytes`` — see
-        :mod:`witan_code.chunking` for the 413 this avoids, and for why every
+        :mod:`witan_core.chunking` for the 413 this avoids, and for why every
         node has to be written before any edge. A local store reads the file
         directly and has no such limit, but chunking there costs only a few
         extra Lance versions, which ``omnigraph optimize`` reclaims — not worth
@@ -179,21 +177,10 @@ class OmnigraphClient(_BaseOmnigraphClient):
         if not records:
             return
         if mode == "overwrite":
-            self._load_batch(records, mode)
+            self.load_batch(records, mode)
             return
         for batch in chunking.chunk_records(records, max_bytes):
-            self._load_batch(batch, mode)
-
-    def _load_batch(self, records: list[dict], mode: str) -> None:
-        fd, tmp = tempfile.mkstemp(suffix=".jsonl", prefix="codegraph-load-")
-        try:
-            with os.fdopen(fd, "w") as fh:
-                for record in records:
-                    fh.write(json.dumps(record))
-                    fh.write("\n")
-            self._run("load", "--data", tmp, "--mode", mode)
-        finally:
-            Path(tmp).unlink(missing_ok=True)
+            self.load_batch(batch, mode)
 
     # ── Branch operations ─────────────────────────────────────────
 

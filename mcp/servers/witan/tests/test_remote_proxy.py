@@ -15,6 +15,8 @@ from fastmcp import Client
 from witan.config import RemoteConfig
 from witan.remote.proxy import RemoteServerProxy, RemoteToolUnavailable
 
+from .conftest import requires_omnigraph
+
 REPO = "https://github.com/test/repo"
 
 
@@ -170,9 +172,109 @@ def test_no_parked_handle_means_no_provenance(proxy, tmp_path, monkeypatch):
 
 
 def test_admin_only_functions_are_refused_without_network(proxy):
-    for name in ("migrate_topics", "apply_schema", "merge_store"):
+    for name in ("migrate_topics", "apply_schema"):
         with pytest.raises(RemoteToolUnavailable, match="in-cluster"):
             getattr(proxy, name)()
+
+
+def test_merge_store_is_no_longer_admin_only(proxy):
+    """`merge_store` has a per-actor form now, so it must NOT be refused.
+
+    It was admin-only for as long as the only way to merge was shelling out to
+    omnigraph against the data tier, which has no per-user identity. ADR-0007
+    D5 gives it one — the proxy exports locally and ships rows through
+    ``store_merge`` — so the refusal would now block the *supported* path.
+    """
+    from witan.remote.proxy import _ADMIN_ONLY
+
+    assert "merge_store" not in _ADMIN_ONLY
+    assert not proxy._is_admin_tool("merge_store")
+
+
+def test_remote_merge_refuses_an_explicit_target(proxy, tmp_path):
+    """Over a deployment the target is the deployment's own graph.
+
+    A client never names a store address (ADR-0005 c) — the server resolves it
+    from its own config. Silently ignoring `--target` would let someone believe
+    they had merged into the store they named.
+    """
+    source = tmp_path / "handover.jsonl"
+    source.write_text("")
+
+    with pytest.raises(RemoteToolUnavailable, match="not accepted"):
+        proxy.merge_store(str(source), target="/some/other/store.omni")
+
+
+@requires_omnigraph
+def test_remote_merge_lands_rows_through_the_mcp_tier(proxy, server, tmp_path):
+    """The whole ADR-0007 D5 path, end to end: local store -> MCP -> deployed graph.
+
+    Nothing here shells out to omnigraph against the *target*: the proxy exports
+    only the source, and `store_merge` reconciles against the graph it already
+    holds a client on. That is what makes the write authorized as the caller
+    rather than as a service account.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    from .test_migrate import _init_store, _insert_memory
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "mine.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-through-the-tier-a1b2c3",
+        content="shipped over MCP",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+
+    result = proxy.merge_store(source.graph_uri)
+
+    assert (result["added"], result["updated"], result["kept_target"]) == (1, 0, 0)
+    assert result["rows_loaded"] == 1
+    rows = srv.client.read(
+        "read.gq", "get_memory", {"slug": "mem-through-the-tier-a1b2c3"}
+    )
+    assert rows and rows[0]["content"] == "shipped over MCP"
+
+    # Idempotent across the batched path: the row now loses reconciliation to
+    # its own already-applied copy, so a re-run writes nothing.
+    again = proxy.merge_store(source.graph_uri)
+    assert (again["added"], again["updated"], again["kept_target"]) == (0, 0, 1)
+    assert again["rows_loaded"] == 0
+
+
+@requires_omnigraph
+def test_remote_merge_dry_run_writes_nothing(proxy, server, tmp_path):
+    """`--dry-run` has to work over this transport too — it is the review step
+    the cutover runbook makes mandatory before a non-reversible merge."""
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    from .test_migrate import _init_store, _insert_memory
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "mine.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-dry-run-only-d4e5f6",
+        content="should not land",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+
+    result = proxy.merge_store(source.graph_uri, dry_run=True)
+
+    assert result["dry_run"] is True
+    assert result["added"] == 1
+    assert result["rows_loaded"] == 0
+    assert [d["slug"] for d in result["decisions"]] == ["mem-dry-run-only-d4e5f6"]
+    assert not srv.client.read(
+        "read.gq", "get_memory", {"slug": "mem-dry-run-only-d4e5f6"}
+    )
 
 
 def test_admin_only_functions_are_not_registered_as_tools(server):
@@ -180,10 +282,13 @@ def test_admin_only_functions_are_not_registered_as_tools(server):
 
     ``RemoteServerProxy._is_admin_tool`` runs in the *client*, so it is advisory
     — a stock MCP client with a valid JWT ignores it entirely. What actually
-    keeps ``apply_schema``/``migrate_*``/``merge_store`` unreachable is that they
-    are deliberately plain module functions, never ``@mcp.tool``. Assert that
+    keeps ``apply_schema``/``migrate_*`` unreachable is that they are
+    deliberately plain module functions, never ``@mcp.tool``. Assert that
     invariant here so a future decorator can't silently expose an admin op with
     no per-user identity to the whole deployment.
+
+    ``store_merge`` is the deliberate counter-example: it *is* a tool, because
+    it resolves the caller's actor per request and writes as them.
     """
     import witan.server as srv
     from witan.remote.proxy import _ADMIN_ONLY
@@ -196,6 +301,7 @@ def test_admin_only_functions_are_not_registered_as_tools(server):
 
     assert exposed, "expected the in-memory server to expose some tools"
     assert not (_ADMIN_ONLY & exposed)
+    assert "store_merge" in exposed
 
 
 def test_memory_repair_tools_are_not_admin_only(server):
