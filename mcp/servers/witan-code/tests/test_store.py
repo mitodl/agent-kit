@@ -6,6 +6,8 @@ store, an unreadable one, a dangling symlink) worth pinning explicitly.
 """
 
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -686,3 +688,114 @@ def test_graph_cache_key_does_not_retain_the_raw_token():
         "http://server:8080",
         None,
     )
+
+
+# ── map_refs ──────────────────────────────────────────────────────────────────
+#
+# The per-graph listing questions are one round trip each against S3-backed
+# graphs (~150-350 ms), so `code_indexed_repos` measured 5.7 s across 14 CI
+# graphs before this. These pin the two properties that make concurrency safe
+# here: order, and that it actually runs concurrently.
+
+
+def _refs(n):
+    return [store_module.StoreRef("https://srv", f"code-g{i}") for i in range(n)]
+
+
+def test_map_refs_preserves_order_regardless_of_completion_order():
+    """THE reason this is not `_fan_out`.
+
+    Callers zip results back against `refs` positionally, so a completion-order
+    result would attribute one graph's file count to another — a wrong answer,
+    not a slow one.
+
+    Completion order is inverted by a chain of Events rather than by staggered
+    sleeps: each task waits for its successor to finish before finishing
+    itself, so the last ref provably completes first and the first completes
+    last. Sleeps would only make that ordering *likely* — and a run where they
+    landed in order would silently PASS against an `as_completed`
+    implementation, which is the one thing this test exists to catch.
+    """
+    refs = _refs(4)
+    done = [threading.Event() for _ in refs]
+
+    def finish_in_reverse(ref):
+        index = int(ref.graph_id.removeprefix("code-g"))
+        if index + 1 < len(refs):
+            assert done[index + 1].wait(timeout=5), "successor never finished"
+        done[index].set()
+        return ref.graph_id
+
+    assert store_module.map_refs(refs, finish_in_reverse, max_workers=len(refs)) == [
+        r.graph_id for r in refs
+    ]
+
+
+def test_map_refs_actually_runs_concurrently():
+    """A serial implementation passes every other test here, so pin the one
+    property they cannot: that the work genuinely overlaps.
+
+    A rendezvous rather than a stopwatch. ``Barrier(len(refs))`` clears only
+    when every task is inside ``fn`` at the same instant, which IS the claim —
+    where an elapsed-time threshold only infers it, and infers it from a number
+    tuned on an idle machine. A serial implementation never gets a second task
+    to the barrier and fails on its timeout; a slow-but-concurrent CI runner
+    still passes, because arriving late is not arriving alone.
+
+    ``max_workers`` is passed explicitly so the parties count cannot drift away
+    from the pool width if the default cap changes — the cap has its own test.
+    """
+    refs = _refs(4)
+    barrier = threading.Barrier(len(refs), timeout=5)
+
+    def rendezvous(_ref):
+        barrier.wait()
+        return True
+
+    assert store_module.map_refs(refs, rendezvous, max_workers=len(refs)) == [
+        True
+    ] * len(refs)
+
+
+def test_map_refs_caps_width_and_does_not_over_subscribe():
+    """Capped at 8 to match `_fan_out`. 20 refs must not open 20 connections."""
+    live = []
+    peak = 0
+    lock = threading.Lock()
+
+    def track(_ref):
+        nonlocal peak
+        with lock:
+            live.append(1)
+            peak = max(peak, len(live))
+        time.sleep(0.02)
+        with lock:
+            live.pop()
+
+    store_module.map_refs(_refs(20), track)
+    assert peak <= 8, f"peak concurrency {peak} exceeded the cap"
+
+
+def test_map_refs_skips_the_pool_for_zero_or_one_ref():
+    """The single-repo case is the common one locally; a thread pool for one
+    item is pure overhead."""
+    assert store_module.map_refs([], lambda _r: pytest.fail("should not run")) == []
+
+    calling_threads = []
+    store_module.map_refs(
+        _refs(1), lambda _r: calling_threads.append(threading.current_thread())
+    )
+    assert calling_threads == [threading.current_thread()], "ran off the main thread"
+
+
+def test_map_refs_propagates_an_exception():
+    """Every current `fn` degrades internally, so a raise here is something the
+    caller should not paper over."""
+
+    def boom(ref):
+        if ref.graph_id == "code-g2":
+            raise RuntimeError("graph exploded")
+        return ref.graph_id
+
+    with pytest.raises(RuntimeError, match="graph exploded"):
+        store_module.map_refs(_refs(4), boom)
