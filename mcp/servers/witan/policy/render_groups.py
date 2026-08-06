@@ -36,12 +36,16 @@ everything.
     svc-witan         -> witan-service
     svc-witan-admin   -> witan-admin
 
-A group named in a bundle but with no provisioned member renders as an empty
-list. That is intentional and load-bearing: `svc-witan` is not provisioned in
-any environment yet (its rules simply grant nobody), and an empty group is far
-safer than inventing an id that silently matches no token. Every rendered group
-is logged with its size so an unexpectedly empty one is visible in the pod log
-rather than surfacing later as a denial nobody can explain.
+A group named in a bundle but with no provisioned member — `svc-witan` is not
+provisioned in any environment yet — is DROPPED, along with every rule that
+references it, rather than written as an empty list. omnigraph rejects an empty
+group at boot ("policy group '<name>' must not be empty"), so an empty list is
+not a way to say "grants nobody"; it is a crash-looping data tier. Dropping the
+group and its rules says the same thing in a form the server accepts.
+
+Every rendered group is logged with its size, and every dropped one is logged
+as a warning, so an unexpectedly missing grant is visible in the pod log rather
+than surfacing later as a denial nobody can explain.
 """
 
 from __future__ import annotations
@@ -123,7 +127,11 @@ def load_actor_ids(tokens_path: Path) -> list[str]:
 
 
 def render_bundle(path: Path, groups: dict[str, list[str]]) -> list[str]:
-    """Rewrite one bundle's `groups:` in place. Returns the group names written.
+    """Rewrite one bundle's `groups:` in place. Returns the groups written.
+
+    A group with no provisioned members, and every rule referencing it, is
+    dropped rather than written empty — omnigraph refuses to boot on an empty
+    group. See the comment at the pruning step.
 
     Only groups the bundle already declares are written — the bundles are
     deliberately scoped (the memory graph declares no `witan-ci`, since the
@@ -159,13 +167,35 @@ def render_bundle(path: Path, groups: dict[str, list[str]]) -> list[str]:
             "members. Bundle and renderer have drifted."
         )
         raise RenderError(msg)
-    doc["groups"] = {name: groups[name] for name in declared}
+    # An empty group is not merely useless — omnigraph REFUSES TO BOOT on one
+    # ("policy group '<name>' must not be empty", omnigraph-policy/src/lib.rs).
+    # So an unprovisioned service account cannot be represented as a group with
+    # no members; the group and every rule naming it have to come out of the
+    # rendered bundle entirely. The result is semantically what an empty group
+    # was meant to express — those actions are granted to nobody — but it is a
+    # bundle the server will actually accept.
+    populated = {name: groups[name] for name in declared if groups[name]}
+    dropped = sorted(set(declared) - set(populated))
+    doc["groups"] = populated
+    if dropped:
+        rules = doc.get("rules")
+        if not isinstance(rules, list):
+            msg = f"{path.name}: `rules` must be a list, got {type(rules).__name__}"
+            raise RenderError(msg)
+        # Leaving a rule that references a dropped group behind would be an
+        # undefined-group reference, which is the same class of boot failure
+        # with a less obvious cause.
+        doc["rules"] = [
+            rule
+            for rule in rules
+            if (rule.get("allow") or {}).get("actors", {}).get("group") not in dropped
+        ]
     try:
         path.write_text(yaml.safe_dump(doc, sort_keys=False))
     except OSError as exc:
         msg = f"{path.name}: cannot write rendered bundle: {exc}"
         raise RenderError(msg) from exc
-    return declared
+    return list(populated)
 
 
 def main(argv: list[str]) -> int:
@@ -200,12 +230,13 @@ def main(argv: list[str]) -> int:
     empty = sorted(name for name, members in groups.items() if not members)
     if empty:
         # Not fatal: `svc-witan` (witan-service) is deliberately unprovisioned
-        # today. Surfaced loudly because an unexpectedly empty group is
-        # otherwise indistinguishable from a working deployment until someone
-        # hits a denial.
+        # today. Surfaced loudly because a missing grant is otherwise
+        # indistinguishable from a working deployment until someone hits a
+        # denial.
         print(
-            f"render-policy-groups: WARNING empty group(s): {empty} — "
-            "rules referencing them grant nobody",
+            f"render-policy-groups: WARNING unprovisioned group(s): {empty} — "
+            "dropped from every bundle along with the rules referencing them, "
+            "so those actions are granted to nobody",
             file=sys.stderr,
         )
     return 0
