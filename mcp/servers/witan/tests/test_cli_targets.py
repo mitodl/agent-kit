@@ -482,6 +482,68 @@ def test_force_replaces_in_place_preserving_target_order(
     assert list(_targets_of(config_file)) == ["hosted", "fallback"]
 
 
+def test_config_is_written_as_utf8_regardless_of_locale(
+    config_file, no_verify, monkeypatch
+):
+    """TOML is UTF-8 by spec, and the reader decodes it as such (load_toml is binary).
+
+    The starter config is full of box-drawing characters, so a locale codec
+    like cp1252 could not even encode it.
+    """
+    from witan.cli.targets import add
+
+    _capture(monkeypatch)
+    add(
+        "hosted",
+        remote_url="https://witan.example.org/mcp",
+        oidc_issuer="https://sso.example.org/realms/eng",
+        author="Ada Lovelace ☕ — née Byron",
+    )
+
+    raw = config_file.read_bytes()
+    assert "née Byron".encode() in raw
+    assert "── Named targets".encode() in raw
+    decoded = raw.decode("utf-8")  # would raise if written in another codec
+    assert tomllib.loads(decoded)["targets"]["hosted"]["author"].endswith("née Byron")
+
+
+def test_write_leaves_no_temp_file_behind(config_file, no_verify, monkeypatch):
+    from witan.cli.targets import add
+
+    _capture(monkeypatch)
+    add(
+        "hosted",
+        remote_url="https://witan.example.org/mcp",
+        oidc_issuer="https://sso.example.org/realms/eng",
+    )
+
+    assert [p.name for p in config_file.parent.iterdir()] == [config_file.name]
+
+
+def test_failed_write_leaves_the_old_config_intact(config_file, no_verify, monkeypatch):
+    """The point of the temp-file dance: never a truncated config.toml."""
+    from witan.cli import targets as targets_mod
+
+    original = "author = 'Someone'\n[targets.personal]\nserver = '/tmp/p.omni'\n"
+    config_file.write_text(original)
+    _capture(monkeypatch)
+
+    def _die(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(targets_mod.os, "replace", _die)
+
+    with pytest.raises(OSError):
+        targets_mod.add(
+            "hosted",
+            remote_url="https://witan.example.org/mcp",
+            oidc_issuer="https://sso.example.org/realms/eng",
+        )
+
+    assert config_file.read_text() == original
+    assert [p.name for p in config_file.parent.iterdir()] == [config_file.name]
+
+
 def test_login_flag_requires_a_remote_url(config_file, monkeypatch):
     from witan.cli.targets import add
 

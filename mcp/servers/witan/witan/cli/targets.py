@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
 import cyclopts
 import tomli_w
@@ -167,6 +168,34 @@ def replace_target_block(text: str, name: str, block: str) -> tuple[str, bool]:
         return text, False
     start, end = span
     return "".join(lines[:start]) + block + "".join(lines[end:]), True
+
+
+def _write_config(path: Path, text: str) -> None:
+    """Replace ``path``'s contents atomically, as UTF-8.
+
+    Atomic because this is the one place that REWRITES a file the user owns
+    (``install_default_config`` only ever creates a missing one). A plain
+    ``write_text`` truncates first, so a crash mid-write leaves a half-written
+    config.toml — and ``load_toml`` raises on a TOML decode error, so that
+    bricks every later ``witan`` command and takes the user's hand-written
+    settings with it. Writing a sibling temp file and ``os.replace``-ing it
+    means a reader sees either the old file or the new one, never a partial.
+
+    UTF-8 explicitly, not the platform locale: TOML is defined as UTF-8, the
+    reader already decodes it as such (``load_toml`` opens in binary and hands
+    bytes to ``tomllib``), and ``default_config_toml()`` is full of non-ASCII
+    box-drawing characters that a locale codec like cp1252 cannot encode.
+    """
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _existing_names() -> list[str]:
@@ -326,7 +355,7 @@ def add(
 
     path = cfg_module.config_path()
     if path.exists():
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         text = cfg_module.default_config_toml()
@@ -350,7 +379,7 @@ def add(
         if text and not text.endswith("\n"):
             text += "\n"
         text = f"{text}\n{block}"
-    path.write_text(text)
+    _write_config(path, text)
 
     verb = "Replaced" if replacing else "Registered"
     console.print(f"[green]{verb} target[/green] [bold]{name}[/bold] → {path}")
@@ -437,7 +466,7 @@ def remove(name: str, *, dry_run: bool = False) -> None:
         console.print(f"[yellow]No config file[/yellow] at {path} — nothing to remove.")
         raise SystemExit(1)
 
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     new_text, removed = remove_target_block(text, name)
     if not removed:
         available = ", ".join(_existing_names()) or "(none defined)"
@@ -453,5 +482,5 @@ def remove(name: str, *, dry_run: bool = False) -> None:
         )
         return
 
-    path.write_text(new_text)
+    _write_config(path, new_text)
     console.print(f"[green]Removed target[/green] [bold]{name}[/bold] from {path}")

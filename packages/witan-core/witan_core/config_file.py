@@ -28,8 +28,15 @@ def resolve_config_path(path: Path) -> Path:
     Split out of :func:`load_toml` so writers (``witan target add``) can target
     the very file the readers read, rather than re-deriving the rule and
     drifting from it.
+
+    An empty or whitespace-only ``WITAN_CONFIG`` counts as unset. Taken
+    literally it resolves to ``Path("")`` — the current directory — so a reader
+    would report "failed to read config file ." and a writer would try to
+    rewrite a directory. That is never what someone means; it is what an
+    unexpanded ``WITAN_CONFIG=$SOME_UNSET_VAR`` looks like.
     """
-    return Path(os.environ.get("WITAN_CONFIG", str(path))).expanduser()
+    override = os.environ.get("WITAN_CONFIG", "").strip()
+    return Path(override or path).expanduser()
 
 
 def load_toml(path: Path) -> dict:
