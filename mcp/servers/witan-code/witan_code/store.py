@@ -19,6 +19,7 @@ mean "no" for a graph that is very much there.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -38,12 +39,30 @@ from . import config as cfg_module
 from .graph import OmnigraphClient
 
 # Graph registration changes only when provisioning does (a Pulumi deploy), but
-# `_client_for_repo` asks "does this store exist" on every MCP tool call — and
-# on the cluster that answer costs a subprocess, where locally it was a stat.
-# One short-lived listing per process amortizes a burst of tool calls without
+# `_client_for_repo` asks "does this store exist" on every MCP tool call. One
+# short-lived listing per process amortizes a burst of tool calls without
 # pinning a stale answer past a deploy.
 _GRAPHS_TTL = 30.0
-_graphs_cache: dict[str, tuple[float, frozenset[str]]] = {}
+# Keyed by (server, credential) rather than server alone: the listing is a
+# function of BOTH, since an unusable token raises where a good one returns.
+# Keying on the server only would let one success make every later credential
+# look valid for the rest of the TTL — an invalid token would silently read as
+# authenticated. Not reachable today (the one caller passes the process-wide
+# `cfg.code_token` every time, and `graph_list` is granted to every group in
+# server.policy.yaml, so the listing is not actor-varying) — but a cache keyed
+# by less than what determines its value is a bug waiting for the call site to
+# change.
+#
+# The credential is hashed rather than stored: this dict is process-global and
+# long-lived, and a bearer token has no business sitting in one as a plain
+# string where a debugger or a dumped repr would surface it.
+_GraphsCacheKey = tuple[str, str | None]
+_graphs_cache: dict[_GraphsCacheKey, tuple[float, frozenset[str]]] = {}
+
+
+def _cache_key(server_url: str, token: str | None) -> _GraphsCacheKey:
+    digest = hashlib.sha256(token.encode()).hexdigest() if token else None
+    return (server_url, digest)
 
 
 class ClusterGraphMissing(RuntimeError):
@@ -205,7 +224,8 @@ def cluster_graphs(server_url: str, token: str | None = None) -> frozenset[str]:
     A successful-but-empty answer is cached; a failure is not, so a transient
     outage doesn't pin an error for the whole TTL.
     """
-    cached = _graphs_cache.get(server_url)
+    key = _cache_key(server_url, token)
+    cached = _graphs_cache.get(key)
     if cached is not None and time.monotonic() - cached[0] < _GRAPHS_TTL:
         return cached[1]
     try:
@@ -220,7 +240,7 @@ def cluster_graphs(server_url: str, token: str | None = None) -> frozenset[str]:
             f"omnigraph-server at {server_url} could not be listed: {outcome.error}"
         )
     graphs = frozenset(_parse_graph_ids(outcome.body or ""))
-    _graphs_cache[server_url] = (time.monotonic(), graphs)
+    _graphs_cache[key] = (time.monotonic(), graphs)
     return graphs
 
 

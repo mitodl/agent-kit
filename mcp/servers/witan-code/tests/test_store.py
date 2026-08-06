@@ -634,3 +634,55 @@ def test_cluster_graphs_caches_success_but_not_failure(monkeypatch):
         with pytest.raises(store_module.ClusterUnreachable):
             store_module.cluster_graphs("http://server:8080", None)
     assert len(bad.calls) == 2, "a failure must not pin an error for the whole TTL"
+
+
+def test_cluster_graphs_cache_does_not_span_credentials(monkeypatch):
+    """A success under one credential must not answer for a different one.
+
+    The listing is a function of (server, token) — an unusable token RAISES
+    where a good one returns — so a cache keyed on the server alone would let
+    one success make every later credential look valid for the rest of the TTL.
+    Not reachable from today's single call site, which passes the process-wide
+    `cfg.code_token` every time; pinned because the bug only becomes visible
+    once that changes, and it would look like an auth bypass when it did.
+    """
+    transports = {
+        "good": _FakeTransport(
+            http_module.Outcome(kind=http_module.OK, body=REAL_GRAPHS_BODY)
+        ),
+        "bad": _FakeTransport(
+            http_module.Outcome(
+                kind=http_module.FATAL, error="invalid bearer token", status=401
+            )
+        ),
+    }
+    # One transport per server, as in production — the credential is a per-call
+    # argument, so only the cache key can tell the two calls apart.
+    current = {"token": "good"}
+    monkeypatch.setattr(
+        store_module, "shared_transport", lambda url: transports[current["token"]]
+    )
+    store_module.reset_graph_cache()
+
+    assert store_module.cluster_graphs("http://server:8080", "good")
+
+    current["token"] = "bad"
+    with pytest.raises(store_module.ClusterUnreachable, match="invalid bearer token"):
+        store_module.cluster_graphs("http://server:8080", "bad")
+
+    # ...and the good credential is still served from cache, so the tighter key
+    # did not simply disable caching.
+    current["token"] = "good"
+    assert store_module.cluster_graphs("http://server:8080", "good")
+    assert len(transports["good"].calls) == 1
+
+
+def test_graph_cache_key_does_not_retain_the_raw_token():
+    """The cache is process-global and long-lived; a bearer token has no
+    business sitting in one as a plain string."""
+    key = store_module._cache_key("http://server:8080", "s3cret-token-value")
+    assert "s3cret-token-value" not in repr(key)
+    assert store_module._cache_key("http://server:8080", None) == (
+        "http://server:8080",
+        None,
+    )
