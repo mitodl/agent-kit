@@ -118,7 +118,7 @@ def _trace_show(slug: str) -> None:
             continue
         console.print(f"[bold]{label}[/bold]")
         for mslug in slugs:
-            m = _fn(s.memory_get)(mslug)
+            m = _fn(s.memory_get)(slug=mslug)
             if m:
                 console.print(f"  [cyan]{mslug}[/cyan]  {m.get('title', '')}")
                 console.print(f"    {m.get('content', '')}"[:240])

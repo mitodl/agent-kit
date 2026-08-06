@@ -49,13 +49,45 @@ def test_token_provider_is_called_per_invocation(proxy):
     assert proxy._token_calls == ["tok", "tok"]
 
 
-def test_positional_first_arg_is_mapped_to_its_param_name(proxy):
+def test_keyword_args_reach_the_server(proxy):
     created = proxy.task_create(title="probe", description="d", repo=REPO)
     slug = created["slug"]
-    # CLI calls s.task_get(slug) positionally; MCP is keyword-only.
-    fetched = proxy.task_get(slug)
+    fetched = proxy.task_get(slug=slug)
     assert fetched["slug"] == slug
     assert fetched["title"] == "probe"
+
+
+def test_positional_arg_is_refused(proxy):
+    # MCP is keyword-only on the wire. The proxy used to map positionals onto
+    # the input schema's property order; that silently misbound arguments (see
+    # witan_core.remote.proxy's module docstring), so it now refuses.
+    with pytest.raises(RemoteToolUnavailable, match="by keyword"):
+        proxy.task_get("tk-anything")
+
+
+def test_schema_property_order_is_not_a_contract(proxy):
+    """Why the old positional mapping survived its own tests for so long.
+
+    This in-memory server publishes ``memory_store``'s properties in SIGNATURE
+    order (``kind`` first), so positional binding looked correct here. The
+    deployed tier publishes the same tool ALPHABETICALLY (``category`` first) —
+    measured 2026-08-06 against witan.ci.ol.mit.edu, where 29 of 41 tools bound
+    their first positional to the wrong parameter.
+
+    Both are legal: JSON Schema ``properties`` is an unordered map, so no order
+    is promised and two conforming servers may disagree. That is precisely why
+    the proxy must not read order at all — and why no local test could have
+    caught the bug by asserting an order. The real guard is
+    ``test_positional_arg_is_refused``; this test exists to stop anyone
+    "restoring" positional support after observing that it works in-process.
+    """
+    proxy.task_ready(repo="")  # force a tools/list so _param_names is populated
+    props = proxy._param_names["memory_store"]
+    assert "kind" in props and "category" in props
+    # Do NOT assert an order here — asserting either one would bless a
+    # deployment-specific accident as a contract.
+    with pytest.raises(RemoteToolUnavailable, match="by keyword"):
+        proxy.memory_store("lesson", "t", "c")
 
 
 def test_repo_none_is_resolved_client_side(proxy, monkeypatch):
@@ -120,7 +152,9 @@ def test_session_handle_is_threaded_from_the_client(
     )
 
     assert mem["session_linked"] is True
-    grouped = proxy.workflow_project_memories(proj["slug"], group_by_session=True)
+    grouped = proxy.workflow_project_memories(
+        project_slug=proj["slug"], group_by_session=True
+    )
     assert mem["slug"] in {
         m["slug"] for m in grouped["by_session"][handle["session_slug"]]
     }

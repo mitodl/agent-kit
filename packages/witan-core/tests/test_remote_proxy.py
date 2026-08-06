@@ -2,8 +2,9 @@
 
 The end-to-end "dispatch a real tool call over an in-memory FastMCP server" test
 lives in witan-council (it needs witan's server + tools). Here we exercise the
-transport-agnostic mechanism in isolation: positional→name mapping, the repo
-resolver hook, the None-dropping, and the admin/unknown refusal wording.
+transport-agnostic mechanism in isolation: the keyword-only argument contract,
+the repo resolver hook, the None-dropping, and the admin/unknown refusal
+wording.
 """
 
 from __future__ import annotations
@@ -30,11 +31,23 @@ class _Proxy(RemoteMCPProxy):
         self._admin = admin
         self._session = session
         # Pre-seed the tool schema so _map_args needs no network.
+        #
+        # ALPHABETICAL, not signature order — this mirrors what the DEPLOYED
+        # tier sends. JSON Schema `properties` is an unordered map by
+        # specification, and the two servers this code talks to genuinely
+        # disagree: an in-memory FastMCP publishes signature order, the
+        # deployment publishes alphabetical. Both conform. A fixture in
+        # signature order would therefore model only the friendlier of the two,
+        # which is how order-based binding passed its tests while misbinding 29
+        # of 41 tools in production.
         self._param_names = {
             "task_get": ["slug"],
             "task_ready": ["repo"],
-            "task_create": ["title", "description", "repo"],
-            "memory_store": ["kind", "title", "content", "repo", "session_slug"],
+            "task_create": ["description", "repo", "title"],
+            "memory_store": ["content", "kind", "repo", "session_slug", "title"],
+            # A real zero-parameter tool — witan-code's `code_indexed_repos`
+            # declares no properties at all.
+            "code_indexed_repos": [],
         }
 
     def _is_admin_tool(self, name):
@@ -97,9 +110,52 @@ def test_param_name_extraction_works_on_both_shapes():
         assert names == ["slug"]
 
 
-def test_positional_arg_maps_to_param_name():
+def test_positional_arg_is_refused():
+    # MCP carries arguments by name; the protocol defines no parameter order,
+    # so there is nothing to map a positional onto. Refusing is the fix for the
+    # misbinding described in the module docstring — a caller that still passes
+    # positionally must be found here rather than silently writing bad data.
     p = _Proxy()
-    assert p._map_args("task_get", ("s-1",), {}) == {"slug": "s-1"}
+    with pytest.raises(RemoteToolUnavailable, match="by keyword"):
+        p._map_args("task_get", ("s-1",), {})
+
+
+def test_keyword_args_pass_through():
+    p = _Proxy()
+    assert p._map_args("task_get", (), {"slug": "s-1"}) == {"slug": "s-1"}
+
+
+def test_refusal_names_the_accepted_parameters():
+    # The message has to be actionable: the caller needs to know what to name
+    # the argument it just passed positionally.
+    p = _Proxy()
+    with pytest.raises(RemoteToolUnavailable, match="content, kind, repo"):
+        p._map_args("memory_store", ("lesson",), {})
+
+
+def test_refusal_on_a_zero_parameter_tool_says_so():
+    # `code_indexed_repos` declares no properties, so listing accepted names
+    # would render as "Accepted names: ." — say what is actually wrong instead.
+    p = _Proxy()
+    with pytest.raises(RemoteToolUnavailable, match="accepts no arguments"):
+        p._map_args("code_indexed_repos", ("oops",), {})
+
+
+def test_zero_parameter_tool_still_works_with_no_args():
+    p = _Proxy()
+    assert p._map_args("code_indexed_repos", (), {}) == {}
+
+
+def test_fixture_order_differs_from_signature_order():
+    # Guards the fixture above, not the code. `memory_store`'s signature starts
+    # with `kind`; this seeds what a deployed server actually sends, which is
+    # alphabetical. If someone "tidies" the fixture back into signature order,
+    # these tests would stop resembling production — the exact blind spot that
+    # let order-based binding look correct for so long.
+    p = _Proxy()
+    props = p._param_names["memory_store"]
+    assert props == sorted(props)
+    assert props[0] != "kind"
 
 
 def test_repo_none_is_resolved_via_hook():
@@ -122,19 +178,27 @@ def test_session_slug_is_injected_when_omitted():
     # The protocol carries no session state, so provenance depends on the client
     # sending the handle it holds.
     p = _Proxy(session="ws-abc")
-    out = p._map_args("memory_store", ("lesson", "t", "c"), {})
+    out = p._map_args(
+        "memory_store", (), {"kind": "lesson", "title": "t", "content": "c"}
+    )
     assert out["session_slug"] == "ws-abc"
 
 
 def test_explicit_session_slug_is_not_overwritten():
     p = _Proxy(session="ws-ambient")
-    out = p._map_args("memory_store", ("lesson", "t", "c"), {"session_slug": "ws-mine"})
+    out = p._map_args(
+        "memory_store",
+        (),
+        {"kind": "lesson", "title": "t", "content": "c", "session_slug": "ws-mine"},
+    )
     assert out["session_slug"] == "ws-mine"
 
 
 def test_session_slug_dropped_when_no_active_session():
     p = _Proxy(session=None)
-    assert "session_slug" not in p._map_args("memory_store", ("lesson", "t", "c"), {})
+    assert "session_slug" not in p._map_args(
+        "memory_store", (), {"kind": "lesson", "title": "t", "content": "c"}
+    )
 
 
 def test_session_slug_not_added_to_tools_without_the_param():
@@ -144,7 +208,9 @@ def test_session_slug_not_added_to_tools_without_the_param():
 
 def test_none_optionals_are_dropped():
     p = _Proxy()
-    out = p._map_args("task_create", ("t",), {"description": None, "repo": "r"})
+    out = p._map_args(
+        "task_create", (), {"title": "t", "description": None, "repo": "r"}
+    )
     assert out == {"title": "t", "repo": "r"}
 
 
@@ -154,11 +220,11 @@ def test_unknown_tool_raises_with_hook_message():
         p._map_args("nope", (), {})
 
 
-def test_too_many_positionals_raises_not_indexerror():
-    # task_get has one param; two positionals is a client/server signature
-    # mismatch that must surface as RemoteToolUnavailable, not IndexError.
+def test_extra_positionals_refused_not_indexerror():
+    # More positionals than the tool has params must still be the keyword
+    # refusal, never an IndexError from indexing past the end of the name list.
     p = _Proxy()
-    with pytest.raises(RemoteToolUnavailable, match="positional"):
+    with pytest.raises(RemoteToolUnavailable, match="by keyword"):
         p._map_args("task_get", ("a", "b"), {})
 
 
@@ -303,17 +369,17 @@ def test_declared_ttl_bounds_how_long_the_list_is_held(monkeypatch):
     from witan_core import caching
 
     proxy = _CountingProxy(_echo_server(**caching.hint_kwargs(ttl_seconds=300)))
-    assert proxy.echo("a") == "a"
+    assert proxy.echo(value="a") == "a"
     assert proxy.lists == 1
 
     # Inside the window the cached list is reused...
-    assert proxy.echo("b") == "b"
+    assert proxy.echo(value="b") == "b"
     assert proxy.lists == 1
 
     # ...and past it the proxy re-lists rather than serving a stale surface.
     expiry = proxy._param_names_expiry
     monkeypatch.setattr("time.monotonic", lambda: expiry + 1)
-    assert proxy.echo("c") == "c"
+    assert proxy.echo(value="c") == "c"
     assert proxy.lists == 2
 
 
@@ -322,8 +388,8 @@ def test_a_zero_ttl_is_an_instruction_not_a_missing_value():
     # "do not cache this" — so the proxy re-reads rather than treating the
     # absence of a *configured* hint as permission to hold the list forever.
     proxy = _CountingProxy(_echo_server())
-    assert proxy.echo("a") == "a"
-    assert proxy.echo("b") == "b"
+    assert proxy.echo(value="a") == "a"
+    assert proxy.echo(value="b") == "b"
     assert proxy.lists == 2
 
 
@@ -334,9 +400,9 @@ def test_connection_without_the_field_keeps_the_process_lifetime_cache():
     import math
 
     proxy = _CountingProxy(_echo_server(), mode="legacy")
-    assert proxy.echo("a") == "a"
+    assert proxy.echo(value="a") == "a"
     assert proxy._param_names_expiry == math.inf
-    assert proxy.echo("b") == "b"
+    assert proxy.echo(value="b") == "b"
     assert proxy.lists == 1
 
 

@@ -113,7 +113,7 @@ def _run_task_slug(
     resolved_model = model or cfg.model
 
     s = _srv()
-    t = _fn(s.task_get)(slug)
+    t = _fn(s.task_get)(slug=slug)
     if not t:
         console.print(f"[red]No task {slug!r}.[/red]")
         raise SystemExit(1)
@@ -121,7 +121,7 @@ def _run_task_slug(
     open_blockers = [
         b
         for b in (t.get("blocked_by") or [])
-        if (_fn(s.task_get)(b) or {}).get("status") != "closed"
+        if (_fn(s.task_get)(slug=b) or {}).get("status") != "closed"
     ]
     if open_blockers:
         console.print(
@@ -134,7 +134,7 @@ def _run_task_slug(
         return
 
     if claim:
-        res = _fn(s.task_claim)(slug, assignee=cfg.author) or {}
+        res = _fn(s.task_claim)(slug=slug, assignee=cfg.author) or {}
         if not res.get("claimed"):
             reason = res.get("held_by") or res.get("reason") or "unavailable"
             console.print(f"[red]Could not claim {slug} ({reason}).[/red]")
@@ -194,7 +194,7 @@ def _run_project_slug(
     resolved_model = model or cfg.model
 
     s = _srv()
-    p = _fn(s.workflow_project_get)(slug)
+    p = _fn(s.workflow_project_get)(slug=slug)
     if not p:
         console.print(f"[red]No project {slug!r}.[/red]")
         raise SystemExit(1)
