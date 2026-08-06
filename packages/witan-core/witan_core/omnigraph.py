@@ -974,7 +974,11 @@ class OmnigraphClient:
             return
         fd, tmp = tempfile.mkstemp(suffix=".jsonl", prefix="omnigraph-load-")
         try:
-            with os.fdopen(fd, "w") as fh:
+            # Explicit UTF-8, not the platform default: witan rows carry prose
+            # (memory content, task descriptions) that is routinely non-ASCII,
+            # and on a non-UTF-8 locale the default encoding either mangles it
+            # or raises before `omnigraph load` ever sees the file.
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 for record in records:
                     fh.write(json.dumps(record))
                     fh.write("\n")

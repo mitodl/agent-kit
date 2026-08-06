@@ -277,6 +277,21 @@ def test_remote_merge_dry_run_writes_nothing(proxy, server, tmp_path):
     )
 
 
+def test_remote_merge_from_a_remote_export_says_to_download_it(proxy):
+    """Same rule as the in-process path, which this client half had not mirrored.
+
+    A remote `.jsonl` fell through to the local-file branch and came back as
+    "no such export file" — pointing at the path when the problem is that witan
+    fetches no remote exports.
+    """
+    for uri in (
+        "s3://ol-data-witan-ci/alice.jsonl",
+        "https://example.invalid/alice.jsonl",
+    ):
+        with pytest.raises(RemoteToolUnavailable, match="does not fetch remote ones"):
+            proxy.merge_store(uri)
+
+
 def test_admin_only_functions_are_not_registered_as_tools(server):
     """The server-side half of the admin refusal, and the load-bearing one.
 

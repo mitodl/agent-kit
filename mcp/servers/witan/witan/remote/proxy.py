@@ -15,6 +15,9 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -29,13 +32,19 @@ from ..config import RemoteConfig
 __all__ = ["RemoteServerProxy", "RemoteToolUnavailable"]
 
 
-def _export_rows(source: str) -> list[dict]:
-    """The rows of ``source``, ready to ship to ``store_merge``.
+@contextmanager
+def _source_export(source: str) -> Iterator[Path]:
+    """Yield a path to ``source``'s export, without buffering it in memory.
 
     Accepts the same two shapes ``witan.server.merge_store`` does: a store URI,
-    which is exported here, or an already-exported ``.jsonl``, which is read as
-    it stands. The export has to happen client-side — the deployment shares no
-    filesystem with the caller, which is the whole reason this path exists.
+    which is exported here, or an already-exported ``.jsonl``, which is used
+    where it lies. The export has to happen client-side — the deployment shares
+    no filesystem with the caller, which is the whole reason this path exists.
+
+    Streams the subprocess straight to a file rather than capturing it, for the
+    same reason ``_run_omnigraph`` does in-process: a real personal store's
+    export is megabytes, and holding it as a string *and* as a parsed list at
+    once doubles the peak for no gain.
 
     Unlike the in-process merge this does *not* export a target: the deployment
     reconciles against its own graph, which it already holds a client on. Only
@@ -45,39 +54,62 @@ def _export_rows(source: str) -> list[dict]:
         source = source[len("file://") :]
 
     if source.endswith(".jsonl"):
+        if source.startswith(("http://", "https://", "s3://")):
+            raise RemoteToolUnavailable(
+                f"{source}: a `.jsonl` source is read as an `omnigraph export` "
+                "file, and witan does not fetch remote ones. Download it with "
+                f"whatever already has access (e.g. `aws s3 cp {source} "
+                "./export.jsonl`) and pass the local path."
+            )
         if not Path(source).is_file():
             raise RemoteToolUnavailable(
                 f"{source}: no such export file. A `.jsonl` source is read as "
-                "an `omnigraph export`, not a store."
+                "an `omnigraph export`, not a store — produce one with "
+                f"`omnigraph export --store <store> > {source}`."
             )
-        text = Path(source).read_text(encoding="utf-8")
-    else:
-        from ..graph import OmnigraphClient
+        yield Path(source)
+        return
 
-        binary = OmnigraphClient._find_binary()
-        result = subprocess.run(
-            [binary, "export", *store_cli_args(source)],
-            capture_output=True,
-            text=True,
-            env=store_subprocess_env(source),
-        )
+    from ..graph import OmnigraphClient
+
+    binary = OmnigraphClient._find_binary()
+    with tempfile.TemporaryDirectory(prefix="witan-remote-merge-") as tmp:
+        export = Path(tmp) / "source.jsonl"
+        with open(export, "w", encoding="utf-8") as fh:
+            result = subprocess.run(
+                [binary, "export", *store_cli_args(source)],
+                stdout=fh,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=store_subprocess_env(source),
+            )
         if result.returncode != 0:
             raise RemoteToolUnavailable(
                 f"omnigraph export of {source} failed:\n{(result.stderr or '').strip()}"
             )
-        text = result.stdout
+        yield export
 
+
+def _read_export(path: Path) -> list[dict]:
+    """Parse an export file into load records, one line at a time.
+
+    Materialised rather than streamed because ``chunk_records`` has to hold the
+    whole set anyway — it emits every node before any edge, which cannot be
+    decided without seeing all of them. Parsing per line at least avoids a
+    second full copy as one big string.
+    """
     rows: list[dict] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError as exc:
-            raise RemoteToolUnavailable(
-                f"{source}: corrupted export line, not valid JSON: {line!r}"
-            ) from exc
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise RemoteToolUnavailable(
+                    f"{path}: corrupted export line, not valid JSON: {line!r}"
+                ) from exc
     return rows
 
 
@@ -156,14 +188,14 @@ class RemoteServerProxy(RemoteMCPProxy):
                 "yourself."
             )
 
-        rows = _export_rows(source)
         decisions: list[dict] = []
         totals = {"added": 0, "updated": 0, "kept_target": 0, "rows_loaded": 0}
-        for batch in chunk_records(rows):
-            result = self.store_merge(rows=batch, dry_run=dry_run)
-            decisions.extend(result.get("decisions") or [])
-            for key in totals:
-                totals[key] += result.get(key, 0)
+        with _source_export(source) as export:
+            for batch in chunk_records(_read_export(export)):
+                result = self.store_merge(rows=batch, dry_run=dry_run)
+                decisions.extend(result.get("decisions") or [])
+                for key in totals:
+                    totals[key] += result.get(key, 0)
 
         return {
             "dry_run": dry_run,
