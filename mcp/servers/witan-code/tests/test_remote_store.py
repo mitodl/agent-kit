@@ -465,19 +465,57 @@ def test_a_deployment_without_the_batch_tool_gets_the_per_step_loop():
     ]
 
 
+class _Unaskable(_FakeClient):
+    """A deployment too old to answer `list_tools` at all."""
+
+    def __init__(self, log, **kw):
+        super().__init__(log, **kw)
+        self.asked = 0
+
+    async def list_tools(self):
+        self.asked += 1
+        raise RuntimeError("no such method")
+
+
 def test_a_server_that_cannot_be_asked_falls_back_rather_than_failing():
     """A deployment too old to answer `list_tools` is certainly too old to have
     the batch tool, and refusing here would fail an index that can succeed."""
-
-    class _Unaskable(_FakeClient):
-        async def list_tools(self):
-            raise RuntimeError("no such method")
-
     log: list = []
     session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: _Unaskable(log))
     RemoteStoreClient(REPO, session).change_many(_steps(2))
     session.close()
     assert len(_calls(log, "code_store_mutate")) == 2
+
+
+def test_a_failed_tool_listing_is_cached_like_a_successful_one():
+    """Otherwise an index re-asks a server that already refused once, paying a
+    round trip AND an exception on every batch — the per-call cost this whole
+    change exists to remove."""
+    log: list = []
+    old = _Unaskable(log)
+    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: old)
+    client = RemoteStoreClient(REPO, session)
+    for _ in range(5):
+        client.change_many(_steps(1))
+    session.close()
+
+    assert old.asked == 1, f"re-asked {old.asked} times; should ask once per connection"
+    assert len(_calls(log, "code_store_mutate")) == 5  # all five still written
+
+
+def test_a_reconnect_clears_a_cached_failure_too():
+    """The cache dies with the connection, so a transport blip costs the slow
+    path only until the next reconnect — not for the life of the process."""
+    log: list = []
+    old = _Unaskable(log)
+    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: old)
+    client = RemoteStoreClient(REPO, session)
+    client.change_many(_steps(1))
+    assert old.asked == 1
+    session._disconnect()
+    client.change_many(_steps(1))
+    session.close()
+    assert old.asked == 2
 
 
 def test_the_tool_surface_is_asked_once_per_connection_not_once_per_batch():

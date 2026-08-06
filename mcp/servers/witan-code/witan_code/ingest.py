@@ -322,7 +322,7 @@ def mutate_many(graph: str, view: str | None, steps: list[dict]) -> int:
         (
             _query_path(cfg, _step_field(step, "query")),
             _step_field(step, "name"),
-            step.get("params") or {},
+            _step_params(step),
         )
         for step in steps
     ]
@@ -330,11 +330,36 @@ def mutate_many(graph: str, view: str | None, steps: list[dict]) -> int:
     return len(triples)
 
 
+# The tool signature is `steps: list[dict]`, and FastMCP validates that much —
+# a non-dict step is refused at the boundary and never reaches here. What the
+# schema does NOT constrain is anything INSIDE a step: `dict` is `dict[str, Any]`,
+# so `{"query": 7}`, a missing `query`, and `{"params": "oops"}` all arrive
+# intact. Hence these two guards, and only these two.
+
+
 def _step_field(step: dict, field: str) -> str:
     value = step.get(field)
     if not isinstance(value, str) or not value:
         raise IngestRefused(f"Every step needs a non-empty {field!r}; got {value!r}.")
     return value
+
+
+def _step_params(step: dict) -> dict:
+    """A step's params, refusing anything that is not a mapping.
+
+    Omitted and null both mean "no params". Anything else has to be a dict: the
+    value is handed to ``change_many`` and ends up as the ``--params`` JSON of a
+    composed mutation, so a string or a list would surface as an opaque omnigraph
+    CLI failure several layers below the caller that sent it.
+    """
+    params = step.get("params")
+    if params is None:
+        return {}
+    if not isinstance(params, dict):
+        raise IngestRefused(
+            f"A step's 'params' must be an object; got {type(params).__name__}."
+        )
+    return params
 
 
 def load_records(

@@ -129,6 +129,11 @@ class StoreSession:
 
         A server too old to answer at all is treated as not having the tool;
         the caller's fallback is what a refusal would have to end in anyway.
+        THE FAILURE IS CACHED TOO, as an empty set — an index issues many
+        batches, and re-asking a server that has already refused once would put
+        a round trip and an exception on every one of them. Since the cache dies
+        with the connection, a transport-level blip costs the slow path only
+        until the next reconnect, not for the life of the process.
         """
         with self._lock:
             if self._client is None:
@@ -137,7 +142,7 @@ class StoreSession:
                 try:
                     self._tools = frozenset(t.name for t in self._list_tools())
                 except Exception:  # noqa: BLE001 — fall back, don't fail
-                    return False
+                    self._tools = frozenset()
             return tool in self._tools
 
     def _list_tools(self) -> Any:

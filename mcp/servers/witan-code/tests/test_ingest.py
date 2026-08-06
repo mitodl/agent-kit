@@ -270,7 +270,10 @@ def test_a_bad_step_refuses_the_whole_batch_and_commits_no_prefix(
         {"query": "delete.gq", "name": ""},
         {"query": "delete.gq", "name": 7},
     ],
-)
+)  # every one of these passes the tool's `list[dict]` schema — see the module
+# comment above `_step_field`: the schema constrains the container, not the
+# contents, so these guards are the only thing standing between a malformed
+# step and an opaque failure several layers down.
 def test_a_malformed_step_is_refused_by_name(step, tmp_path, monkeypatch):
     """The steps arrive as free-form dicts off the wire, so say which field is
     wrong rather than raising a KeyError from inside the splice.
@@ -282,6 +285,39 @@ def test_a_malformed_step_is_refused_by_name(step, tmp_path, monkeypatch):
     monkeypatch.setenv("WITAN_ACTOR", "act-alice")
     with pytest.raises(ingest.IngestRefused, match="non-empty"):
         ingest.mutate_many(REPO, "act-alice/x", [step])
+
+
+@pytest.mark.parametrize("params", ["oops", ["id", "x"], 7, True])
+def test_non_object_params_are_refused_rather_than_shipped_to_the_engine(
+    params, tmp_path, monkeypatch
+):
+    """`params` reaches `change_many` and becomes the `--params` JSON of a
+    composed mutation. A string or a list gets that far and then fails as an
+    opaque omnigraph CLI error, several layers below whoever sent it.
+
+    Note `step.get("params") or {}` would NOT have caught these: every value
+    here is truthy, so it sailed straight through.
+    """
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setenv("WITAN_ACTOR", "act-alice")
+    step = {"query": "delete.gq", "name": "delete_file", "params": params}
+    with pytest.raises(ingest.IngestRefused, match="must be an object"):
+        ingest.mutate_many(REPO, "act-alice/x", [step])
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        {"query": "delete.gq", "name": "delete_file"},
+        {"query": "delete.gq", "name": "delete_file", "params": None},
+    ],
+)
+def test_omitted_and_null_params_both_mean_no_params(step, tmp_path, monkeypatch):
+    """The guard must not turn the ordinary "this mutation takes no arguments"
+    case into a refusal."""
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setenv("WITAN_ACTOR", "act-alice")
+    assert ingest._step_params(step) == {}
 
 
 @requires_stack
