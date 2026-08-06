@@ -154,6 +154,7 @@ tasks hard-link to projects, sessions, and memories. See
 | `task_close` | Close a task with an optional resolution; unblocks its dependents |
 | `task_ready` | **Ready work**: open/unblocked tasks (plus `in_progress` tasks whose lease has lapsed) ordered by priority — the core coordination primitive |
 | `task_link` | Link tasks: `blocks` / `parent` / `discovered_from`, or `addresses` a Memory node |
+| `task_unlink` | Remove any of those links — for one recorded backwards or against the wrong slug. A no-op when the link isn't there |
 | `context_for_symbol` | Reverse lookup: given a code-graph symbol id (`repo#path::Name`), return the memories and tasks whose `symbolRefs` include it |
 
 Tasks are **hierarchical** (an `epic` decomposes into sub-issues via `parent`, with

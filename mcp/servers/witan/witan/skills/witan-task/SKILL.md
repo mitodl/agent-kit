@@ -118,6 +118,16 @@ To add a dependency, hierarchy, or provenance link to existing tasks, use
 - `discovered_from` — `to` is the source `from` was discovered from
 - `addresses` — `from` (task) addresses `to` (a Memory slug)
 
+## Undoing a link
+
+`task_unlink(from_slug, to_slug, kind)` takes the same arguments and removes
+the link. Reach for it when one was recorded the wrong way round — the usual
+tell is a task showing as blocked by something it actually blocks.
+
+Removing the last `blocks` link returns the task from `blocked` to `open`, so
+it shows up in `task_ready()` again. If the link wasn't there, the call
+reports `removed: False` and changes nothing; re-running is safe.
+
 ## Linking tasks to code symbols
 
 For a task scoped to specific code, attach code-graph **symbol ids** via

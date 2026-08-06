@@ -1990,10 +1990,14 @@ def memory_delete(slug: str, confirm: bool = False) -> dict:
     credential, the fix is to **rotate the credential**; scrubbing history is an
     admin ``omnigraph cleanup``, which no MCP tool performs.
 
-    Deleting a node also removes its incident edges in both directions (that is
-    the only way an edge can be removed at all), so a deleted memory leaves no
-    dangling ``Supersedes``/``RelatedTo``/``Tagged`` behind. Topic nodes on the
-    far end of a ``Tagged`` edge survive and may be left with no memories.
+    Deleting a node also removes its incident edges in both directions, so a
+    deleted memory leaves no dangling ``Supersedes``/``RelatedTo``/``Tagged``
+    behind. Topic nodes on the far end of a ``Tagged`` edge survive and may be
+    left with no memories.
+
+    That is not the only way to remove an edge — edges are deletable on their
+    own (``task_unlink``, ``_unlink_edge``). Deleting the node is still the
+    only route for a *memory* edge, since no unlink tool covers those yet.
 
     Parameters
     ----------
@@ -3230,9 +3234,12 @@ def workflow_project_unblock(slug: str, blocks_slug: str) -> dict:
     """
     Remove a project dependency declared with ``workflow_project_block``.
 
-    Removes ``slug`` from ``blocks_slug.blocked_by``. The ``ProjectBlocks``
-    graph edge is not deleted (omnigraph edges are append-only), but the
-    denormalized field — which drives the ready-work check — is updated.
+    Removes ``slug`` from ``blocks_slug.blocked_by`` AND deletes the
+    ``ProjectBlocks`` edge, so the graph and the denormalized field (which
+    drives the ready-work check) agree.
+
+    Earlier versions left the edge in place, on the belief that omnigraph
+    edges were append-only. They are not — see ``_unlink_edge``.
 
     Parameters
     ----------
@@ -3242,6 +3249,7 @@ def workflow_project_unblock(slug: str, blocks_slug: str) -> dict:
         The ``wp-`` slug of the project to unblock.
     """
     now = now_iso()
+    _unlink_edge("project_blocks", slug, blocks_slug)
     blocked = client.read("read.gq", "get_workflow_project", {"slug": blocks_slug})
     if blocked:
         existing = blocked[0].get("blocked_by") or []
@@ -4270,6 +4278,9 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
 
     For ``blocks`` and ``parent`` the denormalized ``blocked_by`` / ``parent_slug``
     fields on the affected task are kept in sync so ``task_ready`` stays correct.
+
+    Reversible: ``task_unlink`` removes any of these, including one recorded in
+    the wrong direction.
     """
     if kind == "blocks":
         client.change("mutations.gq", "link_blocks", {"from": from_slug, "to": to_slug})
@@ -4298,6 +4309,137 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
         )
 
     return {"from": from_slug, "to": to_slug, "kind": kind}
+
+
+# Per edge kind: the read queries listing each endpoint's edges, and the
+# mutations deleting by one endpoint or re-inserting a survivor.
+_EDGE_OPS: dict[str, dict[str, str]] = {
+    "blocks": {
+        "from_q": "blocks_from_slugs",
+        "to_q": "blocks_to_slugs",
+        "del_by_to": "unlink_blocks_by_to",
+        "del_by_from": "unlink_blocks_by_from",
+        "link": "link_blocks",
+    },
+    "parent": {
+        "from_q": "parent_of_from_slugs",
+        "to_q": "parent_of_to_slugs",
+        "del_by_to": "unlink_parent_of_by_to",
+        "del_by_from": "unlink_parent_of_by_from",
+        "link": "link_parent_of",
+    },
+    "discovered_from": {
+        "from_q": "discovered_from_from_slugs",
+        "to_q": "discovered_from_to_slugs",
+        "del_by_to": "unlink_discovered_from_by_to",
+        "del_by_from": "unlink_discovered_from_by_from",
+        "link": "link_discovered_from",
+    },
+    "addresses": {
+        "from_q": "addresses_from_slugs",
+        "to_q": "addresses_to_slugs",
+        "del_by_to": "unlink_addresses_by_to",
+        "del_by_from": "unlink_addresses_by_from",
+        "link": "link_addresses",
+    },
+    "project_blocks": {
+        "from_q": "project_blocks_from_slugs",
+        "to_q": "project_blocks_to_slugs",
+        "del_by_to": "unlink_project_blocks_by_to",
+        "del_by_from": "unlink_project_blocks_by_from",
+        "link": "link_project_blocks",
+    },
+}
+
+
+def _unlink_edge(kind: str, from_slug: str, to_slug: str) -> bool:
+    """Remove one ``from -> to`` edge, leaving every other edge of that kind.
+
+    Returns whether the edge existed. A no-op (and no mutation at all) when it
+    did not, so calling this twice is safe.
+
+    An edge delete accepts exactly ONE predicate — ``delete E where to = $x``
+    or ``where from = $x``, never both (mutations.gq explains). So an exact
+    single-edge removal is: delete every edge on one endpoint, then put back
+    the ones that were not the target. Two things keep that honest:
+
+    - The side with FEWER edges is chosen, so the fewest possible edges are
+      disturbed. In the common case one side has exactly this edge and nothing
+      is re-inserted at all — a single delete, nothing to restore.
+    - Nothing is deleted unless the target edge is confirmed to exist first.
+
+    NOT ATOMIC, and on a shared server that matters: between the delete and the
+    re-inserts, a concurrent reader sees the survivors missing, and a crash
+    would drop them. omnigraph has no conditional write to close this — see
+    tk-omnigraph-conditional-write-cas-precondition-on--94155f. The exposure is
+    bounded by choosing the smaller side, and is nil for the single-edge case
+    that motivated this. ``task_link`` already does an unguarded
+    read-modify-write on ``blocked_by``, so this adds no new class of risk.
+    """
+    ops = _EDGE_OPS[kind]
+    into = [r["slug"] for r in client.read("read.gq", ops["from_q"], {"to": to_slug})]
+    out = [r["slug"] for r in client.read("read.gq", ops["to_q"], {"from": from_slug})]
+    if from_slug not in into or to_slug not in out:
+        return False
+
+    if len(out) <= len(into):
+        # Delete everything `from_slug` points at, restore all but `to_slug`.
+        client.change("mutations.gq", ops["del_by_from"], {"from": from_slug})
+        survivors = [(from_slug, other) for other in out if other != to_slug]
+    else:
+        # Delete everything pointing at `to_slug`, restore all but `from_slug`.
+        client.change("mutations.gq", ops["del_by_to"], {"to": to_slug})
+        survivors = [(other, to_slug) for other in into if other != from_slug]
+
+    for src, dst in survivors:
+        client.change("mutations.gq", ops["link"], {"from": src, "to": dst})
+    return True
+
+
+@mcp.tool
+def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
+    """
+    Remove a link between two tasks (or a task and a memory) — the inverse of
+    ``task_link``, with the same ``from``/``to`` meanings.
+
+    Use it when a link was recorded the wrong way round or against the wrong
+    slug. Removing a ``blocks`` link is how a task wrongly marked blocked
+    becomes ready again.
+
+    For ``blocks`` and ``parent`` the denormalized ``blocked_by`` /
+    ``parent_slug`` fields are updated to match, so ``task_ready`` stays
+    correct. Unblocking a task whose remaining blockers are all closed returns
+    it from ``blocked`` to ``open`` — the mirror of what ``task_link`` does.
+
+    Returns ``{"from", "to", "kind", "removed"}``. ``removed`` is ``False``
+    when the edge was not there, which is not an error: calling this twice, or
+    on a link that never existed, is a safe no-op.
+    """
+    removed = _unlink_edge(kind, from_slug, to_slug)
+
+    if kind == "blocks":
+        blocked = client.read("read.gq", "get_task", {"slug": to_slug})
+        if blocked:
+            existing = blocked[0].get("blocked_by") or []
+            if from_slug in existing:
+                remaining = [s for s in existing if s != from_slug]
+                changes: dict = {"blocked_by": remaining or None}
+                # Only clear `blocked` once nothing open is still holding it.
+                if blocked[0].get("status") == "blocked":
+                    still_held = any(
+                        (rows := client.read("read.gq", "get_task", {"slug": s}))
+                        and rows[0].get("status") != "closed"
+                        for s in remaining
+                    )
+                    if not still_held:
+                        changes["status"] = "open"
+                _update_task(to_slug, changes)
+    elif kind == "parent" and removed:
+        child = client.read("read.gq", "get_task", {"slug": to_slug})
+        if child and child[0].get("parent_slug") == from_slug:
+            _update_task(to_slug, {"parent_slug": None})
+
+    return {"from": from_slug, "to": to_slug, "kind": kind, "removed": removed}
 
 
 @mcp.tool
