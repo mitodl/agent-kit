@@ -18,6 +18,7 @@ re-serialising the parsed document would silently delete all of them.
 
 from __future__ import annotations
 
+import os
 import re
 
 import cyclopts
@@ -85,35 +86,87 @@ def render_target_block(name: str, fields: dict[str, object]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _header_re(name: str) -> re.Pattern[str]:
+    """Match a ``[targets.<name>]`` header in any of TOML's spellings.
+
+    TOML allows whitespace around the dotted key and lets each part be a bare
+    key, a basic string, or a literal string — ``[targets.hosted]``,
+    ``[targets."hosted"]``, and ``[ targets.'hosted' ]`` all declare the same
+    table. Missing one spelling is not a cosmetic gap: ``add --force`` would
+    fail to find the block it means to replace and append a *second*
+    ``[targets.<name>]`` table, which is a duplicate-key TOML error that
+    breaks every later ``witan`` command.
+    """
+    quoted = re.escape(name)
+    return re.compile(
+        rf"^\s*\[\s*targets\s*\.\s*(?:{quoted}|\"{quoted}\"|'{quoted}')\s*\]"
+    )
+
+
+def _is_filler(line: str) -> bool:
+    """A blank or comment line — belongs to whatever table comes next."""
+    stripped = line.strip()
+    return not stripped or stripped.startswith("#")
+
+
+def find_target_block(lines: list[str], name: str) -> tuple[int, int] | None:
+    """Line span ``[start, end)`` of the ``[targets.<name>]`` table, or None.
+
+    The table runs from its header to the next table header (or EOF), minus
+    the trailing blank/comment run — those comments introduce whatever table
+    comes *next*, so swallowing them would delete the documentation of an
+    unrelated section (the shipped config.toml puts a ``# ── [rank] …`` banner
+    directly above ``[rank]``).
+    """
+    header = _header_re(name)
+    for start, line in enumerate(lines):
+        if not header.match(line):
+            continue
+        end = start + 1
+        while end < len(lines) and not lines[end].lstrip().startswith("["):
+            end += 1
+        while end > start + 1 and _is_filler(lines[end - 1]):
+            end -= 1
+        return start, end
+    return None
+
+
 def remove_target_block(text: str, name: str) -> tuple[str, bool]:
     """Excise the ``[targets.<name>]`` table from ``text``.
 
-    Returns ``(new_text, removed)``. Drops the header and every line up to the
-    next table header (or EOF), which is exactly the table's extent — nothing
-    outside it, so surrounding comments and other targets survive.
+    Returns ``(new_text, removed)``. Drops exactly the table's extent —
+    nothing outside it, so surrounding comments and other targets survive.
     """
-    header = re.compile(
-        rf"^\s*\[targets\.(?:{re.escape(name)}|\"{re.escape(name)}\")\]"
-    )
-    out: list[str] = []
     lines = text.splitlines(keepends=True)
-    i, removed = 0, False
-    while i < len(lines):
-        if header.match(lines[i]):
-            removed = True
-            i += 1
-            while i < len(lines) and not lines[i].lstrip().startswith("["):
-                i += 1
-            # Collapse the blank run the removed block leaves behind, so
-            # repeated add/remove cycles don't grow the file.
-            while out and not out[-1].strip():
-                out.pop()
-            if out:
-                out.append("\n")
-        else:
-            out.append(lines[i])
-            i += 1
-    return "".join(out), removed
+    span = find_target_block(lines, name)
+    if span is None:
+        return text, False
+    start, end = span
+    head, tail = lines[:start], lines[end:]
+    # Collapse the blank run the removed block leaves behind, so repeated
+    # add/remove cycles don't grow the file.
+    while head and not head[-1].strip():
+        head.pop()
+    while tail and not tail[0].strip():
+        tail.pop(0)
+    if head and tail:
+        head.append("\n")
+    return "".join(head) + "".join(tail), True
+
+
+def replace_target_block(text: str, name: str, block: str) -> tuple[str, bool]:
+    """Swap the ``[targets.<name>]`` table for ``block``, in place.
+
+    In place, not remove-then-append: ``match_target`` returns the *first*
+    matching target, so moving a block to the end of the file would silently
+    re-order routing precedence for repos that more than one target matches.
+    """
+    lines = text.splitlines(keepends=True)
+    span = find_target_block(lines, name)
+    if span is None:
+        return text, False
+    start, end = span
+    return "".join(lines[:start]) + block + "".join(lines[end:]), True
 
 
 def _existing_names() -> list[str]:
@@ -186,13 +239,9 @@ def add(
     ----------
     name: Target name — the ``<name>`` in ``[targets.<name>]``.
     remote_url: Deployed witan MCP endpoint, e.g. https://witan.example.org/mcp.
-    oidc_issuer: OIDC realm issuer that mints tokens for it. Required with
-        ``--remote-url``; verified against its discovery document unless
-        ``--no-verify``.
-    oidc_client_id: Public OIDC client id for the device grant. Defaults to
-        the built-in ``witan-cli``.
-    oidc_audience: Expected JWT audience, matching the deployment's
-        ``WITAN_OIDC_AUDIENCE``.
+    oidc_issuer: OIDC realm issuer minting its tokens; required with --remote-url.
+    oidc_client_id: Public OIDC device-grant client id (default ``witan-cli``).
+    oidc_audience: Expected JWT audience, matching the deployment's audience.
     server: omnigraph store URI or server URL, for a local/self-hosted target.
     graph: omnigraph graph id addressed on ``server``.
     author: Attribution written to graph nodes under this target.
@@ -227,6 +276,16 @@ def add(
             "[red]--remote-url needs --oidc-issuer.[/red] The CLI authenticates to a "
             "deployed witan with a per-user OIDC token; without an issuer it has "
             "nowhere to get one."
+        )
+        raise SystemExit(1)
+
+    # Caught here rather than after writing: `witan login` on a store-only
+    # target exits 1 with "remote mode is not configured", which would report
+    # a perfectly successful registration as a failure.
+    if login and not remote_url:
+        console.print(
+            "[red]--login needs --remote-url.[/red] There is no device grant to run "
+            "against a local/self-hosted [bold]--server[/bold] target."
         )
         raise SystemExit(1)
 
@@ -268,17 +327,32 @@ def add(
     path = cfg_module.config_path()
     if path.exists():
         text = path.read_text()
-        if name in existing:
-            text, _ = remove_target_block(text, name)
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         text = cfg_module.default_config_toml()
 
-    if text and not text.endswith("\n"):
-        text += "\n"
-    path.write_text(f"{text}\n{block}")
+    replacing = name in existing
+    if replacing:
+        text, found = replace_target_block(text, name, block)
+        if not found:
+            # The reader saw the table but the text scan did not — an exotic
+            # header spelling. Appending anyway would declare the table twice
+            # and leave the file unparseable, so refuse instead.
+            console.print(
+                # \\[ escapes the bracket: Rich would read `[targets.x]` as a
+                # style tag and swallow it.
+                f"[red]Could not locate the \\[targets.{name}] block[/red] in {path} "
+                "to replace it — its header is written in a form this command cannot "
+                "rewrite safely. Edit or delete it by hand, then re-run."
+            )
+            raise SystemExit(1)
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text = f"{text}\n{block}"
+    path.write_text(text)
 
-    verb = "Replaced" if name in existing else "Registered"
+    verb = "Replaced" if replacing else "Registered"
     console.print(f"[green]{verb} target[/green] [bold]{name}[/bold] → {path}")
 
     if login:
@@ -294,7 +368,7 @@ def add(
 
 @targets_app.command(name="list")
 def list_targets() -> None:
-    """List configured targets, marking the one that matches this checkout."""
+    """List configured targets, marking the one in effect here with ``*``."""
     from witan_core.target_config import local_project_path, match_target
 
     from .. import repo as repo_module
@@ -312,9 +386,21 @@ def list_targets() -> None:
         )
         return
 
-    selected = match_target(
-        targets, repo_uri=repo_module.detect(), local_path=local_project_path()
-    )
+    # Same precedence load_remote_config()/load() use: WITAN_TARGET pins a
+    # target outright, and auto-detection only runs when it is unset. Marking
+    # the repo-matched one regardless would point `*` at a target no other
+    # command is going to use.
+    if pinned := os.environ.get("WITAN_TARGET"):
+        selected = next((t for t in targets if t.name == pinned), None)
+        if selected is None:
+            console.print(
+                f"[yellow]WITAN_TARGET={pinned!r} is not a configured target[/yellow] "
+                "— no target is in effect."
+            )
+    else:
+        selected = match_target(
+            targets, repo_uri=repo_module.detect(), local_path=local_project_path()
+        )
     rows = [
         {
             "cur": "*" if selected is not None and t.name == selected.name else "",

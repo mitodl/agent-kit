@@ -392,12 +392,129 @@ def test_render_block_escapes_values():
     assert tomllib.loads(block)["targets"]["hosted"]["author"] == 'A "quoted" name'
 
 
-def test_remove_block_handles_a_quoted_header():
+@pytest.mark.parametrize(
+    "header",
+    [
+        "[targets.hosted]",
+        '[targets."hosted"]',
+        "[targets.'hosted']",
+        "[ targets . hosted ]",
+    ],
+)
+def test_remove_block_handles_every_toml_header_spelling(header):
+    """All four declare the same table, so all four must be findable."""
     from witan.cli.targets import remove_target_block
 
-    text = '[targets."hosted"]\nremote_url = "x"\n\n[rank]\nw_bm25 = 1.0\n'
+    text = f'{header}\nremote_url = "x"\n\n[rank]\nw_bm25 = 1.0\n'
     new_text, removed = remove_target_block(text, "hosted")
 
     assert removed
     assert "[rank]" in new_text
     assert "hosted" not in new_text
+
+
+def test_remove_keeps_the_comments_that_introduce_the_next_table():
+    """Those comments document what follows, not the block being removed."""
+    from witan.cli.targets import remove_target_block
+
+    text = (
+        "[targets.hosted]\n"
+        "remote_url = 'https://old'\n"
+        "\n"
+        "# -- Personal store: side projects live here --\n"
+        "# do not point this at work\n"
+        "[targets.personal]\n"
+        "server = '/tmp/p.omni'\n"
+    )
+    new_text, removed = remove_target_block(text, "hosted")
+
+    assert removed
+    assert "# -- Personal store" in new_text
+    assert "# do not point this at work" in new_text
+    assert tomllib.loads(new_text)["targets"] == {"personal": {"server": "/tmp/p.omni"}}
+
+
+def test_force_replaces_a_literal_quoted_block_without_duplicating_it(
+    config_file, no_verify, monkeypatch
+):
+    """A second [targets.hosted] table is a TOML error that bricks every command."""
+    from witan.cli.targets import add
+
+    config_file.write_text("[targets.'hosted']\nremote_url = 'https://old'\n")
+    _capture(monkeypatch)
+
+    add(
+        "hosted",
+        remote_url="https://new.example/mcp",
+        oidc_issuer="https://sso.example.org/realms/eng",
+        force=True,
+    )
+
+    # tomllib raises on a duplicate table, so parsing at all is the assertion.
+    assert _targets_of(config_file)["hosted"]["remote_url"] == "https://new.example/mcp"
+
+
+def test_force_replaces_in_place_preserving_target_order(
+    config_file, no_verify, monkeypatch
+):
+    """match_target takes the first match — reordering silently reroutes repos."""
+    from witan.cli.targets import add
+
+    config_file.write_text(
+        "[targets.hosted]\n"
+        "remote_url = 'https://old'\n"
+        "match_orgs = ['acme']\n"
+        "\n"
+        "[targets.fallback]\n"
+        "server = '/tmp/f.omni'\n"
+        "match_orgs = ['acme']\n"
+    )
+    _capture(monkeypatch)
+
+    add(
+        "hosted",
+        remote_url="https://new.example/mcp",
+        oidc_issuer="https://sso.example.org/realms/eng",
+        match_orgs=["acme"],
+        force=True,
+    )
+
+    assert list(_targets_of(config_file)) == ["hosted", "fallback"]
+
+
+def test_login_flag_requires_a_remote_url(config_file, monkeypatch):
+    from witan.cli.targets import add
+
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        add("local", server="/tmp/local.omni", login=True)
+
+    assert "--login needs --remote-url" in recorder.export_text()
+    assert not config_file.exists()
+
+
+def test_list_marks_the_pinned_target_not_the_matching_one(config_file, monkeypatch):
+    """WITAN_TARGET wins for every other command; `*` must agree with it."""
+    from witan.cli.targets import list_targets
+
+    config_file.write_text(
+        "[targets.hosted]\n"
+        "server = '/tmp/h.omni'\n"
+        "match_orgs = ['mitodl']\n"
+        "\n"
+        "[targets.personal]\n"
+        "server = '/tmp/personal.omni'\n"
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.setenv("WITAN_TARGET", "personal")
+    recorder = _capture(monkeypatch)
+
+    list_targets()
+
+    marked = [
+        line
+        for line in recorder.export_text().splitlines()
+        if "*" in line and ("hosted" in line or "personal" in line)
+    ]
+    assert len(marked) == 1
+    assert "personal" in marked[0]

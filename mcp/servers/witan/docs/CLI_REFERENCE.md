@@ -32,6 +32,7 @@ Global conventions used throughout:
 | `login` | Authenticate to a deployed witan service (see [Remote mode](#remote-mode)) |
 | `logout` | Forget the cached token for the deployed service (see [Remote mode](#remote-mode)) |
 | `whoami` | Show the identity presented to the deployed service (see [Remote mode](#remote-mode)) |
+| `target` | Register and inspect named `[targets.*]` blocks (see [target](#target)) |
 | `tasks` | List tasks (see [Tasks](#tasks)) |
 | `task` | Manage a single task (see [Tasks](#tasks)) |
 | `projects` | List workflow projects (see [Projects](#projects)) |
@@ -161,7 +162,7 @@ witan whoami --target hosted     # confirm the endpoint and actor
 | `--server` / `--graph` | omnigraph store URI / graph id, for a local or self-hosted target. |
 | `--author` / `--agent` | Attribution and default agent CLI under this target. |
 | `--match-orgs` / `--match-repos` / `--match-hosts` / `--match-paths` | Which checkouts route here (repeatable or comma-separated). |
-| `--force` | Replace an existing block of the same name. |
+| `--force` | Replace an existing block of the same name, in place (its position, and so its `match_*` precedence, is preserved). |
 | `--no-verify` | Skip the issuer check (offline registration). |
 | `--login` | Run the device grant immediately after writing. |
 | `--dry-run` | Print the block and exit. |
@@ -177,13 +178,15 @@ Without any `match_*` criteria a target is only ever reachable explicitly, via
 
 ### `target list`
 
-Lists configured targets and marks with `*` the one that matches the current
+Lists configured targets and marks with `*` the one actually in effect —
+`WITAN_TARGET` when it is set, otherwise the one matching the current
 checkout. Honors `--output-format`.
 
 ### `target remove NAME`
 
 Deletes that block and nothing else — other targets, other tables, and
-surrounding comments are left intact. `--dry-run` reports without writing.
+surrounding comments are left intact, including the comment banner that
+introduces whatever table follows. `--dry-run` reports without writing.
 
 ## `setup`
 
