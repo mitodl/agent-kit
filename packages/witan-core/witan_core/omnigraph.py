@@ -356,7 +356,7 @@ _TRANSPORTS: dict[str, _http.PooledTransport] = {}
 _TRANSPORTS_LOCK = threading.Lock()
 
 
-def _shared_transport(server_url: str) -> _http.PooledTransport:
+def shared_transport(server_url: str) -> _http.PooledTransport:
     with _TRANSPORTS_LOCK:
         transport = _TRANSPORTS.get(server_url)
         if transport is None:
@@ -861,7 +861,7 @@ class OmnigraphClient:
             return None
         if self._extra_args("query") or self._extra_args("mutate"):
             return None
-        return _shared_transport(self.server_url)
+        return shared_transport(self.server_url)
 
     def _resolve_token(self) -> str | None:
         """The bearer token to present over HTTP.
