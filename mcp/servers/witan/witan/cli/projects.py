@@ -80,7 +80,7 @@ def projects(
 def _project_show(slug: str) -> None:
     """Show a project, its sessions, and rolled-up tasks."""
     s = _srv()
-    p = _fn(s.workflow_project_get)(slug)
+    p = _fn(s.workflow_project_get)(slug=slug)
     if not p:
         console.print(f"[red]No project {slug!r}.[/red]")
         return
@@ -170,7 +170,7 @@ def project_status(
     json: Emit the raw JSON payload instead of the formatted view.
     """
     s = _srv()
-    st = _fn(s.workflow_project_status)(slug)
+    st = _fn(s.workflow_project_status)(slug=slug)
     if not st:
         console.print(f"[red]No project {slug!r}.[/red]")
         raise SystemExit(1)
@@ -237,7 +237,7 @@ def project_tasks(
     detail: Expand each task's blockers and dependents.
     """
     s = _srv()
-    p = _fn(s.workflow_project_get)(slug)
+    p = _fn(s.workflow_project_get)(slug=slug)
     if not p:
         console.print(f"[red]No project {slug!r}.[/red]")
         raise SystemExit(1)
@@ -278,7 +278,7 @@ def project_tasks(
     def _status_of(task_slug: str) -> str:
         if task_slug in by_slug:
             return by_slug[task_slug].get("status") or "open"
-        fetched = _fn(s.task_get)(task_slug)
+        fetched = _fn(s.task_get)(slug=task_slug)
         return fetched.get("status", "missing") if fetched else "missing"
 
     console.print("\n[bold]Dependencies[/bold]")

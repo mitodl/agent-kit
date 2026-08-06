@@ -71,11 +71,18 @@ def test_token_provider_is_called_per_invocation(proxy):
 
 
 @requires_stack
-def test_positional_first_arg_is_mapped_to_its_param_name(proxy):
-    # CLI-style call sites pass the first argument positionally; MCP is
-    # keyword-only, so the proxy maps it via the tool's input schema.
-    hits = proxy.code_search_symbol("helper")
+def test_keyword_args_reach_the_server(proxy):
+    hits = proxy.code_search_symbol(query="helper")
     assert any(h["name"] == "helper" for h in hits)
+
+
+@requires_stack
+def test_positional_arg_is_refused(proxy):
+    # MCP is keyword-only on the wire. The proxy used to map positionals onto
+    # the input schema's property order, which is unordered by specification —
+    # see witan_core.remote.proxy's module docstring for what that misbound.
+    with pytest.raises(RemoteToolUnavailable, match="by keyword"):
+        proxy.code_search_symbol("helper")
 
 
 @requires_stack

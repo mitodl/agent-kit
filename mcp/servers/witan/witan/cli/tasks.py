@@ -133,7 +133,7 @@ def tasks(
 def _task_show(slug: str) -> None:
     """Show one task's details, its sub-tasks, and blocker status."""
     s = _srv()
-    t = _fn(s.task_get)(slug)
+    t = _fn(s.task_get)(slug=slug)
     if not t:
         console.print(f"[red]No task {slug!r}.[/red]")
         return
@@ -153,7 +153,7 @@ def _task_show(slug: str) -> None:
         if t.get(key):
             console.print(f"  {label}: {t[key]}")
     if t.get("project_slug"):
-        project = _fn(s.workflow_project_get)(t["project_slug"])
+        project = _fn(s.workflow_project_get)(slug=t["project_slug"])
         if project:
             console.print(
                 f"  project: {project['slug']} — {project.get('title', '')} "
@@ -166,7 +166,7 @@ def _task_show(slug: str) -> None:
     console.print(f"\n{t.get('description') or '(no description)'}\n")
 
     for blocker in t.get("blocked_by") or []:
-        b = _fn(s.task_get)(blocker)
+        b = _fn(s.task_get)(slug=blocker)
         st = b.get("status") if b else "missing"
         console.print(f"  blocked by {blocker} [{_styled(st, _STATUS_STYLE)}]")
 
@@ -253,7 +253,7 @@ def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
     resolution: Short note on what was done.
     """
     s = _srv()
-    result = _fn(s.task_close)(slug, resolution=resolution)
+    result = _fn(s.task_close)(slug=slug, resolution=resolution)
     if not result:
         console.print(f"[red]No task {slug!r}.[/red]")
         raise SystemExit(1)
@@ -281,7 +281,7 @@ def task_claim_cmd(
     force: Steal the task even if another holder's lease is still valid.
     """
     s = _srv()
-    result = _fn(s.task_claim)(slug, assignee=assignee, force=force)
+    result = _fn(s.task_claim)(slug=slug, assignee=assignee, force=force)
     if result is None:
         console.print(f"[red]No task {slug!r}.[/red]")
         raise SystemExit(1)
@@ -314,7 +314,9 @@ def task_release_cmd(
     force: Release even if held by a different assignee.
     """
     s = _srv()
-    result = _fn(s.task_release)(slug, assignee=assignee, status=status, force=force)
+    result = _fn(s.task_release)(
+        slug=slug, assignee=assignee, status=status, force=force
+    )
     if result is None:
         console.print(f"[red]No task {slug!r}.[/red]")
         raise SystemExit(1)
@@ -503,7 +505,7 @@ def task_run(
         if claim and not dry_run:
             claimable = []
             for t in selected:
-                res = _fn(s.task_claim)(t["slug"], assignee=cfg.author) or {}
+                res = _fn(s.task_claim)(slug=t["slug"], assignee=cfg.author) or {}
                 if res.get("claimed"):
                     console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")
                     claimable.append(t)

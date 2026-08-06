@@ -1,23 +1,39 @@
 """A drop-in stand-in for an in-process server module that dispatches each tool
 call over MCP to a deployed FastMCP service (ADR-0005, path a).
 
-A CLI whose ``_srv()`` returns an instance of this transparently turns every
-existing call site — ``_fn(s.task_ready)(repo=…)`` — into an authenticated MCP
-``call_tool`` against the deployment. Nothing in the call sites changes.
+A CLI whose ``_srv()`` returns an instance of this turns every existing call
+site — ``_fn(s.task_ready)(repo=…)`` — into an authenticated MCP ``call_tool``
+against the deployment.
 
-Two shape details make that transparency work:
+Two shape details make that work:
 
 - FastMCP's ``CallToolResult.data`` already unwraps the ``{"result": …}``
   output-schema envelope back to the raw ``list``/``dict`` an in-process call
   returns, so the CLI's rendering code is untouched.
-- CLI sites pass the first argument positionally (``s.task_get(slug)``); the MCP
-  protocol is keyword-only. Positionals map to names using the tool's input
-  schema property order, which FastMCP derives from the function signature
-  (property order == signature order). MCP SDK v2 renamed that field to
-  ``input_schema``; ``_tool_input_schema`` reads whichever the installed
-  fastmcp exposes, since the package supports both 3.4.x and 4.x. That list is
-  held for as long as the server's own ``ttlMs`` says (MCP 2026-07-28), rather
-  than for the process lifetime as it used to be.
+- **Every argument must be passed by keyword.** The MCP protocol carries a
+  name→value object; positional order is a property of a Python signature and
+  does not survive serialisation. Callers that pass positionally get a
+  :class:`RemoteToolUnavailable` naming the parameters, rather than a guess.
+
+  This used to map positionals onto the tool's input-schema property order, on
+  the stated assumption that "property order == signature order". JSON Schema
+  ``properties`` is an unordered map *by specification*, so that was never a
+  contract — and the two servers this proxy talks to really do disagree: an
+  in-memory FastMCP publishes signature order, while the deployed tier
+  publishes alphabetically. That divergence is why the assumption held in every
+  local test and failed in production. Measured against the deployment, 29 of
+  41 tools bound their first positional to the wrong parameter —
+  ``memory_search(query)`` arrived as ``include_superseded``. A misbound
+  parameter of a different type surfaces as a validation error, but two
+  same-typed ``str`` parameters swap in silence:
+  ``workflow_project_block(slug, blocks_slug)`` wrote its edge backwards. See
+  ``_map_args``.
+
+The tool list is held for as long as the server's own ``ttlMs`` says
+(MCP 2026-07-28), rather than for the process lifetime as it used to be. MCP
+SDK v2 renamed the schema field to ``input_schema``; ``_tool_input_schema``
+reads whichever the installed fastmcp exposes, since the package supports both
+3.4.x and 4.x.
 
 Server-specific policy is supplied by subclasses via the hooks below:
 :meth:`~RemoteMCPProxy._is_admin_tool` / :meth:`~RemoteMCPProxy._admin_error`
@@ -247,16 +263,23 @@ class RemoteMCPProxy:
         names = self._param_names.get(name)
         if names is None:
             raise RemoteToolUnavailable(self._unknown_tool_error(name))
-        if len(args) > len(names):
-            # More positionals than the deployed tool accepts — a client/server
-            # signature mismatch. Surface it clearly instead of an IndexError.
+        if args:
+            # Positional arguments cannot be mapped onto an MCP call. The wire
+            # format is a name->value object, and the only ordering information
+            # available here is the input schema's `properties`, which is an
+            # unordered map by JSON Schema specification — FastMCP happens to
+            # emit it alphabetically. Binding by that order silently sent
+            # `memory_search(query)` as `include_superseded`, and swapped
+            # same-typed pairs like `workflow_project_block(slug, blocks_slug)`
+            # without any error at all. Refuse instead of guessing: a caller
+            # that must be fixed should find out here, not in the graph.
             raise RemoteToolUnavailable(
-                f"`{name}` was called with {len(args)} positional argument(s) but "
-                f"the deployed tool accepts {len(names)} ({', '.join(names)})."
+                f"`{name}` was called with {len(args)} positional argument(s). "
+                "Remote tool calls must pass every argument by keyword — MCP "
+                "carries arguments by name and the protocol defines no "
+                f"parameter order. Accepted names: {', '.join(names)}."
             )
         arguments = dict(kwargs)
-        for i, val in enumerate(args):
-            arguments[names[i]] = val
         # The deployed server has no git checkout, so it cannot resolve
         # repo=None ("detect current repo") — do that on the client and send an
         # explicit value. repo="" (all repos) is a meaningful sentinel, kept.
