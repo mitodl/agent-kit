@@ -110,14 +110,18 @@ by whatever already holds credentials for it (`aws s3 cp …`, `curl`) and passe
 as a path; a `s3://…/x.jsonl` source is refused with that instruction rather
 than a misleading "no such file".
 
-`target` takes the same set and defaults to your configured store. A missing
-local `target` is auto-created; a missing remote `target` is assumed to
-already exist and is left alone (same as `witan serve` on a fresh machine). A
-deployed graph is `http(s)://<host>:<port>/graphs/<graph-id>` — or simply the
-configured store, when the command runs somewhere `WITAN_MEMORY_URI` already
-points at the server. Its bearer token comes from the configured
-`WITAN_MEMORY_TOKEN`, or from an ambient `OMNIGRAPH_BEARER_TOKEN` for any other
-remote store.
+`target` takes the same set *minus the export form* — merging appends to a
+graph and an export is a snapshot of one, so a `.jsonl` target is refused
+rather than auto-created as a store under that name — and defaults to your
+configured store. A missing local `target` is auto-created; a missing remote
+`target` is assumed to already exist and is left alone (same as `witan serve`
+on a fresh machine). A deployed graph is
+`http(s)://<host>:<port>/graphs/<graph-id>` — or simply the configured store,
+when the command runs somewhere `WITAN_MEMORY_URI` already points at the
+server. Both spellings of the configured graph use the configured
+`WITAN_MEMORY_TOKEN`; any *other* remote store falls back to an ambient
+`OMNIGRAPH_BEARER_TOKEN`. A remote target with no graph id at all
+(`http://host:8080`, no `/graphs/<id>`) is an error naming what's missing.
 
 Reconciliation only applies to nodes (anything with a `slug`) — edge rows
 (`Tagged`, `ParentOf`, ...) have no slug and pass through the same load

@@ -1240,10 +1240,32 @@ def _store_address(uri: str) -> tuple[list[str], dict]:
     ``WITAN_MEMORY_TOKEN`` is the only credential in the pod); any *other*
     remote store falls back to the ambient ``OMNIGRAPH_BEARER_TOKEN``, the
     omnigraph CLI's documented spelling.
+
+    "Names it" is decided on the *resolved* address, not on the raw string. A
+    deployment sets ``WITAN_MEMORY_URI`` to a bare server URL plus a separate
+    ``WITAN_MEMORY_GRAPH``, while the runbook spells a deployed graph
+    ``http://host:8080/graphs/<id>`` — two spellings of one graph, and a raw
+    string compare would drop the only credential the pod has for it.
+
+    The configured graph id fills in a bare server URL only when that URL *is*
+    the configured server; another server's URI must carry its own, or the
+    merge would silently address a graph nobody named. A URI that ends up with
+    no graph id at all is a caller error, so it surfaces as a ``RuntimeError``
+    (what every caller of this module, the CLI included, already handles)
+    rather than the raw ``ValueError`` from the parser.
     """
-    token = client.token if uri == client.graph_uri else None
-    graph_id = client.graph_id if uri == client.graph_uri else None
-    return store_cli_args(uri, graph_id), store_subprocess_env(uri, token)
+    fallback = (
+        client.graph_id
+        if client.is_remote and uri.rstrip("/") == client.server_url
+        else None
+    )
+    try:
+        args = store_cli_args(uri, fallback)
+    except ValueError as exc:
+        raise RuntimeError(f"{uri}: {exc}") from exc
+    configured = store_cli_args(client.graph_uri, client.graph_id)
+    token = client.token if args == configured else None
+    return args, store_subprocess_env(uri, token)
 
 
 def _is_export_file(source: str) -> bool:
@@ -1321,8 +1343,11 @@ def merge_store(
         fresh machine; no-op for a remote ``s3://``/``http(s)://`` target,
         which is assumed to already exist. An ``http(s)://`` target names a
         deployed omnigraph-server and carries its graph id either from the
-        configured ``WITAN_MEMORY_GRAPH`` (when it *is* the configured store)
-        or inline as ``http://host:8080/graphs/<id>``.
+        configured ``WITAN_MEMORY_GRAPH`` (when it names the configured
+        server) or inline as ``http://host:8080/graphs/<id>``; a remote target
+        with neither is rejected. Unlike ``source``, a ``.jsonl`` target is
+        refused rather than treated as a store — merging appends to a graph,
+        and an export is a snapshot of one.
     dry_run:
         Compute and return the reconciliation decisions without loading
         anything.
@@ -1345,6 +1370,17 @@ def merge_store(
     from_export = _is_export_file(source)
     if from_export:
         _check_export_source(source)
+    if _is_export_file(target):
+        # `.jsonl` means "export" on the source side, and the asymmetry is a
+        # trap: a missing local target is auto-created, so `--target x.jsonl`
+        # would `omnigraph init` a Lance store *directory* named `x.jsonl` and
+        # report a successful merge into a store nobody will ever read.
+        raise RuntimeError(
+            f"{target}: a target must be a store, not an `omnigraph export` "
+            "file — merging appends to a graph, and an export is a snapshot of "
+            "one. Pass the store to merge into (a local path, `s3://`, or "
+            "`http(s)://<host>/graphs/<id>`)."
+        )
 
     _ensure_graph(target)
     binary = client._binary

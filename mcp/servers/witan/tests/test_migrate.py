@@ -425,6 +425,76 @@ def test_merge_addresses_a_remote_target_as_server_and_graph(server, tmp_path):
     assert env is not None
 
 
+def test_store_address_matches_the_configured_graph_across_spellings(monkeypatch):
+    """The configured token must survive being asked for by a different spelling.
+
+    A deployment sets `WITAN_MEMORY_URI` to a *bare* server URL plus a separate
+    `WITAN_MEMORY_GRAPH`, while the runbook writes a deployed graph as
+    `http://host:8080/graphs/<id>`. Those name one graph, and `WITAN_MEMORY_TOKEN`
+    is the only credential the break-glass pod holds for it — comparing the raw
+    strings would drop it and turn an operator's explicit `--target` into a 401.
+    """
+    from witan import server as srv
+
+    class _Configured:
+        graph_uri = "http://omnigraph-server.omnigraph.svc:8080"
+        server_url = "http://omnigraph-server.omnigraph.svc:8080"
+        graph_id = "council"
+        token = "svc-witan-admin-token"
+        is_remote = True
+
+    monkeypatch.setattr(srv, "client", _Configured())
+    base = _Configured.server_url
+
+    for uri in (base, f"{base}/", f"{base}/graphs/council"):
+        args, env = srv._store_address(uri)
+        assert args == ["--server", base, "--graph", "council"]
+        assert env["OMNIGRAPH_BEARER_TOKEN"] == "svc-witan-admin-token"
+
+    # Another graph on the same server, or the same graph id on a different
+    # server, is *not* the configured store: it falls back to the ambient token.
+    for uri in (f"{base}/graphs/code", "http://elsewhere:8080/graphs/council"):
+        _, env = srv._store_address(uri)
+        assert env.get("OMNIGRAPH_BEARER_TOKEN") != "svc-witan-admin-token"
+
+
+def test_merge_into_a_bare_server_url_reports_the_missing_graph_id(server, tmp_path):
+    """A remote target with no graph id is a caller error, not a crash.
+
+    `--target http://host:8080` is the natural typo for the documented
+    `http://host:8080/graphs/<id>`, and the URI parser signals it with a
+    ValueError — which the CLI's `except RuntimeError` would not catch, so the
+    operator got a traceback where the previous `--store` spelling gave them a
+    message.
+    """
+    from witan import server as srv
+
+    source = tmp_path / "empty.jsonl"
+    source.write_text("")
+    with pytest.raises(RuntimeError, match="has no graph id"):
+        srv.merge_store(str(source), target="http://host:8080", dry_run=True)
+
+
+def test_merge_refuses_an_export_file_as_the_target(server, tmp_path):
+    """`.jsonl` means "export" on the source side; a target must still be a store.
+
+    Without this the asymmetry silently eats data: a missing local target is
+    auto-created, so `--target combined.jsonl` would `omnigraph init` a Lance
+    store *directory* under that name and report a successful merge into a
+    graph nobody will ever open.
+    """
+    from witan import server as srv
+
+    source = tmp_path / "handover.jsonl"
+    source.write_text("")
+    target = tmp_path / "combined.jsonl"
+
+    with pytest.raises(RuntimeError, match="must be a store"):
+        srv.merge_store(str(source), target=str(target))
+
+    assert not target.exists()
+
+
 @requires_omnigraph
 def test_merge_reconciles_deterministic_code_branch_slugs(server, tmp_path):
     """CodeBranch is the one slug class that genuinely collides across users.

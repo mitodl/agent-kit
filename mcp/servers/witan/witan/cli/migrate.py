@@ -200,7 +200,9 @@ def merge(
         Store URI to merge into. Defaults to the configured store. Created
         automatically if it's a local path that doesn't exist yet. A deployed
         graph is ``http(s)://<host>:<port>/graphs/<graph-id>`` (or just the
-        configured store, when running in-cluster).
+        configured store, when running in-cluster). Unlike ``source``, a
+        ``.jsonl`` target is refused rather than treated as a store: merging
+        appends to a graph, and an export is a snapshot of one.
     dry_run:
         Preview the reconciliation decision for every colliding slug without
         writing anything.
