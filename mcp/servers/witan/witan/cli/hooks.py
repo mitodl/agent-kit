@@ -5,8 +5,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from witan_core.observability import get_logger
+
 from .. import config as cfg_module
 from ._common import app
+
+logger = get_logger("witan.hook")
 
 
 @app.command(name="inject-context")
@@ -25,8 +29,6 @@ def inject_context(*, debug: bool = False) -> None:
         only the injected block, so ``witan inject-context --debug`` is safe to
         run by hand to see why the block is blank.
     """
-    import sys
-
     from .. import context as ctx_module
 
     # The config load is the earliest step and was the one unguarded one, so it
@@ -42,10 +44,7 @@ def inject_context(*, debug: bool = False) -> None:
         cfg = cfg_module.load()
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — never fail the hook
         if debug:
-            print(
-                f"[witan inject-context] could not load config: {exc}",
-                file=sys.stderr,
-            )
+            logger.debug("witan.hook.config_load_failed", error=str(exc), exc_info=True)
         return
     graph_path = (
         Path(cfg.graph_uri)
@@ -54,10 +53,10 @@ def inject_context(*, debug: bool = False) -> None:
     )
     if graph_path is not None and not graph_path.exists():
         if debug:
-            print(
-                f"[witan inject-context] graph file does not exist: {graph_path} "
-                "(run `witan setup` / `install.sh`?)",
-                file=sys.stderr,
+            logger.debug(
+                "witan.hook.graph_missing",
+                path=str(graph_path),
+                hint="run `witan setup` / `install.sh`?",
             )
         return
     text = ctx_module.inject_context(

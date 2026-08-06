@@ -13,23 +13,23 @@ import functools
 import hashlib
 import importlib
 import os
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from witan_core import now_iso
+from witan_core.observability import get_logger
 
 from . import bridge as bridge_module
-from . import bridge_extractors
+from . import bridge_extractors, package_map, views
 from . import config as cfg_module
 from . import identity as identity_module
-from . import package_map
 from . import repo as repo_module
-from . import views
 from .bridge_extractors import ParsedBinding
 from .graph import OmnigraphClient, check_writable, owns_view
 from .store import ensure_store
+
+logger = get_logger("witan.code.index")
 
 # ── Language support ──────────────────────────────────────────────
 #
@@ -329,7 +329,11 @@ def index_path(
     collected = _collect_files(target, on_error=walk_errors.append)
     for exc in walk_errors:
         stats.errors += 1
-        print(f"codegraph: could not read {exc.filename}: {exc}", file=sys.stderr)
+        # Warning: an unreadable directory silently shrinks `collected`, and
+        # the purge below reads "missing from collected" as "deleted from the
+        # repo" — so this is the difference between a partial index and a
+        # wrongly-purged one.
+        logger.warning("witan.code.index.walk_error", path=exc.filename, error=str(exc))
 
     # Every file the repo should have indexed, changed or not — the authority
     # for the purge below, which `touched_files` is not (an incremental run
@@ -342,7 +346,13 @@ def index_path(
             result = _parse_for_index(path, base, slug, existing, force=force)
         except Exception as exc:  # noqa: BLE001 — one bad file must not abort
             stats.errors += 1
-            print(f"codegraph: failed to index {path}: {exc}", file=sys.stderr)
+            logger.warning(
+                "witan.code.index.file_failed",
+                path=str(path),
+                repo=slug,
+                error=str(exc),
+                exc_info=True,
+            )
             continue
         if result is None:
             stats.skipped += 1
@@ -426,7 +436,9 @@ def index_path(
             indexed_files=frozenset(indexed_rel) if can_purge else None,
         )
     except Exception as exc:  # noqa: BLE001 — bridge is best-effort, never fatal
-        print(f"codegraph: bridge update failed: {exc}", file=sys.stderr)
+        logger.warning(
+            "witan.code.index.bridge_failed", repo=slug, error=str(exc), exc_info=True
+        )
 
     return stats
 

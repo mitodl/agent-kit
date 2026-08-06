@@ -3,6 +3,7 @@
 import logging
 
 import pytest
+from witan_core.observability import configure_logging, reset_logging
 
 from witan.config import ScanConfig
 from witan.scan import (
@@ -13,6 +14,37 @@ from witan.scan import (
     masked_preview,
 )
 from witan.scan.audit import AuditEvent
+
+
+@pytest.fixture(autouse=True)
+def _structlog_through_stdlib():
+    """Route structlog into stdlib logging so ``caplog`` can see audit events.
+
+    ``audit.emit`` logs through structlog now. Only once ``configure_logging``
+    has run does structlog use the stdlib ``LoggerFactory``; unconfigured it
+    uses ``PrintLogger``, which writes straight to a stream and never creates a
+    ``LogRecord`` for caplog to capture. Both serve paths call
+    ``configure_observability()`` before handling anything, so configuring here
+    reproduces production rather than working around it.
+    """
+    configure_logging(log_format="json", level="INFO", force=True)
+    yield
+    reset_logging()
+    # dictConfig put a handler on the root logger; drop it so the next test's
+    # caplog starts clean.
+    logging.getLogger().handlers.clear()
+
+
+def _audit(record):
+    """The AuditEvent payload carried by one captured log record.
+
+    ``audit.emit`` now logs through structlog, whose stdlib bridge puts the
+    whole event dict in ``record.msg`` rather than in a bespoke ``scan_audit``
+    attribute. The dict also carries pipeline keys (``event``, ``level``,
+    ``logger``, ``timestamp``); those are filtered out here so these tests keep
+    asserting on the audit payload instead of on pydantic's extra-field policy.
+    """
+    return {k: v for k, v in record.msg.items() if k in AuditEvent.model_fields}
 
 
 class MatchScanner:
@@ -53,7 +85,7 @@ def test_block_emits_audit_event(caplog):
         )
 
     [record] = caplog.records
-    event = AuditEvent(**record.scan_audit)
+    event = AuditEvent(**_audit(record))
     assert event.outcome == "blocked"
     assert event.action == "block"
     assert event.detector == "aws_key"
@@ -70,7 +102,7 @@ def test_redact_emits_audit_event(caplog):
     guard("insert_memory", {"slug": "mem-2", "title": "t", "content": "a@b.com"})
 
     [record] = caplog.records
-    event = AuditEvent(**record.scan_audit)
+    event = AuditEvent(**_audit(record))
     assert event.outcome == "redacted"
     assert event.action == "redact"
     assert event.slug == "mem-2"
@@ -83,7 +115,7 @@ def test_warn_emits_audit_event(caplog):
     guard("insert_task", {"slug": "task-1", "title": "t", "description": "AKIA stays"})
 
     [record] = caplog.records
-    event = AuditEvent(**record.scan_audit)
+    event = AuditEvent(**_audit(record))
     assert event.outcome == "warned"
     assert event.node_type == "Task"
     assert event.field == "description"
@@ -103,7 +135,7 @@ def test_slug_absent_is_none(caplog):
     guard("insert_memory", {"title": "t", "content": "a@b.com"})
 
     [record] = caplog.records
-    event = AuditEvent(**record.scan_audit)
+    event = AuditEvent(**_audit(record))
     assert event.slug is None
 
 
@@ -113,7 +145,7 @@ def test_suppressed_finding_emits_suppressed_outcome(caplog):
     guard("insert_memory", {"slug": "mem-6", "title": "t", "content": "AKIA here"})
 
     [record] = caplog.records
-    event = AuditEvent(**record.scan_audit)
+    event = AuditEvent(**_audit(record))
     assert event.outcome == "suppressed"
     assert event.suppressed_by == "regex"
     assert event.action == "warn"
@@ -125,7 +157,7 @@ def test_non_suppressed_finding_has_no_suppressed_by(caplog):
     guard("insert_memory", {"slug": "mem-7", "title": "t", "content": "a@b.com"})
 
     [record] = caplog.records
-    event = AuditEvent(**record.scan_audit)
+    event = AuditEvent(**_audit(record))
     assert event.suppressed_by is None
     assert event.outcome == "redacted"
 
@@ -150,7 +182,7 @@ def test_block_in_one_field_marks_redact_in_another_field_as_blocked_too(caplog)
     with pytest.raises(WriteBlocked):
         guard("insert_memory", {"slug": "mem-4", "title": "a@b.com", "content": "AKIA"})
 
-    events = {r.scan_audit["field"]: AuditEvent(**r.scan_audit) for r in caplog.records}
+    events = {_audit(r)["field"]: AuditEvent(**_audit(r)) for r in caplog.records}
     assert events["title"].action == "redact"
     assert (
         events["title"].outcome == "blocked"
@@ -173,9 +205,7 @@ def test_block_later_in_same_field_marks_earlier_redact_as_blocked_too(caplog):
             "insert_memory", {"slug": "mem-5", "title": "t", "content": "a@b.com AKIA"}
         )
 
-    events = {
-        r.scan_audit["detector"]: AuditEvent(**r.scan_audit) for r in caplog.records
-    }
+    events = {_audit(r)["detector"]: AuditEvent(**_audit(r)) for r in caplog.records}
     assert events["email"].action == "redact"
     assert events["email"].outcome == "blocked"
     assert events["aws_key"].outcome == "blocked"

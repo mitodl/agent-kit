@@ -2,7 +2,7 @@
 
 Every finding a scanner produces — whether it ends up blocking a write,
 redacting a field, or just warning — gets exactly one audit event, emitted as
-a single structured log line via the standard :mod:`logging` module. That
+a single structured log line through :mod:`witan_core.observability`. That
 sink beats the alternatives considered: a graph ``ScanEvent`` node would
 itself become sensitive-adjacent state to secure and retention-manage, and a
 bare metrics counter would lose the per-finding detail an operator needs to
@@ -18,16 +18,16 @@ touching content.
 
 from __future__ import annotations
 
-import logging
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+from witan_core.observability import get_logger
 
 from ..config import ScanAction
 from .allowlist import SuppressionReason
 from .models import Category, Finding, Severity
 
-logger = logging.getLogger("witan.scan.audit")
+logger = get_logger("witan.scan.audit")
 
 AuditOutcome = Literal["blocked", "redacted", "warned", "suppressed"]
 
@@ -110,12 +110,9 @@ def emit(
         preview=finding.preview,
         suppressed_by=suppressed_by,
     )
-    logger.info(
-        "witan scan: %s %s on %s.%s (%s)",
-        event.outcome,
-        event.detector,
-        event.node_type,
-        event.field,
-        event.preview,
-        extra={"scan_audit": event.model_dump()},
-    )
+    # One key per field rather than an interpolated sentence: every attribute
+    # of AuditEvent becomes independently queryable in Loki, so "which detector
+    # blocks most writes" is a `sum by (detector)` instead of a regex over a
+    # rendered message. The printf form this replaces already carried the same
+    # dict through `extra=`, so this is the shape the module always intended.
+    logger.info("witan.scan.finding", **event.model_dump())

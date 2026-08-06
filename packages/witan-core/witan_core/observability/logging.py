@@ -16,6 +16,17 @@ pinned to stderr explicitly. ``logging.StreamHandler()`` happens to default to
 stderr, but relying on that default would make the most damaging possible
 regression invisible in review — hence the explicit argument and
 ``test_all_output_goes_to_stderr``.
+
+That covers the *configured* path. The unconfigured one is the sharper edge:
+structlog's own out-of-the-box default is ``PrintLoggerFactory()``, which writes
+to **stdout**. So a module that logs before — or entirely without —
+:func:`configure_logging` would print onto the MCP framing channel, and in the
+UserPromptSubmit hook it would land inside the context block the hook writes to
+stdout. Both failures are silent and neither shows up in a unit test that only
+exercises the configured path. :func:`_install_stderr_default` therefore pins
+that fallback to stderr at import, and :func:`reset_logging` restores it, so
+there is no reachable state in which a witan logger targets stdout. See
+``test_unconfigured_logger_never_writes_to_stdout``.
 """
 
 from __future__ import annotations
@@ -42,6 +53,40 @@ _EXCEPTION_RENDERER = structlog.processors.ExceptionRenderer(
 _NOISY_LOGGERS = ("botocore", "boto3", "urllib3", "httpx", "httpcore", "hpack")
 
 _configured = False
+
+
+class _LateBoundStderr:
+    """A write target that resolves ``sys.stderr`` per call.
+
+    ``PrintLoggerFactory(file=sys.stderr)`` would capture whatever object
+    ``sys.stderr`` names at import. That is the wrong moment: pytest's capsys,
+    ``contextlib.redirect_stderr`` and any CLI that rebinds the stream would all
+    be writing somewhere this logger no longer points, and the safety net would
+    be silently aimed at a dead file object. Resolving on each write keeps it
+    aimed at whatever stderr currently is — while never being stdout.
+    """
+
+    def write(self, message: str) -> int:
+        return sys.stderr.write(message)
+
+    def flush(self) -> None:
+        sys.stderr.flush()
+
+
+def _install_stderr_default() -> None:
+    """Point structlog's unconfigured fallback at stderr instead of stdout.
+
+    Only the ``logger_factory`` is set, deliberately: this is a safety net, not
+    a configuration. Leaving the processor chain alone means an unconfigured
+    log line still renders readably, and :func:`configure_logging` remains the
+    single place that decides format, level and routing.
+    """
+    structlog.configure(
+        logger_factory=structlog.PrintLoggerFactory(file=_LateBoundStderr())
+    )
+
+
+_install_stderr_default()
 
 
 def _log_level() -> str:
@@ -163,6 +208,11 @@ def reset_logging() -> None:
     global _configured  # noqa: PLW0603 - module-level once-only guard
     _configured = False
     structlog.reset_defaults()
+    # reset_defaults() restores structlog's stdout-writing factory, so the
+    # stderr pin has to be reapplied — otherwise every test that resets logging
+    # leaves the process one log call away from corrupting stdio, which is the
+    # exact hazard this guards.
+    _install_stderr_default()
 
 
 def get_logger(name: str | None = None) -> Any:

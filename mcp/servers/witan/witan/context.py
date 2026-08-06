@@ -12,15 +12,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sys
 import time
-import traceback
 from pathlib import Path
 
-from . import readiness
+from witan_core.observability import get_logger
+
+from . import readiness, session_state
 from . import repo as repo_module
-from . import session_state
 from .graph import OmnigraphClient
+
+logger = get_logger("witan.context")
 
 # The context hook runs a fresh process on every prompt, so an in-process cache
 # (like witan-code's server-side ``_cached_git``) can't help it. A tiny on-disk
@@ -45,6 +46,12 @@ def _output_cache_ttl() -> float:
     try:
         return max(0.0, float(raw))
     except ValueError:
+        # Warning, not debug: this is a misconfiguration a human should fix, and
+        # it can only fire for someone who set the variable to a non-number, so
+        # it cannot become per-prompt noise.
+        logger.warning(
+            "witan.context.bad_ttl", value=raw, falling_back_to=_OUTPUT_CACHE_TTL
+        )
         return _OUTPUT_CACHE_TTL
 
 
@@ -67,9 +74,15 @@ def _atomic_write_private(path: Path, text: str) -> None:
             os.close(fd)
         os.replace(tmp, path)
     except OSError:
+        # Debug: the cache is advisory, and the caller recomputes. Anything
+        # louder would fire on every prompt for a read-only temp dir.
+        logger.debug("witan.context.cache_write_failed", path=str(path), exc_info=True)
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
+            # Nothing left to try, and the temp file is in a temp dir. Silence
+            # is right here: reporting a failed cleanup of a failed write would
+            # be two lines about the same non-event.
             pass
 
 
@@ -90,6 +103,9 @@ def _read_output_cache(
         if time.time() - data["stamp"] < ttl:
             return data["output"]
     except Exception:  # noqa: BLE001 — missing/corrupt/stale cache → recompute
+        # Debug, deliberately: a *missing* cache is the normal first-prompt
+        # case, so this path is expected rather than degraded.
+        logger.debug("witan.context.output_cache_miss", exc_info=True)
         return None
     return None
 
@@ -140,12 +156,46 @@ def _stale_repo_case_present(
 
 
 def _dbg(enabled: bool, msg: str) -> None:
-    """Print a diagnostic line to stderr when ``--debug`` is on.
+    """Emit a diagnostic when ``--debug`` is on.
 
-    stderr (not stdout) so it never contaminates the block the hook injects into
-    the prompt — the hook reads stdout only."""
+    Still stderr-only, and that is load-bearing rather than incidental: the
+    hook writes the injected context block to stdout and the client reads
+    stdout only, so a line landing there is swallowed into the user's prompt.
+    structlog satisfies this from both directions — a configured process routes
+    through the handler that ``logging.StreamHandler(sys.stderr)`` pins, and an
+    unconfigured one (the usual case for a hook, which never calls
+    ``configure_observability``) hits the stderr fallback installed by
+    ``witan_core.observability.logging``. Do not "simplify" either end.
+
+    The ``enabled`` flag stays rather than deferring to the log level: the flag
+    is the documented ``--debug`` contract, and routing it through level
+    configuration would make a stray ``WITAN_LOG_LEVEL=DEBUG`` in someone's
+    environment start writing to a hook that is supposed to be silent.
+    """
     if enabled:
-        print(f"[witan inject-context] {msg}", file=sys.stderr)
+        logger.debug("witan.context.debug", detail=msg)
+
+
+def _dbg_exc(enabled: bool, msg: str) -> None:
+    """:func:`_dbg` plus the active exception's traceback.
+
+    Replaces a ``_dbg(...)`` / ``traceback.print_exc(file=sys.stderr)`` pair.
+    One record carrying ``exc_info`` keeps the message and its traceback
+    together — printing the traceback separately meant the two could interleave
+    with anything else on stderr, and in JSON mode the traceback would not be
+    part of the event at all.
+    """
+    if enabled:
+        # ruff's LOG014 only sees that this body is not lexically inside an
+        # `except`. Every caller invokes it from one, and `exc_info=True`
+        # resolves through `sys.exc_info()` at call time, so the active
+        # exception is captured correctly. Inlining the call at each of the
+        # three call sites to satisfy the lint would just duplicate it.
+        logger.debug(
+            "witan.context.debug",
+            detail=msg,
+            exc_info=True,  # noqa: LOG014
+        )
 
 
 def inject_context(
@@ -215,9 +265,7 @@ def inject_context(
             f"repo_tasks={len(repo_tasks)} unscoped={len(unscoped)}",
         )
     except Exception:  # noqa: BLE001
-        if debug:
-            _dbg(debug, "FAILED building context (returning empty block):")
-            traceback.print_exc(file=sys.stderr)
+        _dbg_exc(debug, "FAILED building context (returning empty block)")
         return ""
 
     # Isolated (like the CodeBranch read below): one read grouped by project
@@ -234,9 +282,7 @@ def inject_context(
                 if p_slug and not s.get("superseded_by"):
                     sessions_by_project.setdefault(p_slug, []).append(s)
         except Exception:  # noqa: BLE001
-            if debug:
-                _dbg(debug, "sessions read failed (skipping resume/staleness lines):")
-                traceback.print_exc(file=sys.stderr)
+            _dbg_exc(debug, "sessions read failed (skipping resume/staleness lines)")
             sessions_by_project = {}
 
     # Isolated from the block above: a CodeBranch query failing (e.g. an
@@ -252,12 +298,9 @@ def inject_context(
                 {"branch_slug": f"{repo}|{branch}"},
             )
         except Exception:  # noqa: BLE001
-            if debug:
-                _dbg(
-                    debug,
-                    "code_branch_tasks read failed (run `witan migrate schema`?):",
-                )
-                traceback.print_exc(file=sys.stderr)
+            _dbg_exc(
+                debug, "code_branch_tasks read failed (run `witan migrate schema`?)"
+            )
             branch_tasks = []
     open_branch_tasks = [t for t in branch_tasks if t.get("status") != "closed"]
 
@@ -432,7 +475,9 @@ def _cached_repo_and_branch() -> tuple[str | None, str | None]:
         if time.time() - data["stamp"] < _REPO_CACHE_TTL:
             return data.get("repo"), data.get("branch")
     except Exception:  # noqa: BLE001
-        pass
+        # Same as the output cache: absent on the first prompt in a window, so
+        # debug rather than warning.
+        logger.debug("witan.context.repo_cache_miss", exc_info=True)
 
     repo = _detect_repo()
     branch = _current_branch() if repo else None
@@ -458,6 +503,9 @@ def _current_branch() -> str | None:
     try:
         return repo_module.current_branch()
     except Exception:  # noqa: BLE001
+        # Debug: running outside a git checkout is a supported situation, not a
+        # malfunction — the branch only joins CodeBranch rows.
+        logger.debug("witan.context.branch_detect_failed", exc_info=True)
         return None
 
 
@@ -481,6 +529,9 @@ def _detect_repo() -> str | None:
     try:
         raw = repo_module.git_remote_url(Path(project_dir))
     except Exception:  # noqa: BLE001 — the prompt hook must never crash
+        # Debug for the same reason as the branch probe: no remote, or no repo
+        # at all, is a normal place to run an agent from.
+        logger.debug("witan.context.repo_detect_failed", exc_info=True)
         return None
     return repo_module.normalise(raw) if raw else None
 

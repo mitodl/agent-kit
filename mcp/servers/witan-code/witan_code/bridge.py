@@ -9,10 +9,10 @@ import json
 from pathlib import Path
 
 from witan_core import now_iso
+from witan_core.observability import get_logger
 
 from . import config as cfg_module
-from . import package_map
-from . import views
+from . import package_map, views
 from .bridge_extractors import (
     ParsedBinding,
     adjust_confidence,
@@ -25,6 +25,9 @@ from .store import bridge_store, ensure_bridge_store
 # Delete statements per commit when purging a repo's bindings. The composed
 # query is a single argv element, so a full-repo purge has to be capped.
 _PURGE_BATCH_SIZE = 500
+
+
+logger = get_logger("witan.code.bridge")
 
 
 def write_bindings(
@@ -107,6 +110,10 @@ def write_bindings(
     try:
         all_rows = client.read("bridge.gq", "all_bindings", {})
     except Exception:  # noqa: BLE001 — store may be empty or query unavailable
+        # Info: an empty bridge on a fresh store is normal, but this read also
+        # silently disables dedup against existing bindings, so it is worth a
+        # line when a populated bridge starts answering nothing.
+        logger.info("witan.code.bridge.all_bindings_failed", exc_info=True)
         all_rows = []
 
     # provider_keys/provider_pkg_slugs only feed adjust_confidence, which only
@@ -326,6 +333,9 @@ def _read_repo_symbols(client: OmnigraphClient) -> list[dict]:
     try:
         return client.read("bridge.gq", "all_repo_symbols", {})
     except Exception:  # noqa: BLE001 — store may predate RepoSymbol
+        # Debug: a store written before RepoSymbol existed legitimately has no
+        # such node, and the caller only loses confidence adjustment.
+        logger.debug("witan.code.bridge.repo_symbols_unavailable", exc_info=True)
         return []
 
 
@@ -336,6 +346,8 @@ def _declared_provider_packages(
     try:
         rows = client.read("bridge.gq", "all_package_maps", {})
     except Exception:  # noqa: BLE001 — store may predate the PackageMap node
+        # Debug, for the same reason as RepoSymbol above.
+        logger.debug("witan.code.bridge.package_maps_unavailable", exc_info=True)
         return frozenset()
     names: set[str] = set()
     for row in rows:
@@ -346,6 +358,10 @@ def _declared_provider_packages(
         try:
             provides = json.loads(row.get("provides") or "[]")
         except (TypeError, ValueError):
+            # Warning: `provides` is data this repo wrote, so malformed JSON
+            # here means a package map was stored wrong — not a missing
+            # feature, and it silently drops that repo's provided packages.
+            logger.warning("witan.code.bridge.bad_provides_json", repo=row.get("repo"))
             provides = []
         if not isinstance(provides, list):
             provides = []
