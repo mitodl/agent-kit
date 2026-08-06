@@ -1,13 +1,33 @@
-"""Shared base for the omnigraph CLI subprocess wrapper.
+"""Shared base for the omnigraph client.
 
-Both servers drive the ``omnigraph`` binary the same way: store addressing that
-picks ``--store <uri>`` for local/s3 stores and ``--server <url> --graph <id>``
+Both servers drive omnigraph the same way: store addressing that picks
+``--store <uri>`` for local/s3 stores and ``--server <url> --graph <id>``
 for a deployed omnigraph-server (omnigraph 0.8.1 rejects an http(s) ``--store``),
 a per-store advisory write lock for local stores, a retry/repair loop for
 optimistic-concurrency drift, self-backoff for the deployed omnigraph-server's
 per-actor admission cap and for the window in which it is restarting, and named
-read/mutate queries. That LOCAL-vs-REMOTE-generic surface lives here; each
-server subclasses to add its own tail:
+read/mutate queries. That LOCAL-vs-REMOTE-generic surface lives here.
+
+TWO TRANSPORTS, ONE POLICY
+
+Calls reach omnigraph either by running the ``omnigraph`` CLI as a subprocess or,
+for ``query``/``mutate`` against a deployed server, over a pooled HTTP connection
+(:mod:`witan_core.omnigraph_http`) — the subprocess is 77-81% of every remote
+read on a compacted store. The HTTP path is NOT a general replacement: omnigraph
+0.8.1 serves only ``query``, ``mutate`` and ``graphs`` over HTTP, so ``load``,
+``branch``, ``commit``, ``optimize``, ``cleanup``, ``schema apply`` and
+``repair`` all still shell out, as does any client that injects extra CLI args
+(witan-code's ``--branch`` views). ``_http_transport`` is the single place that
+decides.
+
+What must not fork is the POLICY. Both transports produce an ``_AttemptResult``
+carrying one of the classification kinds, and ``_with_retry_policy`` runs the
+same loop over either — so a restarting server, an admission cap, a
+compare-and-swap conflict or a store needing repair behaves identically however
+the call was made. Only the CLASSIFICATION differs: stderr text for the
+subprocess, HTTP status for the transport.
+
+Each server subclasses to add its own tail:
 
 - ``witan`` adds a write ``guard`` + ``surface_conflict`` (CAS task claims),
   ``apply_schema``, and the storage-version friendly-error hint.
@@ -35,10 +55,14 @@ import random
 import re
 import shutil
 import subprocess
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
+
+from witan_core import omnigraph_http as _http
 
 # omnigraph local stores use optimistic concurrency (Lance manifest versions) and
 # are NOT safe for concurrent writers. We serialize writes with a per-store
@@ -129,6 +153,17 @@ _UNAVAILABLE_MAX_DELAY = 10.0
 # by analogy — a variable the CLI has never read, which left every remote call
 # from both servers unauthenticated and crash-looped the deployed migration Job.
 BEARER_TOKEN_ENV_VAR = "OMNIGRAPH_BEARER_TOKEN"
+
+# Escape hatch for the pooled HTTP transport (see ``_http_transport``). Set to
+# "0"/"false"/"no" to force every call back onto the CLI subprocess.
+#
+# This is on the path of every read against the deployed service, and the CLI
+# path stays fully maintained beneath it (it is still the only way to reach
+# `load`, `branch`, `optimize`, …), so keeping a one-variable revert costs
+# nothing and means a transport-specific problem in production is a Deployment
+# env change rather than an image rebuild.
+HTTP_TRANSPORT_ENV_VAR = "WITAN_OMNIGRAPH_HTTP"
+_FALSEY = {"0", "false", "no", "off"}
 
 # A deployed omnigraph-server is reached over http(s); local files and s3://
 # roots are opened directly. Only http(s) needs the `--server`/`--graph`
@@ -256,6 +291,94 @@ def compose_batch(
         merged.update({f"{prefix}{k}": v for k, v in params.items()})
     joined = "\n".join(f"    {line}" for b in bodies for line in b.splitlines())
     return f"query {query_name}({', '.join(decls)}) {{\n{joined}\n}}\n", merged
+
+
+def extract_query(source: str, name: str) -> str:
+    """Return the named query from ``.gq`` ``source`` as a standalone query.
+
+    The HTTP API takes the query TEXT inline (``{"query": …, "params": …}``) and
+    has no field for a query name, where the CLI takes ``--query <file> <name>``
+    and picks. So the body must contain exactly the one query being run — not the
+    whole file — or which query executes would depend on how the server resolves
+    a multi-query source, which is not a behaviour worth depending on.
+
+    Rebuilt from :func:`parse_query`'s parts rather than sliced out verbatim so
+    both transports go through the same parser: if the splice is ever wrong, it
+    is wrong for ``change_many`` too and the existing batch tests catch it.
+    """
+    decls, body = parse_query(source, name)
+    return f"query {name}({decls}) {{\n{body}\n}}\n"
+
+
+# ── Attempt classification ───────────────────────────────────────────────────
+#
+# One retry/backoff policy serves both transports (see ``_with_retry_policy``),
+# so both must describe a failure in the same vocabulary. The subprocess path
+# classifies by matching the CLI's stderr text — the only signal it has — and the
+# HTTP path classifies by status code and exception type, which is strictly
+# better information for the same conditions. Keeping the POLICY in one place and
+# varying only the CLASSIFICATION is what stops the two paths from drifting into
+# behaving differently under load.
+
+
+class _AttemptResult(NamedTuple):
+    kind: str
+    body: str = ""
+    error: str = ""
+    returncode: int | None = None
+
+
+def _classify_cli_error(stderr: str) -> str:
+    """Map an omnigraph CLI failure's stderr onto the shared kinds."""
+    lowered = stderr.lower()
+    if any(m in lowered for m in _UNAVAILABLE_MARKERS):
+        return _http.UNAVAILABLE
+    if any(m in lowered for m in _ADMISSION_CAP_MARKERS):
+        return _http.ADMISSION_CAP
+    if any(m in lowered for m in _NEEDS_REPAIR):
+        return _http.NEEDS_REPAIR
+    if any(m in lowered for m in _RETRYABLE):
+        return _http.RETRYABLE
+    return _http.FATAL
+
+
+# Transports are PROCESS-wide, keyed by server url, because clients are not:
+# witan constructs a fresh OmnigraphClient per request so per-actor tokens cannot
+# race through shared mutable state (ADR-0004). A transport owned by the client
+# would therefore be built and thrown away per call, every call would open a new
+# connection, and the keep-alive reuse this whole module exists for would never
+# happen — the change would measure as no faster than the subprocess it replaced.
+#
+# Sharing them is safe precisely because the transport holds no per-actor state:
+# the token is passed in per call, and the connections live in thread-locals
+# inside it. What is shared is a socket to a host, which is what a pool is.
+_TRANSPORTS: dict[str, _http.PooledTransport] = {}
+_TRANSPORTS_LOCK = threading.Lock()
+
+
+def _shared_transport(server_url: str) -> _http.PooledTransport:
+    with _TRANSPORTS_LOCK:
+        transport = _TRANSPORTS.get(server_url)
+        if transport is None:
+            transport = _http.PooledTransport(server_url)
+            _TRANSPORTS[server_url] = transport
+        return transport
+
+
+# The .gq sources are packaged data and effectively immutable at runtime, but a
+# `stat` per call is cheap next to a 5ms request and keeps an edit picked up
+# during development — the CLI re-read the file on every invocation, so caching
+# without an mtime check would be the one behaviour this change silently loses.
+_QUERY_TEXT_CACHE: dict[tuple[str, str, float], str] = {}
+
+
+def _cached_query_text(path: Path, query_name: str) -> str:
+    key = (str(path), query_name, path.stat().st_mtime)
+    text = _QUERY_TEXT_CACHE.get(key)
+    if text is None:
+        text = extract_query(path.read_text(), query_name)
+        _QUERY_TEXT_CACHE[key] = text
+    return text
 
 
 def _split_decls(raw: str) -> list[str]:
@@ -488,16 +611,30 @@ class OmnigraphClient:
         params: dict,
     ) -> list[dict]:
         """Run a named read query. Returns a list of result rows."""
-        result = self._run(
-            "query",
-            "--query",
-            str(self.queries_dir / query_file),
-            query_name,
-            "--params",
-            json.dumps(params),
-            "--format",
-            "json",
-        )
+        transport = self._http_transport()
+        if transport is not None:
+            # The server answers with the same JSON body the CLI prints on
+            # stdout — `{rows, columns, row_count}`, alias-prefixed column keys
+            # and all — so the parsing below is shared verbatim rather than
+            # forked per transport.
+            result = self._http_execute(
+                transport,
+                "query",
+                self._query_source(query_file, query_name),
+                params,
+                "query",
+            )
+        else:
+            result = self._run(
+                "query",
+                "--query",
+                str(self.queries_dir / query_file),
+                query_name,
+                "--params",
+                json.dumps(params),
+                "--format",
+                "json",
+            )
         if not result.strip():
             return []
         try:
@@ -530,6 +667,17 @@ class OmnigraphClient:
         """
         if self.guard is not None:
             params = self.guard(query_name, params)
+        transport = self._http_transport()
+        if transport is not None:
+            self._http_execute(
+                transport,
+                "mutate",
+                self._query_source(query_file, query_name),
+                params,
+                "mutate",
+                surface_conflict=surface_conflict,
+            )
+            return
         self._run(
             "mutate",
             "--query",
@@ -612,6 +760,19 @@ class OmnigraphClient:
             return sources[query_file]
 
         source, params = compose_batch(steps, read_source)
+        transport = self._http_transport()
+        if transport is not None:
+            # compose_batch already produces a single standalone query, which is
+            # exactly the inline form the HTTP body wants — no extraction step.
+            self._http_execute(
+                transport,
+                "mutate",
+                source,
+                params,
+                "mutate",
+                surface_conflict=surface_conflict,
+            )
+            return
         self._run(
             "mutate",
             "-e",
@@ -656,8 +817,103 @@ class OmnigraphClient:
     def _extra_args(self, subcommand: str) -> list[str]:
         """Extra CLI args injected into every ``_run`` command (after the store
         flag, before the caller's args). Empty by default; subclasses override
-        (e.g. witan-code injects ``--branch``)."""
+        (e.g. witan-code injects ``--branch``).
+
+        Returning anything non-empty also opts the client OUT of the pooled HTTP
+        transport, because these args have no expressed HTTP equivalent and
+        dropping them would silently retarget the call — see
+        ``_http_transport``.
+        """
         return []
+
+    # ── Pooled HTTP transport (reads/writes against a deployed server) ──
+
+    def _http_transport(self) -> _http.PooledTransport | None:
+        """The pooled transport for this store, or ``None`` to use the CLI.
+
+        Three conditions have to hold, and the third is the interesting one:
+
+        1. The store is a deployed omnigraph-server (``http(s)://``). A local
+           path or an ``s3://`` root has no server to talk to.
+        2. The escape hatch (:data:`HTTP_TRANSPORT_ENV_VAR`) is not switched off.
+        3. **This client injects no extra CLI args for the verb.** The only
+           subclass that does is witan-code, which adds ``--branch`` for its
+           per-user/per-branch code-graph views. omnigraph 0.8.1's HTTP API
+           documents no branch selector on the request body — the response
+           carries a ``target: {branch, snapshot}``, which hints one may exist,
+           but hinted is not verified. Routing a branched call over HTTP without
+           it would silently execute against ``main``: a WIP reindex landing in
+           the shared graph, which is the exact failure branch views exist to
+           prevent. So branched clients stay on the CLI until the request-side
+           selector is confirmed, and the check is written against
+           ``_extra_args`` rather than against ``branch`` so any FUTURE subclass
+           arg is caught by the same guard instead of quietly being dropped.
+
+        Built lazily and cached: constructing it parses a URL and allocates a
+        ``threading.local``, and witan builds a fresh client per request to keep
+        per-actor tokens from racing (ADR-0004). The pooled CONNECTIONS live in
+        thread-locals inside the transport, so they are what actually needs to
+        outlive the client — see ``_TRANSPORTS``.
+        """
+        if not self.is_remote:
+            return None
+        if os.environ.get(HTTP_TRANSPORT_ENV_VAR, "").strip().lower() in _FALSEY:
+            return None
+        if self._extra_args("query") or self._extra_args("mutate"):
+            return None
+        return _shared_transport(self.server_url)
+
+    def _resolve_token(self) -> str | None:
+        """The bearer token to present over HTTP.
+
+        Mirrors what the CLI subprocess would resolve, and the fallback is the
+        load-bearing half: a remote client with no configured token deliberately
+        inherits an ambient ``OMNIGRAPH_BEARER_TOKEN`` (the CLI's own documented
+        last resort, and a supported way to drive a remote graph). Sending only
+        ``self.token`` would silently drop that and turn a working setup into
+        unauthenticated 401s — the same class of failure as the
+        wrong-variable-name bug this env var is named for.
+
+        Read per call rather than cached at construction so the two transports
+        resolve it at the same moment, and so a test or a process that exports
+        the variable late behaves the same either way.
+        """
+        return self.token or os.environ.get(BEARER_TOKEN_ENV_VAR) or None
+
+    def _query_source(self, query_file: str, query_name: str) -> str:
+        """The named query's text, for the HTTP body (which takes it inline)."""
+        path = self.queries_dir / query_file
+        return _cached_query_text(path, query_name)
+
+    def _http_execute(
+        self,
+        transport: _http.PooledTransport,
+        verb: str,
+        source: str,
+        params: dict,
+        label: str,
+        *,
+        surface_conflict: bool = False,
+    ) -> str:
+        """Run one query/mutate over HTTP under the shared retry policy."""
+        is_write = verb == "mutate"
+        call = transport.mutate if is_write else transport.query
+
+        token = self._resolve_token()
+
+        def attempt() -> _AttemptResult:
+            outcome = call(self.graph_id, source, params, token)
+            return _AttemptResult(outcome.kind, body=outcome.body, error=outcome.error)
+
+        return self._with_retry_policy(
+            attempt,
+            label,
+            # Only consulted if a repair is needed, which still shells out —
+            # `repair` has no HTTP form, so the CLI env is what it runs with.
+            env=self._subprocess_env(),
+            is_write=is_write,
+            surface_conflict=surface_conflict,
+        )
 
     def _store_args(self) -> list[str]:
         """The CLI flags that address this store. A remote omnigraph-server
@@ -695,6 +951,30 @@ class OmnigraphClient:
     ) -> str:
         """Run an omnigraph CLI command under the write lock (for writes) with the
         retry/repair loop for optimistic-concurrency conflicts."""
+        env = self._subprocess_env()
+
+        def attempt() -> _AttemptResult:
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            except OSError as exc:
+                raise RuntimeError(f"omnigraph {label} could not run: {exc}") from exc
+            if result.returncode == 0:
+                return _AttemptResult(_http.OK, body=result.stdout, returncode=0)
+            return _AttemptResult(
+                _classify_cli_error(result.stderr),
+                error=result.stderr,
+                returncode=result.returncode,
+            )
+
+        return self._with_retry_policy(
+            attempt,
+            label,
+            env=env,
+            is_write=is_write,
+            surface_conflict=surface_conflict,
+        )
+
+    def _subprocess_env(self) -> dict:
         env = dict(os.environ)
         if not self.is_remote:
             # A local path or an s3:// root is opened directly — there is no
@@ -710,7 +990,25 @@ class OmnigraphClient:
         # environment already carries: that is the CLI's own documented fallback
         # (see BEARER_TOKEN_ENV_VAR), and `export OMNIGRAPH_BEARER_TOKEN=…` with
         # no token in config is a supported way to drive it.
+        return env
 
+    def _with_retry_policy(
+        self,
+        attempt_once: Callable[[], _AttemptResult],
+        label: str,
+        *,
+        env: dict,
+        is_write: bool,
+        surface_conflict: bool = False,
+    ) -> str:
+        """The retry/backoff policy, shared by both transports.
+
+        ``attempt_once`` performs ONE call and classifies its outcome; everything
+        about *whether to call again* lives here. Both the CLI subprocess and the
+        pooled HTTP transport feed this same loop, so a restarting server, an
+        admission cap, or an optimistic-concurrency conflict is handled
+        identically no matter how the call was made.
+        """
         lock_fh = self._acquire_write_lock(is_write)
         try:
             attempt = 0
@@ -718,32 +1016,37 @@ class OmnigraphClient:
             unavailable_attempt = 0
             unavailable_started: float | None = None
             while True:
-                try:
-                    result = subprocess.run(
-                        cmd, capture_output=True, text=True, env=env
-                    )
-                except OSError as exc:
-                    raise RuntimeError(
-                        f"omnigraph {label} could not run: {exc}"
-                    ) from exc
-                if result.returncode == 0:
-                    return result.stdout
-                err = result.stderr
-                err_lower = err.lower()
+                result = attempt_once()
+                if result.kind == _http.OK:
+                    return result.body
+                err = result.error
+                kind = result.kind
                 if self._STORAGE_MISMATCH_HINT and _is_storage_version_mismatch(err):
                     raise RuntimeError(
                         _friendly_storage_error(err, self._STORAGE_MISMATCH_HINT)
                     ) from None
-                if (
-                    self.is_remote
-                    and self.connect_retry
-                    and any(m in err_lower for m in _UNAVAILABLE_MARKERS)
+                if kind == _http.UNAVAILABLE and not (
+                    self.is_remote and self.connect_retry
                 ):
+                    # A connect failure against a LOCAL store is not a restarting
+                    # server, and a caller that opted out of the wait wants an
+                    # answer now. Either way it stops being a retryable
+                    # condition and falls through to the generic failure below.
+                    kind = _http.FATAL
+                if kind == _http.UNAVAILABLE:
                     # Its own budget, like the admission cap below: this is a
                     # gap in the server's availability, not a conflict over the
                     # graph, so it neither consumes _MAX_ATTEMPTS nor honours
-                    # surface_conflict (there is no conflict to surface — the
-                    # request never left this process).
+                    # surface_conflict (there is no conflict to surface).
+                    #
+                    # Reaching here means re-running is known safe. For a WRITE
+                    # that is because the request provably never left this
+                    # process (the CLI's "tcp connect error", or a failure
+                    # during the transport's explicit `connect()`); a write
+                    # whose fate is ambiguous is classified FATAL by both
+                    # transports and never arrives here. Reads may also arrive
+                    # here from a mid-flight failure, which is fine precisely
+                    # because repeating a query changes nothing.
                     #
                     # Elapsed is measured from the FIRST connect failure, not
                     # from entry, so a call that spent time on unrelated drift
@@ -774,7 +1077,7 @@ class OmnigraphClient:
                         f"attempts over {elapsed:.0f}s — could not connect to "
                         f"{self.server_url}:\n{err.strip()}"
                     )
-                if any(m in err_lower for m in _ADMISSION_CAP_MARKERS):
+                if kind == _http.ADMISSION_CAP:
                     # Independent budget/backoff from the drift retries below —
                     # doesn't consume _MAX_ATTEMPTS and ignores surface_conflict.
                     admission_cap_attempt += 1
@@ -786,22 +1089,25 @@ class OmnigraphClient:
                         f"{_ADMISSION_CAP_MAX_ATTEMPTS} attempts (actor "
                         f"admission cap exceeded):\n{err.strip()}"
                     )
-                if surface_conflict and any(m in err_lower for m in _RETRYABLE):
+                if surface_conflict and kind == _http.RETRYABLE:
                     # A compare-and-swap caller wants to lose the race, not
                     # re-apply its write over the winner. Surface immediately.
                     raise OmnigraphConflict(err.strip()) from None
                 attempt += 1
                 if attempt < _MAX_ATTEMPTS:
-                    if any(m in err_lower for m in _NEEDS_REPAIR):
+                    if kind == _http.NEEDS_REPAIR:
                         self._repair(env)
                         continue
-                    if any(m in err_lower for m in _RETRYABLE):
+                    if kind == _http.RETRYABLE:
                         time.sleep(0.05 * attempt)
                         continue
-                raise RuntimeError(
-                    f"omnigraph {label} failed (exit {result.returncode}):\n"
-                    f"{err.strip()}"
+                # `exit N` only makes sense for a subprocess; an HTTP attempt
+                # carries no returncode and says so by omitting it, rather than
+                # inventing one that would read as a CLI exit status.
+                exited = (
+                    "" if result.returncode is None else f" (exit {result.returncode})"
                 )
+                raise RuntimeError(f"omnigraph {label} failed{exited}:\n{err.strip()}")
         finally:
             if lock_fh is not None:
                 fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
