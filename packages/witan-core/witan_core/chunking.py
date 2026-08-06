@@ -11,6 +11,12 @@ load --help`` exposes a knob for it. (It is NOT
 ``OMNIGRAPH_PER_ACTOR_BYTES_MAX``, which is 256 MiB in the deployed cluster —
 a per-actor admission budget the 413 fires an order of magnitude below.) So
 the split has to happen client-side.
+
+Shared rather than witan-code's own since 2026-08-06: witan's ``migrate merge``
+ships a personal graph's rows through the MCP tier the same way witan-code
+ships an index (witan ADR-0007 D5), and hits the same two ceilings — the
+buffered body one layer down, and the records riding as a JSON tool parameter.
+One rule, one place.
 """
 
 from __future__ import annotations

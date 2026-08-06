@@ -26,7 +26,7 @@ one is `s3://`, or one is the shared server's store.
 
 | Scenario | Source | Target |
 |---|---|---|
-| Local → shared (ADR-0009) | your local `~/.local/share/witan/graph.omni` | the shared server's store |
+| Local → shared (ADR-0009) | your local store's **export** | the deployed graph, from inside the cluster — see [below](#local--shared-the-cutover) |
 | Cross-machine merge | two machines' independent local stores | either one, or a fresh third store |
 | Machine migration | old machine's local store | new machine's local store |
 
@@ -34,6 +34,10 @@ All three use the identical three-command sequence above. "Migration" (one
 source, empty target) and "merge" (two sources with independent history) are
 the same command — `--mode merge` into an empty target behaves like a plain
 import, so there's one procedure to remember rather than three.
+
+The first row is the one with a network boundary in the middle, and it has its
+own section: the deployed data tier is ClusterIP-only, so the merge runs
+*inside* the cluster and your store reaches it as an export file.
 
 For a **merge** of two non-empty stores, run the load step twice, once per
 source, into the same target:
@@ -77,9 +81,6 @@ or run after every session, not just as a one-time cutover.
 # preview before touching anything
 witan migrate merge ~/.local/share/witan-laptop-b/graph.omni --dry-run
 
-# local -> shared (ADR-0009)
-witan migrate merge ~/.local/share/witan/graph.omni --target s3://witan-shared/graph.omni
-
 # cross-machine merge: run once per machine's store against a shared target
 witan migrate merge machine-a.omni --target combined.omni
 witan migrate merge machine-b.omni --target combined.omni
@@ -87,13 +88,40 @@ witan migrate merge machine-b.omni --target combined.omni
 # machine migration: same command, target starts empty — a missing local
 # target is created and schema-applied automatically, no separate init step
 witan migrate merge old-machine.omni --target new-machine.omni
+
+# merge from a store that can't travel: its export can (see "never mv" above)
+witan migrate merge alice-export.jsonl --target combined.omni
+
+# a deployed graph, addressed as a server (from inside the cluster, or over a
+# port-forward) — not `--store`, which omnigraph 0.8.1 rejects for http(s)
+witan migrate merge alice-export.jsonl --target http://127.0.0.1:8080/graphs/council
 ```
 
-`source`/`target` accept a plain local path, `s3://`, or an explicit
-`file://` local URI (stripped to a plain path before use, same as everywhere
-else in witan — only `s3://`/`http(s)://` count as "remote"). A missing
-local `target` is auto-created; a missing remote `target` is assumed to
-already exist and is left alone (same as `witan serve` on a fresh machine).
+`source` accepts a plain local path, `s3://`, an explicit `file://` local URI,
+an `http(s)://` omnigraph-server — or **the path to a local `omnigraph export`
+JSONL**. Anything ending `.jsonl` is read as an export rather than
+re-exported; the suffix is unambiguous, since a store is always a directory.
+That form is what crosses machine boundaries, per the "never `mv`" rule at the
+top: a `.omni` directory cannot be copied, but its export can.
+
+An export must be a readable local file — `merge` never fetches one over the
+network. An export is bytes rather than a store, so a remote one is downloaded
+by whatever already holds credentials for it (`aws s3 cp …`, `curl`) and passed
+as a path; a `s3://…/x.jsonl` source is refused with that instruction rather
+than a misleading "no such file".
+
+`target` takes the same set *minus the export form* — merging appends to a
+graph and an export is a snapshot of one, so a `.jsonl` target is refused
+rather than auto-created as a store under that name — and defaults to your
+configured store. A missing local `target` is auto-created; a missing remote
+`target` is assumed to already exist and is left alone (same as `witan serve`
+on a fresh machine). A deployed graph is
+`http(s)://<host>:<port>/graphs/<graph-id>` — or simply the configured store,
+when the command runs somewhere `WITAN_MEMORY_URI` already points at the
+server. Both spellings of the configured graph use the configured
+`WITAN_MEMORY_TOKEN`; any *other* remote store falls back to an ambient
+`OMNIGRAPH_BEARER_TOKEN`. A remote target with no graph id at all
+(`http://host:8080`, no `/graphs/<id>`) is an error naming what's missing.
 
 Reconciliation only applies to nodes (anything with a `slug`) — edge rows
 (`Tagged`, `ParentOf`, ...) have no slug and pass through the same load
@@ -219,7 +247,157 @@ content-equivalent duplicate by design — see `_topic_slug`'s docstring); a
 different records, one is about to silently disappear — this is exactly what
 `witan migrate merge`'s newest-wins reconciliation resolves for you.
 
+## Local → shared: the cutover
+
+Moving your local store onto the deployed service (ADR-0009). **Do it
+yourself** — no kubectl, no port-forward, no AWS credentials:
+
+```bash
+witan login                                            # once, if you haven't
+witan migrate merge ~/.local/share/witan/graph.omni --dry-run
+witan migrate merge ~/.local/share/witan/graph.omni
+```
+
+With a deployment configured (`remote_url`, see
+[`deployed-witan-onboarding.md`](deployed-witan-onboarding.md)), `merge`
+exports your store locally and ships the rows through the deployment's
+`store_merge` tool in batches. The server reconciles each batch against the
+shared graph and writes the winners — **as you**, using your own actor's
+credential, evaluated by Cedar like any other write you make. That is the point
+of this path: under the in-cluster alternative below every row lands in the
+audit trail as `svc-witan-admin`.
+
+Two things behave differently here than against a local store:
+
+- **`--target` is refused.** The target is the deployment's own graph, resolved
+  server-side; a client never names a store address. Unset `remote_url` to
+  merge between stores you address yourself.
+- **Batches commit independently.** A failure part-way leaves earlier batches
+  applied. Just re-run — reconciliation makes an already-applied row lose to
+  its own copy, so nothing double-writes. It is recoverable, not atomic.
+
+Verify with `witan memory show <a-slug-you-recognise>`, then run
+`witan migrate repo-keys` and `witan migrate topics` **once** after everyone
+has merged — those are in-cluster admin commands (below), not self-service.
+
+Keep your local store until you have verified. It is the backup.
+
+### Fallback: the in-cluster path
+
+Use this when the MCP tier is unavailable, or for a bulk merge on someone
+else's behalf. Two constraints shape it:
+
+- **The data tier is ClusterIP-only** and never exposed (ADR-0009), so the
+  merge runs *inside* the cluster as `svc-witan-admin` via the
+  `witan-break-glass` pod (ADR-0005 path b).
+- **Your store cannot travel.** Lance embeds absolute paths, so
+  `~/.local/share/witan/graph.omni` cannot be copied, tarred, or staged in a
+  bucket. Its export can, and that is what you hand over.
+
+Every write lands as `svc-witan-admin` rather than as the user, which is why
+this is the fallback. See
+[ADR-0007](adr/0007-local-to-shared-store-migration-transport.md) for the full
+reasoning, and ol-infrastructure's `docs/witan-admin-break-glass-runbook.md`
+for the pod itself.
+
+### 1. You: export your store
+
+```bash
+omnigraph export --store ~/.local/share/witan/graph.omni > "$USER-witan.jsonl"
+wc -l "$USER-witan.jsonl"     # sanity: should be thousands of rows, not zero
+```
+
+Stop writing locally once you have exported — anything you write afterwards is
+outside the merge. Coordinate this with pointing your CLI at the deployment
+(see [`deployed-witan-onboarding.md`](deployed-witan-onboarding.md)), so
+there is no window where you are still writing to a store nobody will merge
+again.
+
+### 2. Operator: open a break-glass pod and stream the file in
+
+```bash
+kubectl -n witan create job witan-bg-$(date +%s) --from=cronjob/witan-break-glass
+JOB=witan-bg-<id>      # from the output above
+
+kubectl -n witan exec -i job/$JOB -- sh -c 'cat > /tmp/alice.jsonl' < alice-witan.jsonl
+kubectl -n witan exec -it job/$JOB -- wc -l /tmp/alice.jsonl   # confirm it landed intact
+```
+
+`kubectl exec -i` is the ingress mechanism, not `kubectl cp` and not S3: the
+break-glass pod declares no volume and no ServiceAccount, so it holds neither
+bucket credentials nor an `aws` binary. The same idiom is used by
+ol-infrastructure's storage-format upgrade runbook. The file lands in the
+container's ephemeral writable layer — fine for an export, but check the size
+against the pod's 1Gi memory limit for an unusually large store.
+
+### 3. Operator: dry-run, review, merge
+
+The pod's `WITAN_MEMORY_URI` already points at the in-cluster omnigraph-server
+and `WITAN_MEMORY_TOKEN` carries the `svc-witan-admin` credential, so the
+target needs no flag:
+
+```bash
+kubectl -n witan exec -it job/$JOB -- witan migrate merge /tmp/alice.jsonl --dry-run
+```
+
+Read the per-slug decisions before going further — in particular that the
+`added` count is roughly the row count you exported, and that `updated` is
+small. A large `updated` count on a first migration means slugs are colliding
+that shouldn't; stop and investigate rather than overwriting.
+
+```bash
+kubectl -n witan exec -it job/$JOB -- witan migrate merge /tmp/alice.jsonl
+```
+
+### 4. Operator: post-merge migrations, then clean up
+
+These are no-ops until real data lands, which is what step 3 just did:
+
+```bash
+kubectl -n witan exec -it job/$JOB -- witan migrate repo-keys
+kubectl -n witan exec -it job/$JOB -- witan migrate topics
+kubectl -n witan delete job $JOB
+```
+
+### 5. You: verify through the deployment
+
+Spot-check slugs you know you wrote, through the MCP endpoint as *yourself* —
+this checks the merge and your own registration in one step:
+
+```bash
+witan whoami
+witan memory show <a-slug-you-recognise>
+witan tasks --all-repos | head
+```
+
+Keep your local store until you have done this. It is the backup.
+
+### Repeating this per user
+
+Run steps 1–3 once per person, in sequence, into the same graph. Order only
+matters for genuine slug collisions, and the merge resolves those newest-wins
+either way. Run step 4 once at the end rather than after every user.
+
+### If you have cluster credentials
+
+The same commands work from a laptop over a port-forward, which is a
+convenience rather than a second supported path — it needs your own bearer
+token out of the `actor-tokens` Secret, which most users cannot read:
+
+```bash
+kubectl -n omnigraph port-forward svc/omnigraph-server 8080:8080 &
+OMNIGRAPH_BEARER_TOKEN=<your-actor-token> \
+  witan migrate merge ~/.local/share/witan/graph.omni \
+  --target http://127.0.0.1:8080/graphs/council --dry-run
+```
+
+Note this form merges from the *store* directly — no export step, since the
+store is on the same machine as the command.
+
 ## Procedure
+
+The generic procedure, for merges that don't cross into the cluster (the
+cross-machine and machine-migration rows above):
 
 1. **Back up first.** Do not delete or touch the source store(s) until the
    merge is verified. `cp -r` a local store aside if you want an extra
@@ -246,6 +424,15 @@ above instead, resolving any real collision by hand before loading.
 
 - [ADR-0009](https://github.com/mitodl/ol-infrastructure/blob/main/docs/adr/0009-deploy-witan-as-shared-multi-tenant-mcp-service.md) —
   the shared-service decision this runbook implements the migration path for.
+- [ADR-0007](adr/0007-local-to-shared-store-migration-transport.md) — why the
+  local → shared path is an in-cluster merge from a handed-over export, and
+  what was rejected (exposing the data tier; an MCP-tier bulk-import tool).
+- [`deployed-witan-onboarding.md`](deployed-witan-onboarding.md) — the other
+  half of the cutover: pointing your CLI and agent at the deployment. Sequence
+  it against the merge so you aren't writing locally during the handover.
+- ol-infrastructure `docs/witan-admin-break-glass-runbook.md` — the
+  `witan-break-glass` pod the in-cluster steps run in, and how to provision the
+  `svc-witan-admin` token it authenticates with.
 - `witan/server.py:226-259` — `_make_slug` / `_topic_slug`, the slug-generation
   code this runbook's collision analysis is based on.
 - `mcp/servers/witan/schema/schema.pg` — `@key` declarations for every node type.

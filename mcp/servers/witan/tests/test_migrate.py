@@ -1,7 +1,10 @@
 """Tests for the schema/data migration commands."""
 
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from .conftest import SCHEMA, requires_omnigraph
 
@@ -305,6 +308,240 @@ def test_merge_auto_creates_missing_local_target(server, tmp_path):
         "read.gq", "get_memory", {"slug": "mem-new-target-ffffff"}
     )
     assert rows and rows[0]["content"] == "hi"
+
+
+@requires_omnigraph
+def test_merge_accepts_an_export_jsonl_as_source(server, tmp_path):
+    """The cutover path: a store that cannot travel, handed over as its export.
+
+    Lance embeds absolute paths, so a teammate's (or a laptop's) `.omni`
+    directory can't be copied to the machine doing the merge — only
+    `omnigraph export` output can. Merging straight from that file is what
+    makes the local → deployed migration executable.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-from-export-111111",
+        content="handed over",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    export = tmp_path / "handover.jsonl"
+    with open(export, "w", encoding="utf-8") as f:
+        subprocess.run(
+            ["omnigraph", "export", "--store", source.graph_uri],
+            check=True,
+            stdout=f,
+            text=True,
+        )
+    # The store the export came from is gone — only the file remains, which is
+    # the whole point of exporting.
+    shutil.rmtree(source.graph_uri)
+
+    result = srv.merge_store(str(export))
+
+    assert (result["added"], result["updated"], result["kept_target"]) == (1, 0, 0)
+    rows = srv.client.read("read.gq", "get_memory", {"slug": "mem-from-export-111111"})
+    assert rows and rows[0]["content"] == "handed over"
+
+
+def test_merge_from_a_missing_export_file_names_the_file(server, tmp_path):
+    """A `.jsonl` source is read as an export, so a typo'd path must say so
+    rather than being handed to `omnigraph export` as if it were a store."""
+    from witan import server as srv
+
+    with pytest.raises(RuntimeError, match="no such export file"):
+        srv.merge_store(str(tmp_path / "nope.jsonl"))
+
+
+def test_merge_from_a_remote_export_says_to_download_it(server):
+    """A remote `.jsonl` is a different mistake from a missing one, and
+    "no such export file" would point at the wrong problem.
+
+    An export is bytes, not a store: witan has no credentials for the bucket
+    holding it and no reason to grow any, so the answer is "download it with
+    whatever already has access", not "check the path".
+    """
+    from witan import server as srv
+
+    for uri in (
+        "s3://ol-data-witan-ci/alice.jsonl",
+        "https://example.invalid/alice.jsonl",
+    ):
+        with pytest.raises(RuntimeError, match="does not fetch remote ones"):
+            srv.merge_store(uri)
+
+
+def test_merge_addresses_a_remote_target_as_server_and_graph(server, tmp_path):
+    """A deployed graph is `--server <url> --graph <id>`, never `--store`.
+
+    This is the regression that made the shared store unreachable from the
+    merge path: omnigraph 0.8.1 rejects an http(s) `--store`, so an
+    `http://…` target — which is exactly what the in-cluster maintenance pod
+    has, via `WITAN_MEMORY_URI` — failed at the first export. Driven with a
+    stubbed runner because the assertion is about the argv we build, and a
+    real deployed server is not available to a unit test.
+    """
+    from witan import server as srv
+
+    source = tmp_path / "empty.jsonl"
+    source.write_text("")
+    calls = []
+
+    def fake_run(cmd, *, label, stdout=None, env=None):
+        calls.append((cmd, env))
+        return ""
+
+    original = srv._run_omnigraph
+    srv._run_omnigraph = fake_run
+    try:
+        srv.merge_store(
+            str(source),
+            target="http://omnigraph-server.omnigraph.svc:8080/graphs/council",
+            dry_run=True,
+        )
+    finally:
+        srv._run_omnigraph = original
+
+    # One call: the target export. The source was a handed-over export, so it
+    # is read directly rather than re-exported.
+    assert len(calls) == 1
+    cmd, env = calls[0]
+    assert "--store" not in cmd
+    assert cmd[-4:] == [
+        "--server",
+        "http://omnigraph-server.omnigraph.svc:8080",
+        "--graph",
+        "council",
+    ]
+    # A remote store inherits the ambient bearer token — the spelling the
+    # in-cluster Job's WITAN_MEMORY_TOKEN lands in.
+    assert env is not None
+
+
+def test_store_address_matches_the_configured_graph_across_spellings(monkeypatch):
+    """The configured token must survive being asked for by a different spelling.
+
+    A deployment sets `WITAN_MEMORY_URI` to a *bare* server URL plus a separate
+    `WITAN_MEMORY_GRAPH`, while the runbook writes a deployed graph as
+    `http://host:8080/graphs/<id>`. Those name one graph, and `WITAN_MEMORY_TOKEN`
+    is the only credential the break-glass pod holds for it — comparing the raw
+    strings would drop it and turn an operator's explicit `--target` into a 401.
+    """
+    from witan import server as srv
+
+    class _Configured:
+        graph_uri = "http://omnigraph-server.omnigraph.svc:8080"
+        server_url = "http://omnigraph-server.omnigraph.svc:8080"
+        graph_id = "council"
+        token = "svc-witan-admin-token"
+        is_remote = True
+
+    monkeypatch.setattr(srv, "client", _Configured())
+    base = _Configured.server_url
+
+    for uri in (base, f"{base}/", f"{base}/graphs/council"):
+        args, env = srv._store_address(uri)
+        assert args == ["--server", base, "--graph", "council"]
+        assert env["OMNIGRAPH_BEARER_TOKEN"] == "svc-witan-admin-token"
+
+    # Another graph on the same server, or the same graph id on a different
+    # server, is *not* the configured store: it falls back to the ambient token.
+    for uri in (f"{base}/graphs/code", "http://elsewhere:8080/graphs/council"):
+        _, env = srv._store_address(uri)
+        assert env.get("OMNIGRAPH_BEARER_TOKEN") != "svc-witan-admin-token"
+
+
+def test_merge_into_a_bare_server_url_reports_the_missing_graph_id(server, tmp_path):
+    """A remote target with no graph id is a caller error, not a crash.
+
+    `--target http://host:8080` is the natural typo for the documented
+    `http://host:8080/graphs/<id>`, and the URI parser signals it with a
+    ValueError — which the CLI's `except RuntimeError` would not catch, so the
+    operator got a traceback where the previous `--store` spelling gave them a
+    message.
+    """
+    from witan import server as srv
+
+    source = tmp_path / "empty.jsonl"
+    source.write_text("")
+    with pytest.raises(RuntimeError, match="has no graph id"):
+        srv.merge_store(str(source), target="http://host:8080", dry_run=True)
+
+
+def test_merge_refuses_an_export_file_as_the_target(server, tmp_path):
+    """`.jsonl` means "export" on the source side; a target must still be a store.
+
+    Without this the asymmetry silently eats data: a missing local target is
+    auto-created, so `--target combined.jsonl` would `omnigraph init` a Lance
+    store *directory* under that name and report a successful merge into a
+    graph nobody will ever open.
+    """
+    from witan import server as srv
+
+    source = tmp_path / "handover.jsonl"
+    source.write_text("")
+    target = tmp_path / "combined.jsonl"
+
+    with pytest.raises(RuntimeError, match="must be a store"):
+        srv.merge_store(str(source), target=str(target))
+
+    assert not target.exists()
+
+
+@requires_omnigraph
+def test_merge_reconciles_deterministic_code_branch_slugs(server, tmp_path):
+    """CodeBranch is the one slug class that genuinely collides across users.
+
+    Memory/Task/Project/Session slugs carry a random hex suffix, so a
+    cross-user collision is a ~0.015% accident. CodeBranch slugs are
+    `<repo>|<branch>` by construction, so two people on the same branch of the
+    same repo ALWAYS collide — this is the class the cutover has to be safe
+    for. It is: the node carries only status + timestamps (the task/project
+    association lives on WorksOn/ForProject edges, which have no slug and
+    merge additively), so newest-wins costs at most a stale `status`, never a
+    lost association.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    slug = "https://github.com/mitodl/agent-kit|main"
+
+    def _branch(client, *, status, updated_at):
+        client.change(
+            "mutations.gq",
+            "insert_code_branch",
+            {
+                "slug": slug,
+                "repo": "https://github.com/mitodl/agent-kit",
+                "branch": "main",
+                "status": status,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": updated_at,
+            },
+        )
+
+    # The target (shared graph) already has one user's row, marked merged.
+    _branch(srv.client, status="merged", updated_at="2026-01-01T00:00:00Z")
+    # A second user's local store has the same branch, still active, newer.
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _branch(source, status="active", updated_at="2026-06-01T00:00:00Z")
+
+    result = srv.merge_store(source.graph_uri)
+
+    decisions = {(d["type"], d["slug"]): d["decision"] for d in result["decisions"]}
+    assert decisions[("CodeBranch", slug)] == "updated"
+    rows = srv.client.read("read.gq", "get_code_branch", {"slug": slug})
+    assert rows and rows[0]["status"] == "active"
 
 
 def test_parse_export_raises_on_corrupted_json_line(tmp_path):

@@ -33,7 +33,7 @@ from fastmcp.client.auth import BearerAuth
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
-from .. import chunking
+from witan_core import chunking
 
 __all__ = [
     "RemoteStoreClient",

@@ -22,7 +22,12 @@ from fastmcp.server.dependencies import get_access_token
 
 from witan_core import caching, normalise, now_iso
 from witan_core.observability.middleware import ObservabilityMiddleware
-from witan_core.omnigraph import schema_apply, schema_apply_if_changed
+from witan_core.omnigraph import (
+    schema_apply,
+    schema_apply_if_changed,
+    store_cli_args,
+    store_subprocess_env,
+)
 
 from . import config as cfg_module
 from . import elicit
@@ -972,18 +977,23 @@ def _find_pre_upgrade_binary(current_binary: str) -> str | None:
     return None
 
 
-def _run_omnigraph(cmd: list[str], *, label: str, stdout=None) -> str:
+def _run_omnigraph(cmd: list[str], *, label: str, stdout=None, env=None) -> str:
     """Run an omnigraph subcommand.
 
     When ``stdout`` is an open file, output streams straight there (so a
     large ``export`` never sits fully buffered in memory) and ``""`` is
     returned; otherwise stdout is captured and returned as a string.
+
+    ``env`` carries the bearer token when the addressed store is a remote
+    omnigraph-server; ``None`` inherits this process's environment, which is
+    right for a local store (see ``store_subprocess_env``).
     """
     result = subprocess.run(
         cmd,
         stdout=stdout if stdout is not None else subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -1221,6 +1231,127 @@ def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
     return nodes, edges
 
 
+def _reconcile_nodes(
+    source_nodes: dict[tuple[str, str], dict],
+    target_nodes: dict[tuple[str, str], dict],
+) -> tuple[list[dict], list[dict]]:
+    """Newest-record-wins reconciliation: ``(decisions, rows to write)``.
+
+    The single implementation of the merge rule, shared by the in-process path
+    (``merge_store``, which exports both stores itself) and the MCP-tier path
+    (``store_merge``, where the source rows arrive over the wire and the target
+    is the deployed graph). They must not drift: a row's fate should not depend
+    on which transport carried it.
+    """
+    decisions: list[dict] = []
+    winners: list[dict] = []
+    for (row_type, slug), row in source_nodes.items():
+        existing = target_nodes.get((row_type, slug))
+        if existing is None:
+            decisions.append({"type": row_type, "slug": slug, "decision": "added"})
+            winners.append(row)
+            continue
+        src_ts = _reconcile_timestamp(row_type, row["data"])
+        dst_ts = _reconcile_timestamp(row_type, existing["data"])
+        src_dt = _parse_ts(src_ts)
+        dst_dt = _parse_ts(dst_ts)
+        won = src_dt is not None and (dst_dt is None or src_dt > dst_dt)
+        decisions.append(
+            {
+                "type": row_type,
+                "slug": slug,
+                "decision": "updated" if won else "kept-target",
+                "source_ts": src_ts,
+                "target_ts": dst_ts,
+            }
+        )
+        if won:
+            winners.append(row)
+    return decisions, winners
+
+
+def _decision_counts(decisions: list[dict]) -> dict:
+    return {
+        "added": sum(1 for d in decisions if d["decision"] == "added"),
+        "updated": sum(1 for d in decisions if d["decision"] == "updated"),
+        "kept_target": sum(1 for d in decisions if d["decision"] == "kept-target"),
+    }
+
+
+def _store_address(uri: str) -> tuple[list[str], dict]:
+    """The ``omnigraph`` CLI flags and subprocess env addressing ``uri``.
+
+    A store the merge path touches is not necessarily the configured one, so
+    this resolves each side independently. The configured store's own token is
+    reused when ``uri`` names it (the in-cluster maintenance case, where
+    ``WITAN_MEMORY_TOKEN`` is the only credential in the pod); any *other*
+    remote store falls back to the ambient ``OMNIGRAPH_BEARER_TOKEN``, the
+    omnigraph CLI's documented spelling.
+
+    "Names it" is decided on the *resolved* address, not on the raw string. A
+    deployment sets ``WITAN_MEMORY_URI`` to a bare server URL plus a separate
+    ``WITAN_MEMORY_GRAPH``, while the runbook spells a deployed graph
+    ``http://host:8080/graphs/<id>`` — two spellings of one graph, and a raw
+    string compare would drop the only credential the pod has for it.
+
+    The configured graph id fills in a bare server URL only when that URL *is*
+    the configured server; another server's URI must carry its own, or the
+    merge would silently address a graph nobody named. A URI that ends up with
+    no graph id at all is a caller error, so it surfaces as a ``RuntimeError``
+    (what every caller of this module, the CLI included, already handles)
+    rather than the raw ``ValueError`` from the parser.
+    """
+    fallback = (
+        client.graph_id
+        if client.is_remote and uri.rstrip("/") == client.server_url
+        else None
+    )
+    try:
+        args = store_cli_args(uri, fallback)
+    except ValueError as exc:
+        raise RuntimeError(f"{uri}: {exc}") from exc
+    configured = store_cli_args(client.graph_uri, client.graph_id)
+    token = client.token if args == configured else None
+    return args, store_subprocess_env(uri, token)
+
+
+def _is_export_file(source: str) -> bool:
+    """Whether ``source`` names an ``omnigraph export`` JSONL rather than a store.
+
+    A ``.jsonl`` suffix is unambiguous — an omnigraph store is a Lance
+    *directory*, never a file — so this needs no flag. It matters because a
+    JSONL export is the only *transportable* form of a store: Lance embeds
+    absolute paths, so a ``.omni`` directory cannot be copied to another
+    machine or streamed into a pod, while its export can (`kubectl exec -i …
+    'cat > /tmp/x.jsonl'`). Merging from an export is what makes the
+    local → deployed cutover executable at all.
+    """
+    return source.endswith(".jsonl")
+
+
+def _check_export_source(source: str) -> None:
+    """Fail with a message that points at the real problem for a bad export path.
+
+    An export is bytes, not a store, so witan does not fetch one — the two ways
+    a ``.jsonl`` source goes wrong need different answers, and the generic
+    "no such file" sends a remote URI in the wrong direction entirely.
+    """
+    if source.startswith(("http://", "https://", "s3://")):
+        raise RuntimeError(
+            f"{source}: a `.jsonl` source is read as an `omnigraph export` "
+            "file, and witan does not fetch remote ones — it has no "
+            "credentials for them and an export is bytes, not a store. "
+            "Download it with whatever already has access (e.g. `aws s3 cp "
+            f"{source} ./export.jsonl`) and pass the local path."
+        )
+    if not Path(source).is_file():
+        raise RuntimeError(
+            f"{source}: no such export file. A `.jsonl` source is read as an "
+            "`omnigraph export`, not a store — produce one with "
+            f"`omnigraph export --store <store> > {source}`."
+        )
+
+
 def merge_store(
     source: str, *, target: str | None = None, dry_run: bool = False
 ) -> dict:
@@ -1244,13 +1375,26 @@ def merge_store(
     Parameters
     ----------
     source:
-        Store URI to merge from (local path, ``s3://``, or ``file://``).
+        What to merge from: a store URI (local path, ``s3://``, ``file://``, or
+        an ``http(s)://`` omnigraph-server), or the path to an
+        ``omnigraph export`` JSONL — anything ending ``.jsonl`` is read as an
+        export and not re-exported, and must be a readable *local* file (witan
+        fetches no remote exports). The export form is the one that crosses
+        machines: a Lance ``.omni`` directory embeds absolute paths and cannot
+        be copied, so handing a store to another host (or into a cluster pod)
+        means handing over its export.
     target:
         Store URI to merge into. Defaults to the configured store. Created
         (schema-applied, empty) automatically if it's a local path that
         doesn't exist yet — same as ``witan serve``/``witan <cmd>`` on a
         fresh machine; no-op for a remote ``s3://``/``http(s)://`` target,
-        which is assumed to already exist.
+        which is assumed to already exist. An ``http(s)://`` target names a
+        deployed omnigraph-server and carries its graph id either from the
+        configured ``WITAN_MEMORY_GRAPH`` (when it names the configured
+        server) or inline as ``http://host:8080/graphs/<id>``; a remote target
+        with neither is rejected. Unlike ``source``, a ``.jsonl`` target is
+        refused rather than treated as a store — merging appends to a graph,
+        and an export is a snapshot of one.
     dry_run:
         Compute and return the reconciliation decisions without loading
         anything.
@@ -1270,8 +1414,24 @@ def merge_store(
     target = target or client.graph_uri
     if target.startswith("file://"):
         target = target[len("file://") :]
+    from_export = _is_export_file(source)
+    if from_export:
+        _check_export_source(source)
+    if _is_export_file(target):
+        # `.jsonl` means "export" on the source side, and the asymmetry is a
+        # trap: a missing local target is auto-created, so `--target x.jsonl`
+        # would `omnigraph init` a Lance store *directory* named `x.jsonl` and
+        # report a successful merge into a store nobody will ever read.
+        raise RuntimeError(
+            f"{target}: a target must be a store, not an `omnigraph export` "
+            "file — merging appends to a graph, and an export is a snapshot of "
+            "one. Pass the store to merge into (a local path, `s3://`, or "
+            "`http(s)://<host>/graphs/<id>`)."
+        )
+
     _ensure_graph(target)
     binary = client._binary
+    target_args, target_env = _store_address(target)
 
     local_lock = None
     try:
@@ -1280,68 +1440,33 @@ def merge_store(
 
         with tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp:
             tmp_path = Path(tmp)
-            source_file = tmp_path / "source.jsonl"
             target_file = tmp_path / "target.jsonl"
 
-            with open(source_file, "w", encoding="utf-8") as f:
-                _run_omnigraph(
-                    [binary, "export", "--store", source],
-                    label="export (source)",
-                    stdout=f,
-                )
+            if from_export:
+                source_file = Path(source)
+            else:
+                source_file = tmp_path / "source.jsonl"
+                source_args, source_env = _store_address(source)
+                with open(source_file, "w", encoding="utf-8") as f:
+                    _run_omnigraph(
+                        [binary, "export", *source_args],
+                        label="export (source)",
+                        stdout=f,
+                        env=source_env,
+                    )
             with open(target_file, "w", encoding="utf-8") as f:
                 _run_omnigraph(
-                    [binary, "export", "--store", target],
+                    [binary, "export", *target_args],
                     label="export (target)",
                     stdout=f,
+                    env=target_env,
                 )
 
             source_nodes, source_edges = _parse_export(source_file)
             target_nodes, _ = _parse_export(target_file)
 
-            decisions = []
-            winners: list[dict] = []
-            for (row_type, slug), row in source_nodes.items():
-                existing = target_nodes.get((row_type, slug))
-                if existing is None:
-                    decisions.append(
-                        {"type": row_type, "slug": slug, "decision": "added"}
-                    )
-                    winners.append(row)
-                    continue
-                src_ts = _reconcile_timestamp(row_type, row["data"])
-                dst_ts = _reconcile_timestamp(row_type, existing["data"])
-                src_dt = _parse_ts(src_ts)
-                dst_dt = _parse_ts(dst_ts)
-                if src_dt is not None and (dst_dt is None or src_dt > dst_dt):
-                    decisions.append(
-                        {
-                            "type": row_type,
-                            "slug": slug,
-                            "decision": "updated",
-                            "source_ts": src_ts,
-                            "target_ts": dst_ts,
-                        }
-                    )
-                    winners.append(row)
-                else:
-                    decisions.append(
-                        {
-                            "type": row_type,
-                            "slug": slug,
-                            "decision": "kept-target",
-                            "source_ts": src_ts,
-                            "target_ts": dst_ts,
-                        }
-                    )
-
-            counts = {
-                "added": sum(1 for d in decisions if d["decision"] == "added"),
-                "updated": sum(1 for d in decisions if d["decision"] == "updated"),
-                "kept_target": sum(
-                    1 for d in decisions if d["decision"] == "kept-target"
-                ),
-            }
+            decisions, winners = _reconcile_nodes(source_nodes, target_nodes)
+            counts = _decision_counts(decisions)
 
             if dry_run:
                 return {
@@ -1370,14 +1495,14 @@ def merge_store(
                 [
                     binary,
                     "load",
-                    "--store",
-                    target,
+                    *target_args,
                     "--data",
                     str(reconciled_file),
                     "--mode",
                     "merge",
                 ],
                 label="load (reconciled)",
+                env=target_env,
             )
     finally:
         if local_lock is not None:
@@ -1390,6 +1515,90 @@ def merge_store(
         "decisions": decisions,
         "rows_loaded": len(to_load),
         "output": load_out.strip(),
+        **counts,
+    }
+
+
+@mcp.tool
+def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
+    """Merge a batch of exported rows into this deployment's graph, as you.
+
+    The MCP-tier half of ``witan migrate merge`` (ADR-0007 D5). A client
+    exports its own store, splits the rows into batches, and calls this once
+    per batch; the server reconciles each batch against its own graph and
+    writes the winners. That keeps the whole cutover inside the per-actor
+    identity and Cedar model — the write is authorized as the calling user,
+    not as ``svc-witan-admin``, which is the difference between this and the
+    in-cluster path (ADR-0005 b).
+
+    Every store operation here goes through the module-level ``client``, which
+    re-resolves to *this request's* actor on each access. There is no service
+    account behind it: an actor with no provisioned omnigraph token is refused
+    rather than served under one, and a row type the caller's Cedar grant does
+    not cover fails at the data tier.
+
+    ``rows`` are ``omnigraph export`` records — ``{"type": Node, "data": {…}}``
+    for a node, ``{"edge": Edge, "from": …, "to": …}`` for an edge — the shape
+    ``merge_store``'s own export parsing produces. Nodes are reconciled
+    newest-record-wins per ``(type, slug)`` against what this graph already
+    holds, by the *same* ``_reconcile_nodes`` the in-process path uses. Edges
+    carry no slug and pass through additively, exactly as they do there.
+
+    **Batching is the caller's job, and the caller must send every node before
+    any edge** (``witan_core.chunking.chunk_records`` does both). Batches commit
+    independently, so a failure part-way leaves earlier ones applied — which is
+    safe to recover from by simply re-running, since reconciliation makes a
+    re-sent row lose to its own already-applied copy. It is not, however,
+    atomic, and a caller needing all-or-nothing has to arrange that itself.
+
+    Returns this batch's per-row ``decisions`` plus ``added``/``updated``/
+    ``kept_target`` counts, and ``rows_loaded``. With ``dry_run`` the decisions
+    are computed and nothing is written.
+    """
+    if not rows:
+        return {
+            "decisions": [],
+            "rows_loaded": 0,
+            "dry_run": dry_run,
+            **_decision_counts([]),
+        }
+
+    source_nodes: dict[tuple[str, str], dict] = {}
+    source_edges: list[dict] = []
+    for row in rows:
+        row_type = row.get("type")
+        if not row_type:
+            source_edges.append(row)
+            continue
+        slug = (row.get("data") or {}).get("slug")
+        if slug:
+            source_nodes[(row_type, slug)] = row
+        else:
+            source_edges.append(row)
+
+    with tempfile.TemporaryDirectory(prefix="witan-store-merge-") as tmp:
+        target_file = Path(tmp) / "target.jsonl"
+        with open(target_file, "w", encoding="utf-8") as f:
+            _run_omnigraph(
+                [client._binary, "export", *client._store_args()],
+                label="export (deployed graph)",
+                stdout=f,
+                env=client._subprocess_env(),
+            )
+        target_nodes, _ = _parse_export(target_file)
+
+    decisions, winners = _reconcile_nodes(source_nodes, target_nodes)
+    counts = _decision_counts(decisions)
+
+    if dry_run:
+        return {"dry_run": True, "decisions": decisions, "rows_loaded": 0, **counts}
+
+    to_load = winners + source_edges
+    client.load_batch(to_load, "merge")
+    return {
+        "dry_run": False,
+        "decisions": decisions,
+        "rows_loaded": len(to_load),
         **counts,
     }
 
