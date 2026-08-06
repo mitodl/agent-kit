@@ -133,9 +133,14 @@ because it gives up the per-developer branch views ADR-0006 built; and
 developer, poor ergonomics). One exposed boundary, already authenticated,
 already actor-resolving.
 
-- **Surface.** Six machine-facing `code_store_*` tools mirroring the store
-  operations the write path performs — `read`, `mutate`, `load`, `open` (fork
-  a branch view), `views`, `graphs`. Deliberately *not* one bulk-ingest tool:
+- **Surface.** Seven machine-facing `code_store_*` tools mirroring the store
+  operations the write path performs — `read`, `mutate`, `mutate_many`, `load`,
+  `open` (fork a branch view), `views`, `graphs`. `mutate_many` was added after
+  the rest, because a reindex emits two deletes per changed file and one call
+  apiece made both the round trips and the Lance versions scale with the repo;
+  it takes the same `(query, name, params)` steps `mutate` takes one at a time
+  and splices them server-side, so the surface stays named queries and params.
+  Deliberately *not* one bulk-ingest tool:
   a repo index is a hash read, a per-file purge, a bulk load, and then the
   same again against the bridge graph. Modelling each phase as its own tool
   would move indexing policy server-side, where it would have to stay in step

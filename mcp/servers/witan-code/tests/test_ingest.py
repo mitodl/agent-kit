@@ -194,6 +194,148 @@ def test_a_write_and_a_read_round_trip_through_the_surface(sample_repo, monkeypa
     assert f"{REPO}#src/added.py" not in {row["slug"] for row in on_main}
 
 
+# ── Batched mutation ──────────────────────────────────────────────────────────
+
+
+@requires_stack
+def test_a_batch_of_deletes_applies_every_step(sample_repo, monkeypatch):
+    """The server half of the batch: the client sends params, the splice and
+    the queries_dir lookup stay here, and all of it lands."""
+    from witan_code import indexer
+
+    monkeypatch.setenv("WITAN_ACTOR", "act-alice")
+    indexer.index_path(sample_repo, config=cfg_module.load())
+
+    view = ingest.open_view(REPO, "act-alice/feature_x")
+    before = {
+        row["slug"]
+        for row in ingest.read(REPO, view, "code_read.gq", "all_file_hashes", {})
+    }
+    assert before, "nothing indexed, so the delete would prove nothing"
+
+    applied = ingest.mutate_many(
+        REPO,
+        view,
+        [
+            {"query": "delete.gq", "name": "delete_file", "params": {"id": slug}}
+            for slug in sorted(before)
+        ],
+    )
+    assert applied == len(before)
+    after = {
+        row["slug"]
+        for row in ingest.read(REPO, view, "code_read.gq", "all_file_hashes", {})
+    }
+    assert after == set()
+
+
+@requires_stack
+def test_a_bad_step_refuses_the_whole_batch_and_commits_no_prefix(
+    sample_repo, monkeypatch
+):
+    """Validation runs over every step before any of them does. Otherwise a
+    typo in step 300 leaves 299 deletes applied and the caller told it failed."""
+    from witan_code import indexer
+
+    monkeypatch.setenv("WITAN_ACTOR", "act-alice")
+    indexer.index_path(sample_repo, config=cfg_module.load())
+
+    view = ingest.open_view(REPO, "act-alice/feature_x")
+    before = {
+        row["slug"]
+        for row in ingest.read(REPO, view, "code_read.gq", "all_file_hashes", {})
+    }
+    good = [
+        {"query": "delete.gq", "name": "delete_file", "params": {"id": slug}}
+        for slug in sorted(before)
+    ]
+    with pytest.raises(ingest.IngestRefused):
+        ingest.mutate_many(
+            REPO, view, [*good, {"query": "../etc/passwd.gq", "name": "x"}]
+        )
+
+    after = {
+        row["slug"]
+        for row in ingest.read(REPO, view, "code_read.gq", "all_file_hashes", {})
+    }
+    assert after == before
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        {"name": "delete_file", "params": {}},
+        {"query": "delete.gq", "params": {}},
+        {"query": "", "name": "delete_file"},
+        {"query": "delete.gq", "name": ""},
+        {"query": "delete.gq", "name": 7},
+    ],
+)  # every one of these passes the tool's `list[dict]` schema — see the module
+# comment above `_step_field`: the schema constrains the container, not the
+# contents, so these guards are the only thing standing between a malformed
+# step and an opaque failure several layers down.
+def test_a_malformed_step_is_refused_by_name(step, tmp_path, monkeypatch):
+    """The steps arrive as free-form dicts off the wire, so say which field is
+    wrong rather than raising a KeyError from inside the splice.
+
+    The actor owns the view here deliberately: authorization runs BEFORE step
+    validation, so without it every case would refuse for the wrong reason.
+    """
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setenv("WITAN_ACTOR", "act-alice")
+    with pytest.raises(ingest.IngestRefused, match="non-empty"):
+        ingest.mutate_many(REPO, "act-alice/x", [step])
+
+
+@pytest.mark.parametrize("params", ["oops", ["id", "x"], 7, True])
+def test_non_object_params_are_refused_rather_than_shipped_to_the_engine(
+    params, tmp_path, monkeypatch
+):
+    """`params` reaches `change_many` and becomes the `--params` JSON of a
+    composed mutation. A string or a list gets that far and then fails as an
+    opaque omnigraph CLI error, several layers below whoever sent it.
+
+    Note `step.get("params") or {}` would NOT have caught these: every value
+    here is truthy, so it sailed straight through.
+    """
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setenv("WITAN_ACTOR", "act-alice")
+    step = {"query": "delete.gq", "name": "delete_file", "params": params}
+    with pytest.raises(ingest.IngestRefused, match="must be an object"):
+        ingest.mutate_many(REPO, "act-alice/x", [step])
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        {"query": "delete.gq", "name": "delete_file"},
+        {"query": "delete.gq", "name": "delete_file", "params": None},
+    ],
+)
+def test_omitted_and_null_params_both_mean_no_params(step, tmp_path, monkeypatch):
+    """The guard must not turn the ordinary "this mutation takes no arguments"
+    case into a refusal."""
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setenv("WITAN_ACTOR", "act-alice")
+    assert ingest._step_params(step) == {}
+
+
+@requires_stack
+def test_a_batch_into_someone_elses_view_is_refused(sample_repo, monkeypatch):
+    """`mutate_many` is a write, so it goes through the same ownership gate
+    every other write does — being a batch does not route around it."""
+    from witan_code import indexer
+
+    monkeypatch.setenv("WITAN_ACTOR", "act-alice")
+    indexer.index_path(sample_repo, config=cfg_module.load())
+    with pytest.raises(ingest.IngestRefused, match="owned by act-bob"):
+        ingest.mutate_many(
+            REPO,
+            "act-bob/feature_x",
+            [{"query": "delete.gq", "name": "delete_file", "params": {"id": "x"}}],
+        )
+
+
 @requires_stack
 def test_the_graph_listing_names_repos_not_ids(sample_repo):
     """A client cannot invert `graph_id`, so the server answers in repo URIs."""

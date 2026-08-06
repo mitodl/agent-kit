@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Added
+
+- **`code_store_mutate_many` — batched writes for the MCP transport.**
+  `RemoteStoreClient.change_many` was the last per-row writer in witan-code:
+  every other write path collapses N rows into one `omnigraph mutate` and
+  therefore one Lance version, while this one looped `code_store_mutate`
+  because that tool takes a query *file* the server resolves against its own
+  `queries_dir` and there was no way to hand it a composed body. The new tool
+  takes the same `(query, name, params)` steps `mutate` takes one at a time and
+  calls the real `change_many` server-side, so the splice stays where
+  `queries_dir` lives and the wire payload stays params rather than GQ — a
+  client still cannot send arbitrary GQ through a surface Cedar scopes by named
+  query. The concrete win is the reindex delete path: `_delete_file_steps`
+  emits 2 steps per changed-or-purged file, so a 200-file reindex over this
+  transport was 400 sequential MCP calls and 400 Lance versions and is now one
+  of each. `chunk_size` keeps meaning statements-per-commit, applied as one
+  call per chunk, so commit granularity is identical to the subprocess
+  transport's. **Feature-detected**, since this is a deployed contract: a
+  client meeting a server that predates the tool falls back to the per-step
+  loop, which is slow rather than broken.
+
 ## [0.10.0] - 2026-08-01
 
 ### Added
@@ -29,7 +52,8 @@ a MINOR bump may include breaking changes).
   `code_server`, which is unchanged. Compaction and view reaping refuse here
   too; they belong to the cluster's own scheduled jobs.
 - **`code_store_*` tools** — the server half of the above: `read`, `mutate`,
-  `load`, `open`, `views`, `graphs`, mirroring the store operations the write
+  `load`, `open`, `views`, `graphs` (`mutate_many` joined them later),
+  mirroring the store operations the write
   path performs rather than modelling indexing itself, so indexing policy
   stays with the client that has the checkout. Mediated, not arbitrary:
   `query` may only name a query file bundled with the server, and the graph is
