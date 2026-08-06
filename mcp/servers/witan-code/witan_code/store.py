@@ -27,10 +27,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from witan_core import omnigraph_http as _http
 from witan_core.omnigraph import (
-    BEARER_TOKEN_ENV_VAR,
     schema_apply,
     schema_apply_if_changed,
+    shared_transport,
 )
 
 from . import config as cfg_module
@@ -43,8 +44,6 @@ from .graph import OmnigraphClient
 # pinning a stale answer past a deploy.
 _GRAPHS_TTL = 30.0
 _graphs_cache: dict[str, tuple[float, frozenset[str]]] = {}
-
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class ClusterGraphMissing(RuntimeError):
@@ -182,27 +181,22 @@ def cluster_graphs(server_url: str, token: str | None = None) -> frozenset[str]:
     """Graph ids registered with the omnigraph-server at ``server_url``.
 
     ENUMERATION ONLY, and best-effort: nothing on a write path may depend on
-    this. ``graphs list`` is a *server-scoped* action, and on omnigraph 0.8.1 it
-    fails against the deployed cluster two independent ways:
+    this. Asking whether one *known* graph is served is a different,
+    graph-scoped question with its own answer: :func:`probe_cluster_graph`.
 
-    1. The management surface is closed by default — "server-scoped actions
-       require an explicit cluster policy bundle applied with ``omnigraph
-       cluster apply``" — in every runtime state, ``--unauthenticated``
-       included. The deployed cluster.yaml declares no ``policies:`` block yet,
-       and adding one is a hard cutover to authenticated-everything (the server
-       refuses to boot with a policy but no bearer tokens), gated behind the
-       per-environment token rollout.
-    2. Even with the bundle applied and a token that *is* granted ``graph_list``,
-       the 0.8.1 CLI then refuses to print the listing it just fetched: "server
-       scope '<url>' has N graphs: pass --graph <id> to select one". There is no
-       working invocation for a multi-graph server (``--uri`` is retired: "a
-       remote graph must be addressed with ``--server <url>``").
+    Asked over ``GET /graphs`` rather than by shelling out to ``omnigraph graphs
+    list``. The CLI cannot answer it: on 0.8.1 it fetches the listing and then
+    refuses to print it against any multi-graph server ("server scope '<url>'
+    has N graphs: pass --graph <id> to select one"), and there is no working
+    invocation — ``--uri`` is retired, and the ``--graph`` it demands is
+    meaningless for a listing. The listing is right there in the error text,
+    which is what makes it a printing bug rather than a protocol or permissions
+    one. The HTTP endpoint returns the same data cleanly, in ~10ms, and is
+    documented in the server's own OpenAPI spec.
 
-    So on the cluster this answers the empty set today, and the callers that
-    remain are the ones a blank listing merely degrades — see
-    :func:`safe_cluster_graphs`. Asking whether one *known* graph is served is a
-    different, graph-scoped question with a working answer:
-    :func:`probe_cluster_graph`.
+    This is the one omnigraph call witan-code makes for a *server*-scoped
+    question rather than of a graph, so it authenticates as whoever ``token``
+    names — the serving tier's own account, not the requesting user's.
 
     Raises :class:`ClusterUnreachable` when the server could not be asked, so
     that an auth failure or a closed port cannot masquerade as a server that
@@ -215,20 +209,17 @@ def cluster_graphs(server_url: str, token: str | None = None) -> frozenset[str]:
     if cached is not None and time.monotonic() - cached[0] < _GRAPHS_TTL:
         return cached[1]
     try:
-        res = subprocess.run(
-            [_binary(), "graphs", "list", "--server", server_url, "--json"],
-            capture_output=True,
-            text=True,
-            env=_token_env(token),
-        )
-    except (OSError, RuntimeError) as exc:
-        raise ClusterUnreachable(f"could not run omnigraph graphs list: {exc}") from exc
-    if res.returncode != 0:
+        outcome = shared_transport(server_url).graphs(token)
+    except ValueError as exc:
+        # Not an http(s) url. A caller that reached here with a local path or an
+        # s3:// root has a configuration bug, not an unreachable server, but
+        # this function's contract is "could not ask" either way.
+        raise ClusterUnreachable(f"cannot list graphs at {server_url}: {exc}") from exc
+    if outcome.kind != _http.OK:
         raise ClusterUnreachable(
-            f"omnigraph-server at {server_url} could not be listed "
-            f"(exit {res.returncode}): {_clean(res.stderr)}"
+            f"omnigraph-server at {server_url} could not be listed: {outcome.error}"
         )
-    graphs = frozenset(_parse_graph_ids(res.stdout))
+    graphs = frozenset(_parse_graph_ids(outcome.body or ""))
     _graphs_cache[server_url] = (time.monotonic(), graphs)
     return graphs
 
@@ -246,43 +237,26 @@ def safe_cluster_graphs(server_url: str, token: str | None = None) -> frozenset[
         return frozenset()
 
 
-def _token_env(token: str | None) -> dict[str, str]:
-    """Environment for the ``graphs list`` subprocess, carrying ``token``.
-
-    Uses :data:`witan_core.omnigraph.BEARER_TOKEN_ENV_VAR` rather than spelling
-    the name again — this is the one omnigraph call witan-code makes without
-    going through :class:`OmnigraphClient`, since listing a server's graphs is
-    not scoped to any one of them, so it is the one place the shared client's
-    token handling has to be repeated. Repeating the *name* is what put the
-    two out of step before.
-
-    No local-store branch here, unlike ``_execute``'s: this only ever runs
-    against a server URL, so there is no address that could receive a token
-    with nothing to do with it.
-    """
-    env = dict(os.environ)
-    if token:
-        env[BEARER_TOKEN_ENV_VAR] = token
-    return env
-
-
-def _clean(stderr: str) -> str:
-    """omnigraph's error text without ANSI codes or the Rust backtrace boilerplate."""
-    return _ANSI_RE.sub("", stderr).split("Location:")[0].strip()
-
-
 def reset_graph_cache() -> None:
     """Drop the memoized graph listings (tests, and after a provisioning change)."""
     _graphs_cache.clear()
 
 
 def _parse_graph_ids(payload: str) -> list[str]:
-    """Graph ids out of ``omnigraph graphs list --json``.
+    """Graph ids out of ``GET /graphs``.
 
-    Reads both the bare-list and ``{"graphs": [...]}`` envelopes, and both a
-    plain id and a ``{"id": …}``/``{"name": …}`` record — the same shape
-    tolerance ``list_branches`` applies, for the same reason: the envelope has
-    already changed once across omnigraph releases.
+    What the server actually sends, captured from omnigraph-server 0.8.1:
+
+        {"graphs": [{"graph_id": "code-bridge",
+                     "uri": "s3://.../code-bridge.omni"}, …]}
+
+    ``graph_id`` is listed first for that reason. The ``id``/``name``/bare-string
+    fallbacks are kept because the envelope has already changed once across
+    omnigraph releases — but they are fallbacks, not equals: this function used
+    to accept ONLY those three, none of which the server has ever sent, so it
+    would have returned an empty list even against a CLI that printed correctly.
+    Shape tolerance inferred from documentation is not tolerance, it is a guess
+    that fails silently.
     """
     try:
         parsed = json.loads(payload)
@@ -296,7 +270,11 @@ def _parse_graph_ids(payload: str) -> list[str]:
         # Parenthesized for the reader, not the parser: `or` binds tighter than
         # the conditional, so the `.get`s were already confined to the dict
         # branch. A review read it the other way round, which is reason enough.
-        value = (row.get("id") or row.get("name")) if isinstance(row, dict) else row
+        value = (
+            (row.get("graph_id") or row.get("id") or row.get("name"))
+            if isinstance(row, dict)
+            else row
+        )
         if isinstance(value, str):
             out.append(value)
     return out

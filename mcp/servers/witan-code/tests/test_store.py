@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from witan_core import omnigraph_http as http_module
+
 from witan_code import store as store_module
 
 from .conftest import requires_stack
@@ -184,26 +186,26 @@ def _cluster(monkeypatch, *graphs: str, url: str = "https://omnigraph.test"):
     monkeypatch.setattr(store_module, "OmnigraphClient", _build)
 
 
-# The exact stderr omnigraph 0.8.1 produced against the deployed CI server when
-# the CLI had no usable credential (2026-08-01). Verbatim, because the whole
-# point of the two exception types is telling THIS apart from a graph that
-# genuinely isn't provisioned, and a paraphrase would stop testing that.
-_MISSING_TOKEN_STDERR = (
-    "\x1b[0mError: \n   0: \x1b[91mmissing bearer token\x1b[0m\n\n"
-    "Location:\n   \x1b[35mcrates/omnigraph-cli/src/helpers.rs\x1b[0m:\x1b[35m436\x1b[0m\n"
-)
+# The exact message omnigraph-server 0.8.1 returns for an unusable credential.
+# Verbatim, because the whole point of the two exception types is telling THIS
+# apart from a graph that genuinely isn't provisioned, and a paraphrase would
+# stop testing that.
+_MISSING_TOKEN_ERROR = "missing bearer token"
 
 
-def _failing_graphs_list(
-    monkeypatch, stderr: str = _MISSING_TOKEN_STDERR, code: int = 1
-):
-    import subprocess as _sp
+def _failing_graphs_list(monkeypatch, error: str = _MISSING_TOKEN_ERROR):
+    """Make the server-scoped listing fail.
 
-    monkeypatch.setattr(store_module, "_binary", lambda: "/nonexistent/omnigraph")
+    Over HTTP now, not a subprocess: `omnigraph graphs list` cannot answer this
+    against a multi-graph server at all (it fetches the listing and refuses to
+    print it), so `cluster_graphs` asks `GET /graphs` directly.
+    """
     monkeypatch.setattr(
-        store_module.subprocess,
-        "run",
-        lambda *a, **kw: _sp.CompletedProcess(a[0], code, "", stderr),
+        store_module,
+        "shared_transport",
+        lambda url: _FakeTransport(
+            http_module.Outcome(kind=http_module.FATAL, error=error, status=401)
+        ),
     )
     store_module.reset_graph_cache()
 
@@ -356,16 +358,16 @@ def test_a_failed_listing_is_not_cached(monkeypatch):
     _failing_graphs_list(monkeypatch)
     assert store_module.per_repo_stores(cfg) == []
 
-    import subprocess as _sp
-
     monkeypatch.setattr(
-        store_module.subprocess,
-        "run",
-        lambda *a, **kw: _sp.CompletedProcess(a[0], 0, '["code-github-com-x-y"]', ""),
+        store_module,
+        "shared_transport",
+        lambda url: _FakeTransport(
+            http_module.Outcome(
+                kind=http_module.OK, body='{"graphs": [{"graph_id": "code-x-y"}]}'
+            )
+        ),
     )
-    assert [r.graph_id for r in store_module.per_repo_stores(cfg)] == [
-        "code-github-com-x-y"
-    ]
+    assert [r.graph_id for r in store_module.per_repo_stores(cfg)] == ["code-x-y"]
 
 
 def test_store_for_repo_addresses_the_cluster_graph(monkeypatch):
@@ -499,8 +501,34 @@ def test_repo_for_store_asks_a_cluster_graph_what_it_holds(monkeypatch):
     assert store_module.repo_for_store(ref, cfg) == "code-github-com-mitodl-ol-django"
 
 
+# Captured verbatim from `GET /graphs` on the deployed CI omnigraph-server
+# 0.8.1 (2026-08-06), trimmed to three of its seventeen graphs. Real rather
+# than hand-written on purpose: every shape this parser used to accept was
+# invented from CLI help, and none of them is what the server sends, so it
+# would have returned [] against a perfectly good response.
+REAL_GRAPHS_BODY = """
+{"graphs": [
+  {"graph_id": "code-bridge",
+   "uri": "s3://ol-data-witan-ci/graphs/code-bridge.omni"},
+  {"graph_id": "code-github-com-mitodl-agent-kit",
+   "uri": "s3://ol-data-witan-ci/graphs/code-github-com-mitodl-agent-kit.omni"},
+  {"graph_id": "council",
+   "uri": "s3://ol-data-witan-ci/graphs/council.omni"}
+]}
+"""
+
+
+def test_parse_graph_ids_reads_what_the_server_actually_sends():
+    assert store_module._parse_graph_ids(REAL_GRAPHS_BODY) == [
+        "code-bridge",
+        "code-github-com-mitodl-agent-kit",
+        "council",
+    ]
+
+
 def test_parse_graph_ids_reads_both_envelopes():
     assert store_module._parse_graph_ids('["a", "b"]') == ["a", "b"]
+    assert store_module._parse_graph_ids('{"graphs": [{"graph_id": "a"}]}') == ["a"]
     assert store_module._parse_graph_ids('{"graphs": [{"id": "a"}]}') == ["a"]
     assert store_module._parse_graph_ids('{"graphs": [{"name": "b"}]}') == ["b"]
     assert store_module._parse_graph_ids("not json") == []
@@ -517,3 +545,92 @@ def test_parse_graph_ids_mixes_plain_ids_and_records_without_calling_get_on_a_st
     assert store_module._parse_graph_ids('["a", {"id": "b"}]') == ["a", "b"]
     # Non-string, non-dict rows are skipped rather than coerced.
     assert store_module._parse_graph_ids('["a", 7, null, {"id": "b"}]') == ["a", "b"]
+
+
+class _FakeTransport:
+    """Records what was asked for and replays a canned Outcome."""
+
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.calls = []
+
+    def graphs(self, token):
+        self.calls.append(token)
+        return self.outcome
+
+
+def _install_transport(monkeypatch, outcome):
+    fake = _FakeTransport(outcome)
+    monkeypatch.setattr(store_module, "shared_transport", lambda url: fake)
+    store_module.reset_graph_cache()
+    return fake
+
+
+def test_cluster_graphs_reads_the_http_listing(monkeypatch):
+    fake = _install_transport(
+        monkeypatch, http_module.Outcome(kind=http_module.OK, body=REAL_GRAPHS_BODY)
+    )
+    got = store_module.cluster_graphs("http://server:8080", "tok")
+    assert got == frozenset(
+        {"code-bridge", "code-github-com-mitodl-agent-kit", "council"}
+    )
+    # The server-scoped call authenticates as whoever the caller named.
+    assert fake.calls == ["tok"]
+
+
+def test_cluster_graphs_does_not_shell_out(monkeypatch):
+    """REGRESSION: the CLI cannot answer this at all.
+
+    `omnigraph graphs list --server <url>` fetches the listing and then refuses
+    to print it against any multi-graph server, so a subprocess here is not a
+    slower path — it is a guaranteed ClusterUnreachable, which is what silently
+    emptied `code_indexed_repos` on the deployed tier.
+    """
+    _install_transport(
+        monkeypatch, http_module.Outcome(kind=http_module.OK, body=REAL_GRAPHS_BODY)
+    )
+    monkeypatch.setattr(
+        store_module.subprocess,
+        "run",
+        lambda *a, **kw: pytest.fail("cluster_graphs must not shell out"),
+    )
+    assert store_module.cluster_graphs("http://server:8080", "tok")
+
+
+def test_cluster_graphs_raises_cluster_unreachable_on_a_failed_listing(monkeypatch):
+    """An auth failure must not read as "the server has no graphs"."""
+    _install_transport(
+        monkeypatch,
+        http_module.Outcome(
+            kind=http_module.FATAL, error="invalid bearer token", status=401
+        ),
+    )
+    with pytest.raises(store_module.ClusterUnreachable, match="invalid bearer token"):
+        store_module.cluster_graphs("http://server:8080", "tok")
+
+
+def test_safe_cluster_graphs_degrades_to_empty(monkeypatch):
+    _install_transport(
+        monkeypatch,
+        http_module.Outcome(kind=http_module.UNAVAILABLE, error="connection refused"),
+    )
+    assert store_module.safe_cluster_graphs("http://server:8080", None) == frozenset()
+
+
+def test_cluster_graphs_caches_success_but_not_failure(monkeypatch):
+    ok = _install_transport(
+        monkeypatch, http_module.Outcome(kind=http_module.OK, body='{"graphs": []}')
+    )
+    assert store_module.cluster_graphs("http://server:8080", None) == frozenset()
+    assert store_module.cluster_graphs("http://server:8080", None) == frozenset()
+    assert len(ok.calls) == 1, "an empty-but-successful listing is cached"
+
+    bad = _FakeTransport(
+        http_module.Outcome(kind=http_module.UNAVAILABLE, error="down")
+    )
+    monkeypatch.setattr(store_module, "shared_transport", lambda url: bad)
+    store_module.reset_graph_cache()
+    for _ in range(2):
+        with pytest.raises(store_module.ClusterUnreachable):
+            store_module.cluster_graphs("http://server:8080", None)
+    assert len(bad.calls) == 2, "a failure must not pin an error for the whole TTL"

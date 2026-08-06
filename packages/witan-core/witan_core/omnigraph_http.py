@@ -226,7 +226,22 @@ class PooledTransport:
         *,
         idempotent: bool,
     ) -> Outcome:
-        """POST ``payload`` as JSON to ``path`` and classify the result.
+        """POST ``payload`` as JSON to ``path`` and classify the result."""
+        return self._send("POST", path, json.dumps(payload), token, idempotent)
+
+    def get(self, path: str, token: str | None) -> Outcome:
+        """GET ``path``. A read, so always safe to repeat."""
+        return self._send("GET", path, None, token, True)  # noqa: FBT003
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        body: str | None,
+        token: str | None,
+        idempotent: bool,  # noqa: FBT001 — positional from two private callers
+    ) -> Outcome:
+        """Send one request and classify the result.
 
         ``idempotent`` says whether re-sending is safe, and it is what decides
         every ambiguous case:
@@ -246,12 +261,10 @@ class PooledTransport:
           is the stale-keep-alive case, and it is a fast path, not a different
           safety rule.
         """
-        body = json.dumps(payload)
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Content-Length": str(len(body.encode())),
-        }
+        headers = {"Accept": "application/json"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            headers["Content-Length"] = str(len(body.encode()))
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
@@ -273,7 +286,7 @@ class PooledTransport:
                 )
 
             try:
-                conn.request("POST", path, body=body, headers=headers)
+                conn.request(method, path, body=body, headers=headers)
                 response = conn.getresponse()
                 raw = response.read()
             except (http.client.HTTPException, OSError) as exc:
@@ -316,7 +329,7 @@ class PooledTransport:
             )
 
         # Unreachable: the loop either returns or continues exactly once.
-        raise AssertionError("post() retry loop fell through")
+        raise AssertionError("_send() retry loop fell through")
 
     def query(self, graph_id: str, source: str, params: dict, token: str | None):
         """``POST /graphs/<id>/query`` — a read. Always safe to repeat."""
@@ -335,3 +348,16 @@ class PooledTransport:
             token,
             idempotent=False,
         )
+
+    def graphs(self, token: str | None):
+        """``GET /graphs`` — the server's graph registry.
+
+        The one server-scoped question witan asks. It exists here rather than as
+        a caller's own socket because the CLI cannot answer it at all: on 0.8.1
+        ``omnigraph graphs list --server <url>`` fetches the listing and then
+        refuses to print it against any multi-graph server, demanding a
+        ``--graph <id>`` that makes no sense for a listing. The data was never
+        the problem — the error text carries the full list — so the fix is to
+        ask the server directly rather than to wait for the CLI.
+        """
+        return self.get("/graphs", token)
