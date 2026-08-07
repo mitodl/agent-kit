@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.10.0"
+version = "0.11.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -20,11 +20,14 @@ dependencies = [
   "rich>=13",
   "pydantic>=2,<3",
   "agent-config-kit>=0.4,<1",
-  # >=0.9: server.py imports witan_core.observability.middleware at module
-  # scope, which 0.8 does not have. A looser floor lets an external install
-  # resolve a witan-core the server cannot even import. (>=0.8 was already
-  # required for OmnigraphClient.change_many on the batched-write path.)
-  "witan-core[cli,remote,observability]>=0.9,<1",
+  # >=0.10: remote/proxy.py imports witan_core.chunking and calls
+  # OmnigraphClient.load_batch on the `migrate merge` path, and config.py
+  # imports witan_core.config_file.resolve_config_path at module scope for
+  # `witan target add` — none of the three exist in 0.9. A looser floor lets an
+  # external install resolve a witan-core the server cannot even import.
+  # (>=0.9 was already required for witan_core.observability.middleware; >=0.8
+  # for OmnigraphClient.change_many on the batched-write path.)
+  "witan-core[cli,remote,observability]>=0.10,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
