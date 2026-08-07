@@ -456,6 +456,7 @@ def task_run(
     agent: str | None = None,
     model: str | None = None,
     claim: bool = True,
+    force: bool = False,
     dry_run: bool = False,
     repo: str | None = None,
     all_repos: bool = False,
@@ -474,6 +475,10 @@ def task_run(
     agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
     model: Model flag passed to the agent.
     claim: Mark each task in_progress before launching.
+    force: Take the claim even if someone else's lease is still live. Without
+        this the command could report a task as held and offer no way past it
+        from the CLI it was reported in — the interactive steal prompt is
+        server-side and unreachable through ``_fn``, which passes no ``ctx``.
     dry_run: Print the prompt(s) without launching or claiming.
     repo: Scope the picker to a specific repo URI.
     all_repos: Span all repos in the picker.
@@ -487,7 +492,13 @@ def task_run(
 
     if slug:
         _run_task_slug(
-            slug, cfg=cfg, agent=agent, model=model, claim=claim, dry_run=dry_run
+            slug,
+            cfg=cfg,
+            agent=agent,
+            model=model,
+            claim=claim,
+            force=force,
+            dry_run=dry_run,
         )
         return
 
@@ -520,6 +531,7 @@ def task_run(
             agent=agent,
             model=model,
             claim=claim,
+            force=force,
             dry_run=dry_run,
         )
         return
@@ -542,7 +554,7 @@ def task_run(
                 # No explicit assignee: let task_claim qualify the author with
                 # this session, so a task another of these sessions is already
                 # on reads as held instead of being silently re-claimed here.
-                res = _fn(s.task_claim)(slug=t["slug"]) or {}
+                res = _fn(s.task_claim)(slug=t["slug"], force=force) or {}
                 if res.get("claimed"):
                     console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")
                     claimable.append(t)
@@ -567,5 +579,6 @@ def task_run(
                 agent=agent,
                 model=model,
                 claim=claim,
+                force=force,
                 dry_run=dry_run,
             )

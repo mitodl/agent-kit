@@ -592,3 +592,49 @@ def test_project_update_unknown_slug_exits_nonzero(server, monkeypatch):
     with pytest.raises(SystemExit):
         project_update("wp-does-not-exist", title="x")
     assert "No project" in "\n".join(printed)
+
+
+@requires_omnigraph
+def test_task_run_force_gets_past_a_held_task(server, monkeypatch):
+    """`witan task run` used to dead-end on the state it reported.
+
+    It had no `--force`, and the server-side interactive steal is unreachable
+    from the CLI (`_fn` calls the tool with no `ctx`, so `elicit.confirm` always
+    takes its non-interactive default). So a held task — including one held by
+    nobody nameable — was reported and could not then be resolved from the same
+    command; the user had to drop to `task_release`/`task_claim` by hand.
+    """
+    import pytest
+
+    from witan import config as cfg_module
+    from witan.cli import run_helpers
+
+    printed = _patch_server(monkeypatch, server)
+    launched = []
+    monkeypatch.setattr(
+        run_helpers, "_launch_agent", lambda *a, **kw: launched.append(a)
+    )
+    cfg = cfg_module.load()
+
+    t = server.task_create(title="already held", description="x")
+    server.task_claim(t["slug"], assignee="someone-else")
+
+    with pytest.raises(SystemExit):
+        run_helpers._run_task_slug(
+            t["slug"], cfg=cfg, agent="claude", model=None, claim=True, dry_run=False
+        )
+    assert not launched
+    # The refusal points at the way out rather than just naming the holder.
+    assert "--force" in "\n".join(printed)
+
+    run_helpers._run_task_slug(
+        t["slug"],
+        cfg=cfg,
+        agent="claude",
+        model=None,
+        claim=True,
+        force=True,
+        dry_run=False,
+    )
+    assert launched
+    assert server.task_get(t["slug"])["status"] == "in_progress"

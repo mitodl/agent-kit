@@ -108,6 +108,7 @@ def _run_task_slug(
     model: str | None,
     claim: bool,
     dry_run: bool,
+    force: bool = False,
 ) -> None:
     resolved_agent = agent or cfg.agent
     resolved_model = model or cfg.model
@@ -138,7 +139,7 @@ def _run_task_slug(
         # session. Passing cfg.author here made every parallel session claim
         # under one identity, so the second one renewed the first's lease and
         # was told it had claimed the task — both then worked it.
-        res = _fn(s.task_claim)(slug=slug) or {}
+        res = _fn(s.task_claim)(slug=slug, force=force) or {}
         if not res.get("claimed"):
             reason = res.get("held_by") or res.get("reason") or "unavailable"
             console.print(f"[red]Could not claim {slug} ({reason}).[/red]")
