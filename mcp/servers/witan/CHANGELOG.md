@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.11.2] - 2026-08-07
+
+### Fixed
+
+- `witan migrate merge` against a deployment no longer dies with a raw
+  `fastmcp.exceptions.ToolError: … 413: Request body too large`. The refusal is
+  classified as `RemotePayloadTooLarge` and printed as a sentence by `main()`,
+  alongside the three remote failures already handled. This is the other half of
+  0.11.1's client bound: that stops witan *producing* oversized bodies, this is
+  what happens when one gets through anyway — a deployment whose cap is lower
+  than `MCP_LOAD_MAX_BYTES` assumes, or a single record no batch size can split.
+
+### Added
+
+- `_merge_batch_refusal` adds merge-specific context to a 413 refusal, where it
+  is known rather than assumed: which batch was refused, the budget it was sized
+  against, and how many batches already landed. A `--dry-run` is reported as
+  writing nothing at all rather than as a partial write — the base message used
+  to tell its user the merge "stopped part-way", which invites a hunt for
+  half-migrated rows that do not exist.
+
+### Changed
+
+- `witan-core` floor raised to `>=0.12` — `RemotePayloadTooLarge` is imported at
+  module scope in `remote/proxy.py` and `cli/__init__.py`, and 0.11 does not
+  export it. Third time this floor has been tripped; the pin comment now says so
+  and says what to do about it.
+
 ## [0.11.1] - 2026-08-07
 
 ### Fixed

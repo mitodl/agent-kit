@@ -17,11 +17,13 @@ import pytest
 
 from witan_core.remote.proxy import (
     RemoteMCPProxy,
+    RemotePayloadTooLarge,
     RemoteToolUnavailable,
     RemoteUnreachable,
     _tool_input_schema,
     _transport_failure,
     console_elicitation_handler,
+    payload_too_large,
 )
 
 
@@ -269,7 +271,10 @@ class _ScriptedProxy(RemoteMCPProxy):
         self._exc = exc
         self._at = at
         # Seeded so a call reaches call_tool without a tools/list round trip.
-        self._param_names = {"task_get": ["slug"]}
+        # `memory_store` is here as a NON-bulk write: a single call that can
+        # still be refused for size, which is what pins the base message's
+        # silence about batching.
+        self._param_names = {"task_get": ["slug"], "memory_store": ["content"]}
 
     def _unreachable_hint(self):
         return "HINT."
@@ -390,6 +395,142 @@ def test_transport_failure_terminates_on_a_cause_cycle():
     first.__context__ = second
     second.__context__ = first
     assert _transport_failure(first) is None
+
+
+# ── a body the deployment refuses for its size ────────────────────────────
+# `witan migrate merge` against the CI deployment died with a raw
+# `fastmcp.exceptions.ToolError: … 413: Request body too large`. The client
+# bound (MCP_LOAD_MAX_BYTES) stops us producing those bodies; this is the other
+# half — when one gets through anyway, it has to read as a sentence.
+
+
+def _http_413() -> httpx2.HTTPStatusError:
+    """What a DIRECT connection to a deployment raises on a 413."""
+    request = httpx2.Request("POST", ENDPOINT)
+    response = httpx2.Response(413, request=request, text="Request body too large")
+    return httpx2.HTTPStatusError(
+        "Client error '413 Request Entity Too Large'",
+        request=request,
+        response=response,
+    )
+
+
+# The exact text the vMCP relayed in the live failure, and the two other hops
+# on this path that can refuse a body for its size.
+_RELAYED = (
+    'backend unavailable: tool call failed on backend witan: calling "tools/call": '
+    'sending "tools/call": Request Entity Too Large: request failed with status '
+    "413: Request body too large",
+    "413 Payload Too Large: Failed to buffer the request body",
+)
+
+
+@pytest.mark.parametrize("text", _RELAYED)
+def test_a_relayed_413_is_classified_not_raised_raw(text):
+    # Through ToolHive's vMCP the HTTP exchange with us SUCCEEDS — the refusal
+    # happened on its upstream call, so it arrives as a tool error whose only
+    # trace of the 413 is the words. Nothing here has a status code to read.
+    from fastmcp.exceptions import ToolError
+
+    proxy = _ScriptedProxy(ToolError(text), at="call")
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        proxy.task_get(slug="x")
+    assert "over its size cap" in str(caught.value)
+
+
+def test_a_direct_413_is_too_large_and_NOT_unreachable():
+    # ★ THE ORDERING TEST. httpx2.HTTPStatusError is an httpx2.HTTPError, so a
+    # guard that asks `_transport_failure` first answers "the deployed service
+    # could not be reached" about a deployment that is up and answering — and
+    # sends the reader off to check DNS for a payload they need to shrink.
+    proxy = _ScriptedProxy(ExceptionGroup("unhandled", [_http_413()]), at="call")
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        proxy.task_get(slug="x")
+    assert not isinstance(caught.value, RemoteUnreachable)
+    assert "could not be reached" not in str(caught.value)
+
+
+def test_the_base_message_names_the_call_and_says_retrying_is_futile():
+    from fastmcp.exceptions import ToolError
+
+    proxy = _ScriptedProxy(ToolError("Request body too large"), at="call")
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        proxy.task_get(slug="x")
+    message = str(caught.value)
+    assert "`task_get`" in message  # which call
+    assert ENDPOINT in message  # which deployment
+    assert "has to get smaller" in message  # what to actually do
+
+
+def test_the_base_message_claims_NOTHING_about_batching_or_partial_writes():
+    """★ This message fires for EVERY tool call, not just byte-chunked writes.
+
+    An earlier revision asserted here that "bulk writes are split into 2 MiB
+    batches" and that "batches before this one were applied — the write stopped
+    part-way". For a refused `memory_store`, a read, or a `--dry-run` merge,
+    both are false — and the second is false in the direction that does harm:
+    it tells someone whose graph was untouched that it is now half-mutated.
+
+    Callers that genuinely are mid-batch add that context themselves, where the
+    numbers are real (witan's `_merge_batch_refusal`, witan-code's
+    `_load_refusal`).
+    """
+    from fastmcp.exceptions import ToolError
+
+    proxy = _ScriptedProxy(ToolError("Request body too large"), at="call")
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        # A single-call write, not a bulk one — nothing was batched, and
+        # nothing was partially applied.
+        proxy.memory_store(content="x" * 10)
+    message = str(caught.value).lower()
+    for forbidden in ("batch", "part-way", "roll back", "mib", "applied"):
+        assert forbidden not in message, f"base message must not mention {forbidden!r}"
+
+
+def test_a_413_during_teardown_is_still_classified():
+    # Same reason the unreachable guard wraps the exit stack rather than sitting
+    # inside it: anyio re-raises a background failure while the client closes.
+    proxy = _ScriptedProxy(ExceptionGroup("unhandled", [_http_413()]), at="teardown")
+    with pytest.raises(RemotePayloadTooLarge):
+        proxy.task_get(slug="x")
+
+
+def test_an_ordinary_tool_error_is_not_mistaken_for_an_oversized_body():
+    # Classification is by phrase, and a tool error relays the SERVER's text —
+    # which can quote the caller's own data. Matching a bare "413" would turn a
+    # memory that happens to mention one into a size refusal.
+    from fastmcp.exceptions import ToolError
+
+    proxy = _ScriptedProxy(
+        ToolError("no memory with slug 'error-413-handling'"), at="call"
+    )
+    with pytest.raises(ToolError):
+        proxy.task_get(slug="x")
+
+
+def test_an_ordinary_drop_is_still_unreachable_not_too_large():
+    # The guard added above must not swallow the case it was inserted ahead of.
+    dropped = httpx2.ReadError("connection reset by peer")
+    proxy = _ScriptedProxy(ExceptionGroup("unhandled", [dropped]), at="call")
+    with pytest.raises(RemoteUnreachable, match="connection reset by peer"):
+        proxy.task_get(slug="x")
+
+
+def test_payload_too_large_terminates_on_a_cause_cycle():
+    # Shares `_chain` with `_transport_failure`, so it inherits the same cycle
+    # guard — pinned here so a future rewrite of either cannot lose it.
+    first, second = RuntimeError("a"), RuntimeError("b")
+    first.__context__ = second
+    second.__context__ = first
+    assert payload_too_large(first) is None
+
+
+def test_a_413_carries_the_underlying_error_as_its_cause():
+    original = ExceptionGroup("unhandled", [_http_413()])
+    proxy = _ScriptedProxy(original, at="call")
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        proxy.task_get(slug="x")
+    assert caught.value.__cause__ is original
 
 
 # ── answering a deployed server's elicitation prompt ──────────────────────

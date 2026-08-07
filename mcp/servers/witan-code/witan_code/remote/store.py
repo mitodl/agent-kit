@@ -33,10 +33,12 @@ from fastmcp.client.auth import BearerAuth
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from witan_core.observability import get_logger
+from witan_core.remote.proxy import RemotePayloadTooLarge, payload_too_large
 
 from witan_core import chunking
 
 __all__ = [
+    "RemotePayloadTooLarge",
     "RemoteStoreClient",
     "RemoteStoreUnsupported",
     "StoreSession",
@@ -50,6 +52,68 @@ logger = get_logger("witan.code.remote")
 
 class RemoteStoreUnsupported(RuntimeError):
     """A store operation with no counterpart on the MCP tier."""
+
+
+def _refuse_if_too_large(exc: BaseException, tool: str, url: str) -> None:
+    """Re-raise a body refused for its size as a sentence. Otherwise no-op.
+
+    Called on BOTH arms of ``StoreSession.call``'s handler, because a 413
+    reaches this transport wearing either face: relayed through ToolHive's vMCP
+    it is a ``ToolError``, while a direct connection raises an httpx status
+    error that the generic arm would treat as a dropped socket. That second one
+    is why this exists at all — the generic arm RECONNECTS AND RETRIES, so an
+    oversized index batch would be sent, refused, sent again, refused again,
+    and only then surface as a traceback. Retrying cannot help: the payload is
+    the thing being rejected.
+
+    ★ OPERATION-NEUTRAL, for the same reason the witan_core base message is.
+    Every store call comes through here — reads, `code_store_views`, single
+    mutations, the count-chunked `code_store_mutate_many`, and an `overwrite`
+    load that is not chunked at all. An earlier revision asserted here that
+    records were batched under 2 MiB and that an index had stopped part-way;
+    that was false for all of those, and false for any `load` given a
+    non-default ``max_bytes``. The operations that DO know their budget add it
+    themselves below.
+    """
+    oversized = payload_too_large(exc)
+    if oversized is None:
+        return
+    raise RemotePayloadTooLarge(
+        f"{url} refused `{tool}`: the request body is over the deployment's "
+        f"size cap ({oversized}). Retrying sends the same bytes to the same "
+        "answer — the payload itself is what was rejected."
+    ) from exc
+
+
+def _load_refusal(exc: BaseException, *, batch: int, mode: str, max_bytes: int) -> str:
+    """Add load-specific context to the neutral refusal above.
+
+    Splits on ``mode`` because the two are not the same failure. A ``merge``
+    load is byte-chunked, so the budget and the count already applied are both
+    real and worth stating. An ``overwrite`` load is sent WHOLE — it cannot be
+    chunked, since a partial overwrite would delete exactly what the later
+    batches were going to restore — so quoting a batch budget at the reader
+    would send them looking for a knob that does not apply.
+    """
+    if mode == "overwrite":
+        return (
+            f"{exc} An `overwrite` load is sent whole: it cannot be chunked, "
+            "because a partial overwrite would delete what the remaining "
+            "batches were going to restore. The record set itself has to get "
+            "smaller, or the load has to run in-cluster instead."
+        )
+    size = chunking.describe_budget(max_bytes)
+    applied = (
+        f"The {batch} batch(es) before this one were applied — the index "
+        "stopped part-way, it did not roll back."
+        if batch
+        else "Nothing was applied: this was the first batch."
+    )
+    return (
+        f"{exc} This was batch {batch + 1} of a chunked load, sized against a "
+        f"budget of {size} — so either one record is too large to split, or "
+        f"the deployment's cap is below {size}. {applied}"
+    )
 
 
 # Added to the store tier after the first clients shipped, so its presence is
@@ -113,11 +177,13 @@ class StoreSession:
                 self._connect()
             try:
                 return self._invoke(tool, arguments)
-            except ToolError:
+            except ToolError as exc:
                 # The server ran the tool and it failed — a refusal, a bad
                 # query, a store error. Reconnecting would only run it again.
+                _refuse_if_too_large(exc, tool, self.url)
                 raise
-            except Exception:  # noqa: BLE001 — transport-shaped; retry once
+            except Exception as exc:  # noqa: BLE001 — transport-shaped; retry once
+                _refuse_if_too_large(exc, tool, self.url)
                 # Info: one reconnect is routine (idle session dropped), but a
                 # deployment that reconnects on every call is pathological and
                 # invisible without this.
@@ -321,15 +387,35 @@ class RemoteStoreClient:
             return
         size = chunk_size or len(steps)
         for start in range(0, len(steps), size):
-            self._session.call(
-                _MUTATE_MANY_TOOL,
-                graph=self.graph,
-                steps=[
-                    {"query": query_file, "name": query_name, "params": params}
-                    for query_file, query_name, params in steps[start : start + size]
-                ],
-                view=self.branch,
-            )
+            try:
+                self._session.call(
+                    _MUTATE_MANY_TOOL,
+                    graph=self.graph,
+                    steps=[
+                        {"query": query_file, "name": query_name, "params": params}
+                        for query_file, query_name, params in steps[
+                            start : start + size
+                        ]
+                    ],
+                    view=self.branch,
+                )
+            except RemotePayloadTooLarge as exc:
+                # ★ THIS CHUNKING IS BY STATEMENT COUNT, NOT BYTES — so unlike
+                # `load` there is no byte budget to quote, and pointing the
+                # reader at one would send them to a knob that does not exist
+                # here. `chunk_size` is the knob, and it is the caller's.
+                raise RemotePayloadTooLarge(
+                    f"{exc} This batch carried {min(size, len(steps) - start)} "
+                    "statements. `change_many` chunks by statement COUNT, not "
+                    "by bytes, so there is no byte budget bounding it — pass a "
+                    f"smaller `chunk_size` (currently {size}). "
+                    + (
+                        f"The {start} statement(s) before it were applied — "
+                        "chunks commit independently, so this stopped part-way."
+                        if start
+                        else "Nothing was applied: this was the first chunk."
+                    )
+                ) from exc
 
     def load(
         self,
@@ -364,14 +450,19 @@ class RemoteStoreClient:
             if mode == "overwrite"
             else chunking.chunk_records(records, max_bytes)
         )
-        for batch in batches:
-            self._session.call(
-                "code_store_load",
-                graph=self.graph,
-                records=batch,
-                mode=mode,
-                view=self.branch,
-            )
+        for index, batch in enumerate(batches):
+            try:
+                self._session.call(
+                    "code_store_load",
+                    graph=self.graph,
+                    records=batch,
+                    mode=mode,
+                    view=self.branch,
+                )
+            except RemotePayloadTooLarge as exc:
+                raise RemotePayloadTooLarge(
+                    _load_refusal(exc, batch=index, mode=mode, max_bytes=max_bytes)
+                ) from exc
 
     def ensure_branch(self) -> None:
         if self.branch is None:
