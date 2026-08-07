@@ -23,13 +23,17 @@ from typing import Callable
 
 from witan_core.chunking import chunk_records
 from witan_core.omnigraph import store_cli_args, store_subprocess_env
-from witan_core.remote.proxy import RemoteMCPProxy, RemoteToolUnavailable
+from witan_core.remote.proxy import (
+    RemoteMCPProxy,
+    RemoteToolUnavailable,
+    RemoteUnreachable,
+)
 
 from .. import repo as repo_module
 from .. import session_state
 from ..config import RemoteConfig
 
-__all__ = ["RemoteServerProxy", "RemoteToolUnavailable"]
+__all__ = ["RemoteServerProxy", "RemoteToolUnavailable", "RemoteUnreachable"]
 
 
 @contextmanager
@@ -146,9 +150,29 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def __init__(self, cfg: RemoteConfig, token_provider: Callable[[], str]) -> None:
         super().__init__(cfg.url, token_provider)
+        self._target_name = cfg.target_name
 
     def _is_admin_tool(self, name: str) -> bool:
         return name in _ADMIN_ONLY
+
+    def _unreachable_hint(self) -> str:
+        # Name the setting that is actually in play. A target-routed CLI reads
+        # `remote_url` out of a `[targets.<name>]` block, where telling someone
+        # to unset `WITAN_REMOTE_URL` sends them to a variable that was never
+        # set — the same trap witan-code's `_index_locally_hint` avoids.
+        setting = (
+            f"`remote_url` on target [{self._target_name}]"
+            if self._target_name
+            else "`WITAN_REMOTE_URL`"
+        )
+        return (
+            "witan does not fall back to your local store — falling back "
+            "silently would split your memory across two graphs with no signal "
+            "that it happened, leaving a merge nobody knew to run. Check the "
+            "endpoint is reachable and that your session is still valid "
+            f"(`witan whoami`, then `witan login`), or unset {setting} to work "
+            "against your local store on purpose."
+        )
 
     def _admin_error(self, name: str) -> str:
         return (

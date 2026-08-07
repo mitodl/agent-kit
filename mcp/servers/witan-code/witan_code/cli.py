@@ -1009,7 +1009,19 @@ def _launcher(
 
 
 def cli() -> None:
-    app.meta()
+    from rich.console import Console
+
+    from .remote.oidc import RemoteAuthError
+    from .remote.proxy import RemoteToolUnavailable, RemoteUnreachable
+
+    try:
+        app.meta()
+    # Same three remote failures the `witan` entrypoint classifies. This CLI had
+    # no guard at all, so a deployment that was down, or a token the server
+    # rejected, printed a traceback out of `witan-code symbols`.
+    except (RemoteAuthError, RemoteToolUnavailable, RemoteUnreachable) as exc:
+        Console().print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

@@ -39,7 +39,9 @@ Server-specific policy is supplied by subclasses via the hooks below:
 :meth:`~RemoteMCPProxy._is_admin_tool` / :meth:`~RemoteMCPProxy._admin_error`
 (refuse in-process-only admin/break-glass tools),
 :meth:`~RemoteMCPProxy._unknown_tool_error` (wording for a tool the deployment
-doesn't expose), :meth:`~RemoteMCPProxy._resolve_repo` (client-side repo
+doesn't expose), :meth:`~RemoteMCPProxy._unreachable_hint` (what to check, and
+how to opt into working locally, when the deployment cannot be reached),
+:meth:`~RemoteMCPProxy._resolve_repo` (client-side repo
 resolution, since the deployed server has no git checkout), and
 :meth:`~RemoteMCPProxy._resolve_session_slug` (client-side workflow-session
 handle, since a deployed replica shares no filesystem with the agent), and
@@ -55,8 +57,10 @@ import math
 import sys
 import threading
 import time
+from contextlib import AsyncExitStack
 from typing import Any, Callable
 
+import httpx2
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 from fastmcp.client.elicitation import ElicitResult
@@ -65,6 +69,56 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 class RemoteToolUnavailable(RuntimeError):
     """Raised when a CLI command has no remotely-callable counterpart."""
+
+
+class RemoteUnreachable(RuntimeError):
+    """The deployment could not be reached, or dropped mid-call.
+
+    Distinct from :class:`RemoteToolUnavailable` on purpose, the same way
+    witan-code separates ``ClusterUnreachable`` from ``ClusterGraphMissing``:
+    "the service answered and has no such tool" and "I could not ask the
+    service at all" are the same failed call from the caller's seat but send
+    you to completely different places.
+
+    Deliberately *not* a signal to fall back to a local store. Hard-failing is
+    the documented behaviour (``docs/deployed-witan-onboarding.md``) — a silent
+    fallback would split the corpus across two graphs with no signal that it
+    happened, leaving a merge nobody knew to run. This exception exists so that
+    refusal reads as a sentence instead of a traceback.
+    """
+
+
+_TRANSPORT_ERRORS = (httpx2.HTTPError, OSError)
+
+
+def _transport_failure(exc: BaseException) -> BaseException | None:
+    """The transport-level error inside ``exc``, or None if there is none.
+
+    A connection that fails while opening surfaces as fastmcp's own
+    ``RuntimeError("Client failed to connect: …")``, so the connect phase is
+    classified by *where* it failed rather than by type. A connection that
+    drops mid-call has no such wrapper: the httpx2 error arrives chained
+    through fastmcp/anyio, and anyio's task groups re-raise it inside an
+    ``ExceptionGroup``. Walking both the group members and the cause chain is
+    what keeps "the pod restarted during my write" from reading as a tool
+    error. ``seen`` guards the cycles ``__context__`` can form.
+    """
+    seen: set[int] = set()
+
+    def walk(err: BaseException | None) -> BaseException | None:
+        if err is None or id(err) in seen:
+            return None
+        seen.add(id(err))
+        if isinstance(err, _TRANSPORT_ERRORS):
+            return err
+        if isinstance(err, BaseExceptionGroup):
+            for member in err.exceptions:
+                found = walk(member)
+                if found is not None:
+                    return found
+        return walk(err.__cause__) or walk(err.__context__)
+
+    return walk(exc)
 
 
 async def console_elicitation_handler(
@@ -152,6 +206,30 @@ class RemoteMCPProxy:
     def _unknown_tool_error(self, name: str) -> str:
         """Message when the deployment exposes no tool named ``name``."""
         return f"The deployed service exposes no `{name}` tool."
+
+    def _unreachable_hint(self) -> str:
+        """Why there is no fallback, and what to do instead, for THIS CLI.
+
+        Server-specific on both halves. The setting to unset differs per CLI
+        and per config shape (a named target vs. a bare env var), exactly as
+        witan-code's ``_index_locally_hint`` does — and so does the *reason*
+        the client refuses to serve a local answer, since witan's stores hold a
+        corpus that would silently fork while witan-code's hold a cache that
+        would silently go stale.
+        """
+        return "There is no local fallback. Check that the endpoint is up."
+
+    def _unreachable_error(self, exc: BaseException) -> str:
+        """Message for a deployment that could not be reached.
+
+        The no-fallback rule belongs in the message, not just the docs: the
+        failure this replaces is a user assuming their commands quietly went to
+        the local store and only discovering otherwise at merge time.
+        """
+        return (
+            f"The deployed service at {self._url} could not be reached: "
+            f"{exc}. {self._unreachable_hint()}"
+        )
 
     def _resolve_repo(self) -> str | None:
         """Client-side value for ``repo=None`` (detect current repo). None: skip."""
@@ -247,15 +325,41 @@ class RemoteMCPProxy:
             )
 
     async def _invoke(self, name: str, args: tuple, kwargs: dict) -> Any:
+        """Dispatch one tool call, classifying an unreachable deployment.
+
+        Opening the connection is its own step — via an exit stack rather than
+        a plain ``async with`` — because *anything* that fails there is a
+        transport failure by construction: a bad DNS name, a closed port, a TLS
+        error, a 5xx from an ingress, a token the server rejects. fastmcp
+        reports all of them as a bare ``RuntimeError``, so classifying by
+        position is the only honest reading.
+
+        Past the handshake the classification has to be by type instead. A tool
+        that raises server-side is a legitimate answer and must keep its own
+        error; only a genuine transport fault (:func:`_transport_failure`) is
+        the deployment going away mid-call.
+        """
         token = self._token_provider()
-        async with self._new_client(token) as client:
-            if (
-                self._param_names is None
-                or time.monotonic() >= self._param_names_expiry
-            ):
-                await self._refresh_param_names(client)
-            arguments = self._map_args(name, args, kwargs)
-            result = await client.call_tool(name, arguments)
+        async with AsyncExitStack() as stack:
+            try:
+                client = await stack.enter_async_context(self._new_client(token))
+            except Exception as exc:  # noqa: BLE001 — see docstring
+                raise RemoteUnreachable(self._unreachable_error(exc)) from exc
+            try:
+                if (
+                    self._param_names is None
+                    or time.monotonic() >= self._param_names_expiry
+                ):
+                    await self._refresh_param_names(client)
+                arguments = self._map_args(name, args, kwargs)
+                result = await client.call_tool(name, arguments)
+            except RemoteToolUnavailable:
+                raise
+            except Exception as exc:  # noqa: BLE001 — re-raised unless transport
+                dropped = _transport_failure(exc)
+                if dropped is None:
+                    raise
+                raise RemoteUnreachable(self._unreachable_error(dropped)) from exc
             return result.data
 
     def _map_args(self, name: str, args: tuple, kwargs: dict) -> dict:

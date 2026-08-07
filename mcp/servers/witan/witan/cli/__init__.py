@@ -173,10 +173,14 @@ def _launcher(
 
 def main() -> None:
     from ..remote.oidc import RemoteAuthError
-    from ..remote.proxy import RemoteToolUnavailable
+    from ..remote.proxy import RemoteToolUnavailable, RemoteUnreachable
 
     try:
         app.meta()
-    except (RemoteAuthError, RemoteToolUnavailable) as exc:
+    # The three ways a deployed witan fails a command, each already carrying its
+    # own actionable wording: misconfigured or not logged in (RemoteAuthError),
+    # reached but offering no such tool (RemoteToolUnavailable), and not reached
+    # at all (RemoteUnreachable). The last one used to escape as a raw traceback.
+    except (RemoteAuthError, RemoteToolUnavailable, RemoteUnreachable) as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(1) from None

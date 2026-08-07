@@ -14,9 +14,13 @@ from __future__ import annotations
 from typing import Callable
 
 from witan_core.remote.config import RemoteConfig
-from witan_core.remote.proxy import RemoteMCPProxy, RemoteToolUnavailable
+from witan_core.remote.proxy import (
+    RemoteMCPProxy,
+    RemoteToolUnavailable,
+    RemoteUnreachable,
+)
 
-__all__ = ["RemoteServerProxy", "RemoteToolUnavailable"]
+__all__ = ["RemoteServerProxy", "RemoteToolUnavailable", "RemoteUnreachable"]
 
 # Tools that only mean anything against a local checkout. `code_reindex` IS
 # registered on the deployment (it is the same server module), but running it
@@ -31,9 +35,30 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def __init__(self, cfg: RemoteConfig, token_provider: Callable[[], str]) -> None:
         super().__init__(cfg.url, token_provider)
+        self._target_name = cfg.target_name
 
     def _is_admin_tool(self, name: str) -> bool:
         return name in _LOCAL_ONLY
+
+    def _unreachable_hint(self) -> str:
+        # `remote_url` is what routes a client to this proxy — NOT
+        # `code_transport`, which selects the direct-omnigraph store path that
+        # `store._index_locally_hint` speaks to. Naming the wrong one sends the
+        # reader to unset a setting that is not in play.
+        setting = (
+            f"`remote_url` on target [{self._target_name}]"
+            if self._target_name
+            else "`WITAN_REMOTE_URL`"
+        )
+        return (
+            "witan-code does not fall back to a local store — a hit-free answer "
+            "from a stale or absent local index is indistinguishable from a "
+            "real one, so a silent fallback would report 'no callers' for code "
+            "that has them. Check the endpoint is reachable and that your "
+            "session is still valid (`witan-code whoami`, then `witan-code "
+            f"login`), or unset {setting} to query a locally-indexed store on "
+            "purpose."
+        )
 
     def _admin_error(self, name: str) -> str:
         return (

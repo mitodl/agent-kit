@@ -27,6 +27,14 @@
 # by an exact top-level pin, so resolution fails without it.
 prerelease = "allow"
 
+[tool.ruff]
+# Every member declares `requires-python = ">=3.11"`, but ruff only infers a
+# target version from the closest pyproject.toml that *contains* a [tool.ruff]
+# table — and none did, so it fell back to its py39 default and flagged 3.11
+# builtins (`ExceptionGroup`, `BaseExceptionGroup`) as undefined names. This
+# table is that anchor; it changes no rule selection.
+target-version = "py311"
+
 [tool.uv.workspace]
 members = [
     "packages/agent-config-kit",

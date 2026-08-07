@@ -787,3 +787,46 @@ def test_hook_writes_nothing_to_stdout_in_a_fresh_process(tmp_path):
     assert result.stdout == "", f"hook wrote to stdout: {result.stdout!r}"
     # And it genuinely reported the degradations rather than being silent.
     assert "witan." in result.stderr
+
+
+def test_inject_context_cli_survives_an_unreachable_deployment(
+    tmp_path, monkeypatch, capsys
+):
+    """A configured-but-down deployment must not reach an agent's prompt.
+
+    Worth pinning rather than assuming, because the shape here is not the one
+    the rest of the CLI has: this command never calls ``_srv()``, so it does not
+    go through ``RemoteMCPProxy`` at all — a remote-configured hook still reads
+    ``graph_uri`` directly. That means the unreachable-remote classification
+    added for every other command is not what protects this path; the blanket
+    guard inside ``ctx_module.inject_context`` is. Both a dead deployment and a
+    dead graph URI are set, so whichever one it does reach, stdout stays empty.
+    """
+    from witan.cli import hooks
+    from witan.graph import OmnigraphClient
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("")
+    monkeypatch.setenv("WITAN_CONFIG", str(cfg_file))
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.invalid/mcp")
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.invalid/realms/ol")
+    # An http(s) URI so the "local store missing" early return is skipped and
+    # the read is genuinely attempted. Raised rather than actually dialled: the
+    # real client rides out a restart with a connect-retry budget, which is
+    # right in production and minutes of nothing in a test.
+    monkeypatch.setenv("WITAN_MEMORY_URI", "https://omnigraph.invalid")
+    attempted: list[str] = []
+
+    def _refused(_self, _query_file, query_name, _params):
+        attempted.append(query_name)
+        raise RuntimeError("omnigraph: connection refused")
+
+    monkeypatch.setattr(OmnigraphClient, "read", _refused)
+
+    hooks.inject_context()  # must not raise
+
+    assert capsys.readouterr().out == ""
+    # Not vacuous: the hook got as far as a read before degrading. A cached
+    # block, or an early return, would leave this empty.
+    assert attempted

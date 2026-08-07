@@ -13,7 +13,11 @@ import pytest
 from fastmcp import Client
 
 from witan.config import RemoteConfig
-from witan.remote.proxy import RemoteServerProxy, RemoteToolUnavailable
+from witan.remote.proxy import (
+    RemoteServerProxy,
+    RemoteToolUnavailable,
+    RemoteUnreachable,
+)
 
 from .conftest import requires_omnigraph
 
@@ -339,6 +343,67 @@ def test_memory_repair_tools_are_not_admin_only(server):
 def test_unknown_tool_is_refused(proxy):
     with pytest.raises(RemoteToolUnavailable):
         proxy.definitely_not_a_tool(repo="")
+
+
+# ── an unreachable deployment ─────────────────────────────────────────────
+# The generic classification is pinned in witan-core; what witan owns is the
+# wording — which endpoint, why there is no local fallback, and which of the two
+# settings that could have routed the caller here to unset.
+
+
+def _dead(**cfg_kwargs) -> str:
+    cfg = RemoteConfig(
+        url="https://witan.example.org/mcp",
+        oidc_issuer="https://sso/realms/ol",
+        **cfg_kwargs,
+    )
+    proxy = RemoteServerProxy(cfg, lambda: "tok")
+    return proxy._unreachable_error(RuntimeError("All connection attempts failed"))
+
+
+def test_unreachable_message_names_the_endpoint_and_the_cause():
+    message = _dead()
+    assert "https://witan.example.org/mcp" in message
+    assert "All connection attempts failed" in message
+
+
+def test_unreachable_message_states_that_there_is_no_fallback():
+    # The behaviour is deliberate (docs/deployed-witan-onboarding.md) and the
+    # reason has to travel with the error: a user who assumes the command
+    # quietly went local finds out at merge time, which is far too late.
+    message = _dead()
+    assert "does not fall back" in message
+    assert "split your memory" in message
+
+
+def test_unreachable_message_names_the_env_var_when_no_target_matched():
+    assert "`WITAN_REMOTE_URL`" in _dead()
+
+
+def test_unreachable_message_names_the_target_setting_when_one_matched():
+    # Telling a target-routed user to unset WITAN_REMOTE_URL sends them to a
+    # variable that was never set — the trap witan-code's `_index_locally_hint`
+    # already avoids on the direct path.
+    message = _dead(target_name="qa")
+    assert "`remote_url` on target [qa]" in message
+    assert "WITAN_REMOTE_URL" not in message
+
+
+def test_main_prints_an_unreachable_remote_instead_of_a_traceback(monkeypatch, capsys):
+    # The entrypoint guard: `main()` caught only the auth and unknown-tool
+    # refusals, so this one escaped as a raw Python traceback.
+    from types import SimpleNamespace
+
+    from witan import cli as cli_module
+
+    def _down():
+        raise RemoteUnreachable("witan is down at X")
+
+    monkeypatch.setattr(cli_module, "app", SimpleNamespace(meta=_down))
+    with pytest.raises(SystemExit) as exit_code:
+        cli_module.main()
+    assert exit_code.value.code == 1
+    assert "witan is down at X" in capsys.readouterr().out
 
 
 def test_srv_surfaces_misconfigured_remote_as_clean_exit(monkeypatch):
