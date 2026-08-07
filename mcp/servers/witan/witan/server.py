@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from collections import Counter
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1214,37 +1215,76 @@ def _parse_ts(value: str | None) -> datetime | None:
     return parsed
 
 
+def _classify_rows(
+    rows: Iterable[dict], source: str
+) -> tuple[dict[tuple[str, str], dict], list[dict]]:
+    """Split ``omnigraph export`` records into reconcilable nodes and pass-through rows.
+
+    An export holds two record shapes, and they do not share a discriminator:
+    a node is ``{"type": <Node>, "data": {…}}`` while an edge is
+    ``{"edge": <Edge>, "from": …, "to": …, "data": {…}}`` — an edge carries no
+    ``"type"`` at all. Only nodes are reconciled, keyed ``(type, slug)``;
+    everything else passes through the merge exactly as exported, because
+    reconciliation needs a slug to match on and an edge has none. A ``type``
+    row without a slug lands in the pass-through list for the same reason.
+
+    This is the single classifier for both merge transports — ``_parse_export``
+    (a file, in-process) and ``store_merge`` (a batch, over the wire). They had
+    diverged, and the divergence was the bug: the file path treated a missing
+    ``"type"`` as corruption and raised on the first edge, so a merge sourced
+    from or targeting any graph with edges failed outright. ``source`` names
+    what is being classified so the surviving error still points at a file.
+    """
+    nodes: dict[tuple[str, str], dict] = {}
+    passthrough: list[dict] = []
+    for row in rows:
+        # A JSONL line is only *conventionally* an object: `[]`, `null`, `3`
+        # and `"…"` all parse fine and would reach `.get` as an AttributeError,
+        # which is the raw fault this boundary exists to convert into a
+        # sentence. Checked here rather than in `_parse_export` so the wire
+        # path gets it too — the MCP schema says `list[dict]`, but that is the
+        # deployment's guarantee, not this function's.
+        if not isinstance(row, dict):
+            raise RuntimeError(f"{source}: export row is not a JSON object: {row!r}")
+        row_type = row.get("type")
+        if not row_type:
+            if not row.get("edge"):
+                raise RuntimeError(
+                    f"{source}: export row is neither a node (no 'type') nor an "
+                    f"edge (no 'edge'): {row!r}"
+                )
+            passthrough.append(row)
+            continue
+        slug = (row.get("data") or {}).get("slug")
+        if slug:
+            nodes[(row_type, slug)] = row
+        else:
+            passthrough.append(row)
+    return nodes, passthrough
+
+
 def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
-    """Split an ``omnigraph export`` JSONL file into node rows keyed by
-    ``(type, slug)`` and a plain list of edge rows (no ``slug``, so not
-    reconciled — they pass through the merge as exported).
+    """Read an ``omnigraph export`` JSONL file into ``_classify_rows``'s split.
 
     An export is an external boundary (another process's output, not
     necessarily produced by this run), so a malformed line raises a clear
     ``RuntimeError`` naming the offending line rather than a raw
     ``JSONDecodeError``/``KeyError`` mid-reconciliation."""
-    nodes: dict[tuple[str, str], dict] = {}
-    edges: list[dict] = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"{path}: corrupted export line, not valid JSON: {line!r}"
-                ) from exc
-            row_type = row.get("type")
-            if not row_type:
-                raise RuntimeError(f"{path}: export row missing a 'type': {row!r}")
-            slug = (row.get("data") or {}).get("slug")
-            if slug:
-                nodes[(row_type, slug)] = row
-            else:
-                edges.append(row)
-    return nodes, edges
+
+    def _lines() -> Iterator[dict]:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        f"{path}: corrupted export line, not valid JSON: {line!r}"
+                    ) from exc
+
+    return _classify_rows(_lines(), str(path))
 
 
 def _reconcile_nodes(
@@ -1582,18 +1622,7 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
             **_decision_counts([]),
         }
 
-    source_nodes: dict[tuple[str, str], dict] = {}
-    source_edges: list[dict] = []
-    for row in rows:
-        row_type = row.get("type")
-        if not row_type:
-            source_edges.append(row)
-            continue
-        slug = (row.get("data") or {}).get("slug")
-        if slug:
-            source_nodes[(row_type, slug)] = row
-        else:
-            source_edges.append(row)
+    source_nodes, source_edges = _classify_rows(rows, "merge batch")
 
     with tempfile.TemporaryDirectory(prefix="witan-store-merge-") as tmp:
         target_file = Path(tmp) / "target.jsonl"
