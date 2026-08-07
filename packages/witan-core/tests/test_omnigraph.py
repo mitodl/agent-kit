@@ -676,6 +676,169 @@ def test_local_store_does_not_take_the_unavailable_path(monkeypatch):
     assert calls["n"] == 1
 
 
+# ── re-entrant store write lock ────────────────────────────────────
+
+
+def test_a_write_inside_hold_write_lock_does_not_self_deadlock(monkeypatch, tmp_path):
+    """The trap: flock belongs to the open file description, not the process.
+
+    `merge_store` holds the target's lock across export → reconcile → load so
+    another writer cannot make the decisions stale. The load inside is an
+    ordinary client write, which takes the same lock — and a second `open()` of
+    one lock file blocks even the thread already holding it, so the obvious
+    nesting is a self-deadlock, not a no-op. Without the re-entrancy this test
+    hangs rather than fails.
+    """
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    store = tmp_path / "graph.omni"
+    client = OmnigraphClient(str(store), Path("/queries"))
+    _recording_run(monkeypatch)
+
+    with client.hold_write_lock():
+        client.load_batch([{"type": "Memory", "data": {"slug": "m"}}])
+
+    # And the lock is fully released afterwards, not left pinned at depth 1 —
+    # a leaked depth would silently disable locking for the rest of the process.
+    assert not og._held_flocks
+    fh = og.acquire_store_flock(str(store))
+    assert fh is not None
+    og.release_store_flock(str(store), fh)
+
+
+def test_nested_acquisitions_unlock_only_at_depth_zero(tmp_path):
+    store = str(tmp_path / "graph.omni")
+    outer = og.acquire_store_flock(store)
+    inner = og.acquire_store_flock(store)
+
+    assert outer is not None
+    assert inner is None  # re-entry, nothing of its own to release
+
+    og.release_store_flock(store, inner)
+    assert og._held_flocks  # still held by the outer acquisition
+    og.release_store_flock(store, outer)
+    assert not og._held_flocks
+
+
+def test_a_read_inside_hold_write_lock_is_unaffected(monkeypatch, tmp_path):
+    """Reads take no write lock, so they must neither block nor decrement the
+    depth the surrounding write lock is counting on."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    store = tmp_path / "graph.omni"
+    client = OmnigraphClient(str(store), Path("/queries"))
+    _recording_run(monkeypatch)
+
+    with client.hold_write_lock():
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+        assert og._held_flocks  # the outer lock survived the read
+    assert not og._held_flocks
+
+
+# ── export_to: streaming, under the same retry policy ──────────────
+
+
+def _export_stub(monkeypatch, outcomes):
+    """Stub subprocess.run for `export`, consuming one `outcomes` entry per call.
+
+    Each entry is ``(returncode, stdout_text)``; the text is written to the
+    file the caller redirected stdout to, so a test can assert on what a retry
+    left behind rather than only on the return code.
+    """
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        rc, text = outcomes[min(calls["n"], len(outcomes) - 1)]
+        calls["n"] += 1
+        if text:
+            kwargs["stdout"].write(text)
+        stderr = "" if rc == 0 else _CONNECT_REFUSED_STDERR
+        return subprocess.CompletedProcess(cmd, rc, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    return calls
+
+
+def test_export_retries_a_connect_refusal_until_the_server_returns(
+    monkeypatch, tmp_path
+):
+    """The regression: a merge's target export died on the first connect refusal.
+
+    omnigraph-server is `replicas=1` + `strategy=Recreate`, so every restart is
+    a hard endpoint gap — and one landed 43s before a real cutover attempt,
+    killing the merge with a raw Rust backtrace. Every other omnigraph call
+    already rode this out; `export` did not, because `store_merge` shelled out
+    around the client instead of through it.
+    """
+    client = _client(monkeypatch)
+    _fake_clock(monkeypatch)
+    out = tmp_path / "target.jsonl"
+    calls = _export_stub(monkeypatch, [(1, ""), (1, ""), (0, '{"type":"Memory"}\n')])
+
+    client.export_to(out, label="export (target)")
+
+    assert calls["n"] == 3  # two refusals ridden out, third succeeded
+    assert out.read_text() == '{"type":"Memory"}\n'
+
+
+def test_export_truncates_between_attempts(monkeypatch, tmp_path):
+    """A retry must overwrite the failed attempt's partial output, not append to it.
+
+    An export streams straight to the file, so a server that dies mid-export
+    leaves a prefix on disk. Appending the successful retry onto it would
+    produce a file with duplicated rows — which `_parse_export` would happily
+    read, silently doubling the merge's target index.
+    """
+    client = _client(monkeypatch)
+    _fake_clock(monkeypatch)
+    out = tmp_path / "target.jsonl"
+    calls = _export_stub(
+        monkeypatch,
+        [(1, '{"type":"Memory","data":{"slug":"half'), (0, '{"type":"Memory"}\n')],
+    )
+
+    client.export_to(out)
+
+    assert calls["n"] == 2
+    assert out.read_text() == '{"type":"Memory"}\n'  # no truncated prefix left
+
+
+def test_export_gives_up_as_store_unavailable(monkeypatch, tmp_path):
+    """Exhausting the budget raises the typed error, so a caller can say
+    something useful — `store_merge` turns it into "temporarily unavailable,
+    safe to re-run" instead of relaying a ClusterIP the user cannot reach."""
+    client = _client(monkeypatch)
+    _fake_clock(monkeypatch)
+    calls = _export_stub(monkeypatch, [(1, "")])
+
+    with pytest.raises(og.StoreUnavailable, match="could not connect to"):
+        client.export_to(tmp_path / "target.jsonl", label="export (deployed graph)")
+    assert calls["n"] > 1
+    # Still a RuntimeError, so existing `except RuntimeError` handlers are
+    # unaffected by the new type.
+    assert issubclass(og.StoreUnavailable, RuntimeError)
+
+
+def test_export_streams_rather_than_buffering(monkeypatch, tmp_path):
+    """Output must be redirected to the file, never captured into a string —
+    an export is the whole graph, and capturing it would hold it in memory on
+    top of the parsed rows."""
+    client = _client(monkeypatch)
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        seen["cmd"] = cmd
+        kwargs["stdout"].write("{}\n")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    client.export_to(tmp_path / "out.jsonl")
+
+    assert seen.get("capture_output") is not True
+    assert hasattr(seen["stdout"], "write")  # a file handle, not PIPE
+    assert seen["cmd"][:2] == ["/usr/bin/omnigraph", "export"]
+    assert seen["cmd"][2:] == client._store_args()
+
+
 # ── schema apply + mtime stamp ─────────────────────────────────────
 
 

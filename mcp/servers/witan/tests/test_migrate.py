@@ -378,43 +378,41 @@ def test_merge_from_a_remote_export_says_to_download_it(server):
             srv.merge_store(uri)
 
 
-def test_merge_addresses_a_remote_target_as_server_and_graph(server, tmp_path):
+def test_merge_addresses_a_remote_target_as_server_and_graph(
+    server, tmp_path, monkeypatch
+):
     """A deployed graph is `--server <url> --graph <id>`, never `--store`.
 
     This is the regression that made the shared store unreachable from the
     merge path: omnigraph 0.8.1 rejects an http(s) `--store`, so an
     `http://…` target — which is exactly what the in-cluster maintenance pod
-    has, via `WITAN_MEMORY_URI` — failed at the first export. Driven with a
-    stubbed runner because the assertion is about the argv we build, and a
-    real deployed server is not available to a unit test.
+    has, via `WITAN_MEMORY_URI` — failed at the first export. Stubs the export
+    because the assertion is about the address the client resolves, and a real
+    deployed server is not available to a unit test.
     """
     from witan import server as srv
 
     source = tmp_path / "empty.jsonl"
     source.write_text("")
-    calls = []
+    exports = []
 
-    def fake_run(cmd, *, label, stdout=None, env=None):
-        calls.append((cmd, env))
-        return ""
+    def fake_export(self, path, *, label="export"):
+        exports.append((self._store_args(), self._subprocess_env(), label))
+        Path(path).write_text("")
 
-    original = srv._run_omnigraph
-    srv._run_omnigraph = fake_run
-    try:
-        srv.merge_store(
-            str(source),
-            target="http://omnigraph-server.omnigraph.svc:8080/graphs/council",
-            dry_run=True,
-        )
-    finally:
-        srv._run_omnigraph = original
+    monkeypatch.setattr(srv.OmnigraphClient, "export_to", fake_export)
+    srv.merge_store(
+        str(source),
+        target="http://omnigraph-server.omnigraph.svc:8080/graphs/council",
+        dry_run=True,
+    )
 
-    # One call: the target export. The source was a handed-over export, so it
+    # One export: the target. The source was a handed-over export file, so it
     # is read directly rather than re-exported.
-    assert len(calls) == 1
-    cmd, env = calls[0]
-    assert "--store" not in cmd
-    assert cmd[-4:] == [
+    assert len(exports) == 1
+    args, env, _ = exports[0]
+    assert "--store" not in args
+    assert args == [
         "--server",
         "http://omnigraph-server.omnigraph.svc:8080",
         "--graph",
@@ -425,7 +423,8 @@ def test_merge_addresses_a_remote_target_as_server_and_graph(server, tmp_path):
     assert env is not None
 
 
-def test_store_address_matches_the_configured_graph_across_spellings(monkeypatch):
+@requires_omnigraph
+def test_store_client_matches_the_configured_graph_across_spellings(monkeypatch):
     """The configured token must survive being asked for by a different spelling.
 
     A deployment sets `WITAN_MEMORY_URI` to a *bare* server URL plus a separate
@@ -447,14 +446,16 @@ def test_store_address_matches_the_configured_graph_across_spellings(monkeypatch
     base = _Configured.server_url
 
     for uri in (base, f"{base}/", f"{base}/graphs/council"):
-        args, env = srv._store_address(uri)
-        assert args == ["--server", base, "--graph", "council"]
-        assert env["OMNIGRAPH_BEARER_TOKEN"] == "svc-witan-admin-token"
+        built = srv._store_client(uri)
+        assert built._store_args() == ["--server", base, "--graph", "council"]
+        assert built._subprocess_env()["OMNIGRAPH_BEARER_TOKEN"] == (
+            "svc-witan-admin-token"
+        )
 
     # Another graph on the same server, or the same graph id on a different
     # server, is *not* the configured store: it falls back to the ambient token.
     for uri in (f"{base}/graphs/code", "http://elsewhere:8080/graphs/council"):
-        _, env = srv._store_address(uri)
+        env = srv._store_client(uri)._subprocess_env()
         assert env.get("OMNIGRAPH_BEARER_TOKEN") != "svc-witan-admin-token"
 
 
@@ -913,6 +914,61 @@ def test_migrate_repo_keys_is_noop_on_already_canonical_store(server):
         "code_branches_migrated": 0,
         "repos_changed": {},
     }
+
+
+@requires_omnigraph
+def test_store_merge_reports_an_unreachable_data_tier_as_a_retryable_sentence(
+    server, monkeypatch
+):
+    """The user hitting this cannot see the data tier, so tell them what to do.
+
+    `store_merge` is the server-side half of the self-service cutover: the
+    caller is a person migrating their own graph through the MCP tier. When the
+    data tier stays down for the whole retry budget, relaying omnigraph's error
+    hands them a Rust backtrace naming a ClusterIP they have no access to. What
+    they can act on is that it is transient and that re-running is safe.
+    """
+    from witan import server as srv
+
+    def refuse(self, path, *, label="export"):
+        raise srv.StoreUnavailable(
+            f"omnigraph {label} failed after 9 attempts over 150s — could not "
+            "connect to http://omnigraph-server.omnigraph.svc.cluster.local:8080"
+        )
+
+    monkeypatch.setattr(srv.OmnigraphClient, "export_to", refuse)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        server.store_merge([{"type": "Memory", "data": {"slug": "mem-x"}}])
+
+    message = str(excinfo.value)
+    assert "temporarily unavailable" in message
+    assert "re-run" in message.lower()
+    # The internal address and the backtrace stay off the user's screen, but
+    # remain on __cause__ for the operator reading logs.
+    assert "cluster.local" not in message
+    assert isinstance(excinfo.value.__cause__, srv.StoreUnavailable)
+
+
+@requires_omnigraph
+def test_store_merge_covers_the_load_leg_not_only_the_export(server, monkeypatch):
+    """The outage can just as easily land between the export and the load.
+
+    Wrapping only the export would leave the second half of the same tool call
+    relaying the raw error — same user, same restart, same advice needed.
+    """
+    from witan import server as srv
+
+    def refuse(self, records, mode="merge"):
+        raise srv.StoreUnavailable(
+            "omnigraph load failed after 9 attempts over 150s — could not "
+            "connect to http://omnigraph-server.omnigraph.svc.cluster.local:8080"
+        )
+
+    monkeypatch.setattr(srv.OmnigraphClient, "load_batch", refuse)
+
+    with pytest.raises(RuntimeError, match="temporarily unavailable"):
+        server.store_merge([{"type": "Memory", "data": {"slug": "mem-y"}}])
 
 
 def test_parse_ts_compares_naive_and_aware_without_raising():
