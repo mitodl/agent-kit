@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.11.3] - 2026-08-07
+
+### Fixed
+
+- `memory_search` and `recall` now find terms that appear only in a memory's
+  **title**. All four search queries matched `search($m.content, …)` alone, so a
+  term in a title and nowhere in the body could never match — not "ranked low",
+  never, at any corpus size. Titles in this corpus are full sentences carrying
+  the distinguishing identifiers, and an agent recalling context queries with
+  exactly those words, so this was the common case failing quietly.
+- `read.gq` gains a `_title` twin for each of the four search queries. They are
+  separate queries rather than one predicate because the query language will not
+  `or` two `search(…)` calls in a single match (`expected comp_op`). `_search_rows`
+  unions the two runs, deduping by slug.
+
+### Changed
+
+- Content matches *seed* ahead of title-only matches: the two BM25 runs are not
+  on a comparable scale, so title hits are appended rather than interleaved by
+  score, which gives content hits the higher positional proxy (`_rerank`'s
+  `norm_bm25`). This is a seeding order, not a guarantee about the final
+  result — the proxy is one weighted term in `_score` alongside recency,
+  corroboration and confidence, so a well-corroborated title-only hit can
+  finish above a marginal content hit, exactly as it can among content hits.
+- `memory_search` applies its 20-row cap *after* supersession pruning rather
+  than before. `_search_rows` now returns the full candidate union and the
+  caller caps. Capping candidates first meant 20 superseded content hits could
+  occupy every slot, discard the title hits behind them, and prune to an empty
+  result with a valid title match sitting just past the cut. `recall` already
+  capped after pruning and just sees more candidates.
+
 ## [0.11.2] - 2026-08-07
 
 ### Fixed

@@ -4,6 +4,13 @@
 //   The MCP server selects the query name based on which optional filters
 //   the caller provided. This avoids relying on undefined behavior for
 //   null param filtering in match bindings.
+//
+//   Every search comes as a pair: a `content` query and a `_title` twin with
+//   the same params. The query language will not `or` two search predicates in
+//   one match (`search($m.title, $q) or search($m.content, $q)` is a parse
+//   error), so the union happens in `_search_rows` instead. Keep the pairs in
+//   step — a `_title` twin that drifts from its content query silently makes
+//   title terms unfindable again for that filter combination.
 
 // ── Search (BM25 on content) ─────────────────────────────────────
 
@@ -60,6 +67,69 @@ query search_by_repo_and_kind($query: String, $repo: String, $kind: String) {
         $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
     }
     order { bm25($m.content, $query) desc }
+    limit 20
+}
+
+// ── Search (BM25 on title) ───────────────────────────────────────
+//
+// Titles carry the distinguishing nouns — memory titles in this corpus are
+// written as full sentences naming the specific identifier — so a term that
+// lives only in a title has to be findable. See the header note on why these
+// are separate queries rather than an `or` in the ones above.
+
+query search_all_title($query: String) {
+    match {
+        $m: Memory
+        search($m.title, $query)
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
+    }
+    order { bm25($m.title, $query) desc }
+    limit 20
+}
+
+query search_by_repo_title($query: String, $repo: String) {
+    match {
+        $m: Memory { repo: $repo }
+        search($m.title, $query)
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
+    }
+    order { bm25($m.title, $query) desc }
+    limit 20
+}
+
+query search_by_kind_title($query: String, $kind: String) {
+    match {
+        $m: Memory { kind: $kind }
+        search($m.title, $query)
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
+    }
+    order { bm25($m.title, $query) desc }
+    limit 20
+}
+
+query search_by_repo_and_kind_title($query: String, $repo: String, $kind: String) {
+    match {
+        $m: Memory { repo: $repo, kind: $kind }
+        search($m.title, $query)
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
+    }
+    order { bm25($m.title, $query) desc }
     limit 20
 }
 

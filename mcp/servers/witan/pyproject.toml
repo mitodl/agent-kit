@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.11.2"
+version = "0.11.3"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
