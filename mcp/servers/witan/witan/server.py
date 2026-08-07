@@ -1,4 +1,3 @@
-import fcntl
 import hashlib
 import json
 import math
@@ -11,6 +10,7 @@ import threading
 import time
 import uuid
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -22,16 +22,22 @@ from witan_core import caching, normalise, now_iso
 from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
 from witan_core.omnigraph import (
+    acquire_store_flock,
+    release_store_flock,
     schema_apply,
     schema_apply_if_changed,
     store_cli_args,
-    store_subprocess_env,
 )
 
 from . import config as cfg_module
 from . import elicit, readiness, scan, session_state
 from . import repo as repo_module
-from .graph import OmnigraphClient, OmnigraphConflict, _is_storage_version_mismatch
+from .graph import (
+    OmnigraphClient,
+    OmnigraphConflict,
+    StoreUnavailable,
+    _is_storage_version_mismatch,
+)
 from .identity import ActorTokenResolver, derive_actor_id
 
 # ── Startup ───────────────────────────────────────────────────────
@@ -975,23 +981,32 @@ def _find_pre_upgrade_binary(current_binary: str) -> str | None:
     return None
 
 
-def _run_omnigraph(cmd: list[str], *, label: str, stdout=None, env=None) -> str:
-    """Run an omnigraph subcommand.
+def _run_omnigraph(cmd: list[str], *, label: str, stdout=None) -> str:
+    """Run an omnigraph subcommand with no retry policy. ``migrate_storage_format`` only.
 
     When ``stdout`` is an open file, output streams straight there (so a
     large ``export`` never sits fully buffered in memory) and ``""`` is
     returned; otherwise stdout is captured and returned as a string.
 
-    ``env`` carries the bearer token when the addressed store is a remote
-    omnigraph-server; ``None`` inherits this process's environment, which is
-    right for a local store (see ``store_subprocess_env``).
+    **Bypassing ``OmnigraphClient`` here is deliberate, and it is the only place
+    that is true.** The storage-format rebuild runs the *old* omnigraph binary
+    against the store — a client is bound to the one binary it resolved at
+    construction, so it cannot express "export this with the binary that last
+    wrote it". The steps that use the new binary target a local scratch store
+    that does not exist yet, which no client addresses either.
+
+    Skipping the retry policy costs nothing here because every store involved is
+    local: ``migrate_storage_format`` refuses an http(s)/s3 store outright, and
+    for a local store the policy classifies a connect failure as FATAL rather
+    than waiting — there is no server to come back. Every *other* call site,
+    where a store may be remote and a restart is routine, goes through the
+    client (see :func:`_store_client`).
     """
     result = subprocess.run(
         cmd,
         stdout=stdout if stdout is not None else subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=env,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -1002,12 +1017,16 @@ def _run_omnigraph(cmd: list[str], *, label: str, stdout=None, env=None) -> str:
 
 def _acquire_store_lock(store: str):
     """Hold the same ``<store>.lock`` writers use (``OmnigraphClient``) for the
-    full rebuild+swap, so a concurrent witan write can't race the migration."""
-    lock_path = Path(f"{store}.lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "w")  # noqa: SIM115 — released by the caller
-    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-    return fh
+    full rebuild+swap, so a concurrent witan write can't race the migration.
+
+    Goes through ``witan_core``'s re-entrant helper rather than its own
+    ``flock``: a second ``open()`` of one lock file blocks even the thread
+    already holding it, so a plain nested acquisition self-deadlocks. Nothing
+    inside the rebuild takes it today (it drives the CLI directly, see
+    ``_run_omnigraph``), but sharing the primitive is what keeps that true if
+    something ever does.
+    """
+    return acquire_store_flock(store)
 
 
 def migrate_storage_format(old_binary: str | None = None) -> dict:
@@ -1127,8 +1146,7 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
                 backup_path.rename(store_path)
                 raise
     finally:
-        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
-        lock_fh.close()
+        release_store_flock(store, lock_fh)
 
     return {
         "migrated": True,
@@ -1276,15 +1294,23 @@ def _decision_counts(decisions: list[dict]) -> dict:
     }
 
 
-def _store_address(uri: str) -> tuple[list[str], dict]:
-    """The ``omnigraph`` CLI flags and subprocess env addressing ``uri``.
+def _store_client(uri: str) -> OmnigraphClient:
+    """An ``OmnigraphClient`` addressing ``uri`` — a store that need not be the
+    configured one.
 
-    A store the merge path touches is not necessarily the configured one, so
-    this resolves each side independently. The configured store's own token is
-    reused when ``uri`` names it (the in-cluster maintenance case, where
-    ``WITAN_MEMORY_TOKEN`` is the only credential in the pod); any *other*
-    remote store falls back to the ambient ``OMNIGRAPH_BEARER_TOKEN``, the
-    omnigraph CLI's documented spelling.
+    A merge touches two stores, either of which may be a *remote*
+    omnigraph-server, and a remote call has to run under the shared
+    retry/classification policy: that Deployment is ``replicas=1`` +
+    ``strategy=Recreate``, so every restart is a hard endpoint gap, and a bare
+    ``subprocess.run`` turns a routine one into a dead merge with a raw connect
+    refusal. Addressing each side through a client is what keeps this path
+    inside the policy rather than beside it.
+
+    The configured store's own token is reused when ``uri`` names it (the
+    in-cluster maintenance case, where ``WITAN_MEMORY_TOKEN`` is the only
+    credential in the pod); any *other* remote store falls back to the ambient
+    ``OMNIGRAPH_BEARER_TOKEN``, the omnigraph CLI's documented spelling — which
+    is what passing ``token=None`` leaves in place (see ``store_subprocess_env``).
 
     "Names it" is decided on the *resolved* address, not on the raw string. A
     deployment sets ``WITAN_MEMORY_URI`` to a bare server URL plus a separate
@@ -1310,7 +1336,9 @@ def _store_address(uri: str) -> tuple[list[str], dict]:
         raise RuntimeError(f"{uri}: {exc}") from exc
     configured = store_cli_args(client.graph_uri, client.graph_id)
     token = client.token if args == configured else None
-    return args, store_subprocess_env(uri, token)
+    return OmnigraphClient(
+        uri, cfg.queries_dir, token, guard=_write_guard, graph_id=fallback
+    )
 
 
 def _is_export_file(source: str) -> bool:
@@ -1428,14 +1456,13 @@ def merge_store(
         )
 
     _ensure_graph(target)
-    binary = client._binary
-    target_args, target_env = _store_address(target)
+    target_client = _store_client(target)
 
-    local_lock = None
-    try:
-        if not target.startswith(("http://", "https://", "s3://")):
-            local_lock = _acquire_store_lock(target)
-
+    # Held across export → reconcile → load, so no other writer can land
+    # between the target export and the load and make the decisions stale. The
+    # load inside re-enters this lock rather than blocking on it; a remote
+    # target takes no lock at all (flock coordinates local writers only).
+    with target_client.hold_write_lock():
         with tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp:
             tmp_path = Path(tmp)
             target_file = tmp_path / "target.jsonl"
@@ -1444,21 +1471,8 @@ def merge_store(
                 source_file = Path(source)
             else:
                 source_file = tmp_path / "source.jsonl"
-                source_args, source_env = _store_address(source)
-                with open(source_file, "w", encoding="utf-8") as f:
-                    _run_omnigraph(
-                        [binary, "export", *source_args],
-                        label="export (source)",
-                        stdout=f,
-                        env=source_env,
-                    )
-            with open(target_file, "w", encoding="utf-8") as f:
-                _run_omnigraph(
-                    [binary, "export", *target_args],
-                    label="export (target)",
-                    stdout=f,
-                    env=target_env,
-                )
+                _store_client(source).export_to(source_file, label="export (source)")
+            target_client.export_to(target_file, label="export (target)")
 
             source_nodes, source_edges = _parse_export(source_file)
             target_nodes, _ = _parse_export(target_file)
@@ -1484,28 +1498,7 @@ def merge_store(
                     **counts,
                 }
 
-            reconciled_file = tmp_path / "reconciled.jsonl"
-            with open(reconciled_file, "w", encoding="utf-8") as f:
-                for row in to_load:
-                    f.write(json.dumps(row) + "\n")
-
-            load_out = _run_omnigraph(
-                [
-                    binary,
-                    "load",
-                    *target_args,
-                    "--data",
-                    str(reconciled_file),
-                    "--mode",
-                    "merge",
-                ],
-                label="load (reconciled)",
-                env=target_env,
-            )
-    finally:
-        if local_lock is not None:
-            fcntl.flock(local_lock.fileno(), fcntl.LOCK_UN)
-            local_lock.close()
+            load_out = target_client.load_batch(to_load, "merge")
 
     return {
         "merged": True,
@@ -1515,6 +1508,34 @@ def merge_store(
         "output": load_out.strip(),
         **counts,
     }
+
+
+@contextmanager
+def _data_tier_outage_reads_as_retryable():
+    """Turn an exhausted-retry data-tier outage into advice the caller can use.
+
+    ``store_merge``'s caller is a person migrating their own graph through the
+    MCP tier. The data tier is ClusterIP-only: they cannot see it, cannot know
+    it is restarting, and omnigraph's own error hands them a Rust backtrace
+    naming an internal hostname they have no access to.
+
+    The two things they can act on are that the outage is transient and that
+    re-running is safe — batches reconcile against the target as it stands, so
+    a re-sent row loses to its own already-applied copy. That is also why a
+    part-way failure needs no cleanup, only a re-run.
+
+    The original stays on ``__cause__`` for whoever reads the server logs.
+    """
+    try:
+        yield
+    except StoreUnavailable as exc:
+        raise RuntimeError(
+            "The witan deployment's data tier is temporarily unavailable (it "
+            "did not come back within the restart window). Re-run the same "
+            "`witan migrate merge` command once it is back — the merge is "
+            "idempotent, so any batch that already landed is kept, not "
+            "duplicated."
+        ) from exc
 
 
 @mcp.tool
@@ -1576,13 +1597,8 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
 
     with tempfile.TemporaryDirectory(prefix="witan-store-merge-") as tmp:
         target_file = Path(tmp) / "target.jsonl"
-        with open(target_file, "w", encoding="utf-8") as f:
-            _run_omnigraph(
-                [client._binary, "export", *client._store_args()],
-                label="export (deployed graph)",
-                stdout=f,
-                env=client._subprocess_env(),
-            )
+        with _data_tier_outage_reads_as_retryable():
+            client.export_to(target_file, label="export (deployed graph)")
         target_nodes, _ = _parse_export(target_file)
 
     decisions, winners = _reconcile_nodes(source_nodes, target_nodes)
@@ -1592,7 +1608,8 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
         return {"dry_run": True, "decisions": decisions, "rows_loaded": 0, **counts}
 
     to_load = winners + source_edges
-    client.load_batch(to_load, "merge")
+    with _data_tier_outage_reads_as_retryable():
+        client.load_batch(to_load, "merge")
     return {
         "dry_run": False,
         "decisions": decisions,

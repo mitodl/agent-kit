@@ -59,7 +59,8 @@ import tempfile
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
@@ -575,6 +576,83 @@ def _unavailable_backoff(attempt: int) -> float:
     return _jittered_backoff(attempt, _UNAVAILABLE_BASE_DELAY, _UNAVAILABLE_MAX_DELAY)
 
 
+# ── Re-entrant per-store write lock ───────────────────────────────
+#
+# Stores flock cannot coordinate: an http(s) server (writers are other
+# processes on other hosts) and an s3:// root (no local file to lock). A
+# superset of _SERVER_SCHEMES on purpose — s3 is not a *remote server*, but it
+# is just as unlockable.
+_UNLOCKABLE_SCHEMES = ("http://", "https://", "s3://")
+#
+# flock is held by the OPEN FILE DESCRIPTION, not by the process, so a second
+# `open()` of the same `<store>.lock` blocks even from the thread that already
+# holds it. That makes the obvious nesting — hold the lock across a merge, and
+# have the load inside it take the lock too — a self-deadlock rather than the
+# no-op you would expect from a mutex. So re-entrancy is tracked here instead.
+#
+# Keyed by (thread, lock path), NOT by process: two threads doing unrelated
+# writes to one store still have to exclude each other, and a process-wide
+# counter would hand the second one a lock the first is holding.
+_held_flocks: dict[tuple[int, str], int] = {}
+_held_flocks_guard = threading.Lock()
+
+
+def acquire_store_flock(store: str):
+    """Take ``<store>.lock`` exclusively, or note a re-entry if already held.
+
+    Returns the open handle to release, or ``None`` when this thread already
+    holds the lock — in which case the caller must still call
+    :func:`release_store_flock`, which decrements the depth rather than
+    unlocking. The ``None`` return is deliberately the same "nothing to
+    release" signal the remote/no-lock case already uses.
+    """
+    key = (threading.get_ident(), str(Path(f"{store}.lock")))
+    with _held_flocks_guard:
+        if _held_flocks.get(key):
+            _held_flocks[key] += 1
+            return None
+    lock_path = Path(key[1])
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "w")  # noqa: SIM115 — released by release_store_flock
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    except BaseException:
+        fh.close()
+        raise
+    with _held_flocks_guard:
+        _held_flocks[key] = 1
+    return fh
+
+
+def release_store_flock(store: str, fh) -> None:
+    """Undo one :func:`acquire_store_flock`, unlocking at depth zero."""
+    key = (threading.get_ident(), str(Path(f"{store}.lock")))
+    with _held_flocks_guard:
+        depth = _held_flocks.get(key, 0)
+        if depth > 1:
+            _held_flocks[key] = depth - 1
+            return
+        _held_flocks.pop(key, None)
+    if fh is not None:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
+
+class StoreUnavailable(RuntimeError):
+    """The store could not be reached for the whole ``_UNAVAILABLE_MAX_WAIT`` budget.
+
+    A ``RuntimeError`` subclass, so every existing caller keeps catching it
+    unchanged; it exists so a caller that can say something *useful* about an
+    unreachable store does not have to string-match the message to recognise
+    one. The distinction that matters to a user is that this failure is
+    transient and the operation is safe to retry — which is exactly what the
+    generic "omnigraph … failed" cannot claim.
+
+    Raised only after the budget is exhausted. A connect failure that recovers
+    within it never surfaces at all, which is the point of the budget.
+    """
+
+
 class OmnigraphConflict(RuntimeError):
     """An optimistic-concurrency (Lance manifest version) write conflict that the
     caller asked to surface instead of retry.
@@ -955,8 +1033,59 @@ class OmnigraphClient:
             surface_conflict=surface_conflict,
         )
 
-    def load_batch(self, records: list[dict], mode: str = "merge") -> None:
+    def export_to(self, path: Path | str, *, label: str = "export") -> None:
+        """Stream ``omnigraph export`` of this store into ``path``.
+
+        The streaming counterpart to :meth:`_run`. Everything else runs through
+        ``_execute``, which captures stdout into a string — fine for a query
+        result, wrong for an export, which is the *entire* graph and would sit
+        fully buffered in memory (and then again as the parsed rows). So this
+        redirects the subprocess straight to a file.
+
+        What it does **not** fork is the retry policy: the attempt is classified
+        by the same :func:`_classify_cli_error` and driven by the same
+        :meth:`_with_retry_policy` as every other call, so an export rides out a
+        server restart instead of dying on the connect refusal. That is the
+        whole point of it living here rather than in a caller's own
+        ``subprocess.run`` — see ``witan.server.store_merge``, which used to
+        reach for ``_binary``/``_store_args`` and thereby opt out.
+
+        ``label`` names the export in any error message ("export (target)"),
+        since a merge runs two against different stores.
+        """
+        cmd = [self._binary, "export", *self._store_args()]
+        env = self._subprocess_env()
+        out = Path(path)
+
+        def attempt() -> _AttemptResult:
+            # Truncate per attempt ("w", not "a"): a retry must overwrite
+            # whatever the failed attempt already streamed, or a server that
+            # dies mid-export leaves a prefix that the successful retry then
+            # appends a second full copy onto.
+            try:
+                with open(out, "w", encoding="utf-8") as fh:
+                    result = subprocess.run(
+                        cmd, stdout=fh, stderr=subprocess.PIPE, text=True, env=env
+                    )
+            except OSError as exc:
+                raise RuntimeError(f"omnigraph {label} could not run: {exc}") from exc
+            if result.returncode == 0:
+                return _AttemptResult(_http.OK, returncode=0)
+            return _AttemptResult(
+                _classify_cli_error(result.stderr),
+                error=result.stderr,
+                returncode=result.returncode,
+            )
+
+        # is_write=False: an export takes no write lock, and its retries are
+        # unconditionally safe because repeating a read changes nothing.
+        self._with_retry_policy(attempt, label, env=env, is_write=False)
+
+    def load_batch(self, records: list[dict], mode: str = "merge") -> str:
         """Bulk-load one batch of node/edge records via ``omnigraph load``.
+
+        Returns the CLI's stdout (empty for an empty batch) — the load summary,
+        which ``merge_store`` reports back to the user. Most callers ignore it.
 
         Each record is a JSONL line: ``{"type": Node, "data": {...}}`` for a
         node or ``{"edge": Edge, "from": key, "to": key}`` for an edge. One
@@ -971,7 +1100,7 @@ class OmnigraphClient:
         one of its callers.
         """
         if not records:
-            return
+            return ""
         fd, tmp = tempfile.mkstemp(suffix=".jsonl", prefix="omnigraph-load-")
         try:
             # Explicit UTF-8, not the platform default: witan rows carry prose
@@ -982,7 +1111,7 @@ class OmnigraphClient:
                 for record in records:
                     fh.write(json.dumps(record))
                     fh.write("\n")
-            self._run("load", "--data", tmp, "--mode", mode)
+            return self._run("load", "--data", tmp, "--mode", mode)
         finally:
             Path(tmp).unlink(missing_ok=True)
 
@@ -1138,7 +1267,7 @@ class OmnigraphClient:
                             )
                         )
                         continue
-                    raise RuntimeError(
+                    raise StoreUnavailable(
                         f"omnigraph {label} failed after {unavailable_attempt} "
                         f"attempts over {elapsed:.0f}s — could not connect to "
                         f"{self.server_url}:\n{err.strip()}"
@@ -1175,19 +1304,41 @@ class OmnigraphClient:
                 )
                 raise RuntimeError(f"omnigraph {label} failed{exited}:\n{err.strip()}")
         finally:
-            if lock_fh is not None:
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
-                lock_fh.close()
+            # Not `if lock_fh is not None`: a re-entrant acquisition returns
+            # None *and* has a depth to decrement, so the release has to run
+            # either way. It is a no-op when no lock was taken at all (remote
+            # store, or a read).
+            if is_write and not self.graph_uri.startswith(_UNLOCKABLE_SCHEMES):
+                release_store_flock(self.graph_uri, lock_fh)
 
     def _acquire_write_lock(self, is_write: bool):
         """Hold a per-store exclusive lock for writes (local stores)."""
-        if not is_write or self.graph_uri.startswith(("http://", "https://", "s3://")):
+        if not is_write or self.graph_uri.startswith(_UNLOCKABLE_SCHEMES):
             return None
-        lock_path = Path(f"{self.graph_uri}.lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = open(lock_path, "w")  # noqa: SIM115 — released in _execute's finally
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-        return fh
+        return acquire_store_flock(self.graph_uri)
+
+    @contextmanager
+    def hold_write_lock(self) -> Iterator[None]:
+        """Hold this store's write lock across several operations.
+
+        For a caller whose *sequence* has to be atomic, not just each step —
+        ``merge_store`` exports the target, reconciles against it, then loads
+        the winners, and another writer landing between the export and the load
+        would make the decisions stale.
+
+        The nested writes inside the block re-enter the lock rather than
+        blocking on it (see :func:`acquire_store_flock`). A no-op for remote
+        stores, matching :meth:`_acquire_write_lock` — flock is a local-file
+        mechanism and cannot coordinate writers on a shared server.
+        """
+        if self.graph_uri.startswith(_UNLOCKABLE_SCHEMES):
+            yield
+            return
+        fh = acquire_store_flock(self.graph_uri)
+        try:
+            yield
+        finally:
+            release_store_flock(self.graph_uri, fh)
 
     def _repair(self, env: dict) -> None:
         """Reconcile manifest/HEAD drift so the retried write can proceed."""

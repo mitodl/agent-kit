@@ -5,8 +5,9 @@ The subprocess/lock/retry/admission-cap machinery lives in
 and the storage-version friendly-error remediation hint (the write ``guard`` +
 ``surface_conflict`` support is already on the base).
 
-``OmnigraphConflict`` and ``_is_storage_version_mismatch`` are re-exported for
-``server.py`` (and its migrate helpers), which import them from here.
+``OmnigraphConflict``, ``StoreUnavailable`` and ``_is_storage_version_mismatch``
+are re-exported for ``server.py`` (and its migrate helpers), which import them
+from here.
 """
 
 from __future__ import annotations
@@ -16,10 +17,16 @@ from witan_core.omnigraph import (
 )
 from witan_core.omnigraph import (
     OmnigraphConflict,
+    StoreUnavailable,
     _is_storage_version_mismatch,
 )
 
-__all__ = ["OmnigraphClient", "OmnigraphConflict", "_is_storage_version_mismatch"]
+__all__ = [
+    "OmnigraphClient",
+    "OmnigraphConflict",
+    "StoreUnavailable",
+    "_is_storage_version_mismatch",
+]
 
 
 class OmnigraphClient(_BaseOmnigraphClient):
