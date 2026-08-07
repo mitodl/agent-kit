@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.15.0] - 2026-08-07
+
+### Fixed
+
+- `DeviceAuth._write_cache` no longer writes through a fixed `tokens.json.tmp`
+  it unlinks first. Every agent process on a machine shares one token cache, so
+  that fixed name meant concurrent writers deleted each other's in-flight temp:
+  a synchronised burst of 24 refreshes lost 58–83% of its writes to
+  `FileExistsError` (`O_EXCL` lost the race) or `FileNotFoundError`
+  (`os.replace` after someone else's unlink), and every lost write was a token
+  refresh that never landed. The temp name is now unique per writer
+  (`<cache>.<pid>.<uuid>.tmp`) and there is no pre-unlink, so `O_EXCL` still
+  guarantees we created — and therefore own the `0600` mode of — the file we
+  write. `os.replace` was already atomic, so no cache was ever corrupt; the
+  writes simply failed. The unlink the unique name replaces also did one useful
+  thing — it reclaimed a temp left by a hard-killed writer — so `_store_token`
+  now sweeps `<cache>.*.tmp` files older than a minute while it holds the lock,
+  rather than accumulating `0600` fragments in the config directory forever.
+- `DeviceAuth._store_token` and `DeviceAuth.logout` now take an exclusive
+  `flock` on `<cache>.lock` around their read-modify-write of the whole cache
+  file. Two processes refreshing *different* deployments concurrently each
+  wrote back a snapshot taken before the other's, so one deployment's entry was
+  silently dropped and that target reported "Not logged in".
+- `DeviceAuth.get_valid_token` single-flights the refresh across processes: it
+  takes the same lock and **re-reads the cache after acquiring it**, because the
+  holder before it has very likely just stored a fresh token. A fleet of agents
+  started together re-converges on the ~5-minute access-token expiry forever, so
+  without this every one of them refreshed at the same instant *and spent the
+  same refresh token*, which a rotating IdP reads as replay — this is what put
+  401s in front of the fleet during the live concurrency probe against
+  `witan.ci.ol.mit.edu`. N simultaneous refreshes now collapse into one refresh
+  and N-1 cache hits.
+
+  Unlike the graph store — where the advisory flock is skipped for remote
+  stores because it cannot span hosts — the token cache is a genuinely local
+  file, so flock coordinates every process that shares it. The lock is
+  re-entrant per `(thread, lock path)` for the same reason
+  `acquire_store_flock` is: `get_valid_token` → `_refresh` → `_store_token`
+  nests, and `flock` conflicts between two file descriptors even within one
+  process.
+
 ## [0.14.0] - 2026-08-07
 
 ### Added
