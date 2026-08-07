@@ -56,10 +56,10 @@ prek install
 | `agent-kit validate agent-config.toml` | Check for drift between the manifest and on-disk config |
 | `agent-kit profiles agent-config.toml` | List profiles and their resolved entry counts |
 | `prek run --all-files` | Run all pre-commit checks |
-| `cd mcp/servers/witan && uv run --group test pytest` | Run witan MCP server tests |
-| `cd mcp/servers/witan-code && uv run --group test pytest` | Run witan-code MCP server tests |
+| `just test-all` (alias `just test`) | Run every workspace package's tests, each isolated, all in parallel |
+| `just test-witan-core` / `test-witan-council` / `test-witan-code` / `test-agent-config-kit` / `test-ol-agent-kit` | Run one package's tests in isolation (`*args` forwards to pytest, e.g. `just test-witan-council -k merge`) |
 
-CI runs on push/PR: skill ZIP packaging (on tags) and witan server tests.
+CI runs on push/PR: skill ZIP packaging (on tags) and per-package tests.
 
 ## Adding a Skill
 
@@ -88,6 +88,7 @@ See [`skills/workflow/creating-skills/SKILL.md`](./skills/workflow/creating-skil
 - `description` is what the agent reads to decide when to load the skill — make it trigger-rich, not just a label.
 - MD013 (line length) and MD033 (inline HTML) are disabled in markdownlint; long lines in code blocks are fine.
 - `witan` MCP servers use `uv` exclusively — never `pip` directly.
+- This repo is one `uv` workspace with a single shared `.venv` at the root (`packages/agent-config-kit`, `packages/agent-kit`, `packages/witan-core`, `mcp/servers/witan`, `mcp/servers/witan-code`) — running `uv sync --package X` then testing package Y against the same env risks cross-contamination (Y sees X's deps, or a stale build of a sibling you just edited). Use the `just test-*` recipes (`justfile`, repo root): each runs `uv run --isolated --package <name> --group test pytest <path>` in its own throwaway venv, so results can't leak between packages. `just test-all` runs all five concurrently via just's native `[parallel]` recipe attribute.
 - Skills are distributed as ZIPs on GitHub releases (tagged `v*`) — the publish workflow handles this automatically.
 - Each publishable package (`agent-config-kit`, `mcp/servers/witan`, `mcp/servers/witan-code`, `packages/agent-kit`) carries a `[tool.bumpversion]` config — bump a release with `cd <package-dir> && uvx bump-my-version@1.4.1 bump patch|minor|major`, then commit and push to `main`; each package's `publish-*.yml` workflow tests, builds, publishes to PyPI, and tags the release automatically whenever its `pyproject.toml` version line changes. `packages/agent-kit`'s `dependencies` on `agent-config-kit[cli]`/`witan-council`/`witan-code` are open-ended floors (no upper bound), so a new release of any of the three is picked up by a fresh install without `ol-agent-kit` itself needing a release.
 
