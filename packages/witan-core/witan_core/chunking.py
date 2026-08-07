@@ -17,6 +17,15 @@ ships a personal graph's rows through the MCP tier the same way witan-code
 ships an index (witan ADR-0007 D5), and hits the same two ceilings — the
 buffered body one layer down, and the records riding as a JSON tool parameter.
 One rule, one place.
+
+★ THOSE TWO CEILINGS ARE NOT THE SAME SIZE, which is why there are two budgets
+here. ``LOAD_MAX_BYTES`` (8 MiB) bounds the hop into omnigraph itself.
+``MCP_LOAD_MAX_BYTES`` (2 MiB) bounds the hop through an MCP session, where the
+Python SDK caps request bodies at 4 MiB. A caller that reaches the store by
+shelling out wants the first; a caller that reaches it through a ``*_store_*``
+tool wants the second. Using one budget for both is not a tuning mistake, it is
+a correctness one — it shipped that way, and a real ``migrate merge`` against
+the deployment failed with ``413 Request body too large`` on its first call.
 """
 
 from __future__ import annotations
@@ -24,12 +33,34 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Iterator
 
-__all__ = ["LOAD_MAX_BYTES", "chunk_records"]
+__all__ = ["LOAD_MAX_BYTES", "MCP_LOAD_MAX_BYTES", "chunk_records"]
 
 # Bisected against omnigraph 0.8.1 — the version deployed in the cluster:
 # ~26 MiB of records accepted, ~54 MiB refused. The cap is only known as that
 # range, so aim well under its low end rather than close to it.
 LOAD_MAX_BYTES = 8 * 1024 * 1024
+
+# The ceiling for records riding as a JSON tool parameter over an MCP session,
+# which is a DIFFERENT hop from the one LOAD_MAX_BYTES bounds and an order of
+# magnitude tighter. Measured live against the CI deployment 2026-08-07: the
+# MCP Python SDK caps Streamable HTTP request bodies at
+# ``mcp.server.streamable_http_manager.DEFAULT_MAX_REQUEST_BODY_SIZE`` — 4 MiB
+# — in ASGI middleware ahead of parsing, answering ``413 Request body too
+# large``. FastMCP exposes no way to raise it (its session-manager subclass
+# neither accepts nor forwards ``max_request_body_size``), so the client has to
+# stay under it.
+#
+# NOT set to the cap, for two reasons that both bite:
+#  1. `_batches` counts JSONL framing (one `json.dumps` + a newline per record)
+#     while the wire carries a JSON-RPC envelope with the records as an array —
+#     measured at ~1.03x the JSONL bytes. A budget set AT 4 MiB overflows.
+#  2. The cap belongs to a deployment this client does not control and cannot
+#     interrogate. Leaving real headroom is what keeps a server-side default
+#     change from becoming our outage.
+# 2 MiB costs a 5.4 MiB personal graph 4 requests instead of 2 — worth it.
+# `test_mcp_bound_stays_clear_of_the_sdk_cap` pins the relationship to the SDK
+# constant so an SDK bump that lowers the cap fails CI instead of production.
+MCP_LOAD_MAX_BYTES = 2 * 1024 * 1024
 
 
 def chunk_records(

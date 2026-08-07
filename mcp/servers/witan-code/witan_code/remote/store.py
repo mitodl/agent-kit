@@ -336,7 +336,7 @@ class RemoteStoreClient:
         records: list[dict],
         mode: str = "merge",
         *,
-        max_bytes: int = chunking.LOAD_MAX_BYTES,
+        max_bytes: int = chunking.MCP_LOAD_MAX_BYTES,
     ) -> None:
         """Bulk-load records through the MCP tier's ``code_store_load``.
 
@@ -346,6 +346,14 @@ class RemoteStoreClient:
         the same buffered-body ceiling. This transport adds one of its own — the
         records ride as a JSON tool parameter over the MCP session — which the
         byte budget bounds as well.
+
+        ★ That second ceiling is the tighter one and the default reflects it:
+        ``MCP_LOAD_MAX_BYTES``, not ``LOAD_MAX_BYTES``. The MCP Python SDK
+        rejects request bodies over 4 MiB before parsing them. This defaulted to
+        the omnigraph budget (8 MiB) until 2026-08-07, which made a large enough
+        index fail here exactly as ``migrate merge`` did against the deployment
+        — ``413 Request body too large``, from the SDK rather than from
+        omnigraph.
 
         ``overwrite`` is not chunked here either; see the note there.
         """
