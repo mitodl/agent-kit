@@ -26,7 +26,10 @@ exactly as it does today. See
 ## Prerequisites
 
 - `witan` on `PATH` (`uv tool install witan-council`), version new enough to
-  have `witan login` — check with `witan login --help`.
+  have `witan target` — check with `witan target --help`. That is the newest
+  of the commands below (witan-council 0.11.0), so a CLI that passes this
+  check has all of them; checking `witan login` instead would let an older
+  CLI through, to fail at step 1 with an unknown command.
 - A Keycloak account in the `ol-platform-engineering` realm, enabled. The
   hourly `witan-token-sync` job mints an actor entry for every enabled realm
   user, so if you can log in to other OL services you almost certainly already
@@ -91,8 +94,17 @@ other selectors — see the `load()` docstring in `witan/config.py` for the
 precedence order. To force a target regardless, `WITAN_TARGET=ol witan …`.
 
 Note the corollary: a target with **no** `match_*` selectors never selects
-itself, so it is only ever reached explicitly — pass `--target ol` to the
-commands below, or export `WITAN_TARGET=ol`.
+itself, so it is only ever reached explicitly. **Export `WITAN_TARGET=ol` for
+that case** — `--target` is a flag on `login`/`logout`/`whoami` only, not on
+the read and write commands (`witan tasks`, `witan memory`, `witan migrate
+merge`, …), which resolve their target from the environment and the checkout.
+`WITAN_TARGET` covers every command; `--target` does not.
+
+Selector precedence is by **specificity, not file order**: every target's
+`match_paths` is checked before any `match_repos`, then `match_hosts`, then
+`match_orgs` (`witan_core.target_config.match_target`). A `match_paths` target
+at the bottom of the file therefore beats a `match_orgs` target at the top;
+position only breaks ties *within* one tier.
 
 ## 2. Log in
 
@@ -190,9 +202,10 @@ is not an outage — re-run `witan login`.
   same target, or unset `remote_url`. `target add` rejects this combination up
   front, so this only comes from a hand-edited config.
 - **`target add` says the target already exists.** Deliberate: it will not
-  silently overwrite. `--force` replaces the block in place (keeping its
-  position, which matters — the *first* matching target wins), or pick another
-  name.
+  silently overwrite. `--force` replaces the block in place, keeping its
+  position — which matters for ties, since within one selector tier the first
+  matching target wins. (Across tiers, specificity decides; see step 1.) Or
+  pick another name.
 - **401 / token rejected.** The deployment validates the `aud` claim. If your
   realm's audience mapper is not stamping `aud: witan`, set `oidc_audience` to
   match the deployment's `WITAN_OIDC_AUDIENCE`.
