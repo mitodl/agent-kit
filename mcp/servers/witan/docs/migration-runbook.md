@@ -303,6 +303,35 @@ has merged — those are in-cluster admin commands (below), not self-service.
 
 Keep your local store until you have verified. It is the backup.
 
+#### Verify by slug, not by search — search lies on a near-empty graph
+
+Check the merge with `witan memory show <slug>` or a `--kind` listing. Do **not**
+judge it by `witan memory "<some words>"`, which will very likely return
+*No memories.* on a graph that has just been populated — even for rows that are
+present and correct.
+
+Measured against the CI council graph at N=2 rows: a term that is common
+relative to the corpus matches nothing, and **one such term zeroes the entire
+query**. `'quokkazebra'` returned its row; `'quokkazebra policy'` returned
+nothing, because `'policy'` appeared in both stored rows. Since real queries are
+multi-word, nearly all of them come back empty.
+
+This is a BM25 property, not a broken index and not a failed merge: as a term's
+document frequency approaches the corpus size its IDF goes non-positive and the
+row is dropped. It clears as the graph fills — going from 2 to 10 rows made
+`bundles`, `omnigraph`, `list` and a three-term query findable, while the two
+most frequent terms needed more still.
+
+Two practical consequences:
+
+- **Merge everyone in one sitting, not one person a week.** A graph that reaches
+  a few hundred rows immediately never spends time in the degenerate regime.
+  Staggered cutovers leave every early adopter with a search that appears dead.
+- **Do not treat "search finds nothing" as evidence the merge failed.** It looks
+  exactly like an empty graph, which is what a freshly-migrated deployment is
+  expected to look like. Confirm with a slug lookup or a listing before
+  concluding anything.
+
 ### Fallback: the in-cluster path
 
 Use this when the MCP tier is unavailable, or for a bulk merge on someone
