@@ -13,9 +13,12 @@ rate with normal interactions.
 ★ THIS IS THE ONLY TIER THAT CAN SAY *WHO* ★
 witan holds the validated JWT; omnigraph-server downstream only ever sees the
 bearer token filed under an actor id, so its policy log can name ``act-<sub>``
-and nothing else. Every ``mcp.tool_call`` line therefore carries ``actor_id``
-and ``actor`` (see :func:`_caller_identity`), which is what makes two users'
-concurrent traffic separable in Loki rather than one undifferentiated stream.
+and nothing else. Every ``mcp.tool_call`` line therefore carries ``actor_id`` —
+a sentinel when there is no usable claim, never a blank — which is what makes
+two users' concurrent traffic separable in Loki rather than one undifferentiated
+stream. The human-readable ``actor`` rides alongside it whenever the token names
+somebody, and is omitted rather than invented when it does not (local stdio, or
+a token with no username/email claim). See :func:`_caller_identity`.
 
 ★ CLI CALLS DO NOT PASS THROUGH HERE ★
 ``witan/cli/_common.py:_fn`` unwraps ``@mcp.tool`` functions and calls the plain
