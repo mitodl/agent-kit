@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.12.1] - 2026-08-07
+
+### Fixed
+
+- **`RemoteStoreClient.load` sized its batches by the wrong ceiling.** The same
+  defect found in witan's `migrate merge`, latent here: `load` defaulted to
+  `LOAD_MAX_BYTES` (omnigraph's 8 MiB buffered-body budget) while this transport
+  ships records as a JSON tool parameter, where the MCP SDK caps request bodies
+  at 4 MiB. A large enough index over `code_transport = "mcp"` would have failed
+  with `413 Request body too large` — from the SDK rather than from omnigraph.
+  Now defaults to `witan_core.chunking.MCP_LOAD_MAX_BYTES`.
+
+  Not hit in practice before now, which is why it is recorded as a fix rather
+  than a regression: the deployed indexer does not use this transport.
+
+### Changed
+
+- **Requires `witan-core>=0.11`** — `remote/store.py` evaluates
+  `MCP_LOAD_MAX_BYTES` as a default argument, so it resolves at import time and
+  0.10 does not export it.
+
 ## [0.12.0] - 2026-08-07
 
 > Also covers 0.11.0 and 0.11.1, published from the workspace without their own

@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.11.1] - 2026-08-07
+
+### Fixed
+
+- **`migrate merge` against a deployment sized its batches by the wrong
+  ceiling.** It chunked on `LOAD_MAX_BYTES` — omnigraph's 8 MiB buffered-body
+  budget — but rows shipped through the MCP tier ride as a JSON tool parameter,
+  where the MCP SDK caps request bodies at 4 MiB. A real personal graph went out
+  as one oversized request and the deployment answered `413 Request body too
+  large`. Now bounded by `witan_core.chunking.MCP_LOAD_MAX_BYTES`: on the store
+  that produced the original failure, 2 requests with a 4.78 MB body becomes 4
+  requests with a largest of 2.10 MB.
+
+### Changed
+
+- **Requires `witan-core>=0.11`** — `remote/proxy.py` imports
+  `MCP_LOAD_MAX_BYTES` at module scope, which 0.10 does not export.
+
 ## [0.11.0] - 2026-08-07
 
 > Also covers 0.10.0, which was published from the workspace without its own

@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.11.0] - 2026-08-07
+
+### Added
+
+- **`MCP_LOAD_MAX_BYTES` — a second byte budget, for the MCP hop.** The
+  existing `LOAD_MAX_BYTES` (8 MiB) was bisected against *omnigraph's* buffered
+  request body. Records that travel through an MCP session never reach omnigraph
+  directly: they ride as a JSON tool parameter, and the MCP Python SDK rejects
+  request bodies over 4 MiB (`DEFAULT_MAX_REQUEST_BODY_SIZE`) in ASGI middleware
+  ahead of parsing, answering `413 Request body too large`. FastMCP exposes no
+  way to raise it, so the client must stay under it.
+
+  One name for two different ceilings is what hid this — a real
+  `witan migrate merge` against the deployed service failed on its first call.
+  2 MiB rather than 4: the packer counts JSONL framing while the wire carries a
+  JSON-RPC envelope (~1.03x measured), so a budget set at the cap overflows it,
+  and the cap belongs to a deployment this client cannot interrogate.
+
 ## [0.10.0] - 2026-08-07
 
 > Also covers 0.8.0 and 0.9.0, which were published from the workspace without
