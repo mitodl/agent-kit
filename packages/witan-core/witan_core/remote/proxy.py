@@ -67,8 +67,6 @@ from fastmcp.client.auth import BearerAuth
 from fastmcp.client.elicitation import ElicitResult
 from fastmcp.client.transports import StreamableHttpTransport
 
-from ..chunking import MCP_LOAD_MAX_BYTES
-
 
 class RemoteToolUnavailable(RuntimeError):
     """Raised when a CLI command has no remotely-callable counterpart."""
@@ -301,27 +299,25 @@ class RemoteMCPProxy:
     def _payload_too_large_error(self, name: str, exc: BaseException) -> str:
         """Message for a request body the deployment refused for its size.
 
-        Says which of the two causes it is by elimination, because the client
-        cannot tell them apart from here: bulk writes are ALREADY bounded by
-        ``MCP_LOAD_MAX_BYTES``, so a body that is still too big is either one
-        record that no batch size can split, or a deployment whose cap is
-        tighter than that budget assumes. Both are actionable; neither is
-        "retry".
+        ★ DELIBERATELY OPERATION-NEUTRAL. This fires for EVERY tool call —
+        a `memory_store` with a large body, a read, a single mutation — not
+        only for the byte-chunked bulk writes. An earlier revision asserted
+        here that "bulk writes are split into 2 MiB batches" and that "batches
+        before this one were applied, the write stopped part-way". Both are
+        false off the merge path, and the second is false in the direction that
+        does harm: it tells someone whose single call was refused that their
+        graph is now half-mutated, when nothing was written at all.
 
-        The partial-write sentence is the part a reader actually needs. Batches
-        commit independently, so a refusal part-way through leaves the earlier
-        ones applied — someone who assumes the whole merge rolled back will
-        re-run it against a graph that already holds half of it.
+        Callers that DO know they are mid-batch add that context themselves,
+        where the batch number, the budget actually in play, and whether
+        anything was applied are all real rather than assumed — see
+        ``witan.remote.proxy._merge_batch_refusal``.
         """
-        budget = MCP_LOAD_MAX_BYTES // (1024 * 1024)
         return (
             f"The deployed service at {self._url} refused `{name}`: the request "
-            f"body is over its size cap ({exc}). Bulk writes are already split "
-            f"into {budget} MiB batches, so this is either a single record too "
-            "large to split, or a deployment whose cap is lower than that "
-            "budget assumes. Retrying sends the same bytes to the same answer. "
-            "Note that batches accepted before this one were applied — the "
-            "write stopped part-way, it did not roll back."
+            f"body is over its size cap ({exc}). Retrying sends the same bytes "
+            "to the same answer — the payload itself is what was rejected, so "
+            "it has to get smaller."
         )
 
     def _resolve_repo(self) -> str | None:

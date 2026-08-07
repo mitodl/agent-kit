@@ -12,10 +12,15 @@ a MINOR bump may include breaking changes).
 
 - `RemotePayloadTooLarge` and `payload_too_large()` in `witan_core.remote.proxy`:
   a request body the deployment refuses for its size (HTTP 413) is now its own
-  classification, with a message naming the tool, the batch budget the client
-  already applies, the two causes that survive that budget, and — the part a
-  reader needs most — that earlier batches were applied, so the write stopped
-  part-way rather than rolling back.
+  classification, with a message naming the call, the endpoint, and the fact
+  that retrying cannot help because the payload itself is what was rejected.
+  The message is deliberately **operation-neutral** — it fires for every tool
+  call, so it claims nothing about batching or partial writes. Callers that are
+  genuinely mid-batch add that context themselves, where the numbers are real.
+- `describe_budget()` in `witan_core.chunking`: renders a byte budget as "2 MiB"
+  for the constants and an exact byte count for anything else, so a `load` given
+  a non-default `max_bytes` cannot be told about a limit that is not the one
+  that refused it.
 - `payload_too_large()` is public because witan-code's store session holds its
   own connection and classifies for itself; one definition keeps the two
   transports agreeing on what "refused for its size" means.

@@ -17,9 +17,15 @@ a MINOR bump may include breaking changes).
   identically. Retrying cannot help — the payload is the thing being rejected.
   Both faces of a 413 are now classified: relayed through the vMCP as a
   `ToolError`, and direct as an httpx status error.
-- The message names the tool, the endpoint, the byte budget records are already
-  batched under, and that batches accepted before the refusal were applied — an
-  index that stopped part-way, not one that rolled back.
+- The refusal message is per-operation rather than one claim for all of them.
+  Every store call comes through one helper, but most are not chunked loads:
+  reads, `code_store_views`, and single mutations carry no byte budget and apply
+  nothing incrementally; `load(mode="overwrite")` is sent whole and cannot be
+  chunked at all; `change_many` chunks by statement COUNT, so `chunk_size` is
+  its knob and no byte budget bounds it. A chunked `load` reports the budget
+  actually in play — `max_bytes` comes from the caller, so a hardcoded "2 MiB"
+  was wrong for any non-default — plus which batch was refused and how many
+  already landed.
 
 ### Changed
 

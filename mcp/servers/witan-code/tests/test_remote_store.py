@@ -368,8 +368,82 @@ def test_an_oversized_batch_is_refused_once_and_never_retried(exc):
     message = str(caught.value)
     assert "`code_store_load`" in message
     assert "http://x/mcp" in message
-    assert "2 MiB" in message
-    assert "stopped part-way" in message
+    # Chunked-merge context, added by `_load_refusal` where it is actually true.
+    assert "budget of 2 MiB" in message
+    assert "first batch" in message  # nothing applied — this WAS batch 1
+
+
+def test_a_read_refusal_claims_nothing_about_batching_or_partial_indexes():
+    """★ Every store call comes through one helper — most are not chunked loads.
+
+    Reads, `code_store_views`, and single mutations carry no byte budget and
+    apply nothing incrementally. An earlier revision told all of them that
+    "records are already batched under 2 MiB" and that "the index stopped
+    part-way", which was false for each.
+    """
+    log: list = []
+    session = StoreSession(
+        "http://x/mcp", lambda: "jwt", lambda _t: _RefusesForSize(log, _relayed_413())
+    )
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        RemoteStoreClient(REPO, session).list_branches()
+    message = str(caught.value).lower()
+    for forbidden in ("batch", "part-way", "mib", "budget", "applied"):
+        assert forbidden not in message, (
+            f"a read refusal must not mention {forbidden!r}"
+        )
+
+
+def test_an_overwrite_load_is_not_told_to_shrink_a_budget_it_does_not_have():
+    """`overwrite` is sent WHOLE — it cannot be chunked, so quoting a batch
+    budget would point at a knob that does not apply to it."""
+    log: list = []
+    session = StoreSession(
+        "http://x/mcp", lambda: "jwt", lambda _t: _RefusesForSize(log, _relayed_413())
+    )
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        RemoteStoreClient(REPO, session).load(
+            [{"id": "n1", "type": "Symbol"}], mode="overwrite"
+        )
+    message = str(caught.value)
+    assert "sent whole" in message
+    assert "cannot be chunked" in message
+    assert "MiB" not in message  # no budget to quote
+    assert "batch " not in message.lower()
+
+
+def test_a_custom_max_bytes_is_reported_instead_of_the_default():
+    """`load` takes `max_bytes` from its caller, so a hardcoded "2 MiB" would
+    send the reader looking for a limit that is not the one that refused them."""
+    log: list = []
+    session = StoreSession(
+        "http://x/mcp", lambda: "jwt", lambda _t: _RefusesForSize(log, _relayed_413())
+    )
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        RemoteStoreClient(REPO, session).load(
+            [{"id": "n1", "type": "Symbol"}], max_bytes=1_500_000
+        )
+    message = str(caught.value)
+    assert "budget of 1,500,000 bytes" in message
+    assert "2 MiB" not in message
+
+
+def test_a_change_many_refusal_points_at_chunk_size_not_a_byte_budget():
+    """`change_many` chunks by statement COUNT. There is no byte budget bounding
+    it, so naming one would point at a knob that does not exist here."""
+    log: list = []
+    session = StoreSession(
+        "http://x/mcp", lambda: "jwt", lambda _t: _RefusesForSize(log, _relayed_413())
+    )
+    steps = [("q.gq", "delete_file", {"id": str(n)}) for n in range(10)]
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        RemoteStoreClient(REPO, session).change_many(steps, chunk_size=4)
+    message = str(caught.value)
+    assert "4 statements" in message
+    assert "`chunk_size`" in message
+    assert "statement COUNT" in message
+    assert "MiB" not in message  # no byte budget bounds this path
+    assert "first chunk" in message  # nothing applied yet
 
 
 def test_a_dropped_socket_is_still_retried_after_the_size_guard():

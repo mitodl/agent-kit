@@ -271,7 +271,10 @@ class _ScriptedProxy(RemoteMCPProxy):
         self._exc = exc
         self._at = at
         # Seeded so a call reaches call_tool without a tools/list round trip.
-        self._param_names = {"task_get": ["slug"]}
+        # `memory_store` is here as a NON-bulk write: a single call that can
+        # still be refused for size, which is what pins the base message's
+        # silence about batching.
+        self._param_names = {"task_get": ["slug"], "memory_store": ["content"]}
 
     def _unreachable_hint(self):
         return "HINT."
@@ -447,7 +450,7 @@ def test_a_direct_413_is_too_large_and_NOT_unreachable():
     assert "could not be reached" not in str(caught.value)
 
 
-def test_the_message_names_the_tool_the_budget_and_the_partial_write():
+def test_the_base_message_names_the_call_and_says_retrying_is_futile():
     from fastmcp.exceptions import ToolError
 
     proxy = _ScriptedProxy(ToolError("Request body too large"), at="call")
@@ -456,10 +459,32 @@ def test_the_message_names_the_tool_the_budget_and_the_partial_write():
     message = str(caught.value)
     assert "`task_get`" in message  # which call
     assert ENDPOINT in message  # which deployment
-    assert "2 MiB batches" in message  # what the client already bounds
-    assert "too large to split" in message  # cause one
-    assert "cap is lower" in message  # cause two
-    assert "did not roll back" in message  # ★ the state they are left in
+    assert "has to get smaller" in message  # what to actually do
+
+
+def test_the_base_message_claims_NOTHING_about_batching_or_partial_writes():
+    """★ This message fires for EVERY tool call, not just byte-chunked writes.
+
+    An earlier revision asserted here that "bulk writes are split into 2 MiB
+    batches" and that "batches before this one were applied — the write stopped
+    part-way". For a refused `memory_store`, a read, or a `--dry-run` merge,
+    both are false — and the second is false in the direction that does harm:
+    it tells someone whose graph was untouched that it is now half-mutated.
+
+    Callers that genuinely are mid-batch add that context themselves, where the
+    numbers are real (witan's `_merge_batch_refusal`, witan-code's
+    `_load_refusal`).
+    """
+    from fastmcp.exceptions import ToolError
+
+    proxy = _ScriptedProxy(ToolError("Request body too large"), at="call")
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        # A single-call write, not a bulk one — nothing was batched, and
+        # nothing was partially applied.
+        proxy.memory_store(content="x" * 10)
+    message = str(caught.value).lower()
+    for forbidden in ("batch", "part-way", "roll back", "mib", "applied"):
+        assert forbidden not in message, f"base message must not mention {forbidden!r}"
 
 
 def test_a_413_during_teardown_is_still_classified():

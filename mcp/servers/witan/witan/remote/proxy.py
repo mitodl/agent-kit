@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
-from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records
+from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records, describe_budget
 from witan_core.omnigraph import store_cli_args, store_subprocess_env
 from witan_core.remote.proxy import (
     RemoteMCPProxy,
@@ -98,6 +98,39 @@ def _source_export(source: str) -> Iterator[Path]:
                 f"omnigraph export of {source} failed:\n{(result.stderr or '').strip()}"
             )
         yield export
+
+
+def _merge_batch_refusal(
+    exc: BaseException, *, batch: int, budget: int, dry_run: bool
+) -> str:
+    """Add merge-specific context to the neutral 413 refusal from witan_core.
+
+    The base message cannot say any of this: it fires for every tool call, so
+    asserting a batch budget and a half-applied write there was false for a
+    refused `memory_store` and actively misleading — it told someone whose
+    graph was untouched that it had been partly mutated.
+
+    Here all three are known rather than assumed. ``batch`` is the count that
+    already succeeded, so "nothing was applied" and "the merge stopped
+    part-way" are distinguishable, and a ``--dry-run`` is stated as writing
+    nothing at all instead of being described as a partial write.
+    """
+    size = describe_budget(budget)
+    if dry_run:
+        applied = "Nothing was written — this was a --dry-run."
+    elif batch:
+        applied = (
+            f"The {batch} batch(es) before this one were applied: the merge "
+            "stopped part-way, it did not roll back. Re-running is safe — the "
+            "merge is idempotent, and rows already present are kept."
+        )
+    else:
+        applied = "Nothing was applied: this was the first batch."
+    return (
+        f"{exc} This was batch {batch + 1} of the merge, sized against a budget of "
+        f"{size} — so the refusal means either a single record too large to "
+        f"split, or a deployment whose cap is below {size}. {applied}"
+    )
 
 
 def _read_export(path: Path) -> list[dict]:
@@ -223,8 +256,22 @@ class RemoteServerProxy(RemoteMCPProxy):
             # MCP_LOAD_MAX_BYTES, not the default: these rows ride as a JSON
             # tool parameter, so the binding ceiling is the MCP session's 4 MiB
             # body cap, not omnigraph's much larger buffered-body one.
-            for batch in chunk_records(_read_export(export), MCP_LOAD_MAX_BYTES):
-                result = self.store_merge(rows=batch, dry_run=dry_run)
+            batches = chunk_records(_read_export(export), MCP_LOAD_MAX_BYTES)
+            for index, batch in enumerate(batches):
+                try:
+                    result = self.store_merge(rows=batch, dry_run=dry_run)
+                except RemotePayloadTooLarge as exc:
+                    # Only here is the caller known to be mid-batch, so only
+                    # here can the budget and the partial-write state be stated
+                    # as fact rather than assumed for every tool call.
+                    raise RemotePayloadTooLarge(
+                        _merge_batch_refusal(
+                            exc,
+                            batch=index,
+                            budget=MCP_LOAD_MAX_BYTES,
+                            dry_run=dry_run,
+                        )
+                    ) from exc
                 decisions.extend(result.get("decisions") or [])
                 for key in totals:
                     totals[key] += result.get(key, 0)

@@ -18,6 +18,15 @@ a MINOR bump may include breaking changes).
   what happens when one gets through anyway — a deployment whose cap is lower
   than `MCP_LOAD_MAX_BYTES` assumes, or a single record no batch size can split.
 
+### Added
+
+- `_merge_batch_refusal` adds merge-specific context to a 413 refusal, where it
+  is known rather than assumed: which batch was refused, the budget it was sized
+  against, and how many batches already landed. A `--dry-run` is reported as
+  writing nothing at all rather than as a partial write — the base message used
+  to tell its user the merge "stopped part-way", which invites a hunt for
+  half-migrated rows that do not exist.
+
 ### Changed
 
 - `witan-core` floor raised to `>=0.12` — `RemotePayloadTooLarge` is imported at
