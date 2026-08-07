@@ -72,6 +72,19 @@ class RemoteConfig:
     """Name of the matched [targets.<name>] section that supplied any of the
     above, or None when resolved from env vars/global config.toml alone."""
 
+    url_source: str | None = None
+    """Human-readable name of the setting that actually supplied :attr:`url`,
+    e.g. ``` `WITAN_REMOTE_URL` ``` or ``` `remote_url` on target [qa] ```.
+
+    Deliberately separate from :attr:`target_name`, which says only that *a*
+    target matched — not that the target is where the URL came from. Those two
+    diverge in both directions: ``WITAN_REMOTE_URL`` overrides a matched
+    target's ``remote_url`` (keeping ``target_name`` set), and a global
+    ``remote_url`` in config.toml supplies the URL with no target matched at
+    all. Anything telling a user which setting to unset to stop being routed
+    remotely has to read this, or it names a key that is absent or overridden
+    and the CLI stays remote after they follow the advice."""
+
 
 class RemoteTarget(Protocol):
     """The remote fields a server's own ``[targets.<name>]`` model must carry.
@@ -95,6 +108,21 @@ def _first(*values: str | None, default: str | None = None) -> str | None:
     return default
 
 
+def _first_sourced(
+    *candidates: tuple[str, str | None],
+) -> tuple[str | None, str | None]:
+    """The first truthy value, paired with the name of the setting it came from.
+
+    Same precedence as :func:`_first`, but keeps hold of *which* source won.
+    Only worth doing for ``url``: it is the setting whose presence routes the
+    CLI remotely at all, so it is the one a user is told to unset.
+    """
+    for source, value in candidates:
+        if value:
+            return value, source
+    return None, None
+
+
 def resolve_remote_config(
     file_cfg: dict, selected: RemoteTarget | None
 ) -> RemoteConfig | None:
@@ -108,10 +136,13 @@ def resolve_remote_config(
     endpoint the CLI can't authenticate to is useless, so fail loudly rather
     than fall through to the unauthenticated in-process path.
     """
-    url = _first(
-        os.environ.get("WITAN_REMOTE_URL"),
-        selected.remote_url if selected else None,
-        file_cfg.get("remote_url"),
+    url, url_source = _first_sourced(
+        ("`WITAN_REMOTE_URL`", os.environ.get("WITAN_REMOTE_URL")),
+        (
+            f"`remote_url` on target [{selected.name}]" if selected else "",
+            selected.remote_url if selected else None,
+        ),
+        ("`remote_url` in config.toml", file_cfg.get("remote_url")),
     )
     if not url:
         return None
@@ -143,4 +174,5 @@ def resolve_remote_config(
             file_cfg.get("oidc_audience"),
         ),
         target_name=selected.name if selected else None,
+        url_source=url_source,
     )

@@ -284,6 +284,8 @@ class _ScriptedProxy(RemoteMCPProxy):
                 return self
 
             async def __aexit__(self, *_):
+                if at == "teardown":
+                    raise exc
                 return False
 
             async def call_tool(self, name, arguments):
@@ -324,6 +326,26 @@ def test_a_drop_mid_call_is_unreachable_through_the_exception_group():
     dropped = httpx2.ReadError("connection reset by peer")
     proxy = _ScriptedProxy(ExceptionGroup("unhandled", [dropped]), at="call")
     with pytest.raises(RemoteUnreachable, match="connection reset by peer"):
+        proxy.task_get(slug="x")
+
+
+def test_a_drop_noticed_only_while_closing_is_still_unreachable():
+    # The call succeeded; the failure surfaces from `AsyncExitStack.__aexit__`,
+    # which re-raises what fastmcp's anyio background tasks failed with. That
+    # is outside the call itself, so a guard sitting *inside* the stack would
+    # let exactly the traceback this change removes escape from teardown.
+    dropped = httpx2.ReadError("server disconnected")
+    proxy = _ScriptedProxy(ExceptionGroup("unhandled", [dropped]), at="teardown")
+    with pytest.raises(RemoteUnreachable, match="server disconnected"):
+        proxy.task_get(slug="x")
+
+
+def test_a_non_transport_cleanup_error_still_propagates_as_itself():
+    # Only transport faults are reclassified. A cleanup bug is a bug, and
+    # relabelling it "the deployment could not be reached" would send whoever
+    # hits it to check DNS for a defect in this process.
+    proxy = _ScriptedProxy(ValueError("bad state in close()"), at="teardown")
+    with pytest.raises(ValueError, match="bad state in close"):
         proxy.task_get(slug="x")
 
 

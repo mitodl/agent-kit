@@ -182,5 +182,10 @@ def main() -> None:
     # reached but offering no such tool (RemoteToolUnavailable), and not reached
     # at all (RemoteUnreachable). The last one used to escape as a raw traceback.
     except (RemoteAuthError, RemoteToolUnavailable, RemoteUnreachable) as exc:
-        console.print(f"[red]{exc}[/red]")
+        # markup=False: these messages name config keys, and a target block is
+        # written `[qa]` — which rich parses as a style tag and swallows, so
+        # "unset `remote_url` on target [qa]" reached the user as "on target".
+        # The one part of the sentence that identifies what to unset is exactly
+        # the part markup ate.
+        console.print(str(exc), style="red", markup=False)
         raise SystemExit(1) from None

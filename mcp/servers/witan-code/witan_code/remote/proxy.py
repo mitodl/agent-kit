@@ -35,21 +35,20 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def __init__(self, cfg: RemoteConfig, token_provider: Callable[[], str]) -> None:
         super().__init__(cfg.url, token_provider)
-        self._target_name = cfg.target_name
+        self._url_source = cfg.url_source
 
     def _is_admin_tool(self, name: str) -> bool:
         return name in _LOCAL_ONLY
 
     def _unreachable_hint(self) -> str:
+        # Two ways to name the wrong setting here, and this avoids both.
         # `remote_url` is what routes a client to this proxy — NOT
         # `code_transport`, which selects the direct-omnigraph store path that
-        # `store._index_locally_hint` speaks to. Naming the wrong one sends the
-        # reader to unset a setting that is not in play.
-        setting = (
-            f"`remote_url` on target [{self._target_name}]"
-            if self._target_name
-            else "`WITAN_REMOTE_URL`"
-        )
+        # `store._index_locally_hint` speaks to. And *which* `remote_url` is
+        # the resolver's answer to give (`url_source`), not something to infer
+        # from `target_name`: env overrides a matched target, and a global key
+        # supplies the URL with no target at all.
+        setting = self._url_source or "the configured remote URL"
         return (
             "witan-code does not fall back to a local store — a hit-free answer "
             "from a stale or absent local index is indistinguishable from a "

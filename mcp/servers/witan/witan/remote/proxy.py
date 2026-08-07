@@ -150,21 +150,20 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def __init__(self, cfg: RemoteConfig, token_provider: Callable[[], str]) -> None:
         super().__init__(cfg.url, token_provider)
-        self._target_name = cfg.target_name
+        self._url_source = cfg.url_source
 
     def _is_admin_tool(self, name: str) -> bool:
         return name in _ADMIN_ONLY
 
     def _unreachable_hint(self) -> str:
-        # Name the setting that is actually in play. A target-routed CLI reads
-        # `remote_url` out of a `[targets.<name>]` block, where telling someone
-        # to unset `WITAN_REMOTE_URL` sends them to a variable that was never
-        # set — the same trap witan-code's `_index_locally_hint` avoids.
-        setting = (
-            f"`remote_url` on target [{self._target_name}]"
-            if self._target_name
-            else "`WITAN_REMOTE_URL`"
-        )
+        # Name the setting that is actually in play, read off the resolver's
+        # own record of which source won (`url_source`) rather than inferred
+        # from `target_name`. A matched target does not mean the target
+        # supplied the URL: `WITAN_REMOTE_URL` overrides it while leaving
+        # `target_name` set, and a global `remote_url` supplies it with no
+        # target at all. Inferring gets both of those backwards, and a user
+        # who unsets what they were told stays routed at the dead endpoint.
+        setting = self._url_source or "the configured remote URL"
         return (
             "witan does not fall back to your local store — falling back "
             "silently would split your memory across two graphs with no signal "

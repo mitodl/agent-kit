@@ -208,15 +208,24 @@ def test_unreachable_message_names_remote_url_not_code_transport():
     # `remote_url` is what routes a caller to this proxy. `code_transport`
     # selects the direct-omnigraph store path, and naming it here would send
     # the reader to unset a setting that is not in play.
-    message = _dead()
+    message = _dead(url_source="`WITAN_REMOTE_URL`")
     assert "`WITAN_REMOTE_URL`" in message
     assert "code_transport" not in message
 
 
-def test_unreachable_message_names_the_target_setting_when_one_matched():
-    message = _dead(target_name="qa")
-    assert "`remote_url` on target [qa]" in message
-    assert "WITAN_REMOTE_URL" not in message
+def test_unreachable_message_names_the_setting_that_supplied_the_url():
+    assert "`remote_url` on target [qa]" in _dead(
+        target_name="qa", url_source="`remote_url` on target [qa]"
+    )
+
+
+def test_unreachable_message_does_not_infer_the_setting_from_the_target():
+    # A matched target does not mean the target supplied the URL — env
+    # overrides it while leaving `target_name` set. Inferring would name a
+    # key that is overridden, and the caller would still be routed remotely.
+    message = _dead(target_name="qa", url_source="`WITAN_REMOTE_URL`")
+    assert "`WITAN_REMOTE_URL`" in message
+    assert "target [qa]" not in message
 
 
 def test_cli_prints_an_unreachable_remote_instead_of_a_traceback(monkeypatch, capsys):

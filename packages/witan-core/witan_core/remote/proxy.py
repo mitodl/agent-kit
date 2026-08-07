@@ -57,7 +57,8 @@ import math
 import sys
 import threading
 import time
-from contextlib import AsyncExitStack
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, Callable
 
 import httpx2
@@ -324,6 +325,25 @@ class RemoteMCPProxy:
                 else math.inf
             )
 
+    @asynccontextmanager
+    async def _reclassifying(self) -> AsyncIterator[None]:
+        """Report a transport fault raised in this block as RemoteUnreachable.
+
+        By exception type, not by position: a tool that raises server-side is a
+        legitimate answer and must keep its own error, so only a genuine
+        transport fault (:func:`_transport_failure`) is the deployment going
+        away. Errors this class already classified pass through untouched.
+        """
+        try:
+            yield
+        except (RemoteToolUnavailable, RemoteUnreachable):
+            raise
+        except Exception as exc:  # noqa: BLE001 — re-raised unless transport
+            dropped = _transport_failure(exc)
+            if dropped is None:
+                raise
+            raise RemoteUnreachable(self._unreachable_error(dropped)) from exc
+
     async def _invoke(self, name: str, args: tuple, kwargs: dict) -> Any:
         """Dispatch one tool call, classifying an unreachable deployment.
 
@@ -334,32 +354,27 @@ class RemoteMCPProxy:
         reports all of them as a bare ``RuntimeError``, so classifying by
         position is the only honest reading.
 
-        Past the handshake the classification has to be by type instead. A tool
-        that raises server-side is a legitimate answer and must keep its own
-        error; only a genuine transport fault (:func:`_transport_failure`) is
-        the deployment going away mid-call.
+        Everything else — the call itself *and closing the connection* — is
+        classified by type inside :meth:`_reclassifying`. Teardown matters as
+        much as the call: ``AsyncExitStack.__aexit__`` re-raises what fastmcp's
+        anyio background tasks failed with, so a drop noticed only while the
+        client is closing would otherwise escape as exactly the traceback this
+        exists to remove. It wraps the stack rather than sitting inside it for
+        that reason. A non-transport cleanup error still propagates as itself.
         """
         token = self._token_provider()
-        async with AsyncExitStack() as stack:
+        async with self._reclassifying(), AsyncExitStack() as stack:
             try:
                 client = await stack.enter_async_context(self._new_client(token))
             except Exception as exc:  # noqa: BLE001 — see docstring
                 raise RemoteUnreachable(self._unreachable_error(exc)) from exc
-            try:
-                if (
-                    self._param_names is None
-                    or time.monotonic() >= self._param_names_expiry
-                ):
-                    await self._refresh_param_names(client)
-                arguments = self._map_args(name, args, kwargs)
-                result = await client.call_tool(name, arguments)
-            except RemoteToolUnavailable:
-                raise
-            except Exception as exc:  # noqa: BLE001 — re-raised unless transport
-                dropped = _transport_failure(exc)
-                if dropped is None:
-                    raise
-                raise RemoteUnreachable(self._unreachable_error(dropped)) from exc
+            if (
+                self._param_names is None
+                or time.monotonic() >= self._param_names_expiry
+            ):
+                await self._refresh_param_names(client)
+            arguments = self._map_args(name, args, kwargs)
+            result = await client.call_tool(name, arguments)
             return result.data
 
     def _map_args(self, name: str, args: tuple, kwargs: dict) -> dict:

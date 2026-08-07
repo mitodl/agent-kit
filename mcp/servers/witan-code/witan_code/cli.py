@@ -1020,7 +1020,10 @@ def cli() -> None:
     # no guard at all, so a deployment that was down, or a token the server
     # rejected, printed a traceback out of `witan-code symbols`.
     except (RemoteAuthError, RemoteToolUnavailable, RemoteUnreachable) as exc:
-        Console().print(f"[red]{exc}[/red]")
+        # markup=False — a target block is written `[qa]`, which rich parses as
+        # a style tag and swallows, taking the name of the setting to unset
+        # with it.
+        Console().print(str(exc), style="red", markup=False)
         raise SystemExit(1) from None
 
 

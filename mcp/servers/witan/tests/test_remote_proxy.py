@@ -376,17 +376,29 @@ def test_unreachable_message_states_that_there_is_no_fallback():
     assert "split your memory" in message
 
 
-def test_unreachable_message_names_the_env_var_when_no_target_matched():
-    assert "`WITAN_REMOTE_URL`" in _dead()
+@pytest.mark.parametrize(
+    "source",
+    [
+        "`WITAN_REMOTE_URL`",
+        "`remote_url` on target [qa]",
+        "`remote_url` in config.toml",
+    ],
+)
+def test_unreachable_message_names_the_setting_that_supplied_the_url(source):
+    assert source in _dead(url_source=source)
 
 
-def test_unreachable_message_names_the_target_setting_when_one_matched():
-    # Telling a target-routed user to unset WITAN_REMOTE_URL sends them to a
-    # variable that was never set — the trap witan-code's `_index_locally_hint`
-    # already avoids on the direct path.
-    message = _dead(target_name="qa")
-    assert "`remote_url` on target [qa]" in message
-    assert "WITAN_REMOTE_URL" not in message
+def test_unreachable_message_does_not_infer_the_setting_from_the_target():
+    # The trap: a matched target does NOT mean the target supplied the URL.
+    # `WITAN_REMOTE_URL` overrides a matched target's `remote_url` while
+    # leaving `target_name` set (test_config.py's
+    # `test_load_remote_config_env_overrides_target`), so inferring from
+    # `target_name` would tell this user to unset a key that is present but
+    # overridden — and they would still be routed at the dead endpoint after
+    # doing it. `url_source` is the resolver's own record of which won.
+    message = _dead(target_name="qa", url_source="`WITAN_REMOTE_URL`")
+    assert "`WITAN_REMOTE_URL`" in message
+    assert "target [qa]" not in message
 
 
 def test_main_prints_an_unreachable_remote_instead_of_a_traceback(monkeypatch, capsys):
@@ -404,6 +416,28 @@ def test_main_prints_an_unreachable_remote_instead_of_a_traceback(monkeypatch, c
         cli_module.main()
     assert exit_code.value.code == 1
     assert "witan is down at X" in capsys.readouterr().out
+
+
+def test_main_does_not_let_rich_swallow_a_bracketed_target_name(monkeypatch, capsys):
+    """A target block is written `[qa]`, which rich parses as a style tag.
+
+    Printing through `f"[red]{exc}[/red]"` therefore ate the one part of the
+    sentence that says which setting to unset — "unset `remote_url` on target
+    [qa]" reached the user as "…on target". Caught only by running the real
+    command, since asserting on `str(exc)` never goes through the console.
+    """
+    from types import SimpleNamespace
+
+    from witan import cli as cli_module
+
+    def _down():
+        raise RemoteUnreachable("unset `remote_url` on target [qa] to work locally")
+
+    monkeypatch.setattr(cli_module, "app", SimpleNamespace(meta=_down))
+    with pytest.raises(SystemExit):
+        cli_module.main()
+    # Rendered output wraps, so match the fragment that markup would remove.
+    assert "[qa]" in capsys.readouterr().out
 
 
 def test_srv_surfaces_misconfigured_remote_as_clean_exit(monkeypatch):
