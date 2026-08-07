@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from witan_core.config_file import load_toml as _load_toml_shared
+from witan_core.config_file import resolve_config_path as _resolve_config_path
 from witan_core.remote.config import RemoteConfig, resolve_remote_config
 from witan_core.target_config import (
     local_project_path,
@@ -520,6 +521,10 @@ def default_config_toml() -> str:
 # model = "claude-opus-4-8"
 
 # ── Named targets ────────────────────────────────────────────────────────────
+# `witan target add <name> --remote-url … --oidc-issuer …` writes these blocks
+# for you (and checks the issuer before writing); `witan target list` / `witan
+# target remove <name>` manage them. The hand-written form below still works.
+#
 # Route different repos/orgs/checkouts at different stores (e.g. work vs.
 # personal). The first target whose match_paths/match_repos/match_hosts/
 # match_orgs matches the current repo or local checkout wins; see the
@@ -622,6 +627,16 @@ class _Target(BaseModel):
 def _load_toml() -> dict:
     """Load WITAN_CONFIG path or ~/.config/witan/config.toml. Returns {} on missing file."""
     return _load_toml_shared(DEFAULT_CONFIG_PATH)
+
+
+def config_path() -> Path:
+    """The config file in effect for this process.
+
+    Reads ``DEFAULT_CONFIG_PATH`` from this module at call time, so tests that
+    monkeypatch the constant are observed here the same way ``_load_toml``
+    observes them.
+    """
+    return _resolve_config_path(DEFAULT_CONFIG_PATH)
 
 
 def _parse_targets(raw: dict) -> list[_Target]:

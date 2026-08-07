@@ -22,6 +22,23 @@ from pathlib import Path
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "witan" / "config.toml"
 
 
+def resolve_config_path(path: Path) -> Path:
+    """The config file actually in effect: ``WITAN_CONFIG`` if set, else ``path``.
+
+    Split out of :func:`load_toml` so writers (``witan target add``) can target
+    the very file the readers read, rather than re-deriving the rule and
+    drifting from it.
+
+    An empty or whitespace-only ``WITAN_CONFIG`` counts as unset. Taken
+    literally it resolves to ``Path("")`` — the current directory — so a reader
+    would report "failed to read config file ." and a writer would try to
+    rewrite a directory. That is never what someone means; it is what an
+    unexpanded ``WITAN_CONFIG=$SOME_UNSET_VAR`` looks like.
+    """
+    override = os.environ.get("WITAN_CONFIG", "").strip()
+    return Path(override or path).expanduser()
+
+
 def load_toml(path: Path) -> dict:
     """Load ``WITAN_CONFIG`` path or ``path``. Returns ``{}`` on a missing file.
 
@@ -34,7 +51,7 @@ def load_toml(path: Path) -> dict:
     misconfiguration fails loudly at startup rather than silently falling
     back to defaults.
     """
-    resolved = Path(os.environ.get("WITAN_CONFIG", str(path))).expanduser()
+    resolved = resolve_config_path(path)
     try:
         with open(resolved, "rb") as f:
             return tomllib.load(f)

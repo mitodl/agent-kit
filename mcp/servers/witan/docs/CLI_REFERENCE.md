@@ -32,6 +32,7 @@ Global conventions used throughout:
 | `login` | Authenticate to a deployed witan service (see [Remote mode](#remote-mode)) |
 | `logout` | Forget the cached token for the deployed service (see [Remote mode](#remote-mode)) |
 | `whoami` | Show the identity presented to the deployed service (see [Remote mode](#remote-mode)) |
+| `target` | Register and inspect named `[targets.*]` blocks (see [target](#target)) |
 | `tasks` | List tasks (see [Tasks](#tasks)) |
 | `task` | Manage a single task (see [Tasks](#tasks)) |
 | `projects` | List workflow projects (see [Projects](#projects)) |
@@ -110,22 +111,89 @@ witan tasks --ready  # now runs against the deployment as you
 witan logout         # forget the cached token
 ```
 
+Env vars are the throwaway form — they last one shell. To register a
+deployment persistently, use [`witan target add`](#target) instead, which
+writes a `[targets.<name>]` block and verifies the issuer up front.
+
 ### `login`
 
 Runs the OIDC device authorization grant (RFC 8628): prints a verification URL
 and user code, waits for browser approval, then caches the access/refresh
 tokens (mode `0600`). Refreshes happen automatically on later commands.
 
+Takes `--target <name>` to authenticate against a specific `[targets.<name>]`
+block — needed when the target carries no `match_*` criteria, since it then
+never selects itself.
+
 ### `whoami`
 
 Decodes the cached token and prints the endpoint, `preferred_username`,
 `email`, `sub`, the derived `act-<id>` the server will scope you to, and the
-token expiry. Refreshes the token first if it has expired.
+token expiry. Refreshes the token first if it has expired. Also takes
+`--target`.
 
 ### `logout`
 
 Drops the cached token for the configured deployment only (tokens for other
-deployments in the same cache are untouched).
+deployments in the same cache are untouched). Also takes `--target`.
+
+## `target`
+
+Manage the `[targets.<name>]` blocks in `config.toml` (`WITAN_CONFIG`, else
+`~/.config/witan/config.toml`) instead of hand-editing TOML. A target names a
+deployed witan endpoint (`remote_url` + `oidc_issuer`), a local/self-hosted
+store (`server`/`graph`), or both, plus the `match_*` criteria that decide
+which checkouts route to it.
+
+### `target add NAME`
+
+Writes a `[targets.<NAME>]` block, creating a starter `config.toml` first if
+none exists. Blocks are **appended as text**, so the comments documenting every
+key in an existing file survive — a TOML round-trip would silently drop them.
+
+```bash
+witan target add hosted \
+    --remote-url https://witan.example.org/mcp \
+    --oidc-issuer https://sso.example.org/realms/ol-platform-engineering \
+    --match-orgs my-org
+witan login --target hosted
+witan whoami --target hosted     # confirm the endpoint and actor
+```
+
+| Flag | Description |
+|---|---|
+| `--remote-url` | Deployed witan MCP endpoint. Requires `--oidc-issuer`. |
+| `--oidc-issuer` | OIDC realm issuer that mints tokens for it. |
+| `--oidc-client-id` | Public device-grant client id (default `witan-cli`). |
+| `--oidc-audience` | Expected `aud` claim, matching the deployment. |
+| `--server` / `--graph` | omnigraph store URI / graph id, for a local or self-hosted target. |
+| `--author` / `--agent` | Attribution and default agent CLI under this target. |
+| `--match-orgs` / `--match-repos` / `--match-hosts` / `--match-paths` | Which checkouts route here (repeatable or comma-separated). |
+| `--force` | Replace an existing block of the same name, in place (its position, and so its `match_*` precedence, is preserved). |
+| `--no-verify` | Skip the issuer check (offline registration). |
+| `--login` | Run the device grant immediately after writing. |
+| `--dry-run` | Print the block and exit. |
+
+The issuer is verified **at registration time** against its
+`.well-known/openid-configuration` (the same discovery the device grant later
+performs, issuer-match check included). This is the point of the command: a
+typo'd issuer previously surfaced as an auth failure during `witan login`, far
+from its cause. Nothing is written if verification fails.
+
+Without any `match_*` criteria a target is only ever reachable explicitly, via
+`--target` or `WITAN_TARGET`.
+
+### `target list`
+
+Lists configured targets and marks with `*` the one actually in effect —
+`WITAN_TARGET` when it is set, otherwise the one matching the current
+checkout. Honors `--output-format`.
+
+### `target remove NAME`
+
+Deletes that block and nothing else — other targets, other tables, and
+surrounding comments are left intact, including the comment banner that
+introduces whatever table follows. `--dry-run` reports without writing.
 
 ## `setup`
 

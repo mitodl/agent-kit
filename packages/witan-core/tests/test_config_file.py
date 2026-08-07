@@ -1,6 +1,6 @@
 import pytest
 
-from witan_core.config_file import load_toml
+from witan_core.config_file import load_toml, resolve_config_path
 
 
 def test_load_toml_missing_file_returns_empty(tmp_path):
@@ -12,6 +12,17 @@ def test_load_toml_reads_default_path(tmp_path, monkeypatch):
     p = tmp_path / "config.toml"
     p.write_text('agent = "pi"\n')
     assert load_toml(p) == {"agent": "pi"}
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_blank_env_var_is_treated_as_unset(tmp_path, monkeypatch, blank):
+    """Taken literally, `WITAN_CONFIG=""` means Path("") — the current directory."""
+    monkeypatch.setenv("WITAN_CONFIG", blank)
+    default = tmp_path / "config.toml"
+    default.write_text('agent = "pi"\n')
+
+    assert resolve_config_path(default) == default
+    assert load_toml(default) == {"agent": "pi"}
 
 
 def test_load_toml_env_var_overrides_default_path(tmp_path, monkeypatch):

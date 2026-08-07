@@ -31,6 +31,7 @@ from . import projects  # noqa: F401
 from . import scan  # noqa: F401
 from . import session  # noqa: F401
 from . import setup_cmd  # noqa: F401
+from . import targets  # noqa: F401
 from . import tasks  # noqa: F401
 from . import traces  # noqa: F401
 from .migrate import migrate_app
