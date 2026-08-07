@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.12.3] - 2026-08-07
+
+### Fixed
+
+- A server-side tool error against the deployed cluster reads as a sentence
+  rather than a traceback. `witan-code`'s entrypoint already classified the
+  four remote failures the `witan` CLI does, but a tool that ran and *refused* —
+  a Cedar denial on a code graph the caller may not read, a branch the cluster
+  does not have — came back as `fastmcp.exceptions.ToolError`, which is not a
+  `RuntimeError` and so escaped as a traceback out of `witan-code symbols`.
+- ★ Fixed on **both** of this package's transports, not just the proxy.
+  Index and write commands reach the deployment through `StoreRef.client()` and
+  `StoreSession`, which holds its own connection and does its own
+  classification — so classifying in `RemoteMCPProxy` alone would have left
+  every refusal on the store path escaping exactly as before. `StoreSession.call`
+  now raises `RemoteToolFailed` on both of its arms: the first attempt, and the
+  re-invoke after a reconnect, so a refusal that happens to follow a dropped
+  socket is not left as the one uncovered case.
+
+### Changed
+
+- Floor bumped to `witan-core>=0.14` for `remote.proxy.RemoteToolFailed`, which
+  `witan_code/remote/proxy.py` re-exports at module scope. Bumped in the same
+  change that adds the caller, per the pin comment.
+
 ## [0.12.2] - 2026-08-07
 
 ### Fixed

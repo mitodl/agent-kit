@@ -18,12 +18,14 @@ import pytest
 from witan_core.remote.proxy import (
     RemoteMCPProxy,
     RemotePayloadTooLarge,
+    RemoteToolFailed,
     RemoteToolUnavailable,
     RemoteUnreachable,
     _tool_input_schema,
     _transport_failure,
     console_elicitation_handler,
     payload_too_large,
+    tool_failure,
 )
 
 
@@ -354,14 +356,70 @@ def test_a_non_transport_cleanup_error_still_propagates_as_itself():
         proxy.task_get(slug="x")
 
 
-def test_a_server_side_tool_error_is_not_reclassified():
+def test_a_server_side_tool_error_is_not_reclassified_as_unreachable():
     # The deployment WAS reached and answered. Relabelling that as unreachable
     # would send the reader to check DNS for a task that simply does not exist.
+    # It becomes RemoteToolFailed — its own type, carrying the server's own
+    # words — and specifically NOT RemoteUnreachable.
     from fastmcp.exceptions import ToolError
 
     proxy = _ScriptedProxy(ToolError("no task with slug 'x'"), at="call")
-    with pytest.raises(ToolError):
+    with pytest.raises(RemoteToolFailed, match="no task with slug 'x'") as caught:
         proxy.task_get(slug="x")
+    assert not isinstance(caught.value, RemoteUnreachable)
+
+
+def test_a_refused_call_is_catchable_as_the_runtime_error_the_cli_expects():
+    # THE DEFECT THIS FIXES. `ToolError → FastMCPError → Exception` is not a
+    # RuntimeError, so every `except RuntimeError` in the CLI missed it and a
+    # server-side refusal on a remote target printed ~40 lines of asyncio
+    # internals. In-process the same refusal IS a RuntimeError; this assertion
+    # is the local/remote parity the proxy's drop-in claim depends on.
+    from fastmcp.exceptions import ToolError
+
+    proxy = _ScriptedProxy(ToolError("cedar: write denied on memory"), at="call")
+    with pytest.raises(RuntimeError, match="cedar: write denied"):
+        proxy.task_get(slug="x")
+
+
+def test_the_wire_form_of_a_refusal_is_kept_as_the_cause():
+    # "Must keep its own error" is about not losing what the server said, not
+    # about the class that carries it. Anyone who needs the ToolError itself —
+    # a caller inspecting fastmcp's own fields — still has it.
+    from fastmcp.exceptions import ToolError
+
+    raised = ToolError("no task with slug 'x'")
+    proxy = _ScriptedProxy(raised, at="call")
+    with pytest.raises(RemoteToolFailed) as caught:
+        proxy.task_get(slug="x")
+    assert caught.value.__cause__ is raised
+
+
+def test_tool_failure_finds_nothing_in_an_unrelated_error():
+    # Public because witan-code's store session holds its own connection and
+    # does its own classification, the same reason payload_too_large is. A
+    # helper that answered "yes" to anything would make every bug in that path
+    # read as a server-side refusal.
+    assert tool_failure(ValueError("bad state in close()")) is None
+    assert tool_failure(httpx2.ReadError("connection reset by peer")) is None
+
+
+def test_a_refusal_arriving_inside_an_exception_group_is_still_classified():
+    # anyio re-raises through a task group, so the ToolError is not always the
+    # outermost exception — the same reason _transport_failure walks the chain.
+    from fastmcp.exceptions import ToolError
+
+    inner = ToolError("no task with slug 'x'")
+    group = ExceptionGroup("unhandled", [inner])
+    proxy = _ScriptedProxy(group, at="call")
+    with pytest.raises(RemoteToolFailed, match="no task with slug 'x'") as caught:
+        proxy.task_get(slug="x")
+    # And __cause__ is the ToolError, not the group it arrived inside. Chaining
+    # the group would hand a caller the wrapper this class exists to unwrap,
+    # making the "keeps the original ToolError" contract true only for the
+    # ungrouped case. The group is still reachable as __context__.
+    assert caught.value.__cause__ is inner
+    assert caught.value.__context__ is group
 
 
 def test_a_keyword_refusal_still_beats_the_unreachable_guard():
@@ -504,7 +562,20 @@ def test_an_ordinary_tool_error_is_not_mistaken_for_an_oversized_body():
     proxy = _ScriptedProxy(
         ToolError("no memory with slug 'error-413-handling'"), at="call"
     )
-    with pytest.raises(ToolError):
+    with pytest.raises(RemoteToolFailed) as caught:
+        proxy.task_get(slug="x")
+    assert not isinstance(caught.value, RemotePayloadTooLarge)
+
+
+def test_a_relayed_413_is_still_a_size_refusal_though_it_arrives_as_a_tool_error():
+    # ORDERING GUARD. ToolHive's vMCP relays an upstream 413 as a ToolError, so
+    # the tool-refusal branch must be asked LAST. Asked first, it would file
+    # every relayed 413 under "the tool refused" and lose the one reading that
+    # tells the caller to send less rather than to fix the call.
+    from fastmcp.exceptions import ToolError
+
+    proxy = _ScriptedProxy(ToolError("upstream: 413 Request body too large"), at="call")
+    with pytest.raises(RemotePayloadTooLarge):
         proxy.task_get(slug="x")
 
 

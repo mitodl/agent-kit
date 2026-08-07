@@ -1012,7 +1012,7 @@ def cli() -> None:
     from rich.console import Console
 
     from .remote.oidc import RemoteAuthError
-    from .remote.proxy import RemoteToolUnavailable, RemoteUnreachable
+    from .remote.proxy import RemoteToolFailed, RemoteToolUnavailable, RemoteUnreachable
     from .remote.store import RemotePayloadTooLarge
 
     try:
@@ -1022,9 +1022,13 @@ def cli() -> None:
     # rejected, printed a traceback out of `witan-code symbols`.
     # RemotePayloadTooLarge comes from the store session rather than the proxy:
     # this CLI's oversized bodies are index batches, not tool arguments.
+    # RemoteToolFailed covers the tool running and refusing — a Cedar denial on
+    # a code graph the caller may not read, or a branch the cluster does not
+    # have.
     except (
         RemoteAuthError,
         RemotePayloadTooLarge,
+        RemoteToolFailed,
         RemoteToolUnavailable,
         RemoteUnreachable,
     ) as exc:
