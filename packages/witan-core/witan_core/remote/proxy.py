@@ -57,7 +57,7 @@ import math
 import sys
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, Callable
 
@@ -70,6 +70,22 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 class RemoteToolUnavailable(RuntimeError):
     """Raised when a CLI command has no remotely-callable counterpart."""
+
+
+class RemotePayloadTooLarge(RuntimeError):
+    """The deployment refused a request body as over its size cap (HTTP 413).
+
+    Separate from :class:`RemoteUnreachable` because the deployment answered —
+    it read the request far enough to reject it — and separate from a plain
+    tool failure because nothing about the *call* was wrong, only its size.
+    Conflating it with either sends you somewhere useless: "could not be
+    reached" starts a hunt for a down endpoint that is in fact up, and a raw
+    tool error says nothing about what to shrink.
+
+    Never a signal to retry. The payload is what was refused, so sending it
+    again gets the same answer for the same reason, having spent the same
+    megabytes.
+    """
 
 
 class RemoteUnreachable(RuntimeError):
@@ -91,6 +107,44 @@ class RemoteUnreachable(RuntimeError):
 
 _TRANSPORT_ERRORS = (httpx2.HTTPError, OSError)
 
+# What a hop on this path says when it refuses a body for its size. Matched on
+# the phrase rather than on a bare "413" because a tool error relays the
+# server's own text, which can quote the caller's data — and every hop that can
+# refuse us announces itself in words:
+#   "request body too large"   the MCP Python SDK's RequestBodyLimitMiddleware
+#   "request entity too large" ToolHive's pkg/bodylimit, and httpx's 413 reason
+#   "payload too large"        omnigraph-server's axum DefaultBodyLimit
+_TOO_LARGE_PHRASES = (
+    "request body too large",
+    "request entity too large",
+    "payload too large",
+)
+
+
+def _chain(exc: BaseException) -> Iterator[BaseException]:
+    """Every exception reachable from ``exc``, through groups and causes.
+
+    A fault raised deep in the client does not arrive as itself: it comes
+    chained through fastmcp/anyio, and anyio's task groups re-raise inside an
+    ``ExceptionGroup``. Walking the group members *and* the cause chain is what
+    keeps "the pod restarted during my write" from reading as a tool error.
+    ``seen`` guards the cycles ``__context__`` can form.
+    """
+    seen: set[int] = set()
+
+    def walk(err: BaseException | None) -> Iterator[BaseException]:
+        if err is None or id(err) in seen:
+            return
+        seen.add(id(err))
+        yield err
+        if isinstance(err, BaseExceptionGroup):
+            for member in err.exceptions:
+                yield from walk(member)
+        yield from walk(err.__cause__)
+        yield from walk(err.__context__)
+
+    return walk(exc)
+
 
 def _transport_failure(exc: BaseException) -> BaseException | None:
     """The transport-level error inside ``exc``, or None if there is none.
@@ -98,28 +152,38 @@ def _transport_failure(exc: BaseException) -> BaseException | None:
     A connection that fails while opening surfaces as fastmcp's own
     ``RuntimeError("Client failed to connect: …")``, so the connect phase is
     classified by *where* it failed rather than by type. A connection that
-    drops mid-call has no such wrapper: the httpx2 error arrives chained
-    through fastmcp/anyio, and anyio's task groups re-raise it inside an
-    ``ExceptionGroup``. Walking both the group members and the cause chain is
-    what keeps "the pod restarted during my write" from reading as a tool
-    error. ``seen`` guards the cycles ``__context__`` can form.
+    drops mid-call has no such wrapper, which is what :func:`_chain` is for.
     """
-    seen: set[int] = set()
+    return next((e for e in _chain(exc) if isinstance(e, _TRANSPORT_ERRORS)), None)
 
-    def walk(err: BaseException | None) -> BaseException | None:
-        if err is None or id(err) in seen:
-            return None
-        seen.add(id(err))
-        if isinstance(err, _TRANSPORT_ERRORS):
+
+def payload_too_large(exc: BaseException) -> BaseException | None:
+    """The "body over the size cap" error inside ``exc``, or None.
+
+    ★ MUST BE ASKED BEFORE :func:`_transport_failure`. A 413 that arrives from
+    a direct connection is an ``httpx2.HTTPStatusError``, which *is* an
+    ``httpx2.HTTPError`` — so classifying by transport first reports a
+    deployment that is plainly up and answering as one that "could not be
+    reached", and sends the reader to check an endpoint that is fine.
+
+    Two shapes reach us, because two different hops can do the refusing. On a
+    direct connection the status code is on the response. Through ToolHive's
+    vMCP the refusal happened on *its* upstream call, so it comes back as a
+    perfectly successful HTTP exchange carrying a tool error whose text quotes
+    the 413 — no status code anywhere, only the words.
+
+    Public because witan-code's store session holds its own connection and so
+    does its own classification, and one definition of "this was refused for
+    its size" is what keeps the two transports agreeing.
+    """
+    for err in _chain(exc):
+        response = getattr(err, "response", None)
+        if getattr(response, "status_code", None) == 413:
             return err
-        if isinstance(err, BaseExceptionGroup):
-            for member in err.exceptions:
-                found = walk(member)
-                if found is not None:
-                    return found
-        return walk(err.__cause__) or walk(err.__context__)
-
-    return walk(exc)
+        text = str(err).lower()
+        if any(phrase in text for phrase in _TOO_LARGE_PHRASES):
+            return err
+    return None
 
 
 async def console_elicitation_handler(
@@ -232,6 +296,30 @@ class RemoteMCPProxy:
             f"{exc}. {self._unreachable_hint()}"
         )
 
+    def _payload_too_large_error(self, name: str, exc: BaseException) -> str:
+        """Message for a request body the deployment refused for its size.
+
+        ★ DELIBERATELY OPERATION-NEUTRAL. This fires for EVERY tool call —
+        a `memory_store` with a large body, a read, a single mutation — not
+        only for the byte-chunked bulk writes. An earlier revision asserted
+        here that "bulk writes are split into 2 MiB batches" and that "batches
+        before this one were applied, the write stopped part-way". Both are
+        false off the merge path, and the second is false in the direction that
+        does harm: it tells someone whose single call was refused that their
+        graph is now half-mutated, when nothing was written at all.
+
+        Callers that DO know they are mid-batch add that context themselves,
+        where the batch number, the budget actually in play, and whether
+        anything was applied are all real rather than assumed — see
+        ``witan.remote.proxy._merge_batch_refusal``.
+        """
+        return (
+            f"The deployed service at {self._url} refused `{name}`: the request "
+            f"body is over its size cap ({exc}). Retrying sends the same bytes "
+            "to the same answer — the payload itself is what was rejected, so "
+            "it has to get smaller."
+        )
+
     def _resolve_repo(self) -> str | None:
         """Client-side value for ``repo=None`` (detect current repo). None: skip."""
         return None
@@ -326,19 +414,27 @@ class RemoteMCPProxy:
             )
 
     @asynccontextmanager
-    async def _reclassifying(self) -> AsyncIterator[None]:
-        """Report a transport fault raised in this block as RemoteUnreachable.
+    async def _reclassifying(self, name: str) -> AsyncIterator[None]:
+        """Report a fault raised in this block as the sentence it deserves.
 
         By exception type, not by position: a tool that raises server-side is a
         legitimate answer and must keep its own error, so only a genuine
         transport fault (:func:`_transport_failure`) is the deployment going
         away. Errors this class already classified pass through untouched.
+
+        Size is asked FIRST — see :func:`payload_too_large` for why asking it
+        second silently mislabels every direct-connection 413 as unreachable.
         """
         try:
             yield
-        except (RemoteToolUnavailable, RemoteUnreachable):
+        except (RemoteToolUnavailable, RemoteUnreachable, RemotePayloadTooLarge):
             raise
-        except Exception as exc:  # noqa: BLE001 — re-raised unless transport
+        except Exception as exc:  # noqa: BLE001 — re-raised unless classified
+            oversized = payload_too_large(exc)
+            if oversized is not None:
+                raise RemotePayloadTooLarge(
+                    self._payload_too_large_error(name, oversized)
+                ) from exc
             dropped = _transport_failure(exc)
             if dropped is None:
                 raise
@@ -363,7 +459,7 @@ class RemoteMCPProxy:
         that reason. A non-transport cleanup error still propagates as itself.
         """
         token = self._token_provider()
-        async with self._reclassifying(), AsyncExitStack() as stack:
+        async with self._reclassifying(name), AsyncExitStack() as stack:
             try:
                 client = await stack.enter_async_context(self._new_client(token))
             except Exception as exc:  # noqa: BLE001 — see docstring

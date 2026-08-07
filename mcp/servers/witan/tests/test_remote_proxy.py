@@ -8,6 +8,8 @@ client-side repo resolution are exercised end to end without a network.
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 from fastmcp import Client
@@ -494,3 +496,83 @@ def test_remote_merge_chunks_against_the_mcp_budget_not_omnigraph_s(
     proxy.merge_store(source.graph_uri)
 
     assert seen == [MCP_LOAD_MAX_BYTES]
+
+
+# ── merge-specific context on a 413 ───────────────────────────────────────
+# The base message in witan_core is operation-neutral by design: it fires for
+# every tool call, so it cannot claim a batch budget or a half-applied write.
+# Only the merge loop knows those, and only for a real merge — a --dry-run
+# applies nothing at all.
+
+
+def test_a_dry_run_is_never_described_as_a_partial_write():
+    """★ The one that would do real harm. A --dry-run writes NOTHING, so
+    telling its user the merge "stopped part-way" invites them to go hunting
+    for half-migrated rows that do not exist."""
+    from witan.remote.proxy import _merge_batch_refusal
+
+    message = _merge_batch_refusal(
+        RuntimeError("body too large"), batch=3, budget=2 * 1024 * 1024, dry_run=True
+    )
+    assert "Nothing was written" in message
+    assert "--dry-run" in message
+    assert "part-way" not in message
+    assert "were applied" not in message
+
+
+def test_a_refusal_on_the_first_batch_says_nothing_was_applied():
+    from witan.remote.proxy import _merge_batch_refusal
+
+    message = _merge_batch_refusal(
+        RuntimeError("body too large"), batch=0, budget=2 * 1024 * 1024, dry_run=False
+    )
+    assert "batch 1 of the merge" in message
+    assert "Nothing was applied" in message
+    assert "part-way" not in message
+
+
+def test_a_refusal_mid_merge_reports_how_many_batches_landed():
+    from witan.remote.proxy import _merge_batch_refusal
+
+    message = _merge_batch_refusal(
+        RuntimeError("body too large"), batch=3, budget=2 * 1024 * 1024, dry_run=False
+    )
+    assert "batch 4 of the merge" in message
+    assert "The 3 batch(es) before this one were applied" in message
+    assert "did not roll back" in message
+    assert "budget of 2 MiB" in message
+    # Re-running is the right next move and the message should say so, since
+    # the merge is idempotent — rows already present are kept.
+    assert "idempotent" in message
+
+
+def test_merge_store_wraps_a_batch_refusal_with_that_context(proxy, monkeypatch):
+    """The wiring, not just the wording: a 413 from `store_merge` must come out
+    of `merge_store` carrying the batch context."""
+    from witan_core.remote.proxy import RemotePayloadTooLarge
+
+    from witan.remote import proxy as proxy_mod
+
+    monkeypatch.setattr(
+        proxy_mod, "_source_export", lambda _s: _fake_export(["a", "b"])
+    )
+    monkeypatch.setattr(
+        proxy_mod, "_read_export", lambda _p: [{"type": "T", "id": "1"}]
+    )
+
+    def _refuse(**_kwargs):
+        raise RemotePayloadTooLarge("the deployed service refused it")
+
+    monkeypatch.setattr(proxy, "store_merge", _refuse)
+
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        proxy.merge_store("/tmp/whatever.omni")
+    message = str(caught.value)
+    assert "the deployed service refused it" in message  # base message kept
+    assert "batch 1 of the merge" in message  # context added
+    assert "Nothing was applied" in message
+
+
+@contextmanager
+def _fake_export(_rows):
+    yield Path("/tmp/does-not-matter.jsonl")

@@ -33,7 +33,12 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Iterator
 
-__all__ = ["LOAD_MAX_BYTES", "MCP_LOAD_MAX_BYTES", "chunk_records"]
+__all__ = [
+    "LOAD_MAX_BYTES",
+    "MCP_LOAD_MAX_BYTES",
+    "chunk_records",
+    "describe_budget",
+]
 
 # Bisected against omnigraph 0.8.1 — the version deployed in the cluster:
 # ~26 MiB of records accepted, ~54 MiB refused. The cap is only known as that
@@ -61,6 +66,19 @@ LOAD_MAX_BYTES = 8 * 1024 * 1024
 # `test_mcp_bound_stays_clear_of_the_sdk_cap` pins the relationship to the SDK
 # constant so an SDK bump that lowers the cap fails CI instead of production.
 MCP_LOAD_MAX_BYTES = 2 * 1024 * 1024
+
+
+def describe_budget(max_bytes: int) -> str:
+    """A byte budget as a phrase for an error message, exact at any size.
+
+    Says "2 MiB" for the constants above and falls back to an exact byte count
+    for anything else, because the budget is not always one of them: ``load``
+    takes ``max_bytes`` from its caller. An error that rounds a 1,500,000-byte
+    budget to "1 MiB" tells the reader to look for a limit that is not the one
+    that refused them.
+    """
+    mib = 1024 * 1024
+    return f"{max_bytes // mib} MiB" if max_bytes % mib == 0 else f"{max_bytes:,} bytes"
 
 
 def chunk_records(

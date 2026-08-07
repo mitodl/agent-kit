@@ -173,15 +173,25 @@ def _launcher(
 
 def main() -> None:
     from ..remote.oidc import RemoteAuthError
-    from ..remote.proxy import RemoteToolUnavailable, RemoteUnreachable
+    from ..remote.proxy import (
+        RemotePayloadTooLarge,
+        RemoteToolUnavailable,
+        RemoteUnreachable,
+    )
 
     try:
         app.meta()
-    # The three ways a deployed witan fails a command, each already carrying its
+    # The four ways a deployed witan fails a command, each already carrying its
     # own actionable wording: misconfigured or not logged in (RemoteAuthError),
-    # reached but offering no such tool (RemoteToolUnavailable), and not reached
-    # at all (RemoteUnreachable). The last one used to escape as a raw traceback.
-    except (RemoteAuthError, RemoteToolUnavailable, RemoteUnreachable) as exc:
+    # reached but offering no such tool (RemoteToolUnavailable), not reached at
+    # all (RemoteUnreachable), and answering that the body is too big
+    # (RemotePayloadTooLarge). The last two each used to escape as a traceback.
+    except (
+        RemoteAuthError,
+        RemotePayloadTooLarge,
+        RemoteToolUnavailable,
+        RemoteUnreachable,
+    ) as exc:
         # markup=False: these messages name config keys, and a target block is
         # written `[qa]` — which rich parses as a style tag and swallows, so
         # "unset `remote_url` on target [qa]" reached the user as "on target".
