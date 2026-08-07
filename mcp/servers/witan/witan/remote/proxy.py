@@ -294,3 +294,10 @@ class RemoteServerProxy(RemoteMCPProxy):
         # derive on its own — it shares neither the filesystem nor the session id.
         handle = session_state.read_handle(os.environ.get("CLAUDE_SESSION_ID") or "")
         return (handle or {}).get("session_slug") or None
+
+    def _resolve_session_id(self) -> str | None:
+        # The agent session itself, for `task_claim`/`task_release`'s holder
+        # qualifier. Unlike the handle above this needs no `witan session start`
+        # to have run — the claim has to tell two of one person's concurrent
+        # sessions apart whether or not either is attached to a project.
+        return os.environ.get("CLAUDE_SESSION_ID") or None

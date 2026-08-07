@@ -401,7 +401,7 @@ _UNKNOWN_HOLDER = "unknown (no assignee on record)"
 _SESSION_SUFFIX_RE = re.compile(r"#[0-9A-Za-z_-]{1,64}$")
 
 
-def _claim_holder(assignee: str | None = None) -> str:
+def _claim_holder(assignee: str | None = None, session_id: str | None = None) -> str:
     """The identity a claim is recorded under.
 
     An explicit ``assignee`` always wins — callers that already have a better
@@ -419,19 +419,29 @@ def _claim_holder(assignee: str | None = None) -> str:
     turns that silent double-claim into an ordinary "held by someone else",
     which the elicit/force path already handles.
 
-    ``$CLAUDE_SESSION_ID`` is the same session identity ``workflow_session_start``,
-    the context hook and ``session_state`` already key on. Truncated because the
-    holder string is read by humans in refusal messages and task listings, and 8
-    hex chars is plenty to tell two concurrent sessions apart.
+    ★ THE ID MUST COME FROM THE CALLER, NOT THIS PROCESS'S ENVIRONMENT. Reading
+    ``$CLAUDE_SESSION_ID`` here works only under local stdio, where the server
+    is a child of the agent and inherits it. A deployed pod has no such
+    variable (its env is ``WITAN_*``/``KUBERNETES_*`` and nothing else), so
+    every remote caller would fall back to the bare ``preferred_username`` and
+    keep colliding — in the one topology where concurrent users are the whole
+    point. ``witan_core.remote.proxy._map_args`` injects the client's id for
+    tools declaring ``session_id``, the same way it already does for ``repo``
+    and ``session_slug``; an agent calling a *deployed* witan directly (not
+    through the CLI proxy) has to pass its own.
 
-    With no session id in the environment there is only one session to be, so
+    The environment is still consulted as the local-stdio fallback. Truncated
+    because the holder string is read by humans in refusal messages and task
+    listings, and 8 hex chars is plenty to tell two concurrent sessions apart.
+
+    With no session id from either source there is only one session to be, so
     the bare identity is both correct and byte-identical to what older stores
     already hold.
     """
     if assignee:
         return assignee
     identity = _current_author()
-    session = os.environ.get("CLAUDE_SESSION_ID") or ""
+    session = session_id or os.environ.get("CLAUDE_SESSION_ID") or ""
     return f"{identity}#{session[:8]}" if session else identity
 
 
@@ -4420,6 +4430,7 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
 async def task_claim(
     slug: str,
     assignee: str | None = None,
+    session_id: str | None = None,
     force: bool = False,
     ctx: Context | None = None,
 ) -> dict | None:
@@ -4450,10 +4461,18 @@ async def task_claim(
     assignee:
         Holder identity. Defaults to the calling user (the JWT's
         ``preferred_username`` when deployed, the configured author locally)
-        **qualified by ``$CLAUDE_SESSION_ID``** — see ``_claim_holder``. Two of
-        one person's parallel sessions must not share a holder string, or the
+        qualified by ``session_id`` — see ``_claim_holder``. Two of one
+        person's parallel sessions must not share a holder string, or the
         contention check passes and the second silently renews the first's
         lease. Pass an explicit id to override (a worker name, a CI job).
+    session_id:
+        The calling agent session's id, which qualifies the default holder.
+        **Pass this when calling a deployed witan** — the server cannot infer
+        it (no shared environment, and MCP 2026-07-28 carries no session
+        state), and without it every one of your concurrent sessions claims
+        under the same name. The CLI's remote proxy fills it in automatically;
+        under local stdio the server falls back to its own
+        ``$CLAUDE_SESSION_ID``, which it inherits from the agent.
     force:
         Steal the task even if another holder's lease is still valid.
     """
@@ -4462,7 +4481,7 @@ async def task_claim(
     # last-write-wins (see docs/adr/0003 and the claim loop below). On success
     # also upserts a CodeBranch for the checkout's repo+branch and links it
     # WorksOn this task (best-effort).
-    holder = _claim_holder(assignee)
+    holder = _claim_holder(assignee, session_id)
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
@@ -4579,6 +4598,7 @@ async def task_claim(
 def task_release(
     slug: str,
     assignee: str | None = None,
+    session_id: str | None = None,
     status: TaskStatus = "open",
     force: bool = False,
 ) -> dict | None:
@@ -4599,12 +4619,17 @@ def task_release(
         *identities*, ignoring the ``#<session>`` qualifier, so you can release a
         claim one of your own other sessions took; another person's still needs
         ``force``.
+    session_id:
+        The calling agent session's id, same resolution and same reason as
+        ``task_claim``'s. Only affects the holder string this call is compared
+        *as*; since the comparison is identity-level, omitting it against a
+        deployed server is harmless here in a way it is not for ``task_claim``.
     status:
         Status to return the task to (default ``open``).
     force:
         Release even if held by a different assignee.
     """
-    holder = _claim_holder(assignee)
+    holder = _claim_holder(assignee, session_id)
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None

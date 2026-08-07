@@ -465,6 +465,39 @@ def test_parallel_sessions_of_one_person_do_not_share_a_claim(server, monkeypatc
     assert server.task_claim(t["slug"])["claimed"] is True
 
 
+@requires_omnigraph
+def test_caller_supplied_session_id_beats_the_server_environment(server, monkeypatch):
+    """The deployed case: the server's own environment has no session id.
+
+    A pod's env is `WITAN_*`/`KUBERNETES_*` and nothing else — it is not a
+    child of the agent, so it never sees $CLAUDE_SESSION_ID. Reading the
+    variable server-side therefore qualified nothing for any remote caller, and
+    two of one person's concurrent sessions collided exactly as before. The id
+    has to arrive as an argument; the environment is only the local-stdio
+    fallback.
+    """
+    from witan import server as srv
+
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)  # a deployed pod
+    t = server.task_create(title="deployed claim", description="x")
+
+    first = server.task_claim(t["slug"], session_id="11111111-aaaa")
+    assert first["claimed"] is True
+    assert first["assignee"] == f"{srv._current_author()}#11111111"
+
+    second = server.task_claim(t["slug"], session_id="22222222-bbbb")
+    assert second["claimed"] is False
+    assert second["held_by"] == first["assignee"]
+
+    # An explicit assignee still outranks both sources.
+    assert (
+        server.task_claim(
+            t["slug"], assignee="ci-worker", session_id="333", force=True
+        )["assignee"]
+        == "ci-worker"
+    )
+
+
 def test_holder_qualifier_survives_rich_rendering(monkeypatch):
     """The qualifier is printed straight into a rich console by the task CLI.
 
