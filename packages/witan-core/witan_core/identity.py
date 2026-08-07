@@ -17,9 +17,16 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
-__all__ = ["ACTOR_PREFIX", "ActorTokenResolver", "derive_actor_id"]
+__all__ = [
+    "ACTOR_PREFIX",
+    "ActorTokenResolver",
+    "derive_actor_handle",
+    "derive_actor_id",
+]
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9-]+")
 
@@ -47,6 +54,37 @@ def derive_actor_id(sub: str) -> str:
     if not slug:
         raise ValueError(f"Cannot derive an actor id from sub={sub!r}")
     return f"{ACTOR_PREFIX}{slug}"
+
+
+def derive_actor_handle(claims: Mapping[str, Any]) -> str | None:
+    """A short, human-readable handle for the caller, or ``None`` if unknowable.
+
+    Exists so a structured log line can be read without a second lookup: an
+    ``act-<uuid>`` alone answers "which actor" but never "which person".
+
+    ★ THE LOCAL-PART IS THE POINT, NOT AN ACCIDENT ★
+    ``preferred_username`` is a full email address in this realm, and witan's
+    own scanner classifies a bare email as ``pii`` (medium) — see
+    ``witan.scan.detectors``. Logs ship to Loki, so this returns only the part
+    before the ``@``: enough for a human reading a log line to recognise a
+    colleague, without putting an RFC-5322 address into log storage
+    (maintainer decision, 2026-08-07). The full value is deliberately still
+    written to a node's ``author`` field, where it is the readable attribution
+    ADR-0004 asks for; this is the narrower thing that goes to logs.
+
+    Falls back to ``email`` for the same reason ``_current_author`` does — a
+    token that carries one but not the other should not degrade to nothing.
+    A claim that is not an email is returned as-is, so a realm that ever
+    switches to bare usernames keeps working without a change here.
+    """
+    for claim in ("preferred_username", "email"):
+        value = claims.get(claim)
+        if not isinstance(value, str):
+            continue
+        handle = value.strip().split("@", 1)[0].strip()
+        if handle:
+            return handle
+    return None
 
 
 class ActorTokenResolver:
