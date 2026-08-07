@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.13.0] - 2026-08-07
+
+### Added
+
+- `acquire_store_flock()` / `release_store_flock()` in `witan_core.omnigraph`: a
+  re-entrant, thread-keyed wrapper around the advisory `<store>.lock` flock.
+  `flock` is held by the open file description rather than the process, so a
+  caller that takes the lock across a merge and then takes it again for a load
+  inside that merge would otherwise self-deadlock; re-entrancy is now tracked
+  per `(thread, lock path)` so nested acquisition within one thread is a no-op
+  while two threads still exclude each other.
+- `StoreUnavailable` in `witan_core.omnigraph`: raised when a store could not be
+  reached for the whole `_UNAVAILABLE_MAX_WAIT` retry budget. A `RuntimeError`
+  subclass, so existing callers keep catching it unchanged; it exists so a
+  caller that can say something useful about an unreachable store (transient,
+  safe to retry) does not have to string-match the generic failure message.
+  `OmnigraphClient.export_to` and the `merge_store` source/target/load paths
+  now raise it instead of letting a bare subprocess connect-refusal (e.g. a
+  data-tier pod restart) escape outside the retry policy.
+
 ## [0.12.0] - 2026-08-07
 
 ### Added

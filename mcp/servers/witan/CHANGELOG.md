@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.11.4] - 2026-08-07
+
+### Fixed
+
+- Floor bumped to `witan-core>=0.13`: `witan/graph.py` re-exports
+  `StoreUnavailable` (added to `witan_core.omnigraph` in 0.13.0) at module
+  scope. The `>=0.12` floor left in place after that addition resolved a
+  published `witan-core` that could not satisfy the import, so a plain
+  `pip install`/`uv tool install witan-council` (or the `ol-agent-kit`
+  meta-package) failed at startup with
+  `ImportError: cannot import name 'StoreUnavailable' from 'witan_core.omnigraph'`.
+  No behavior changes in this package; the `store_merge`/`export_to`
+  merge-resilience fix that introduced the symbol landed earlier and is
+  unaffected — this release only closes the floor gap it left behind.
+
 ## [0.11.3] - 2026-08-07
 
 ### Fixed
