@@ -432,6 +432,197 @@ def test_unleased_recent_in_progress_is_not_ready_or_claimable(server):
 
 
 @requires_omnigraph
+def test_parallel_sessions_of_one_person_do_not_share_a_claim(server, monkeypatch):
+    """The silent double-claim: two agent sessions run by the same human used to
+    both be told ``claimed: True`` for one task.
+
+    ``assignee`` defaulted to the bare identity, so ``current_holder != holder``
+    was False for the second session, the contention branch never ran, and the
+    write went through as a *renewal* of the first session's lease. Neither side
+    saw a signal. The holder is now qualified with $CLAUDE_SESSION_ID, so the
+    second session hits the ordinary held-by-someone-else path.
+    """
+    from witan import server as srv
+
+    t = server.task_create(title="two sessions", description="x")
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "aaaaaaaa-1111-2222-3333-444444444444")
+    first = server.task_claim(t["slug"])
+    assert first["claimed"] is True
+    assert first["assignee"] == f"{srv._current_author()}#aaaaaaaa"
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "bbbbbbbb-5555-6666-7777-888888888888")
+    second = server.task_claim(t["slug"])
+    assert second["claimed"] is False
+    assert second["reason"] == "held"
+    assert second["held_by"] == first["assignee"]
+
+    # …and the first session's claim is intact, not renewed under the second.
+    assert server.task_get(t["slug"])["assignee"] == first["assignee"]
+
+    # The same session re-claiming is still an idempotent renewal.
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "aaaaaaaa-1111-2222-3333-444444444444")
+    assert server.task_claim(t["slug"])["claimed"] is True
+
+
+@requires_omnigraph
+def test_caller_supplied_session_id_beats_the_server_environment(server, monkeypatch):
+    """The deployed case: the server's own environment has no session id.
+
+    A pod's env is `WITAN_*`/`KUBERNETES_*` and nothing else — it is not a
+    child of the agent, so it never sees $CLAUDE_SESSION_ID. Reading the
+    variable server-side therefore qualified nothing for any remote caller, and
+    two of one person's concurrent sessions collided exactly as before. The id
+    has to arrive as an argument; the environment is only the local-stdio
+    fallback.
+    """
+    from witan import server as srv
+
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)  # a deployed pod
+    t = server.task_create(title="deployed claim", description="x")
+
+    first = server.task_claim(t["slug"], session_id="11111111-aaaa")
+    assert first["claimed"] is True
+    assert first["assignee"] == f"{srv._current_author()}#11111111"
+
+    second = server.task_claim(t["slug"], session_id="22222222-bbbb")
+    assert second["claimed"] is False
+    assert second["held_by"] == first["assignee"]
+
+    # An explicit assignee still outranks both sources.
+    assert (
+        server.task_claim(
+            t["slug"], assignee="ci-worker", session_id="333", force=True
+        )["assignee"]
+        == "ci-worker"
+    )
+
+
+def test_holder_qualifier_survives_rich_rendering(monkeypatch):
+    """The qualifier is printed straight into a rich console by the task CLI.
+
+    The first cut used ``"<identity> [<session>]"``, and rich read ``[aaaaaaaa]``
+    as a style tag and dropped it — so both sessions rendered as the bare
+    identity again, exactly the indistinguishability the qualifier removes, at
+    the one place a human actually reads it. No markup-significant characters.
+    """
+    import io
+
+    from rich.console import Console
+
+    from witan import server as srv
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "aaaaaaaa-1111-2222-3333-444444444444")
+    holder = srv._claim_holder()
+    assert "aaaaaaaa" in holder
+
+    buf = io.StringIO()
+    Console(file=buf, width=200, no_color=True).print(holder)
+    assert "aaaaaaaa" in buf.getvalue()
+
+
+@requires_omnigraph
+def test_holder_without_session_id_is_the_bare_identity(server, monkeypatch):
+    """No $CLAUDE_SESSION_ID means one session, so the holder stays exactly what
+    older stores already hold — no qualifier, nothing to migrate."""
+    from witan import server as srv
+
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    t = server.task_create(title="no session", description="x")
+    assert server.task_claim(t["slug"])["assignee"] == srv._current_author()
+
+
+@requires_omnigraph
+def test_assignee_filters_match_a_person_across_their_sessions(server, monkeypatch):
+    """The filter's own precision decides its scope.
+
+    An unqualified filter means the person and must span their sessions; a
+    qualified one names a single session and must NOT widen back to the person.
+    Two sessions each hold a task here — with only one, an over-wide qualified
+    filter still returns the right row and the test passes for the wrong
+    reason, which is exactly how the first version of this shipped.
+    """
+    from witan import server as srv
+
+    me = srv._current_author()
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "cccccccc-9999-0000-1111-222222222222")
+    mine_c = server.task_create(title="held by session c", description="x")
+    claimed_c = server.task_claim(mine_c["slug"])
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "eeee0000-9999-0000-1111-222222222222")
+    mine_e = server.task_create(title="held by session e", description="x")
+    claimed_e = server.task_claim(mine_e["slug"])
+
+    assert claimed_c["assignee"] != claimed_e["assignee"]
+
+    # Unqualified: the person, across both sessions.
+    by_person = {r["slug"] for r in server.task_list(assignee=me)}
+    assert {mine_c["slug"], mine_e["slug"]} <= by_person
+
+    # Qualified: that one session, and not the person's other one.
+    by_session_c = {r["slug"] for r in server.task_list(assignee=claimed_c["assignee"])}
+    assert mine_c["slug"] in by_session_c
+    assert mine_e["slug"] not in by_session_c
+
+    # Someone else's filter must not pick either up.
+    others = {r["slug"] for r in server.task_list(assignee="agentZ")}
+    assert not ({mine_c["slug"], mine_e["slug"]} & others)
+
+
+@requires_omnigraph
+def test_release_accepts_another_session_of_the_same_person(server, monkeypatch):
+    """Releasing a claim your other session took is not a steal — same person,
+    different session — so it must not require force."""
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "dddddddd-0000-0000-0000-000000000000")
+    t = server.task_create(title="handover", description="x")
+    server.task_claim(t["slug"])
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "eeeeeeee-0000-0000-0000-000000000000")
+    assert server.task_release(t["slug"])["released"] is True
+    assert server.task_get(t["slug"])["assignee"] is None
+
+    # A different person still needs force, and is told so.
+    server.task_claim(t["slug"], assignee="agentA")
+    refused = server.task_release(t["slug"], assignee="agentB")
+    assert refused["released"] is False
+    assert "--force" in refused["remedy"]
+
+
+@requires_omnigraph
+def test_refused_claim_names_a_way_out(server):
+    """A refusal that only names the holder is a dead end — especially when
+    there is no holder to name. Every refusal carries the recovery command."""
+    from witan import server as srv
+
+    t = server.task_create(title="stuck", description="x")
+    srv._update_task(t["slug"], {"status": "in_progress", "claimed_at": None})
+
+    refused = server.task_claim(t["slug"], assignee="agentB")
+    assert refused["claimed"] is False
+    assert refused["held_by"] == srv._UNKNOWN_HOLDER
+    remedy = refused["remedy"]
+    assert f"witan task claim {t['slug']} --force" in remedy
+    assert f"witan task release {t['slug']} --force" in remedy
+
+    # And the way out actually works.
+    assert (
+        server.task_claim(t["slug"], assignee="agentB", force=True)["claimed"] is True
+    )
+
+
+@requires_omnigraph
+def test_refused_claim_remedy_reports_when_the_lease_lapses(server):
+    """The third way out is simply waiting, so the refusal says until when."""
+    t = server.task_create(title="leased", description="x")
+    server.task_claim(t["slug"], assignee="agentA")
+
+    refused = server.task_claim(t["slug"], assignee="agentB")
+    assert "held by agentA" in refused["remedy"]
+    assert "lease lapses at" in refused["remedy"]
+
+
+@requires_omnigraph
 def test_unleased_stale_in_progress_is_still_reclaimable(server, monkeypatch):
     """The abandonment recovery path must not regress: an in_progress task with
     no claimed_at whose updated_at is older than the lease window is genuinely

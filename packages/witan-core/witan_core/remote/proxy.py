@@ -44,7 +44,9 @@ how to opt into working locally, when the deployment cannot be reached),
 :meth:`~RemoteMCPProxy._resolve_repo` (client-side repo
 resolution, since the deployed server has no git checkout), and
 :meth:`~RemoteMCPProxy._resolve_session_slug` (client-side workflow-session
-handle, since a deployed replica shares no filesystem with the agent), and
+handle, since a deployed replica shares no filesystem with the agent),
+:meth:`~RemoteMCPProxy._resolve_session_id` (client-side agent-session id, for
+the same reason), and
 :meth:`~RemoteMCPProxy._elicitation_handler` (who answers a prompt the
 deployment raises — a terminal by default). Requires the ``remote`` extra
 (``fastmcp``).
@@ -377,6 +379,20 @@ class RemoteMCPProxy:
         """
         return None
 
+    def _resolve_session_id(self) -> str | None:
+        """Client-side value for an omitted ``session_id``. None: skip.
+
+        The raw agent-session id, for tools that need to tell two sessions of
+        one *person* apart rather than attribute a node to a session — the
+        advisory task claim is the case. Same reason as ``session_slug``: the
+        deployed replica has neither the environment variable nor any
+        protocol-level session state, so the value has to travel as an
+        argument. Distinct from ``session_slug`` because it needs no workflow
+        session to exist first; every agent run has an id, only some have a
+        project.
+        """
+        return None
+
     # ── dispatch ───────────────────────────────────────────────────────────
     def __getattr__(self, name: str) -> Callable[..., Any]:
         # Real instance attributes (_url, _token_provider, …) are set in
@@ -590,6 +606,18 @@ class RemoteMCPProxy:
                 arguments["session_slug"] = active
             else:
                 arguments.pop("session_slug", None)
+        # And the raw session id, for the advisory task claim. Reading it from
+        # the *server* environment would have worked only under local stdio,
+        # where the server is a child of the agent and inherits it; a deployed
+        # pod has no such variable, so every remote caller would collapse back
+        # onto the bare identity — precisely the case the claim qualifier
+        # exists for, since concurrent users are what a shared deployment is.
+        if "session_id" in names and arguments.get("session_id") is None:
+            sid = self._resolve_session_id()
+            if sid is not None:
+                arguments["session_id"] = sid
+            else:
+                arguments.pop("session_id", None)
         # Drop remaining None values so omitted optionals take the tool's own
         # default rather than being sent as explicit nulls.
         return {k: v for k, v in arguments.items() if v is not None}

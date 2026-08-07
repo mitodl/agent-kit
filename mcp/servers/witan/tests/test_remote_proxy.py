@@ -576,3 +576,54 @@ def test_merge_store_wraps_a_batch_refusal_with_that_context(proxy, monkeypatch)
 @contextmanager
 def _fake_export(_rows):
     yield Path("/tmp/does-not-matter.jsonl")
+
+
+def test_claim_session_id_is_threaded_from_the_client(proxy, monkeypatch):
+    """The holder qualifier must survive the hop to a deployed server.
+
+    Regression for a fix that only worked locally: `_claim_holder` read
+    $CLAUDE_SESSION_ID from the *server* process, which is the agent's own
+    child under local stdio but a pod with no such variable when deployed. So
+    every remote caller fell back to the bare `preferred_username` and two of
+    one person's concurrent sessions collided again — in the one topology where
+    concurrent users are the entire point. The client sends its id instead.
+    """
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "ffffffff-1234-5678-9abc-def012345678")
+    captured = {}
+    orig = proxy._map_args
+
+    def spy(name, args, kwargs):
+        result = orig(name, args, kwargs)
+        captured[name] = result
+        return result
+
+    monkeypatch.setattr(proxy, "_map_args", spy)
+
+    t = proxy.task_create(title="remote claim", description="d", repo=REPO)
+    claimed = proxy.task_claim(slug=t["slug"])
+
+    assert captured["task_claim"]["session_id"] == (
+        "ffffffff-1234-5678-9abc-def012345678"
+    )
+    assert claimed["claimed"] is True
+    assert claimed["assignee"].endswith("#ffffffff")
+
+
+def test_claim_without_a_client_session_id_sends_none(proxy, monkeypatch):
+    """No id to send means the argument is omitted, not sent as an explicit
+    null — the server then falls back to its own environment (correct under
+    local stdio) or to the bare identity."""
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    captured = {}
+    orig = proxy._map_args
+
+    def spy(name, args, kwargs):
+        result = orig(name, args, kwargs)
+        captured[name] = result
+        return result
+
+    monkeypatch.setattr(proxy, "_map_args", spy)
+
+    t = proxy.task_create(title="no sid", description="d", repo=REPO)
+    proxy.task_claim(slug=t["slug"])
+    assert "session_id" not in captured["task_claim"]

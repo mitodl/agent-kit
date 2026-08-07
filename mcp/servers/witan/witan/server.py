@@ -12,7 +12,7 @@ import uuid
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -386,6 +386,150 @@ _lease_expired = readiness.lease_expired
 # "not held" or "held, holder unknown"?), so every held_by response field uses
 # this stable placeholder instead of the raw (possibly-None) holder.
 _UNKNOWN_HOLDER = "unknown (no assignee on record)"
+
+# A holder is ``"<identity>#<session>"`` — see ``_claim_holder``. Matched
+# conservatively (the charset of a session id, anchored at the end) so an
+# identity that happens to contain a '#' is not mistaken for a qualified one.
+#
+# '#' rather than the more obvious "identity [session]": holder strings are
+# printed straight into `rich` consoles by the task CLI, and rich reads
+# ``[aaaaaaaa]`` as a style tag and *swallows* it. That silently rendered every
+# session's holder as the bare identity again — reintroducing the exact
+# indistinguishability this qualifier exists to remove, at the one place a human
+# reads it. A delimiter that is not markup in any of our output paths avoids
+# having to remember to escape it at each one.
+_SESSION_SUFFIX_RE = re.compile(r"#[0-9A-Za-z_-]{1,64}$")
+
+
+def _claim_holder(assignee: str | None = None, session_id: str | None = None) -> str:
+    """The identity a claim is recorded under.
+
+    An explicit ``assignee`` always wins — callers that already have a better
+    id (a worker name, a CI job) keep passing it.
+
+    Otherwise the caller's identity is qualified with the agent session it came
+    from, because the bare identity CANNOT TELL TWO OF ONE PERSON'S PARALLEL
+    SESSIONS APART, and that is not a near-miss — it defeats the check
+    entirely. With both sessions claiming as ``"Tobias Macey"``,
+    ``task_claim``'s ``current_holder != holder`` test is False, so the
+    contention branch never runs: the second session skips straight to the
+    write, *renews the first session's lease*, and is told ``claimed: True``.
+    Two agents then work the same task, each believing it holds an exclusive
+    claim, and neither side ever sees a signal. Session-qualifying the holder
+    turns that silent double-claim into an ordinary "held by someone else",
+    which the elicit/force path already handles.
+
+    ★ THE ID MUST COME FROM THE CALLER, NOT THIS PROCESS'S ENVIRONMENT. Reading
+    ``$CLAUDE_SESSION_ID`` here works only under local stdio, where the server
+    is a child of the agent and inherits it. A deployed pod has no such
+    variable (its env is ``WITAN_*``/``KUBERNETES_*`` and nothing else), so
+    every remote caller would fall back to the bare ``preferred_username`` and
+    keep colliding — in the one topology where concurrent users are the whole
+    point. ``witan_core.remote.proxy._map_args`` injects the client's id for
+    tools declaring ``session_id``, the same way it already does for ``repo``
+    and ``session_slug``; an agent calling a *deployed* witan directly (not
+    through the CLI proxy) has to pass its own.
+
+    The environment is still consulted as the local-stdio fallback. Truncated
+    because the holder string is read by humans in refusal messages and task
+    listings, and 8 hex chars is plenty to tell two concurrent sessions apart.
+
+    With no session id from either source there is only one session to be, so
+    the bare identity is both correct and byte-identical to what older stores
+    already hold.
+    """
+    if assignee:
+        return assignee
+    identity = _current_author()
+    session = session_id or os.environ.get("CLAUDE_SESSION_ID") or ""
+    return f"{identity}#{session[:8]}" if session else identity
+
+
+def _holder_identity(holder: str | None) -> str | None:
+    """Strip a holder's ``#<session>`` qualifier, leaving the person."""
+    return _SESSION_SUFFIX_RE.sub("", holder) if holder else holder
+
+
+def _is_qualified(holder: str | None) -> bool:
+    """Whether a holder string names a session as well as a person."""
+    return bool(holder) and _SESSION_SUFFIX_RE.search(holder) is not None
+
+
+def _holder_matches(recorded: str | None, wanted: str | None) -> bool:
+    """Whether a row's holder satisfies an ``assignee`` *filter*.
+
+    The filter's own precision decides the scope, which is the only reading
+    that lets one parameter answer both questions people actually ask:
+
+      ``"Tobias Macey"``           → every session of that person
+      ``"Tobias Macey#5e313f6d"``  → that one session, and no other
+
+    Stripping the qualifier off *both* sides — the obvious implementation, and
+    the first one here — collapses the second case into the first: filtering
+    for ``alice#aaaaaaaa`` would also return rows held by ``alice#bbbbbbbb``,
+    so a qualified selector silently meant something wider than it says. Only
+    an unqualified filter is widened to the person.
+    """
+    if wanted is None:
+        return True
+    if recorded == wanted:
+        return True
+    if _is_qualified(wanted):
+        return False
+    return _holder_identity(recorded) == wanted
+
+
+def _same_person(a: str | None, b: str | None) -> bool:
+    """Whether two holder strings name the same person, whatever the session.
+
+    Deliberately *not* ``_holder_matches``: this asks about two holders rather
+    than matching a row against a filter, and the answer must ignore the
+    qualifier on both sides. ``task_release`` is the caller — releasing a claim
+    that another of your own sessions took is a handover, not a steal, so it
+    should not need ``force``, while another person's still should.
+    """
+    return _holder_identity(a) == _holder_identity(b)
+
+
+def _lease_expiry(lease_started_at: str | None) -> str | None:
+    """When an advisory lease lapses, ISO-8601, or ``None`` if unknowable."""
+    if not lease_started_at:
+        return None
+    try:
+        started = datetime.fromisoformat(lease_started_at)
+    except (ValueError, TypeError):
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return (started + timedelta(seconds=readiness.CLAIM_LEASE_SECONDS)).isoformat()
+
+
+def _claim_remedy(slug: str, held_by: str, lease_started_at: str | None) -> str:
+    """What to actually *do* about a refused claim.
+
+    A refusal that only names the holder is a dead end for the two cases that
+    matter most: nobody is on record as the holder (the task was moved to
+    ``in_progress`` by ``task_update``, so there is no person to go and ask),
+    and the holder is a session of your own that has since gone away. Both are
+    recoverable — ``force`` steals, ``task_release --force`` clears, and the
+    lease lapses on its own — but none of that is discoverable from
+    ``{"claimed": false, "reason": "held"}``, so callers conclude the task is
+    simply stuck. Say the way out in the response, next to the refusal.
+    """
+    expiry = _lease_expiry(lease_started_at)
+    when = f" Its lease lapses at {expiry}." if expiry else ""
+    if held_by == _UNKNOWN_HOLDER:
+        return (
+            f"No holder is on record — {slug} was moved to in_progress without a "
+            f"claim, so there is nobody to hand it over.{when} Take it with "
+            f"`witan task claim {slug} --force`, or clear it with "
+            f"`witan task release {slug} --force`."
+        )
+    return (
+        f"{slug} is held by {held_by}.{when} Take it over with "
+        f"`witan task claim {slug} --force` if that holder is gone."
+    )
+
 
 # Bounded re-tries for the best-effort CAS claim loop: on each surfaced
 # optimistic-concurrency conflict we re-read and either bail (a rival won) or
@@ -4214,7 +4358,7 @@ def task_list(
     if status:
         rows = [r for r in rows if r.get("status") == status]
     if assignee:
-        rows = [r for r in rows if r.get("assignee") == assignee]
+        rows = [r for r in rows if _holder_matches(r.get("assignee"), assignee)]
     return rows
 
 
@@ -4314,6 +4458,7 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
 async def task_claim(
     slug: str,
     assignee: str | None = None,
+    session_id: str | None = None,
     force: bool = False,
     ctx: Context | None = None,
 ) -> dict | None:
@@ -4343,9 +4488,19 @@ async def task_claim(
         The ``tk-`` slug to claim.
     assignee:
         Holder identity. Defaults to the calling user (the JWT's
-        ``preferred_username`` when deployed, the configured author locally);
-        parallel agents under one identity should pass a distinct id (e.g. a
-        session id) so claims don't collide.
+        ``preferred_username`` when deployed, the configured author locally)
+        qualified by ``session_id`` — see ``_claim_holder``. Two of one
+        person's parallel sessions must not share a holder string, or the
+        contention check passes and the second silently renews the first's
+        lease. Pass an explicit id to override (a worker name, a CI job).
+    session_id:
+        The calling agent session's id, which qualifies the default holder.
+        **Pass this when calling a deployed witan** — the server cannot infer
+        it (no shared environment, and MCP 2026-07-28 carries no session
+        state), and without it every one of your concurrent sessions claims
+        under the same name. The CLI's remote proxy fills it in automatically;
+        under local stdio the server falls back to its own
+        ``$CLAUDE_SESSION_ID``, which it inherits from the agent.
     force:
         Steal the task even if another holder's lease is still valid.
     """
@@ -4354,7 +4509,7 @@ async def task_claim(
     # last-write-wins (see docs/adr/0003 and the claim loop below). On success
     # also upserts a CodeBranch for the checkout's repo+branch and links it
     # WorksOn this task (best-effort).
-    holder = assignee or _current_author()
+    holder = _claim_holder(assignee, session_id)
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
@@ -4400,6 +4555,7 @@ async def task_claim(
                 "reason": "held",
                 "held_by": holder_desc,
                 "claimed_at": claimed_at,
+                "remedy": _claim_remedy(slug, holder_desc, lease_started_at),
             }
         force = True
 
@@ -4432,6 +4588,9 @@ async def task_claim(
                     "reason": "lost_race",
                     "held_by": rival or _UNKNOWN_HOLDER,
                     "claimed_at": fresh.get("claimed_at"),
+                    "remedy": _claim_remedy(
+                        slug, rival or _UNKNOWN_HOLDER, fresh_lease_started_at
+                    ),
                 }
             # The conflict was unrelated (or the rival's lease has lapsed) —
             # retry the claim now that the manifest has advanced.
@@ -4444,12 +4603,14 @@ async def task_claim(
     rows = client.read("read.gq", "get_task", {"slug": slug})
     winner = rows[0].get("assignee") if rows else None
     if winner != holder and not force:
+        winner_claimed_at = rows[0].get("claimed_at") if rows else None
         return {
             "slug": slug,
             "claimed": False,
             "reason": "lost_race",
             "held_by": winner or _UNKNOWN_HOLDER,
-            "claimed_at": rows[0].get("claimed_at") if rows else None,
+            "claimed_at": winner_claimed_at,
+            "remedy": _claim_remedy(slug, winner or _UNKNOWN_HOLDER, winner_claimed_at),
         }
     _track_code_branch(repo_module.detect(), task_slug=slug)
     return {
@@ -4465,6 +4626,7 @@ async def task_claim(
 def task_release(
     slug: str,
     assignee: str | None = None,
+    session_id: str | None = None,
     status: TaskStatus = "open",
     force: bool = False,
 ) -> dict | None:
@@ -4481,19 +4643,38 @@ def task_release(
         The ``tk-`` slug to release.
     assignee:
         Holder identity releasing the task. Defaults to the calling user, same
-        resolution as ``task_claim``'s ``assignee``.
+        resolution as ``task_claim``'s ``assignee``. The held-by check compares
+        *identities*, ignoring the ``#<session>`` qualifier, so you can release a
+        claim one of your own other sessions took; another person's still needs
+        ``force``.
+    session_id:
+        The calling agent session's id, same resolution and same reason as
+        ``task_claim``'s. Only affects the holder string this call is compared
+        *as*; since the comparison is identity-level, omitting it against a
+        deployed server is harmless here in a way it is not for ``task_claim``.
     status:
         Status to return the task to (default ``open``).
     force:
         Release even if held by a different assignee.
     """
-    holder = assignee or _current_author()
+    holder = _claim_holder(assignee, session_id)
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
     current_holder = rows[0].get("assignee")
-    if current_holder and current_holder != holder and not force:
-        return {"slug": slug, "released": False, "held_by": current_holder}
+    # Identity-level match, so you can release a claim your *other* session took
+    # (same person, different `#<session>` qualifier) without reaching for force.
+    # Another person's claim still needs it.
+    if current_holder and not _same_person(current_holder, holder) and not force:
+        return {
+            "slug": slug,
+            "released": False,
+            "held_by": current_holder,
+            "remedy": (
+                f"{slug} is held by {current_holder}, not {holder}. Release it "
+                f"anyway with `witan task release {slug} --force`."
+            ),
+        }
 
     _update_task(slug, {"status": status, "assignee": None, "claimed_at": None})
     return {"slug": slug, "released": True, "status": status}
@@ -4560,7 +4741,7 @@ def task_ready(
         r
         for r in rows
         if readiness.is_ready(r, blocker_status)
-        and (assignee is None or r.get("assignee") == assignee)
+        and _holder_matches(r.get("assignee"), assignee)
     ]
     ready.sort(key=lambda r: _PRIORITY_ORDER.get(r.get("priority"), 9))
     return ready[:limit]
