@@ -1001,10 +1001,16 @@ def test_store_merge_rows_are_findable_by_search_not_just_readable(server):
     # Corpus, so the searched-for token is rare *relative to N*. Written via
     # memory_store rather than the merge, to keep the path under test to the
     # one row whose findability is being asserted.
+    #
+    # Through the `server` fixture, NOT the `srv` module: memory_store is a
+    # coroutine function, and calling it off the module returns a coroutine
+    # nobody awaits — the rows silently never land, leaving this test on the
+    # one-row corpus the docstring says it must stay out of. The fixture's
+    # _Tools proxy is what runs it to completion.
     for i, subject in enumerate(
         ["sourdough starters", "derailleur cables", "ski wax", "espresso pucks"]
     ):
-        srv.memory_store(
+        server.memory_store(
             kind="project_fact",
             title=f"filler {i}",
             content=f"Unrelated prose concerning {subject} and nothing else.",
