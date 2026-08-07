@@ -16,11 +16,17 @@ from typing import Callable
 from witan_core.remote.config import RemoteConfig
 from witan_core.remote.proxy import (
     RemoteMCPProxy,
+    RemoteToolFailed,
     RemoteToolUnavailable,
     RemoteUnreachable,
 )
 
-__all__ = ["RemoteServerProxy", "RemoteToolUnavailable", "RemoteUnreachable"]
+__all__ = [
+    "RemoteServerProxy",
+    "RemoteToolFailed",
+    "RemoteToolUnavailable",
+    "RemoteUnreachable",
+]
 
 # Tools that only mean anything against a local checkout. `code_reindex` IS
 # registered on the deployment (it is the same server module), but running it

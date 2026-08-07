@@ -26,6 +26,7 @@ from witan_core.omnigraph import store_cli_args, store_subprocess_env
 from witan_core.remote.proxy import (
     RemoteMCPProxy,
     RemotePayloadTooLarge,
+    RemoteToolFailed,
     RemoteToolUnavailable,
     RemoteUnreachable,
 )
@@ -37,6 +38,7 @@ from ..config import RemoteConfig
 __all__ = [
     "RemotePayloadTooLarge",
     "RemoteServerProxy",
+    "RemoteToolFailed",
     "RemoteToolUnavailable",
     "RemoteUnreachable",
 ]

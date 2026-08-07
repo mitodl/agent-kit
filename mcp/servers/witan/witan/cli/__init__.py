@@ -175,20 +175,28 @@ def main() -> None:
     from ..remote.oidc import RemoteAuthError
     from ..remote.proxy import (
         RemotePayloadTooLarge,
+        RemoteToolFailed,
         RemoteToolUnavailable,
         RemoteUnreachable,
     )
 
     try:
         app.meta()
-    # The four ways a deployed witan fails a command, each already carrying its
+    # The five ways a deployed witan fails a command, each already carrying its
     # own actionable wording: misconfigured or not logged in (RemoteAuthError),
     # reached but offering no such tool (RemoteToolUnavailable), not reached at
-    # all (RemoteUnreachable), and answering that the body is too big
-    # (RemotePayloadTooLarge). The last two each used to escape as a traceback.
+    # all (RemoteUnreachable), answering that the body is too big
+    # (RemotePayloadTooLarge), and running the tool only for the tool to refuse
+    # (RemoteToolFailed). All but the first used to escape as a traceback.
+    #
+    # RemoteToolFailed is the wide one: only `migrate` has its own
+    # `except RuntimeError`, so for every other command — memory, tasks,
+    # projects, traces — this net is the entire difference between a Cedar
+    # denial reading as a sentence and reading as a crash.
     except (
         RemoteAuthError,
         RemotePayloadTooLarge,
+        RemoteToolFailed,
         RemoteToolUnavailable,
         RemoteUnreachable,
     ) as exc:

@@ -66,6 +66,7 @@ from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 from fastmcp.client.elicitation import ElicitResult
 from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.exceptions import ToolError
 
 
 class RemoteToolUnavailable(RuntimeError):
@@ -85,6 +86,31 @@ class RemotePayloadTooLarge(RuntimeError):
     Never a signal to retry. The payload is what was refused, so sending it
     again gets the same answer for the same reason, having spent the same
     megabytes.
+    """
+
+
+class RemoteToolFailed(RuntimeError):
+    """The deployment ran the tool and the tool refused — a Cedar denial, a
+    missing slug, a schema mismatch, a bad argument.
+
+    ★ EXISTS TO MAKE THE PROXY A REAL DROP-IN ★
+    In-process, a tool that refuses raises ``RuntimeError`` and the CLI's
+    ``except RuntimeError`` renders one red line. Over MCP the identical
+    refusal comes back as ``fastmcp.exceptions.ToolError``, which is *not* a
+    ``RuntimeError`` (``ToolError → FastMCPError → Exception``), so it sailed
+    past every one of those handlers and the user got ~40 lines of cyclopts →
+    asyncio → fastmcp internals with the real message on the last one. The
+    message was always there; nothing rendered it. Subclassing ``RuntimeError``
+    is what makes the same handler cover both tiers, which is the property the
+    proxy's module docstring claims ("the CLI's rendering code is untouched").
+
+    This does not walk back :meth:`RemoteMCPProxy._reclassifying`'s rule that a
+    server-side raise "must keep its own error". That rule is about not
+    relabelling a refusal as :class:`RemoteUnreachable` — about *where* the
+    fault was, not which class carries it. A refusal still arrives as its own
+    distinct type, still says what the server said, and still keeps the
+    original ``ToolError`` as its ``__cause__`` for anyone who needs the wire
+    form.
     """
 
 
@@ -184,6 +210,23 @@ def payload_too_large(exc: BaseException) -> BaseException | None:
         if any(phrase in text for phrase in _TOO_LARGE_PHRASES):
             return err
     return None
+
+
+def tool_failure(exc: BaseException) -> BaseException | None:
+    """The server-side tool refusal inside ``exc``, or None.
+
+    ★ MUST BE ASKED LAST — AFTER :func:`payload_too_large` ★
+    A 413 relayed by ToolHive's vMCP *is* a ``ToolError``: the HTTP exchange
+    with vMCP succeeded, and the upstream refusal comes back as tool-error text
+    quoting the limit. Asking this first would file every one of those under
+    "the tool refused", losing the one classification that tells the caller to
+    send less rather than to fix their call.
+
+    Walks the chain rather than testing ``exc`` directly, for the same reason
+    :func:`_transport_failure` does: anyio re-raises through an
+    ``ExceptionGroup``, so the ``ToolError`` is not always the outermost thing.
+    """
+    return next((e for e in _chain(exc) if isinstance(e, ToolError)), None)
 
 
 async def console_elicitation_handler(
@@ -422,8 +465,20 @@ class RemoteMCPProxy:
         transport fault (:func:`_transport_failure`) is the deployment going
         away. Errors this class already classified pass through untouched.
 
-        Size is asked FIRST — see :func:`payload_too_large` for why asking it
-        second silently mislabels every direct-connection 413 as unreachable.
+        The three questions are asked in a fixed order, and each ordering is
+        load-bearing:
+
+        1. Size FIRST — see :func:`payload_too_large` for why asking it second
+           silently mislabels every direct-connection 413 as unreachable.
+        2. Transport next, since a drop is the deployment going away.
+        3. Tool refusal LAST — see :func:`tool_failure`. A vMCP-relayed 413
+           arrives as a ``ToolError`` too, so this must not get first look.
+
+        A refusal becomes :class:`RemoteToolFailed` rather than propagating as
+        the raw ``ToolError``: it is still its own type carrying the server's
+        own words, but it is now a ``RuntimeError``, which is what the CLI has
+        always caught for the identical in-process failure. Anything this does
+        not recognise still propagates untouched.
         """
         try:
             yield
@@ -436,9 +491,12 @@ class RemoteMCPProxy:
                     self._payload_too_large_error(name, oversized)
                 ) from exc
             dropped = _transport_failure(exc)
-            if dropped is None:
+            if dropped is not None:
+                raise RemoteUnreachable(self._unreachable_error(dropped)) from exc
+            refused = tool_failure(exc)
+            if refused is None:
                 raise
-            raise RemoteUnreachable(self._unreachable_error(dropped)) from exc
+            raise RemoteToolFailed(str(refused)) from exc
 
     async def _invoke(self, name: str, args: tuple, kwargs: dict) -> Any:
         """Dispatch one tool call, classifying an unreachable deployment.

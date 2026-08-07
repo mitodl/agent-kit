@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.11.5] - 2026-08-07
+
+### Fixed
+
+- A server-side tool error on a remote target reads as a sentence instead of a
+  traceback. `fastmcp.exceptions.ToolError` is not a `RuntimeError`, so it
+  missed every `except RuntimeError` in the CLI: against a local store a failing
+  tool gave one red line, and against a deployment the same failure gave ~40
+  lines of cyclopts/asyncio/fastmcp internals with the message on the last one.
+  Found during the first live cutover on
+  `WITAN_TARGET=ci witan migrate merge <store> --dry-run`; the message the user
+  needed was real and useful, and simply buried.
+- The fix is not merge-specific. Only `witan migrate` has `except RuntimeError`
+  of its own, so `main()` now also catches `RemoteToolFailed` — which is what
+  covers memory, tasks, projects and traces, where a Cedar denial on the shared
+  deployment is the common way to hit this.
+
+### Changed
+
+- Floor bumped to `witan-core>=0.14` for `remote.proxy.RemoteToolFailed`, which
+  `witan/remote/proxy.py` re-exports at module scope. Bumped in the same change
+  that adds the caller, as the pin comment asks — the workspace resolves
+  witan-core by path, so nothing in CI can catch a stale floor.
+
 ## [0.11.4] - 2026-08-07
 
 ### Fixed

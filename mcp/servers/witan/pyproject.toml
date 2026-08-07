@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.11.4"
+version = "0.11.5"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -27,11 +27,13 @@ dependencies = [
   # witan_core symbol in the same change as its caller, bump this line in that
   # change: the workspace resolves witan-core by path, so nothing here can
   # catch it.
-  # (>=0.12 was required for remote.proxy.RemotePayloadTooLarge; >=0.11 for
-  # chunking.MCP_LOAD_MAX_BYTES; >=0.10 for witan_core.chunking + load_batch +
-  # config_file.resolve_config_path; >=0.9 for observability.middleware; >=0.8
-  # for OmnigraphClient.change_many.)
-  "witan-core[cli,remote,observability]>=0.13,<1",
+  # (>=0.14 was required for remote.proxy.RemoteToolFailed, re-exported at
+  # module scope by witan/remote/proxy.py and named by cli/__init__.py's
+  # main(); >=0.13 for omnigraph.StoreUnavailable; >=0.12 for
+  # remote.proxy.RemotePayloadTooLarge; >=0.11 for chunking.MCP_LOAD_MAX_BYTES;
+  # >=0.10 for witan_core.chunking + load_batch + config_file.resolve_config_path;
+  # >=0.9 for observability.middleware; >=0.8 for OmnigraphClient.change_many.)
+  "witan-core[cli,remote,observability]>=0.14,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code

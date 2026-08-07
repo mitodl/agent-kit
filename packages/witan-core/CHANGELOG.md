@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.14.0] - 2026-08-07
+
+### Added
+
+- `RemoteToolFailed` in `witan_core.remote.proxy`: the deployment ran the tool
+  and the tool refused — a Cedar denial, a missing slug, a schema mismatch, a
+  bad argument. A `RuntimeError` subclass, which is the entire point: in-process
+  a refusing tool raises `RuntimeError` and every CLI command's
+  `except RuntimeError` renders one red line, but over MCP the identical refusal
+  came back as `fastmcp.exceptions.ToolError`, which is **not** a `RuntimeError`
+  (`ToolError -> FastMCPError -> Exception`). It sailed past every one of those
+  handlers, so any server-side refusal on a deployed target printed ~40 lines of
+  cyclopts -> asyncio -> fastmcp internals with the real message on the last one.
+  Observed during the first live cutover on
+  `WITAN_TARGET=ci witan migrate merge <store> --dry-run`.
+- `tool_failure()` in `witan_core.remote.proxy`: the `ToolError` inside an
+  exception, or `None`. Walks the chain (anyio re-raises through an
+  `ExceptionGroup`, so the `ToolError` is not always outermost) for the same
+  reason `_transport_failure` does.
+
+### Changed
+
+- `RemoteMCPProxy._reclassifying` now converts a server-side refusal into
+  `RemoteToolFailed` instead of letting the raw `ToolError` propagate. This does
+  not walk back its "a tool that raises server-side must keep its own error"
+  rule: that rule is about not relabelling a refusal as `RemoteUnreachable` —
+  about *where* the fault was, not which class carries it. The refusal keeps its
+  own distinct type, the server's own words, and the original `ToolError` as its
+  `__cause__`.
+- The refusal branch is asked **last**, after size and transport. ToolHive's
+  vMCP relays an upstream 413 as a `ToolError` too, so asking it first would
+  file every relayed 413 under "the tool refused" and lose the one reading that
+  tells the caller to send less rather than to fix their call. Pinned by
+  `test_a_relayed_413_is_still_a_size_refusal_though_it_arrives_as_a_tool_error`.
+
 ## [0.13.0] - 2026-08-07
 
 ### Added
