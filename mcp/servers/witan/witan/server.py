@@ -1238,6 +1238,14 @@ def _classify_rows(
     nodes: dict[tuple[str, str], dict] = {}
     passthrough: list[dict] = []
     for row in rows:
+        # A JSONL line is only *conventionally* an object: `[]`, `null`, `3`
+        # and `"…"` all parse fine and would reach `.get` as an AttributeError,
+        # which is the raw fault this boundary exists to convert into a
+        # sentence. Checked here rather than in `_parse_export` so the wire
+        # path gets it too — the MCP schema says `list[dict]`, but that is the
+        # deployment's guarantee, not this function's.
+        if not isinstance(row, dict):
+            raise RuntimeError(f"{source}: export row is not a JSON object: {row!r}")
         row_type = row.get("type")
         if not row_type:
             if not row.get("edge"):

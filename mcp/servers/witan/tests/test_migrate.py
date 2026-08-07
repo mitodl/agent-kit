@@ -634,6 +634,22 @@ def test_parse_export_reads_real_edge_rows_as_edges(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("payload", ["[]", "null", '"a string"', "3"])
+def test_parse_export_raises_on_a_line_that_is_not_a_json_object(tmp_path, payload):
+    """Valid JSON is not the same as a valid export row.
+
+    Each of these parses cleanly and then reaches `.get` as a bare
+    `AttributeError` — the raw fault this boundary exists to convert into a
+    sentence naming the offending line.
+    """
+    from witan import server as srv
+
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(payload + "\n")
+    with pytest.raises(RuntimeError, match="not a JSON object"):
+        srv._parse_export(bad)
+
+
 def test_parse_export_raises_on_a_row_that_is_neither_node_nor_edge(tmp_path):
     from witan import server as srv
 
