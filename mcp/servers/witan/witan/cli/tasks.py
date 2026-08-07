@@ -277,7 +277,8 @@ def task_claim_cmd(
     Parameters
     ----------
     slug: The ``tk-`` slug to claim.
-    assignee: Holder identity (default: the configured author).
+    assignee: Holder identity (default: the author, qualified by this agent
+        session so parallel sessions don't share one claim).
     force: Steal the task even if another holder's lease is still valid.
     """
     s = _srv()
@@ -293,6 +294,8 @@ def task_claim_cmd(
         return
     reason = result.get("held_by") or result.get("reason") or "unavailable"
     console.print(f"[yellow]Not claimed[/yellow] ({reason}).")
+    if result.get("remedy"):
+        console.print(f"  {result['remedy']}")
     raise SystemExit(1)
 
 
@@ -309,7 +312,9 @@ def task_release_cmd(
     Parameters
     ----------
     slug: The ``tk-`` slug to release.
-    assignee: Holder identity releasing the task (default: the configured author).
+    assignee: Holder identity releasing the task (default: the author, qualified
+        by this agent session — a claim taken by another of your own sessions
+        still matches, since the check is on identity, not session).
     status: Status to return the task to (default ``open``).
     force: Release even if held by a different assignee.
     """
@@ -330,6 +335,8 @@ def task_release_cmd(
         f"[yellow]Not released[/yellow] — held by {result.get('held_by')} "
         f"(pass --force)."
     )
+    if result.get("remedy"):
+        console.print(f"  {result['remedy']}")
     raise SystemExit(1)
 
 
@@ -532,7 +539,10 @@ def task_run(
         if claim and not dry_run:
             claimable = []
             for t in selected:
-                res = _fn(s.task_claim)(slug=t["slug"], assignee=cfg.author) or {}
+                # No explicit assignee: let task_claim qualify the author with
+                # this session, so a task another of these sessions is already
+                # on reads as held instead of being silently re-claimed here.
+                res = _fn(s.task_claim)(slug=t["slug"]) or {}
                 if res.get("claimed"):
                     console.print(f"[cyan]Claimed {t['slug']}.[/cyan]")
                     claimable.append(t)
@@ -541,6 +551,8 @@ def task_run(
                     console.print(
                         f"[yellow]Could not claim {t['slug']} ({reason}), skipping.[/yellow]"
                     )
+                    if res.get("remedy"):
+                        console.print(f"  [yellow]{res['remedy']}[/yellow]")
         if not claimable:
             console.print("[red]No tasks could be claimed.[/red]")
             raise SystemExit(1)
