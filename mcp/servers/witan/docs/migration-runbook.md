@@ -253,13 +253,19 @@ Moving your local store onto the deployed service (ADR-0009). **Do it
 yourself** — no kubectl, no port-forward, no AWS credentials:
 
 ```bash
-witan login                                            # once, if you haven't
+witan target add ol --remote-url … --oidc-issuer …     # once, if you haven't
+witan login --target ol                                # once, if you haven't
 witan migrate merge ~/.local/share/witan/graph.omni --dry-run
 witan migrate merge ~/.local/share/witan/graph.omni
 ```
 
-With a deployment configured (`remote_url`, see
-[`deployed-witan-onboarding.md`](deployed-witan-onboarding.md)), `merge`
+The first two lines are step 1 and 2 of
+[`deployed-witan-onboarding.md`](deployed-witan-onboarding.md), which has the
+actual hostnames — do that first if you have not, and confirm with `witan
+whoami` before merging anything. Merging into a deployment you are not
+authenticated against fails at the first batch, not silently.
+
+With a deployment configured (`remote_url`), `merge`
 exports your store locally and ships the rows through the deployment's
 `store_merge` tool in batches. The server reconciles each batch against the
 shared graph and writes the winners — **as you**, using your own actor's
