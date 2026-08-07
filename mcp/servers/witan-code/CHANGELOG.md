@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.12.2] - 2026-08-07
+
+### Fixed
+
+- An oversized index batch is refused **once**, as a sentence, instead of being
+  retried and then raising a traceback. A direct 413 is an httpx error, so
+  `StoreSession.call`'s generic arm read it as a dropped socket and did what it
+  does for one: reconnect and send the same multi-MiB body again, to be refused
+  identically. Retrying cannot help — the payload is the thing being rejected.
+  Both faces of a 413 are now classified: relayed through the vMCP as a
+  `ToolError`, and direct as an httpx status error.
+- The message names the tool, the endpoint, the byte budget records are already
+  batched under, and that batches accepted before the refusal were applied — an
+  index that stopped part-way, not one that rolled back.
+
+### Changed
+
+- `witan-core` floor raised to `>=0.12` for `RemotePayloadTooLarge` /
+  `payload_too_large`, imported at module scope in `remote/store.py`. Third time
+  this floor has been tripped; the pin comment now says so.
+
 ## [0.12.1] - 2026-08-07
 
 ### Fixed

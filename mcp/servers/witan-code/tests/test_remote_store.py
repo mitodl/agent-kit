@@ -22,6 +22,7 @@ from fastmcp import Client
 from witan_code import config as cfg_module
 from witan_code import store as store_module
 from witan_code.remote.store import (
+    RemotePayloadTooLarge,
     RemoteStoreClient,
     RemoteStoreUnsupported,
     StoreSession,
@@ -312,6 +313,87 @@ def test_a_dropped_connection_is_reconnected_once():
         "code_store_views",
     ]
     session.close()
+
+
+class _RefusesForSize(_FakeClient):
+    """A deployment that answers every call with a size refusal.
+
+    ``exc`` is the shape under test: the two faces a 413 wears on this path.
+    """
+
+    def __init__(self, log, exc):
+        super().__init__(log)
+        self._exc = exc
+
+    async def call_tool(self, name, arguments):
+        self._log.append(("attempt", name))
+        raise self._exc
+
+
+def _http_413():
+    import httpx2
+
+    request = httpx2.Request("POST", "http://x/mcp")
+    response = httpx2.Response(413, request=request, text="Request body too large")
+    return httpx2.HTTPStatusError("413", request=request, response=response)
+
+
+def _relayed_413():
+    from fastmcp.exceptions import ToolError
+
+    return ToolError(
+        'backend unavailable: tool call failed on backend witan: calling "tools/call": '
+        "Request Entity Too Large: request failed with status 413: Request body too large"
+    )
+
+
+@pytest.mark.parametrize(
+    "exc", [_http_413(), _relayed_413()], ids=["direct", "relayed"]
+)
+def test_an_oversized_batch_is_refused_once_and_never_retried(exc):
+    """★ The retry is the bug, not just the traceback.
+
+    A direct 413 is an httpx error, so the generic arm treats it as a dropped
+    socket: reconnect and send the same multi-MiB body again, to be refused
+    identically. That is one wasted round trip per batch of a repo-scale index
+    before the run dies — and it died as a traceback either way.
+    """
+    log: list = []
+    clients = iter([_RefusesForSize(log, exc), _RefusesForSize(log, exc)])
+    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: next(clients))
+    with pytest.raises(RemotePayloadTooLarge) as caught:
+        RemoteStoreClient(REPO, session).load([{"id": "n1", "type": "Symbol"}])
+    # Exactly one attempt: no reconnect, no second send of the same payload.
+    assert [entry[0] for entry in log] == ["connect", "attempt"]
+    message = str(caught.value)
+    assert "`code_store_load`" in message
+    assert "http://x/mcp" in message
+    assert "2 MiB" in message
+    assert "stopped part-way" in message
+
+
+def test_a_dropped_socket_is_still_retried_after_the_size_guard():
+    """The guard sits ahead of the reconnect; it must not disable it."""
+    log: list = []
+    clients = iter([_FakeClient(log, fail_first=True), _FakeClient(log)])
+    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: next(clients))
+    assert RemoteStoreClient(REPO, session).list_branches() == ["main"]
+    assert [entry[0] for entry in log].count("connect") == 2
+    session.close()
+
+
+def test_an_ordinary_tool_failure_is_not_read_as_a_size_refusal():
+    """A tool error relays the server's text, which can quote the caller's data."""
+    from fastmcp.exceptions import ToolError
+
+    log: list = []
+    session = StoreSession(
+        "http://x/mcp",
+        lambda: "jwt",
+        lambda _t: _RefusesForSize(log, ToolError("no view named 'payload-413'")),
+    )
+    with pytest.raises(ToolError):
+        RemoteStoreClient(REPO, session).list_branches()
 
 
 def test_an_empty_load_costs_nothing():

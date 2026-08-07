@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.12.0] - 2026-08-07
+
+### Added
+
+- `RemotePayloadTooLarge` and `payload_too_large()` in `witan_core.remote.proxy`:
+  a request body the deployment refuses for its size (HTTP 413) is now its own
+  classification, with a message naming the tool, the batch budget the client
+  already applies, the two causes that survive that budget, and — the part a
+  reader needs most — that earlier batches were applied, so the write stopped
+  part-way rather than rolling back.
+- `payload_too_large()` is public because witan-code's store session holds its
+  own connection and classifies for itself; one definition keeps the two
+  transports agreeing on what "refused for its size" means.
+
+### Fixed
+
+- A 413 from a **direct** connection is an `httpx2.HTTPStatusError`, which is an
+  `httpx2.HTTPError` — so the existing transport guard reported a deployment
+  that was up and answering as one that "could not be reached", sending the
+  reader to check DNS for a payload they needed to shrink. Size is now asked
+  before transport, and `test_a_direct_413_is_too_large_and_NOT_unreachable`
+  pins the ordering.
+- A 413 **relayed** by ToolHive's vMCP arrives as a `ToolError` — the HTTP
+  exchange with us succeeded, so only the words carry the 413 — and escaped as
+  the raw `fastmcp.exceptions.ToolError` traceback that the first live
+  `witan migrate merge` against CI died with.
+- Matching is by phrase, not by a bare `413`: a tool error relays the server's
+  own text, which can quote the caller's data.
+
 ## [0.11.0] - 2026-08-07
 
 ### Added

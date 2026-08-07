@@ -25,6 +25,7 @@ from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records
 from witan_core.omnigraph import store_cli_args, store_subprocess_env
 from witan_core.remote.proxy import (
     RemoteMCPProxy,
+    RemotePayloadTooLarge,
     RemoteToolUnavailable,
     RemoteUnreachable,
 )
@@ -33,7 +34,12 @@ from .. import repo as repo_module
 from .. import session_state
 from ..config import RemoteConfig
 
-__all__ = ["RemoteServerProxy", "RemoteToolUnavailable", "RemoteUnreachable"]
+__all__ = [
+    "RemotePayloadTooLarge",
+    "RemoteServerProxy",
+    "RemoteToolUnavailable",
+    "RemoteUnreachable",
+]
 
 
 @contextmanager

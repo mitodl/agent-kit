@@ -33,10 +33,12 @@ from fastmcp.client.auth import BearerAuth
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from witan_core.observability import get_logger
+from witan_core.remote.proxy import RemotePayloadTooLarge, payload_too_large
 
 from witan_core import chunking
 
 __all__ = [
+    "RemotePayloadTooLarge",
     "RemoteStoreClient",
     "RemoteStoreUnsupported",
     "StoreSession",
@@ -50,6 +52,31 @@ logger = get_logger("witan.code.remote")
 
 class RemoteStoreUnsupported(RuntimeError):
     """A store operation with no counterpart on the MCP tier."""
+
+
+def _refuse_if_too_large(exc: BaseException, tool: str, url: str) -> None:
+    """Re-raise a body refused for its size as a sentence. Otherwise no-op.
+
+    Called on BOTH arms of ``StoreSession.call``'s handler, because a 413
+    reaches this transport wearing either face: relayed through ToolHive's vMCP
+    it is a ``ToolError``, while a direct connection raises an httpx status
+    error that the generic arm would treat as a dropped socket. That second one
+    is why this exists at all — the generic arm RECONNECTS AND RETRIES, so an
+    oversized index batch would be sent, refused, sent again, refused again,
+    and only then surface as a traceback. Retrying cannot help: the payload is
+    the thing being rejected.
+    """
+    oversized = payload_too_large(exc)
+    if oversized is None:
+        return
+    budget = chunking.MCP_LOAD_MAX_BYTES // (1024 * 1024)
+    raise RemotePayloadTooLarge(
+        f"{url} refused `{tool}`: the request body is over the deployment's "
+        f"size cap ({oversized}). Records are already batched under "
+        f"{budget} MiB, so this is either a single record too large to split, "
+        "or a deployment whose cap is lower than that budget assumes. Batches "
+        "accepted before this one were applied — the index stopped part-way."
+    ) from exc
 
 
 # Added to the store tier after the first clients shipped, so its presence is
@@ -113,11 +140,13 @@ class StoreSession:
                 self._connect()
             try:
                 return self._invoke(tool, arguments)
-            except ToolError:
+            except ToolError as exc:
                 # The server ran the tool and it failed — a refusal, a bad
                 # query, a store error. Reconnecting would only run it again.
+                _refuse_if_too_large(exc, tool, self.url)
                 raise
-            except Exception:  # noqa: BLE001 — transport-shaped; retry once
+            except Exception as exc:  # noqa: BLE001 — transport-shaped; retry once
+                _refuse_if_too_large(exc, tool, self.url)
                 # Info: one reconnect is routine (idle session dropped), but a
                 # deployment that reconnects on every call is pathological and
                 # invisible without this.

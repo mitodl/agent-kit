@@ -1013,13 +1013,21 @@ def cli() -> None:
 
     from .remote.oidc import RemoteAuthError
     from .remote.proxy import RemoteToolUnavailable, RemoteUnreachable
+    from .remote.store import RemotePayloadTooLarge
 
     try:
         app.meta()
-    # Same three remote failures the `witan` entrypoint classifies. This CLI had
-    # no guard at all, so a deployment that was down, or a token the server
+    # Same remote failures the `witan` entrypoint classifies. This CLI had no
+    # guard at all, so a deployment that was down, or a token the server
     # rejected, printed a traceback out of `witan-code symbols`.
-    except (RemoteAuthError, RemoteToolUnavailable, RemoteUnreachable) as exc:
+    # RemotePayloadTooLarge comes from the store session rather than the proxy:
+    # this CLI's oversized bodies are index batches, not tool arguments.
+    except (
+        RemoteAuthError,
+        RemotePayloadTooLarge,
+        RemoteToolUnavailable,
+        RemoteUnreachable,
+    ) as exc:
         # markup=False — a target block is written `[qa]`, which rich parses as
         # a style tag and swallows, taking the name of the setting to unset
         # with it.

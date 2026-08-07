@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.11.1"
+version = "0.11.2"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -20,14 +20,17 @@ dependencies = [
   "rich>=13",
   "pydantic>=2,<3",
   "agent-config-kit>=0.4,<1",
-  # >=0.11: remote/proxy.py imports witan_core.chunking.MCP_LOAD_MAX_BYTES at
-  # module scope, which 0.10 does not export. A looser floor lets an external
-  # install resolve a witan-core the server cannot even import — the failure
-  # this pin exists to prevent, and one it has now hit twice.
-  # (>=0.10 was already required for witan_core.chunking + load_batch +
-  # config_file.resolve_config_path; >=0.9 for observability.middleware; >=0.8
-  # for OmnigraphClient.change_many on the batched-write path.)
-  "witan-core[cli,remote,observability]>=0.11,<1",
+  # >=0.12: witan/remote/proxy.py and witan/cli/__init__.py import
+  # witan_core.remote.proxy.RemotePayloadTooLarge at module scope, which 0.11
+  # does not export. A looser floor lets an external install resolve a
+  # witan-core the server cannot even import — the failure this pin exists to
+  # prevent, and one it has now hit THREE times. If you add a witan_core symbol
+  # in the same change as its caller, bump this line in that change: the
+  # workspace resolves witan-core by path, so nothing here can catch it.
+  # (>=0.11 was required for chunking.MCP_LOAD_MAX_BYTES; >=0.10 for
+  # witan_core.chunking + load_batch + config_file.resolve_config_path; >=0.9
+  # for observability.middleware; >=0.8 for OmnigraphClient.change_many.)
+  "witan-core[cli,remote,observability]>=0.12,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
