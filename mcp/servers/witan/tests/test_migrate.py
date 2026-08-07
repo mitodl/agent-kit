@@ -1,12 +1,13 @@
 """Tests for the schema/data migration commands."""
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from .conftest import SCHEMA, requires_omnigraph
+from .conftest import SCHEMA, _Tools, requires_omnigraph
 
 
 def _init_store(path):
@@ -545,6 +546,50 @@ def test_merge_reconciles_deterministic_code_branch_slugs(server, tmp_path):
     assert rows and rows[0]["status"] == "active"
 
 
+@requires_omnigraph
+def test_merge_carries_edges_across_from_a_store_that_has_them(server, tmp_path):
+    """The end-to-end guard the other merge tests could not be: real edges.
+
+    Every existing store-to-store merge test builds its fixtures from bare node
+    inserts, so both exports came out edge-free and the merge never met the row
+    shape that broke it. `memory_store` writes a Memory, its Topics, and the
+    `Tagged` edges between them, which is enough for the source export to look
+    like a real one — roughly two edge rows per node.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source_store = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    original, srv.client = srv.client, source_store
+    try:
+        stored = _Tools(srv).memory_store(
+            kind="pattern",
+            title="Merging a store that has edges",
+            content="An export is mostly edges; the merge has to carry them.",
+            tags=["witan", "migration"],
+        )
+    finally:
+        srv.client = original
+    slug = stored["slug"]
+
+    export = tmp_path / "source.jsonl"
+    source_store.export_to(export, label="export (test source)")
+    _, edges = srv._parse_export(export)
+    assert edges, "fixture must produce edge rows or it does not guard anything"
+
+    result = srv.merge_store(source_store.graph_uri)
+
+    assert result["merged"]
+    # The node came across...
+    assert srv.client.read("read.gq", "get_memory", {"slug": slug})
+    # ...and so did its topics, which are only reachable over a Tagged edge.
+    topics = srv.client.read("read.gq", "topics_for_memory", {"slug": slug})
+    assert {t["slug"] for t in topics} >= {"tp-topic-witan", "tp-topic-migration"}
+
+
 def test_parse_export_raises_on_corrupted_json_line(tmp_path):
     from witan import server as srv
 
@@ -558,7 +603,38 @@ def test_parse_export_raises_on_corrupted_json_line(tmp_path):
         raise AssertionError("expected RuntimeError for a corrupted export line")
 
 
-def test_parse_export_raises_on_missing_type_field(tmp_path):
+def test_parse_export_reads_real_edge_rows_as_edges(tmp_path):
+    """An `omnigraph export` edge row has no 'type', and that is not corruption.
+
+    This is the shape omnigraph 0.8.1 actually writes — `{"edge", "from",
+    "to", "data"}` — and it outnumbers node rows roughly 2:1 in a real store.
+    Treating a missing 'type' as a malformed line made every merge die on the
+    first edge it met, in either direction: sourcing from a populated store, or
+    targeting a deployed graph that had ever written an edge.
+    """
+    from witan import server as srv
+
+    export = tmp_path / "export.jsonl"
+    export.write_text(
+        '{"type": "Memory", "data": {"slug": "mem-x-aaaaaa", "title": "x"}}\n'
+        '{"edge": "Tagged", "from": "mem-x-aaaaaa", "to": "tp-topic-witan", '
+        '"data": {"id": "01KZEH5Z994JBHHB4BHHTVH2YY"}}\n'
+    )
+
+    nodes, edges = srv._parse_export(export)
+
+    assert set(nodes) == {("Memory", "mem-x-aaaaaa")}
+    assert edges == [
+        {
+            "edge": "Tagged",
+            "from": "mem-x-aaaaaa",
+            "to": "tp-topic-witan",
+            "data": {"id": "01KZEH5Z994JBHHB4BHHTVH2YY"},
+        }
+    ]
+
+
+def test_parse_export_raises_on_a_row_that_is_neither_node_nor_edge(tmp_path):
     from witan import server as srv
 
     bad = tmp_path / "bad.jsonl"
@@ -566,9 +642,32 @@ def test_parse_export_raises_on_missing_type_field(tmp_path):
     try:
         srv._parse_export(bad)
     except RuntimeError as exc:
-        assert "missing a 'type'" in str(exc)
+        assert "neither a node" in str(exc)
     else:
-        raise AssertionError("expected RuntimeError for a row missing 'type'")
+        raise AssertionError("expected RuntimeError for a row that is neither")
+
+
+def test_store_merge_and_parse_export_classify_rows_identically(tmp_path):
+    """The two merge transports must not disagree about what an edge is.
+
+    They already had: `store_merge` classified inline and tolerated edges,
+    `_parse_export` raised on them. Both now go through `_classify_rows`, and
+    this pins that they stay one implementation — a row's fate must not depend
+    on whether it arrived as a file or over the wire.
+    """
+    from witan import server as srv
+
+    rows = [
+        {"type": "Memory", "data": {"slug": "mem-x-aaaaaa"}},
+        {"type": "Topic", "data": {"slug": "tp-topic-witan"}},
+        {"edge": "Tagged", "from": "mem-x-aaaaaa", "to": "tp-topic-witan", "data": {}},
+        # A node type with no slug is unreconcilable, so it passes through too.
+        {"type": "Actor", "data": {"id": "act-1"}},
+    ]
+    export = tmp_path / "export.jsonl"
+    export.write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    assert srv._classify_rows(rows, "merge batch") == srv._parse_export(export)
 
 
 def test_parse_ts_handles_missing_and_unparsable_values():
