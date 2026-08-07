@@ -410,9 +410,16 @@ def test_a_refusal_arriving_inside_an_exception_group_is_still_classified():
     from fastmcp.exceptions import ToolError
 
     inner = ToolError("no task with slug 'x'")
-    proxy = _ScriptedProxy(ExceptionGroup("unhandled", [inner]), at="call")
-    with pytest.raises(RemoteToolFailed, match="no task with slug 'x'"):
+    group = ExceptionGroup("unhandled", [inner])
+    proxy = _ScriptedProxy(group, at="call")
+    with pytest.raises(RemoteToolFailed, match="no task with slug 'x'") as caught:
         proxy.task_get(slug="x")
+    # And __cause__ is the ToolError, not the group it arrived inside. Chaining
+    # the group would hand a caller the wrapper this class exists to unwrap,
+    # making the "keeps the original ToolError" contract true only for the
+    # ungrouped case. The group is still reachable as __context__.
+    assert caught.value.__cause__ is inner
+    assert caught.value.__context__ is group
 
 
 def test_a_keyword_refusal_still_beats_the_unreachable_guard():

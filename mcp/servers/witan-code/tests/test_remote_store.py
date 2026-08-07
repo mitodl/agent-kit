@@ -459,6 +459,7 @@ def test_a_dropped_socket_is_still_retried_after_the_size_guard():
 def test_an_ordinary_tool_failure_is_not_read_as_a_size_refusal():
     """A tool error relays the server's text, which can quote the caller's data."""
     from fastmcp.exceptions import ToolError
+    from witan_code.remote.store import RemoteToolFailed
 
     log: list = []
     session = StoreSession(
@@ -466,7 +467,51 @@ def test_an_ordinary_tool_failure_is_not_read_as_a_size_refusal():
         lambda: "jwt",
         lambda _t: _RefusesForSize(log, ToolError("no view named 'payload-413'")),
     )
-    with pytest.raises(ToolError):
+    with pytest.raises(RemoteToolFailed) as caught:
+        RemoteStoreClient(REPO, session).list_branches()
+    assert not isinstance(caught.value, RemotePayloadTooLarge)
+
+
+def test_a_refused_store_call_reads_as_a_sentence_not_a_traceback():
+    """This session is witan-code's OTHER transport, and it needs the same fix.
+
+    Index and write commands reach the deployment through `StoreRef.client()`
+    and this session, not through `RemoteMCPProxy` — so classifying refusals in
+    the proxy alone left every one of them escaping as a raw `ToolError`, which
+    is not a `RuntimeError` and so slips past `cli()`'s guard tuple.
+    """
+    from fastmcp.exceptions import ToolError
+    from witan_code.remote.store import RemoteToolFailed
+
+    refusal = ToolError("cedar: read denied on graph 'code'")
+    session = StoreSession(
+        "http://x/mcp", lambda: "jwt", lambda _t: _RefusesForSize([], refusal)
+    )
+    with pytest.raises(RemoteToolFailed, match="cedar: read denied") as caught:
+        RemoteStoreClient(REPO, session).list_branches()
+    assert isinstance(caught.value, RuntimeError)
+    assert caught.value.__cause__ is refusal
+
+
+def test_a_refusal_on_the_post_reconnect_retry_is_classified_too():
+    """A refusal that happens to follow a dropped socket takes the other arm.
+
+    The generic arm reconnects and re-invokes; classifying only the first
+    attempt would let exactly the same refusal escape as a traceback whenever
+    it landed after a dead connection rather than before one.
+    """
+    from fastmcp.exceptions import ToolError
+    from witan_code.remote.store import RemoteToolFailed
+
+    log: list = []
+    clients = iter(
+        [
+            _FakeClient(log, fail_first=True),
+            _RefusesForSize(log, ToolError("no view named 'branches'")),
+        ]
+    )
+    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: next(clients))
+    with pytest.raises(RemoteToolFailed, match="no view named 'branches'"):
         RemoteStoreClient(REPO, session).list_branches()
 
 

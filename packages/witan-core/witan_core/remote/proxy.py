@@ -496,7 +496,13 @@ class RemoteMCPProxy:
             refused = tool_failure(exc)
             if refused is None:
                 raise
-            raise RemoteToolFailed(str(refused)) from exc
+            # Chained from the ToolError itself, not from `exc`. When anyio
+            # re-raises through an ExceptionGroup the two differ, and `from exc`
+            # would put the *group* on __cause__ — leaving a caller to re-walk
+            # it for the wire error this class promises to hand over. The group
+            # is not lost either way: it is the exception being handled, so it
+            # lands on __context__.
+            raise RemoteToolFailed(str(refused)) from refused
 
     async def _invoke(self, name: str, args: tuple, kwargs: dict) -> Any:
         """Dispatch one tool call, classifying an unreachable deployment.

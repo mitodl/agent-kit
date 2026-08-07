@@ -16,6 +16,14 @@ a MINOR bump may include breaking changes).
   a Cedar denial on a code graph the caller may not read, a branch the cluster
   does not have — came back as `fastmcp.exceptions.ToolError`, which is not a
   `RuntimeError` and so escaped as a traceback out of `witan-code symbols`.
+- ★ Fixed on **both** of this package's transports, not just the proxy.
+  Index and write commands reach the deployment through `StoreRef.client()` and
+  `StoreSession`, which holds its own connection and does its own
+  classification — so classifying in `RemoteMCPProxy` alone would have left
+  every refusal on the store path escaping exactly as before. `StoreSession.call`
+  now raises `RemoteToolFailed` on both of its arms: the first attempt, and the
+  re-invoke after a reconnect, so a refusal that happens to follow a dropped
+  socket is not left as the one uncovered case.
 
 ### Changed
 

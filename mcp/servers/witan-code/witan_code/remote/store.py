@@ -33,7 +33,11 @@ from fastmcp.client.auth import BearerAuth
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 from witan_core.observability import get_logger
-from witan_core.remote.proxy import RemotePayloadTooLarge, payload_too_large
+from witan_core.remote.proxy import (
+    RemotePayloadTooLarge,
+    RemoteToolFailed,
+    payload_too_large,
+)
 
 from witan_core import chunking
 
@@ -41,6 +45,7 @@ __all__ = [
     "RemotePayloadTooLarge",
     "RemoteStoreClient",
     "RemoteStoreUnsupported",
+    "RemoteToolFailed",
     "StoreSession",
     "close_sessions",
     "session_for",
@@ -181,7 +186,7 @@ class StoreSession:
                 # The server ran the tool and it failed — a refusal, a bad
                 # query, a store error. Reconnecting would only run it again.
                 _refuse_if_too_large(exc, tool, self.url)
-                raise
+                raise RemoteToolFailed(str(exc)) from exc
             except Exception as exc:  # noqa: BLE001 — transport-shaped; retry once
                 _refuse_if_too_large(exc, tool, self.url)
                 # Info: one reconnect is routine (idle session dropped), but a
@@ -190,7 +195,15 @@ class StoreSession:
                 logger.info("witan.code.remote.reconnecting", tool=tool, exc_info=True)
                 self._disconnect()
                 self._connect()
-                return self._invoke(tool, arguments)
+                try:
+                    return self._invoke(tool, arguments)
+                except ToolError as refused:
+                    # The reconnect succeeded and the server refused the retry.
+                    # Classified here too, or a refusal that happened to follow
+                    # a dropped socket escapes as the raw traceback the first
+                    # arm exists to prevent.
+                    _refuse_if_too_large(refused, tool, self.url)
+                    raise RemoteToolFailed(str(refused)) from refused
 
     def has_tool(self, tool: str) -> bool:
         """Whether the deployment serves ``tool``.
