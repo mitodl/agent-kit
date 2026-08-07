@@ -915,6 +915,55 @@ def test_migrate_repo_keys_is_noop_on_already_canonical_store(server):
     }
 
 
+@requires_omnigraph
+def test_store_merge_rows_are_findable_by_search_not_just_readable(server):
+    """A merged row must come back from ``memory_search``, not merely ``memory_get``.
+
+    Rows landing and rows being *findable* are different claims, and until this
+    test only the first was ever asserted. That distinction is what
+    tk-bm25-search-returns-nothing-on-the-ci-council-gr-ec3cfa turned on: the
+    memory it reported was listable by slug and by kind on the deployed graph
+    while every search for it came back empty.
+
+    Note what this can and cannot catch. It pins the *witan-side* path — that
+    ``store_merge`` writes content into the field ``read.gq``'s search queries
+    actually match on, and that nothing in the merge drops or mangles it. It
+    cannot reproduce the deployed symptom, which is a corpus-size property of
+    the engine's BM25: a term whose document frequency approaches the corpus
+    size scores non-positive and is dropped, and one such term zeroes the whole
+    query. See docs/migration-runbook.md, "Verify by slug, not by search".
+    Hence the deliberately rare search term below — a common one would be
+    testing the engine's IDF rather than witan.
+    """
+    from witan import server as srv
+
+    now = "2026-08-07T00:00:00Z"
+    rows = [
+        {
+            "type": "Memory",
+            "data": {
+                "slug": "pat-merged-findable-aaaaaa",
+                "kind": "pattern",
+                "title": "merged row",
+                "content": "quokkazebra is a deliberately rare token",
+                "repo": "https://github.com/test/repo",
+                "author": "pytest",
+                "created_at": now,
+                "updated_at": now,
+            },
+        }
+    ]
+
+    assert srv.store_merge(rows)["rows_loaded"] == 1
+
+    # Readable by slug — the weaker claim, true even when search is broken.
+    assert srv.memory_get("pat-merged-findable-aaaaaa")["title"] == "merged row"
+
+    # Findable by search — the claim that actually matters for recall.
+    hits = srv.memory_search("quokkazebra")
+    assert [h["slug"] for h in hits] == ["pat-merged-findable-aaaaaa"]
+
+
 def test_parse_ts_compares_naive_and_aware_without_raising():
     """omnigraph's own export strips the offset witan writes down to a naive
     string — an aware value must still compare against a naive one without
