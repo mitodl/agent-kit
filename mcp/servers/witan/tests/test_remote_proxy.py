@@ -351,3 +351,47 @@ def test_srv_surfaces_misconfigured_remote_as_clean_exit(monkeypatch):
     monkeypatch.setattr(_common, "_server", None)
     with pytest.raises(SystemExit):
         _common._srv()
+
+
+@requires_omnigraph
+def test_remote_merge_chunks_against_the_mcp_budget_not_omnigraph_s(
+    proxy, server, tmp_path, monkeypatch
+):
+    """Regression: these rows ride as a JSON tool parameter, not into omnigraph.
+
+    `merge_store` shipped chunking on `LOAD_MAX_BYTES` (8 MiB, omnigraph's
+    buffered-body budget) while the binding ceiling on this path is the MCP
+    SDK's 4 MiB request cap — so a real personal store went out as one
+    oversized request and the deployment answered `413 Request body too large`.
+    Pinning the budget the call site passes, rather than the resulting batch
+    count, keeps this from regressing to "whatever the default is".
+    """
+    from witan_core.chunking import MCP_LOAD_MAX_BYTES
+
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan.remote import proxy as proxy_mod
+
+    from .test_migrate import _init_store, _insert_memory
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "budget.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-budget-check-9f8e7d",
+        content="sized against the MCP cap",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+
+    seen: list[int] = []
+    real = proxy_mod.chunk_records
+
+    def _spy(records, max_bytes=None, *args, **kwargs):
+        seen.append(max_bytes)
+        return real(records, max_bytes) if max_bytes is not None else real(records)
+
+    monkeypatch.setattr(proxy_mod, "chunk_records", _spy)
+    proxy.merge_store(source.graph_uri)
+
+    assert seen == [MCP_LOAD_MAX_BYTES]

@@ -365,6 +365,52 @@ def test_cluster_side_operations_are_refused_not_faked(call):
         call(RemoteStoreClient(REPO, session))
 
 
+def test_load_chunks_against_the_mcp_budget_not_omnigraph_s():
+    """Regression: records ride as a JSON tool parameter, so the SDK cap binds.
+
+    `load` defaulted to `LOAD_MAX_BYTES` — omnigraph's 8 MiB buffered-body
+    budget — while this transport's real ceiling is the MCP Python SDK's 4 MiB
+    request cap. A large enough index would have failed here exactly as `witan
+    migrate merge` did against the deployment: `413 Request body too large`,
+    from the SDK rather than from omnigraph.
+
+    Asserts on the request bodies these batches actually become, not on the
+    batch count, so the JSONL-vs-envelope accounting difference cannot quietly
+    eat the margin.
+    """
+    import json
+
+    from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
+
+    log: list = []
+    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: _FakeClient(log))
+
+    # ~6 MiB of records: over the SDK cap, under omnigraph's 8 MiB budget, so
+    # the old default produced a single request the deployment would refuse.
+    records = [
+        {"type": "Symbol", "data": {"slug": f"sym-{i}", "body": "x" * 4096}}
+        for i in range(1500)
+    ]
+    RemoteStoreClient(REPO, session).load(records)
+
+    loads = [args for name, args in log if name == "code_store_load"]
+    assert len(loads) > 1, "should have split; a single call is the old bug"
+
+    for args in loads:
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "code_store_load", "arguments": args},
+            }
+        )
+        assert len(body.encode()) < DEFAULT_MAX_REQUEST_BODY_SIZE
+
+    # Nothing dropped on the way through the splitter.
+    assert sum(len(args["records"]) for args in loads) == len(records)
+
+
 # ── Batched mutation ──────────────────────────────────────────────────────────
 #
 # `change_many` was the last per-row writer in witan-code: every other write

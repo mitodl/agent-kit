@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
-from witan_core.chunking import chunk_records
+from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records
 from witan_core.omnigraph import store_cli_args, store_subprocess_env
 from witan_core.remote.proxy import RemoteMCPProxy, RemoteToolUnavailable
 
@@ -191,7 +191,10 @@ class RemoteServerProxy(RemoteMCPProxy):
         decisions: list[dict] = []
         totals = {"added": 0, "updated": 0, "kept_target": 0, "rows_loaded": 0}
         with _source_export(source) as export:
-            for batch in chunk_records(_read_export(export)):
+            # MCP_LOAD_MAX_BYTES, not the default: these rows ride as a JSON
+            # tool parameter, so the binding ceiling is the MCP session's 4 MiB
+            # body cap, not omnigraph's much larger buffered-body one.
+            for batch in chunk_records(_read_export(export), MCP_LOAD_MAX_BYTES):
                 result = self.store_merge(rows=batch, dry_run=dry_run)
                 decisions.extend(result.get("decisions") or [])
                 for key in totals:
