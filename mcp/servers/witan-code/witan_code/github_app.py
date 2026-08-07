@@ -51,6 +51,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from witan_core.observability import get_logger
+
 if TYPE_CHECKING:  # httpx2 stays a runtime import inside the App path only
     import httpx2
 
@@ -115,6 +117,9 @@ class AppCredentials:
             f"AppCredentials(app_id={self.app_id!r}, "
             f"installation_id={self.installation_id!r}, private_key=<redacted>)"
         )
+
+
+logger = get_logger("witan.code.github_app")
 
 
 def from_env(env: dict[str, str] | None = None) -> AppCredentials | None:
@@ -287,7 +292,12 @@ def main(argv: list[str] | None = None) -> int:
             api_url = os.environ.get(API_URL_ENV_VAR) or GITHUB_API_URL
             print(installation_token(credentials, api_url=api_url))
     except GitHubAppError as exc:
-        print(f"witan-code github-app: {exc}", file=sys.stderr)
+        # Logged rather than printed: this runs inside the CI indexer CronJob,
+        # where a credentials failure is the thing an operator has to see in
+        # Loki alongside the indexer's other events. The `usage:` line above
+        # stays a bare print on purpose — argument feedback to a human at a
+        # terminal is presentation, not a service diagnostic.
+        logger.error("witan.code.github_app.failed", error=str(exc), exc_info=True)
         return EXIT_ERROR
     return EXIT_OK
 

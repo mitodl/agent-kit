@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from witan_core import omnigraph_http as _http
+from witan_core.observability import get_logger
 from witan_core.omnigraph import (
     schema_apply,
     schema_apply_if_changed,
@@ -59,6 +60,9 @@ _GRAPHS_TTL = 30.0
 # string where a debugger or a dumped repr would surface it.
 _GraphsCacheKey = tuple[str, str | None]
 _graphs_cache: dict[_GraphsCacheKey, tuple[float, frozenset[str]]] = {}
+
+
+logger = get_logger("witan.code.store")
 
 
 def _cache_key(server_url: str, token: str | None) -> _GraphsCacheKey:
@@ -181,6 +185,11 @@ class StoreRef:
         try:
             self.client(config, connect_retry=False).list_branches()
         except Exception:  # noqa: BLE001 — a read path degrades to "no"
+            # Debug: "does this store exist" is asked speculatively, and a
+            # not-yet-provisioned graph answering "no" is the expected case.
+            logger.debug(
+                "witan.code.store.exists_probe_failed", uri=self.uri, exc_info=True
+            )
             return False
         return True
 
@@ -551,6 +560,10 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
         try:
             repos = mcp_session(cfg).call("code_store_graphs")
         except Exception:  # noqa: BLE001 — a listing degrades, same as above
+            # Warning: an empty listing here is indistinguishable from "this
+            # deployment indexes nothing", which is exactly how a broken
+            # deployment looks healthy.
+            logger.warning("witan.code.store.graph_listing_failed", exc_info=True)
             return []
         return [StoreRef(_endpoint(cfg).url, via_mcp=repo) for repo in sorted(repos)]
     if cfg.code_server:
@@ -634,6 +647,14 @@ def repo_for_store(ref: StoreRef, config: cfg_module.Config | None = None) -> st
         try:
             rows = ref.client(config).read("code_read.gq", "indexed_repo", {})
         except Exception:  # noqa: BLE001 — a listing must not fail on one graph
+            # Info: one graph failing to name itself degrades to showing its id
+            # instead, which is cosmetic — but it is also the first symptom of a
+            # graph that exists in the catalog and is not really readable.
+            logger.info(
+                "witan.code.store.repo_name_unreadable",
+                graph=ref.graph_id or ref.uri,
+                exc_info=True,
+            )
             rows = []
         value = next(iter(rows[0].values()), None) if rows else None
         return value if isinstance(value, str) and value else (ref.graph_id or ref.uri)
@@ -671,6 +692,9 @@ def file_count(ref: StoreRef, config: cfg_module.Config | None = None) -> int | 
     try:
         rows = ref.client(config).read("code_read.gq", "count_files", {})
     except Exception:  # noqa: BLE001 — degrade gracefully, a listing isn't critical
+        # Debug: the caller renders "unknown" for None, and this runs on the
+        # UserPromptSubmit hook path where a per-prompt warning would be noise.
+        logger.debug("witan.code.store.count_files_failed", exc_info=True)
         return None
     if not rows:
         return 0

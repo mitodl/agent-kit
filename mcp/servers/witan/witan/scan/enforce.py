@@ -9,7 +9,7 @@ that turns detector findings into policy, for every node type.
 
 from __future__ import annotations
 
-import logging
+from witan_core.observability import get_logger
 
 from ..config import ScanAction, ScanConfig
 from . import audit
@@ -18,7 +18,7 @@ from .models import Finding, ScannerError
 from .redact import flag_redacted, redact_spans
 from .registry import ScannerRegistry
 
-logger = logging.getLogger("witan.scan")
+logger = get_logger("witan.scan")
 
 # query_name → (node_type, scalar free-text params to scan). Only scalar string
 # fields are scanned; list fields (tags, symbol_refs, files_changed, …) and
@@ -172,12 +172,17 @@ class WriteGuard:
             return self._registry.scan(value, field, node_type)
         except ScannerError as exc:
             if config.on_scanner_error == "warn":
+                # Keyed rather than interpolated, matching the audit event: a
+                # scanner failing open is the one condition an operator needs
+                # to alert on per-scanner, and `sum by (scanner)` beats a
+                # regex over a sentence.
                 logger.warning(
-                    "witan scan: scanner %r failed on %s.%s; allowing write "
-                    "(on_scanner_error=warn)",
-                    exc.scanner,
-                    node_type,
-                    field,
+                    "witan.scan.scanner_failed",
+                    scanner=exc.scanner,
+                    node_type=node_type,
+                    field=field,
+                    on_scanner_error="warn",
+                    exc_info=True,
                 )
                 return []
             raise  # fail-closed: the ScannerError aborts the write

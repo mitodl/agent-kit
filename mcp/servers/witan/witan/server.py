@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -19,8 +18,8 @@ from typing import Literal
 from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
-
 from witan_core import caching, normalise, now_iso
+from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
 from witan_core.omnigraph import (
     schema_apply,
@@ -30,15 +29,14 @@ from witan_core.omnigraph import (
 )
 
 from . import config as cfg_module
-from . import elicit
-from . import readiness
+from . import elicit, readiness, scan, session_state
 from . import repo as repo_module
-from . import scan
-from . import session_state
 from .graph import OmnigraphClient, OmnigraphConflict, _is_storage_version_mismatch
 from .identity import ActorTokenResolver, derive_actor_id
 
 # ── Startup ───────────────────────────────────────────────────────
+
+logger = get_logger("witan.server")
 
 _SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "schema.pg"
 
@@ -2509,7 +2507,15 @@ def _track_code_branch(
         if project_slug:
             _link_for_project(slug, project_slug)
     except Exception as exc:  # noqa: BLE001 — coordination metadata, never fatal
-        print(f"witan: CodeBranch tracking failed: {exc}", file=sys.stderr)
+        logger.warning(
+            "witan.code_branch.tracking_failed",
+            repo=repo,
+            branch=branch,
+            task=task_slug,
+            project=project_slug,
+            error=str(exc),
+            exc_info=True,
+        )
 
 
 # ── Workflow Tracking Tools ───────────────────────────────────────
@@ -4712,6 +4718,11 @@ def _code_server():
 
             _code_server._cached = code_server
         except Exception:  # noqa: BLE001 — optional dependency; degrade to None
+            # Info, not warning: witan-code genuinely is optional, so absence is
+            # a supported configuration. But it is cached forever after this, so
+            # if it failed for a *broken* install rather than an absent one,
+            # this line is the only chance to find out.
+            logger.info("witan.code_server.unavailable", exc_info=True)
             _code_server._cached = None
     return _code_server._cached
 
@@ -4761,7 +4772,15 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
                 "consumers": code.code_interface_consumers(kind, key_norm),
             }
         except Exception:  # noqa: BLE001 — cross-store lookup is best-effort
-            pass
+            # Info: the contract answer is still returned, just without its
+            # code bindings — a quietly thinner result that otherwise looks
+            # like "this contract has no providers or consumers".
+            logger.info(
+                "witan.contract.bindings_lookup_failed",
+                kind=kind,
+                key=key_norm,
+                exc_info=True,
+            )
 
     return {
         "key_norm": key_norm,
@@ -4798,7 +4817,12 @@ def memory_symbols(slug: str) -> dict:
                 if defs:
                     entry["definition"] = defs
             except Exception:  # noqa: BLE001 — best-effort enrichment
-                pass
+                # Debug: one symbol failing to resolve a definition is common
+                # (a renamed or removed symbol still referenced by a memory),
+                # and this runs per symbol, so anything louder would be noisy.
+                logger.debug(
+                    "witan.symbol.definition_lookup_failed", ref=ref, exc_info=True
+                )
         symbols.append(entry)
     return {"slug": slug, "symbols": symbols}
 

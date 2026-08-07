@@ -2,9 +2,14 @@
 focused on the CodeBranch "In-Flight Branch" section, and on the
 `witan inject-context` command never failing the hook."""
 
+import logging
+import os
 import subprocess
+import sys
+import textwrap
 
 import pytest
+from witan_core.observability import configure_logging, reset_logging
 
 from .conftest import SCHEMA, requires_omnigraph
 
@@ -421,8 +426,36 @@ def test_detect_repo_normalises_witan_repo_env(monkeypatch):
     assert ctx._detect_repo() == "https://github.com/mitodl/ol-django"
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_logging():
+    """Pin logging to a fresh handler on the *current* stderr for each test.
+
+    Two things make the diagnostics otherwise untestable with capsys once the
+    whole suite runs together. structlog caches a module-level ``get_logger``
+    proxy on first use, so ``witan.context``'s logger keeps whatever factory was
+    active then; and ``configure_logging`` builds a ``StreamHandler`` bound to
+    whatever ``sys.stderr`` was at that moment, so a call in an earlier test
+    leaves records going to that test's capture. Reconfiguring per test rebinds
+    the handler and makes the assertions below about the code rather than about
+    suite ordering.
+
+    ``json`` specifically, because that is what a deployed pod runs: it puts the
+    exception through ``ExceptionRenderer`` in the pipeline, so a swallowed
+    error's cause lands *in the event* where caplog (and Loki) can see it. In
+    ``console`` mode the renderer formats the traceback at handler time instead,
+    and the cause is invisible to any in-process assertion.
+
+    The genuinely-unconfigured hook path is covered separately, in a subprocess
+    -- see ``test_hook_writes_nothing_to_stdout_in_a_fresh_process``.
+    """
+    configure_logging(log_format="json", level="DEBUG", force=True)
+    yield
+    reset_logging()
+    logging.getLogger().handlers.clear()
+
+
 @requires_omnigraph
-def test_inject_context_debug_reports_to_stderr(tmp_path, monkeypatch, capsys):
+def test_inject_context_debug_reports_to_stderr(tmp_path, monkeypatch, capsys, caplog):
     """--debug prints detection/read diagnostics to stderr, leaving stdout
     (the injected block) untouched."""
     from witan import context as ctx_module
@@ -434,13 +467,18 @@ def test_inject_context_debug_reports_to_stderr(tmp_path, monkeypatch, capsys):
 
     text = ctx_module.inject_context(str(store), queries_dir, None, debug=True)
     captured = capsys.readouterr()
-    assert "[witan inject-context]" in captured.err
-    assert "detected repo=" in captured.err
+    # The diagnostics are structlog events now rather than a
+    # "[witan inject-context]" prefix, so they are asserted through caplog;
+    # that they reach stderr and never stdout is what the subprocess test at
+    # the bottom of this file proves, in a process that mirrors the real hook.
+    assert "witan.context.debug" in caplog.text
+    assert "detected repo=" in caplog.text
     # The returned block itself must not carry the diagnostics.
-    assert "[witan inject-context]" not in text
+    assert "witan.context.debug" not in text
+    assert captured.out == ""
 
 
-def test_inject_context_debug_surfaces_failure_reason(monkeypatch, capsys):
+def test_inject_context_debug_surfaces_failure_reason(monkeypatch, capsys, caplog):
     """A broken graph read is swallowed (returns "") but --debug prints why."""
     from witan import context as ctx_module
 
@@ -457,8 +495,11 @@ def test_inject_context_debug_surfaces_failure_reason(monkeypatch, capsys):
     out = ctx_module.inject_context("nonexistent", None, None, debug=True)
     captured = capsys.readouterr()
     assert out == ""
-    assert "FAILED building context" in captured.err
-    assert "graph is on fire" in captured.err
+    assert "FAILED building context" in caplog.text
+    # The cause is rendered into the event by ExceptionRenderer under the json
+    # format the fixture pins -- the same shape an operator reads in Loki.
+    assert "graph is on fire" in caplog.text
+    assert captured.out == ""
 
 
 def test_cwd_or_dot_falls_back_on_oserror(monkeypatch):
@@ -659,7 +700,7 @@ def test_inject_context_cli_survives_a_stale_witan_target(
     ],
 )
 def test_inject_context_cli_debug_explains_on_stderr_only(
-    config_text, target, tmp_path, monkeypatch, capsys
+    config_text, target, tmp_path, monkeypatch, capsys, caplog
 ):
     """--debug is how a blank block is diagnosed, so the reason has to reach
     stderr — while stdout stays empty, since anything printed there is
@@ -676,4 +717,73 @@ def test_inject_context_cli_debug_explains_on_stderr_only(
 
     out = capsys.readouterr()
     assert out.out == ""
-    assert "could not load config" in out.err
+    assert "witan.hook.config_load_failed" in caplog.text
+
+
+def test_hook_writes_nothing_to_stdout_in_a_fresh_process(tmp_path):
+    """The hook must not write to stdout in a process that never configured logging.
+
+    This is the guard for the trap the structlog migration introduced. The hook
+    runs as a bare ``witan inject-context`` process that never calls
+    ``configure_observability()``, and structlog's own out-of-the-box logger
+    factory writes to STDOUT -- so converting these diagnostics from
+    ``print(..., file=sys.stderr)`` to log calls would have silently started
+    injecting them into the user's prompt, where they would be read as part of
+    it. ``witan_core.observability.logging`` pins the unconfigured fallback to
+    stderr; this proves the hook actually benefits from that.
+
+    A subprocess, not a fixture, because that is the only way to get a genuinely
+    pristine interpreter: an in-process version is at the mercy of whichever
+    earlier test last configured logging, since structlog caches a module-level
+    logger on first use. It is also exactly how the hook runs in production.
+    """
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text('[targets.work]\ngraph = "work.omni"\n')
+
+    program = textwrap.dedent(
+        """
+        from witan import context as ctx
+        from witan.cli import hooks
+
+        # Every degradation the hook can hit, through the real entry points.
+        hooks.inject_context(debug=True)
+        ctx._output_cache_ttl()
+        ctx._detect_repo()
+        ctx._current_branch()
+        ctx._read_output_cache("/nonexistent/graph.omni", None, None)
+        ctx.inject_context("/nonexistent/graph.omni", ".", None, debug=True)
+        """
+    )
+    # Inherit the real environment rather than building one from scratch: the
+    # subprocess still needs whatever makes Python work here (locale, cert
+    # paths, uv/venv resolution), and a hand-built dict would fail for reasons
+    # that have nothing to do with what is being asserted.
+    env = os.environ.copy()
+    # But strip witan/OTel configuration the developer's shell may already
+    # carry, so the run is driven only by what this test sets — a stray
+    # WITAN_TARGET or WITAN_LOG_LEVEL=ERROR would otherwise quietly change what
+    # the hook does, or silence it into passing vacuously.
+    for key in [
+        k for k in env if k.startswith(("WITAN_", "OTEL_")) or k == "LOG_LEVEL"
+    ]:
+        del env[key]
+    env |= {
+        "WITAN_CONFIG": str(cfg_file),
+        "WITAN_TARGET": "does-not-exist",
+        "WITAN_CONTEXT_TTL": "not-a-number",
+        "WITAN_REPO": "",
+        # DEBUG so the debug-level degradations are emitted rather than
+        # filtered out, which would make this pass vacuously.
+        "WITAN_LOG_LEVEL": "DEBUG",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+    assert result.stdout == "", f"hook wrote to stdout: {result.stdout!r}"
+    # And it genuinely reported the degradations rather than being silent.
+    assert "witan." in result.stderr

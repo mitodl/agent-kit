@@ -50,6 +50,20 @@ def test_all_output_goes_to_stderr(capsys):
     assert "hello" in captured.err
 
 
+def test_unconfigured_logger_never_writes_to_stdout(capsys):
+    # The sharper half of the same constraint. structlog's own default factory
+    # is PrintLoggerFactory(), which writes to STDOUT -- so before this was
+    # pinned, any module logging before (or without) configure_logging() would
+    # print onto the MCP framing channel, and inside the UserPromptSubmit hook
+    # it would land in the context block the hook writes to stdout. The autouse
+    # fixture has already called reset_logging(), so this is genuinely the
+    # unconfigured path, and it also proves reset restores the pin.
+    get_logger("witan.context").warning("degraded", detail="x")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "degraded" in captured.err
+
+
 def test_stdlib_logging_also_goes_to_stderr(capsys):
     # Foreign records travel the same handler, so a dependency's logger cannot
     # corrupt stdio either.
