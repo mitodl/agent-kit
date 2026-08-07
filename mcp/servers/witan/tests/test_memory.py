@@ -56,6 +56,70 @@ def test_search_bm25_ranked(server):
 
 
 @requires_omnigraph
+def test_search_finds_terms_that_appear_only_in_the_title(server):
+    """Titles carry the distinguishing nouns, so a term living only there has to
+    be findable — `search($m.content, …)` alone could never match it."""
+    res = server.memory_store(
+        kind="lesson",
+        title="zebrafish quokka narwhal",
+        content="totally unrelated prose about compaction and fragments",
+    )
+
+    hits = server.memory_search("zebrafish quokka narwhal")
+    assert [h["slug"] for h in hits] == [res["slug"]]
+
+    # …and through recall, which seeds from the same candidate set.
+    recalled = server.recall(query="zebrafish quokka narwhal")
+    assert res["slug"] in [m["slug"] for m in recalled["memories"]]
+
+
+@requires_omnigraph
+def test_search_ranks_content_matches_above_title_only_matches(server):
+    """The two BM25 runs aren't on a comparable scale, so content hits are
+    appended-to rather than interleaved-with title hits. Pin that ordering."""
+    title_only = server.memory_store(
+        kind="lesson",
+        title="quokka narwhal",
+        content="prose about compaction and fragments",
+    )
+    in_content = server.memory_store(
+        kind="lesson",
+        title="an unremarkable heading",
+        content="this body discusses quokka narwhal at length",
+    )
+
+    slugs = [h["slug"] for h in server.memory_search("quokka narwhal")]
+    assert slugs.index(in_content["slug"]) < slugs.index(title_only["slug"])
+
+
+@requires_omnigraph
+def test_search_returns_a_both_fields_match_exactly_once(server):
+    """A row matching on content *and* title is found by both runs; the union
+    must dedup it rather than return it twice."""
+    both = server.memory_store(
+        kind="lesson",
+        title="quokka narwhal",
+        content="more about the quokka narwhal",
+    )
+
+    slugs = [h["slug"] for h in server.memory_search("quokka narwhal")]
+    assert slugs.count(both["slug"]) == 1
+
+
+@requires_omnigraph
+def test_title_search_respects_the_kind_filter(server):
+    """The `_title` twin of each query carries the same filters — otherwise a
+    filtered search would leak title hits from outside the filter."""
+    server.memory_store(kind="pattern", title="quokka narwhal", content="unrelated")
+    wanted = server.memory_store(
+        kind="lesson", title="quokka narwhal too", content="also unrelated"
+    )
+
+    hits = server.memory_search("quokka narwhal", kind="lesson")
+    assert [h["slug"] for h in hits] == [wanted["slug"]]
+
+
+@requires_omnigraph
 def test_search_kind_filter(server):
     server.memory_store(kind="pattern", title="caching", content="cache sql results")
     server.memory_store(kind="lesson", title="sql danger", content="raw sql is risky")

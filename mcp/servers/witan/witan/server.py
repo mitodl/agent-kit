@@ -1604,22 +1604,44 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
 # ── Composite re-rank (spec §7) ───────────────────────────────────
 
 
+# Matches the `limit 20` each search query carries, and caps the two-run union
+# below so a search still returns 20 rows rather than silently up to 40.
+_SEARCH_LIMIT = 20
+
+
 def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
-    """BM25 candidate rows in score-desc order (the seed step for §3.5 / §8)."""
+    """BM25 candidate rows in score-desc order (the seed step for §3.5 / §8).
+
+    Two BM25 runs — one over ``content``, one over ``title`` — unioned here
+    rather than in the query, because the engine won't ``or`` two ``search``
+    predicates in one match. Content hits come first and title-only hits are
+    appended: the two runs' scores are not on a comparable scale, so there is
+    no honest way to interleave them by score, and downstream ranking reads
+    *position* rather than score anyway (``_rerank``'s ``norm_bm25`` proxy).
+    Appending therefore keeps content matches ranked above title-only ones.
+    """
     detected = repo_module.detect(override=repo)
     if detected and kind:
-        return client.read(
-            "read.gq",
-            "search_by_repo_and_kind",
-            {"query": query, "repo": detected, "kind": kind},
-        )
-    if detected:
-        return client.read(
-            "read.gq", "search_by_repo", {"query": query, "repo": detected}
-        )
-    if kind:
-        return client.read("read.gq", "search_by_kind", {"query": query, "kind": kind})
-    return client.read("read.gq", "search_all", {"query": query})
+        name = "search_by_repo_and_kind"
+        params = {"query": query, "repo": detected, "kind": kind}
+    elif detected:
+        name = "search_by_repo"
+        params = {"query": query, "repo": detected}
+    elif kind:
+        name = "search_by_kind"
+        params = {"query": query, "kind": kind}
+    else:
+        name = "search_all"
+        params = {"query": query}
+
+    rows = list(client.read("read.gq", name, params))
+    seen = {r["slug"] for r in rows}
+    rows.extend(
+        r
+        for r in client.read("read.gq", f"{name}_title", params)
+        if r["slug"] not in seen
+    )
+    return rows[:_SEARCH_LIMIT]
 
 
 # The edge index is a handful of global queries; cache it briefly so a burst of
@@ -1780,7 +1802,8 @@ def memory_search(
     Parameters
     ----------
     query:
-        Free-text search query. Searched against ``content``.
+        Free-text search query. Searched against ``content`` and ``title``;
+        a memory matching on content ranks above one matching on title alone.
     kind:
         Optional filter: ``pattern``, ``project_fact``, ``lesson``,
         or ``agent_context``.
