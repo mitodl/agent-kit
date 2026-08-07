@@ -105,7 +105,19 @@ filterwarnings = [
   "error:coroutine .* was never awaited:RuntimeWarning",
   # The line above is not enough on its own. That RuntimeWarning is emitted when
   # the orphaned coroutine is garbage-collected, not inside the test body, so it
-  # surfaces through the unraisable hook — where pytest re-wraps it and the test
-  # still PASSES. Promoting the wrapper is what actually fails the build.
-  "error::pytest.PytestUnraisableExceptionWarning",
+  # surfaces through the unraisable hook — where pytest re-wraps it in its own
+  # class and the test still PASSES. Promoting the wrapper is what actually
+  # fails the build.
+  #
+  # Message-qualified for the same reason as above, and it matters more here:
+  # the wrapper class is generic, so promoting it wholesale would fail the run
+  # on ANY unraisable exception — a dependency whose finalizer raises would turn
+  # CI red for something no one here can fix. Verified in both directions: an
+  # orphaned coroutine fails the run, while a `__del__` raising an unrelated
+  # ValueError does not.
+  #
+  # Keyed on "coroutine" rather than pytest's full phrasing ("Exception ignored
+  # while finalizing coroutine ...") so a reworded message in a future pytest
+  # narrows the guard rather than silently disabling it.
+  "error:.*coroutine:pytest.PytestUnraisableExceptionWarning",
 ]
