@@ -18,11 +18,15 @@ module is server-agnostic. Requires the ``remote`` extra (``httpx2``).
 from __future__ import annotations
 
 import base64
+import fcntl
 import json
 import os
+import threading
 import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Callable, Iterator, Protocol
 
 import httpx2
 
@@ -37,6 +41,54 @@ Shared on purpose, next to the shared ``~/.config/witan/config.toml``: entries
 are keyed by ``(issuer, client_id)``, so one ``witan login`` covers every CLI
 pointing at the same deployment under the same client id.
 """
+
+
+_cache_lock_depth: dict[tuple[int, str], int] = {}
+_cache_lock_guard = threading.Lock()
+
+
+@contextmanager
+def _cache_lock(cache_path: Path) -> Iterator[None]:
+    """Hold ``<cache>.lock`` exclusively for the block, re-entrant per thread.
+
+    The token cache is a *local* file, so an advisory ``flock`` genuinely
+    coordinates every process that shares it — unlike the graph store, where
+    the same pattern is skipped for remote stores because it cannot span hosts.
+
+    Re-entrancy is not optional: ``flock`` conflicts between two file
+    descriptors even within one process, so the nested
+    ``get_valid_token`` → ``_refresh`` → ``_store_token`` path would deadlock
+    against itself without the depth count. Same shape as
+    ``witan_core.omnigraph.acquire_store_flock``.
+    """
+    lock_path = cache_path.with_name(cache_path.name + ".lock")
+    key = (threading.get_ident(), str(lock_path))
+    with _cache_lock_guard:
+        depth = _cache_lock_depth.get(key, 0)
+        if depth:
+            _cache_lock_depth[key] = depth + 1
+    if depth:
+        try:
+            yield
+        finally:
+            with _cache_lock_guard:
+                _cache_lock_depth[key] -= 1
+        return
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(lock_path, "w")  # noqa: SIM115 — closed in the finally below
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        with _cache_lock_guard:
+            _cache_lock_depth[key] = 1
+        try:
+            yield
+        finally:
+            with _cache_lock_guard:
+                _cache_lock_depth.pop(key, None)
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    finally:
+        fh.close()
 
 
 class OidcEndpoint(Protocol):
@@ -197,14 +249,17 @@ class DeviceAuth:
         path.parent.mkdir(parents=True, exist_ok=True)
         # Create the temp file 0600 *at creation* (O_CREAT | mode), not
         # chmod-after, so the token is never even briefly group/world-readable,
-        # then atomically replace. os.open honors the mode only when it creates
-        # the file, so drop any stale temp first (a crashed prior write could
-        # have left one with laxer perms that O_CREAT would silently reuse).
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
+        # then atomically replace.
+        #
+        # The temp name is unique per writer. It used to be a fixed
+        # ``tokens.json.tmp`` preceded by an unlink, which meant concurrent
+        # writers deleted each other's in-flight temp: 58-83% of simultaneous
+        # refreshes died on FileExistsError (O_EXCL lost the race) or
+        # FileNotFoundError (os.replace after someone else's unlink), and each
+        # failure was a token refresh that never landed. A unique name cannot
+        # collide, so O_EXCL still guarantees we created — and therefore own
+        # the mode of — the file we are about to write.
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_EXCL, 0o600)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -224,10 +279,40 @@ class DeviceAuth:
             "expires_at": now + float(token.get("expires_in", 0)),
             "obtained_at": now,
         }
-        cache = self._load_cache()
-        cache[self._cache_key()] = entry
-        self._write_cache(cache)
+        # Read-modify-write of the *whole* file, so it has to be serialized:
+        # two processes refreshing different deployments concurrently would
+        # each write back a snapshot taken before the other's, and one
+        # deployment's entry would silently vanish into "Not logged in".
+        with _cache_lock(self._cache_path):
+            self._sweep_stale_temps()
+            cache = self._load_cache()
+            cache[self._cache_key()] = entry
+            self._write_cache(cache)
         return entry
+
+    def _sweep_stale_temps(self) -> None:
+        """Remove temp files a hard-killed writer left behind. Call under the lock.
+
+        The old fixed temp name self-healed — the next writer unlinked it. A
+        unique name per writer cannot, so a process SIGKILLed between ``os.open``
+        and ``os.replace`` would otherwise leave a 0600 fragment in the config
+        directory forever. Anything older than a minute is abandoned: a real
+        write of a few kilobytes does not take a minute, and a *live* writer is
+        either holding this lock (so it is not running now) or is younger than
+        the cutoff.
+        """
+        path = self._cache_path
+        cutoff = time.time() - 60
+        for stale in path.parent.glob(f"{path.name}.*.tmp"):
+            try:
+                if stale.stat().st_mtime < cutoff:
+                    stale.unlink()
+            except OSError:
+                pass  # raced with another sweeper, or not ours to delete
+
+    def _usable(self, entry: dict) -> bool:
+        """Is this cached entry good for longer than the refresh skew?"""
+        return entry["expires_at"] - time.time() > _EXPIRY_SKEW_S
 
     # ── request helpers ────────────────────────────────────────────────────
     def _auth_params(self) -> dict:
@@ -324,7 +409,7 @@ class DeviceAuth:
             raise NeedsLogin(
                 f"Not logged in to {self._cfg.url} — run `{self._login_hint}` first."
             )
-        if entry["expires_at"] - time.time() > _EXPIRY_SKEW_S:
+        if self._usable(entry):
             return entry["access_token"]
         if not entry.get("refresh_token"):
             raise NeedsLogin(
@@ -333,11 +418,22 @@ class DeviceAuth:
         owns = client is None
         client = client or httpx2.Client(timeout=15)
         try:
-            refreshed = self._refresh(entry["refresh_token"], client)
+            with _cache_lock(self._cache_path):
+                # Re-read under the lock. A fleet of agents that started
+                # together re-converges on the same expiry every ~5 minutes and
+                # arrives here at once; whoever held the lock immediately
+                # before us has almost certainly just stored a fresh token, so
+                # the stampede collapses into one refresh and N-1 cache hits.
+                # It also stops N processes from spending the *same* refresh
+                # token, which a rotating IdP treats as replay.
+                current = self._load_cache().get(self._cache_key()) or entry
+                if self._usable(current):
+                    return current["access_token"]
+                refresh_token = current.get("refresh_token") or entry["refresh_token"]
+                return self._refresh(refresh_token, client)["access_token"]
         finally:
             if owns:
                 client.close()
-        return refreshed["access_token"]
 
     def cached_claims(self) -> dict:
         """Claims of the cached access token for this deployment, or ``{}``.
@@ -357,10 +453,11 @@ class DeviceAuth:
 
     def logout(self) -> bool:
         """Drop the cached token for this deployment. True if one existed."""
-        cache = self._load_cache()
-        existed = cache.pop(self._cache_key(), None) is not None
-        if existed:
-            self._write_cache(cache)
+        with _cache_lock(self._cache_path):
+            cache = self._load_cache()
+            existed = cache.pop(self._cache_key(), None) is not None
+            if existed:
+                self._write_cache(cache)
         return existed
 
     def token_provider(self) -> Callable[[], str]:

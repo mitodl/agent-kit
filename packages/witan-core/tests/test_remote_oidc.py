@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import base64
 import json
+import multiprocessing
+import os
 import stat
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -358,3 +361,128 @@ def test_login_hint_appears_in_needs_login_message(cache_path):
     auth = DeviceAuth(_Endpoint(), cache_path, login_hint="witan login")
     with pytest.raises(NeedsLogin, match="witan login"):
         auth.get_valid_token()
+
+
+# ── concurrent writers ─────────────────────────────────────────────────────
+# A fleet of agents on one machine shares ~/.config/witan/tokens.json, and the
+# access token's ~5-minute life makes them re-converge on a simultaneous
+# refresh forever. These drive REAL processes released by a REAL barrier
+# because that is what reproduced the live failure: threads inside one
+# interpreter never hit the cross-process file races at all.
+
+_FLEET = 16
+
+
+def _store_worker(cache_path, index, barrier, result_path):
+    """One agent process storing a token for its own deployment."""
+    auth = DeviceAuth(_Endpoint(oidc_client_id=f"client-{index}"), cache_path)
+    barrier.wait()
+    try:
+        auth._store_token({"access_token": f"tok-{index}", "expires_in": 900})
+    except BaseException as exc:  # noqa: BLE001 — the outcome IS the assertion
+        Path(result_path).write_text(f"{type(exc).__name__}: {exc}")
+    else:
+        Path(result_path).write_text("ok")
+
+
+def _refresh_worker(cache_path, refresh_log, index, barrier, result_path):
+    """One agent process finding the shared token expired and refreshing it."""
+    auth = DeviceAuth(_Endpoint(), cache_path, login_hint="witan login")
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        with open(refresh_log, "a", encoding="utf-8") as fh:
+            fh.write("refresh\n")  # short + O_APPEND: atomic across processes
+        return httpx2.Response(
+            200,
+            json={
+                "access_token": _jwt({"sub": "u"}),
+                "refresh_token": "r-new",
+                "expires_in": 900,
+            },
+        )
+
+    barrier.wait()
+    try:
+        token = auth.get_valid_token(client=_client(handler))
+    except BaseException as exc:  # noqa: BLE001
+        Path(result_path).write_text(f"{type(exc).__name__}: {exc}")
+    else:
+        Path(result_path).write_text(f"ok {token}")
+
+
+def _run_fleet(target, tmp_path, *args):
+    """Start _FLEET processes, release them at one instant, collect outcomes."""
+    ctx = multiprocessing.get_context("fork")
+    barrier = ctx.Barrier(_FLEET)
+    procs = []
+    for i in range(_FLEET):
+        result = tmp_path / f"result-{i}"
+        procs.append(
+            (result, ctx.Process(target=target, args=(*args, i, barrier, str(result))))
+        )
+    for _, proc in procs:
+        proc.start()
+    for _, proc in procs:
+        proc.join(timeout=60)
+    return [
+        result.read_text() if result.exists() else "no result (process died)"
+        for result, _ in procs
+    ]
+
+
+def test_concurrent_stores_all_succeed_and_no_entry_is_lost(cache_path, tmp_path):
+    # Each process writes a DIFFERENT deployment's entry, so a lost write is
+    # unambiguous: a read-modify-write of one shared file must not drop the
+    # entry a concurrent writer just added.
+    results = _run_fleet(_store_worker, tmp_path, cache_path)
+
+    assert results == ["ok"] * _FLEET
+    cache = json.loads(cache_path.read_text())
+    assert len(cache) == _FLEET
+    for i in range(_FLEET):
+        assert (
+            cache[f"{_Endpoint.oidc_issuer}|client-{i}"]["access_token"] == f"tok-{i}"
+        )
+    # No temp file survives, and the cache is still owner-only.
+    assert list(cache_path.parent.glob("tokens.json*.tmp")) == []
+    assert stat.S_IMODE(cache_path.stat().st_mode) == 0o600
+
+
+def test_store_sweeps_a_hard_killed_writers_temp(auth, cache_path):
+    # The old fixed temp name self-healed via the pre-unlink; a unique name
+    # cannot, so a SIGKILLed writer's fragment must be swept instead.
+    abandoned = cache_path.with_name(f"{cache_path.name}.999999.deadbeef.tmp")
+    abandoned.write_text("{}")
+    os.utime(abandoned, (time.time() - 3600, time.time() - 3600))
+    mine = cache_path.with_name(f"{cache_path.name}.999998.cafe.tmp")
+    mine.write_text("{}")  # in-flight: too young to be abandoned
+
+    auth._store_token({"access_token": "t", "expires_in": 900})
+
+    assert not abandoned.exists()
+    assert mine.exists()
+
+
+def test_concurrent_refreshes_collapse_into_one(cache_path, tmp_path):
+    # All processes start from the same expired entry, so without single-flight
+    # every one of them spends the same refresh token — which a rotating IdP
+    # reads as replay, and which is what put 401s in front of the fleet.
+    DeviceAuth(_Endpoint(), cache_path)._write_cache(
+        {
+            f"{_Endpoint.oidc_issuer}|{_Endpoint.oidc_client_id}": {
+                "access_token": _jwt({"sub": "u"}),
+                "refresh_token": "r-old",
+                "expires_at": time.time() - 100,
+            }
+        }
+    )
+    refresh_log = tmp_path / "refreshes"
+    refresh_log.touch()
+
+    results = _run_fleet(_refresh_worker, tmp_path, cache_path, str(refresh_log))
+
+    assert all(r.startswith("ok ") for r in results), results
+    assert len(set(results)) == 1  # everyone ends up on the same token
+    assert refresh_log.read_text().count("refresh") == 1
