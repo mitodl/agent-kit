@@ -253,13 +253,34 @@ Moving your local store onto the deployed service (ADR-0009). **Do it
 yourself** — no kubectl, no port-forward, no AWS credentials:
 
 ```bash
-witan login                                            # once, if you haven't
+witan target add ol --remote-url … --oidc-issuer …     # once, if you haven't
+witan login --target ol                                # once, if you haven't
+
+export WITAN_TARGET=ol                                 # ← selects the deployment
+witan whoami                                           # confirm it, before merging
 witan migrate merge ~/.local/share/witan/graph.omni --dry-run
 witan migrate merge ~/.local/share/witan/graph.omni
 ```
 
-With a deployment configured (`remote_url`, see
-[`deployed-witan-onboarding.md`](deployed-witan-onboarding.md)), `merge`
+The first two lines are step 1 and 2 of
+[`deployed-witan-onboarding.md`](deployed-witan-onboarding.md), which has the
+actual hostnames — do that first if you have not.
+
+**`export WITAN_TARGET` is load-bearing, and its absence fails quietly.**
+`migrate merge` picks its destination the same way every other command does —
+from the environment and the checkout — so a target that matches neither
+resolves to *no* remote, and the merge runs happily against your local store
+instead of the deployment. There is no error; the rows just go nowhere useful.
+Setting `WITAN_TARGET` pins it regardless. You cannot use `--target` here:
+`migrate merge --target` names a *store to merge into*, not a config target,
+and against a deployment it is refused outright (see below).
+
+If the target carries a `match_*` selector that covers your checkout (the
+onboarding doc's example uses `match_orgs`), it selects itself inside those
+repos and the export is unnecessary there — `witan whoami` is what tells you
+which case you are in. Run it from the directory you will merge from.
+
+With a deployment configured (`remote_url`), `merge`
 exports your store locally and ships the rows through the deployment's
 `store_merge` tool in batches. The server reconciles each batch against the
 shared graph and writes the winners — **as you**, using your own actor's

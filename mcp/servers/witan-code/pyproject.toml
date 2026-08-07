@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.11.1"
+version = "0.12.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -15,12 +15,15 @@ dependencies = [
     # proxy) behind `witan-code login` and the read commands' remote mode.
     # Costs nothing extra in practice — fastmcp is already required here and
     # itself depends on httpx2, the extra's only other dependency.
-    # >=0.9: server.py imports witan_core.observability.middleware at module
-    # scope, which 0.8 does not have. A looser floor lets an external install
-    # resolve a witan-core the server cannot even import. (>=0.8 was already
-    # required for OmnigraphClient.change_many with chunk_size on the batched
-    # reindex deletes.)
-    "witan-core[cli,remote,observability]>=0.9,<1",
+    # >=0.10: graph.py and remote/store.py import witan_core.chunking and call
+    # OmnigraphClient.load_batch at module scope — both moved up from this
+    # package into witan-core so a code index and a memory merge share one
+    # split rule, so 0.9 has neither. A looser floor lets an external install
+    # resolve a witan-core the server cannot even import. (>=0.9 was already
+    # required for witan_core.observability.middleware; >=0.8 for
+    # OmnigraphClient.change_many with chunk_size on the batched reindex
+    # deletes.)
+    "witan-core[cli,remote,observability]>=0.10,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled

@@ -6,7 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [Unreleased]
+## [0.12.0] - 2026-08-07
+
+> Also covers 0.11.0 and 0.11.1, published from the workspace without their own
+> entries; their content is folded in below.
+
+### Changed
+
+- **Requires `witan-core>=0.10`.** `chunk_records` and the batch-loading half
+  of `OmnigraphClient` moved *out* of this package and into
+  `witan_core.chunking` / `OmnigraphClient.load_batch`, so a code index and a
+  memory merge share one split rule instead of two copies. Behaviour is
+  unchanged; this is a breaking change only for anyone importing
+  `witan_code.chunking` directly, which is why it is a minor bump.
+
+### Fixed
+
+- **`code_indexed_repos` returned nothing against a multi-graph server.**
+  Enumerating a server's graphs is not something the CLI can answer — it now
+  goes over HTTP to the server's own `/graphs`, whose envelope the previous
+  parser did not match.
+
+### Performance
+
+- **Per-graph listing queries now fan out** rather than running in sequence:
+  6.4s → 0.70s across the deployed graph set.
 
 ### Added
 

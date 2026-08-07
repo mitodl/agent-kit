@@ -6,7 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [Unreleased]
+## [0.10.0] - 2026-08-07
+
+> Also covers 0.8.0 and 0.9.0, which were published from the workspace without
+> their own entries — their content is the "Changed"/"Added" items below that
+> predate this release's own. Version bumps had been running ahead of this
+> file; this entry closes the gap rather than reconstructing boundaries that
+> were never recorded.
+
+### Added
+
+- **`witan_core.chunking` and `OmnigraphClient.load_batch`, moved up from
+  witan-code.** Both now serve two callers: a code index and a memory merge hit
+  the same buffered-body ceiling on the way to the server, so the split rule —
+  and the every-node-before-any-edge ordering it has to preserve — lives in one
+  place instead of being reimplemented per package. witan-code imports them
+  from here now; `witan.remote.proxy` uses them to batch `migrate merge`
+  against a deployment.
+
+- **`resolve_config_path()`**, split out of `load_toml()`. Readers already
+  resolved `WITAN_CONFIG` internally; now writers (`witan target add`) can
+  target the very file the readers read rather than re-deriving the rule and
+  drifting from it.
+
+  An empty or whitespace-only `WITAN_CONFIG` now counts as **unset**. Taken
+  literally it resolves to `Path("")` — the current directory — so a reader
+  reported "failed to read config file ." and a writer would have tried to
+  rewrite a directory. Nobody means that by it; it is what an unexpanded
+  `WITAN_CONFIG=$SOME_UNSET_VAR` looks like.
+
+### Fixed
+
+- **`load_batch` wrote its temp file in the platform locale encoding.** witan
+  rows are prose and routinely non-ASCII, so this could fail or corrupt on the
+  way to the store. Now explicitly UTF-8.
 
 ### Changed
 

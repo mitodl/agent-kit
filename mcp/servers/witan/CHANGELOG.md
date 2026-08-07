@@ -6,6 +6,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.11.0] - 2026-08-07
+
+> Also covers 0.10.0, which was published from the workspace without its own
+> entry; its batched-write work is folded in below.
+
+### Added
+
+- **`witan target add|list|remove` — join a deployment without hand-editing
+  TOML.** Registering a deployed witan meant hand-writing a `[targets.<name>]`
+  block with two URLs you had to get exactly right, in a file you had to know
+  the path of. `witan setup` did not help: it writes a starter config only when
+  none exists, and every remote key in it is commented out.
+
+  The sharp edge was the issuer — a typo in it did not surface as a *config*
+  error, it surfaced later as an auth failure during `witan login`, far from
+  its cause. So `target add` verifies the issuer **at registration time**
+  against its `.well-known/openid-configuration`, reusing the same
+  `discover_endpoints` the device grant itself later relies on (RFC 8414 §3.3
+  issuer-match check included). Nothing is written if it fails; `--no-verify`
+  covers offline registration.
+
+  Blocks are appended as *text*, never round-tripped through a TOML writer: the
+  shipped config.toml is almost entirely comments documenting every key, and
+  re-serialising the parsed document would silently delete all of them.
+  `--force` replaces a block **in place** — `match_target` returns the first
+  match, so moving it to the end of the file would silently re-order routing
+  precedence. Writes are atomic (temp file → `fsync` → `os.replace`) and
+  explicitly UTF-8: these are the only commands that rewrite a user-owned file,
+  and a truncated config.toml is not a soft failure, since `load_toml` raises
+  on a decode error and every later `witan` command stops working.
+
+  Deliberately *not* included: an `--env <name>` shorthand deriving both URLs
+  from one flag. That needs a specific organisation's SSO and service hostnames
+  compiled into a general-purpose package; verifying the issuer generically
+  removes the same class of typo without the coupling.
+
+- **`--target` on `login`, `logout`, and `whoami`.** A target carrying no
+  `match_*` selectors never selects itself, so it was previously reachable only
+  by exporting `WITAN_TARGET`.
+
+- **`store_merge` — `witan migrate merge` through the MCP tier (ADR-0007 D5).**
+  A user with `remote_url` + `witan login` can now merge their local store into
+  the deployed graph with no kubectl, no port-forward and no AWS credentials.
+  The client exports its own store and ships rows in batches; the server
+  reconciles each batch against the graph it already holds a client on and
+  writes the winners — **as the calling user**, evaluated by Cedar, rather than
+  as `svc-witan-admin`, which is what the in-cluster fallback records.
+  `--dry-run` works over this path, and re-running is a no-op.
+
+- **`task_unlink`** — remove a link recorded backwards or against the wrong
+  slug. Removing a `blocks` edge is how a task wrongly marked blocked becomes
+  ready again.
+
+- **Structured logging and OpenTelemetry** (`witan_core.observability`), wired
+  into `witan serve`, plus Cedar policy bundles shipped in the image with
+  membership rendered at boot.
+
+### Fixed
+
+- `migrate merge` addressed every store as `--store <uri>`, which omnigraph
+  0.8.1 rejects for an http(s) target — a remote graph is reachable only as
+  `--server <url> --graph <id>`, so the merge failed at its first export
+  against any deployment. It also now accepts an `omnigraph export` JSONL as
+  its source, which matters because a Lance store embeds absolute paths and
+  therefore cannot travel; only its export can.
+- Unleased `in_progress` tasks are treated as held rather than free.
+- Unprovisioned policy groups are dropped instead of rendered empty.
+- MCP tools refuse positional arguments instead of guessing their names.
+
+### Changed
+
+- **Requires `witan-core>=0.10`** — `remote/proxy.py` imports
+  `witan_core.chunking` and `config.py` imports `resolve_config_path`, neither
+  of which exists in 0.9. The previous `>=0.9` floor would let an external
+  install resolve a witan-core this server cannot import.
+
 ## [0.9.0] - 2026-08-01
 
 ### Added

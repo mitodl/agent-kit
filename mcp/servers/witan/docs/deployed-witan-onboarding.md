@@ -26,7 +26,10 @@ exactly as it does today. See
 ## Prerequisites
 
 - `witan` on `PATH` (`uv tool install witan-council`), version new enough to
-  have `witan login` — check with `witan login --help`.
+  have `witan target` — check with `witan target --help`. That is the newest
+  of the commands below (witan-council 0.11.0), so a CLI that passes this
+  check has all of them; checking `witan login` instead would let an older
+  CLI through, to fail at step 1 with an unknown command.
 - A Keycloak account in the `ol-platform-engineering` realm, enabled. The
   hourly `witan-token-sync` job mints an actor entry for every enabled realm
   user, so if you can log in to other OL services you almost certainly already
@@ -34,26 +37,55 @@ exactly as it does today. See
 - A browser you can reach from wherever you run the CLI. The device-code flow
   is designed for this to work over SSH — you approve on any device.
 
-## 1. Configure the target
+## 1. Register the target
 
-Add a `[targets.*]` block to `~/.config/witan/config.toml`. A named target is
-better than exporting env vars: it scopes the deployment to the repos it
-actually covers, and it routes **both** `witan` and `witan-code` at once (they
-share one endpoint and one token cache — there is no separate
-`WITAN_CODE_REMOTE_URL`).
+`witan target add` writes the config for you. Start against CI, which is the
+recommended way in:
+
+```bash
+witan target add ol \
+    --remote-url https://witan.ci.ol.mit.edu/mcp \
+    --oidc-issuer https://sso-ci.ol.mit.edu/realms/ol-platform-engineering \
+    --oidc-audience witan \
+    --match-orgs mitodl
+```
+
+Drop the `ci`/`-ci` from the two hostnames for production. `oidc_client_id`
+defaults to `witan-cli`, the public client registered for the device grant; you
+only pass `--oidc-client-id` if that changes.
+
+**The issuer is checked before anything is written.** `target add` fetches the
+issuer's `.well-known/openid-configuration` and confirms the document advertises
+the issuer you gave it, so a typo is an error about the issuer, right here —
+rather than a confusing auth failure at step 2, which is where it used to
+surface. Pass `--no-verify` if you are registering offline and want to skip the
+check.
+
+A named target beats exporting env vars: it scopes the deployment to the repos
+it actually covers, survives the shell, and routes **both** `witan` and
+`witan-code` at once (they share one endpoint and one token cache — there is no
+separate `WITAN_CODE_REMOTE_URL`).
+
+`witan target list` shows what is configured and marks with `*` the target in
+effect for the current checkout; `witan target remove ol` deletes the block
+again. Re-running `target add` with an existing name refuses rather than
+overwriting — pass `--force` to replace it in place.
+
+<details>
+<summary>What that writes, if you would rather edit the TOML by hand</summary>
 
 ```toml
 [targets.ol]
-remote_url  = "https://witan.ol.mit.edu/mcp"
-oidc_issuer = "https://sso.ol.mit.edu/realms/ol-platform-engineering"
+remote_url = "https://witan.ci.ol.mit.edu/mcp"
+oidc_issuer = "https://sso-ci.ol.mit.edu/realms/ol-platform-engineering"
 oidc_audience = "witan"
-match_orgs  = ["mitodl"]
+match_orgs = ["mitodl"]
 ```
 
-Swap the hostnames for `witan.ci.ol.mit.edu` / `sso-ci.ol.mit.edu` to try it
-against CI first, which is the recommended way in. `oidc_client_id` defaults to
-`witan-cli`, the public client registered for the device grant; you only set it
-if that changes.
+…and for production, the same block with `witan.ol.mit.edu` /
+`sso.ol.mit.edu`. Hand-editing `~/.config/witan/config.toml` still works
+exactly as before; the command is a convenience, not a new format.
+</details>
 
 `match_orgs` is what makes this safe to leave in place: outside a `mitodl`
 checkout the target doesn't match, and the CLI keeps using your local store.
@@ -61,10 +93,23 @@ checkout the target doesn't match, and the CLI keeps using your local store.
 other selectors — see the `load()` docstring in `witan/config.py` for the
 precedence order. To force a target regardless, `WITAN_TARGET=ol witan …`.
 
+Note the corollary: a target with **no** `match_*` selectors never selects
+itself, so it is only ever reached explicitly. **Export `WITAN_TARGET=ol` for
+that case** — `--target` is a flag on `login`/`logout`/`whoami` only, not on
+the read and write commands (`witan tasks`, `witan memory`, `witan migrate
+merge`, …), which resolve their target from the environment and the checkout.
+`WITAN_TARGET` covers every command; `--target` does not.
+
+Selector precedence is by **specificity, not file order**: every target's
+`match_paths` is checked before any `match_repos`, then `match_hosts`, then
+`match_orgs` (`witan_core.target_config.match_target`). A `match_paths` target
+at the bottom of the file therefore beats a `match_orgs` target at the top;
+position only breaks ties *within* one tier.
+
 ## 2. Log in
 
 ```bash
-witan login
+witan login --target ol
 ```
 
 This runs the OIDC device authorization grant: it prints a URL and a user code,
@@ -73,8 +118,14 @@ you approve in a browser, and the resulting token is cached at
 several deployments don't clobber each other. It refreshes automatically; you
 should not need to run this again until the refresh token expires.
 
+`--target` is accepted by `login`, `logout`, and `whoami`. Inside a `mitodl`
+checkout the `match_orgs` above already selects the target, so you can leave it
+off — but it is always correct, and it is *required* for a target with no
+`match_*` selectors. (`witan target add --login` runs this step for you
+immediately after registering.)
+
 ```bash
-witan whoami
+witan whoami --target ol
 ```
 
 Confirm the endpoint, your username, and — the part worth actually reading —
@@ -138,11 +189,23 @@ is not an outage — re-run `witan login`.
 ## Troubleshooting
 
 - **"Remote mode is not configured."** No `remote_url` resolved: your target
-  didn't match this repo. Check with `witan whoami` from inside the checkout,
-  or force it with `WITAN_TARGET=ol`.
+  didn't match this repo. Check with `witan target list` — if no row is marked
+  `*`, nothing matches here. Pass `--target ol`, or force it with
+  `WITAN_TARGET=ol`.
+- **"Could not verify OIDC issuer …" from `target add`.** The issuer URL is
+  wrong, or unreachable from where you ran it. Nothing was written, so just fix
+  it and re-run. Note the check also fails if the discovery document advertises
+  a *different* issuer than the one you passed — that mismatch is refused
+  deliberately (RFC 8414 §3.3), not worked around.
 - **A remote URL is configured but no OIDC issuer.** The CLI refuses to fall
   through to the unauthenticated in-process path — set `oidc_issuer` on the
-  same target, or unset `remote_url`.
+  same target, or unset `remote_url`. `target add` rejects this combination up
+  front, so this only comes from a hand-edited config.
+- **`target add` says the target already exists.** Deliberate: it will not
+  silently overwrite. `--force` replaces the block in place, keeping its
+  position — which matters for ties, since within one selector tier the first
+  matching target wins. (Across tiers, specificity decides; see step 1.) Or
+  pick another name.
 - **401 / token rejected.** The deployment validates the `aud` claim. If your
   realm's audience mapper is not stamping `aud: witan`, set `oidc_audience` to
   match the deployment's `WITAN_OIDC_AUDIENCE`.
