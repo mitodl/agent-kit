@@ -932,10 +932,27 @@ def test_store_merge_rows_are_findable_by_search_not_just_readable(server):
     the engine's BM25: a term whose document frequency approaches the corpus
     size scores non-positive and is dropped, and one such term zeroes the whole
     query. See docs/migration-runbook.md, "Verify by slug, not by search".
-    Hence the deliberately rare search term below — a common one would be
-    testing the engine's IDF rather than witan.
+
+    Hence the filler rows below. Rarity is ``df/N``, not a property of the word
+    itself: in a one-row corpus the search token would appear in *every*
+    document, which is precisely the regime this test must stay out of if it is
+    to isolate ``store_merge``. The filler shares no vocabulary with the token,
+    so ``df == 1`` against a corpus of five and the search stays in the
+    well-behaved part of BM25 on any engine.
     """
     from witan import server as srv
+
+    # Corpus, so the searched-for token is rare *relative to N*. Written via
+    # memory_store rather than the merge, to keep the path under test to the
+    # one row whose findability is being asserted.
+    for i, subject in enumerate(
+        ["sourdough starters", "derailleur cables", "ski wax", "espresso pucks"]
+    ):
+        srv.memory_store(
+            kind="project_fact",
+            title=f"filler {i}",
+            content=f"Unrelated prose concerning {subject} and nothing else.",
+        )
 
     now = "2026-08-07T00:00:00Z"
     rows = [
