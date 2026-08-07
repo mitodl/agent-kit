@@ -23,13 +23,17 @@ from typing import Callable
 
 from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records
 from witan_core.omnigraph import store_cli_args, store_subprocess_env
-from witan_core.remote.proxy import RemoteMCPProxy, RemoteToolUnavailable
+from witan_core.remote.proxy import (
+    RemoteMCPProxy,
+    RemoteToolUnavailable,
+    RemoteUnreachable,
+)
 
 from .. import repo as repo_module
 from .. import session_state
 from ..config import RemoteConfig
 
-__all__ = ["RemoteServerProxy", "RemoteToolUnavailable"]
+__all__ = ["RemoteServerProxy", "RemoteToolUnavailable", "RemoteUnreachable"]
 
 
 @contextmanager
@@ -146,9 +150,28 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def __init__(self, cfg: RemoteConfig, token_provider: Callable[[], str]) -> None:
         super().__init__(cfg.url, token_provider)
+        self._url_source = cfg.url_source
 
     def _is_admin_tool(self, name: str) -> bool:
         return name in _ADMIN_ONLY
+
+    def _unreachable_hint(self) -> str:
+        # Name the setting that is actually in play, read off the resolver's
+        # own record of which source won (`url_source`) rather than inferred
+        # from `target_name`. A matched target does not mean the target
+        # supplied the URL: `WITAN_REMOTE_URL` overrides it while leaving
+        # `target_name` set, and a global `remote_url` supplies it with no
+        # target at all. Inferring gets both of those backwards, and a user
+        # who unsets what they were told stays routed at the dead endpoint.
+        setting = self._url_source or "the configured remote URL"
+        return (
+            "witan does not fall back to your local store — falling back "
+            "silently would split your memory across two graphs with no signal "
+            "that it happened, leaving a merge nobody knew to run. Check the "
+            "endpoint is reachable and that your session is still valid "
+            f"(`witan whoami`, then `witan login`), or unset {setting} to work "
+            "against your local store on purpose."
+        )
 
     def _admin_error(self, name: str) -> str:
         return (

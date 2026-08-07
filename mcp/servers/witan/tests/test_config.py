@@ -896,6 +896,85 @@ def test_load_remote_config_env_overrides_target(monkeypatch, toml_file):
     assert cfg.oidc_issuer == "https://sso.example.org/realms/ol"
 
 
+# ── url_source: which setting actually routed this CLI remotely ───────────
+# Separate from `target_name`, which says only that *a* target matched. The two
+# diverge in both directions, and anything telling a user what to unset to stop
+# being routed at a dead endpoint has to read the former — naming an absent or
+# overridden key leaves them remote after they follow the advice.
+
+
+def test_url_source_names_the_target_when_the_target_supplied_the_url(
+    monkeypatch, toml_file
+):
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.hosted]
+            remote_url = "https://witan.example.org/mcp"
+            oidc_issuer = "https://sso.example.org/realms/ol"
+            match_orgs = ["mitodl"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+
+    assert load_remote_config().url_source == "`remote_url` on target [hosted]"
+
+
+def test_url_source_names_the_env_var_when_it_overrides_a_matched_target(
+    monkeypatch, toml_file
+):
+    """The case inference gets wrong: a target matched, so `target_name` is set,
+    but the env var is what supplied the URL and what has to be unset."""
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.hosted]
+            remote_url = "https://witan.example.org/mcp"
+            oidc_issuer = "https://sso.example.org/realms/ol"
+            match_orgs = ["mitodl"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan-env.example.org/mcp")
+
+    cfg = load_remote_config()
+    assert cfg.target_name == "hosted"  # a target DID match…
+    assert cfg.url_source == "`WITAN_REMOTE_URL`"  # …and did not supply the URL
+
+
+def test_url_source_names_the_global_key_when_no_target_matched(monkeypatch, toml_file):
+    """The mirror case: no target, so inference would fall back to naming
+    `WITAN_REMOTE_URL` — which is not set either."""
+    from witan.config import load_remote_config
+
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            remote_url = "https://witan.example.org/mcp"
+            oidc_issuer = "https://sso.example.org/realms/ol"
+            """
+        ),
+    )
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+
+    cfg = load_remote_config()
+    assert cfg.target_name is None
+    assert cfg.url_source == "`remote_url` in config.toml"
+
+
 def test_load_remote_config_target_shared_with_omnigraph_fields(monkeypatch, toml_file):
     """One target block routes both the omnigraph store and the deployed
     witan service under the same name."""

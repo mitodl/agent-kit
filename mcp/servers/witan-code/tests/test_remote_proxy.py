@@ -173,3 +173,72 @@ def test_srv_is_the_server_module_by_default(monkeypatch, tmp_path):
     assert cli_module._srv() is server_module
     assert cli_module._is_remote() is False
     cli_module._server = None
+
+
+# ── an unreachable deployment ─────────────────────────────────────────────
+# The classification itself is pinned in witan-core; what witan-code owns is
+# the wording, and the fact that `cli()` guards at all — it had no try/except,
+# so a deployment that was down printed a traceback out of `witan-code symbols`.
+
+
+def _dead(**cfg_kwargs) -> str:
+    cfg = RemoteConfig(
+        url="https://witan.example.org/mcp",
+        oidc_issuer="https://sso/realms/ol",
+        **cfg_kwargs,
+    )
+    proxy = RemoteServerProxy(cfg, lambda: "tok")
+    return proxy._unreachable_error(RuntimeError("All connection attempts failed"))
+
+
+def test_unreachable_message_names_the_endpoint_and_the_cause():
+    message = _dead()
+    assert "https://witan.example.org/mcp" in message
+    assert "All connection attempts failed" in message
+
+
+def test_unreachable_message_states_that_there_is_no_fallback():
+    # Silently answering from a local index is worse here than failing: an
+    # index that is stale or absent returns no hits, which reads exactly like a
+    # true "nothing calls this".
+    assert "does not fall back" in _dead()
+
+
+def test_unreachable_message_names_remote_url_not_code_transport():
+    # `remote_url` is what routes a caller to this proxy. `code_transport`
+    # selects the direct-omnigraph store path, and naming it here would send
+    # the reader to unset a setting that is not in play.
+    message = _dead(url_source="`WITAN_REMOTE_URL`")
+    assert "`WITAN_REMOTE_URL`" in message
+    assert "code_transport" not in message
+
+
+def test_unreachable_message_names_the_setting_that_supplied_the_url():
+    assert "`remote_url` on target [qa]" in _dead(
+        target_name="qa", url_source="`remote_url` on target [qa]"
+    )
+
+
+def test_unreachable_message_does_not_infer_the_setting_from_the_target():
+    # A matched target does not mean the target supplied the URL — env
+    # overrides it while leaving `target_name` set. Inferring would name a
+    # key that is overridden, and the caller would still be routed remotely.
+    message = _dead(target_name="qa", url_source="`WITAN_REMOTE_URL`")
+    assert "`WITAN_REMOTE_URL`" in message
+    assert "target [qa]" not in message
+
+
+def test_cli_prints_an_unreachable_remote_instead_of_a_traceback(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from witan_code import cli as cli_module
+    from witan_code.remote.proxy import RemoteUnreachable
+
+    def _down():
+        raise RemoteUnreachable("witan-code is down at X")
+
+    monkeypatch.setattr(cli_module, "app", SimpleNamespace(meta=_down))
+    with pytest.raises(SystemExit) as exit_code:
+        cli_module.cli()
+    assert exit_code.value.code == 1
+    assert "witan-code is down at X" in capsys.readouterr().out

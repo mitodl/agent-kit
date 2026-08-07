@@ -169,12 +169,27 @@ projects that other people created.
 
 **It hard-fails. There is no fallback to your local store, by design.**
 
-A configured-but-unreachable remote surfaces as a connection error from the
-command you ran; the CLI does not quietly serve you a different graph. This is
-deliberate — a silent fallback would split the corpus in two, writing some
-sessions' work to the shared graph and some to a local one with no signal that
-it happened, and the two would then have to be reconciled by a merge that
-nobody knew to run.
+A configured-but-unreachable remote fails the command you ran, naming the
+endpoint and saying so out loud:
+
+```
+The deployed service at https://witan.qa.ol.mit.edu/mcp could not be reached:
+Client failed to connect: All connection attempts failed. witan does not fall
+back to your local store — falling back silently would split your memory across
+two graphs with no signal that it happened, leaving a merge nobody knew to run.
+Check the endpoint is reachable and that your session is still valid (`witan
+whoami`, then `witan login`), or unset `remote_url` on target [qa] to work
+against your local store on purpose.
+```
+
+The CLI does not quietly serve you a different graph. This is deliberate — a
+silent fallback would split the corpus in two, writing some sessions' work to
+the shared graph and some to a local one with no signal that it happened, and
+the two would then have to be reconciled by a merge that nobody knew to run.
+
+`witan-code` prints the same shape for its own reads, with its own reason: an
+answer with no hits from a stale or absent local index is indistinguishable
+from a true "nothing calls this".
 
 So an outage means witan commands fail while it lasts, and your agent's context
 hook comes back empty rather than stale. If you need to keep working offline,
@@ -206,6 +221,11 @@ is not an outage — re-run `witan login`.
   position — which matters for ties, since within one selector tier the first
   matching target wins. (Across tiers, specificity decides; see step 1.) Or
   pick another name.
+- **"could not be reached" but the endpoint is definitely up.** The same
+  message covers a token the *server* rejects, because both fail while the
+  connection is being opened and the client cannot tell them apart from
+  outside. Check `witan whoami` first — an expired session, or a missing `aud`
+  claim (below), reads identically to an outage.
 - **401 / token rejected.** The deployment validates the `aud` claim. If your
   realm's audience mapper is not stamping `aud: witan`, set `oidc_audience` to
   match the deployment's `WITAN_OIDC_AUDIENCE`.

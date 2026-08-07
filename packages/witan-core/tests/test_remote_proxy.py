@@ -12,12 +12,15 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import httpx2
 import pytest
 
 from witan_core.remote.proxy import (
     RemoteMCPProxy,
     RemoteToolUnavailable,
+    RemoteUnreachable,
     _tool_input_schema,
+    _transport_failure,
     console_elicitation_handler,
 )
 
@@ -245,6 +248,148 @@ def test_dunder_attributes_are_not_intercepted():
     p = _Proxy()
     with pytest.raises(AttributeError):
         p.__wrapped__
+
+
+# ── an unreachable deployment ─────────────────────────────────────────────
+# With a remote configured and the endpoint down, every command used to exit
+# with a raw Python traceback: `_invoke` had no handling and `main()` caught
+# only the two auth/tool refusals. The classification mirrors witan-code's
+# ClusterUnreachable — "I could not ask the service" is not "the service said
+# no", and hard-failing (rather than falling back to the local store) is the
+# deliberate behaviour being explained, not changed.
+
+ENDPOINT = "https://witan.example.org/mcp"
+
+
+class _ScriptedProxy(RemoteMCPProxy):
+    """A proxy whose client fails at a chosen point, with a chosen exception."""
+
+    def __init__(self, exc, *, at):
+        super().__init__(ENDPOINT, lambda: "tok")
+        self._exc = exc
+        self._at = at
+        # Seeded so a call reaches call_tool without a tools/list round trip.
+        self._param_names = {"task_get": ["slug"]}
+
+    def _unreachable_hint(self):
+        return "HINT."
+
+    def _new_client(self, token):
+        exc, at = self._exc, self._at
+
+        class _Client:
+            async def __aenter__(self):
+                if at == "connect":
+                    raise exc
+                return self
+
+            async def __aexit__(self, *_):
+                if at == "teardown":
+                    raise exc
+                return False
+
+            async def call_tool(self, name, arguments):
+                if at == "call":
+                    raise exc
+                return SimpleNamespace(data={"slug": arguments["slug"]})
+
+        return _Client()
+
+
+def test_a_failed_connection_is_classified_not_raised_raw():
+    # fastmcp reports every connect-time failure — DNS, TLS, refused, a 5xx
+    # from an ingress, a token the server rejects — as this bare RuntimeError.
+    proxy = _ScriptedProxy(
+        RuntimeError("Client failed to connect: All connection attempts failed"),
+        at="connect",
+    )
+    with pytest.raises(RemoteUnreachable) as caught:
+        proxy.task_get(slug="x")
+    message = str(caught.value)
+    assert ENDPOINT in message
+    assert "All connection attempts failed" in message
+    assert "HINT." in message
+
+
+def test_the_underlying_error_is_kept_as_the_cause():
+    original = RuntimeError("Client failed to connect: nope")
+    proxy = _ScriptedProxy(original, at="connect")
+    with pytest.raises(RemoteUnreachable) as caught:
+        proxy.task_get(slug="x")
+    assert caught.value.__cause__ is original
+
+
+def test_a_drop_mid_call_is_unreachable_through_the_exception_group():
+    # anyio's task groups re-raise a failed request inside an ExceptionGroup, so
+    # the httpx2 error is never the exception the caller sees. Matching only the
+    # outermost type would leave "the pod restarted during my write" a traceback.
+    dropped = httpx2.ReadError("connection reset by peer")
+    proxy = _ScriptedProxy(ExceptionGroup("unhandled", [dropped]), at="call")
+    with pytest.raises(RemoteUnreachable, match="connection reset by peer"):
+        proxy.task_get(slug="x")
+
+
+def test_a_drop_noticed_only_while_closing_is_still_unreachable():
+    # The call succeeded; the failure surfaces from `AsyncExitStack.__aexit__`,
+    # which re-raises what fastmcp's anyio background tasks failed with. That
+    # is outside the call itself, so a guard sitting *inside* the stack would
+    # let exactly the traceback this change removes escape from teardown.
+    dropped = httpx2.ReadError("server disconnected")
+    proxy = _ScriptedProxy(ExceptionGroup("unhandled", [dropped]), at="teardown")
+    with pytest.raises(RemoteUnreachable, match="server disconnected"):
+        proxy.task_get(slug="x")
+
+
+def test_a_non_transport_cleanup_error_still_propagates_as_itself():
+    # Only transport faults are reclassified. A cleanup bug is a bug, and
+    # relabelling it "the deployment could not be reached" would send whoever
+    # hits it to check DNS for a defect in this process.
+    proxy = _ScriptedProxy(ValueError("bad state in close()"), at="teardown")
+    with pytest.raises(ValueError, match="bad state in close"):
+        proxy.task_get(slug="x")
+
+
+def test_a_server_side_tool_error_is_not_reclassified():
+    # The deployment WAS reached and answered. Relabelling that as unreachable
+    # would send the reader to check DNS for a task that simply does not exist.
+    from fastmcp.exceptions import ToolError
+
+    proxy = _ScriptedProxy(ToolError("no task with slug 'x'"), at="call")
+    with pytest.raises(ToolError):
+        proxy.task_get(slug="x")
+
+
+def test_a_keyword_refusal_still_beats_the_unreachable_guard():
+    # _map_args runs inside the guarded block; its refusal is a caller bug, not
+    # a transport fault, and must keep its own actionable wording.
+    proxy = _ScriptedProxy(None, at="never")
+    with pytest.raises(RemoteToolUnavailable, match="by keyword"):
+        proxy.task_get("x")
+
+
+def test_a_genuinely_closed_port_raises_the_same_way():
+    # The hermetic tests above script fastmcp's failure shape; this one proves
+    # the shape is real, through the actual client stack against a port nothing
+    # is listening on.
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    proxy = RemoteMCPProxy(f"http://127.0.0.1:{port}/mcp", lambda: "tok")
+    with pytest.raises(RemoteUnreachable, match=f"127.0.0.1:{port}"):
+        proxy.task_get(slug="x")
+
+
+def test_transport_failure_terminates_on_a_cause_cycle():
+    # __context__ chains can be cyclic; the walk must answer, not recurse
+    # forever, and a cycle of non-transport errors is still "not a transport
+    # fault".
+    first, second = RuntimeError("a"), RuntimeError("b")
+    first.__context__ = second
+    second.__context__ = first
+    assert _transport_failure(first) is None
 
 
 # ── answering a deployed server's elicitation prompt ──────────────────────
