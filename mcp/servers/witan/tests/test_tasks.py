@@ -534,22 +534,40 @@ def test_holder_without_session_id_is_the_bare_identity(server, monkeypatch):
 
 @requires_omnigraph
 def test_assignee_filters_match_a_person_across_their_sessions(server, monkeypatch):
-    """Session-qualifying the holder must not break "my work" filters: a person
-    asking for their own tasks does not know which session took them."""
+    """The filter's own precision decides its scope.
+
+    An unqualified filter means the person and must span their sessions; a
+    qualified one names a single session and must NOT widen back to the person.
+    Two sessions each hold a task here — with only one, an over-wide qualified
+    filter still returns the right row and the test passes for the wrong
+    reason, which is exactly how the first version of this shipped.
+    """
     from witan import server as srv
 
-    monkeypatch.setenv("CLAUDE_SESSION_ID", "cccccccc-9999-0000-1111-222222222222")
-    t = server.task_create(title="mine", description="x")
-    claimed = server.task_claim(t["slug"])
     me = srv._current_author()
 
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "cccccccc-9999-0000-1111-222222222222")
+    mine_c = server.task_create(title="held by session c", description="x")
+    claimed_c = server.task_claim(mine_c["slug"])
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "eeee0000-9999-0000-1111-222222222222")
+    mine_e = server.task_create(title="held by session e", description="x")
+    claimed_e = server.task_claim(mine_e["slug"])
+
+    assert claimed_c["assignee"] != claimed_e["assignee"]
+
+    # Unqualified: the person, across both sessions.
     by_person = {r["slug"] for r in server.task_list(assignee=me)}
-    assert t["slug"] in by_person
-    # The fully-qualified holder still selects that one session.
-    by_session = {r["slug"] for r in server.task_list(assignee=claimed["assignee"])}
-    assert t["slug"] in by_session
-    # Someone else's filter must not pick it up.
-    assert t["slug"] not in {r["slug"] for r in server.task_list(assignee="agentZ")}
+    assert {mine_c["slug"], mine_e["slug"]} <= by_person
+
+    # Qualified: that one session, and not the person's other one.
+    by_session_c = {r["slug"] for r in server.task_list(assignee=claimed_c["assignee"])}
+    assert mine_c["slug"] in by_session_c
+    assert mine_e["slug"] not in by_session_c
+
+    # Someone else's filter must not pick either up.
+    others = {r["slug"] for r in server.task_list(assignee="agentZ")}
+    assert not ({mine_c["slug"], mine_e["slug"]} & others)
 
 
 @requires_omnigraph

@@ -450,17 +450,45 @@ def _holder_identity(holder: str | None) -> str | None:
     return _SESSION_SUFFIX_RE.sub("", holder) if holder else holder
 
 
-def _holder_matches(recorded: str | None, wanted: str | None) -> bool:
-    """Whether ``recorded`` is ``wanted``, ignoring session qualifiers.
+def _is_qualified(holder: str | None) -> bool:
+    """Whether a holder string names a session as well as a person."""
+    return bool(holder) and _SESSION_SUFFIX_RE.search(holder) is not None
 
-    ``assignee`` filters on ``task_list`` / ``task_ready`` are asked by people
-    ("my ready work"), so ``"Tobias Macey"`` has to keep matching a row held by
-    ``"Tobias Macey#5e313f6d"``. Passing the fully-qualified holder still
-    selects that one session, since the exact comparison is tried first.
+
+def _holder_matches(recorded: str | None, wanted: str | None) -> bool:
+    """Whether a row's holder satisfies an ``assignee`` *filter*.
+
+    The filter's own precision decides the scope, which is the only reading
+    that lets one parameter answer both questions people actually ask:
+
+      ``"Tobias Macey"``           → every session of that person
+      ``"Tobias Macey#5e313f6d"``  → that one session, and no other
+
+    Stripping the qualifier off *both* sides — the obvious implementation, and
+    the first one here — collapses the second case into the first: filtering
+    for ``alice#aaaaaaaa`` would also return rows held by ``alice#bbbbbbbb``,
+    so a qualified selector silently meant something wider than it says. Only
+    an unqualified filter is widened to the person.
     """
     if wanted is None:
         return True
-    return recorded == wanted or _holder_identity(recorded) == _holder_identity(wanted)
+    if recorded == wanted:
+        return True
+    if _is_qualified(wanted):
+        return False
+    return _holder_identity(recorded) == wanted
+
+
+def _same_person(a: str | None, b: str | None) -> bool:
+    """Whether two holder strings name the same person, whatever the session.
+
+    Deliberately *not* ``_holder_matches``: this asks about two holders rather
+    than matching a row against a filter, and the answer must ignore the
+    qualifier on both sides. ``task_release`` is the caller — releasing a claim
+    that another of your own sessions took is a handover, not a steal, so it
+    should not need ``force``, while another person's still should.
+    """
+    return _holder_identity(a) == _holder_identity(b)
 
 
 def _lease_expiry(lease_started_at: str | None) -> str | None:
@@ -4637,7 +4665,7 @@ def task_release(
     # Identity-level match, so you can release a claim your *other* session took
     # (same person, different `#<session>` qualifier) without reaching for force.
     # Another person's claim still needs it.
-    if current_holder and not _holder_matches(current_holder, holder) and not force:
+    if current_holder and not _same_person(current_holder, holder) and not force:
         return {
             "slug": slug,
             "released": False,
