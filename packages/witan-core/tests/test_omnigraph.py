@@ -9,6 +9,7 @@ setup-hint message; witan-code's branch ops; witan's apply_schema).
 import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -716,6 +717,56 @@ def test_nested_acquisitions_unlock_only_at_depth_zero(tmp_path):
     og.release_store_flock(store, inner)
     assert og._held_flocks  # still held by the outer acquisition
     og.release_store_flock(store, outer)
+    assert not og._held_flocks
+
+
+def test_a_second_thread_still_blocks_on_a_lock_this_thread_holds(tmp_path):
+    """Re-entrancy is per THREAD, and only a second thread can prove it.
+
+    Every other lock test here nests within one thread, which a process-wide
+    depth counter would satisfy just as well — while handing a second thread a
+    lock the first is holding, destroying the mutual exclusion the lock exists
+    for. That wrong implementation is indistinguishable from the right one
+    until two threads contend, so this is the test that pins the choice.
+
+    Written so it can only fail by re-entrancy being wrongly GRANTED: the
+    contender announces itself before attempting, and being slow merely makes
+    the negative check weaker, never false.
+    """
+    store = str(tmp_path / "graph.omni")
+    attempting = threading.Event()
+    acquired = threading.Event()
+    may_release = threading.Event()
+    released = threading.Event()
+    got = {}
+
+    def contender():
+        attempting.set()
+        got["fh"] = acquire = og.acquire_store_flock(store)
+        acquired.set()
+        may_release.wait(timeout=10)
+        # Released on the acquiring thread: the registry is keyed by thread, so
+        # releasing from the main thread would leave this entry behind.
+        og.release_store_flock(store, acquire)
+        released.set()
+
+    outer = og.acquire_store_flock(store)  # held by the MAIN thread
+    thread = threading.Thread(target=contender, daemon=True)
+    thread.start()
+    assert attempting.wait(timeout=10)
+
+    # The whole point: another thread must NOT get in behind our back.
+    assert not acquired.wait(timeout=0.5)
+
+    og.release_store_flock(store, outer)
+
+    assert acquired.wait(timeout=10)
+    # And it took a real lock of its own, not a re-entrancy free pass.
+    assert got["fh"] is not None
+
+    may_release.set()
+    assert released.wait(timeout=10)
+    thread.join(timeout=10)
     assert not og._held_flocks
 
 
