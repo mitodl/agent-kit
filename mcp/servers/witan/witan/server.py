@@ -1604,8 +1604,10 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
 # ── Composite re-rank (spec §7) ───────────────────────────────────
 
 
-# Matches the `limit 20` each search query carries, and caps the two-run union
-# below so a search still returns 20 rows rather than silently up to 40.
+# `memory_search`'s documented result size. Applied by the caller *after*
+# supersession pruning, never to the candidate set below: capping candidates
+# first would let 20 superseded content hits discard every title hit and then
+# prune to nothing, with a perfectly good title match sitting behind the cut.
 _SEARCH_LIMIT = 20
 
 
@@ -1618,7 +1620,15 @@ def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
     appended: the two runs' scores are not on a comparable scale, so there is
     no honest way to interleave them by score, and downstream ranking reads
     *position* rather than score anyway (``_rerank``'s ``norm_bm25`` proxy).
-    Appending therefore keeps content matches ranked above title-only ones.
+
+    That ordering is a *seeding* order, not a guarantee about the final result.
+    It gives content matches the higher positional proxy, but the proxy is one
+    weighted term in ``_score`` alongside recency, corroboration and
+    confidence — so a well-corroborated title-only hit can finish above a
+    marginal content hit, exactly as it can among content hits today.
+
+    Returns up to 2× each query's ``limit 20``. Callers cap; see
+    ``_SEARCH_LIMIT``.
     """
     detected = repo_module.detect(override=repo)
     if detected and kind:
@@ -1641,7 +1651,7 @@ def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
         for r in client.read("read.gq", f"{name}_title", params)
         if r["slug"] not in seen
     )
-    return rows[:_SEARCH_LIMIT]
+    return rows
 
 
 # The edge index is a handful of global queries; cache it briefly so a burst of
@@ -1802,8 +1812,10 @@ def memory_search(
     Parameters
     ----------
     query:
-        Free-text search query. Searched against ``content`` and ``title``;
-        a memory matching on content ranks above one matching on title alone.
+        Free-text search query. Searched against ``content`` and ``title``.
+        Content matches seed ahead of title-only matches, so they carry the
+        higher relevance proxy — but final order is the composite score, which
+        also weighs recency, corroboration and confidence.
     kind:
         Optional filter: ``pattern``, ``project_fact``, ``lesson``,
         or ``agent_context``.
@@ -1819,12 +1831,13 @@ def memory_search(
     edge_index = _edge_index()
     if not include_superseded:
         rows = [r for r in rows if r["slug"] not in edge_index["superseded"]]
+    # Cap here, after pruning — see _SEARCH_LIMIT.
     return _rerank(
         rows,
         now=datetime.now(timezone.utc),
         rank_cfg=rank_cfg,
         edge_index=edge_index,
-    )
+    )[:_SEARCH_LIMIT]
 
 
 @mcp.tool

@@ -74,9 +74,17 @@ def test_search_finds_terms_that_appear_only_in_the_title(server):
 
 
 @requires_omnigraph
-def test_search_ranks_content_matches_above_title_only_matches(server):
+def test_content_matches_seed_ahead_of_title_only_matches(server):
     """The two BM25 runs aren't on a comparable scale, so content hits are
-    appended-to rather than interleaved-with title hits. Pin that ordering."""
+    appended-to rather than interleaved-with title hits.
+
+    This pins the *seeding* order, not a guarantee about the final result: the
+    positional proxy is one weighted term in `_score`, so with recency,
+    corroboration or confidence in play a title-only hit can legitimately
+    finish higher — as it can among content hits. Both memories here are
+    fresh, unlinked and of default confidence, so position is the only signal
+    that differs and the seeding order survives to the output.
+    """
     title_only = server.memory_store(
         kind="lesson",
         title="quokka narwhal",
@@ -117,6 +125,68 @@ def test_title_search_respects_the_kind_filter(server):
 
     hits = server.memory_search("quokka narwhal", kind="lesson")
     assert [h["slug"] for h in hits] == [wanted["slug"]]
+
+
+@requires_omnigraph
+def test_superseded_content_hits_do_not_crowd_out_a_title_match(server, monkeypatch):
+    """The result cap has to come after supersession pruning, not before.
+
+    Capping the candidate set first lets content hits that are all about to be
+    pruned occupy every slot, discarding the title hits behind them — and the
+    search then returns nothing, with a perfectly good title match sitting just
+    behind the cut. The cap is patched down so the test needs three memories
+    rather than twenty-one; it pins the order of operations, not the number.
+    """
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_SEARCH_LIMIT", 1)
+
+    old = server.memory_store(
+        kind="lesson", title="a heading", content="quokka narwhal in the body"
+    )
+    newer = server.memory_store(
+        kind="lesson", title="another heading", content="quokka narwhal again"
+    )
+    server.memory_link(newer["slug"], old["slug"], "supersedes")
+    # `newer` supersedes `old`; now supersede `newer` too, so every content hit
+    # is pruned and only the title-only memory should survive.
+    replacement = server.memory_store(
+        kind="lesson", title="unrelated heading", content="nothing matching here"
+    )
+    server.memory_link(replacement["slug"], newer["slug"], "supersedes")
+
+    title_only = server.memory_store(
+        kind="lesson", title="quokka narwhal", content="body shares no query terms"
+    )
+
+    assert [h["slug"] for h in server.memory_search("quokka narwhal")] == [
+        title_only["slug"]
+    ]
+
+
+@requires_omnigraph
+def test_title_search_on_the_unscoped_query_paths(server):
+    """Cover `search_all_title` and `search_by_kind_title`.
+
+    The `server` fixture sets `WITAN_REPO`, so every other test here dispatches
+    to the `_by_repo` twins and these two would never run — a typo in one of
+    the four hand-duplicated queries would ship silently. `repo=""` is the
+    documented way to ask for no repo scope.
+    """
+    lesson = server.memory_store(
+        kind="lesson", title="zebrafish quokka", content="unrelated prose"
+    )
+    pattern = server.memory_store(
+        kind="pattern", title="zebrafish narwhal", content="also unrelated"
+    )
+
+    # search_all_title — no repo, no kind.
+    found = {h["slug"] for h in server.memory_search("zebrafish", repo="")}
+    assert {lesson["slug"], pattern["slug"]} <= found
+
+    # search_by_kind_title — no repo, with kind.
+    hits = server.memory_search("zebrafish", repo="", kind="lesson")
+    assert [h["slug"] for h in hits] == [lesson["slug"]]
 
 
 @requires_omnigraph

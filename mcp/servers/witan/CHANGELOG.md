@@ -23,12 +23,19 @@ a MINOR bump may include breaking changes).
 
 ### Changed
 
-- Content matches rank above title-only matches: the two BM25 runs are not on a
-  comparable scale, so title hits are appended rather than interleaved by score.
-  Downstream ranking reads rank *position* (`_rerank`'s `norm_bm25` proxy), so
-  appending is what preserves the ordering. The union is capped at
-  `_SEARCH_LIMIT` (20) — the documented result size — rather than returning up
-  to 40 rows.
+- Content matches *seed* ahead of title-only matches: the two BM25 runs are not
+  on a comparable scale, so title hits are appended rather than interleaved by
+  score, which gives content hits the higher positional proxy (`_rerank`'s
+  `norm_bm25`). This is a seeding order, not a guarantee about the final
+  result — the proxy is one weighted term in `_score` alongside recency,
+  corroboration and confidence, so a well-corroborated title-only hit can
+  finish above a marginal content hit, exactly as it can among content hits.
+- `memory_search` applies its 20-row cap *after* supersession pruning rather
+  than before. `_search_rows` now returns the full candidate union and the
+  caller caps. Capping candidates first meant 20 superseded content hits could
+  occupy every slot, discard the title hits behind them, and prune to an empty
+  result with a valid title match sitting just past the cut. `recall` already
+  capped after pruning and just sees more candidates.
 
 ## [0.11.2] - 2026-08-07
 
