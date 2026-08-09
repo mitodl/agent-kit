@@ -66,6 +66,32 @@ ingress answers 502 rather than a graceful 429
 clients stampede the shared OIDC token cache
 (tk-concurrent-agents-stampede-the-oidc-token-refres-677984) -- which is why
 this probe pins one token across its workers instead of letting each refresh.
+
+── AND AGAIN, 2026-08-09, after the vMCP memory fix (ol-infrastructure #5320) ──
+The 2026-08-07 ceiling was the vMCP being OOMKilled. That is gone: across every
+run below the vMCP, proxy runner and backend held `restartCount 0` and served
+~150 sessions, where the same load previously killed the aggregator outright.
+
+  A  4 and 16 racers: exactly one `claimed: true`, every loser a structured
+     `held` refusal, zero errors -- unchanged.
+  B  12 writers: 12 acked, 12/12 readable, zero lost, zero duplicated slugs.
+  C  6 readers alongside those writers: all clean, all overlapping the window.
+
+  24 writers + 12 readers still FAILS, but for a different reason than before
+  and NOT by crashing anything. Writes queue on the single backend until a
+  layer above cancels them: 36 concurrent `memory_store` calls returned 25
+  HTML 502s, the proxy runner logged 25 x `http: proxy error: context
+  canceled`, and the backend logged only 13 completions. Reads degrade rather
+  than fail -- 36 concurrent `memory_search` all returned 200, at 15.8s p50
+  against 4.4s for a lone caller. Filed as its own task; the write ceiling is
+  now latency, not memory.
+
+★ A LOCAL CEILING TO KNOW ABOUT: much above ~24 workers this probe stops being
+  able to measure the server at all. Each worker is a separate interpreter, and
+  36 of them cannot finish importing and connecting inside the default 20s
+  lead -- the run then reports `22 LATE, fire spread 28062ms` and correctly
+  refuses to call itself a race. Raise --lead (75s was enough for 36 here)
+  rather than reading that FAIL as a server verdict.
 """
 
 from __future__ import annotations
@@ -226,7 +252,45 @@ def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
         out["ok"] = False
         out["error_type"] = type(exc).__name__
         out["error"] = str(exc)[:400]
+        out.update(_error_detail(exc))
     print(json.dumps(out), flush=True)
+
+
+def _error_detail(exc: BaseException) -> dict[str, Any]:
+    """Everything about a failure that ``str(exc)`` throws away.
+
+    ``MCPError.__str__`` is its ``message`` alone, and the message the deployed
+    stack produces under load is the useless sentence "Server returned an error
+    response" -- which named neither the layer nor the status and cost a whole
+    session to chase. The JSON-RPC ``code``/``data`` and the causal chain are
+    what distinguish a server-side refusal from a transport failure, so record
+    them rather than the sentence.
+    """
+    detail: dict[str, Any] = {}
+    chain, seen, cur = [], set(), exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        chain.append(f"{type(cur).__name__}: {str(cur)[:120]}")
+        # Read the code/status off whichever link CARRIES it, not off the
+        # outermost exception: witan wraps the transport fault in a
+        # RemoteUnreachable whose prose is all the reader ever saw, and which
+        # has no code of its own.
+        code = getattr(cur, "code", None)
+        if isinstance(code, int) and "error_code" not in detail:
+            detail["error_code"] = code
+        data = getattr(cur, "data", None)
+        if data is not None and "error_data" not in detail:
+            detail["error_data"] = str(data)[:400]
+        status = getattr(getattr(cur, "response", None), "status_code", None)
+        if status is not None and "http_status" not in detail:
+            detail["http_status"] = status
+        # An ExceptionGroup hides the real fault in .exceptions, not __cause__;
+        # anyio re-raises transport faults that way (see proxy._transport_failure).
+        inner = getattr(cur, "exceptions", None)
+        cur = (inner[0] if inner else None) or cur.__cause__ or cur.__context__
+    if len(chain) > 1:
+        detail["error_chain"] = chain[:6]
+    return detail
 
 
 @dataclass
@@ -750,6 +814,11 @@ def run(
                         f"{row.get('error_type')}: "
                         f"{row.get('error') or row.get('result')}"
                     )
+                    for key in ("error_code", "http_status", "error_data"):
+                        if row.get(key) is not None:
+                            print(f"          {key}={row[key]}")
+                    for link in row.get("error_chain") or []:
+                        print(f"          via {link}")
         failed = [o.name for o in (a, b, c) if not o.passed]
     finally:
         # In a finally, because everything above writes REAL rows to a SHARED
