@@ -98,3 +98,76 @@ check-omnigraph-pins:
 # failed in CI the first time.
 check-omnigraph-format *args:
     uv run --package witan-core --extra cli python bin/check_omnigraph_format.py {{ args }}
+
+# Runs in CI on every PR, so drift is caught however the bump was made — which
+# matters, because the previous drift happened by NOT using the tool: three of
+# five packages had a `[tool.bumpversion].current_version` stranded several
+# releases behind the real version, so `bump-my-version` searched for a string
+# that no longer existed and silently did nothing.
+
+# Fail if any package's version, bumpversion config, and CHANGELOG disagree.
+check-versions *args:
+    uv run --package witan-core --extra cli python bin/check_versions.py {{ args }}
+
+# CHANGELOG FIRST, THEN THE VERSION — and the order is the whole point. The
+# recipe computes the version this bump would produce and refuses unless
+# CHANGELOG.md already has a `## [<that version>]` heading. So the only way to
+# release is to have written down what is being released, and the two cannot
+# drift apart, because the bump will not run until they agree.
+#
+# Publishing is triggered by a push to main touching the package's own
+# pyproject.toml (.github/workflows/publish-*.yml), so this recipe IS the
+# release. It deliberately does not commit, tag, or push: what to say in the
+# commit is a judgement call, and a recipe that pushed on your behalf would be
+# one typo away from an unintended PyPI release.
+#
+# bump-my-version comes via uvx rather than a dev dependency — it is needed
+# only at release time, and pinning it into the workspace would put it in every
+# contributor's environment for no benefit.
+
+# Release a package, e.g. `just bump witan-core minor`. Changelog entry first.
+bump package part:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{ package }}" in
+        witan-core)       dir=packages/witan-core ;;
+        witan-council)    dir=mcp/servers/witan ;;
+        witan-code)       dir=mcp/servers/witan-code ;;
+        agent-config-kit) dir=packages/agent-config-kit ;;
+        ol-agent-kit)     dir=packages/agent-kit ;;
+        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit" >&2; exit 1 ;;
+    esac
+    case "{{ part }}" in
+        major|minor|patch) ;;
+        *) echo "part must be major, minor or patch (got '{{ part }}')" >&2; exit 1 ;;
+    esac
+
+    # Everything must already agree before touching anything: bumping on top of
+    # existing drift would bury the drift in a release rather than fix it.
+    just check-versions
+
+    # `show-bump --ascii` renders as `0.15.0 -- bump -+- minor - 0.16.0`, so the
+    # part name and its resulting version sit on one line. Asking the tool
+    # rather than computing it here keeps this honest if the versioning scheme
+    # ever grows a pre-release component.
+    new=$(cd "$dir" && uvx bump-my-version show-bump --ascii 2>/dev/null \
+        | grep -oE "\b{{ part }} - [0-9]+\.[0-9]+\.[0-9]+" \
+        | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+    if [[ -z "$new" ]]; then
+        echo "could not determine the {{ part }} version for {{ package }}" >&2
+        exit 1
+    fi
+
+    if ! grep -qE "^## \[${new//./\\.}\]" "$dir/CHANGELOG.md"; then
+        echo "" >&2
+        echo "$dir/CHANGELOG.md has no entry for ${new}." >&2
+        echo "" >&2
+        echo "Write it first — a release with no changelog entry is one nobody" >&2
+        echo "can read. Add a '## [${new}] - $(date +%F)' section, then re-run:" >&2
+        echo "  just bump {{ package }} {{ part }}" >&2
+        exit 1
+    fi
+
+    (cd "$dir" && uvx bump-my-version bump "{{ part }}" --no-commit --no-tag)
+    just check-versions
+    echo "{{ package }} bumped to ${new} — commit pyproject.toml + CHANGELOG.md together."

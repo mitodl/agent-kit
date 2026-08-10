@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.11.6] - 2026-08-10
+
+Client-side preparation for omnigraph 0.9.0
+([#217](https://github.com/mitodl/agent-kit/pull/217)). The omnigraph pin is
+unchanged; this is what has to be true before it can move.
+
+### Fixed
+
+- Every cross-store merge died on omnigraph 0.9.0. Its `export` renders a
+  `DateTime` as integer epoch milliseconds where 0.8.x wrote a naive ISO-8601
+  string, and `_parse_ts` fed that to `datetime.fromisoformat`, whose
+  `except ValueError` does not catch the `TypeError` an int raises. Both
+  representations are now read, because `witan migrate merge` accepts a `.jsonl`
+  export taken on another machine and old exports outlive the stores that wrote
+  them.
+
+  Milliseconds, not microseconds — `omnigraph commit list` reports *its*
+  timestamps in microseconds, so the obvious fix by analogy with existing code
+  in this repo is wrong, and wrong silently: it dates every row to January 1970
+  and inverts which side of a merge wins.
+- `merge_store` sent its whole reconciled set through one unchunked
+  `load_batch`. That was safe while the only ceiling was the served request
+  body; 0.9.0 caps keyed writes at 8,192 rows per table in the engine, local
+  stores included, so a merge of more than `LOAD_MAX_ROWS` rows of one type is
+  now refused. Chunked via `chunk_records`, which also guarantees the
+  nodes-before-edges ordering this path wants. Batches commit independently, so
+  a part-way failure leaves the earlier ones applied — recoverable by
+  re-running, since reconciliation makes a re-sent row lose to its own
+  already-applied copy.
+- `migrate_storage_format` aborted instead of finding a usable binary.
+  `_find_pre_upgrade_binary` returned the installer's set-aside copy
+  unconditionally, but `OmnigraphClient._find_binary` resolves `PATH` *before*
+  `~/.local/bin`, so a Homebrew install can be current while an unrelated stale
+  backup sits beside it. It now collects candidates — set-aside copies
+  newest-first, then `PATH` — and proves each by opening the store with it.
+  Which binary can read a given store is not decidable from names or versions.
+
+### Changed
+
+- Requires `witan-core>=0.16`, for `omnigraph_install.preserved_binaries()`.
+  The workspace resolves witan-core from the local path, so a stale floor is
+  invisible here and only bites a published install — at the worst moment,
+  since this code path runs during a format-break recovery.
+
 ## [0.11.5] - 2026-08-07
 
 ### Fixed

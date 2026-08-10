@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.11.5"
+version = "0.11.6"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -27,13 +27,19 @@ dependencies = [
   # witan_core symbol in the same change as its caller, bump this line in that
   # change: the workspace resolves witan-core by path, so nothing here can
   # catch it.
-  # (>=0.14 was required for remote.proxy.RemoteToolFailed, re-exported at
+  # (>=0.16 for omnigraph_install.preserved_binaries, called by server.py's
+  # _pre_upgrade_binary_candidates — it REPLACED preserved_binary, so an older
+  # witan-core does not merely lack a helper, it AttributeErrors during
+  # `witan migrate storage`, i.e. while recovering from a storage-format break.
+  # The workspace resolves witan-core from the local path, so a stale floor is
+  # invisible here and only bites a published install; >=0.14 was required for
+  # remote.proxy.RemoteToolFailed, re-exported at
   # module scope by witan/remote/proxy.py and named by cli/__init__.py's
   # main(); >=0.13 for omnigraph.StoreUnavailable; >=0.12 for
   # remote.proxy.RemotePayloadTooLarge; >=0.11 for chunking.MCP_LOAD_MAX_BYTES;
   # >=0.10 for witan_core.chunking + load_batch + config_file.resolve_config_path;
   # >=0.9 for observability.middleware; >=0.8 for OmnigraphClient.change_many.)
-  "witan-core[cli,remote,observability]>=0.14,<1",
+  "witan-core[cli,remote,observability]>=0.16,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -78,7 +84,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.10.0"
+current_version = "0.11.6"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
