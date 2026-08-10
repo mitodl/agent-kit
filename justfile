@@ -123,12 +123,17 @@ check-versions *args:
 #
 # bump-my-version comes via uvx rather than a dev dependency — it is needed
 # only at release time, and pinning it into the workspace would put it in every
-# contributor's environment for no benefit.
+# contributor's environment for no benefit. It IS version-pinned, though: this
+# recipe parses `show-bump`'s human-readable output, so an unpinned `uvx` could
+# resolve a release that reformats it and break version calculation during a
+# release. One variable, used for both the preview and the mutation, so those
+# two can never run different versions of the tool.
 
 # Release a package, e.g. `just bump witan-core minor`. Changelog entry first.
 bump package part:
     #!/usr/bin/env bash
     set -euo pipefail
+    BUMP_TOOL="bump-my-version@1.4.1"   # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
         witan-council)    dir=mcp/servers/witan ;;
@@ -149,12 +154,25 @@ bump package part:
     # `show-bump --ascii` renders as `0.15.0 -- bump -+- minor - 0.16.0`, so the
     # part name and its resulting version sit on one line. Asking the tool
     # rather than computing it here keeps this honest if the versioning scheme
-    # ever grows a pre-release component.
-    new=$(cd "$dir" && uvx bump-my-version show-bump --ascii 2>/dev/null \
+    # ever grows a pre-release component — but it also means this recipe is
+    # coupled to a human-readable format, which is why the tool is PINNED
+    # (BUMP_TOOL, matching AGENTS.md): an unpinned `uvx` would resolve whatever
+    # is newest on the day and could reformat this output from under us, at
+    # release time, which is the worst moment to discover it.
+    #
+    # `|| true` and a separate emptiness check, NOT a bare assignment: under
+    # `set -euo pipefail` a `grep` that matches nothing exits 1, pipefail
+    # propagates it, and the command substitution takes the whole recipe down
+    # before the diagnostic below can run. With stderr suppressed as well, the
+    # releaser would see a bare non-zero exit and nothing else.
+    raw=$(cd "$dir" && uvx "$BUMP_TOOL" show-bump --ascii 2>&1) || true
+    new=$(printf '%s\n' "$raw" \
         | grep -oE "\b{{ part }} - [0-9]+\.[0-9]+\.[0-9]+" \
-        | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+        | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1) || true
     if [[ -z "$new" ]]; then
-        echo "could not determine the {{ part }} version for {{ package }}" >&2
+        echo "could not determine the {{ part }} version for {{ package }}." >&2
+        echo "\`$BUMP_TOOL show-bump\` said:" >&2
+        printf '%s\n' "$raw" >&2
         exit 1
     fi
 
@@ -168,6 +186,13 @@ bump package part:
         exit 1
     fi
 
-    (cd "$dir" && uvx bump-my-version bump "{{ part }}" --no-commit --no-tag)
+    (cd "$dir" && uvx "$BUMP_TOOL" bump "{{ part }}" --no-commit --no-tag)
     just check-versions
-    echo "{{ package }} bumped to ${new} — commit pyproject.toml + CHANGELOG.md together."
+    echo ""
+    echo "{{ package }} bumped to ${new}. Commit together:"
+    echo "  $dir/pyproject.toml"
+    echo "  $dir/CHANGELOG.md"
+    # uv.lock records every workspace member's version, so it moves with the
+    # bump — `just check-versions` above runs uv and refreshes it. Left behind,
+    # the next `uv lock --check` (and CI) fails on a repo that looks untouched.
+    echo "  uv.lock"

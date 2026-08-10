@@ -6,10 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-`ol-agent-kit` is a meta-package: it pins no code of its own, only the versions
-of `agent-config-kit`, `witan-council` and `witan-code` that are known to work
-together. So an entry here is almost always a change to those floors, and the
-substance of a release is in the member packages' own changelogs.
+`ol-agent-kit` is a meta-package: it ships no code of its own, only open-ended
+**floors** on `agent-config-kit`, `witan-council` and `witan-code` — minimum
+versions with no upper bound. A fresh install therefore picks up newer releases
+of any of the three automatically, and a member release does **not** need an
+`ol-agent-kit` release to reach users (AGENTS.md § release).
+
+So an entry here means a floor was raised — because a member gained something
+this meta-package's users are expected to have — and the substance of what
+changed is in that member's own changelog.
 
 ## [0.1.3] - 2026-08-03
 
