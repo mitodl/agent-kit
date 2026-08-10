@@ -1346,10 +1346,14 @@ _RECONCILE_TS_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _reconcile_timestamp(row_type: str, data: dict) -> str | None:
+def _reconcile_timestamp(row_type: str, data: dict) -> str | int | float | None:
     """The best available comparison timestamp for a row, or ``None`` if it has
     none of its type's candidate fields set (an in-progress WorkflowSession
-    with no ``ended_at`` falls back to ``started_at``, not to nothing)."""
+    with no ``ended_at`` falls back to ``started_at``, not to nothing).
+
+    Returned as exported, not parsed — see :func:`_parse_ts` for the two
+    representations that can come back, and note that this value is also
+    echoed verbatim into the merge report's ``source_ts``/``target_ts``."""
     for field in _RECONCILE_TS_FIELDS.get(row_type, ("updated_at", "created_at")):
         value = data.get(field)
         if value:
@@ -1357,26 +1361,53 @@ def _reconcile_timestamp(row_type: str, data: dict) -> str | None:
     return None
 
 
-def _parse_ts(value: str | None) -> datetime | None:
-    """Parse an ISO-8601 timestamp for comparison, or ``None`` if absent/unparsable.
+#: omnigraph >= 0.9 exports a ``DateTime`` as integer milliseconds since the
+#: Unix epoch, UTC. NOT microseconds — ``commit list --json`` uses microseconds
+#: for its own ``created_at`` (see ``witan_code.graph.branch_last_write``, which
+#: divides by 1_000_000), and the two surfaces genuinely disagree. Getting this
+#: scale wrong does not raise; it silently dates every row to January 1970 and
+#: quietly inverts merge decisions. Measured on 0.9.0:
+#: ``"2026-01-01T00:00:00Z"`` exports as ``1767225600000``.
+_EXPORT_TS_PER_SECOND = 1_000
 
-    Two stores' timestamps aren't guaranteed to share a textual format (``Z``
-    vs. ``+00:00``, or genuinely different offsets) — comparing the raw
-    strings sorts wrong across those (e.g. ``"...T23:30:00-05:00"`` — later in
-    UTC — sorts *before* ``"...T00:00:00Z"`` the next calendar day
-    lexicographically). Parsed values are normalized to naive UTC so any two
-    are always comparable — ``datetime`` raises on comparing an aware value
-    against a naive one, and omnigraph's own export already strips the offset
-    from what witan writes (aware, ``+00:00``) down to a naive string, so
-    aware/naive comparison isn't a hypothetical here. An unparsable value
-    degrades to ``None`` (treated as "no usable timestamp") rather than
-    raising, since a malformed value shouldn't crash a merge — it just can't
-    win a comparison."""
+
+def _parse_ts(value: str | int | float | None) -> datetime | None:
+    """Parse an exported timestamp for comparison, or ``None`` if absent/unusable.
+
+    TWO REPRESENTATIONS, because a merge routinely spans omnigraph versions —
+    that is the whole point of the command. A store exported by 0.8.x yields
+    naive ISO-8601 strings; 0.9.0 onward yields integer epoch milliseconds
+    (``_EXPORT_TS_PER_SECOND``). ``witan migrate merge`` accepts a ``.jsonl``
+    export taken on another machine, so a 0.8.x export can arrive long after
+    every live store has moved to 0.9.x, and both forms have to keep working
+    for as long as anyone holds an old export file.
+
+    Everything normalizes to naive UTC so any two values are comparable —
+    ``datetime`` raises on comparing an aware value against a naive one. The
+    string form needs this because two stores' text isn't guaranteed to share a
+    format (``Z`` vs. ``+00:00``, or genuinely different offsets), and
+    comparing raw strings sorts wrong across those: ``"...T23:30:00-05:00"``,
+    later in UTC, sorts *before* ``"...T00:00:00Z"`` the next calendar day.
+
+    An unusable value degrades to ``None`` (treated as "no usable timestamp")
+    rather than raising, since a malformed value shouldn't crash a merge — it
+    just can't win a comparison. ``bool`` is excluded deliberately: it is an
+    ``int`` subclass, and ``True`` would otherwise read as 1ms past the epoch.
+    """
     if not value:
         return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(
+                value / _EXPORT_TS_PER_SECOND, timezone.utc
+            ).replace(tzinfo=None)
+        except (OverflowError, OSError, ValueError):
+            return None
     try:
         parsed = datetime.fromisoformat(value)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)

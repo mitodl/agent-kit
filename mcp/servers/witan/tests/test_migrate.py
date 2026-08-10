@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -740,6 +741,63 @@ def test_parse_ts_orders_mixed_offset_formats_correctly():
 
     assert "2026-01-01T23:30:00-05:00" < "2026-01-02T00:00:00Z"  # wrong as strings
     assert later_with_offset > earlier_utc  # correct once parsed
+
+
+# The literal integers below were captured from a real omnigraph 0.9.0
+# `export` of a Memory seeded with created_at="2026-01-01T00:00:00Z" and
+# updated_at="2026-08-10T12:30:45.123456Z". Hard-coded on purpose: they are the
+# upstream contract, and a future release that changes the scale again should
+# fail here rather than in a user's merge.
+_EXPORT_MS_2026_01_01 = 1767225600000
+_EXPORT_MS_2026_08_10 = 1786365045123
+
+
+def test_parse_ts_reads_the_epoch_millis_that_omnigraph_0_9_exports():
+    """0.8.x exported a naive ISO string; 0.9.0 exports integer epoch millis.
+    `datetime.fromisoformat` raises TypeError on an int, which is what broke
+    every `store_merge` on the 0.9.0 bump."""
+    from witan import server as srv
+
+    assert srv._parse_ts(_EXPORT_MS_2026_01_01) == datetime(2026, 1, 1, 0, 0, 0)
+    assert srv._parse_ts(_EXPORT_MS_2026_08_10) == datetime(
+        2026, 8, 10, 12, 30, 45, 123000
+    )
+
+
+def test_parse_ts_treats_export_integers_as_millis_not_micros():
+    """The scale is the trap, not the type. `commit list --json` reports
+    microseconds (witan_code.graph.branch_last_write divides by 1_000_000);
+    `export` reports milliseconds. Reading one as the other does not raise —
+    it silently dates every row to 1970 and inverts merge decisions."""
+    from witan import server as srv
+
+    parsed = srv._parse_ts(_EXPORT_MS_2026_01_01)
+
+    assert parsed.year == 2026
+    assert (
+        datetime.fromtimestamp(_EXPORT_MS_2026_01_01 / 1_000_000, timezone.utc).year
+        == 1970
+    )  # what the microsecond reading would have given
+
+
+def test_parse_ts_agrees_across_the_two_export_representations():
+    """A merge routinely spans versions — `witan migrate merge` accepts a
+    .jsonl export taken on another machine, so a 0.8.x string and a 0.9.x
+    integer for the same instant must compare equal, not merely both parse."""
+    from witan import server as srv
+
+    assert srv._parse_ts("2026-01-01T00:00:00") == srv._parse_ts(_EXPORT_MS_2026_01_01)
+    assert srv._parse_ts(_EXPORT_MS_2026_08_10) > srv._parse_ts("2026-01-01T00:00:00Z")
+
+
+def test_parse_ts_rejects_bools_and_absurd_epochs():
+    """`True` is an int subclass and would otherwise read as 1ms past the
+    epoch — a value that beats nothing but compares as real."""
+    from witan import server as srv
+
+    assert srv._parse_ts(True) is None
+    assert srv._parse_ts(False) is None
+    assert srv._parse_ts(10**30) is None
 
 
 @requires_omnigraph
