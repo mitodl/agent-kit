@@ -70,3 +70,12 @@ check-omnigraph-pins:
         echo "  docker/witan.Dockerfile:                             $mcp" >&2
         exit 1
     fi
+
+# Fail if the pinned omnigraph binary reads a storage format this repo does not
+# declare — i.e. if a version bump is secretly a rebuild-every-graph event.
+#
+# Needs the pinned binary on PATH (`witan setup`, or the workflow's install
+# step). See bin/check_omnigraph_format.py for why this compares the binary
+# against a declaration rather than diffing two release pins.
+check-omnigraph-format *args:
+    uv run --package witan-core python bin/check_omnigraph_format.py {{ args }}

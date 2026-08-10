@@ -49,6 +49,7 @@ import shutil
 import subprocess
 
 import pytest
+from witan_core.omnigraph_install import _OMNIGRAPH_INTERNAL_SCHEMA
 
 _BINARY = shutil.which("omnigraph")
 
@@ -284,6 +285,34 @@ def test_the_format_version_is_one_we_have_verified(contract):
     unrecognised on-disk format appears — rather than letting the individual
     shape tests fail one by one with narrower messages."""
     assert contract
+
+
+def test_the_declared_format_has_verified_contracts():
+    """`_OMNIGRAPH_INTERNAL_SCHEMA` is what `bin/check_omnigraph_format.py`
+    holds the binary to; `_CONTRACTS` is what this suite knows how to check.
+    Declaring a format whose wire shapes nobody verified would let the format
+    check pass while these assertions ran against guesses — so the two move
+    together or not at all."""
+    assert _OMNIGRAPH_INTERNAL_SCHEMA in _CONTRACTS, (
+        f"the repo declares storage format {_OMNIGRAPH_INTERNAL_SCHEMA} but "
+        "_CONTRACTS has no entry for it. Verify the export/query shapes "
+        "against that binary and record them before declaring it."
+    )
+
+
+def test_the_binary_on_path_is_the_declared_format(reader_schema):
+    """The same assertion `bin/check_omnigraph_format.py` makes, so a developer
+    running the suite locally against a mismatched binary is told why rather
+    than watching shape assertions fail for reasons that look unrelated.
+
+    Not a duplicate of that script: the script is the CI gate and runs without
+    the test environment; this is the local ergonomics.
+    """
+    assert reader_schema == _OMNIGRAPH_INTERNAL_SCHEMA, (
+        f"the omnigraph on PATH reads storage format {reader_schema}, but this "
+        f"repo declares {_OMNIGRAPH_INTERNAL_SCHEMA}. Run "
+        "`just check-omnigraph-format` for what that means."
+    )
 
 
 # ── export ────────────────────────────────────────────────────────────────

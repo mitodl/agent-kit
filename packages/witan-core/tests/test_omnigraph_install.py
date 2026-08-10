@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+import pytest
 from witan_core import omnigraph_install as oi
 
 
@@ -216,6 +217,51 @@ def test_preserve_failure_does_not_abort_the_upgrade(tmp_path, monkeypatch):
 
     assert dest.read_bytes() == b"#!/bin/sh\necho new"
     assert oi.preserved_binary(dest) is None
+
+
+def _fake_version_binary(path: Path, body: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return path
+
+
+def test_reported_internal_schema_reads_the_version_line(tmp_path):
+    binary = _fake_version_binary(
+        tmp_path / "og", "echo 'omnigraph 0.9.0'\necho 'internal-schema 6'"
+    )
+
+    assert oi.reported_internal_schema(binary) == 6
+
+
+def test_reported_internal_schema_raises_when_the_line_is_gone(tmp_path):
+    """Never a sentinel. Every caller compares the result against a declared
+    format, and a comparison against "unknown" that quietly passes is the
+    failure this whole mechanism exists to prevent."""
+    binary = _fake_version_binary(tmp_path / "og", "echo 'omnigraph 1.0.0'")
+
+    with pytest.raises(RuntimeError, match="no internal-schema line"):
+        oi.reported_internal_schema(binary)
+
+
+def test_reported_internal_schema_raises_on_a_failing_binary(tmp_path):
+    binary = _fake_version_binary(tmp_path / "og", "echo boom >&2\nexit 3")
+
+    with pytest.raises(RuntimeError, match="failed"):
+        oi.reported_internal_schema(binary)
+
+
+def test_reported_internal_schema_raises_when_the_binary_is_missing(tmp_path):
+    with pytest.raises(RuntimeError, match="could not run"):
+        oi.reported_internal_schema(tmp_path / "does-not-exist")
+
+
+def test_the_declared_internal_schema_is_a_plausible_version():
+    """Guards a typo in the declaration itself — it is a hand-edited number
+    that gates a rebuild-everything decision, and `bin/check_omnigraph_format.py`
+    trusts it completely."""
+    assert isinstance(oi._OMNIGRAPH_INTERNAL_SCHEMA, int)
+    assert oi._OMNIGRAPH_INTERNAL_SCHEMA > 0
 
 
 def test_installed_version_none_on_timeout(tmp_path, monkeypatch):

@@ -37,6 +37,24 @@ import urllib.request
 from pathlib import Path
 
 _OMNIGRAPH_VERSION = "0.8.1"
+
+#: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
+#: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
+#: 0.9.x reads 6.
+#:
+#: THIS IS A DECLARATION, NOT A CACHE. Renovate bumps the version pin above and
+#: cannot know about this line, so a release that moves the storage format
+#: leaves the two disagreeing — which is exactly the signal
+#: ``bin/check_omnigraph_format.py`` turns into a failing check. Editing this
+#: number is how a human says "yes, I know this rebuilds every graph, and the
+#: migration is planned".
+#:
+#: Do not update it to make CI green. Updating it is the last step of a format
+#: migration, not the first: every local store and every deployed graph written
+#: under the old number has to be rebuilt, and a 0.8.x binary refuses a 0.9.x
+#: graph in both directions, so there is no gradual path and no downgrade.
+_OMNIGRAPH_INTERNAL_SCHEMA = 4
+
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
     ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
@@ -74,6 +92,38 @@ def _installed_version(dest: Path) -> str | None:
 def default_install_path() -> Path:
     """Where :func:`install_omnigraph` puts the binary."""
     return Path.home() / ".local" / "bin" / "omnigraph"
+
+
+def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
+    """The on-disk storage format ``binary`` reads, per ``omnigraph version``.
+
+    The number that decides whether an upgrade is a rebuild-everything event.
+    Read from the binary rather than inferred from its release number, because
+    the mapping is upstream's to change and has no published table.
+
+    Raises ``RuntimeError`` rather than returning a sentinel: every caller is
+    asking in order to compare against a declared value, and a comparison
+    against "unknown" that quietly passes is the failure mode this whole
+    mechanism exists to prevent.
+    """
+    try:
+        result = subprocess.run(
+            [str(binary), "version"], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"could not run `{binary} version`: {exc}") from exc
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"`{binary} version` failed ({result.returncode}):\n{result.stderr}"
+        )
+    for line in (result.stdout + result.stderr).splitlines():
+        if line.strip().startswith("internal-schema"):
+            return int(line.split()[-1])
+    raise RuntimeError(
+        f"`{binary} version` reported no internal-schema line:\n{result.stdout}\n"
+        "The storage-format checks depend on it; upstream may have renamed or "
+        "dropped it."
+    )
 
 
 def preserved_binary(dest: Path | None = None) -> Path | None:
