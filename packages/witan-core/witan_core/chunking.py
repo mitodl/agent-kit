@@ -26,15 +26,25 @@ shelling out wants the first; a caller that reaches it through a ``*_store_*``
 tool wants the second. Using one budget for both is not a tuning mistake, it is
 a correctness one — it shipped that way, and a real ``migrate merge`` against
 the deployment failed with ``413 Request body too large`` on its first call.
+
+★★ BYTES ARE NOT THE ONLY CEILING. Since omnigraph 0.9.0 a keyed write also
+caps ROWS PER TABLE — 8,192 — and that one is enforced on local stores too, not
+just over HTTP. The two limits are independent: 20,000 small Memory rows is
+4.5 MiB, comfortably inside every byte budget here, and is still refused with
+``resource limit exceeded for keyed rows for node:Memory: actual 8193, limit
+8192``. Byte-only chunking therefore passed a batch omnigraph would not take.
+See ``LOAD_MAX_ROWS``.
 """
 
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Iterable, Iterator
 
 __all__ = [
     "LOAD_MAX_BYTES",
+    "LOAD_MAX_ROWS",
     "MCP_LOAD_MAX_BYTES",
     "chunk_records",
     "describe_budget",
@@ -67,6 +77,27 @@ LOAD_MAX_BYTES = 8 * 1024 * 1024
 # constant so an SDK bump that lowers the cap fails CI instead of production.
 MCP_LOAD_MAX_BYTES = 2 * 1024 * 1024
 
+# Rows of ONE type per batch. omnigraph >= 0.9.0 refuses a keyed write staging
+# more than 8,192 rows in a single table ("Keyed writes are bounded", 0.9.0
+# release notes) — measured directly against the 0.9.0 binary on a LOCAL store,
+# so this is an engine limit and not the served-write ceiling the byte budgets
+# above deal with. 8,192 exactly is accepted; 8,193 is refused.
+#
+# PER TYPE, not per batch: the error names the table
+# (``keyed rows for node:Memory``), so a batch holding 5,000 Memory and 5,000
+# Task rows is fine while 9,000 Memory rows alone is not. Counting the batch as
+# a whole would split loads that never needed splitting.
+#
+# Set below the cap for the same reason MCP_LOAD_MAX_BYTES is: the limit
+# belongs to a binary this client does not control, and the cost of headroom is
+# one extra commit per 8,000 rows.
+#
+# ``--mode overwrite`` is exempt upstream (verified: 20,000 rows load fine),
+# which is consistent with it being a whole-table replacement rather than a
+# keyed write — and independently confirms why ``witan_code.graph.load`` must
+# never chunk that mode.
+LOAD_MAX_ROWS = 8_000
+
 
 def describe_budget(max_bytes: int) -> str:
     """A byte budget as a phrase for an error message, exact at any size.
@@ -84,8 +115,15 @@ def describe_budget(max_bytes: int) -> str:
 def chunk_records(
     records: Iterable[dict],
     max_bytes: int = LOAD_MAX_BYTES,
+    max_rows: int = LOAD_MAX_ROWS,
 ) -> Iterator[list[dict]]:
-    """Yield byte-bounded batches of load records, every node before any edge.
+    """Yield bounded batches of load records, every node before any edge.
+
+    Bounded on BOTH axes, because omnigraph enforces both and they are reached
+    by different workloads. ``max_bytes`` catches a few large records;
+    ``max_rows`` catches many small ones — a repo-scale index of ~300-byte
+    symbol rows hits the 8,192-row-per-table cap at about 2.4 MiB, long before
+    any byte budget here notices. See ``LOAD_MAX_ROWS``.
 
     ORDER IS LOAD-BEARING HERE, and not for the reason ``change_many``'s is.
     Measured against 0.8.1: an edge resolves against nodes already persisted by
@@ -109,6 +147,9 @@ def chunk_records(
     if max_bytes < 1:
         msg = f"max_bytes must be >= 1, got {max_bytes}"
         raise ValueError(msg)
+    if max_rows < 1:
+        msg = f"max_rows must be >= 1, got {max_rows}"
+        raise ValueError(msg)
     # Partitioned in ONE pass: a repo-scale index passes hundreds of thousands
     # of records, and materializing the input before splitting it held two full
     # pointer lists at once for no benefit.
@@ -117,18 +158,36 @@ def chunk_records(
     for record in records:
         (nodes if "type" in record else edges).append(record)
     for group in (nodes, edges):
-        yield from _batches(group, max_bytes)
+        yield from _batches(group, max_bytes, max_rows)
 
 
-def _batches(records: list[dict], max_bytes: int) -> Iterator[list[dict]]:
+def _table_of(record: dict) -> str:
+    """The omnigraph table a record lands in — what ``max_rows`` is counted per.
+
+    A node record carries ``type``, an edge record carries ``edge``; they share
+    no discriminator, which is the same asymmetry ``chunk_records`` partitions
+    on. Unnamed records fall into one bucket together: that over-counts rather
+    than under-counts, so the batch splits early instead of being refused.
+    """
+    return record.get("type") or record.get("edge") or ""
+
+
+def _batches(
+    records: list[dict], max_bytes: int, max_rows: int
+) -> Iterator[list[dict]]:
     batch: list[dict] = []
     size = 0
+    per_table: Counter[str] = Counter()
     for record in records:
         # +1 for the newline the JSONL writer adds after each record.
         cost = len(json.dumps(record).encode()) + 1
-        if batch and size + cost > max_bytes:
+        table = _table_of(record)
+        over_bytes = size + cost > max_bytes
+        over_rows = per_table[table] + 1 > max_rows
+        if batch and (over_bytes or over_rows):
             yield batch
-            batch, size = [], 0
+            batch, size, per_table = [], 0, Counter()
+        per_table[_table_of(record)] += 1
         batch.append(record)
         size += cost
     if batch:
