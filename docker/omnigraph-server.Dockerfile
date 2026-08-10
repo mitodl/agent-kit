@@ -25,7 +25,7 @@
 ARG OMNIGRAPH_VERSION=0.8.1
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
-FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS fetch
+FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS fetch
 ARG OMNIGRAPH_VERSION
 ARG TARGETARCH=amd64
 RUN apt-get update \
@@ -53,7 +53,7 @@ RUN set -eux; \
     /out/omnigraph --version
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
+FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime
 ARG OMNIGRAPH_VERSION
 LABEL org.opencontainers.image.title="omnigraph-server" \
       org.opencontainers.image.description="witan data tier — S3-backed omnigraph graph server" \
