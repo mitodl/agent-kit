@@ -36,7 +36,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-_OMNIGRAPH_VERSION = "0.8.1"
+_OMNIGRAPH_VERSION = "0.9.0"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
 #: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;

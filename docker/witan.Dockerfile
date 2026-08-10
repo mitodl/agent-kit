@@ -22,7 +22,7 @@ ARG PYTHON_VERSION=3.14
 # and docker/omnigraph-server.Dockerfile's — see that file for why a split
 # version is an outage. Renovate covers all three; `just check-omnigraph-pins`
 # is the CI backstop.
-ARG OMNIGRAPH_VERSION=0.8.1
+ARG OMNIGRAPH_VERSION=0.9.0
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
 ARG WITAN_VERSION=0.8.0
