@@ -66,6 +66,55 @@ ingress answers 502 rather than a graceful 429
 clients stampede the shared OIDC token cache
 (tk-concurrent-agents-stampede-the-oidc-token-refres-677984) -- which is why
 this probe pins one token across its workers instead of letting each refresh.
+
+── AND AGAIN, 2026-08-09, after the vMCP memory fix (ol-infrastructure #5320) ──
+The 2026-08-07 ceiling was the vMCP being OOMKilled. That is gone: across every
+run below, the vMCP, proxy runner and backend each held `restartCount 0` with an
+empty `lastState`, while the vMCP's own log recorded ~150 sessions opened and
+terminated in one 9-minute window. The same load previously killed it outright.
+
+  A  4 and 16 racers: exactly one `claimed: true`, every loser a structured
+     `held` refusal, zero errors -- unchanged.
+  B  12 writers: 12 acked, 12/12 readable, zero lost, zero duplicated slugs.
+  C  6 readers alongside those writers: all clean, all overlapping the window.
+
+  24 writers + 12 readers still FAILS, but for a different reason than before
+  and NOT by crashing anything: ~half the workers came back RemoteUnreachable
+  wrapping `error_code=-32603`, while every pod's restart count stayed at 0.
+
+★ THE NUMBERS IN THE PARAGRAPH BELOW ARE NOT THIS PROBE'S. Read them as a
+  separate experiment, because that is what they are. This probe issues ONE
+  `memory_store` per writer and, per reader, `n_reads` sequential `task_get`s
+  -- so a 24+12 run contains 24 concurrent writes and at most 12 simultaneous
+  reads (72 in total), never 36 of either. The counts below come from a
+  raw-HTTP burst harness: N independent connections, each doing one MCP
+  `initialize` plus one `tools/call` of a chosen tool, so that "36 concurrent
+  writes" means exactly that and the answer is a status code rather than a
+  client exception. It is not in this repo; reproduce it with any N-way
+  client that posts to /mcp directly.
+
+  Against witan.ci.ol.mit.edu, all fired within a 6ms spread:
+      36 x memory_store   -> {200: 11, 502: 25}, the 502s an APISIX HTML page
+      36 x memory_search  -> {200: 36}, p50 15.8s against 4.4s for N=1
+  At the same instant the proxy runner logged exactly 25 x `http: proxy error:
+  context canceled` and the backend logged only 13 completions -- so writes are
+  queueing until a deadline above the backend cancels them. Reads degrade;
+  writes fail. Filed as its own task; the write ceiling is now latency, not
+  memory.
+
+  ★ AND CHECK THE BODY, NOT THE STATUS, if you rebuild that harness: a wrong
+    tool name comes back as HTTP 200 carrying a JSON-RPC error, which reads as
+    a clean pass. The deployed vMCP exposes tools UNPREFIXED (`memory_store`,
+    not `witan_memory_store`); an early run of the above "passed" at N=64 while
+    calling a tool that does not exist.
+
+★ A LOCAL CEILING TO KNOW ABOUT: past some worker count this probe stops being
+  able to measure the server at all, because each worker is a separate
+  interpreter that must import and connect before the epoch. Observed on one
+  laptop: 18 workers made the default 20s lead comfortably; 36 did not, and the
+  run reported `22 LATE, fire spread 28062ms` and correctly refused to call
+  itself a race. 75s was enough for 36 there. The number is per-machine -- read
+  that FAIL as "raise --lead", not as a verdict on the server.
 """
 
 from __future__ import annotations
@@ -226,7 +275,50 @@ def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
         out["ok"] = False
         out["error_type"] = type(exc).__name__
         out["error"] = str(exc)[:400]
+        out.update(_error_detail(exc))
     print(json.dumps(out), flush=True)
+
+
+def _error_detail(exc: BaseException) -> dict[str, Any]:
+    """Everything about a failure that ``str(exc)`` throws away.
+
+    ``MCPError.__str__`` is its ``message`` alone, and the message the deployed
+    stack produces under load is the useless sentence "Server returned an error
+    response" -- which named neither the layer nor the status and cost a whole
+    session to chase. The JSON-RPC ``code``/``data`` and the causal chain are
+    what distinguish a server-side refusal from a transport failure, so record
+    them rather than the sentence.
+
+    The traversal is ``witan_core.remote.proxy._chain``, the same walk the proxy
+    classifies faults with -- every group member AND every cause/context, not
+    the first branch of each. Rolling a cheaper one here meant a coded error
+    sitting in a group's second member, or under the group's own ``__cause__``,
+    was invisible: exactly the reachable-but-unread failure this helper exists
+    to stop happening.
+    """
+    from witan_core.remote.proxy import _chain
+
+    detail: dict[str, Any] = {}
+    chain = []
+    for link in _chain(exc):
+        chain.append(f"{type(link).__name__}: {str(link)[:120]}")
+        # Read the code/status off whichever link CARRIES it, not off the
+        # outermost exception: witan wraps the transport fault in a
+        # RemoteUnreachable whose prose is all the reader ever saw, and which
+        # has no code of its own. First one wins -- _chain yields outermost
+        # first, so the nearest cause is preferred over a deeper one.
+        code = getattr(link, "code", None)
+        if isinstance(code, int) and "error_code" not in detail:
+            detail["error_code"] = code
+        data = getattr(link, "data", None)
+        if data is not None and "error_data" not in detail:
+            detail["error_data"] = str(data)[:400]
+        status = getattr(getattr(link, "response", None), "status_code", None)
+        if status is not None and "http_status" not in detail:
+            detail["http_status"] = status
+    if len(chain) > 1:
+        detail["error_chain"] = chain[:6]
+    return detail
 
 
 @dataclass
@@ -750,6 +842,11 @@ def run(
                         f"{row.get('error_type')}: "
                         f"{row.get('error') or row.get('result')}"
                     )
+                    for key in ("error_code", "http_status", "error_data"):
+                        if row.get(key) is not None:
+                            print(f"          {key}={row[key]}")
+                    for link in row.get("error_chain") or []:
+                        print(f"          via {link}")
         failed = [o.name for o in (a, b, c) if not o.passed]
     finally:
         # In a finally, because everything above writes REAL rows to a SHARED
