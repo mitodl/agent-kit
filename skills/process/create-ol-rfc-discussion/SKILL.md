@@ -273,5 +273,8 @@ paths that are inaccessible to readers. Instead:
 - **Reference external docs** via public URLs
 - **Attach diagrams** by uploading images to the discussion after posting
 
-Include a code snippet inline only when the snippet *is* the argument — a
-contract shape being proposed, for example. Otherwise link to it.
+Self-containment means every reference must resolve for a reader who does not
+have your checkout — it is not licence to paste the detail back in. If a
+snippet feels necessary to carry the argument, that is the tripwire above
+firing: the decision is resting on something that belongs in the spec.
+Describe the shape in a sentence and link to the code or the draft spec.
