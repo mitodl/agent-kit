@@ -36,7 +36,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-_OMNIGRAPH_VERSION = "0.8.1"
+_OMNIGRAPH_VERSION = "0.9.0"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
 #: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
@@ -53,7 +53,7 @@ _OMNIGRAPH_VERSION = "0.8.1"
 #: migration, not the first: every local store and every deployed graph written
 #: under the old number has to be rebuilt, and a 0.8.x binary refuses a 0.9.x
 #: graph in both directions, so there is no gradual path and no downgrade.
-_OMNIGRAPH_INTERNAL_SCHEMA = 4
+_OMNIGRAPH_INTERNAL_SCHEMA = 6
 
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",

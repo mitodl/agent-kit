@@ -30,7 +30,7 @@
 # exists because this file went a full release cycle claiming the manager
 # covered it when it did not, and a partial bump is silent until deploy.
 
-ARG OMNIGRAPH_VERSION=0.8.1
+ARG OMNIGRAPH_VERSION=0.9.0
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
 FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS fetch
