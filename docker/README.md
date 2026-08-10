@@ -125,9 +125,23 @@ glibc 2.36) cannot run them.
 
 ## Version pin
 
-`OMNIGRAPH_VERSION` (default `0.8.1`) **must** match witan_core's installer pin
-(`packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_VERSION`).
-The same Renovate custom-manager pin drives both — bump them together.
+The omnigraph version is pinned in three places, and they are one decision
+spelled three times:
+
+| Where | What it governs |
+|---|---|
+| `packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_VERSION` | what `witan setup` puts on a developer's PATH |
+| `docker/witan.Dockerfile :: ARG OMNIGRAPH_VERSION` | the CLI baked into the MCP tier image |
+| `docker/omnigraph-server.Dockerfile :: ARG OMNIGRAPH_VERSION` | the deployed data tier |
+
+They **must** agree. omnigraph uses strict single-version storage: a binary
+refuses a graph written by a different on-disk format, in either direction, so
+a client and a server on different releases cannot share a store at all.
+
+Renovate's custom manager (`renovate.json`) bumps all three together, and
+`just check-omnigraph-pins` fails CI if they drift. Both exist because the
+manager silently covered only the installer for a full release cycle while
+this file claimed otherwise, and nothing caught it.
 
 ## Publish pipeline (ol-infrastructure)
 

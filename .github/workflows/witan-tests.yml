@@ -16,6 +16,12 @@ on:
       - "uv.lock"
       - "pyproject.toml"
       - ".github/workflows/witan-tests.yml"
+      # The omnigraph pin lives in the two Dockerfiles as well as in
+      # witan-core, and `omnigraph-pins` below is what keeps the three in
+      # agreement — so a Dockerfile-only bump has to trigger this workflow.
+      - "docker/omnigraph-server.Dockerfile"
+      - "docker/witan.Dockerfile"
+      - "justfile"
   pull_request:
     paths:
       - "mcp/servers/witan/**"
@@ -25,11 +31,25 @@ on:
       - "uv.lock"
       - "pyproject.toml"
       - ".github/workflows/witan-tests.yml"
+      # The omnigraph pin lives in the two Dockerfiles as well as in
+      # witan-core, and `omnigraph-pins` below is what keeps the three in
+      # agreement — so a Dockerfile-only bump has to trigger this workflow.
+      - "docker/omnigraph-server.Dockerfile"
+      - "docker/witan.Dockerfile"
+      - "justfile"
 
 permissions:
   contents: read
 
 jobs:
+  omnigraph-pins:
+    name: omnigraph (version pins agree)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - run: just check-omnigraph-pins
+
   test-witan:
     name: witan (memory + CLI)
     runs-on: ubuntu-latest

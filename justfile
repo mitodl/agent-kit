@@ -44,3 +44,29 @@ test-all: test-agent-config-kit test-ol-agent-kit test-witan-core test-witan-cou
 
 # Alias for `test-all`.
 test: test-all
+
+# Fail if the three omnigraph version pins have drifted apart.
+#
+# omnigraph uses strict single-version storage: a binary refuses a graph
+# written by a different on-disk format, in either direction. So the version
+# `witan setup` puts on a developer's PATH, the version baked into the MCP
+# tier's image, and the version the deployed data tier runs are not three
+# independent choices — they are one, spelled three times. Renovate's custom
+# manager bumps all three (renovate.json), but it silently covered only the
+# first for a full release cycle, and nothing failed until deploy. This is the
+# second belt.
+check-omnigraph-pins:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    installer=$(grep -oP '_OMNIGRAPH_VERSION = "\K[^"]+' packages/witan-core/witan_core/omnigraph_install.py)
+    server=$(grep -oP '^ARG OMNIGRAPH_VERSION=\K\S+' docker/omnigraph-server.Dockerfile)
+    mcp=$(grep -oP '^ARG OMNIGRAPH_VERSION=\K\S+' docker/witan.Dockerfile)
+    if [[ "$installer" == "$server" && "$installer" == "$mcp" ]]; then
+        echo "omnigraph pins agree: $installer"
+    else
+        echo "omnigraph version pins have drifted:" >&2
+        echo "  packages/witan-core/witan_core/omnigraph_install.py: $installer" >&2
+        echo "  docker/omnigraph-server.Dockerfile:                  $server" >&2
+        echo "  docker/witan.Dockerfile:                             $mcp" >&2
+        exit 1
+    fi

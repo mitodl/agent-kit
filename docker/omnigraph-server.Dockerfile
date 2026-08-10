@@ -19,8 +19,16 @@
 #     -t omnigraph-server:$(git rev-parse --short HEAD) .
 #
 # The pinned OMNIGRAPH_VERSION MUST match witan_core's installer pin
-# (packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_VERSION);
-# the same Renovate custom-manager pin drives both, so bump them together.
+# (packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_VERSION)
+# and docker/witan.Dockerfile's. omnigraph uses strict single-version storage:
+# a binary refuses a graph written by a different on-disk format, in either
+# direction, so a client and a server on different releases cannot talk to the
+# same store at all.
+#
+# Renovate's custom manager covers all three files (renovate.json), and
+# `just check-omnigraph-pins` fails CI if they ever drift — the second belt
+# exists because this file went a full release cycle claiming the manager
+# covered it when it did not, and a partial bump is silent until deploy.
 
 ARG OMNIGRAPH_VERSION=0.8.1
 
