@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.16.0] - 2026-08-10
+
+Prepares for omnigraph 0.9.0, which changes the on-disk storage format and —
+undocumented — the export wire format. Nothing here bumps the omnigraph pin;
+this is the client-side work that has to land first
+([#217](https://github.com/mitodl/agent-kit/pull/217)).
+
+### Changed
+
+- **BREAKING:** `omnigraph_install.preserved_binary()` is now
+  `preserved_binaries()`, returning `list[Path]` newest-first instead of
+  `Path | None`. There is no single "previous binary": witan-code keeps one
+  `<slug>.omni` per repository, each migrated only when that repo is next
+  opened, so a machine holds stores at several formats at once and the caller
+  has to try candidates in turn. Callers should probe — open the store with
+  each until one works — rather than trust the first.
+- The installer no longer prunes older set-aside binaries. It kept only the
+  newest, on the reasoning that a store has one writer; true per store and
+  irrelevant, because there are many. Crossing two format versions while a repo
+  lay untouched deleted the only binary able to export it.
+- `chunking.chunk_records()` takes `max_rows` (default `LOAD_MAX_ROWS`, 8,000)
+  and bounds batches by rows per table as well as by bytes. omnigraph 0.9.0
+  caps a keyed write at 8,192 rows per table — enforced by the engine, on local
+  stores too, not just over HTTP. 20,000 small rows is ~4.5 MiB, inside every
+  byte budget here, and was refused outright.
+
+### Added
+
+- `omnigraph_install.preserved_binaries()` (above) and
+  `default_install_path()`.
+- `omnigraph_install.reported_internal_schema()` — the on-disk format version a
+  binary reads, from `omnigraph version`. Raises rather than returning a
+  sentinel: every caller is comparing against a declared value, and a
+  comparison against "unknown" that quietly passes is the failure this exists
+  to prevent.
+- `_OMNIGRAPH_INTERNAL_SCHEMA`, declaring the storage format the pinned release
+  is expected to read. Renovate cannot write it, so a format-breaking bump
+  leaves it disagreeing with the binary — which is what
+  `bin/check_omnigraph_format.py` turns into a failing check.
+- `chunking.LOAD_MAX_ROWS`.
+
+### Fixed
+
+- An upgrade destroyed the only binary that could rescue a store it had just
+  orphaned. `install_omnigraph` replaced `~/.local/bin/omnigraph` in place and
+  kept no copy, so after a format bump `witan migrate storage` — whose first
+  step is to export with the *old* binary — asked for something the same tool
+  had deleted. Every previous version is now set aside as
+  `omnigraph-<version>`.
+
 ## [0.15.0] - 2026-08-07
 
 ### Fixed

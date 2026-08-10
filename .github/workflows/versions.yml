@@ -1,0 +1,53 @@
+name: versions
+
+# Every workspace member publishes to PyPI on a push to main touching its own
+# pyproject.toml (.github/workflows/publish-*.yml), so a version bump IS a
+# release. This asserts that a release is internally coherent before it can
+# happen: the published version, the version bump-my-version searches for, and
+# the CHANGELOG a reader gets all name the same thing.
+#
+# Cross-package on purpose — the drift this catches was in three of five
+# members at once, so a per-package job would have needed the same check
+# copied five times.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/pyproject.toml"
+      - "**/CHANGELOG.md"
+      - "bin/check_versions.py"
+      - "justfile"
+      - ".github/workflows/versions.yml"
+  pull_request:
+    paths:
+      - "**/pyproject.toml"
+      - "**/CHANGELOG.md"
+      - "bin/check_versions.py"
+      - "justfile"
+      - ".github/workflows/versions.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check-versions:
+    name: versions (pyproject + CHANGELOG agree)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      # --extra cli: bin/check_versions.py is a cyclopts CLI, and cyclopts is
+      # in witan-core's `cli` extra rather than its base dependencies.
+      - name: Install dependencies
+        run: uv sync --frozen --package witan-core --extra cli
+
+      - name: Check versions
+        run: just check-versions
