@@ -63,11 +63,11 @@ superseded-pruning, and re-ranking — and degrades to a plain search when the
 graph has no edges yet.
 
 ```python
-recall(query="vault secrets injection")        # by topic
-recall(query="rate limiting", kind="pattern")   # filter by kind
-recall(symbol_id="…::Service.run")              # seed from a code symbol
-recall(task="tk-…")                             # seed from a task
-recall(topic="uv")                              # seed from a topic
+recall(query="vault secrets injection")  # by topic
+recall(query="rate limiting", kind="pattern")  # filter by kind
+recall(symbol_id="…::Service.run")  # seed from a code symbol
+recall(task="tk-…")  # seed from a task
+recall(topic="uv")  # seed from a topic
 ```
 
 Seed with any combination of `query`, `symbol_id`, `task`, and `topic`; widen
@@ -89,7 +89,7 @@ with `hops=2`. Reach for a narrower read only for a specific need:
 ### `memory_list` — browse a kind without a query
 
 ```python
-memory_list(kind="project_fact")                # structural facts, this repo
+memory_list(kind="project_fact")  # structural facts, this repo
 memory_list(kind="pattern", language="python")  # conventions before coding
 ```
 
@@ -115,7 +115,7 @@ memory_store(
     title="Always use uv, never pip",
     content="All Python work in this repo uses uv for environment management. ...",
     language="python",
-    tags=["tooling", "environment"]
+    tags=["tooling", "environment"],
 )
 ```
 
@@ -127,7 +127,7 @@ memory_store(
     kind="project_fact",
     title="Vault secrets injected via env at runtime",
     content="This service reads secrets from Vault at startup via the ...",
-    category="deployment"
+    category="deployment",
 )
 ```
 
@@ -138,7 +138,7 @@ memory_store(
     kind="lesson",
     title="Do not run migrations without a backup in staging",
     content="On 2025-05-10, a migration was run without a prior snapshot ...",
-    severity="warning"
+    severity="warning",
 )
 ```
 
@@ -150,7 +150,7 @@ memory_store(
     kind="agent_context",
     title="Ticket 1234 — approach taken",
     content="Chose to use the existing TaskQueue infrastructure rather than ...",
-    tags=["ticket-1234"]
+    tags=["ticket-1234"],
 )
 ```
 

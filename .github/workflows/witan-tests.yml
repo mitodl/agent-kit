@@ -16,6 +16,13 @@ on:
       - "uv.lock"
       - "pyproject.toml"
       - ".github/workflows/witan-tests.yml"
+      # The omnigraph pin lives in the two Dockerfiles as well as in
+      # witan-core, and `omnigraph-pins` below is what keeps the three in
+      # agreement — so a Dockerfile-only bump has to trigger this workflow.
+      - "docker/omnigraph-server.Dockerfile"
+      - "docker/witan.Dockerfile"
+      - "justfile"
+      - "bin/**"
   pull_request:
     paths:
       - "mcp/servers/witan/**"
@@ -25,11 +32,67 @@ on:
       - "uv.lock"
       - "pyproject.toml"
       - ".github/workflows/witan-tests.yml"
+      # The omnigraph pin lives in the two Dockerfiles as well as in
+      # witan-core, and `omnigraph-pins` below is what keeps the three in
+      # agreement — so a Dockerfile-only bump has to trigger this workflow.
+      - "docker/omnigraph-server.Dockerfile"
+      - "docker/witan.Dockerfile"
+      - "justfile"
+      - "bin/**"
 
 permissions:
   contents: read
 
 jobs:
+  omnigraph-pins:
+    name: omnigraph (version pins agree)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - run: just check-omnigraph-pins
+
+  omnigraph-format:
+    name: omnigraph (storage format unchanged)
+    runs-on: ubuntu-latest
+    # A separate, plainly-named check rather than a step inside a test job:
+    # its whole purpose is to be legible on a Renovate bump PR, where the
+    # question "does this rebuild every graph?" needs answering before anyone
+    # reads the diff. Renovate has automerge enabled for this dependency.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Install dependencies
+        # --extra cli: bin/check_omnigraph_format.py is a cyclopts CLI, and
+        # cyclopts is in witan-core's `cli` extra rather than its base
+        # dependencies. The installer also imports rich lazily, from the same
+        # extra.
+        run: uv sync --frozen --package witan-core --extra cli
+
+      - name: Cache omnigraph binary
+        id: cache-omnigraph
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/bin/omnigraph
+          key: omnigraph-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/witan-core/witan_core/omnigraph_install.py') }}
+
+      - name: Install omnigraph binary
+        # The cache key is the installer module's content, so the one PR that
+        # matters here — a version bump — always misses and fetches the new
+        # release. That download is the price of the check.
+        if: steps.cache-omnigraph.outputs.cache-hit != 'true'
+        run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
+
+      - name: Check storage format
+        run: just check-omnigraph-format
+
   test-witan:
     name: witan (memory + CLI)
     runs-on: ubuntu-latest

@@ -3,6 +3,7 @@
 import json
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -135,14 +136,80 @@ def test_migrate_storage_format_is_noop_when_already_readable(server):
     }
 
 
+def _fake_binary(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
 @requires_omnigraph
-def test_find_pre_upgrade_binary_skips_the_current_one():
+def test_pre_upgrade_candidates_exclude_the_current_binary(monkeypatch):
     import shutil
 
     from witan import server as srv
 
+    # Isolated from the real ~/.local/bin: a developer who has upgraded once
+    # legitimately HAS set-aside binaries there, and this test is about the
+    # PATH scan finding nothing but the current binary.
+    monkeypatch.setattr(srv.omnigraph_install, "preserved_binaries", lambda *a: [])
     current = shutil.which("omnigraph")
-    assert srv._find_pre_upgrade_binary(current) is None
+    assert srv._pre_upgrade_binary_candidates(current) == []
+
+
+def test_pre_upgrade_candidates_offer_set_aside_binaries_first(tmp_path, monkeypatch):
+    """Set-aside copies are the best guesses, so they are tried before an
+    unrelated PATH install of unknown vintage — but PATH is still offered,
+    because preference is not proof."""
+    from witan import server as srv
+
+    kept = [
+        _fake_binary(tmp_path / "omnigraph-0.8.1"),
+        _fake_binary(tmp_path / "omnigraph-0.7.2"),
+    ]
+    on_path = _fake_binary(tmp_path / "brew" / "omnigraph")
+    monkeypatch.setattr(srv.omnigraph_install, "preserved_binaries", lambda *a: kept)
+    monkeypatch.setenv("PATH", str(on_path.parent))
+
+    assert srv._pre_upgrade_binary_candidates("/usr/local/bin/omnigraph") == [
+        str(kept[0]),
+        str(kept[1]),
+        str(on_path),
+    ]
+
+
+def test_pre_upgrade_candidates_still_reach_path_when_a_stale_backup_exists(
+    tmp_path, monkeypatch
+):
+    """`OmnigraphClient._find_binary` resolves PATH before ~/.local/bin, so a
+    Homebrew binary can be the current one while an unrelated set-aside copy
+    sits unused. Returning only that copy would abort the migration without
+    ever scanning PATH — the regression this ordering-plus-fallthrough
+    prevents."""
+    from witan import server as srv
+
+    stale = _fake_binary(tmp_path / "omnigraph-0.5.0")
+    other = _fake_binary(tmp_path / "usr" / "omnigraph")
+    monkeypatch.setattr(srv.omnigraph_install, "preserved_binaries", lambda *a: [stale])
+    monkeypatch.setenv("PATH", str(other.parent))
+
+    candidates = srv._pre_upgrade_binary_candidates("/opt/homebrew/bin/omnigraph")
+
+    assert str(other) in candidates, "the PATH binary must remain reachable"
+
+
+def test_pre_upgrade_candidates_drop_a_set_aside_copy_of_itself(tmp_path, monkeypatch):
+    """Degenerate case: the set-aside path resolves to the binary in use. It
+    cannot read a store that one refuses, so it is not a candidate."""
+    from witan import server as srv
+
+    current = _fake_binary(tmp_path / "omnigraph")
+    monkeypatch.setattr(
+        srv.omnigraph_install, "preserved_binaries", lambda *a: [current]
+    )
+    monkeypatch.setenv("PATH", "")
+
+    assert srv._pre_upgrade_binary_candidates(str(current)) == []
 
 
 @requires_omnigraph
@@ -169,6 +236,64 @@ def test_merge_adds_a_row_only_present_in_source(server, tmp_path):
         "read.gq", "get_memory", {"slug": "mem-only-in-source-aaaaaa"}
     )
     assert rows and rows[0]["content"] == "hi"
+
+
+@requires_omnigraph
+def test_merge_load_is_chunked_per_table(server, tmp_path, monkeypatch):
+    """`merge_store` must route its load through `chunk_records`, not send the
+    whole reconciled set as one `load_batch`.
+
+    Before omnigraph 0.9 the only ceiling on a load was the served request
+    body, so a LOCAL merge could safely go in one call. 0.9 added a per-table
+    row cap enforced by the engine itself, local stores included, so an
+    unchunked merge of more than `LOAD_MAX_ROWS` rows of one type is now
+    refused outright.
+
+    Forces a two-row split rather than building an 8,000-row fixture: what
+    regressed is the wiring, and a real-size fixture would test omnigraph's
+    cap instead of this function's use of it.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    for i in range(3):
+        _insert_memory(
+            source,
+            slug=f"mem-chunked-{i:02d}-cccccc",
+            content=f"row {i}",
+            updated_at="2026-01-01T00:00:00Z",
+        )
+
+    real_chunk = srv.chunking.chunk_records
+    monkeypatch.setattr(
+        srv.chunking,
+        "chunk_records",
+        lambda records, *a, **k: real_chunk(records, max_rows=2),
+    )
+    loads: list[int] = []
+    real_load = graph_mod.OmnigraphClient.load_batch
+
+    def counting_load(self, records, mode="merge"):
+        loads.append(len(records))
+        return real_load(self, records, mode)
+
+    monkeypatch.setattr(graph_mod.OmnigraphClient, "load_batch", counting_load)
+
+    result = srv.merge_store(source.graph_uri)
+
+    assert len(loads) > 1, f"merge sent one unchunked load of {loads} rows"
+    assert max(loads) <= 2
+    assert sum(loads) == result["rows_loaded"] == 3
+    # The rows still land despite committing across several batches.
+    for i in range(3):
+        rows = srv.client.read(
+            "read.gq", "get_memory", {"slug": f"mem-chunked-{i:02d}-cccccc"}
+        )
+        assert rows and rows[0]["content"] == f"row {i}"
 
 
 @requires_omnigraph
@@ -707,6 +832,63 @@ def test_parse_ts_orders_mixed_offset_formats_correctly():
 
     assert "2026-01-01T23:30:00-05:00" < "2026-01-02T00:00:00Z"  # wrong as strings
     assert later_with_offset > earlier_utc  # correct once parsed
+
+
+# The literal integers below were captured from a real omnigraph 0.9.0
+# `export` of a Memory seeded with created_at="2026-01-01T00:00:00Z" and
+# updated_at="2026-08-10T12:30:45.123456Z". Hard-coded on purpose: they are the
+# upstream contract, and a future release that changes the scale again should
+# fail here rather than in a user's merge.
+_EXPORT_MS_2026_01_01 = 1767225600000
+_EXPORT_MS_2026_08_10 = 1786365045123
+
+
+def test_parse_ts_reads_the_epoch_millis_that_omnigraph_0_9_exports():
+    """0.8.x exported a naive ISO string; 0.9.0 exports integer epoch millis.
+    `datetime.fromisoformat` raises TypeError on an int, which is what broke
+    every `store_merge` on the 0.9.0 bump."""
+    from witan import server as srv
+
+    assert srv._parse_ts(_EXPORT_MS_2026_01_01) == datetime(2026, 1, 1, 0, 0, 0)
+    assert srv._parse_ts(_EXPORT_MS_2026_08_10) == datetime(
+        2026, 8, 10, 12, 30, 45, 123000
+    )
+
+
+def test_parse_ts_treats_export_integers_as_millis_not_micros():
+    """The scale is the trap, not the type. `commit list --json` reports
+    microseconds (witan_code.graph.branch_last_write divides by 1_000_000);
+    `export` reports milliseconds. Reading one as the other does not raise —
+    it silently dates every row to 1970 and inverts merge decisions."""
+    from witan import server as srv
+
+    parsed = srv._parse_ts(_EXPORT_MS_2026_01_01)
+
+    assert parsed.year == 2026
+    assert (
+        datetime.fromtimestamp(_EXPORT_MS_2026_01_01 / 1_000_000, timezone.utc).year
+        == 1970
+    )  # what the microsecond reading would have given
+
+
+def test_parse_ts_agrees_across_the_two_export_representations():
+    """A merge routinely spans versions — `witan migrate merge` accepts a
+    .jsonl export taken on another machine, so a 0.8.x string and a 0.9.x
+    integer for the same instant must compare equal, not merely both parse."""
+    from witan import server as srv
+
+    assert srv._parse_ts("2026-01-01T00:00:00") == srv._parse_ts(_EXPORT_MS_2026_01_01)
+    assert srv._parse_ts(_EXPORT_MS_2026_08_10) > srv._parse_ts("2026-01-01T00:00:00Z")
+
+
+def test_parse_ts_rejects_bools_and_absurd_epochs():
+    """`True` is an int subclass and would otherwise read as 1ms past the
+    epoch — a value that beats nothing but compares as real."""
+    from witan import server as srv
+
+    assert srv._parse_ts(True) is None
+    assert srv._parse_ts(False) is None
+    assert srv._parse_ts(10**30) is None
 
 
 @requires_omnigraph

@@ -44,3 +44,57 @@ test-all: test-agent-config-kit test-ol-agent-kit test-witan-core test-witan-cou
 
 # Alias for `test-all`.
 test: test-all
+
+# Fail if the three omnigraph version pins have drifted apart.
+#
+# omnigraph uses strict single-version storage: a binary refuses a graph
+# written by a different on-disk format, in either direction. So the version
+# `witan setup` puts on a developer's PATH, the version baked into the MCP
+# tier's image, and the version the deployed data tier runs are not three
+# independent choices — they are one, spelled three times. Renovate's custom
+# manager bumps all three (renovate.json), but it silently covered only the
+# first for a full release cycle, and nothing failed until deploy. This is the
+# second belt.
+#
+# Parsed with awk, not `grep -oP`: -P is a GNU extension the BSD grep on macOS
+# does not have, and darwin/arm64 is a supported installer platform
+# (_OMNIGRAPH_ASSETS). A check a Mac developer cannot run is a check that only
+# ever fails in CI.
+check-omnigraph-pins:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    installer=$(awk -F'"' '/^_OMNIGRAPH_VERSION = /{print $2; exit}' packages/witan-core/witan_core/omnigraph_install.py)
+    server=$(awk -F= '/^ARG OMNIGRAPH_VERSION=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
+    mcp=$(awk -F= '/^ARG OMNIGRAPH_VERSION=/{print $2; exit}' docker/witan.Dockerfile)
+    # An empty capture means the line moved or was renamed, not that the pins
+    # agree — three empty strings would otherwise compare equal and pass.
+    for pair in "installer:$installer" "server:$server" "mcp:$mcp"; do
+        if [[ -z "${pair#*:}" ]]; then
+            echo "could not read the omnigraph pin for '${pair%%:*}' — the declaration moved or was renamed" >&2
+            exit 1
+        fi
+    done
+    if [[ "$installer" == "$server" && "$installer" == "$mcp" ]]; then
+        echo "omnigraph pins agree: $installer"
+    else
+        echo "omnigraph version pins have drifted:" >&2
+        echo "  packages/witan-core/witan_core/omnigraph_install.py: $installer" >&2
+        echo "  docker/omnigraph-server.Dockerfile:                  $server" >&2
+        echo "  docker/witan.Dockerfile:                             $mcp" >&2
+        exit 1
+    fi
+
+# Fail if the pinned omnigraph binary reads a storage format this repo does not
+# declare — i.e. if a version bump is secretly a rebuild-every-graph event.
+#
+# Needs the pinned binary on PATH (`witan setup`, or the workflow's install
+# step). See bin/check_omnigraph_format.py for why this compares the binary
+# against a declaration rather than diffing two release pins.
+#
+# `--extra cli` is load-bearing: cyclopts (and rich, which the installer imports
+# lazily) live in witan-core's `cli` extra, not its base dependencies. Without
+# it this works only in a shared workspace .venv that some other package's sync
+# happened to leave cyclopts in — which is exactly how it passed locally and
+# failed in CI the first time.
+check-omnigraph-format *args:
+    uv run --package witan-core --extra cli python bin/check_omnigraph_format.py {{ args }}

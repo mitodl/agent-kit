@@ -10,8 +10,18 @@ fail against the deployment with `413 Request body too large`.
 import json
 
 from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
+from witan_core.chunking import (
+    LOAD_MAX_BYTES,
+    LOAD_MAX_ROWS,
+    MCP_LOAD_MAX_BYTES,
+    chunk_records,
+)
 
-from witan_core.chunking import LOAD_MAX_BYTES, MCP_LOAD_MAX_BYTES, chunk_records
+# omnigraph >= 0.9.0 refuses a keyed write staging more than this many rows in
+# one table. Measured directly against the 0.9.0 binary on a local store:
+# 8,192 rows load; 8,193 fail with "resource limit exceeded for keyed rows for
+# node:Memory: actual 8193, limit 8192".
+OMNIGRAPH_KEYED_ROW_CAP = 8192
 
 # What the JSON-RPC envelope adds over the JSONL framing `_batches` counts.
 # Measured at ~1.03x against a real 5.4 MiB store export; 1.10 is deliberate
@@ -69,3 +79,71 @@ def test_batches_under_the_mcp_bound_fit_a_real_request_body():
             }
         )
         assert len(body.encode()) < DEFAULT_MAX_REQUEST_BODY_SIZE
+
+
+def test_row_bound_stays_under_the_engine_cap():
+    """Same shape as the MCP-vs-SDK assertion above: our budget must fit
+    inside the limit it exists to respect, with room to spare."""
+    assert LOAD_MAX_ROWS < OMNIGRAPH_KEYED_ROW_CAP
+
+
+def test_many_small_rows_are_split_by_count_not_bytes():
+    """The regression 0.9.0 introduced. 20,000 ~230-byte Memory rows are about
+    4.5 MiB — inside LOAD_MAX_BYTES — so byte-only chunking emitted ONE batch
+    and omnigraph refused it at 8,193 rows."""
+    records = [
+        {
+            "type": "Memory",
+            "data": {"slug": f"mem-{i:06d}", "content": f"body for row {i}"},
+        }
+        for i in range(20_000)
+    ]
+
+    total = sum(len(json.dumps(r).encode()) + 1 for r in records)
+    assert total < LOAD_MAX_BYTES, "test is meaningless if bytes alone would split"
+
+    batches = list(chunk_records(records))
+
+    assert len(batches) > 1
+    for batch in batches:
+        assert len(batch) <= OMNIGRAPH_KEYED_ROW_CAP
+    assert sum(len(b) for b in batches) == len(records)
+
+
+def test_the_row_cap_is_counted_per_table_not_per_batch():
+    """omnigraph names the table in its refusal ("keyed rows for node:Memory"),
+    so the cap is per type. Counting a batch as a whole would split loads that
+    omnigraph would have accepted whole."""
+    records = [
+        {"type": "Memory" if i % 2 else "Task", "data": {"slug": f"row-{i}"}}
+        for i in range(2 * LOAD_MAX_ROWS)
+    ]
+
+    batches = list(chunk_records(records))
+
+    # LOAD_MAX_ROWS of each type — every row fits in one batch on a per-table
+    # count, and would have needed two on a per-batch one.
+    assert len(batches) == 1
+    assert len(batches[0]) == 2 * LOAD_MAX_ROWS
+
+
+def test_nodes_still_precede_edges_when_the_row_cap_splits():
+    """The row bound must not disturb the node/edge ordering that makes edge
+    endpoints resolvable — an edge in a batch before its target node fails the
+    whole load with "dst '...' not found"."""
+    records = [{"type": "Memory", "data": {"slug": f"m-{i}"}} for i in range(9_000)]
+    records += [
+        {"edge": "RelatesTo", "from": f"m-{i}", "to": f"m-{i + 1}"}
+        for i in range(9_000)
+    ]
+
+    batches = list(chunk_records(records))
+
+    seen_edge = False
+    for batch in batches:
+        for record in batch:
+            if "edge" in record:
+                seen_edge = True
+            else:
+                assert not seen_edge, "a node followed an edge across batches"
+    assert seen_edge

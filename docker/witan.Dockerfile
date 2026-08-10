@@ -17,6 +17,11 @@
 #   docker build -f docker/witan.Dockerfile -t witan:$(git rev-parse --short HEAD) .
 
 ARG PYTHON_VERSION=3.14
+# Keep in lockstep with witan_core's installer pin
+# (packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_VERSION)
+# and docker/omnigraph-server.Dockerfile's — see that file for why a split
+# version is an outage. Renovate covers all three; `just check-omnigraph-pins`
+# is the CI backstop.
 ARG OMNIGRAPH_VERSION=0.8.1
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
