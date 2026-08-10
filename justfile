@@ -55,12 +55,25 @@ test: test-all
 # manager bumps all three (renovate.json), but it silently covered only the
 # first for a full release cycle, and nothing failed until deploy. This is the
 # second belt.
+#
+# Parsed with awk, not `grep -oP`: -P is a GNU extension the BSD grep on macOS
+# does not have, and darwin/arm64 is a supported installer platform
+# (_OMNIGRAPH_ASSETS). A check a Mac developer cannot run is a check that only
+# ever fails in CI.
 check-omnigraph-pins:
     #!/usr/bin/env bash
     set -euo pipefail
-    installer=$(grep -oP '_OMNIGRAPH_VERSION = "\K[^"]+' packages/witan-core/witan_core/omnigraph_install.py)
-    server=$(grep -oP '^ARG OMNIGRAPH_VERSION=\K\S+' docker/omnigraph-server.Dockerfile)
-    mcp=$(grep -oP '^ARG OMNIGRAPH_VERSION=\K\S+' docker/witan.Dockerfile)
+    installer=$(awk -F'"' '/^_OMNIGRAPH_VERSION = /{print $2; exit}' packages/witan-core/witan_core/omnigraph_install.py)
+    server=$(awk -F= '/^ARG OMNIGRAPH_VERSION=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
+    mcp=$(awk -F= '/^ARG OMNIGRAPH_VERSION=/{print $2; exit}' docker/witan.Dockerfile)
+    # An empty capture means the line moved or was renamed, not that the pins
+    # agree — three empty strings would otherwise compare equal and pass.
+    for pair in "installer:$installer" "server:$server" "mcp:$mcp"; do
+        if [[ -z "${pair#*:}" ]]; then
+            echo "could not read the omnigraph pin for '${pair%%:*}' — the declaration moved or was renamed" >&2
+            exit 1
+        fi
+    done
     if [[ "$installer" == "$server" && "$installer" == "$mcp" ]]; then
         echo "omnigraph pins agree: $installer"
     else

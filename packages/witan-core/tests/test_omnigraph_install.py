@@ -153,30 +153,49 @@ def test_upgrade_sets_the_outgoing_binary_aside(tmp_path, monkeypatch):
     assert kept.stat().st_mode & 0o111  # still runnable, or it can't export
 
 
-def test_preserved_binary_finds_what_the_upgrade_set_aside(tmp_path, monkeypatch):
+def test_preserved_binaries_finds_what_the_upgrade_set_aside(tmp_path, monkeypatch):
     dest = _upgrade_from(tmp_path, monkeypatch)
 
-    assert oi.preserved_binary(dest) == dest.with_name(f"omnigraph-{_OLD}")
+    assert oi.preserved_binaries(dest) == [dest.with_name(f"omnigraph-{_OLD}")]
 
 
-def test_only_the_newest_previous_version_is_kept(tmp_path, monkeypatch):
-    """A store was written by ONE binary. Older set-aside copies are dead weight
-    and an ambiguity `preserved_binary` would have to guess its way out of."""
+def test_every_previous_version_is_kept(tmp_path, monkeypatch):
+    """NOTHING is pruned. A machine holds many stores at once — witan-code
+    keeps one `<slug>.omni` per repository, migrated only when that repo is
+    next opened — so a repo left untouched across two upgrades needs a binary
+    older than the newest set-aside one. Sweeping to the newest deletes the
+    only thing that could ever export it."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    for stale in ("0.5.0", "0.6.0"):
-        _write_fake_binary(_dest(tmp_path).with_name(f"omnigraph-{stale}"), stale)
+    for older in ("0.5.0", "0.6.0"):
+        _write_fake_binary(_dest(tmp_path).with_name(f"omnigraph-{older}"), older)
 
     dest = _upgrade_from(tmp_path, monkeypatch)
 
     survivors = sorted(p.name for p in dest.parent.glob("omnigraph-*"))
-    assert survivors == [f"omnigraph-{_OLD}"]
-    assert oi.preserved_binary(dest) == dest.with_name(f"omnigraph-{_OLD}")
+    assert survivors == ["omnigraph-0.5.0", "omnigraph-0.6.0", f"omnigraph-{_OLD}"]
 
 
-def test_the_sweep_leaves_binaries_it_did_not_write_alone(tmp_path, monkeypatch):
-    """`omnigraph-dev` is a user's own build sitting in the same directory.
-    Pruning is scoped to the exact `omnigraph-<semver>` names this module
-    writes, so a hand-placed sibling survives an upgrade untouched."""
+def test_preserved_binaries_are_ordered_newest_first(tmp_path, monkeypatch):
+    """Preference order for the migration's probe, and sorted by parsed version
+    rather than filename so 0.10.0 outranks 0.9.0 instead of sorting under it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    for version in ("0.6.0", "0.10.0", "0.9.0"):
+        _write_fake_binary(_dest(tmp_path).with_name(f"omnigraph-{version}"), version)
+
+    dest = _dest(tmp_path)
+
+    assert [p.name for p in oi.preserved_binaries(dest)] == [
+        "omnigraph-0.10.0",
+        "omnigraph-0.9.0",
+        "omnigraph-0.6.0",
+    ]
+
+
+def test_a_binary_this_module_did_not_write_is_not_offered(tmp_path, monkeypatch):
+    """`omnigraph-dev` is a user's own build sitting in the same directory. It
+    is left alone, and it is not returned as a migration candidate either —
+    `_PRESERVED_RE` matches only the exact `omnigraph-<semver>` names written
+    here."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     mine = _dest(tmp_path).with_name("omnigraph-dev")
     _write_fake_binary(mine, "9.9.9")
@@ -184,7 +203,7 @@ def test_the_sweep_leaves_binaries_it_did_not_write_alone(tmp_path, monkeypatch)
     dest = _upgrade_from(tmp_path, monkeypatch)
 
     assert mine.exists()
-    assert oi.preserved_binary(dest) == dest.with_name(f"omnigraph-{_OLD}")
+    assert oi.preserved_binaries(dest) == [dest.with_name(f"omnigraph-{_OLD}")]
 
 
 def test_first_install_preserves_nothing(tmp_path, monkeypatch):
@@ -200,7 +219,7 @@ def test_first_install_preserves_nothing(tmp_path, monkeypatch):
 
     dest = _dest(tmp_path)
     assert list(dest.parent.glob("omnigraph-*")) == []
-    assert oi.preserved_binary(dest) is None
+    assert oi.preserved_binaries(dest) == []
 
 
 def test_preserve_failure_does_not_abort_the_upgrade(tmp_path, monkeypatch):
@@ -216,7 +235,7 @@ def test_preserve_failure_does_not_abort_the_upgrade(tmp_path, monkeypatch):
     dest = _upgrade_from(tmp_path, monkeypatch)
 
     assert dest.read_bytes() == b"#!/bin/sh\necho new"
-    assert oi.preserved_binary(dest) is None
+    assert oi.preserved_binaries(dest) == []
 
 
 def _fake_version_binary(path: Path, body: str) -> Path:

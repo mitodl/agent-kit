@@ -19,7 +19,7 @@ from typing import Literal
 from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
-from witan_core import caching, normalise, now_iso
+from witan_core import caching, chunking, normalise, now_iso
 from witan_core import omnigraph_install
 from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
@@ -1107,42 +1107,54 @@ def _snapshot(binary: str, store: str) -> tuple[bool, str]:
     return False, "\n".join(s for s in (result.stdout, result.stderr) if s)
 
 
-def _find_pre_upgrade_binary(current_binary: str) -> str | None:
-    """A binary that can still read a store the current one refuses, or ``None``.
+def _pre_upgrade_binary_candidates(current_binary: str) -> list[str]:
+    """Binaries that might still read a store the current one refuses.
 
-    Prefers what the installer deliberately set aside on the last upgrade
-    (``omnigraph-<version>``, see :func:`witan_core.omnigraph_install.preserved_binary`)
-    — that IS the binary that last wrote the store, by construction, so it is
-    the right answer rather than merely a candidate.
+    A LIST, TRIED IN ORDER, not a single answer — because no single candidate
+    is knowably the right one:
 
-    Falls back to the first ``omnigraph`` on PATH that isn't the one witan is
-    currently using. That is a guess: it finds a Homebrew or system install of
-    unknown vintage, which may be older than the store rather than the version
-    that wrote it. Kept because it is the only thing that helps a user who
-    upgraded before the installer started preserving anything, and a wrong
-    guess fails loudly at ``export`` rather than corrupting anything.
+    * The installer's set-aside copies (``omnigraph-<version>``) are the best
+      guesses, newest first, but only for stores in that install's lineage. A
+      machine can hold stores at several formats at once: witan-code keeps one
+      ``<slug>.omni`` per repository, migrated only when someone next opens
+      that repo, so an untouched repo can be two releases behind.
+    * A PATH hit may be an unrelated Homebrew or system install of unknown
+      vintage. It cannot be preferred — but neither can it be skipped, since
+      ``OmnigraphClient._find_binary`` resolves PATH *before* ``~/.local/bin``,
+      so a Homebrew binary can legitimately be the current one while a stale
+      set-aside copy sits unused. Returning that copy alone would abort the
+      migration without ever looking at PATH.
+
+    Ordering is preference, not correctness: the caller proves a candidate by
+    opening the store with it (:func:`migrate_storage_format`), so a wrong
+    guess costs one failed ``snapshot`` and moves on.
+
+    Whatever the current binary resolves to is excluded — it is by definition
+    the one that cannot read this store.
     """
     current_real = Path(current_binary).resolve()
-    preserved = omnigraph_install.preserved_binary()
-    if preserved is not None:
+    candidates: list[str] = []
+    seen: set[Path] = {current_real}
+
+    def offer(path: Path) -> None:
         try:
-            if preserved.resolve() != current_real:
-                return str(preserved)
+            resolved = path.resolve()
         except OSError:
-            pass
+            return
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        candidates.append(str(path))
+
+    for preserved in omnigraph_install.preserved_binaries():
+        offer(preserved)
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry:
             continue
         candidate = Path(entry) / "omnigraph"
-        if not candidate.is_file() or not os.access(candidate, os.X_OK):
-            continue
-        try:
-            if candidate.resolve() == current_real:
-                continue
-        except OSError:
-            continue
-        return str(candidate)
-    return None
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            offer(candidate)
+    return candidates
 
 
 def _run_omnigraph(cmd: list[str], *, label: str, stdout=None) -> str:
@@ -1231,24 +1243,45 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
             f"omnigraph snapshot failed for an unrelated reason:\n{out.strip()}"
         )
 
-    old = old_binary or _find_pre_upgrade_binary(new_binary)
+    # An explicit --old-binary is taken at its word and not probed against the
+    # alternatives: the caller is asserting which release wrote this store, and
+    # silently falling through to a different one would hide their mistake.
+    candidates = (
+        [old_binary] if old_binary else _pre_upgrade_binary_candidates(new_binary)
+    )
+    old, old_out = None, ""
+    for candidate in candidates:
+        # PROVE each candidate by opening the store with it. Which binary can
+        # read a given store is not decidable from names or versions — a
+        # machine holds many stores at different formats (witan-code keeps one
+        # per repo), so the only reliable test is the one the engine performs.
+        ok, out = _snapshot(candidate, store)
+        if ok:
+            old = candidate
+            break
+        old_out = out
+
     if old is None:
+        if not candidates:
+            raise RuntimeError(
+                "The store was written by an older, incompatible omnigraph "
+                "on-disk format, and no other binary was found to export it — "
+                "neither a set-aside `omnigraph-<version>` beside "
+                f"{omnigraph_install.default_install_path()} nor another "
+                "`omnigraph` on PATH. This happens when the store predates the "
+                "upgrade that started preserving the outgoing binary. Download "
+                "the release that last wrote this store from "
+                "https://github.com/ModernRelay/omnigraph/releases and pass "
+                "its path."
+            )
+        tried = ", ".join(candidates)
         raise RuntimeError(
-            "The store was written by an older, incompatible omnigraph "
-            "on-disk format, and no binary that can still read it was found — "
-            f"neither a set-aside `omnigraph-<version>` beside "
-            f"{omnigraph_install.default_install_path()} nor another "
-            "`omnigraph` on PATH. This happens when the store predates the "
-            "upgrade that started preserving the outgoing binary. Download the "
-            "release that last wrote this store from "
+            f"No available omnigraph binary can read this store. Tried: "
+            f"{tried}. The last attempt reported:\n{old_out.strip()}\n\n"
+            "If the store predates every binary still on this machine, "
+            "download the release that last wrote it from "
             "https://github.com/ModernRelay/omnigraph/releases and pass its "
             "path."
-        )
-    old_ok, old_out = _snapshot(old, store)
-    if not old_ok:
-        raise RuntimeError(
-            f"The candidate old binary {old!r} can't read the store either:\n"
-            f"{old_out.strip()}"
         )
 
     store_path = Path(store)
@@ -1737,7 +1770,30 @@ def merge_store(
                     **counts,
                 }
 
-            load_out = target_client.load_batch(to_load, "merge")
+            # CHUNKED, even though the target may be local. Until omnigraph
+            # 0.9 the only ceiling on a load was the served request body, so a
+            # local merge could safely go in one call — which is why this used
+            # a bare `load_batch`. 0.9 added a per-table row cap enforced by
+            # the engine itself, on local stores too, so a merge with more
+            # than `LOAD_MAX_ROWS` winning rows of one type is now refused
+            # here exactly as it would be over HTTP.
+            #
+            # `chunk_records` also emits every node before any edge, which
+            # matters more here than the row bound does: `to_load` is
+            # `winners + source_edges` and an edge whose endpoint lost
+            # reconciliation resolves against the copy already in the target.
+            #
+            # ATOMICITY IS TRADED AWAY. Batches commit independently, so a
+            # failure part-way leaves the earlier ones applied. That is
+            # recoverable by re-running rather than by cleanup: reconciliation
+            # makes a re-sent row lose to its own already-applied copy, which
+            # is the same "repeatable by construction" property this function's
+            # docstring already promises.
+            outputs = [
+                target_client.load_batch(batch, "merge")
+                for batch in chunking.chunk_records(to_load)
+            ]
+            load_out = "\n".join(out.strip() for out in outputs if out.strip())
 
     return {
         "merged": True,

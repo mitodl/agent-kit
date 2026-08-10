@@ -126,16 +126,22 @@ def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
     )
 
 
-def preserved_binary(dest: Path | None = None) -> Path | None:
-    """The pre-upgrade binary this installer set aside, or ``None``.
+def preserved_binaries(dest: Path | None = None) -> list[Path]:
+    """Every pre-upgrade binary this installer set aside, newest version first.
 
     Named ``omnigraph-<version>`` beside ``dest`` by :func:`_preserve_outgoing`.
-    The highest version wins if several somehow survive — the store being
-    rescued was written by the binary that ran most recently, and that is the
-    newest one that is not the current pin.
 
-    Callers use this to answer "what can still read a store the current binary
-    refuses?" — see :func:`witan.server.migrate_storage_format`.
+    ALL OF THEM, NOT JUST THE NEWEST, and the caller is expected to try each in
+    turn. There is no single "the previous binary", because there is no single
+    store: witan keeps one memory graph, but witan-code keeps a separate
+    ``<slug>.omni`` per repository (``witan_code.config.Config.code_dir``), and
+    those are only ever migrated when someone next opens that repo. Cross two
+    format versions while a repo sits untouched and its store is two releases
+    behind — older than the newest set-aside binary, and readable only by one
+    further back.
+
+    Ordering is by parsed version rather than filename, so ``0.10.0`` sorts
+    above ``0.9.0`` instead of below it.
     """
     target = dest or default_install_path()
     found: list[tuple[tuple[int, ...], Path]] = []
@@ -144,7 +150,7 @@ def preserved_binary(dest: Path | None = None) -> Path | None:
         if match and entry.is_file() and os.access(entry, os.X_OK):
             parsed = tuple(int(part) for part in match.group(1).split("."))
             found.append((parsed, entry))
-    return max(found)[1] if found else None
+    return [path for _, path in sorted(found, reverse=True)]
 
 
 def install_omnigraph(dry_run: bool = False) -> None:
@@ -164,11 +170,20 @@ def _preserve_outgoing(dest: Path, version: str | None, console) -> None:
     move would leave the user with no working ``omnigraph`` at all in the
     window between the two, or permanently if the replace then failed.
 
-    Exactly one previous version is kept. A store can only have been written by
-    the binary that last wrote it, so a pile of older ones is dead weight (tens
-    of MB each) and an ambiguity ``preserved_binary`` would have to guess its
-    way out of. Only names this module wrote are swept — see
-    ``_PRESERVED_RE``.
+    ★ EVERY PREVIOUS VERSION IS KEPT. Nothing is pruned here, and that is
+    deliberate — an earlier revision of this function swept all but the newest,
+    on the reasoning that a store has exactly one writer. True per store, and
+    irrelevant: there are many stores. witan-code keeps one ``<slug>.omni`` per
+    repository, each migrated only when someone next opens that repo. Upgrade
+    across two format versions while a repo lies untouched and its store is two
+    releases behind — so the sweep would delete the only binary able to export
+    it, permanently, with no warning and no way back.
+
+    The cost of not pruning is disk (these binaries are ~220 MB each) bounded
+    by how many format versions a machine traverses, which is small. The cost
+    of pruning is unrecoverable data. Retiring old copies is safe only once
+    every store is known migrated, which this function cannot know and should
+    not guess.
 
     Best-effort: failing to set the old binary aside must not abort an
     otherwise-working upgrade, so an ``OSError`` here warns and returns rather
@@ -188,14 +203,6 @@ def _preserve_outgoing(dest: Path, version: str | None, console) -> None:
         )
         return
     console.print(f"  [dim]omnigraph[/dim] — previous v{version} kept at {keep}")
-    for stale in dest.parent.glob("omnigraph-*"):
-        if stale != keep and _PRESERVED_RE.match(stale.name):
-            try:
-                stale.unlink()
-            except OSError:
-                # Pruning is advisory. A stale copy left behind wastes disk;
-                # aborting the sweep over it would waste the upgrade.
-                pass
 
 
 def _download_omnigraph(dest: Path, dry_run: bool) -> None:
