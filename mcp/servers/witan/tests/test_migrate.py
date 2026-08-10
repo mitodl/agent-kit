@@ -136,13 +136,46 @@ def test_migrate_storage_format_is_noop_when_already_readable(server):
 
 
 @requires_omnigraph
-def test_find_pre_upgrade_binary_skips_the_current_one():
+def test_find_pre_upgrade_binary_skips_the_current_one(monkeypatch):
     import shutil
 
     from witan import server as srv
 
+    # Isolated from the real ~/.local/bin: a developer who has upgraded once
+    # legitimately HAS a set-aside binary there, and this test is about the
+    # PATH scan finding nothing but the current binary.
+    monkeypatch.setattr(srv.omnigraph_install, "preserved_binary", lambda *a: None)
     current = shutil.which("omnigraph")
     assert srv._find_pre_upgrade_binary(current) is None
+
+
+def test_find_pre_upgrade_binary_prefers_the_set_aside_one(tmp_path, monkeypatch):
+    """The installer's set-aside binary IS the one that wrote the store, by
+    construction. A PATH hit is a guess of unknown vintage, so it must not win."""
+    from witan import server as srv
+
+    kept = tmp_path / "omnigraph-0.8.1"
+    kept.write_text("#!/bin/sh\n")
+    kept.chmod(0o755)
+    monkeypatch.setattr(srv.omnigraph_install, "preserved_binary", lambda *a: kept)
+
+    assert srv._find_pre_upgrade_binary("/usr/local/bin/omnigraph") == str(kept)
+
+
+def test_find_pre_upgrade_binary_ignores_a_set_aside_copy_of_itself(
+    tmp_path, monkeypatch
+):
+    """Degenerate case: the set-aside path resolves to the binary in use. It
+    cannot read a store that one refuses, so fall through to the PATH scan."""
+    from witan import server as srv
+
+    current = tmp_path / "omnigraph"
+    current.write_text("#!/bin/sh\n")
+    current.chmod(0o755)
+    monkeypatch.setattr(srv.omnigraph_install, "preserved_binary", lambda *a: current)
+    monkeypatch.setenv("PATH", "")
+
+    assert srv._find_pre_upgrade_binary(str(current)) is None
 
 
 @requires_omnigraph

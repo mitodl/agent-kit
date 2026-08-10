@@ -121,6 +121,103 @@ def test_install_omnigraph_redownloads_when_version_differs(tmp_path, monkeypatc
     assert _dest(tmp_path).read_bytes() == b"#!/bin/sh\necho fake"
 
 
+#: The version an upgrade is coming *from*. Must differ from the current pin,
+#: or `_download_omnigraph` short-circuits on the already-at-this-version skip
+#: and never reaches the preservation step under test.
+_OLD = "0.7.2"
+
+
+def _upgrade_from(tmp_path, monkeypatch, version: str = _OLD) -> Path:
+    """Run an install over an existing binary reporting ``version``."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
+    _write_fake_binary(_dest(tmp_path), version)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: _FakeResponse(_fake_release_tarball(b"#!/bin/sh\necho new")),
+    )
+    oi.install_omnigraph(dry_run=False)
+    return _dest(tmp_path)
+
+
+def test_upgrade_sets_the_outgoing_binary_aside(tmp_path, monkeypatch):
+    """The upgrade must not destroy the only binary that can export a store the
+    new one refuses — that is the whole recovery path for a format bump."""
+    dest = _upgrade_from(tmp_path, monkeypatch)
+
+    kept = dest.with_name(f"omnigraph-{_OLD}")
+    assert dest.read_bytes() == b"#!/bin/sh\necho new"
+    assert kept.read_text() == f"#!/bin/sh\necho 'omnigraph {_OLD}'\n"
+    assert kept.stat().st_mode & 0o111  # still runnable, or it can't export
+
+
+def test_preserved_binary_finds_what_the_upgrade_set_aside(tmp_path, monkeypatch):
+    dest = _upgrade_from(tmp_path, monkeypatch)
+
+    assert oi.preserved_binary(dest) == dest.with_name(f"omnigraph-{_OLD}")
+
+
+def test_only_the_newest_previous_version_is_kept(tmp_path, monkeypatch):
+    """A store was written by ONE binary. Older set-aside copies are dead weight
+    and an ambiguity `preserved_binary` would have to guess its way out of."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    for stale in ("0.5.0", "0.6.0"):
+        _write_fake_binary(_dest(tmp_path).with_name(f"omnigraph-{stale}"), stale)
+
+    dest = _upgrade_from(tmp_path, monkeypatch)
+
+    survivors = sorted(p.name for p in dest.parent.glob("omnigraph-*"))
+    assert survivors == [f"omnigraph-{_OLD}"]
+    assert oi.preserved_binary(dest) == dest.with_name(f"omnigraph-{_OLD}")
+
+
+def test_the_sweep_leaves_binaries_it_did_not_write_alone(tmp_path, monkeypatch):
+    """`omnigraph-dev` is a user's own build sitting in the same directory.
+    Pruning is scoped to the exact `omnigraph-<semver>` names this module
+    writes, so a hand-placed sibling survives an upgrade untouched."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    mine = _dest(tmp_path).with_name("omnigraph-dev")
+    _write_fake_binary(mine, "9.9.9")
+
+    dest = _upgrade_from(tmp_path, monkeypatch)
+
+    assert mine.exists()
+    assert oi.preserved_binary(dest) == dest.with_name(f"omnigraph-{_OLD}")
+
+
+def test_first_install_preserves_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: _FakeResponse(_fake_release_tarball(b"#!/bin/sh\necho new")),
+    )
+
+    oi.install_omnigraph(dry_run=False)
+
+    dest = _dest(tmp_path)
+    assert list(dest.parent.glob("omnigraph-*")) == []
+    assert oi.preserved_binary(dest) is None
+
+
+def test_preserve_failure_does_not_abort_the_upgrade(tmp_path, monkeypatch):
+    """Setting the old binary aside is best-effort. Failing it leaves the user
+    where they were before the feature existed; failing the install does not."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    def _no_copy(*a, **k):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(oi.shutil, "copy2", _no_copy)
+
+    dest = _upgrade_from(tmp_path, monkeypatch)
+
+    assert dest.read_bytes() == b"#!/bin/sh\necho new"
+    assert oi.preserved_binary(dest) is None
+
+
 def test_installed_version_none_on_timeout(tmp_path, monkeypatch):
     dest = _dest(tmp_path)
     _write_fake_binary(dest, oi._OMNIGRAPH_VERSION)

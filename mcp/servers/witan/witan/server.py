@@ -20,6 +20,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 from witan_core import caching, normalise, now_iso
+from witan_core import omnigraph_install
 from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
 from witan_core.omnigraph import (
@@ -1107,10 +1108,28 @@ def _snapshot(binary: str, store: str) -> tuple[bool, str]:
 
 
 def _find_pre_upgrade_binary(current_binary: str) -> str | None:
-    """First ``omnigraph`` on PATH that isn't the binary witan is currently
-    using — a candidate for whatever wrote the store before witan's own
-    bundled binary moved on to a newer release."""
+    """A binary that can still read a store the current one refuses, or ``None``.
+
+    Prefers what the installer deliberately set aside on the last upgrade
+    (``omnigraph-<version>``, see :func:`witan_core.omnigraph_install.preserved_binary`)
+    — that IS the binary that last wrote the store, by construction, so it is
+    the right answer rather than merely a candidate.
+
+    Falls back to the first ``omnigraph`` on PATH that isn't the one witan is
+    currently using. That is a guess: it finds a Homebrew or system install of
+    unknown vintage, which may be older than the store rather than the version
+    that wrote it. Kept because it is the only thing that helps a user who
+    upgraded before the installer started preserving anything, and a wrong
+    guess fails loudly at ``export`` rather than corrupting anything.
+    """
     current_real = Path(current_binary).resolve()
+    preserved = omnigraph_install.preserved_binary()
+    if preserved is not None:
+        try:
+            if preserved.resolve() != current_real:
+                return str(preserved)
+        except OSError:
+            pass
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry:
             continue
@@ -1216,9 +1235,14 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
     if old is None:
         raise RuntimeError(
             "The store was written by an older, incompatible omnigraph "
-            "on-disk format, and no other `omnigraph` binary was found on "
-            "PATH to export it. Pass the path to the pre-upgrade binary that "
-            "last wrote this store."
+            "on-disk format, and no binary that can still read it was found — "
+            f"neither a set-aside `omnigraph-<version>` beside "
+            f"{omnigraph_install.default_install_path()} nor another "
+            "`omnigraph` on PATH. This happens when the store predates the "
+            "upgrade that started preserving the outgoing binary. Download the "
+            "release that last wrote this store from "
+            "https://github.com/ModernRelay/omnigraph/releases and pass its "
+            "path."
         )
     old_ok, old_out = _snapshot(old, store)
     if not old_ok:
