@@ -41,13 +41,36 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      # The test suite is hermetic — the omnigraph installer tests monkeypatch
-      # download/extract and never touch the network or a real binary — so no
-      # binary-install step is needed here (unlike the server jobs).
       - name: Install dependencies
         run: uv sync --frozen --group test
 
+      # tests/test_binary_contract.py is the one non-hermetic suite here: it
+      # asserts the shapes the REAL binary puts on the wire, which is the whole
+      # point of it (see that file's module docstring — 0.9.0 changed the
+      # export timestamp representation and announced nothing). Everything else
+      # in witan-core stays hermetic; the installer tests monkeypatch
+      # download/extract and never touch the network.
+      - name: Cache omnigraph binary
+        id: cache-omnigraph
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/bin/omnigraph
+          key: omnigraph-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/witan-core/witan_core/omnigraph_install.py') }}
+
+      - name: Install omnigraph binary
+        # Keyed on the installer module's content, so a version bump
+        # invalidates the cache automatically rather than pinning the contract
+        # suite to a stale binary — which would defeat its purpose entirely.
+        if: steps.cache-omnigraph.outputs.cache-hit != 'true'
+        run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
+
       - name: Run tests
+        # WITAN_REQUIRE_OMNIGRAPH turns test_binary_contract.py's "no binary,
+        # skip" into a hard failure. Without it, deleting the install step
+        # above would retire the contract suite silently and it would keep
+        # reporting green.
+        env:
+          WITAN_REQUIRE_OMNIGRAPH: "1"
         run: uv run pytest
 
       - name: Lint (ruff check)
