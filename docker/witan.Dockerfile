@@ -50,7 +50,7 @@ RUN set -eux; \
 
 # ── Build the relocatable venv from the uv workspace ──────────────────────────
 FROM python:${PYTHON_VERSION}-slim-trixie AS builder
-COPY --from=ghcr.io/astral-sh/uv:0.12.0@sha256:606e70c71c852d03f611b1e56a195d08648507018a7057fab82c4974c4eae105 /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
 
 # build-essential is insurance for any dependency that ships only an sdist; the
 # runtime stage discards it. UV_PYTHON_DOWNLOADS=never keeps uv on the image's
