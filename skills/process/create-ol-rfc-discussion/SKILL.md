@@ -13,43 +13,65 @@ metadata:
 # Create an RFC Discussion (`/olrfc`)
 
 When the user runs `/olrfc`, or asks to post/create an RFC, guide them through
-writing a well-structured RFC and posting it to `mitodl/hq` as a GitHub
-Discussion in the **RFC** category.
+writing a **short, high-altitude** RFC and posting it to `mitodl/hq` as a
+GitHub Discussion in the **RFC** category.
 
-## Default target
+## What an RFC is for
 
-Always post to **`mitodl/hq`** under the **RFC** discussion category unless the
-user explicitly names a different repository.
+An RFC exists to get a team of busy people to agree on **what problem we're
+solving, roughly how we intend to solve it, and what that commits us to**.
+It is a decision document, not a design document.
 
-Known constant IDs for `mitodl/hq` (hardcoded in the posting script —
-no lookup needed on the happy path):
+The implementation detail follows later, as a spec opened against the target
+repositories. Anything a reader does not need in order to say "yes, go do
+that" belongs in the spec — not here.
 
-| Name | ID |
-|------|----|
-| Repository | `R_kgDOHOGzLg` |
-| RFC category | `DIC_kwDOHOGzLs4COw0u` |
+| Belongs in the RFC | Belongs in the spec |
+|--------------------|---------------------|
+| The problem and why now | Schemas, interfaces, function signatures |
+| The 2–3 real options and why they lose/win | File and module layout |
+| The chosen direction, in shape not steps | Ordered task breakdown, estimates |
+| What the decision commits us to, and what it costs | Test plans, migration scripts |
+| Questions that could change the decision | Config keys, flag names, env vars |
+| Links to prior art / related RFCs | Error handling, edge cases |
 
-If you ever need to re-derive these (e.g. the repo was renamed or transferred):
+If you catch yourself writing code blocks, type definitions, or a numbered
+build plan, you have crossed into spec territory. Cut it.
+
+---
+
+## Length budget — this is a hard requirement
+
+**Target: 800–1,500 words. Ceiling: 2,000.** That is a 5–10 minute read.
+RFCs that run 20–30 minutes do not get read, and unread RFCs do not produce
+decisions.
+
+Rough per-section budget:
+
+| Section | Budget |
+|---------|--------|
+| Problem | 150–300 words |
+| Options Considered | 300–500 words total across all options |
+| Decision | 150–250 words |
+| Approach | 150–300 words |
+| Consequences | 100–200 words |
+| Open Questions | 75–150 words |
+
+Before posting, check it:
 
 ```bash
-# Repository ID
-gh api graphql -f query='{ repository(owner:"mitodl", name:"hq") { id } }' \
-  --jq '.data.repository.id'
-
-# Discussion category IDs
-gh api graphql -f query='
-  { repository(owner:"mitodl", name:"hq") {
-      discussionCategories(first:20) { nodes { id name } }
-  } }' \
-  --jq '.data.repository.discussionCategories.nodes[] | select(.name=="RFC") | .id'
+wc -w /tmp/rfc-body.md
 ```
+
+If it is over 2,000, cut — do not rationalise. The usual offenders, in order:
+step-by-step implementation plans, exhaustive option enumeration, restating
+the problem inside the Decision section, and worked examples.
 
 ---
 
 ## Step 1 — Confirm the RFC is ready to post
 
-An RFC should only be posted after the design space has been explored. Before
-writing the document, check:
+An RFC should only be posted after the design space has been explored. Check:
 
 - The problem is clearly articulated
 - At least two options were considered (even if one was quickly ruled out)
@@ -62,8 +84,8 @@ If planning is still in progress, finish that first.
 
 ## Step 2 — Write the RFC document
 
-Use the standard RFC format below. Every section is required; delete only
-**Open Questions** if there are genuinely none.
+Every section is required; delete only **Open Questions** if there are
+genuinely none.
 
 ```markdown
 # RFC: <title>
@@ -72,47 +94,47 @@ Use the standard RFC format below. Every section is required; delete only
 <Draft | Accepted | Superseded by #N | Withdrawn>
 
 ## Problem
-What problem are we solving and why does it matter now?
-One to three paragraphs. Include why this is worth addressing at this moment,
-not just what it is.
+What problem are we solving, and why does it matter now? Two or three short
+paragraphs. Lead with the consequence of not acting. Say what changed to make
+this worth doing at this moment.
 
 ## Options Considered
 
 ### Option N: <name>
-One paragraph describing the approach.
+Two to four sentences describing the approach in terms of its *shape* — what
+moves, what stays, who owns it. Not how it is built.
 
-**Tradeoffs:**
-- ✅ pro
-- ✅ pro
-- ❌ con / risk
+**Tradeoff:** one or two sentences on what this option buys and what it costs.
+Use a short bullet pair only if the tradeoff genuinely has multiple axes.
 
-(Repeat for each option. Minimum two options.)
+(Repeat for each option. Two or three options; more than three means the space
+was not narrowed before writing.)
 
 ## Decision
-Which option we're going with and why. Reference the tradeoffs above —
-don't just restate them, explain the weighting. If the decision is a
-stepping-stone to a fuller option, say so explicitly.
+Which option we're going with and *why that tradeoff is the right one to
+accept*. Do not restate the option's pros — explain the weighting. If this is
+a stepping-stone toward a fuller option, say so.
 
-## Implementation Plan
-Ordered, numbered steps. Each step should be concrete enough that a
-different engineer could pick it up. Avoid vague steps like "build the thing".
+## Approach
+The shape of the work in three to six bullets — the major pieces, roughly in
+order, at the altitude of "what changes where". Name the systems and repos
+touched, not the files. The detailed breakdown lands in the spec.
 
-1. **Step title** — one sentence description of what gets built/done and why.
+- **<Piece of work>** — one sentence on what changes and where.
 
 ## Consequences
 
-**What we gain:**
-- bullet
+**What we gain:** two or three bullets.
 
-**What we give up / risks:**
-- bullet
+**What we give up / risks:** two or three bullets.
 
-**Downstream changes:**
-- bullet (who/what is affected by this decision)
+**Who is affected:** teams, services, or repos that inherit work or change
+behaviour as a result.
 
 ## Open Questions
-- **Question label:** One sentence framing the question. Note if it is
-  blocking or non-blocking for the initial implementation.
+- **Question label:** one sentence. Mark blocking vs. non-blocking.
+  Only list questions whose answers could change the decision or the approach —
+  unresolved implementation detail goes in the spec.
 ```
 
 ---
@@ -127,6 +149,8 @@ cat > /tmp/rfc-body.md << 'RFCEOF'
 <RFC content here>
 RFCEOF
 ```
+
+Then run the word count from the length budget section above before posting.
 
 ---
 
@@ -168,6 +192,36 @@ with the user.
 
 ---
 
+## Default target
+
+Always post to **`mitodl/hq`** under the **RFC** discussion category unless the
+user explicitly names a different repository.
+
+Known constant IDs for `mitodl/hq` (hardcoded in the posting script —
+no lookup needed on the happy path):
+
+| Name | ID |
+|------|----|
+| Repository | `R_kgDOHOGzLg` |
+| RFC category | `DIC_kwDOHOGzLs4COw0u` |
+
+If you ever need to re-derive these (e.g. the repo was renamed or transferred):
+
+```bash
+# Repository ID
+gh api graphql -f query='{ repository(owner:"mitodl", name:"hq") { id } }' \
+  --jq '.data.repository.id'
+
+# Discussion category IDs
+gh api graphql -f query='
+  { repository(owner:"mitodl", name:"hq") {
+      discussionCategories(first:20) { nodes { id name } }
+  } }' \
+  --jq '.data.repository.discussionCategories.nodes[] | select(.name=="RFC") | .id'
+```
+
+---
+
 ## RFC Status values
 
 | Status | Meaning |
@@ -182,29 +236,32 @@ consensus. Do not delete Draft RFCs — keep them as a record.
 
 ---
 
-## Tips
+## Writing tips
 
-- **Title format:** Always prefix the discussion title with `RFC: ` so it is
-  scannable in the discussion list. The posting script enforces this
-  automatically.
-- **Options minimum:** Include at least two options even if one was an obvious
-  non-starter. Documenting the rejected path prevents revisiting the same
-  ground in future discussions.
-- **Decision ≠ restatement:** The Decision section should explain the
-  *weighting* of tradeoffs, not just repeat the winning option's pros. What
-  made the cons acceptable?
-- **Implementation steps should be handoff-ready:** Each step should name the
-  artifact being produced (file, service, config, skill, etc.) and be concrete
-  enough that a different engineer could execute it.
-- **Consequences ≠ tradeoffs:** Tradeoffs live under each option. Consequences
-  documents what changes *as a result of the decision* — downstream effects,
-  things the team gains and gives up going forward.
-- **Open questions are not todos:** An open question is something that needs a
-  decision before or during implementation. Unresolved implementation details
-  belong in the implementation plan, not here.
-- **Body size:** GitHub Discussions have a 65,536-character body limit. For
-  very long RFCs, summarise verbosely-documented options and link to supporting
-  documents rather than embedding them.
+- **Write for a reader who will skim.** Section headings and first sentences
+  should carry the argument on their own. If someone reads only the first line
+  of each paragraph, they should still get the decision.
+- **Prefer the general over the particular.** "Sessions are held in process
+  memory, so we cannot scale horizontally" beats three paragraphs on the
+  session dict's structure.
+- **One idea per paragraph, three sentences per paragraph.** Dense
+  multi-clause prose reads as long even when the word count is fine.
+- **Title format:** always prefix the title with `RFC: `. The posting script
+  enforces this automatically.
+- **Two options minimum, three maximum.** Document the rejected path so the
+  same ground is not revisited — but a survey of six approaches means the
+  design work was not finished before writing.
+- **Decision ≠ restatement.** Explain the *weighting* of the tradeoffs, not
+  the winning option's pros. What made its costs acceptable?
+- **Approach ≠ implementation plan.** Name the pieces of work and where they
+  land. If a bullet could be a ticket title, it is at the right altitude; if it
+  reads like a ticket body, cut it down.
+- **Consequences ≠ tradeoffs.** Tradeoffs live under each option. Consequences
+  are what changes for the team *as a result of the decision*.
+- **Open questions are not todos.** They are things that could change the
+  decision. Everything else is spec material.
+- **Link instead of embedding.** Prior art, benchmark output, long option
+  writeups, and design explorations belong behind a URL.
 
 ## Self-contained RFCs
 
@@ -214,5 +271,7 @@ paths that are inaccessible to readers. Instead:
 - **Reference code** via GitHub URLs with line numbers
 - **Reference prior RFCs** by their discussion URL
 - **Reference external docs** via public URLs
-- **Include essential snippets inline** rather than describing them
 - **Attach diagrams** by uploading images to the discussion after posting
+
+Include a code snippet inline only when the snippet *is* the argument — a
+contract shape being proposed, for example. Otherwise link to it.
