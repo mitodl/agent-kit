@@ -70,7 +70,11 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
 
       - name: Install dependencies
-        run: uv sync --frozen --package witan-core
+        # --extra cli: bin/check_omnigraph_format.py is a cyclopts CLI, and
+        # cyclopts is in witan-core's `cli` extra rather than its base
+        # dependencies. The installer also imports rich lazily, from the same
+        # extra.
+        run: uv sync --frozen --package witan-core --extra cli
 
       - name: Cache omnigraph binary
         id: cache-omnigraph

@@ -77,5 +77,11 @@ check-omnigraph-pins:
 # Needs the pinned binary on PATH (`witan setup`, or the workflow's install
 # step). See bin/check_omnigraph_format.py for why this compares the binary
 # against a declaration rather than diffing two release pins.
+#
+# `--extra cli` is load-bearing: cyclopts (and rich, which the installer imports
+# lazily) live in witan-core's `cli` extra, not its base dependencies. Without
+# it this works only in a shared workspace .venv that some other package's sync
+# happened to leave cyclopts in — which is exactly how it passed locally and
+# failed in CI the first time.
 check-omnigraph-format *args:
-    uv run --package witan-core python bin/check_omnigraph_format.py {{ args }}
+    uv run --package witan-core --extra cli python bin/check_omnigraph_format.py {{ args }}
