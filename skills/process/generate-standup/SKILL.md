@@ -47,7 +47,7 @@ The script outputs a JSON object:
     "tomorrow": "string",
     "since": "string"
   },
-  "checkin_discussion": { "id", "number", "title", "url", "createdAt" },
+  "checkin_targets": { "eod": {...}, "bod": {...}, "latest": {...} },
   "prs_authored":        [...],
   "prs_reviewed":        [...],
   "issues":              [...],
@@ -61,8 +61,10 @@ The script outputs a JSON object:
 - `meta.yesterday` is the previous weekday (Friday if today is Monday).
 - `meta.tomorrow` is the next weekday (Monday if today is Friday).
 - `meta.since` is midnight UTC on `meta.yesterday` — the fetch window start.
-- `checkin_discussion` is the most recent Check-ins discussion in `mitodl/hq`.
-  Keep its `id` (GraphQL node ID) and `url` for Steps 4–5.
+- `checkin_targets` holds the candidate post targets in `mitodl/hq`, each with
+  `id` (GraphQL node ID), `number`, `title`, `url`, `createdAt`, `date` (the
+  calendar date the title names) and `comment_count`. Any of the three may be
+  `null`. See [Choosing the post target](#choosing-the-post-target).
 - `discussions_opened` — discussions the user **opened** in the window, any
   category. Opening one is announcement-worthy; see Step 3.
 - `discussion_comments` — comments and replies the user left in the window,
@@ -70,12 +72,24 @@ The script outputs a JSON object:
   threads are excluded (those are standup posts — reporting them is circular).
 - Do **not** infer or fabricate activity beyond what the script returns.
 
-**Why "most recent Check-ins discussion" is the right post target.** The thread
-for day D is created on D-1, mid-afternoon UTC, and standup is at **9:15am ET
-(~13:15 UTC)**. So a BOD post finds D's thread as the newest — D+1's does not
-exist yet — and an EOD post finds D+1's, which is where an end-of-day report
-belongs since the team reads it at the next morning's standup. Both are
-correct; **do not "fix" this selection to title-match the date.**
+### Choosing the post target
+
+The thread for day D is titled with D's date (`Tuesday, August 11th, 2026`) and
+is created on D-1, mid-afternoon UTC. "Newest thread" is therefore not a usable
+rule — which thread is newest depends only on what time of day the script ran.
+The script resolves the target from the **date in the title** instead:
+
+- **EOD** → `checkin_targets.eod`, the thread titled `meta.tomorrow`. An
+  end-of-day report is read by the team at the *next* morning's standup, so it
+  belongs on the next day's thread.
+- **BOD** → `checkin_targets.bod`, the thread titled `meta.today` — yesterday's
+  work reported at today's standup.
+
+`checkin_targets.latest` is the newest thread regardless of date, and is only a
+fallback. If the target for the user's `timing` answer is `null` the thread has
+not been created yet (before ~15:30 UTC on the preceding day): **say so, show
+`latest` by title, and ask** — never silently post to a different day's thread
+than the table above selects.
 
 Every PR and issue carries three timestamps and each still-open authored PR
 carries its review state. These fields exist so that no claim in the post has to
@@ -104,42 +118,31 @@ Comments add `discussion_url` and `excerpt`.
 
 ## Step 1b — Mine your own session history
 
-The goal of this step is to surface work you did that never produced a
-GitHub artifact — investigation, local changes, planning, incident
-follow-up — by reviewing your own recent session activity since
-`meta.since`. How you do this depends entirely on what your current agent
-runtime exposes; there is no fixed schema or tool name to assume. Work
-through these options in order and use the first one that applies:
+Surface work that never produced a GitHub artifact — investigation, local
+changes, planning, incident follow-up — by reviewing your own session activity
+since `meta.since`. Use whichever of the following your runtime **actually
+has**; check your available tools and move on. Do not go hunting for a tool
+that is not there, and do not narrate the search.
 
-1. **A dedicated session-history tool.** If your environment exposes a tool
-   for querying past sessions/checkpoints (for example a `sql`-style tool
-   backed by a session store, or an equivalent structured API), query it for
-   sessions updated since `meta.since`, along with any stored
-   summary/checkpoint/overview field and — for sessions with no stored
-   summary — the first user message as a fallback signal of intent.
-2. **Team or project memory/work-tracking MCP tools**, if this environment
-   has any configured (e.g. a shared memory graph, workflow/session tracker,
-   or project-tracking server). Use whatever read/query tools they expose to
-   find sessions, traces, or memories touched since `meta.since`, scoped to
-   the relevant repos.
-3. **Local transcript files**, if your runtime persists them to disk (e.g.
-   Claude Code writes one JSONL file per session under
-   `~/.claude/projects/<cwd-slug>/`, one project directory per working
-   directory). Filter to files modified since `meta.since`, and treat the
-   working-directory path as the repo, plus the first user message and the
-   most recent assistant text as a proxy summary of what happened.
-4. **None of the above available or discoverable.** Skip this step
-   entirely and proceed with GitHub-only data — do not fabricate session
-   activity. **Say so in the message presenting the draft**, up front rather
-   than as a trailing footnote: off-GitHub work is then entirely
-   unrepresented, and the user is the only one who can fill that gap (the
-   `off_github` field in Step 2).
+1. **Session or memory MCP tools**, if configured — e.g. witan's
+   `workflow_session_list` / `recall`, or an equivalent project tracker. Query
+   for sessions, traces, or memories touched since `meta.since`, scoped to the
+   relevant repos.
+2. **Local transcript files**, if your runtime persists them to disk (Claude
+   Code writes one JSONL file per session under
+   `~/.claude/projects/<cwd-slug>/`, one directory per working directory).
+   Filter to files modified since `meta.since`; treat the working-directory
+   path as the repo, and the first user message plus the most recent assistant
+   text as a proxy summary.
+3. **Neither available.** Skip this step and proceed with GitHub-only data —
+   do not fabricate session activity. **Say so up front in the message
+   presenting the draft**, not as a trailing footnote: off-GitHub work is then
+   entirely unrepresented, and only the user can fill that gap (Step 2's
+   `off_github` field).
 
-Whichever source applies, normalize each session you find into a common
-shape before moving on — `repository` (or `null` if none), `branch` (or
-`null`), `summary`, and `updated_at`. Later steps (Step 2's session-only
-detection, Step 3's bucketing) assume this shape regardless of which source
-strategy produced it.
+Normalize each session into `repository` (or `null`), `branch` (or `null`),
+`summary`, and `updated_at` before moving on. Step 2's session-only detection
+and Step 3's bucketing assume that shape whichever source produced it.
 
 **Summarization rules** (apply regardless of which source above was used):
 
@@ -246,7 +249,7 @@ the message presenting the draft — not in the post itself.
   — don't. Summarize from the `excerpt` and link the comment `url` (the deep
   link), not just the parent thread. A long comment laying out a proposal is
   worth a real sentence, not "commented on
-  https://github.com/mitodl/hq/discussions/12502".
+  <https://github.com/mitodl/hq/discussions/12502>".
 - **Deduplication:** A PR in both `prs_authored` and `prs_reviewed` → list
   once under the most relevant bucket.
 
@@ -356,6 +359,21 @@ _<Display Name>_
 
 **Formatting rules:**
 
+- **Every entry is a bullet.** Each top-level item starts with a hyphen bullet
+  marker at column 0 — never a bare prose line, never a numbered list.
+  Sub-bullets are indented exactly two spaces, and a bullet's own continuation
+  lines are indented two spaces as well so they stay inside the bullet instead
+  of ending the list.
+- **Lead with the GitHub reference.** Any entry about a PR or issue *begins*
+  with its full `https://github.com/<org>/<repo>/(pull|issues)/<number>` URL,
+  followed by an em dash and the description — not the URL buried mid-sentence.
+  GitHub renders such a URL as a linked `org/repo#123` reference carrying the
+  glyph for its type and state, so a reader scanning the post sees at a glance
+  which items are PRs, which are issues, and which are merged or closed. Bury
+  the reference in prose and that signal is gone. The same applies to
+  discussion comments: lead with the deep link.
+  - Grouping bullets are the one exception — a parent like `Reviewed a batch of
+    PRs:` with reference-led sub-bullets under it is fine.
 - **Empty sections:** write `- None`, never omit the section header.
 - **Blockers** go in announcements as a bullet; tag with `@handle` and link.
 - **Name line:** prefer a human-friendly display name, commonly wrapped in
@@ -406,7 +424,7 @@ Display the rendered standup, then use `ask_user` to confirm:
     "type": "string",
     "title": "Post this standup?",
     "enum": ["Post it", "Edit first", "Cancel"],
-    "description": "Post as a comment on <title> (<checkin_discussion.url>), make edits, or cancel."
+    "description": "Post as a comment on <target title> (<target url>), make edits, or cancel."
   }
 }
 ```
@@ -418,8 +436,13 @@ On confirmation, post using the bundled script:
 ```bash
 echo "<rendered standup>" \
   | bash skills/process/generate-standup/scripts/post-standup-comment.sh \
-      -d "<checkin_discussion.id>"
+      -d "<target id>"
 ```
+
+The target is the one [chosen in Step 1](#choosing-the-post-target) from the
+user's `timing` answer — `checkin_targets.eod` for EOD, `.bod` for BOD. Name
+the thread by its title in the confirmation, so a wrong day is caught before
+the post lands rather than after.
 
 The script prints the comment URL on success.
 
@@ -432,17 +455,18 @@ Anna G
 
 > Standup announcements
 
-- https://github.com/mitodl/mitxonline/pull/3600 needs review
+- https://github.com/mitodl/mitxonline/pull/3600 — needs review
 
 > What did I work on today?
 
-- worked on https://github.com/mitodl/mitxonline/pull/3600
-- updated UI and fixed tests https://github.com/mitodl/mit-learn/pull/3346, received review
+- https://github.com/mitodl/mitxonline/pull/3600 — worked on it
+- https://github.com/mitodl/mit-learn/pull/3346 — updated UI and fixed tests,
+  received review
 
 > What am I working on tomorrow?
 
-- address feedback https://github.com/mitodl/mit-learn/pull/3346
-- resolve https://github.com/mitodl/hq/issues/11440
+- https://github.com/mitodl/mit-learn/pull/3346 — address feedback
+- https://github.com/mitodl/hq/issues/11440 — resolve
 ```
 
 ## Example output (BOD, narrative style)
@@ -453,15 +477,17 @@ Tobias Macey
 > Standup announcements
 
 - PRs needing review:
-  - ol-infrastructure: add Archive/Deep Archive access tier support to OLBucket — https://github.com/mitodl/ol-infrastructure/pull/4659
-  - ol-data-platform: automate Iceberg table maintenance across the lakehouse — https://github.com/mitodl/ol-data-platform/pull/2238
-- ol-infrastructure: approved and ready to merge — https://github.com/mitodl/ol-infrastructure/pull/4640
+  - https://github.com/mitodl/ol-infrastructure/pull/4659 — add Archive/Deep Archive access tier support to OLBucket
+  - https://github.com/mitodl/ol-data-platform/pull/2238 — automate Iceberg table maintenance across the lakehouse
+- https://github.com/mitodl/ol-infrastructure/pull/4640 — approved and ready to merge
 
 > What did I work on yesterday?
 
 - Worked on addressing the hanging open issue for Dagster assets using Polars to read Iceberg tables
-- Opened https://github.com/mitodl/ol-infrastructure/pull/4659 for S3 cost optimization
-- Laid out the two options for Iceberg table maintenance scheduling — leaning toward a single Dagster schedule over per-table sensors: https://github.com/mitodl/hq/discussions/12488#discussioncomment-17801234
+- https://github.com/mitodl/ol-infrastructure/pull/4659 — opened for S3 cost optimization
+- https://github.com/mitodl/hq/discussions/12488#discussioncomment-17801234 — laid out the two
+  options for Iceberg table maintenance scheduling; leaning toward a single Dagster schedule
+  over per-table sensors
 
 > What am I working on today?
 
@@ -484,12 +510,15 @@ _Chris Patti_
 - Pycon tech talk!
 - Reviewed a bunch of PRs:
   - https://github.com/mitodl/ol-infrastructure/pull/4715
-  - https://github.com/mitodl/ol-infrastructure/pull/4713 and a couple more I forgot :)
-- Engaged in a wrestling match with Rootly's post incident retrospective creation tools. Lost, then after getting support from them won - kind of? It's not as clean as I'd like but details from yesterday's incident are documented at https://pe.ol.mit.edu/runbooks_post_mortems/20260603_xpro_outage/
+  - https://github.com/mitodl/ol-infrastructure/pull/4713 — and a couple more I forgot :)
+- Engaged in a wrestling match with Rootly's post incident retrospective creation tools.
+  Lost, then after getting support from them won - kind of? It's not as clean as I'd like
+  but details from yesterday's incident are documented at
+  https://pe.ol.mit.edu/runbooks_post_mortems/20260603_xpro_outage/
 
 > What am I working on tomorrow?
 
-- https://github.com/mitodl/ol-infrastructure/issues/4702
+- https://github.com/mitodl/ol-infrastructure/issues/4702 — streamlined EKS credentialing
   - I'm concerned that the issues Tobias raised around devs having neither the artifacts nor the permissions to run the streamlined EKS credentialing process we wrote is a deal breaker. We talked about potential solutions for a few seconds today, but I was mostly Retrospective-ing from the outage yesterday and didn't really have time to dig much.
   - I'd like to have our solution either finished, abandoned, or very thoroughly scoped by the end of the week.
 ```
@@ -505,7 +534,7 @@ Sar
 
 > What did I work on yesterday/today?
 
-- Wrote and deployed https://github.com/mitodl/ol-infrastructure/pull/4658
+- https://github.com/mitodl/ol-infrastructure/pull/4658 — wrote and deployed
 - Continued investigating SCIM sync failures — updates are reaching Keycloak
   logs but not propagating to Learn/MITx Online; restarting Keycloak temporarily
   restores sync, root cause still unknown

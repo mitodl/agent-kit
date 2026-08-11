@@ -10,8 +10,12 @@
 #   -o ORGS         Comma-separated list of GitHub orgs to search
 #                   (default: mitodl,openedx)
 #
-# Output: JSON — keys: meta, checkin_discussion, prs_authored, prs_reviewed,
+# Output: JSON — keys: meta, checkin_targets, prs_authored, prs_reviewed,
 #                       issues, discussions_opened, discussion_comments
+#
+#   checkin_targets.eod    — the Check-ins thread titled meta.tomorrow (EOD post target)
+#   checkin_targets.bod    — the Check-ins thread titled meta.today (BOD post target)
+#   checkin_targets.latest — newest Check-ins thread, for when the above is null
 #
 #   meta.today      — the date the script was run
 #   meta.yesterday  — previous weekday (Friday if today is Monday)
@@ -324,24 +328,59 @@ _discussion_comments() {
       ]' <<<"${raw:-null}" 2>/dev/null || true)"
 }
 
-# Fetch the most recent Check-ins discussion from mitodl/hq (post target)
-_checkin_discussion() {
-	local result
-	result="$(gh api graphql -f query='
+# Recent Check-ins discussions in mitodl/hq, each annotated with the calendar
+# date its title names.
+#
+# The date has to come from the title, not from createdAt: a thread for day D is
+# opened on D-1, so "newest thread" resolves to D's thread or D+1's depending on
+# nothing more than what time of day the script runs.
+_checkin_discussions() {
+	local raw
+	raw="$(gh api graphql -f query='
   query {
     repository(owner: "mitodl", name: "hq") {
       discussions(first: 50, orderBy: {field: CREATED_AT, direction: DESC}) {
         nodes {
           id number title url createdAt
           category { name }
+          comments { totalCount }
         }
       }
     }
-  }' \
-		-q '[.data.repository.discussions.nodes[]
-       | select(.category.name | ascii_downcase == "check-ins")] | first' \
-		2>/dev/null || true)"
-	echo "${result:-null}"
+  }' 2>/dev/null || true)"
+	_warn_graphql_errors "$raw" "checkin-discussions"
+
+	_json_array "$(jq '
+    def month_num: {jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",
+                    jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12"}[.];
+    # Titles read "Tuesday, August 11th, 2026". Matching month/day/year only
+    # keeps a missing weekday, an abbreviated month, or a dropped ordinal
+    # suffix from turning into an unresolvable target.
+    # Wrapped in [] because capture emits an empty stream on no match, which
+    # would otherwise drop the whole discussion instead of yielding null.
+    def title_date:
+      [ascii_downcase
+       | capture("(?<mon>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\s+(?<day>\\d{1,2})(st|nd|rd|th)?,?\\s+(?<year>\\d{4})")]
+      | if length == 0 then null
+        else .[0]
+             | "\(.year)-\(.mon | month_num)-\(if (.day | length) == 1 then "0" + .day else .day end)"
+        end;
+    [ .data.repository.discussions.nodes[]?
+      | select(. != null and (.category.name | ascii_downcase) == "check-ins")
+      | { id, number, title, url, createdAt,
+          date: (.title | title_date),
+          comment_count: (.comments.totalCount // 0) } ]' \
+		<<<"${raw:-null}" 2>/dev/null || true)"
+}
+
+# The Check-ins thread for one calendar date, or null if it does not exist yet.
+#
+# Duplicate threads for the same day do happen (two "Friday, August 7th, 2026"
+# discussions existed). Prefer the one the team actually posted in, then the
+# newer of the two — a thread nobody replied to is the abandoned one.
+_checkin_target() {
+	jq --arg d "$2" '[.[] | select(.date == $d)] | sort_by(.comment_count, .createdAt) | last' \
+		<<<"$1"
 }
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────
@@ -356,7 +395,11 @@ PRS_REVIEWED="$(_search_prs "--reviewed-by" "$SINCE")"
 ISSUES="$(_search_issues "$SINCE")"
 DISCUSSIONS_OPENED="$(_discussions_opened)"
 DISCUSSION_COMMENTS="$(_discussion_comments)"
-CHECKIN_DISCUSSION="$(_checkin_discussion)"
+
+CHECKIN_DISCUSSIONS="$(_checkin_discussions)"
+CHECKIN_EOD="$(_checkin_target "$CHECKIN_DISCUSSIONS" "$TOMORROW")"
+CHECKIN_BOD="$(_checkin_target "$CHECKIN_DISCUSSIONS" "$TODAY")"
+CHECKIN_LATEST="$(jq 'sort_by(.createdAt) | last' <<<"$CHECKIN_DISCUSSIONS")"
 
 # Final guard: --argjson dies on an empty or malformed value, which would throw
 # away an otherwise complete run.
@@ -378,7 +421,9 @@ jq -n \
 	--argjson issues "$ISSUES" \
 	--argjson discussions_opened "$DISCUSSIONS_OPENED" \
 	--argjson discussion_comments "$DISCUSSION_COMMENTS" \
-	--argjson checkin_discussion "$CHECKIN_DISCUSSION" \
+	--argjson checkin_eod "$CHECKIN_EOD" \
+	--argjson checkin_bod "$CHECKIN_BOD" \
+	--argjson checkin_latest "$CHECKIN_LATEST" \
 	'{
     meta: {
       username:     $username,
@@ -388,7 +433,11 @@ jq -n \
       tomorrow:     $tomorrow,
       since:        $since
     },
-    checkin_discussion:  $checkin_discussion,
+    checkin_targets: {
+      eod:    $checkin_eod,
+      bod:    $checkin_bod,
+      latest: $checkin_latest
+    },
     prs_authored:        $prs_authored,
     prs_reviewed:        $prs_reviewed,
     issues:              $issues,
