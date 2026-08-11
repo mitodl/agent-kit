@@ -93,10 +93,18 @@ contrib_query="
 
 echo "Measuring ${login}'s activity in ${org} since ${since}..." >&2
 
-contrib="$(gh api graphql -f query="$contrib_query" \
-  --jq '(.data.viewer // .data.user).contributionsCollection' 2>/dev/null || echo '{}')"
+# `gh api graphql` exits non-zero when the response carries an `errors` array,
+# and it prints the whole {data, errors} envelope to stdout without running a
+# `--jq` filter. Filtering inline with `|| echo '{}'` would therefore append a
+# second JSON document to the envelope, and `--argjson contrib` would abort on
+# the concatenation instead of taking the search-only fallback below. Capture
+# raw, then extract and validate separately (as the advisory lookup does).
+contrib_raw="$(gh api graphql -f query="$contrib_query" 2>/dev/null || true)"
+contrib="$(jq -ce '(.data.viewer // .data.user).contributionsCollection // empty' \
+  <<<"$contrib_raw" 2>/dev/null || true)"
+[[ -z "$contrib" ]] && contrib='{}'
 
-if [[ "$contrib" == '{}' || -z "$contrib" ]]; then
+if [[ "$contrib" == '{}' ]]; then
   echo "Warning: contributionsCollection returned nothing (token scope, or no activity); falling back to search only" >&2
 fi
 

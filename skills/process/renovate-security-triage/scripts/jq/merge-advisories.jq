@@ -14,8 +14,15 @@ def sev_rank: {"CRITICAL": 4, "HIGH": 3, "MODERATE": 2, "LOW": 1}[. // ""] // 0;
 map(. as $pr
   | ( [$advisories[] | select(.ghsaId as $g | $pr.ghsa_ids | index($g))]
       | map(. + {advisory_source: "pr_body"}) ) as $direct
+  # Fallback records are pooled across every PR, so package name alone is not a
+  # safe key: identically named packages exist in different ecosystems (a PIP
+  # `requests` and an NPM `requests` are unrelated), and matching on name alone
+  # would attach one's advisories and severity to the other. Require the
+  # record's ecosystem to be one this PR actually touches.
   | ( if ($direct | length) > 0 then []
-      else [$fallback[] | select(.package as $p | ($pr.updates | map(.package) | index($p)))]
+      else [$fallback[]
+            | select(.package as $p | ($pr.updates | map(.package) | index($p)))
+            | select(.ecosystem as $e | ($pr.ecosystems // []) | index($e))]
            | map(. + {advisory_source: "package_fallback"})
       end ) as $indirect
   | ($direct + $indirect | map(select(.withdrawn | not))) as $adv

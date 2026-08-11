@@ -16,6 +16,10 @@
 # shellcheck disable=SC2034  # every var here is consumed by the sourcing script
 triage_dir="${RENOVATE_TRIAGE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/renovate-security-triage}"
 mkdir -p "$triage_dir"
+# The retained artifacts hold private repo names, full PR bodies and unpatched
+# advisory detail. The caller's umask is commonly 022, which would leave those
+# world-readable on a shared machine, so pin the directory to owner-only.
+chmod 700 "$triage_dir" 2>/dev/null || true
 
 # One directory, not one per org -- the skill scopes a run to a single org, and
 # each run overwrites the previous. Retained (rather than piped) so a failure in

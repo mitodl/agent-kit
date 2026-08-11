@@ -55,6 +55,11 @@ map(. as $pr
       kind: $pr.kind,
       bump: $pr.bump,
       ecosystems: $pr.ecosystems,
+      # Kept even though nothing here ranks on it: this file is the only
+      # artifact the report phase reads, and the blast-radius judgment it is
+      # asked to make (runtime vs dev, direct vs transitive) needs the changed
+      # manifest paths as evidence.
+      files: ($pr.files // []),
       updates: $pr.updates,
       # A security fix that cannot merge is worse than one that can, so
       # surface the blocker alongside the urgency rather than hiding it.

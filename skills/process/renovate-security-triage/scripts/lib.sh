@@ -15,11 +15,23 @@ jq_dir="${lib_dir}/jq"
 max_parallel=8
 
 # Block until a background-job slot (out of $max_parallel) is free.
-wait_for_slot() {
-  while [[ "$(jobs -r -p | wc -l)" -ge "$max_parallel" ]]; do
-    wait -n || true
-  done
-}
+#
+# `wait -n` is bash 4.3+; macOS still ships bash 3.2 as /bin/bash, and these
+# scripts otherwise stay 3.2-clean (see also the BSD `date` fallback in
+# active-repos.sh), so poll there instead of hard-failing on a stock shell.
+if ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3))); then
+  wait_for_slot() {
+    while [[ "$(jobs -r -p | wc -l)" -ge "$max_parallel" ]]; do
+      wait -n || true
+    done
+  }
+else
+  wait_for_slot() {
+    while [[ "$(jobs -r -p | wc -l)" -ge "$max_parallel" ]]; do
+      sleep 0.2
+    done
+  }
+fi
 
 # gather_json <dir> <prefix> <dest> <reducer>
 # Combine <dir>/<prefix>-*.json into <dest> with `jq -s <reducer>`, after

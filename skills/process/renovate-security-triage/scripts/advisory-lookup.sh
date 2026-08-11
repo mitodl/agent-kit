@@ -56,10 +56,19 @@ lookup_ghsa() {
   ' <<<"$out" 2>/dev/null || true
 }
 
+# `first: 100` is the API maximum. Ordering by UPDATED_AT DESC and taking fewer
+# would silently drop *older* advisories, which is exactly the wrong end to cut:
+# an old advisory can still cover the PR's current version, so truncating it
+# understates max_severity. 100 covers every package observed in practice; when
+# a package does exceed it, say so rather than ranking a partial set as whole.
 lookup_package() {
   local out
-  out="$(gh api graphql -f query="{ securityVulnerabilities(ecosystem: $1, package: \"$2\", first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {
+  out="$(gh api graphql -f query="{ securityVulnerabilities(ecosystem: $1, package: \"$2\", first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
+           pageInfo { hasNextPage }
            nodes { vulnerableVersionRange firstPatchedVersion { identifier } advisory { ${advisory_fields} } } } }" 2>/dev/null || true)"
+  if [[ "$(jq -r '.data.securityVulnerabilities.pageInfo.hasNextPage // false' <<<"$out" 2>/dev/null || echo false)" == "true" ]]; then
+    echo "Warning: $1 package '$2' has more than 100 advisories; the fallback severity for it is based on a truncated set." >&2
+  fi
   jq -L "$jq_dir" '
     include "advisory";
     [(.data.securityVulnerabilities.nodes // [])[]
@@ -96,21 +105,26 @@ tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 # Stage 1: resolve every distinct GHSA id named in any PR body, once each.
-mapfile -t ghsa_ids < <(jq -r '[.[].ghsa_ids[]] | unique | .[]' "$enriched")
-echo "Resolving ${#ghsa_ids[@]} distinct advisory record(s)..." >&2
+#
+# Work lists go through files rather than `mapfile` arrays: mapfile is bash 4.0+
+# and macOS ships bash 3.2, so the array form would fail on a stock shell.
+jq -r '[.[].ghsa_ids[]] | unique | .[]' "$enriched" > "${tmp_dir}/ghsa-ids.txt"
+ghsa_total="$(grep -c . "${tmp_dir}/ghsa-ids.txt" || true)"
+echo "Resolving ${ghsa_total} distinct advisory record(s)..." >&2
 
 i=0
-for ghsa in "${ghsa_ids[@]}"; do
+while IFS= read -r ghsa; do
+  [[ -z "$ghsa" ]] && continue
   i=$((i + 1))
   lookup_ghsa "$ghsa" > "${tmp_dir}/adv-${i}.json" &
   wait_for_slot
-done
+done < "${tmp_dir}/ghsa-ids.txt"
 wait || true
 gather_json "$tmp_dir" adv "${tmp_dir}/advisories.json" '.'
 
 resolved="$(jq 'length' "${tmp_dir}/advisories.json")"
-if [[ "$resolved" -lt "${#ghsa_ids[@]}" ]]; then
-  echo "Note: $(( ${#ghsa_ids[@]} - resolved )) of ${#ghsa_ids[@]} GHSA id(s) cited by Renovate are not in GitHub's Advisory Database (upstream-only or renamed advisories); those PRs fall back to a package query." >&2
+if [[ "$resolved" -lt "$ghsa_total" ]]; then
+  echo "Note: $(( ghsa_total - resolved )) of ${ghsa_total} GHSA id(s) cited by Renovate are not in GitHub's Advisory Database (upstream-only or renamed advisories); those PRs fall back to a package query." >&2
 fi
 
 # Stage 2: fall back to a package+ecosystem query for any security-relevant PR
@@ -123,29 +137,39 @@ fi
 # package, not only the ones this PR closes. Records are tagged
 # advisory_source: "package_fallback" so the model knows to check
 # vulnerableVersionRange against the "from" version before trusting the tier.
-mapfile -t fallback_keys < <(
-  jq -r --argjson resolved "$(cat "${tmp_dir}/advisories.json")" '
-    [$resolved[].ghsaId] as $ok
-    | .[]
-    | select(.security_marked or ((.ghsa_ids | length) > 0))
-    | select([.ghsa_ids[] | select(. as $g | $ok | index($g))] | length == 0)
-    | (.ecosystems | first) as $eco
-    | select($eco != null)
-    | .updates[]? | [$eco, .package] | @tsv
-  ' "$enriched" | sort -u
-)
+#
+# Renovate's body table names the packages but not which manifest each came
+# from, so there is no package -> ecosystem mapping to read. Querying only the
+# PR's first ecosystem would ask the wrong database for the rest: a PR touching
+# both package.json and pyproject.toml would look every Python package up as
+# NPM. Instead, query every (ecosystem, package) pair the PR could plausibly
+# mean -- a wrong pair simply returns no records -- and keep the ecosystem on
+# each record so the merge can require it to match.
+jq -r --argjson resolved "$(cat "${tmp_dir}/advisories.json")" '
+  [$resolved[].ghsaId] as $ok
+  | .[]
+  | select(.security_marked or ((.ghsa_ids | length) > 0))
+  | select([.ghsa_ids[] | select(. as $g | $ok | index($g))] | length == 0)
+  | . as $pr
+  | select(($pr.ecosystems | length) > 0)
+  | $pr.ecosystems[] as $eco
+  | $pr.updates[]?
+  | [$eco, .package] | @tsv
+' "$enriched" | sort -u > "${tmp_dir}/fallback-keys.tsv"
 
 fallback='[]'
-if [[ "${#fallback_keys[@]}" -gt 0 ]]; then
-  echo "Falling back to package lookups for ${#fallback_keys[@]} unscored package(s)..." >&2
+fallback_total="$(grep -c . "${tmp_dir}/fallback-keys.tsv" || true)"
+if [[ "$fallback_total" -gt 0 ]]; then
+  echo "Falling back to package lookups for ${fallback_total} unscored (ecosystem, package) pair(s)..." >&2
   j=0
   while IFS=$'\t' read -r eco pkg; do
     [[ -z "$eco" || -z "$pkg" ]] && continue
     j=$((j + 1))
     lookup_package "$eco" "$pkg" \
-      | jq --arg pkg "$pkg" 'map(. + {package: $pkg})' > "${tmp_dir}/fb-${j}.json" &
+      | jq --arg pkg "$pkg" --arg eco "$eco" \
+           'map(. + {package: $pkg, ecosystem: $eco})' > "${tmp_dir}/fb-${j}.json" &
     wait_for_slot
-  done < <(printf '%s\n' "${fallback_keys[@]}")
+  done < "${tmp_dir}/fallback-keys.tsv"
   wait || true
   gather_json "$tmp_dir" fb "${tmp_dir}/fallback.json" 'add // []'
   fallback="$(cat "${tmp_dir}/fallback.json")"
