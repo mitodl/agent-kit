@@ -62,6 +62,7 @@ generate-standup                = "skills/process/generate-standup/SKILL.md"
 github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
 github-pr-triage                = "skills/process/github-pr-triage/SKILL.md"
 pulumi-modify-existing          = "skills/infrastructure/pulumi-modify-existing/SKILL.md"
+renovate-security-triage        = "skills/process/renovate-security-triage/SKILL.md"
 screenshot-pr                   = "skills/process/screenshot-pr/SKILL.md"
 uv-python-workflow               = "skills/python/uv-python-workflow/SKILL.md"
 validate-before-commit          = "skills/workflow/validate-before-commit/SKILL.md"
@@ -97,5 +98,6 @@ skills = [
     "dependency-updates",
     "github-issue-triage",
     "github-pr-triage",
+    "renovate-security-triage",
     "screenshot-pr",
 ]
