@@ -152,8 +152,11 @@ def write_bindings(
         }
     # One commit for the whole purge, not one per file: this runs over every
     # touched file on each index, and a commit apiece fragments the bridge store
-    # the same way the per-file deletes did the per-repo one. Chunked because the
-    # composed query rides in argv and a full-repo purge is unbounded.
+    # the same way the per-file deletes did the per-repo one. Chunked because a
+    # full-repo purge is unbounded and a matching delete costs ~362ms, so an
+    # uncapped batch runs past the client's 120s timeout — see
+    # `_PURGE_BATCH_SIZE` for the measurements and for why the argv reasoning
+    # this comment used to give no longer applies.
     client.change_many(
         [
             ("bridge.gq", "delete_bindings_in_file", {"repo_file": f"{repo}|{rel}"})
