@@ -416,27 +416,81 @@ _<Display Name>_
 
 ## Step 5 — Confirm and post
 
-Display the rendered standup, then use `ask_user` to confirm:
+First write the rendered standup to the draft file. Do not inline it into a
+shell command — newlines and quotes will break the invocation.
+
+```bash
+mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup" && \
+cat > "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md" << 'STANDUPEOF'
+<rendered standup>
+STANDUPEOF
+```
+
+The path is fixed rather than session-scoped so the command is identical every
+run and can be approved once. The file is overwritten on each run, and it is
+the single source of truth for what gets posted: every branch below reads it
+back rather than trusting the copy held in context.
+
+Display the draft, then use `ask_user` to confirm:
 
 ```json
 {
   "action": {
     "type": "string",
     "title": "Post this standup?",
-    "enum": ["Post it", "Edit first", "Cancel"],
-    "description": "Post as a comment on <target title> (<target url>), make edits, or cancel."
+    "enum": ["Post it", "Edit (Interactive)", "Edit (Editor)", "Cancel"],
+    "description": "Post as a comment on <target title> (<target url>), edit here, edit in $EDITOR, or cancel."
   }
 }
 ```
 
 **Do not post unless the user selects "Post it".**
 
-On confirmation, post using the bundled script:
+### Edit (Interactive)
+
+Ask in conversation what to change, apply it, rewrite the draft file with the
+same heredoc as above, re-display it, and return to this menu.
+
+### Edit (Editor)
+
+Give the user the exact command for their configured editor:
 
 ```bash
-echo "<rendered standup>" \
-  | bash skills/process/generate-standup/scripts/post-standup-comment.sh \
-      -d "<target id>"
+printf '%s %s\n' "${VISUAL:-${EDITOR:-vi}}" \
+  "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md"
+```
+
+Tell them to run it **in their own terminal window**, not through the agent.
+The agent's shell has no TTY, and neither do most harness bash modes, so a
+terminal editor started there hangs or exits with an error — this handoff is
+deliberate, not an oversight.
+
+Then wait with a second `ask_user`:
+
+```json
+{
+  "edit_status": {
+    "type": "string",
+    "title": "Done editing?",
+    "enum": ["Saved — reload it", "Cancel edit"],
+    "description": "Reload the draft from ~/.cache/generate-standup/draft.md, or discard the editor session."
+  }
+}
+```
+
+On "Saved", read the draft file back, display it, and return to the menu. The
+user's edits are final — do not re-render, re-wrap, or reapply the Step 4
+formatting rules to text they hand-edited. On "Cancel edit", return to the menu
+with the draft unchanged.
+
+### Post it
+
+Post using the bundled script:
+
+```bash
+bash skills/process/generate-standup/scripts/post-standup-comment.sh \
+  -d "<target id>" \
+  -f "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md"
 ```
 
 The target is the one [chosen in Step 1](#choosing-the-post-target) from the
