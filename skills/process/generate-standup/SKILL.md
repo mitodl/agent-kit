@@ -421,9 +421,19 @@ learn the absolute path:
 
 ```bash
 mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup" \
+  && chmod 700 "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup" \
   && rm -f "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md" \
   && printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md"
 ```
+
+The `chmod 700` is not incidental. The draft holds private repository activity,
+agent session summaries and whatever off-GitHub work the user described, and it
+is retained on disk after the run. `mkdir` applies the caller's umask, commonly
+`022`, which would leave the directory world-traversable and the `Write`-created
+file world-readable on a shared machine. Pinning the directory to owner-only
+blocks that, the same way
+[`renovate-security-triage/scripts/paths.sh`](../renovate-security-triage/scripts/paths.sh)
+does for its retained artifacts.
 
 Then write the standup to the printed path with the **`Write` tool**.
 
@@ -467,9 +477,14 @@ menu.
 Give the user the exact command for their configured editor:
 
 ```bash
-printf '%s %s\n' "${VISUAL:-${EDITOR:-vi}}" \
+printf '%s %q\n' "${VISUAL:-${EDITOR:-vi}}" \
   "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md"
 ```
+
+The two conversions differ on purpose. The editor is printed with `%s` so a
+multi-word setting like `code --wait` stays multiple arguments, and the path is
+printed with `%q` so a `$HOME` or `XDG_CACHE_HOME` containing spaces or shell
+metacharacters still arrives at the editor as one argument.
 
 Tell them to run it **in their own terminal window**, not through the agent.
 The agent's shell has no TTY, and neither do most harness bash modes, so a
@@ -483,16 +498,25 @@ Then wait with a second `ask_user`:
   "edit_status": {
     "type": "string",
     "title": "Done editing?",
-    "enum": ["Saved — reload it", "Cancel edit"],
-    "description": "Reload the draft from ~/.cache/generate-standup/draft.md, or discard the editor session."
+    "enum": ["Saved — reload it", "Discard my edits"],
+    "description": "Reload the draft from <printed draft path>, or throw away the editor session and restore the draft as it was."
   }
 }
 ```
 
+Use the path the command above printed, not a hard-coded `~/.cache` — the two
+differ whenever `XDG_CACHE_HOME` is set.
+
 On "Saved", read the draft file back, display it, and return to the menu. The
 user's edits are final — do not re-render, re-wrap, or reapply the Step 4
-formatting rules to text they hand-edited. On "Cancel edit", return to the menu
-with the draft unchanged.
+formatting rules to text they hand-edited.
+
+On "Discard my edits", rewrite the draft file with the `Write` tool from the
+version you last displayed, then return to the menu. This branch has to write:
+the editor saves straight over the source of truth, so by the time this question
+is answered the file may already hold edits, and a "Post it" afterwards reads
+the file — doing nothing here would post the very text the user asked to throw
+away. The pre-edit draft is still in context, so no backup copy is needed.
 
 ### Post it
 
