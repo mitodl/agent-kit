@@ -303,6 +303,13 @@ printf '1749\n' | \
 For tracker repos, the `--repo` argument is the tracker repo (where the issues
 live), not the product repo. The closing comment is posted to the tracker issue.
 
+**The closing comment is read by whoever filed the issue.** The script's
+default reason is a generic catch-all — prefer a specific one via
+`ISSUE_TRIAGE_REASON`, one sentence naming the actual cause and the superseding
+issue or commit: `Closed: superseded by #4828 (Pingdom → Grafana migration).`
+Ask the user to supply or approve the wording per group before closing; a batch
+close is visible to the whole team and hard to walk back.
+
 ---
 
 ## Common patterns

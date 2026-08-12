@@ -162,6 +162,11 @@ GitHub-derived bullets and fill in non-GitHub work.
 
 Use a **single `ask_user` call** with all fields at once.
 
+These answers are the *primary* source for the post, not a supplement to the
+GitHub data. GitHub tells you which artifacts moved; only the user can say what
+the work was and what mattered about it. Where an answer covers the same work
+as a GitHub item, keep the user's wording and let the link carry the rest.
+
 First, identify **session-only work** from Step 1b (sessions with `repository:
 null` or whose repository doesn't appear in `prs_authored`). Format them as a
 short suggestion list for the `off_github` field description.
@@ -356,6 +361,15 @@ _<Display Name>_
 
 - <item>
 ```
+
+**Writing style:** a standup is skimmed by the whole team in a few seconds.
+One line per item, plain words, no narration. A bare link, or a link plus a
+few words, is a good bullet. Don't paste a PR's title back after its link —
+GitHub renders it already; add a description only when it says something the
+title doesn't. No lead-in sentence, no closing summary, no "as mentioned
+above" cross-references, no filler adjectives, and no emoji unless the user
+used them. Multi-line bullets are for genuine nuance (a caveat, a concern, an
+open question), not for elaborating on work the link already explains.
 
 **Formatting rules:**
 
