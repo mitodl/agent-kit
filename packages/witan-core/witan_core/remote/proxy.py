@@ -116,6 +116,29 @@ class RemoteToolFailed(RuntimeError):
     """
 
 
+class RemoteWriteIndeterminate(RuntimeError):
+    """A gateway cut the call off after it had been dispatched, and the tool WRITES.
+
+    ★ NOT A FAILURE, AND NOT A SUCCESS. ★ Measured live against the CI
+    deployment on 2026-08-12, counted from the rows afterwards rather than
+    inferred: across two 16-writer bursts, one committed every row it 502'd on
+    (28 attempted, 28 present) and the other did not (16 attempted, 14 present).
+    So the deadline cuts the RESPONSE, the backend usually finishes the write
+    anyway, and nothing in the reply says which happened this time.
+
+    Distinct from :class:`RemoteUnreachable` because both of that class's
+    implications are false here. The service WAS reached — it answered, through
+    a proxy, having already started the work — and the operation is NOT safe to
+    repeat: a blind retry writes the row twice whenever the first one landed,
+    and `memory_store` with a generated slug has no key that would collapse the
+    duplicate. Reporting this as "could not be reached" invites exactly that
+    retry, which is why it is its own type with its own sentence.
+
+    A read cut the same way stays :class:`RemoteUnreachable`: no answer came
+    back, nothing changed server-side, and repeating it is free.
+    """
+
+
 class RemoteUnreachable(RuntimeError):
     """The deployment could not be reached, or dropped mid-call.
 
@@ -210,6 +233,35 @@ def payload_too_large(exc: BaseException) -> BaseException | None:
             return err
         text = str(err).lower()
         if any(phrase in text for phrase in _TOO_LARGE_PHRASES):
+            return err
+    return None
+
+
+# Statuses an intervening proxy returns for "I reached the upstream and did not
+# get a usable reply out of it". Both mean the request was DISPATCHED, which is
+# the property that makes a write's outcome unknowable:
+#   502  the upstream connection was torn down mid-response — what APISIX renders
+#        when ToolHive's vMCP hits its own hardcoded 30s deadline and Go closes
+#        the connection out from under the handler
+#   504  the proxy gave up waiting for the upstream first
+#
+# 503 is deliberately absent: it means no upstream was available to try, so
+# nothing was dispatched and the existing "unreachable, safe to retry" reading is
+# the correct one. That distinction is the whole basis for this list.
+_GATEWAY_STATUSES = frozenset({502, 504})
+
+
+def gateway_failure(exc: BaseException) -> BaseException | None:
+    """The dispatched-then-cut-off error inside ``exc``, or None.
+
+    ★ MUST BE ASKED BEFORE :func:`_transport_failure`, for the same reason
+    :func:`payload_too_large` must be: these arrive as ``httpx2.HTTPStatusError``,
+    which IS an ``httpx2.HTTPError``, so classifying by transport first buries
+    every one of them under "could not be reached".
+    """
+    for err in _chain(exc):
+        status = getattr(getattr(err, "response", None), "status_code", None)
+        if status in _GATEWAY_STATUSES:
             return err
     return None
 
@@ -339,6 +391,52 @@ class RemoteMCPProxy:
         return (
             f"The deployed service at {self._url} could not be reached: "
             f"{exc}. {self._unreachable_hint()}"
+        )
+
+    def _writes(self, name: str) -> bool:
+        """Whether calling ``name`` can change the graph. Default: assume it can.
+
+        ★ THE DEFAULT IS DELIBERATELY THE CAUTIOUS ONE. ★ This is only ever
+        consulted about a call whose outcome is already unknown, and the two
+        possible mistakes are not symmetric: calling a read a write costs one
+        over-careful sentence ("re-read before retrying" for a call that changed
+        nothing), while calling a write a read tells someone their write did not
+        happen when it may well have. A subclass that lists its read-only tools
+        therefore lists exactly those, and anything it has not heard of —
+        a tool added after the list was written — lands on the safe side.
+        """
+        return True
+
+    def _indeterminate_error(self, name: str, status: int) -> str:
+        """Message for a write whose fate the gateway made unknowable.
+
+        Names the ambiguity in the first sentence. An earlier version of this
+        path said "could not be reached", which is wrong in both halves and
+        wrong in the expensive direction: the service was reached, and the
+        remedy it implies — try again — is what duplicates the row.
+
+        The STATUS is quoted rather than the exception, whose ``str`` is
+        httpx's three-line "for more information check…" paragraph. The number
+        is the whole content; the rest is chained on ``__cause__`` for anyone
+        who wants it.
+        """
+        return (
+            f"The deployed service at {self._url} answered HTTP {status} for "
+            f"`{name}`: the request reached it and was cut off before a reply "
+            f"came back. `{name}` writes, so ITS OUTCOME IS INDETERMINATE — the "
+            "write may or may not have been applied, and nothing in this "
+            "response says which. Re-read before retrying; retrying blind "
+            "writes it twice if it did land."
+        )
+
+    def _gateway_read_error(self, name: str, status: int) -> str:
+        """Message for a read cut off the same way. Reached, answered nothing."""
+        return (
+            f"The deployed service at {self._url} answered HTTP {status} for "
+            f"`{name}`: the request reached it and was cut off before a reply "
+            "came back. Nothing was read and nothing changed, so this is safe "
+            "to retry — it usually means the service is saturated rather than "
+            "down."
         )
 
     def _payload_too_large_error(self, name: str, exc: BaseException) -> str:
@@ -481,13 +579,17 @@ class RemoteMCPProxy:
         transport fault (:func:`_transport_failure`) is the deployment going
         away. Errors this class already classified pass through untouched.
 
-        The three questions are asked in a fixed order, and each ordering is
+        The four questions are asked in a fixed order, and each ordering is
         load-bearing:
 
         1. Size FIRST — see :func:`payload_too_large` for why asking it second
            silently mislabels every direct-connection 413 as unreachable.
-        2. Transport next, since a drop is the deployment going away.
-        3. Tool refusal LAST — see :func:`tool_failure`. A vMCP-relayed 413
+        2. Gateway cut-off next — see :func:`gateway_failure`. Same trap as the
+           413: a 502 is an ``httpx2.HTTPError``, so asking about the transport
+           first files a service that answered under "could not be reached" and,
+           on a write, invites the retry that duplicates the row.
+        3. Transport next, since a drop is the deployment going away.
+        4. Tool refusal LAST — see :func:`tool_failure`. A vMCP-relayed 413
            arrives as a ``ToolError`` too, so this must not get first look.
 
         A refusal becomes :class:`RemoteToolFailed` rather than propagating as
@@ -498,7 +600,12 @@ class RemoteMCPProxy:
         """
         try:
             yield
-        except (RemoteToolUnavailable, RemoteUnreachable, RemotePayloadTooLarge):
+        except (
+            RemoteToolUnavailable,
+            RemoteUnreachable,
+            RemotePayloadTooLarge,
+            RemoteWriteIndeterminate,
+        ):
             raise
         except Exception as exc:  # noqa: BLE001 — re-raised unless classified
             oversized = payload_too_large(exc)
@@ -506,6 +613,14 @@ class RemoteMCPProxy:
                 raise RemotePayloadTooLarge(
                     self._payload_too_large_error(name, oversized)
                 ) from exc
+            cut_off = gateway_failure(exc)
+            if cut_off is not None:
+                status = cut_off.response.status_code
+                if self._writes(name):
+                    raise RemoteWriteIndeterminate(
+                        self._indeterminate_error(name, status)
+                    ) from exc
+                raise RemoteUnreachable(self._gateway_read_error(name, status)) from exc
             dropped = _transport_failure(exc)
             if dropped is not None:
                 raise RemoteUnreachable(self._unreachable_error(dropped)) from exc

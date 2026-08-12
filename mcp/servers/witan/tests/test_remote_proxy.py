@@ -578,6 +578,111 @@ def _fake_export(_rows):
     yield Path("/tmp/does-not-matter.jsonl")
 
 
+# ── which of witan's tools write ──────────────────────────────────────────
+# Consulted when a gateway cuts a call off after dispatching it: a write's
+# outcome is then INDETERMINATE and must be reported as such, while a read's is
+# simply absent. Getting this list wrong in one direction costs an over-careful
+# sentence; in the other it tells somebody their write did not happen when it
+# may well have.
+
+
+def test_read_only_tools_all_exist_on_the_server(server):
+    """A stale entry here silently reclassifies a write as a read.
+
+    The list names READS so that anything unlisted defaults to "assume it
+    wrote" — which covers a tool added later. What that default cannot catch is
+    an entry that is renamed or removed, so pin it against the real surface.
+    """
+    import witan.server as srv
+    from witan.remote.proxy import _READ_ONLY
+
+    async def _list() -> set[str]:
+        async with Client(srv.mcp) as client:
+            return {t.name for t in await client.list_tools()}
+
+    exposed = asyncio.run(_list())
+    assert _READ_ONLY <= exposed, f"no longer registered: {_READ_ONLY - exposed}"
+
+
+@pytest.mark.parametrize(
+    ("tool", "writes"),
+    [
+        ("memory_store", True),
+        ("task_claim", True),
+        ("store_merge", True),
+        # ★ The one that reads like a read. It mines *sessions*, and what it
+        # produces is Memory rows.
+        ("workflow_trace_mine", True),
+        ("recall", False),
+        ("task_ready", False),
+        ("workflow_project_status", False),
+        # Nobody has classified this one, so it is assumed to write.
+        ("some_tool_added_next_year", True),
+    ],
+)
+def test_write_classification(proxy, tool, writes):
+    assert proxy._writes(tool) is writes
+
+
+# ── merge-specific context on an indeterminate write ──────────────────────
+
+
+def test_an_indeterminate_batch_says_to_re_run_rather_than_to_re_read():
+    """★ The base advice is wrong HERE, and only here can that be known.
+
+    `witan_core`'s message says "re-read before retrying", which is right for a
+    lone `memory_store` with a generated slug. A merge reconciles
+    newest-record-wins, so re-running it is the remedy — telling a user to go
+    audit their graph by hand instead is a worse answer to a better-understood
+    situation.
+    """
+    from witan.remote.proxy import _merge_batch_indeterminate
+
+    message = _merge_batch_indeterminate(
+        RuntimeError("outcome is INDETERMINATE"), batch=3, dry_run=False
+    )
+    assert "batch 4 of the merge" in message
+    assert "The 3 batch(es) before it were applied" in message
+    assert "may or may not have been" in message
+    assert "idempotent" in message
+    assert "witan migrate merge" in message
+
+
+def test_an_indeterminate_dry_run_batch_cannot_have_changed_anything():
+    from witan.remote.proxy import _merge_batch_indeterminate
+
+    message = _merge_batch_indeterminate(
+        RuntimeError("outcome is INDETERMINATE"), batch=3, dry_run=True
+    )
+    assert "writes nothing" in message
+    assert "cannot have changed the graph" in message
+
+
+def test_merge_store_wraps_an_indeterminate_batch_with_that_context(proxy, monkeypatch):
+    from witan_core.remote.proxy import RemoteWriteIndeterminate
+
+    from witan.remote import proxy as proxy_mod
+
+    monkeypatch.setattr(
+        proxy_mod, "_source_export", lambda _s: _fake_export(["a", "b"])
+    )
+    monkeypatch.setattr(
+        proxy_mod, "_read_export", lambda _p: [{"type": "T", "id": "1"}]
+    )
+
+    def _cut_off(**_kwargs):
+        raise RemoteWriteIndeterminate("the reply never came back")
+
+    monkeypatch.setattr(proxy, "store_merge", _cut_off)
+
+    with pytest.raises(RemoteWriteIndeterminate) as caught:
+        proxy.merge_store("/tmp/whatever.omni")
+    message = str(caught.value)
+    assert "the reply never came back" in message  # base message kept
+    assert "batch 1 of the merge" in message  # context added
+    assert "idempotent" in message
+
+
 def test_claim_session_id_is_threaded_from_the_client(proxy, monkeypatch):
     """The holder qualifier must survive the hop to a deployed server.
 

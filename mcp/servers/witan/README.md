@@ -93,6 +93,8 @@ export WITAN_AUTHOR="Your Name"
 | `WITAN_REPO` | No | — | Repo slug override (bypasses git detection) |
 | `WITAN_SCAN_ENABLED` | No | `true` | Write-path secret/PII scanning; set to `false` to opt out — see [Write-path content scanning](docs/write-path-scanning.md) |
 | `WITAN_OPTIMIZE_INTERVAL` | No | `86400` | Throttle window (seconds) for the Stop hook's opportunistic background store compaction; `0` disables it |
+| `WITAN_REMOTE_WRITE_MAX_INFLIGHT` | No | `4` | Concurrent writes this process will send to one graph on a **remote** server before refusing. Sized from the measured write rate against the deployment's 30s deadline; `0` refuses every remote write |
+| `WITAN_REMOTE_WRITE_QUEUE_SECONDS` | No | `10` | How long a write waits for one of those slots before it is refused outright rather than admitted into a queue it cannot clear in time |
 
 ## MCP Tools
 

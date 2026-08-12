@@ -51,13 +51,23 @@ def _isolate_transport_cache(monkeypatch):
 
 
 class FakeResponse:
-    def __init__(self, status: int, body: str = "", will_close: bool = False):
+    def __init__(
+        self,
+        status: int,
+        body: str = "",
+        will_close: bool = False,
+        headers: dict | None = None,
+    ):
         self.status = status
         self.will_close = will_close
         self._body = body.encode()
+        self._headers = headers or {}
 
     def read(self) -> bytes:
         return self._body
+
+    def getheader(self, name: str, default=None):
+        return self._headers.get(name, default)
 
 
 class FakeConnection:
@@ -179,6 +189,59 @@ def test_error_message_passes_through_a_non_json_body():
 
 def test_error_message_survives_an_empty_body():
     assert ogh.error_message(500, "") == "HTTP 500"
+
+
+# ── the server's Retry-After, which only this transport can see ──────
+# The CLI's error path prints the JSON body's message and discards the response
+# headers, which is why the admission-cap backoff was a blind schedule. Over
+# HTTP the response object is right here.
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("60", 60.0),
+        ("0", 0.0),
+        ("  30 ", 30.0),
+        (None, None),
+        # An HTTP-date is legal per RFC 9110 and deliberately unread: honouring
+        # it means trusting this clock against the server's, and a skewed clock
+        # turns "wait a minute" into "wait an hour" or into no wait at all.
+        ("Wed, 12 Aug 2026 14:00:00 GMT", None),
+        ("", None),
+        ("soon", None),
+        # A negative delay is not what the server asked for, and reading it as
+        # zero would silently turn a malformed header into a hot retry loop.
+        ("-5", None),
+    ],
+)
+def test_parse_retry_after(header, expected):
+    assert ogh.parse_retry_after(header) == expected
+
+
+def test_a_429_carries_the_servers_retry_after(_fake_http):
+    _fake_http.script = [
+        FakeResponse(
+            429,
+            json.dumps({"error": "actor in-flight count cap exceeded"}),
+            headers={"Retry-After": "60"},
+        )
+    ]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    outcome = transport.mutate("council", "query q() {}", {}, "tok")
+
+    assert outcome.kind == ogh.ADMISSION_CAP
+    assert outcome.retry_after == 60.0
+
+
+def test_a_response_without_the_header_reports_no_hint(_fake_http):
+    """None means "the server said nothing", NOT "retry immediately" — the
+    policy loop falls back to its own schedule on it."""
+    _fake_http.script = [FakeResponse(429, json.dumps({"error": "cap exceeded"}))]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    assert transport.mutate("council", "query q() {}", {}, "tok").retry_after is None
 
 
 # ── connect vs mid-flight: the write-safety distinction ──────────────

@@ -29,6 +29,7 @@ from witan_core.remote.proxy import (
     RemoteToolFailed,
     RemoteToolUnavailable,
     RemoteUnreachable,
+    RemoteWriteIndeterminate,
 )
 
 from .. import repo as repo_module
@@ -41,6 +42,7 @@ __all__ = [
     "RemoteToolFailed",
     "RemoteToolUnavailable",
     "RemoteUnreachable",
+    "RemoteWriteIndeterminate",
 ]
 
 
@@ -135,6 +137,29 @@ def _merge_batch_refusal(
     )
 
 
+def _merge_batch_indeterminate(exc: BaseException, *, batch: int, dry_run: bool) -> str:
+    """Add merge-specific context to the neutral indeterminate-write message.
+
+    The base message can only tell the caller to re-read before retrying, which
+    is the right advice for a lone ``memory_store`` and needlessly frightening
+    here: ``store_merge`` reconciles newest-record-wins, so re-running it is the
+    remedy rather than the risk. The two facts that make that safe — how far the
+    merge got, and that it is idempotent — are known only at this call site.
+    """
+    if dry_run:
+        return (
+            f"{exc} This was batch {batch + 1} of a --dry-run, which writes "
+            "nothing: the interrupted call cannot have changed the graph. "
+            "Re-run the dry run."
+        )
+    return (
+        f"{exc} This was batch {batch + 1} of the merge. The {batch} batch(es) "
+        "before it were applied and this one may or may not have been. Re-run "
+        "`witan migrate merge` — the merge is idempotent (newest-record-wins), "
+        "so a batch that did land is reconciled rather than duplicated."
+    )
+
+
 def _read_export(path: Path) -> list[dict]:
     """Parse an export file into load records, one line at a time.
 
@@ -186,6 +211,44 @@ _ADMIN_ONLY = frozenset(
 )
 
 
+# witan's read-only tool surface: the tools whose outcome after a gateway
+# cut-off is uninteresting because they changed nothing.
+#
+# The READS are listed rather than the writes, so that the default for a tool
+# nobody has classified yet is "assume it wrote" — see
+# ``RemoteMCPProxy._writes``. A tool added to the server and forgotten here gets
+# an over-careful message; the inverse mistake tells someone their write did not
+# happen when it may have. `test_read_only_tools_are_all_registered` keeps the
+# list from going stale in the other direction (an entry that no longer exists).
+#
+# `workflow_trace_mine` is NOT here, and is the one that looks like it should
+# be: it reads sessions but writes the Memory nodes it mines out of them.
+_READ_ONLY = frozenset(
+    {
+        "memory_for_contract",
+        "memory_get",
+        "memory_list",
+        "memory_neighbors",
+        "memory_search",
+        "memory_symbols",
+        "recall",
+        "symbol_context",
+        "task_get",
+        "task_list",
+        "task_ready",
+        "topic_get",
+        "workflow_project_get",
+        "workflow_project_get_blockers",
+        "workflow_project_list",
+        "workflow_project_memories",
+        "workflow_project_status",
+        "workflow_session_list",
+        "workflow_trace_get",
+        "workflow_trace_list",
+    }
+)
+
+
 class RemoteServerProxy(RemoteMCPProxy):
     """Mirrors the ``witan.server`` tool surface, dispatching over MCP."""
 
@@ -195,6 +258,9 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def _is_admin_tool(self, name: str) -> bool:
         return name in _ADMIN_ONLY
+
+    def _writes(self, name: str) -> bool:
+        return name not in _READ_ONLY
 
     def _unreachable_hint(self) -> str:
         # Name the setting that is actually in play, read off the resolver's
@@ -273,6 +339,14 @@ class RemoteServerProxy(RemoteMCPProxy):
                             budget=MCP_LOAD_MAX_BYTES,
                             dry_run=dry_run,
                         )
+                    ) from exc
+                except RemoteWriteIndeterminate as exc:
+                    # Same reasoning as the 413 above, opposite conclusion: the
+                    # generic advice ("re-read before retrying") is wrong for a
+                    # merge, which is idempotent by construction and whose
+                    # remedy is simply to run it again.
+                    raise RemoteWriteIndeterminate(
+                        _merge_batch_indeterminate(exc, batch=index, dry_run=dry_run)
                     ) from exc
                 decisions.extend(result.get("decisions") or [])
                 for key in totals:

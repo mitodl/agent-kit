@@ -201,6 +201,38 @@ a separate store, to be merged later with
 Related: `witan login` failing with an expired refresh token looks similar but
 is not an outage — re-run `witan login`.
 
+## What happens when the deployment is busy
+
+Not the same thing, and the difference matters: the service is up, and it is
+writes — not reads — that are scarce. The shared graph serialises them at
+roughly one every 3-4 seconds, so a burst of concurrent writers queues.
+
+You may see either of two answers, and they say different things:
+
+```
+omnigraph mutate was refused before it was sent: 4 writes are already in flight
+against https://.../council and no slot freed within 10s. … NOTHING WAS
+WRITTEN — retry once the burst clears.
+```
+
+That one is clean. It happened before anything left the client, so the graph is
+untouched and retrying is unambiguous.
+
+```
+The deployed service at https://… answered HTTP 502 for `memory_store`: the
+request reached it and was cut off before a reply came back. `memory_store`
+writes, so ITS OUTCOME IS INDETERMINATE — the write may or may not have been
+applied … Re-read before retrying; retrying blind writes it twice if it did land.
+```
+
+That one is not. The call was cut at the deployment's 30-second deadline with
+the write already in flight, and nothing in the reply says whether it committed
+— measured live, most such writes had committed and some had not. **Re-read
+before you retry.** `witan migrate merge` is the exception: it reconciles
+newest-record-wins, so re-running it is safe and its message says so.
+
+Reads are unaffected by all of this and stay fast under the same load.
+
 ## Troubleshooting
 
 - **"Remote mode is not configured."** No `remote_url` resolved: your target

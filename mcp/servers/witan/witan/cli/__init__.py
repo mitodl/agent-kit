@@ -178,16 +178,19 @@ def main() -> None:
         RemoteToolFailed,
         RemoteToolUnavailable,
         RemoteUnreachable,
+        RemoteWriteIndeterminate,
     )
 
     try:
         app.meta()
-    # The five ways a deployed witan fails a command, each already carrying its
+    # The six ways a deployed witan fails a command, each already carrying its
     # own actionable wording: misconfigured or not logged in (RemoteAuthError),
     # reached but offering no such tool (RemoteToolUnavailable), not reached at
     # all (RemoteUnreachable), answering that the body is too big
-    # (RemotePayloadTooLarge), and running the tool only for the tool to refuse
-    # (RemoteToolFailed). All but the first used to escape as a traceback.
+    # (RemotePayloadTooLarge), cut off mid-write so that nobody can say whether
+    # it landed (RemoteWriteIndeterminate), and running the tool only for the
+    # tool to refuse (RemoteToolFailed). All but the first used to escape as a
+    # traceback.
     #
     # RemoteToolFailed is the wide one: only `migrate` has its own
     # `except RuntimeError`, so for every other command — memory, tasks,
@@ -199,6 +202,7 @@ def main() -> None:
         RemoteToolFailed,
         RemoteToolUnavailable,
         RemoteUnreachable,
+        RemoteWriteIndeterminate,
     ) as exc:
         # markup=False: these messages name config keys, and a target block is
         # written `[qa]` — which rich parses as a style tag and swallows, so
