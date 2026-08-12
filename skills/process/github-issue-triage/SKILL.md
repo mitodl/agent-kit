@@ -294,9 +294,12 @@ printf '1749\n822\n407\n' | \
 printf '1749\n822\n407\n' | \
   ./scripts/close-issues.sh --close mitodl/ol-infrastructure
 
-# Override the closing comment for a specific group
-ISSUE_TRIAGE_REASON="Closed: superseded by #4828 (Grafana Alerting → Pulumi migration)." \
+# Override the closing comment for a specific group.
+# The assignment must sit on the script side of the pipe — a prefix on the
+# `printf` sets it for `printf` only, and the script silently falls back to
+# the generic default.
 printf '1749\n' | \
+  ISSUE_TRIAGE_REASON="Closed: superseded by #4828 (Grafana Alerting → Pulumi migration)." \
   ./scripts/close-issues.sh --close mitodl/ol-infrastructure
 ```
 

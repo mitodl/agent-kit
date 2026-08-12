@@ -362,14 +362,19 @@ _<Display Name>_
 - <item>
 ```
 
-**Writing style:** a standup is skimmed by the whole team in a few seconds.
-One line per item, plain words, no narration. A bare link, or a link plus a
-few words, is a good bullet. Don't paste a PR's title back after its link —
-GitHub renders it already; add a description only when it says something the
-title doesn't. No lead-in sentence, no closing summary, no "as mentioned
-above" cross-references, no filler adjectives, and no emoji unless the user
-used them. Multi-line bullets are for genuine nuance (a caveat, a concern, an
-open question), not for elaborating on work the link already explains.
+**Writing style — applies to the text *you* write, not the user's.** A standup
+is skimmed by the whole team in a few seconds, so anything you generate from
+GitHub data should be a bare link, or a link plus a few words. Don't paste a
+PR's title back after its link (GitHub renders it already) — add a description
+only when it says something the title doesn't. No lead-in sentence, no closing
+summary, no "as mentioned above" cross-references, no filler adjectives, no
+emoji.
+
+The user's own prose from `off_github` / `extra_context` is exempt: pass it
+through in their voice, at their length. Some people post links and some post
+paragraphs, and both are correct — the "Do not impose narrative style" rule
+below still governs. This rule stops *you* from padding a link into a
+sentence; it does not compress what they wrote.
 
 **Formatting rules:**
 

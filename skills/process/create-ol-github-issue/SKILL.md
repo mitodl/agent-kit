@@ -39,7 +39,12 @@ one-line answer into three paragraphs. Only draft a section yourself when the
 user asks you to or points you at source material (an error, a code path, a
 thread) — and then show the draft before creating the issue.
 
-If the user leaves a section blank, delete it rather than padding it.
+**Blank sections:** the templates below mark optional sections with
+`<!--- optional — delete if empty -->` (Possible Solution, Additional Details).
+Delete those when empty rather than padding them. Every other section is
+required — if one comes back blank, ask again for it instead of deleting it or
+filling it in yourself. An issue with no Steps to Reproduce is the thing this
+skill exists to prevent.
 
 ## Step 2 — Choose a template
 
