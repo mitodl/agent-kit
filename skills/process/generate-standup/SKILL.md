@@ -416,18 +416,28 @@ _<Display Name>_
 
 ## Step 5 — Confirm and post
 
-First write the rendered standup to the draft file. Do not inline it into a
-shell command — newlines and quotes will break the invocation.
+First put the rendered standup in the draft file. Prepare the directory and
+learn the absolute path:
 
 ```bash
-mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup" && \
-cat > "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md" << 'STANDUPEOF'
-<rendered standup>
-STANDUPEOF
+mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup" \
+  && rm -f "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md" \
+  && printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md"
 ```
 
-The path is fixed rather than session-scoped so the command is identical every
-run and can be approved once. The file is overwritten on each run, and it is
+Then write the standup to the printed path with the **`Write` tool**.
+
+**Never put the standup text in a shell command — not as an argument, not as a
+heredoc body.** The rendered standup is multi-line markdown full of blank lines,
+`>` block quotes and backticks; passing it through bash gets it silently
+mangled, and the corrupted text is what would be posted. A quoted heredoc is
+not a workaround: it is what this skill used to do, and the parser dropped and
+spliced lines mid-sentence. `Write` takes the content as a tool argument with no
+shell involved, so it is the only safe way to get the draft onto disk.
+
+The path is fixed rather than session-scoped so the commands are identical every
+run and can be approved once. The prepare step deletes any draft left over from
+a previous run, so the first `Write` always creates the file fresh. The draft is
 the single source of truth for what gets posted: every branch below reads it
 back rather than trusting the copy held in context.
 
@@ -449,7 +459,8 @@ Display the draft, then use `ask_user` to confirm:
 ### Edit (Interactive)
 
 Ask in conversation what to change, apply it, rewrite the draft file with the
-same heredoc as above, re-display it, and return to this menu.
+`Write` tool (same path, same no-shell rule), re-display it, and return to this
+menu.
 
 ### Edit (Editor)
 
