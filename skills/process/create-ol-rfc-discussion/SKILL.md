@@ -82,7 +82,32 @@ If planning is still in progress, finish that first.
 
 ---
 
-## Step 2 — Write the RFC document
+## Step 2 — Get the content from the operator
+
+An RFC is an argument its author has to stand behind in review. **Ask the user
+for the substance of each section rather than composing it for them**, in a
+single batched question:
+
+| Section | What to ask for |
+|---------|-----------------|
+| Problem | What's broken/blocked, and why now |
+| Options | The 2–3 approaches considered, and the tradeoff on each |
+| Decision | Which one, and what made its costs acceptable |
+| Approach | The major pieces of work, one line each |
+| Consequences | What the team gains, gives up, and who inherits work |
+| Open Questions | What could still change the decision |
+
+Exception: when the design work happened in this session, you already have the
+material — draft from it, but show the draft and let the user correct the
+framing before posting. Their weighting of the tradeoffs is the part that
+matters, and it is not recoverable from the code.
+
+Use their phrasing where you have it. Your job is compression and structure,
+not authorship — never expand a one-line answer into a paragraph to fill a
+section. A thin section means the design work isn't done; say so rather than
+padding it.
+
+## Step 3 — Write the RFC document
 
 Every section is required; delete only **Open Questions** if there are
 genuinely none.
@@ -139,7 +164,7 @@ behaviour as a result.
 
 ---
 
-## Step 3 — Write the RFC body to a file
+## Step 4 — Write the RFC body to a file
 
 Write the finished RFC markdown to a temporary file. Do not attempt to inline
 it into a shell command — newlines and quotes will break the invocation.
@@ -154,7 +179,10 @@ Then run the word count from the length budget section above before posting.
 
 ---
 
-## Step 4 — Post the discussion
+## Step 5 — Post the discussion
+
+Show the user the finished RFC and get explicit confirmation before posting —
+this is a team-wide broadcast, not a draft they can quietly amend.
 
 Use the script that ships with this skill. It handles GraphQL encoding,
 the `RFC:` title prefix, and all error reporting — do not reconstruct the
@@ -246,6 +274,9 @@ consensus. Do not delete Draft RFCs — keep them as a record.
   session dict's structure.
 - **One idea per paragraph, three sentences per paragraph.** Dense
   multi-clause prose reads as long even when the word count is fine.
+- **Plain words, short sentences.** No preamble, no scene-setting, no closing
+  summary, no filler adjectives ("comprehensive", "robust", "significant"), no
+  emoji. Bullets where the content is a list.
 - **Title format:** always prefix the title with `RFC: `. The posting script
   enforces this automatically.
 - **Two options minimum, three maximum.** Document the rejected path so the

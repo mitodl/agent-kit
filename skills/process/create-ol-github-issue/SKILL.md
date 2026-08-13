@@ -20,16 +20,31 @@ Always default to **`mitodl`** unless the user explicitly names a different org.
 
 ## Step 1 — Gather required inputs
 
-Ask the user (or infer from context) for:
+Ask the user for:
 
 | Field | Notes |
 |-------|-------|
 | **Repository** | e.g. `ol-django` — org is implied as `mitodl` |
 | **Issue type** | See template menu below |
 | **Title** | Short, imperative sentence |
-| **Body details** | Specifics to fill into the chosen template |
+| **Body details** | Their text for each section of the chosen template |
 
-If any field is missing, ask before proceeding.
+Ask in a **single batched question** covering everything missing — one round
+trip, not a sequence of one-field prompts.
+
+**Ask for the body text; don't invent it.** The user knows what the issue is
+about and you don't. Ask for their words per template section and use them
+mostly as given — tighten wording and fix formatting, but do not expand a
+one-line answer into three paragraphs. Only draft a section yourself when the
+user asks you to or points you at source material (an error, a code path, a
+thread) — and then show the draft before creating the issue.
+
+**Blank sections:** the templates below mark optional sections with
+`<!--- optional — delete if empty -->` (Possible Solution, Additional Details).
+Delete those when empty rather than padding them. Every other section is
+required — if one comes back blank, ask again for it instead of deleting it or
+filling it in yourself. An issue with no Steps to Reproduce is the thing this
+skill exists to prevent.
 
 ## Step 2 — Choose a template
 
@@ -44,7 +59,7 @@ Present these four options and apply the matching template body:
 
 ## Step 3 — Create the issue
 
-Use the GitHub CLI to create the issue:
+Show the filled-in body and confirm before creating it. Use the GitHub CLI:
 
 ```bash
 gh issue create \
@@ -157,6 +172,21 @@ Labels: `design QA`
 ```
 
 ---
+
+## Writing style
+
+The issue is read by a busy person deciding whether to pick it up. Keep it
+short and factual:
+
+- Plain sentences. No preamble, no scene-setting, no closing summary.
+- Bullets and code blocks over paragraphs. One idea per bullet.
+- Say it once. Don't restate the title in the body or repeat a section's
+  content in another section.
+- No filler adjectives ("comprehensive", "robust", "critical") and no emoji.
+- Link rather than explain — a URL beats a paragraph describing what's behind it.
+- Paste the actual error, log line, or snippet instead of narrating it.
+
+A three-bullet issue that says exactly what is wrong beats a page of context.
 
 ## Tips
 

@@ -216,6 +216,23 @@ changes.
 
 ## Phase 4 — Reply & resolve
 
+**Reply style: one or two sentences.** Name the commit and what changed, or
+the evidence and the conclusion. Nothing else — no thanks-for-the-review
+opener, no restating the reviewer's comment back at them, no closing offer to
+discuss further, no emoji. A reviewer reading twelve replies wants twelve
+facts.
+
+```
+Fixed in a1b2c3d: transport is now streamable-http.
+Verified — ensure_bridge_store runs at every call site, so this path is
+unreachable. Not adding the guard.
+```
+
+Where the reply carries a judgment the user made (a decline they decided on, a
+disagreement with a reviewer, a deferral), post **their** framing rather than
+your own paraphrase — ask for the wording if you don't already have it. Those
+replies are read as the author's position, not the tool's.
+
 For each thread you touched, reply with what changed (cite the commit) and
 resolve in one call:
 

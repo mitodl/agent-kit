@@ -51,22 +51,38 @@ gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'
 
 ## Step 3 — Gather PR metadata
 
-Collect or infer:
+Ask the user for each field in a **single batched question**, rather than
+inferring the body and asking them to correct it:
 
 | Field | How to obtain |
 |-------|---------------|
-| **Title** | Ask the user, or suggest one derived from the branch name / commit messages |
-| **Linked tickets** | Ask the user for issue numbers (Closes #, Fixes #, or N/A) |
-| **Description** | Ask what the PR does; summarise from commits if the user says "summarise" |
+| **Title** | Ask the user; offer one derived from the branch name / commits as a default they can overwrite |
+| **Linked tickets** | Ask for issue numbers (Closes #, Fixes #, or N/A) |
+| **Description** | Ask what the PR does; summarise from commits only if the user says "summarise" |
 | **Screenshots** | Ask if UI changes are present; skip section if not applicable |
 | **Testing notes** | Ask how the changes were tested and how a reviewer can validate |
 | **Additional context** | Ask for reviewer notes, caveats, or checklist items; skip if none |
 | **Draft?** | Ask if this should be a draft PR (default: no) |
 
+**Use the user's words.** They know the intent behind the diff; the commits
+only show the mechanics. Tighten and format what they give you — don't inflate
+a one-line answer into a multi-paragraph section.
+
+**Blank sections:** only Screenshots, Additional Context, and Checklist are
+optional — delete those when empty rather than padding them. Relevant tickets,
+Description, and How can this be tested are required; if one comes back blank,
+ask again rather than deleting the section. Deleting an empty testing section
+is worse than leaving it visibly thin: it hides that nothing was tested.
+
+Testing notes in particular are the user's to supply: do not describe test
+steps you have not run or cannot verify. If the honest answer is that nothing
+was run, write that.
+
 ## Step 4 — Populate the template
 
 Fill in the standard PR template below with the gathered information.
-Strip HTML comments before passing to `gh pr create`.
+Strip HTML comments before passing to `gh pr create`. Show the finished body
+and confirm before creating the PR.
 
 ```markdown
 ### What are the relevant tickets?
@@ -148,6 +164,21 @@ assessing this change.  --->
 ```
 
 ---
+
+## Writing style
+
+The PR body exists to get a reviewer oriented in under a minute:
+
+- Lead with what changed and why. No preamble, no closing summary.
+- Bullets over paragraphs; one change per bullet.
+- Say it once. The description should not restate the title, and the testing
+  section should not re-describe the change.
+- No filler adjectives ("comprehensive", "robust", "significant"), no emoji.
+- Link to the issue, the doc, or the line of code instead of paraphrasing it.
+- Drop an optional section rather than filling it with "N/A"-grade prose.
+
+A five-bullet description that a reviewer can act on beats a wall of narrative.
+If the diff is self-explanatory, a two-line description is the correct length.
 
 ## Tips
 
