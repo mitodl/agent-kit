@@ -22,9 +22,22 @@ from .bridge_extractors import (
 from .graph import OmnigraphClient, check_writable
 from .store import bridge_store, ensure_bridge_store
 
-# Delete statements per commit when purging a repo's bindings. The composed
-# query is a single argv element, so a full-repo purge has to be capped.
-_PURGE_BATCH_SIZE = 500
+# Delete statements per commit when purging a repo's bindings. A full-repo purge
+# has to be capped rather than built whole.
+#
+# Same reasoning, and the same measurement, as `_DELETE_BATCH_SIZE` in
+# `indexer.py` — read the comment there. Short version: the argv justification is
+# stale (the deployed path is the HTTP transport, no argv), a matching delete
+# costs ~362ms, and 500 of them is ~181s against a 120s client timeout. One
+# statement per file here rather than two, so this is 128 files per commit.
+#
+# Lowered together with the indexer's cap deliberately. This purge has not been
+# SEEN to time out, but it is the identical shape against the same engine, and a
+# repo with enough changed files would trip it the same way. Fixing only the one
+# that happened to fail first would leave the other waiting for a busy day.
+# (The 362ms figure was measured on `Symbol` deletes; `InterfaceBinding` deletes
+# were not timed separately, so treat this cap as the same order, not as exact.)
+_PURGE_BATCH_SIZE = 128
 
 
 logger = get_logger("witan.code.bridge")
@@ -139,8 +152,11 @@ def write_bindings(
         }
     # One commit for the whole purge, not one per file: this runs over every
     # touched file on each index, and a commit apiece fragments the bridge store
-    # the same way the per-file deletes did the per-repo one. Chunked because the
-    # composed query rides in argv and a full-repo purge is unbounded.
+    # the same way the per-file deletes did the per-repo one. Chunked because a
+    # full-repo purge is unbounded and a matching delete costs ~362ms, so an
+    # uncapped batch runs past the client's 120s timeout — see
+    # `_PURGE_BATCH_SIZE` for the measurements and for why the argv reasoning
+    # this comment used to give no longer applies.
     client.change_many(
         [
             ("bridge.gq", "delete_bindings_in_file", {"repo_file": f"{repo}|{rel}"})

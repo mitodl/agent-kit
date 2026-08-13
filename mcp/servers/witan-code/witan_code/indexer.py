@@ -39,10 +39,41 @@ logger = get_logger("witan.code.index")
 _QUERIES_TS_DIR = Path(__file__).parent / "queries_ts"
 
 # Delete statements per commit when clearing reindexed/purged files. A full-repo
-# reindex can touch thousands of files, and the composed query rides in argv, so
-# the batch has to be capped rather than built whole. Two statements per file, so
-# this is 250 files per commit.
-_DELETE_BATCH_SIZE = 500
+# reindex can touch thousands of files, so the batch has to be capped rather than
+# built whole. Two statements per file, so this is 64 files per commit.
+#
+# ★ THE BINDING CONSTRAINT IS TIME, NOT ARGV. The original cap was 500, justified
+# by the composed query riding in a single argv element. That reasoning does not
+# apply to the deployed indexer at all: it uses the pooled HTTP transport, where
+# the query travels in a JSON body and argv is never involved. Meanwhile a
+# MATCHING delete costs ~362ms server-side, so 500 statements is ~181 SECONDS —
+# past `witan_core.omnigraph_http.DEFAULT_TIMEOUT_SECONDS` (120s), and the chunk
+# fails with a bare "timed out".
+#
+# That is not hypothetical: it is why `witan-ci-index` failed every run from
+# 2026-08-07, in CI and Production alike, always on ol-infrastructure —
+# `indexer.py` change_many → chunk of 500 → timeout → "indexed 13, failed 1".
+#
+# Measured 2026-08-12 against the CI data tier, inserting then deleting real rows
+# in `code-github-com-mitodl-lehrer`:
+#      50 matching deletes   19.23s   (385 ms/stmt)
+#     100 matching deletes   36.29s   (363 ms/stmt)
+#     250 matching deletes   90.47s   (362 ms/stmt)
+# Linear, and — measured on the SMALLEST graph (1,567 rows) — essentially
+# independent of table size, so this is not a big-repo problem. Any repo whose
+# reindex touches ~165 files in one run would hit it; ol-infrastructure is simply
+# the one busy enough to do so every four hours.
+#
+# 128 statements is ~46s, a 2.5x margin under the timeout. It does NOT make a
+# reindex faster — the cost is linear per statement either way — it makes it
+# COMPLETE, which for a four-hourly job is the property that matters.
+#
+# ★ Raising DEFAULT_TIMEOUT_SECONDS instead would be the wrong lever: that
+# budget exists to catch a genuinely wedged server, and widening it to fit a
+# known-slow operation blunts the one signal that says the server is stuck.
+# The real defect is that a single keyed delete costs 362ms at all — tracked as
+# tk-upstream-omnigraph-a-single-row-insert-costs-a-f-eeeae3.
+_DELETE_BATCH_SIZE = 128
 
 # Stand-in written into CodeFile.content_hash for the duration of a load, so a
 # run that fails part-way leaves nothing the incremental skip check will match.
