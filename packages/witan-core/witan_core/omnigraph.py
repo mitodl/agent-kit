@@ -1257,28 +1257,15 @@ class OmnigraphClient:
                 retry_after=outcome.retry_after,
             )
 
-        # Started BEFORE the gate, not after it: the queue wait is part of what
-        # this call spends, and a budget that ignored it would let a write sit
-        # in the gate and then still believe it had its whole budget to retry.
-        # Unset (0) means no deadline is known, and nothing is bounded by one.
-        budget = _env_override(REMOTE_CALL_BUDGET_ENV_VAR, _REMOTE_CALL_BUDGET, float)
-        deadline = time.monotonic() + budget if budget else None
-        gate = (
-            _WRITE_GATE.admit(f"{transport.server_url}|{self.graph_id}", label)
-            if is_write
-            else nullcontext()
+        return self._with_retry_policy(
+            attempt,
+            label,
+            # Only consulted if a repair is needed, which still shells out —
+            # `repair` has no HTTP form, so the CLI env is what it runs with.
+            env=self._subprocess_env(),
+            is_write=is_write,
+            surface_conflict=surface_conflict,
         )
-        with gate:
-            return self._with_retry_policy(
-                attempt,
-                label,
-                # Only consulted if a repair is needed, which still shells out —
-                # `repair` has no HTTP form, so the CLI env is what it runs with.
-                env=self._subprocess_env(),
-                is_write=is_write,
-                surface_conflict=surface_conflict,
-                deadline=deadline,
-            )
 
     def export_to(self, path: Path | str, *, label: str = "export") -> None:
         """Stream ``omnigraph export`` of this store into ``path``.
@@ -1442,7 +1429,6 @@ class OmnigraphClient:
         env: dict,
         is_write: bool,
         surface_conflict: bool = False,
-        deadline: float | None = None,
     ) -> str:
         """The retry/backoff policy, shared by both transports.
 
@@ -1452,18 +1438,66 @@ class OmnigraphClient:
         admission cap, or an optimistic-concurrency conflict is handled
         identically no matter how the call was made.
 
-        ``deadline`` is a ``time.monotonic()`` stamp past which this call cannot
-        usefully still be running, and it is what the admission-cap branch
-        measures a ``Retry-After`` against. ``None`` — the default, and the only
-        possibility on the CLI path — means no cut-off is known, so a hint is
-        obeyed rather than second-guessed. The HTTP transport supplies one only
-        when the deployment has declared it (:data:`REMOTE_CALL_BUDGET_ENV_VAR`);
-        witan-core does not assume anybody is waiting on a timer.
+        ★ AND THAT IS WHY WRITE ADMISSION LIVES HERE, not in ``_http_execute``.
+        Being the one place every call converges makes it the only place a bound
+        cannot be walked around. Gating the HTTP branch alone left two real
+        remote-write paths ungated:
 
-        Note it must be established BEFORE the write gate is entered, or the
-        time spent queueing there is invisible to it — that queue wait is the
-        largest single consumer of the budget.
+        * ``load_batch`` shells out to ``omnigraph load`` — it has no HTTP form
+          at all — so every batch of a ``store_merge`` bypassed the bound. Two
+          people migrating at once is precisely the multi-user burst this exists
+          to bound.
+        * witan-code's BRANCHED clients deliberately fall back to the CLI
+          (``_transport`` returns ``None`` when ``_extra_args`` is non-empty,
+          because 0.8.1's HTTP API has no request-side branch selector), so
+          every write from a branch view bypassed it too.
+
+        The deadline is established here for the same reason, and BEFORE the gate
+        is entered: the queue wait is the largest single consumer of the budget,
+        and one measured from after admission would let a write sit 10s in the
+        gate and still believe it had its whole budget left to retry.
         """
+        # Remote writes only. A local store is serialised by its own flock and
+        # has no server to saturate, and reads do not queue (~5 req/s flat from
+        # 8 to 36 concurrent readers) so bounding them would only add latency to
+        # the one path that has none.
+        gate_write = is_write and self.is_remote
+        budget = (
+            _env_override(REMOTE_CALL_BUDGET_ENV_VAR, _REMOTE_CALL_BUDGET, float)
+            if self.is_remote
+            else 0.0
+        )
+        deadline = time.monotonic() + budget if budget else None
+        gate = (
+            _WRITE_GATE.admit(f"{self.server_url}|{self.graph_id}", label)
+            if gate_write
+            else nullcontext()
+        )
+        with gate:
+            return self._retry_loop(
+                attempt_once,
+                label,
+                env=env,
+                is_write=is_write,
+                surface_conflict=surface_conflict,
+                deadline=deadline,
+            )
+
+    def _retry_loop(
+        self,
+        attempt_once: Callable[[], _AttemptResult],
+        label: str,
+        *,
+        env: dict,
+        is_write: bool,
+        surface_conflict: bool,
+        deadline: float | None,
+    ) -> str:
+        """The loop itself, inside whatever admission :meth:`_with_retry_policy`
+        decided on. ``deadline`` is a ``time.monotonic()`` stamp past which this
+        call cannot usefully still be running, or ``None`` when no cut-off is
+        known — in which case a ``Retry-After`` is obeyed rather than
+        second-guessed."""
         lock_fh = self._acquire_write_lock(is_write)
         try:
             attempt = 0

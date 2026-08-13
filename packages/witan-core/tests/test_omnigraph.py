@@ -1109,6 +1109,57 @@ def test_a_write_past_the_bound_is_refused_before_it_is_sent(monkeypatch):
     holder.join(5)
 
 
+def test_the_cli_write_path_is_gated_too(monkeypatch):
+    """★ THE BOUND MUST NOT BE WALKABLE-AROUND BY CHOOSING A TRANSPORT.
+
+    Gating only ``_http_execute`` left two real remote-write paths unbounded,
+    and both are ones a burst actually travels: ``load_batch`` shells out to
+    ``omnigraph load`` (there is no HTTP form of it), so every batch of a
+    ``store_merge`` escaped — two people migrating at once being exactly the
+    multi-user burst this exists to bound — and witan-code's branched clients
+    fall back to the CLI by design, so every write from a branch view escaped
+    as well.
+
+    Driven through ``_run`` rather than a transport, so it fails if admission
+    ever moves back to the HTTP branch.
+    """
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 0)
+    monkeypatch.setattr(og, "_REMOTE_WRITE_QUEUE_WAIT", 0.05)
+    client = _client(monkeypatch)
+    ran = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        ran["n"] += 1
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(og.WriteQueueFull):
+        client._run("mutate", "--source", "x")
+    assert ran["n"] == 0, "refused writes must not reach the subprocess"
+
+    # A READ over the same transport is ungated — reads do not queue.
+    client._run("query", "--source", "x")
+    assert ran["n"] == 1
+
+
+def test_a_local_store_write_is_not_gated(monkeypatch, tmp_path):
+    """The bound is about saturating a shared server. A local store has none —
+    it is serialised by its own flock — so gating it would only add latency."""
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 0)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient(str(tmp_path / "g.omni"), Path("/queries"), graph_id="g")
+    ran = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        ran["n"] += 1
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client._run("mutate", "--source", "x")
+    assert ran["n"] == 1
+
+
 def test_the_slot_is_released_so_writes_queue_rather_than_fail(monkeypatch):
     monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 1)
     client = _client(monkeypatch)
