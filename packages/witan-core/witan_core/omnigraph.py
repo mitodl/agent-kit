@@ -51,6 +51,7 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -97,15 +98,37 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 # CLI's error path prints the JSON body's message and discards the response
 # headers, so the subprocess path still has nothing but this blind schedule.
 # Where the header IS present it is preferred over the schedule — and where it
-# asks for longer than _ADMISSION_CAP_MAX_DELAY the call is failed immediately
-# rather than slept through, because the calling tool call is itself cut at 30s
-# (three hardcoded ToolHive constants, tk-toolhive-s-vmcp-operational-timeouts-*)
-# and a 60s sleep can only ever end as a torn-down connection. Quoting the
-# server's number in the error is worth more than obeying it into a wall.
+# asks for longer than the call has left (REMOTE_CALL_BUDGET_ENV_VAR, when the
+# deployment has told us it has a deadline at all) the call is failed
+# immediately rather than slept through, since a sleep past the caller's
+# cut-off can only end as a torn-down connection. Quoting the server's number
+# in the error is worth more than obeying it into a wall.
 _ADMISSION_CAP_MARKERS = ("in-flight count cap", "byte budget exceeded")
 _ADMISSION_CAP_MAX_ATTEMPTS = 6
 _ADMISSION_CAP_BASE_DELAY = 0.25
 _ADMISSION_CAP_MAX_DELAY = 4.0
+
+# How long one remote call has, end to end, before something ABOVE this library
+# stops waiting for it. witan-core does not know that number and must not
+# assume one: the same client runs under a hosting layer with a request
+# deadline, from an interactive CLI with none, and from a batch Job that may
+# happily wait minutes. Whoever deploys it behind a deadline is the only party
+# that knows what it is, so they set this; unset means "no known cut-off", and
+# a retry hint is then obeyed rather than second-guessed.
+#
+# What it BUYS when set: sleeping past the caller's deadline cannot succeed. The
+# response arrives after the connection is gone, so the write's outcome becomes
+# unknowable rather than merely late — the indeterminate-502 failure this whole
+# change exists to stop producing. Refusing while there is still time to say so
+# turns that into an ordinary, retryable answer.
+#
+# NOT the same quantity as _ADMISSION_CAP_MAX_DELAY, and keeping them separate
+# is the point: that one bounds how long ONE backoff sleep may be, this one
+# bounds the WHOLE call including the write-gate queue and every retry so far.
+# Using the per-sleep cap as a budget test rejected hints that fit easily and
+# admitted sequences of hints that did not.
+REMOTE_CALL_BUDGET_ENV_VAR = "WITAN_REMOTE_CALL_BUDGET_SECONDS"
+_REMOTE_CALL_BUDGET = 0.0  # 0 = no deadline known; obey the server's hints
 
 # ── Client-side write admission (remote stores only) ─────────────────────────
 #
@@ -128,21 +151,27 @@ _ADMISSION_CAP_MAX_DELAY = 4.0
 # Lance commit cycle against S3 plus a FilteredRead of the whole table. Reads are
 # unaffected and hold flat at ~5 req/s, which is why only writes are gated.
 #
-# So 4 is not a guess: at n=4 every admitted write still lands inside the 30s
-# deadline, and at n=6 the slowest is already past it. Admitting a fifth writer
-# does not make it faster — it makes it a 502 whose outcome the caller cannot
-# even determine (tk-a-502-from-the-deployed-witan-does-not-mean-the--f76dcb).
-# A refusal here is strictly better: it is unambiguous, and it happens BEFORE
-# anything was sent.
+# So 4 is not a guess — but note what it is calibrated AGAINST: the deployment
+# these numbers were measured on stops waiting for a call after 30s. At n=4
+# every admitted write still lands inside that; at n=6 the slowest is already
+# past it. Admitting a fifth writer does not make it faster — it makes it a 502
+# whose outcome the caller cannot even determine
+# (tk-a-502-from-the-deployed-witan-does-not-mean-the--f76dcb). A refusal here
+# is strictly better: it is unambiguous, and it happens BEFORE anything was
+# sent.
+#
+# A deployment with a different deadline — or none — has a different right
+# answer, which is why this is a default and not a constant. witan-core itself
+# holds no opinion about who is waiting on the other end.
 #
 # PER GRAPH, not per server, because the serialisation is: 4 writes to
 # `code-bridge` and 4 to `code-github-com-mitodl-lehrer` fired together each
 # finished in their solo time. A repo's reindex must not block a memory write.
 #
-# The wait is bounded by what the deadline can still afford: a full gate of 4
-# drains in ~15.5s, so a write that queues longer than ~10s cannot finish inside
-# 30s even once admitted. Waiting past that only converts a clean refusal into a
-# torn-down connection.
+# The wait is bounded by what the measured deployment's deadline could still
+# afford: a full gate of 4 drains in ~15.5s, so a write that queues longer than
+# ~10s could not finish inside its 30s even once admitted. Waiting past that
+# only converts a clean refusal into a torn-down connection.
 #
 # ★ BOTH ARE DEFAULTS, NOT FIXED VALUES. Each is overridable by an env var, so
 # retuning a deployment is a Deployment env change rather than a code change +
@@ -449,6 +478,14 @@ def _env_override(name: str, default: T, cast: Callable[[str], T]) -> T:
     Zero is a legal value (it disables admission entirely, which is a real
     operational answer during an incident). Negative is not — it would mean an
     unbounded wait or a gate nobody can pass — so it is refused like a typo.
+
+    NON-FINITE IS REFUSED TOO, and it is the one that does not look like a typo.
+    ``float("nan")`` and ``float("inf")`` are both accepted by ``float()`` and
+    both survive a ``< 0`` test — ``nan`` compares False against everything —
+    so a ``WITAN_REMOTE_WRITE_QUEUE_SECONDS=nan`` would reach
+    ``Condition.wait(nan)`` and raise out of the gate. That is precisely the
+    "a bad env var turns every write into a crash" failure this function exists
+    to prevent, arriving through the one input that passes every other check.
     """
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -457,6 +494,9 @@ def _env_override(name: str, default: T, cast: Callable[[str], T]) -> T:
         value = cast(raw)
     except ValueError:
         _log.warning("%s=%r is not a number; using %r", name, raw, default)
+        return default
+    if not math.isfinite(value):
+        _log.warning("%s=%r is not finite; using %r", name, raw, default)
         return default
     if value < 0:
         _log.warning("%s=%r is negative; using %r", name, raw, default)
@@ -510,8 +550,8 @@ class _WriteGate:
                         f"{self._in_flight.get(key, 0)} writes are already in "
                         f"flight against {key} and no slot freed within "
                         f"{wait:.0f}s. This graph serialises writes at roughly "
-                        "one every 4 seconds, so a write queued this long "
-                        "cannot complete inside the service's 30s deadline. "
+                        "one every 4 seconds, so a write queued this long is "
+                        "unlikely to complete before the caller stops waiting. "
                         "NOTHING WAS WRITTEN — retry once the burst clears."
                     )
                 self._cv.wait(remaining)
@@ -1217,6 +1257,12 @@ class OmnigraphClient:
                 retry_after=outcome.retry_after,
             )
 
+        # Started BEFORE the gate, not after it: the queue wait is part of what
+        # this call spends, and a budget that ignored it would let a write sit
+        # in the gate and then still believe it had its whole budget to retry.
+        # Unset (0) means no deadline is known, and nothing is bounded by one.
+        budget = _env_override(REMOTE_CALL_BUDGET_ENV_VAR, _REMOTE_CALL_BUDGET, float)
+        deadline = time.monotonic() + budget if budget else None
         gate = (
             _WRITE_GATE.admit(f"{transport.server_url}|{self.graph_id}", label)
             if is_write
@@ -1231,6 +1277,7 @@ class OmnigraphClient:
                 env=self._subprocess_env(),
                 is_write=is_write,
                 surface_conflict=surface_conflict,
+                deadline=deadline,
             )
 
     def export_to(self, path: Path | str, *, label: str = "export") -> None:
@@ -1395,6 +1442,7 @@ class OmnigraphClient:
         env: dict,
         is_write: bool,
         surface_conflict: bool = False,
+        deadline: float | None = None,
     ) -> str:
         """The retry/backoff policy, shared by both transports.
 
@@ -1403,6 +1451,18 @@ class OmnigraphClient:
         pooled HTTP transport feed this same loop, so a restarting server, an
         admission cap, or an optimistic-concurrency conflict is handled
         identically no matter how the call was made.
+
+        ``deadline`` is a ``time.monotonic()`` stamp past which this call cannot
+        usefully still be running, and it is what the admission-cap branch
+        measures a ``Retry-After`` against. ``None`` — the default, and the only
+        possibility on the CLI path — means no cut-off is known, so a hint is
+        obeyed rather than second-guessed. The HTTP transport supplies one only
+        when the deployment has declared it (:data:`REMOTE_CALL_BUDGET_ENV_VAR`);
+        witan-core does not assume anybody is waiting on a timer.
+
+        Note it must be established BEFORE the write gate is entered, or the
+        time spent queueing there is invisible to it — that queue wait is the
+        largest single consumer of the budget.
         """
         lock_fh = self._acquire_write_lock(is_write)
         try:
@@ -1477,30 +1537,50 @@ class OmnigraphClient:
                     # doesn't consume _MAX_ATTEMPTS and ignores surface_conflict.
                     #
                     # The server's own Retry-After wins over the blind schedule
-                    # when there is one — but only when it fits. A hint longer
-                    # than _ADMISSION_CAP_MAX_DELAY is un-obeyable here: the tool
-                    # call carrying this write is cut at 30s, so sleeping 60s
-                    # ends as a torn-down connection whose outcome the caller
-                    # cannot determine. Failing NOW, quoting the number the
-                    # server asked for, is the honest answer — the wait it wants
-                    # belongs to whoever schedules the retry, not to a call
-                    # already inside a deadline it cannot extend.
+                    # when there is one — but only when THE CALL CAN STILL
+                    # AFFORD IT, and that is measured against the remaining
+                    # budget, not against _ADMISSION_CAP_MAX_DELAY. Those are
+                    # different quantities and conflating them was wrong in both
+                    # directions: it rejected a `Retry-After: 5` that fits
+                    # comfortably inside a 30s budget, while happily sleeping
+                    # five separate 4s hints for a total of 20s on top of
+                    # whatever the write gate had already spent queueing —
+                    # arriving at exactly the cut-off it meant to stay inside.
+                    #
+                    # With no deadline (the CLI path) there is no cut-off to
+                    # respect and any hint is obeyed, which is the pre-existing
+                    # behaviour for that transport.
                     admission_cap_attempt += 1
                     hint = result.retry_after
-                    if hint is not None and hint > _ADMISSION_CAP_MAX_DELAY:
+                    delay = (
+                        hint
+                        if hint is not None
+                        else _admission_cap_backoff(admission_cap_attempt)
+                    )
+                    remaining = (
+                        None if deadline is None else deadline - time.monotonic()
+                    )
+                    if remaining is not None and delay > remaining:
+                        # Sleeping past the deadline can only end as a torn-down
+                        # connection whose outcome the caller cannot determine.
+                        # Failing NOW, quoting what the server asked for, is the
+                        # honest answer — the wait it wants belongs to whoever
+                        # schedules the retry, not to a call that cannot extend
+                        # its own deadline.
+                        asked = (
+                            f"which asked to be retried in {hint:.0f}s"
+                            if hint is not None
+                            else "and the backoff before another attempt"
+                        )
                         raise RuntimeError(
                             f"omnigraph {label} was refused by the server's "
-                            f"admission cap, which asked to be retried in "
-                            f"{hint:.0f}s — longer than this call can wait. "
-                            f"Nothing was written; retry after {hint:.0f}s:\n"
+                            f"admission cap, {asked} — longer than the "
+                            f"{max(remaining, 0.0):.1f}s this call has left. "
+                            f"Nothing was written; retry in {delay:.0f}s:\n"
                             f"{err.strip()}"
                         )
                     if admission_cap_attempt < _ADMISSION_CAP_MAX_ATTEMPTS:
-                        time.sleep(
-                            hint
-                            if hint is not None
-                            else _admission_cap_backoff(admission_cap_attempt)
-                        )
+                        time.sleep(delay)
                         continue
                     raise RuntimeError(
                         f"omnigraph {label} failed after "
