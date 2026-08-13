@@ -15,10 +15,11 @@ deployment at one wall-clock instant:
                         PASS: exactly one ``claimed: true``; every loser gives a
                         structured refusal rather than an error.
   B  no-lost-writes     N workers ``memory_store`` distinct memories at once.
-                        PASS: all N readable afterwards. Sharper than A because
-                        ``_execute`` masks OCC conflicts by re-running the
-                        mutation, which has never been watched under real
-                        contention on a shared store.
+                        PASS: all N readable afterwards, AND no write that
+                        reported failure turns out to have committed. Sharper
+                        than A because ``_execute`` masks OCC conflicts by
+                        re-running the mutation, which has never been watched
+                        under real contention on a shared store.
   C  read-availability  Readers run against the deployment while B's writes are
                         in flight. PASS: every read returns, none errors.
 
@@ -108,6 +109,35 @@ terminated in one 9-minute window. The same load previously killed it outright.
     not `witan_memory_store`); an early run of the above "passed" at N=64 while
     calling a tool that does not exist.
 
+── AND WHAT THE PROBE ITSELF GOT WRONG, 2026-08-13 ──
+★ READ THIS BEFORE QUOTING A VERDICT LINE. Both defects below made a FAILING
+  deployment look either fine or differently-broken, and one of them was
+  actually acted on: "the indeterminacy is gone" was reported off the verdict
+  line before anyone read the server log.
+
+  1. `0 LOST` COULD NOT DETECT AN INDETERMINATE WRITE. Verification covered
+     only the rows the server ACKED, because those are the only slugs it got
+     back. An errored write that had nonetheless committed appeared in NO
+     bucket. Against CI: the verdict said `11 acked, 13 errored, 0 LOST` while
+     the pod log showed 23 of 24 handlers finishing `ok` — twelve rows sitting
+     in the graph the probe believed had failed. The same blind spot leaked
+     them, run after run, because cleanup also works from acked slugs.
+
+     Fixed by reconciling on the writer's TITLE, which is deterministic where
+     its slug is not, and reporting a third bucket: errored-but-present is
+     INDETERMINATE and fails the probe.
+
+  2. AN EXPIRED TOKEN WAS COUNTED AS SATURATION. A phase whose pinned token
+     ran out mid-run reported its 401s as errored writes and degraded reads —
+     a FAIL that reads exactly like capacity. The tell was readers failing at
+     the same ~13ms as writers, which the write path cannot produce. Auth
+     failures are now counted and named separately, and the per-phase token
+     margin was widened after a near-miss (see _PHASE_MARGIN_S).
+
+  Consistent across three runs that day, and the only thing that was: THE
+  SERVER COMPLETED FAR MORE WRITES THAN THE CLIENT WAS TOLD ABOUT (12, 20 and
+  8 of them), while `WriteQueueFull` never meaningfully fired.
+
 ★ A LOCAL CEILING TO KNOW ABOUT: past some worker count this probe stops being
   able to measure the server at all, because each worker is a separate
   interpreter that must import and connect before the epoch. Observed on one
@@ -147,6 +177,25 @@ DEFAULT_LEAD_SECONDS = 20.0
 #: fit inside. See _pinned_token: the token must cover a whole phase
 #: (lead + this + margin), and a 300s guard made that impossible to satisfy.
 WORKER_TIMEOUT_S = 90.0
+
+#: Slack between what a phase is predicted to need and what its token must have.
+#:
+#: ★ SIZED FROM A NEAR-MISS, not from taste. This was 30s, and on 2026-08-13 a
+#: B/C phase pinned a cached token with barely more life than the 195s budget,
+#: passed the check, and then had 8 of 24 writers refused with `401
+#: Unauthorized` — reported as errored writes and degraded reads, so the run
+#: read as saturation when it was an expired credential.
+#:
+#: Two things make the prediction optimistic rather than exact, and the margin
+#: has to cover both. WORKER_TIMEOUT_S is a per-worker HANG guard measured from
+#: spawn, not a phase length; and it is written for a worker that makes ONE tool
+#: call, while probe C's readers make `n_reads` sequential ones, each of which
+#: can be as slow as a write under the storm the writers are creating.
+#:
+#: The margin is deliberately large relative to the phase. Being refused a
+#: token costs a whole run and, worse, produces a plausible-looking FAIL; being
+#: refreshed slightly too eagerly costs one extra token request.
+_PHASE_MARGIN_S = 120.0
 
 #: A "concurrent" call that lands 2 seconds after its peers measured a queue,
 #: not a race. Every probe therefore gates its own PASS on the workers having
@@ -535,6 +584,58 @@ def probe_mutual_exclusion(srv, target, n, lead, run_id, token, spread_tol):
 # ── probes B + C: lost writes, and reads under that write load ───────────────
 
 
+def _writer_title(label: str, index: int) -> str:
+    """The title worker ``index`` stores. Deterministic, unlike its slug.
+
+    Kept next to the ``memory_store`` call it mirrors — if one changes and the
+    other does not, every errored write reads as LOST, which is loud rather
+    than silent and is the failure direction to prefer here.
+    """
+    return f"{label} writer {index}"
+
+
+def _rows_for_run(srv, label: str, repo: str | None) -> dict[str, str]:
+    """``{title: slug}`` for the rows this run left in the graph.
+
+    Listed rather than searched: ``memory_search`` returns the top 20 by BM25,
+    and a 24-writer run needs all of them — a cap silently becomes "the rest
+    were never written", which is the exact false negative being fixed.
+
+    Never raises. This runs after the measurement, and a failure to reconcile
+    must degrade the verdict to "unknown" rather than destroy a phase's results;
+    the caller reads an empty mapping as "found nothing" and the LOST/absent
+    bucket makes that visible.
+    """
+    try:
+        rows = srv.memory_list(kind="agent_context", repo=repo)
+    except BaseException as exc:  # noqa: BLE001 — see docstring
+        print(f"  reconcile: could not list rows ({type(exc).__name__}: {exc})")
+        return {}
+    return {
+        r["title"]: r["slug"]
+        for r in rows or []
+        if isinstance(r, dict) and str(r.get("title", "")).startswith(label)
+    }
+
+
+def _is_auth_failure(row: dict) -> bool:
+    """Whether a worker row failed because its credential was refused.
+
+    Matched on the message because the worker is a separate PROCESS and hands
+    back JSON, not an exception. Both the classified client error and the raw
+    status are accepted: the probe pins a token deliberately, so a client
+    without a refresher reports rather than retries, and older clients say only
+    what the transport said.
+    """
+    blob = f"{row.get('error_type', '')} {row.get('error', '')}".lower()
+    return (
+        "credentialrejected" in blob
+        or "401" in blob
+        or "unauthorized" in blob
+        or "rejected the credential" in blob
+    )
+
+
 def probe_writes_and_reads(
     srv,
     target,
@@ -615,29 +716,95 @@ def probe_writes_and_reads(
     dupes = len(slugs) - len({s for s, _ in slugs})
     write_errors = [r for r in write_rows if not r.get("ok")]
 
+    # ★ WHAT DID THE FAILED WRITES ACTUALLY DO? ★
+    #
+    # Until this existed, nothing asked. Verification covered only the rows the
+    # server ACKED, so `0 LOST` was reported while most of the errored writes
+    # had committed — and the cleanup missed them for the same reason, which is
+    # why the shared graph accumulated orphans run after run.
+    #
+    # Measured 2026-08-13 against CI: the verdict said "11 acked, 13 errored,
+    # 0 LOST" and the pod log said 23 of 24 handlers finished `ok`. Twelve rows
+    # were sitting in the graph that the probe believed had failed. That is the
+    # indeterminate write this whole probe exists to detect, rendered as a pass.
+    #
+    # The reconciliation is possible because a writer's TITLE is deterministic
+    # (`<label> writer <index>`) even though its slug is not — `_make_slug`
+    # appends `uuid4().hex[:6]`, so an errored call, which returns nothing, can
+    # never be found by slug. Titles can.
+    attempted = {
+        r["index"]: _writer_title(payload_w["label"], r["index"]) for r in write_rows
+    }
+    found = _rows_for_run(srv, payload_w["label"], repo)
+    # Cleanup works off this list, so it has to cover the rows the probe did
+    # NOT get a slug back for — those are exactly the orphans that accumulated
+    # in the shared graph, one batch per run, because nothing knew they existed.
+    already = set(slug_sink)
+    slug_sink.extend(sorted(set(found.values()) - already))
+    indeterminate = sorted(
+        (r["index"], found[attempted[r["index"]]])
+        for r in write_errors
+        if attempted.get(r["index"]) in found
+    )
+    vanished = sorted(
+        r["index"] for r in write_errors if attempted.get(r["index"]) not in found
+    )
+    # An auth failure is the HARNESS losing its credential, not the store
+    # failing. Counting it as an errored write reports saturation for an expired
+    # token — see the 2026-08-13 run where 8 writers AND several readers failed
+    # in a uniform ~13ms with `401 Unauthorized`. Same rule the harness already
+    # applies to `RemoteDisconnected` from a dying port-forward.
+    write_auth = [r for r in write_errors if _is_auth_failure(r)]
+
     b = Outcome(
         name="B no-lost-writes",
         # Only a row the server ACKED and that is then verifiably ABSENT is a
         # lost write. Unverifiable reads make the probe inconclusive, not failed.
         # Simultaneity is a precondition: writes that did not overlap cannot
         # have contended, so their not being lost proves nothing.
+        #
+        # ★ AND AN INDETERMINATE WRITE IS A FAILURE, not a footnote. It was
+        # previously invisible: an errored write whose row is present did not
+        # appear in any bucket, so the verdict line could read `0 LOST` while
+        # half the burst had committed behind the client's back.
         passed=(
             not missing
             and not dupes
             and not write_errors
             and not unknown
             and not no_slug
+            and not indeterminate
             and write_timing.raced(spread_tol)
         ),
         detail=(
             f"{n_writers} concurrent writers -> {len(acked)} acked, "
-            f"{len(write_errors)} errored, {len(no_slug)} ok-but-no-slug, "
+            f"{len(write_errors)} errored "
+            f"({len(write_auth)} of them auth, not capacity), "
+            f"{len(no_slug)} ok-but-no-slug, "
             f"{len(present)}/{len(acked)} readable "
-            f"afterwards, {len(missing)} LOST, {len(unknown)} unverifiable, "
+            f"afterwards, {len(indeterminate)} INDETERMINATE (errored but "
+            f"committed), {len(missing)} LOST, {len(unknown)} unverifiable, "
             f"{dupes} slug collisions; {write_timing.describe()}"
         ),
         rows=write_rows,
     )
+    if indeterminate:
+        b.detail += (
+            f"\n      INDETERMINATE (the call failed and the row is THERE): "
+            f"{[i for i, _ in indeterminate]}"
+            "\n      These committed while telling the client they had not. A "
+            "retry would duplicate them; not retrying loses nothing. This is "
+            "the failure the probe exists to detect."
+        )
+    if vanished:
+        b.detail += f"\n      errored and absent (a clean refusal): {vanished}"
+    if write_auth:
+        b.detail += (
+            f"\n      ★ AUTH, NOT CAPACITY: workers {[r.get('index') for r in write_auth]} "
+            "were refused a credential. That is this harness losing its token "
+            "mid-run, not the store failing — re-run with a fresher login "
+            "before reading anything into these numbers."
+        )
     if not write_timing.raced(spread_tol):
         b.detail += f"\n      NOT CONCURRENT: {write_timing.why_not(spread_tol)}"
     if no_slug:
@@ -676,12 +843,17 @@ def probe_writes_and_reads(
         else:
             disjoint.append(row)
 
+    # Same rule as the writers: a reader refused a credential measured the
+    # harness, not the store. Reads failing at the SAME latency as writes is
+    # what exposed this — the write path cannot produce a 13ms failure.
+    read_auth = [r for r in read_bad if _is_auth_failure(r)]
     c = Outcome(
         name="C read-availability",
         passed=bool(overlapping) and not read_bad and not disjoint,
         detail=(
             f"{n_readers} readers x {payload_r['n_reads']} reads during the write "
-            f"storm -> {len(read_ok)} clean, {len(read_bad)} degraded, "
+            f"storm -> {len(read_ok)} clean, {len(read_bad)} degraded "
+            f"({len(read_auth)} of them auth, not capacity), "
             f"{len(overlapping)}/{len(read_ok)} overlapped the write window"
             + (
                 f"; errors={[r.get('error_type') or r.get('error') for r in read_bad][:3]}"
@@ -691,6 +863,11 @@ def probe_writes_and_reads(
         ),
         rows=read_rows,
     )
+    if read_auth:
+        c.detail += (
+            f"\n      ★ AUTH, NOT CAPACITY: readers "
+            f"{[r.get('index') for r in read_auth]} were refused a credential."
+        )
     if disjoint:
         c.detail += (
             f"\n      NOT UNDER LOAD: readers {[r.get('index') for r in disjoint]} "
@@ -801,7 +978,7 @@ def run(
         # each phase is allowed its full worker timeout, and a phase that fires
         # with an expired token measures 401s rather than the store. Re-pinning
         # keeps the requirement to a single phase, which is satisfiable.
-        phase_s = lead + WORKER_TIMEOUT_S + 30
+        phase_s = lead + WORKER_TIMEOUT_S + _PHASE_MARGIN_S
         token, remaining = _pinned_token(target, needed_s=phase_s)
         print(
             f"probe A: token pinned, {remaining:.0f}s of life for a {phase_s:.0f}s phase"
