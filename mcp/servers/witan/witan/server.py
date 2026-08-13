@@ -2838,8 +2838,19 @@ def _code_branch_steps(
 ) -> list[_Step]:
     """Mutations tracking the current checkout's CodeBranch, for a caller's batch.
 
-    Returns ``[]`` when there is no repo context, no current git branch
-    (detached HEAD, outside a repo), or when everything is already recorded.
+    Returns ``[]`` in exactly one situation: there is no checkout to describe —
+    no repo context, no current git branch (detached HEAD, outside a repo), or
+    construction failed (see best-effort below).
+
+    ★ "ALREADY RECORDED" IS NOT ONE OF THEM. With a repo and a branch the list
+    is never empty: `_upsert_code_branch_step` yields an insert for a new
+    branch and a ``touch_code_branch`` for one already present, and that touch
+    is not redundant — bumping ``updated_at`` is what tells the branch reaper
+    (ADR-0006) the branch is still live. Only the EDGE steps drop out when the
+    edge already exists. A caller that reads an empty-on-no-op contract here
+    and optimizes the touch away silently makes live branches look abandoned;
+    `test_re_entrant_session_start_costs_one_commit` pins the touch for that
+    reason.
 
     ★ BEST-EFFORT IS PRESERVED, AND ITS SCOPE IS NOW EXACT. This is metadata
     riding alongside a task/workflow tool call, not the tool's purpose, so it
@@ -4157,6 +4168,10 @@ def workflow_session_start(
 
     steps += _code_branch_steps(detected_repo, project_slug=project_slug)
 
+    # Empty only when there is nothing to say: a re-entrant call with no meta
+    # change, no new repo for the project, and no checkout to track. A
+    # re-entrant call ON a git branch still writes — the CodeBranch liveness
+    # touch — so this guard is not a "nothing changed" fast path.
     if steps:
         client.change_many(steps)
 
