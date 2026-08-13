@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.12.0] - 2026-08-13
+
+### Changed
+
+- **The first call of every agent session costs one Lance commit instead of
+  four.** `workflow_session_start` wrote its session row, the project's repo
+  set, the CodeBranch upsert and the ForProject edge as four separate `mutate`
+  calls; against the deployed store each is a full commit cycle against S3 at
+  ~3.5-4s, so the call spent 14-16s of the deployment's 30s deadline before any
+  other user contended for anything. `task_update(parent=…)` was three commits
+  and is now one. Nothing about what gets written changes
+  ([#226](https://github.com/mitodl/agent-kit/pull/226)).
+  The CodeBranch helpers now return their mutations for the caller to commit —
+  edges may reference a node inserted earlier in the same body, so a node and
+  its edges legitimately share a commit. `task_claim` deliberately keeps a
+  standalone commit: its claim is a compare-and-swap with a post-write
+  verification read, so the branch metadata must only land once the claim is
+  known won.
+- A write cut off by a gateway (502/504) surfaces as
+  `RemoteWriteIndeterminate` rather than "the deployed service could not be
+  reached", and the CLI renders it as a sentence. `witan migrate merge` says
+  the opposite of the generic advice, because it can: the merge reconciles
+  newest-record-wins, so re-running it is the remedy rather than the risk
+  ([#225](https://github.com/mitodl/agent-kit/pull/225)).
+
+### Fixed
+
+- `parent_slug` and the `ParentOf` edge are two encodings of one fact and were
+  written in separate commits, so a reader landing between them saw a task
+  parented one way and not the other. They now land together or not at all —
+  and `task_update` against a task that does not exist writes nothing, edge
+  included.
+- `test_zero_weights_preserve_bm25_order` was flaky, red on main since
+  2026-08-10, and wrong in a way that predated the flake: it compared
+  `search_all` against `memory_search`, which resolves a repo first and so runs
+  `search_by_repo`. Two different queries. Separately, omnigraph 0.9.0 returns
+  BM25-**tied** rows in nondeterministic order — identical calls, same process,
+  same store, came back one way 6/6 in one store and split 4/2 in the next,
+  where 0.8.1 was stable across 15 runs. The re-rank test now supplies its own
+  seed, so it asserts the property it is named for; a companion test asserts
+  set equality end-to-end, which is the part that is stable.
+
 ## [0.11.6] - 2026-08-10
 
 Client-side preparation for omnigraph 0.9.0

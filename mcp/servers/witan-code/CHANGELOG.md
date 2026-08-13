@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.13.0] - 2026-08-13
+
+### Fixed
+
+- **An index write cut off by a gateway is no longer retried.**
+  `RemoteStoreClient` reconnects and retries on a transport fault, which is
+  right for a dropped connection and wrong for a 502/504: measured against the
+  deployed service, most writes cut that way had already committed (28 of 28 in
+  one burst, 14 of 16 in the next), so the blind retry writes those rows a
+  second time. `_refuse_if_indeterminate` now stops it and says the outcome is
+  unknown, matching `_refuse_if_too_large` beside it
+  ([#225](https://github.com/mitodl/agent-kit/pull/225)).
+  ★ This transport is separate from the CLI proxy, and had to be fixed
+  separately. `RemoteServerProxy._writes()` returns `False` because nothing
+  *that proxy* dispatches writes — `code_reindex` is refused as local-only —
+  which is easy to misread as "witan-code never writes remotely". Index writes
+  go out over `code_store_mutate` / `code_store_mutate_many` /
+  `code_store_load`, on this client, and it does its own classification.
+- The CI indexer's per-repo delete no longer times out. The batch was sized
+  against the argv length limit while the real constraint is time: a
+  500-statement delete chunk takes ~181s against a 120s client timeout
+  ([#223](https://github.com/mitodl/agent-kit/pull/223)).
+
 ## [0.12.3] - 2026-08-07
 
 ### Fixed
