@@ -36,7 +36,27 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-_OMNIGRAPH_VERSION = "0.9.0"
+_OMNIGRAPH_VERSION = "0.10.0"
+
+#: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
+#: above; ``edge`` selects the rolling build of upstream ``main``, which
+#: ``release-edge.yml`` force-updates and re-publishes on every push there.
+#:
+#: Separate from ``_OMNIGRAPH_VERSION`` because on a moving tag the two genuinely
+#: differ: ``edge`` currently ships a binary that reports ``0.10.0``, and there is
+#: no ``v0.10.0`` release to download. Collapsing them into one string would
+#: either break the URL or break the "already installed, skipping" check, which
+#: compares against what ``omnigraph --version`` actually prints.
+#:
+#: ★ A MOVING TAG WEAKENS THAT SKIP CHECK, and the caveat is the price of using
+#: one: two different `edge` builds both report ``0.10.0``, so a machine that
+#: installed yesterday's will not re-download today's. Delete the binary (or
+#: pass a real release tag) when you need to be certain which build you have.
+#:
+#: Renovate manages the VERSION line only (see renovate.json). While this is
+#: ``edge`` a bump is not meaningful, so pin a real ``v<version>`` before
+#: treating dependency updates here as authoritative.
+_OMNIGRAPH_RELEASE_TAG = "edge"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
 #: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
@@ -238,9 +258,12 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
 
     url = (
         f"https://github.com/ModernRelay/omnigraph/releases/download"
-        f"/v{_OMNIGRAPH_VERSION}/{asset}"
+        f"/{_OMNIGRAPH_RELEASE_TAG}/{asset}"
     )
-    console.print(f"  downloading omnigraph v{_OMNIGRAPH_VERSION} …")
+    console.print(
+        f"  downloading omnigraph {_OMNIGRAPH_RELEASE_TAG} "
+        f"(expected v{_OMNIGRAPH_VERSION}) …"
+    )
 
     if dry_run:
         console.print(f"  [green]omnigraph[/green] → {dest} [dim](dry-run)[/dim]")

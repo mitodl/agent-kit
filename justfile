@@ -66,23 +66,38 @@ check-omnigraph-pins:
     installer=$(awk -F'"' '/^_OMNIGRAPH_VERSION = /{print $2; exit}' packages/witan-core/witan_core/omnigraph_install.py)
     server=$(awk -F= '/^ARG OMNIGRAPH_VERSION=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
     mcp=$(awk -F= '/^ARG OMNIGRAPH_VERSION=/{print $2; exit}' docker/witan.Dockerfile)
+    # The TAG is checked alongside the version, and for the same reason: it
+    # decides which upstream build each tier actually downloads, so a partial
+    # bump ships a client and a server on different binaries just as surely.
+    # Adding a second pin without extending this check would recreate exactly
+    # the gap the comment above describes.
+    installer_tag=$(awk -F'"' '/^_OMNIGRAPH_RELEASE_TAG = /{print $2; exit}' packages/witan-core/witan_core/omnigraph_install.py)
+    server_tag=$(awk -F= '/^ARG OMNIGRAPH_RELEASE_TAG=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
+    mcp_tag=$(awk -F= '/^ARG OMNIGRAPH_RELEASE_TAG=/{print $2; exit}' docker/witan.Dockerfile)
     # An empty capture means the line moved or was renamed, not that the pins
     # agree — three empty strings would otherwise compare equal and pass.
-    for pair in "installer:$installer" "server:$server" "mcp:$mcp"; do
+    for pair in "installer:$installer" "server:$server" "mcp:$mcp" \
+                "installer_tag:$installer_tag" "server_tag:$server_tag" "mcp_tag:$mcp_tag"; do
         if [[ -z "${pair#*:}" ]]; then
             echo "could not read the omnigraph pin for '${pair%%:*}' — the declaration moved or was renamed" >&2
             exit 1
         fi
     done
-    if [[ "$installer" == "$server" && "$installer" == "$mcp" ]]; then
-        echo "omnigraph pins agree: $installer"
-    else
+    if [[ "$installer" != "$server" || "$installer" != "$mcp" ]]; then
         echo "omnigraph version pins have drifted:" >&2
         echo "  packages/witan-core/witan_core/omnigraph_install.py: $installer" >&2
         echo "  docker/omnigraph-server.Dockerfile:                  $server" >&2
         echo "  docker/witan.Dockerfile:                             $mcp" >&2
         exit 1
     fi
+    if [[ "$installer_tag" != "$server_tag" || "$installer_tag" != "$mcp_tag" ]]; then
+        echo "omnigraph release-tag pins have drifted:" >&2
+        echo "  packages/witan-core/witan_core/omnigraph_install.py: $installer_tag" >&2
+        echo "  docker/omnigraph-server.Dockerfile:                  $server_tag" >&2
+        echo "  docker/witan.Dockerfile:                             $mcp_tag" >&2
+        exit 1
+    fi
+    echo "omnigraph pins agree: $installer (tag $installer_tag)"
 
 # Fail if the pinned omnigraph binary reads a storage format this repo does not
 # declare — i.e. if a version bump is secretly a rebuild-every-graph event.

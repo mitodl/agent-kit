@@ -22,7 +22,12 @@ ARG PYTHON_VERSION=3.14
 # and docker/omnigraph-server.Dockerfile's — see that file for why a split
 # version is an outage. Renovate covers all three; `just check-omnigraph-pins`
 # is the CI backstop.
-ARG OMNIGRAPH_VERSION=0.9.0
+ARG OMNIGRAPH_VERSION=0.10.0
+# Upstream tag to fetch from. `edge` is the rolling build of upstream main,
+# republished on every push there; a real release is `v${OMNIGRAPH_VERSION}`.
+# Kept separate because on a moving tag the two differ — see
+# witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG.
+ARG OMNIGRAPH_RELEASE_TAG=edge
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
 ARG WITAN_VERSION=0.8.0
@@ -30,6 +35,7 @@ ARG WITAN_VERSION=0.8.0
 # ── Fetch the pinned omnigraph CLI binary (checksum-verified) ─────────────────
 FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS omnigraph-fetch
 ARG OMNIGRAPH_VERSION
+ARG OMNIGRAPH_RELEASE_TAG
 ARG TARGETARCH=amd64
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -41,7 +47,7 @@ RUN set -eux; \
         *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     base="omnigraph-linux-${arch}"; \
-    url="https://github.com/ModernRelay/omnigraph/releases/download/v${OMNIGRAPH_VERSION}"; \
+    url="https://github.com/ModernRelay/omnigraph/releases/download/${OMNIGRAPH_RELEASE_TAG}"; \
     cd /tmp; \
     curl -fsSL -o "${base}.tar.gz" "${url}/${base}.tar.gz"; \
     curl -fsSL -o "${base}.sha256" "${url}/${base}.sha256"; \
