@@ -15,6 +15,7 @@ from typing import Callable
 
 from witan_core.remote.config import RemoteConfig
 from witan_core.remote.proxy import (
+    RemoteCredentialRejected,
     RemoteMCPProxy,
     RemoteToolFailed,
     RemoteToolUnavailable,
@@ -22,6 +23,7 @@ from witan_core.remote.proxy import (
 )
 
 __all__ = [
+    "RemoteCredentialRejected",
     "RemoteServerProxy",
     "RemoteToolFailed",
     "RemoteToolUnavailable",
@@ -39,8 +41,13 @@ _LOCAL_ONLY = frozenset({"code_reindex"})
 class RemoteServerProxy(RemoteMCPProxy):
     """Mirrors the ``witan_code.server`` tool surface, dispatching over MCP."""
 
-    def __init__(self, cfg: RemoteConfig, token_provider: Callable[[], str]) -> None:
-        super().__init__(cfg.url, token_provider)
+    def __init__(
+        self,
+        cfg: RemoteConfig,
+        token_provider: Callable[[], str],
+        token_refresher: Callable[[], str] | None = None,
+    ) -> None:
+        super().__init__(cfg.url, token_provider, token_refresher)
         self._url_source = cfg.url_source
 
     def _is_admin_tool(self, name: str) -> bool:

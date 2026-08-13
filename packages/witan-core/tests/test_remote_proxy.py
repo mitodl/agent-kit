@@ -16,6 +16,7 @@ import httpx2
 import pytest
 
 from witan_core.remote.proxy import (
+    RemoteCredentialRejected,
     RemoteMCPProxy,
     RemotePayloadTooLarge,
     RemoteToolFailed,
@@ -921,3 +922,170 @@ def test_a_later_undeclared_page_cannot_upgrade_a_ttl_to_forever(monkeypatch):
     proxy = _PagedProxy([_page(300_000, "1"), _page(0, None, declared=False)])
     asyncio.run(proxy.refresh())
     assert proxy._param_names_expiry == 1000.0 + 300.0
+
+
+# ── a credential the deployment rejected ──────────────────────────────────
+# OBSERVED LIVE 2026-08-13 against the CI deployment: 8 of 24 writers and
+# several readers failed in a uniform ~13ms, which the pod log showed as
+# `"POST /mcp HTTP/1.1" 401 Unauthorized`. The access token had expired mid-run
+# — witan's refresh skew was 30s while a single write takes up to 51s, so the
+# provider handed out a token that could not outlive the call it was fetched
+# for (tk-the-oidc-refresh-skew-30s-is-shorter-than-a-writ-8b04db). These pin
+# the client half: classify it honestly, and recover where recovery is safe.
+
+
+def _auth_error(status: int) -> httpx2.HTTPStatusError:
+    request = httpx2.Request("POST", ENDPOINT)
+    response = httpx2.Response(status, request=request, text="Unauthorized")
+    return httpx2.HTTPStatusError(
+        f"Client error '{status}'", request=request, response=response
+    )
+
+
+class _RefreshingProxy(_ScriptedProxy):
+    """Fails the first attempt with ``exc``; succeeds once refreshed.
+
+    Models the real sequence rather than a single call: the point is that the
+    SECOND attempt uses a different credential, so the test can assert the
+    refresher was consulted instead of the cache handing back the same token.
+    """
+
+    def __init__(self, exc, *, at, writes=False):
+        super().__init__(exc, at=at)
+        self.tokens: list[str] = []
+        self._writes_flag = writes
+        self._refreshed = False
+        self._token_refresher = self._refresh
+
+    def _refresh(self, rejected):
+        # The rejected credential is PASSED IN, not re-read from a cache that a
+        # concurrent worker may already have replaced.
+        self.rejected_seen = rejected
+        self._refreshed = True
+        return "fresh-token"
+
+    def _writes(self, name):
+        return self._writes_flag
+
+    def _new_client(self, token):
+        self.tokens.append(token)
+        if self._refreshed:  # the retry: behave like a healthy deployment
+            return _ScriptedProxy(None, at="never")._new_client(token)
+        return super()._new_client(token)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_rejected_credential_is_not_reported_as_unreachable(status):
+    """★ THE ORDERING TEST, THIRD INSTANCE, and the most misleading fallout.
+
+    A 401 is an httpx2.HTTPStatusError and therefore an httpx2.HTTPError, so
+    asking `_transport_failure` first files an expired token under "could not
+    be reached … check the endpoint" — sending somebody after DNS and ingress
+    for something a refresh fixes.
+    """
+    proxy = _ScriptedProxy(
+        ExceptionGroup("unhandled", [_auth_error(status)]), at="call"
+    )
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        proxy.task_get(slug="x")
+    message = str(caught.value)
+    assert not isinstance(caught.value, RemoteUnreachable)
+    assert "could not be reached" not in message
+    assert "rejected the credential" in message
+    assert f"HTTP {status}" in message
+    assert "re-authenticate" in message
+
+
+def test_a_read_refreshes_once_and_retries():
+    """The recoverable case, and the reason the whole thing exists: tokens live
+    ~5 minutes, a slow run crosses an expiry boundary, and making the user
+    re-issue the command by hand is a worse answer than refreshing."""
+    proxy = _RefreshingProxy(
+        ExceptionGroup("unhandled", [_auth_error(401)]), at="call", writes=False
+    )
+    proxy.task_get(slug="x")
+    # The retry used the REFRESHED credential, not the cached one again.
+    assert proxy.tokens == ["tok", "fresh-token"]
+
+
+def test_a_write_is_never_retried_on_a_rejected_credential():
+    """★ Same asymmetry the 502 path settled. The request reached the server,
+    which may have applied it either side of judging the credential, so a blind
+    retry writes the row twice whenever it did land."""
+    proxy = _RefreshingProxy(
+        ExceptionGroup("unhandled", [_auth_error(401)]), at="call", writes=True
+    )
+    with pytest.raises(RemoteCredentialRejected):
+        proxy.memory_store(content="x")
+    assert proxy.tokens == ["tok"], "a write must not be re-sent"
+
+
+def test_without_a_refresher_a_rejected_credential_is_reported_not_retried():
+    """A pinned-token client (the concurrency probe) has nothing to refresh to,
+    and the message must say so rather than implying a refresh was tried."""
+    proxy = _ScriptedProxy(ExceptionGroup("unhandled", [_auth_error(401)]), at="call")
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        proxy.task_get(slug="x")
+    assert "pinned credential" in str(caught.value)
+
+
+def test_a_rejected_credential_at_CONNECT_is_classified_too():
+    """★ The connect-time branch is separate code from `_reclassifying`, and the
+    401 that motivated all of this arrives there — the client is built with the
+    token, so a dead one fails while opening the session, not at `call_tool`.
+    A call-time-only test leaves that path free to regress."""
+    proxy = _ScriptedProxy(_auth_error(401), at="connect")
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        proxy.task_get(slug="x")
+    assert not isinstance(caught.value, RemoteUnreachable)
+    assert "rejected the credential" in str(caught.value)
+
+
+def test_a_read_rejected_at_CONNECT_refreshes_and_retries():
+    proxy = _RefreshingProxy(_auth_error(401), at="connect", writes=False)
+    proxy.task_get(slug="x")
+    assert proxy.tokens == ["tok", "fresh-token"]
+
+
+def test_the_refresher_is_given_the_credential_that_was_rejected():
+    """Not left to re-read it: under concurrent 401s the cache may already hold
+    somebody else's fresh token, and refreshing that spends a rotating refresh
+    token for nothing."""
+    proxy = _RefreshingProxy(
+        ExceptionGroup("unhandled", [_auth_error(401)]), at="call", writes=False
+    )
+    proxy.task_get(slug="x")
+    assert proxy.rejected_seen == "tok"
+
+
+def test_a_write_says_no_refresh_was_attempted_rather_than_that_one_failed():
+    """★ The message must report what HAPPENED, not what was configured. A
+    write is re-raised without refreshing, so claiming the refresh already
+    failed tells the reader the recovery is exhausted when it never began."""
+    proxy = _RefreshingProxy(
+        ExceptionGroup("unhandled", [_auth_error(401)]), at="call", writes=True
+    )
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        proxy.memory_store(content="x")
+    message = str(caught.value)
+    assert "No refresh was attempted" in message
+    assert "INDETERMINATE" in message
+    assert "A refresh was attempted" not in message
+
+
+def test_a_read_whose_retry_is_also_rejected_says_the_refresh_failed():
+    """The other half: once the refresh HAS run and the deployment still
+    refuses, re-authenticating really is the next step."""
+
+    class _AlwaysRejects(_RefreshingProxy):
+        def _new_client(self, token):
+            self.tokens.append(token)
+            return _ScriptedProxy(self._exc, at=self._at)._new_client(token)
+
+    proxy = _AlwaysRejects(
+        ExceptionGroup("unhandled", [_auth_error(401)]), at="call", writes=False
+    )
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        proxy.task_get(slug="x")
+    assert "A refresh was attempted" in str(caught.value)
+    assert proxy.tokens == ["tok", "fresh-token"]

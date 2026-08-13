@@ -62,10 +62,14 @@ def _srv():
             print(exc)
             raise SystemExit(1) from None
         if remote is not None:
-            from .remote.oidc import default_token_provider
+            from .remote.oidc import default_token_provider, default_token_refresher
             from .remote.proxy import RemoteServerProxy
 
-            _server = RemoteServerProxy(remote, default_token_provider(remote))
+            _server = RemoteServerProxy(
+                remote,
+                default_token_provider(remote),
+                default_token_refresher(remote),
+            )
         else:
             from . import server as server_module
 
@@ -1012,7 +1016,12 @@ def cli() -> None:
     from rich.console import Console
 
     from .remote.oidc import RemoteAuthError
-    from .remote.proxy import RemoteToolFailed, RemoteToolUnavailable, RemoteUnreachable
+    from .remote.proxy import (
+        RemoteCredentialRejected,
+        RemoteToolFailed,
+        RemoteToolUnavailable,
+        RemoteUnreachable,
+    )
     from .remote.store import RemotePayloadTooLarge
 
     try:
@@ -1027,6 +1036,7 @@ def cli() -> None:
     # have.
     except (
         RemoteAuthError,
+        RemoteCredentialRejected,
         RemotePayloadTooLarge,
         RemoteToolFailed,
         RemoteToolUnavailable,

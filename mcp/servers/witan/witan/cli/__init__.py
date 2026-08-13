@@ -174,6 +174,7 @@ def _launcher(
 def main() -> None:
     from ..remote.oidc import RemoteAuthError
     from ..remote.proxy import (
+        RemoteCredentialRejected,
         RemotePayloadTooLarge,
         RemoteToolFailed,
         RemoteToolUnavailable,
@@ -183,14 +184,15 @@ def main() -> None:
 
     try:
         app.meta()
-    # The six ways a deployed witan fails a command, each already carrying its
+    # The seven ways a deployed witan fails a command, each already carrying its
     # own actionable wording: misconfigured or not logged in (RemoteAuthError),
     # reached but offering no such tool (RemoteToolUnavailable), not reached at
     # all (RemoteUnreachable), answering that the body is too big
     # (RemotePayloadTooLarge), cut off mid-write so that nobody can say whether
-    # it landed (RemoteWriteIndeterminate), and running the tool only for the
-    # tool to refuse (RemoteToolFailed). All but the first used to escape as a
-    # traceback.
+    # it landed (RemoteWriteIndeterminate), reached and refusing the credential
+    # after a refresh already failed (RemoteCredentialRejected), and running the
+    # tool only for the tool to refuse (RemoteToolFailed). All but the first
+    # used to escape as a traceback.
     #
     # RemoteToolFailed is the wide one: only `migrate` has its own
     # `except RuntimeError`, so for every other command — memory, tasks,
@@ -198,6 +200,7 @@ def main() -> None:
     # denial reading as a sentence and reading as a crash.
     except (
         RemoteAuthError,
+        RemoteCredentialRejected,
         RemotePayloadTooLarge,
         RemoteToolFailed,
         RemoteToolUnavailable,

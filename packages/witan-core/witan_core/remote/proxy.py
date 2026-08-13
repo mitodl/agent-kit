@@ -116,6 +116,31 @@ class RemoteToolFailed(RuntimeError):
     """
 
 
+class RemoteCredentialRejected(RuntimeError):
+    """The deployment reached, and refused the credential.
+
+    Raised in three situations, which the MESSAGE distinguishes because the
+    reader's next step differs and only one of them is "log in again":
+
+    * the refresh ran and the deployment still refused — re-authenticate;
+    * this client holds a pinned credential and cannot refresh at all;
+    * the call WRITES, so no refresh was attempted on purpose. The request had
+      already reached the service, so its outcome is indeterminate and a retry
+      could apply it twice; re-read before retrying.
+
+    An earlier revision asserted here that the refresh had always been tried
+    first. That was false for the write case and told the reader the recovery
+    was exhausted when it had never begun.
+
+    Its own type rather than :class:`RemoteUnreachable` because both of that
+    class's implications are wrong here: the service WAS reached (it answered
+    401/403), and the remedy is a credential, not an endpoint. Routing this
+    through "could not be reached … check the endpoint" sent at least one
+    investigation after DNS and ingress for an expired token — see
+    tk-the-oidc-refresh-skew-30s-is-shorter-than-a-writ-8b04db.
+    """
+
+
 class RemoteWriteIndeterminate(RuntimeError):
     """A gateway cut the call off after it had been dispatched, and the tool WRITES.
 
@@ -250,6 +275,32 @@ def payload_too_large(exc: BaseException) -> BaseException | None:
 # the correct one. That distinction is the whole basis for this list.
 _GATEWAY_STATUSES = frozenset({502, 504})
 
+# The deployment rejected the credential. Distinct from every other failure
+# here because it is the only one the CLIENT can fix mid-flight, by refreshing.
+#
+# 403 rides along with 401 deliberately: witan's server answers an unknown or
+# unauthorised actor that way, and the remedy a user needs to be told is the
+# same — the identity is wrong or stale, not the endpoint.
+_AUTH_STATUSES = frozenset({401, 403})
+
+
+def auth_failure(exc: BaseException) -> BaseException | None:
+    """The credential rejection inside ``exc``, or None.
+
+    ★ MUST BE ASKED BEFORE :func:`_transport_failure`, for the third time in
+    this module and the same reason as :func:`payload_too_large` and
+    :func:`gateway_failure`: it arrives as an ``httpx2.HTTPStatusError``, which
+    IS an ``httpx2.HTTPError``, so classifying by transport first files an
+    expired token under "the deployed service could not be reached … check the
+    endpoint". That message sends somebody to inspect DNS and ingress over a
+    token they could have refreshed.
+    """
+    for err in _chain(exc):
+        status = getattr(getattr(err, "response", None), "status_code", None)
+        if status in _AUTH_STATUSES:
+            return err
+    return None
+
 
 def gateway_failure(exc: BaseException) -> BaseException | None:
     """The dispatched-then-cut-off error inside ``exc``, or None.
@@ -346,9 +397,33 @@ def _next_cursor(result: Any) -> str | None:
 class RemoteMCPProxy:
     """Mirror a FastMCP server's tool surface, dispatching each call over MCP."""
 
-    def __init__(self, url: str, token_provider: Callable[[], str]) -> None:
+    def __init__(
+        self,
+        url: str,
+        token_provider: Callable[[], str],
+        token_refresher: Callable[[str], str] | None = None,
+    ) -> None:
+        """``token_refresher`` force-mints a credential, bypassing any cache.
+
+        It takes the credential that was REJECTED, so it can tell "the cache
+        still holds the dead one, refresh it" from "somebody already replaced
+        it, use theirs" — re-reading the cache instead would refresh a fresh
+        token under concurrent 401s and spend a rotating refresh token twice.
+
+        Optional, and its absence is a supported configuration rather than a
+        degraded one: the concurrency probe deliberately PINS one token across
+        its workers (`lambda: token`) precisely so a fleet cannot stampede the
+        shared cache, and a pinned token has nothing to refresh to. Without a
+        refresher a 401 is reported rather than retried, which is the old
+        behaviour made explicit.
+
+        Distinct from ``token_provider`` because that one is allowed to answer
+        from cache — and on a rejected token it necessarily WOULD, handing back
+        the same dead credential and turning a retry into a second 401.
+        """
         self._url = url
         self._token_provider = token_provider
+        self._token_refresher = token_refresher
         self._param_names: dict[str, list[str]] | None = None
         # When the cached tool list goes stale, per the server's own ttlMs.
         # `inf` is the pre-2026-07-28 behavior — hold it for the process
@@ -427,6 +502,36 @@ class RemoteMCPProxy:
             "write may or may not have been applied, and nothing in this "
             "response says which. Re-read before retrying; retrying blind "
             "writes it twice if it did land."
+        )
+
+    def _credential_rejected_error(
+        self, name: str, status: int, *, refreshed: bool
+    ) -> str:
+        """Message for a credential the deployment refused.
+
+        ★ ``refreshed`` IS WHAT ACTUALLY HAPPENED, not what was configured.
+        Holding a refresher does not mean one was used: a WRITE is re-raised
+        without refreshing, deliberately, so reporting "a refresh was attempted
+        and still refused" there tells the reader the recovery has been
+        exhausted when it was never begun — and sends them to re-authenticate
+        instead of re-reading the graph.
+        """
+        if refreshed:
+            tried = "A refresh was attempted and the deployment still refused."
+        elif self._token_refresher is None:
+            tried = "This client holds a pinned credential and cannot refresh it."
+        else:
+            tried = (
+                f"No refresh was attempted: `{name}` writes, and the request "
+                "had already reached the service, so its outcome is "
+                "INDETERMINATE — retrying could apply it twice. Re-read before "
+                "retrying."
+            )
+        return (
+            f"The deployed service at {self._url} answered HTTP {status} for "
+            f"`{name}`: it was reached, and it rejected the credential. "
+            f"{tried} The endpoint is fine — re-authenticate (`witan login`) "
+            "rather than checking the URL."
         )
 
     def _gateway_read_error(self, name: str, status: int) -> str:
@@ -571,7 +676,9 @@ class RemoteMCPProxy:
             )
 
     @asynccontextmanager
-    async def _reclassifying(self, name: str) -> AsyncIterator[None]:
+    async def _reclassifying(
+        self, name: str, *, refreshed: bool = False
+    ) -> AsyncIterator[None]:
         """Report a fault raised in this block as the sentence it deserves.
 
         By exception type, not by position: a tool that raises server-side is a
@@ -579,7 +686,7 @@ class RemoteMCPProxy:
         transport fault (:func:`_transport_failure`) is the deployment going
         away. Errors this class already classified pass through untouched.
 
-        The four questions are asked in a fixed order, and each ordering is
+        The five questions are asked in a fixed order, and each ordering is
         load-bearing:
 
         1. Size FIRST — see :func:`payload_too_large` for why asking it second
@@ -588,8 +695,12 @@ class RemoteMCPProxy:
            413: a 502 is an ``httpx2.HTTPError``, so asking about the transport
            first files a service that answered under "could not be reached" and,
            on a write, invites the retry that duplicates the row.
-        3. Transport next, since a drop is the deployment going away.
-        4. Tool refusal LAST — see :func:`tool_failure`. A vMCP-relayed 413
+        3. Credential rejection — see :func:`auth_failure`. The same trap a
+           third time, and the one with the most misleading fallout: an expired
+           token reported as "check the endpoint" sends somebody after DNS and
+           ingress for something a refresh fixes.
+        4. Transport next, since a drop is the deployment going away.
+        5. Tool refusal LAST — see :func:`tool_failure`. A vMCP-relayed 413
            arrives as a ``ToolError`` too, so this must not get first look.
 
         A refusal becomes :class:`RemoteToolFailed` rather than propagating as
@@ -605,6 +716,7 @@ class RemoteMCPProxy:
             RemoteUnreachable,
             RemotePayloadTooLarge,
             RemoteWriteIndeterminate,
+            RemoteCredentialRejected,
         ):
             raise
         except Exception as exc:  # noqa: BLE001 — re-raised unless classified
@@ -621,6 +733,13 @@ class RemoteMCPProxy:
                         self._indeterminate_error(name, status)
                     ) from exc
                 raise RemoteUnreachable(self._gateway_read_error(name, status)) from exc
+            rejected = auth_failure(exc)
+            if rejected is not None:
+                raise RemoteCredentialRejected(
+                    self._credential_rejected_error(
+                        name, rejected.response.status_code, refreshed=refreshed
+                    )
+                ) from exc
             dropped = _transport_failure(exc)
             if dropped is not None:
                 raise RemoteUnreachable(self._unreachable_error(dropped)) from exc
@@ -653,11 +772,68 @@ class RemoteMCPProxy:
         exists to remove. It wraps the stack rather than sitting inside it for
         that reason. A non-transport cleanup error still propagates as itself.
         """
+        # Bound before the attempt so the refresher below can be told exactly
+        # which credential was refused, rather than re-reading a cache another
+        # worker may already have replaced.
         token = self._token_provider()
-        async with self._reclassifying(name), AsyncExitStack() as stack:
+        try:
+            return await self._invoke_once(name, args, kwargs, token)
+        except RemoteCredentialRejected:
+            # ★ ONE RETRY, AND ONLY FOR A READ.
+            #
+            # The credential can go stale mid-session: tokens here live ~5
+            # minutes and a single write has been measured at up to 51s, so a
+            # run of slow calls crosses an expiry boundary as a matter of
+            # course. That is recoverable, and making the user re-run the
+            # command by hand is a worse answer than refreshing.
+            #
+            # But NOT for a write, and this is the same asymmetry the 502 path
+            # settled: the request reached the server, which may have applied
+            # it either side of the credential being judged. Retrying blind
+            # writes the row twice whenever it did land, and no response
+            # distinguishes those cases. `_writes` already encodes this, with
+            # "assume it wrote" as the default for anything unclassified.
+            #
+            # A pinned-token client (no refresher) has nothing to retry WITH —
+            # the provider would hand back the same dead token.
+            if self._writes(name) or self._token_refresher is None:
+                raise
+            fresh = self._token_refresher(token)
+            return await self._invoke_once(name, args, kwargs, fresh, refreshed=True)
+
+    async def _invoke_once(
+        self,
+        name: str,
+        args: tuple,
+        kwargs: dict,
+        token: str,
+        *,
+        refreshed: bool = False,
+    ) -> Any:
+        """One dispatch attempt with an already-resolved ``token``.
+
+        ``refreshed`` records whether this attempt is the post-refresh retry,
+        so a message can say what was actually tried rather than what was
+        configured.
+        """
+        async with (
+            self._reclassifying(name, refreshed=refreshed),
+            AsyncExitStack() as stack,
+        ):
             try:
                 client = await stack.enter_async_context(self._new_client(token))
             except Exception as exc:  # noqa: BLE001 — see docstring
+                # A rejected credential is knowable here when the status
+                # survives, and must not be swallowed by the blanket
+                # transport reading — otherwise the refresh above never fires
+                # for the case that motivated it.
+                rejected = auth_failure(exc)
+                if rejected is not None:
+                    raise RemoteCredentialRejected(
+                        self._credential_rejected_error(
+                            name, rejected.response.status_code, refreshed=refreshed
+                        )
+                    ) from exc
                 raise RemoteUnreachable(self._unreachable_error(exc)) from exc
             if (
                 self._param_names is None
