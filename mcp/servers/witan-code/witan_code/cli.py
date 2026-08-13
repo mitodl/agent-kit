@@ -1016,7 +1016,12 @@ def cli() -> None:
     from rich.console import Console
 
     from .remote.oidc import RemoteAuthError
-    from .remote.proxy import RemoteToolFailed, RemoteToolUnavailable, RemoteUnreachable
+    from .remote.proxy import (
+        RemoteCredentialRejected,
+        RemoteToolFailed,
+        RemoteToolUnavailable,
+        RemoteUnreachable,
+    )
     from .remote.store import RemotePayloadTooLarge
 
     try:
@@ -1031,6 +1036,7 @@ def cli() -> None:
     # have.
     except (
         RemoteAuthError,
+        RemoteCredentialRejected,
         RemotePayloadTooLarge,
         RemoteToolFailed,
         RemoteToolUnavailable,

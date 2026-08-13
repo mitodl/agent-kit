@@ -382,8 +382,29 @@ class DeviceAuth:
         """
         skew = _env_seconds(EXPIRY_SKEW_ENV_VAR, _EXPIRY_SKEW_S)
         lifetime = entry["expires_at"] - entry.get("obtained_at", entry["expires_at"])
-        if lifetime > 0:
-            skew = min(skew, lifetime * _MAX_SKEW_FRACTION)
+        if 0 < lifetime < skew / _MAX_SKEW_FRACTION:
+            # ★ AND SAY SO. Capping keeps the token usable and avoids a refresh
+            # on every single call, but it does NOT make the token long enough:
+            # a call slower than the capped skew can still expire in flight, and
+            # a write that does cannot be safely retried. Nothing downstream can
+            # infer that from a boolean, so the compromise is logged where an
+            # operator can see it rather than left to be rediscovered from 401s.
+            #
+            # Not an outright failure, deliberately: refusing every request is a
+            # worse answer than serving them with a shorter safety bound, and
+            # this is reachable purely by an IdP's token-lifetime setting. If
+            # the calls here are genuinely slower than half the token lifetime,
+            # the fix is the IdP's TTL, not this constant.
+            _log.warning(
+                "access token lifetime (%.0fs) is short relative to the "
+                "configured refresh skew (%.0fs); capping the skew at %.0fs. "
+                "Calls slower than that can still have their token expire "
+                "mid-flight — raise the IdP's token TTL.",
+                lifetime,
+                skew,
+                lifetime * _MAX_SKEW_FRACTION,
+            )
+            skew = lifetime * _MAX_SKEW_FRACTION
         return entry["expires_at"] - time.time() > skew
 
     # ── request helpers ────────────────────────────────────────────────────
@@ -507,7 +528,9 @@ class DeviceAuth:
             if owns:
                 client.close()
 
-    def force_refresh(self, *, client: httpx2.Client | None = None) -> str:
+    def force_refresh(
+        self, rejected: str, *, client: httpx2.Client | None = None
+    ) -> str:
         """Mint a new access token, ignoring how healthy the cached one looks.
 
         For the one case :meth:`get_valid_token` cannot serve: the DEPLOYMENT
@@ -516,12 +539,20 @@ class DeviceAuth:
         turn a retry into a second 401, so the cache check has to be skipped
         rather than re-run.
 
+        ★ ``rejected`` IS THE TOKEN THAT ACTUALLY FAILED, PASSED IN — not read
+        back out of the cache here. Reading it here looked equivalent and is
+        not: under concurrent 401s, another worker can replace the cache
+        between the failure and this call, so this would treat ITS fresh token
+        as the rejected one and refresh a perfectly good credential. Repeated
+        across workers that serialises into one refresh each, defeating the
+        single-flight behaviour below and spending rotating refresh tokens a
+        rotating IdP treats as replay.
+
         Still takes the cache lock and still re-reads under it, for the reason
         :meth:`get_valid_token` documents — a fleet that hits an expiry
         boundary together arrives here together, and whoever refreshed a moment
-        ago has already stored a good token. The difference is only that a
-        cached token is accepted here when it is NEWER than the one that was
-        rejected; an equally-stale one is refreshed rather than handed back.
+        ago has already stored a good token. A cached token is accepted when it
+        differs from the one that was rejected; an identical one is refreshed.
         """
         entry = self._load_cache().get(self._cache_key())
         if not entry:
@@ -532,7 +563,6 @@ class DeviceAuth:
             raise NeedsLogin(
                 f"Session expired — run `{self._login_hint}` to re-authenticate."
             )
-        rejected = entry["access_token"]
         owns = client is None
         client = client or httpx2.Client(timeout=15)
         try:

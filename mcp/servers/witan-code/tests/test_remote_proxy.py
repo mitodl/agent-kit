@@ -242,3 +242,26 @@ def test_cli_prints_an_unreachable_remote_instead_of_a_traceback(monkeypatch, ca
         cli_module.cli()
     assert exit_code.value.code == 1
     assert "witan-code is down at X" in capsys.readouterr().out
+
+
+def test_cli_prints_a_rejected_credential_instead_of_a_traceback(monkeypatch, capsys):
+    """★ witan-code's handler has to list this too.
+
+    The remote path can now raise `RemoteCredentialRejected` — on a write, or on
+    a read whose refreshed retry is refused again. The `witan` CLI was updated
+    and this one was not, so it would have escaped as the traceback the whole
+    handler exists to prevent.
+    """
+    from types import SimpleNamespace
+
+    from witan_code import cli as cli_module
+    from witan_code.remote.proxy import RemoteCredentialRejected
+
+    def _rejected():
+        raise RemoteCredentialRejected("witan-code: it rejected the credential")
+
+    monkeypatch.setattr(cli_module, "app", SimpleNamespace(meta=_rejected))
+    with pytest.raises(SystemExit) as exit_code:
+        cli_module.cli()
+    assert exit_code.value.code == 1
+    assert "rejected the credential" in capsys.readouterr().out

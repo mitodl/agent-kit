@@ -553,3 +553,28 @@ def test_the_skew_is_capped_at_half_a_short_token_s_life(auth, monkeypatch):
     # 60s token, 40s left: uncapped this fails (40 < 90); capped at 30 it passes.
     assert auth._usable(_entry(lifetime=60, remaining=40))
     assert not auth._usable(_entry(lifetime=60, remaining=20))
+
+
+def test_capping_the_skew_is_logged_rather_than_silent(auth, monkeypatch, caplog):
+    """★ THE CAP IS A COMPROMISE AND MUST NOT BE INVISIBLE.
+
+    It keeps the token usable and avoids refreshing on every call, but it does
+    not make the token long enough: a call slower than the capped skew can still
+    expire in flight, and a write that does cannot be safely retried. A boolean
+    return cannot carry that, so it is logged where an operator can see it
+    instead of being rediscovered from 401s.
+    """
+    monkeypatch.setenv(oidc.EXPIRY_SKEW_ENV_VAR, "90")
+    with caplog.at_level("WARNING"):
+        assert auth._usable(_entry(lifetime=60, remaining=40))
+    assert "capping the skew" in caplog.text
+    assert "mid-flight" in caplog.text
+
+
+def test_a_long_token_caps_nothing_and_logs_nothing(auth, monkeypatch, caplog):
+    """The normal case — a ~5min token against a 90s skew — must stay quiet, or
+    the warning becomes noise nobody reads."""
+    monkeypatch.setenv(oidc.EXPIRY_SKEW_ENV_VAR, "90")
+    with caplog.at_level("WARNING"):
+        assert auth._usable(_entry(lifetime=300, remaining=200))
+    assert "capping the skew" not in caplog.text

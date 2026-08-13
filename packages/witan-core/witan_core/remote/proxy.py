@@ -117,11 +117,20 @@ class RemoteToolFailed(RuntimeError):
 
 
 class RemoteCredentialRejected(RuntimeError):
-    """The deployment rejected the credential, and refreshing did not fix it.
+    """The deployment reached, and refused the credential.
 
-    Raised only after the automatic refresh-and-retry has been tried and
-    declined or failed — so by the time a caller sees this, "log in again" is
-    genuinely the next step rather than something the client could have done.
+    Raised in three situations, which the MESSAGE distinguishes because the
+    reader's next step differs and only one of them is "log in again":
+
+    * the refresh ran and the deployment still refused — re-authenticate;
+    * this client holds a pinned credential and cannot refresh at all;
+    * the call WRITES, so no refresh was attempted on purpose. The request had
+      already reached the service, so its outcome is indeterminate and a retry
+      could apply it twice; re-read before retrying.
+
+    An earlier revision asserted here that the refresh had always been tried
+    first. That was false for the write case and told the reader the recovery
+    was exhausted when it had never begun.
 
     Its own type rather than :class:`RemoteUnreachable` because both of that
     class's implications are wrong here: the service WAS reached (it answered
@@ -392,9 +401,14 @@ class RemoteMCPProxy:
         self,
         url: str,
         token_provider: Callable[[], str],
-        token_refresher: Callable[[], str] | None = None,
+        token_refresher: Callable[[str], str] | None = None,
     ) -> None:
         """``token_refresher`` force-mints a credential, bypassing any cache.
+
+        It takes the credential that was REJECTED, so it can tell "the cache
+        still holds the dead one, refresh it" from "somebody already replaced
+        it, use theirs" — re-reading the cache instead would refresh a fresh
+        token under concurrent 401s and spend a rotating refresh token twice.
 
         Optional, and its absence is a supported configuration rather than a
         degraded one: the concurrency probe deliberately PINS one token across
@@ -490,19 +504,29 @@ class RemoteMCPProxy:
             "writes it twice if it did land."
         )
 
-    def _credential_rejected_error(self, name: str, status: int) -> str:
+    def _credential_rejected_error(
+        self, name: str, status: int, *, refreshed: bool
+    ) -> str:
         """Message for a credential the deployment refused.
 
-        Says whether a refresh was even possible, because the two cases need
-        different things from the reader: with no refresher there is a stale
-        pinned token to replace, and with one the refresh has already been
-        tried and failed, so re-authenticating is genuinely next.
+        ★ ``refreshed`` IS WHAT ACTUALLY HAPPENED, not what was configured.
+        Holding a refresher does not mean one was used: a WRITE is re-raised
+        without refreshing, deliberately, so reporting "a refresh was attempted
+        and still refused" there tells the reader the recovery has been
+        exhausted when it was never begun — and sends them to re-authenticate
+        instead of re-reading the graph.
         """
-        tried = (
-            "A refresh was attempted and the deployment still refused."
-            if self._token_refresher is not None
-            else "This client holds a pinned credential and cannot refresh it."
-        )
+        if refreshed:
+            tried = "A refresh was attempted and the deployment still refused."
+        elif self._token_refresher is None:
+            tried = "This client holds a pinned credential and cannot refresh it."
+        else:
+            tried = (
+                f"No refresh was attempted: `{name}` writes, and the request "
+                "had already reached the service, so its outcome is "
+                "INDETERMINATE — retrying could apply it twice. Re-read before "
+                "retrying."
+            )
         return (
             f"The deployed service at {self._url} answered HTTP {status} for "
             f"`{name}`: it was reached, and it rejected the credential. "
@@ -652,7 +676,9 @@ class RemoteMCPProxy:
             )
 
     @asynccontextmanager
-    async def _reclassifying(self, name: str) -> AsyncIterator[None]:
+    async def _reclassifying(
+        self, name: str, *, refreshed: bool = False
+    ) -> AsyncIterator[None]:
         """Report a fault raised in this block as the sentence it deserves.
 
         By exception type, not by position: a tool that raises server-side is a
@@ -710,7 +736,9 @@ class RemoteMCPProxy:
             rejected = auth_failure(exc)
             if rejected is not None:
                 raise RemoteCredentialRejected(
-                    self._credential_rejected_error(name, rejected.response.status_code)
+                    self._credential_rejected_error(
+                        name, rejected.response.status_code, refreshed=refreshed
+                    )
                 ) from exc
             dropped = _transport_failure(exc)
             if dropped is not None:
@@ -744,8 +772,12 @@ class RemoteMCPProxy:
         exists to remove. It wraps the stack rather than sitting inside it for
         that reason. A non-transport cleanup error still propagates as itself.
         """
+        # Bound before the attempt so the refresher below can be told exactly
+        # which credential was refused, rather than re-reading a cache another
+        # worker may already have replaced.
+        token = self._token_provider()
         try:
-            return await self._invoke_once(name, args, kwargs, self._token_provider())
+            return await self._invoke_once(name, args, kwargs, token)
         except RemoteCredentialRejected:
             # ★ ONE RETRY, AND ONLY FOR A READ.
             #
@@ -766,13 +798,28 @@ class RemoteMCPProxy:
             # the provider would hand back the same dead token.
             if self._writes(name) or self._token_refresher is None:
                 raise
-            return await self._invoke_once(name, args, kwargs, self._token_refresher())
+            fresh = self._token_refresher(token)
+            return await self._invoke_once(name, args, kwargs, fresh, refreshed=True)
 
     async def _invoke_once(
-        self, name: str, args: tuple, kwargs: dict, token: str
+        self,
+        name: str,
+        args: tuple,
+        kwargs: dict,
+        token: str,
+        *,
+        refreshed: bool = False,
     ) -> Any:
-        """One dispatch attempt with an already-resolved ``token``."""
-        async with self._reclassifying(name), AsyncExitStack() as stack:
+        """One dispatch attempt with an already-resolved ``token``.
+
+        ``refreshed`` records whether this attempt is the post-refresh retry,
+        so a message can say what was actually tried rather than what was
+        configured.
+        """
+        async with (
+            self._reclassifying(name, refreshed=refreshed),
+            AsyncExitStack() as stack,
+        ):
             try:
                 client = await stack.enter_async_context(self._new_client(token))
             except Exception as exc:  # noqa: BLE001 — see docstring
@@ -784,7 +831,7 @@ class RemoteMCPProxy:
                 if rejected is not None:
                     raise RemoteCredentialRejected(
                         self._credential_rejected_error(
-                            name, rejected.response.status_code
+                            name, rejected.response.status_code, refreshed=refreshed
                         )
                     ) from exc
                 raise RemoteUnreachable(self._unreachable_error(exc)) from exc

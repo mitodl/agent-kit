@@ -81,13 +81,17 @@ def default_token_provider(cfg: RemoteConfig) -> Callable[[], str]:
     return lambda: get_valid_token(cfg)
 
 
-def default_token_refresher(cfg: RemoteConfig) -> Callable[[], str]:
-    """A zero-arg callable that force-mints a token, ignoring the cache.
+def default_token_refresher(cfg: RemoteConfig) -> Callable[[str], str]:
+    """Force-mint a token, given the one the deployment rejected.
 
     Handed to the proxy alongside the provider so it can recover from a
     credential the deployment rejected while this client still believed it was
     good — see ``RemoteMCPProxy.__init__``. Separate from the provider because
     the provider is allowed to answer from cache, which on a rejected token is
     exactly the wrong answer.
+
+    Takes the rejected token rather than re-reading it: under concurrent 401s
+    the cache may already hold somebody else's fresh one, and refreshing that
+    would spend a rotating refresh token for nothing.
     """
-    return lambda: _auth(cfg).force_refresh()
+    return lambda rejected: _auth(cfg).force_refresh(rejected)

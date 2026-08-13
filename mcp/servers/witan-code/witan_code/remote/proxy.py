@@ -15,6 +15,7 @@ from typing import Callable
 
 from witan_core.remote.config import RemoteConfig
 from witan_core.remote.proxy import (
+    RemoteCredentialRejected,
     RemoteMCPProxy,
     RemoteToolFailed,
     RemoteToolUnavailable,
@@ -22,6 +23,7 @@ from witan_core.remote.proxy import (
 )
 
 __all__ = [
+    "RemoteCredentialRejected",
     "RemoteServerProxy",
     "RemoteToolFailed",
     "RemoteToolUnavailable",

@@ -957,7 +957,10 @@ class _RefreshingProxy(_ScriptedProxy):
         self._refreshed = False
         self._token_refresher = self._refresh
 
-    def _refresh(self):
+    def _refresh(self, rejected):
+        # The rejected credential is PASSED IN, not re-read from a cache that a
+        # concurrent worker may already have replaced.
+        self.rejected_seen = rejected
         self._refreshed = True
         return "fresh-token"
 
@@ -1024,3 +1027,65 @@ def test_without_a_refresher_a_rejected_credential_is_reported_not_retried():
     with pytest.raises(RemoteCredentialRejected) as caught:
         proxy.task_get(slug="x")
     assert "pinned credential" in str(caught.value)
+
+
+def test_a_rejected_credential_at_CONNECT_is_classified_too():
+    """★ The connect-time branch is separate code from `_reclassifying`, and the
+    401 that motivated all of this arrives there — the client is built with the
+    token, so a dead one fails while opening the session, not at `call_tool`.
+    A call-time-only test leaves that path free to regress."""
+    proxy = _ScriptedProxy(_auth_error(401), at="connect")
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        proxy.task_get(slug="x")
+    assert not isinstance(caught.value, RemoteUnreachable)
+    assert "rejected the credential" in str(caught.value)
+
+
+def test_a_read_rejected_at_CONNECT_refreshes_and_retries():
+    proxy = _RefreshingProxy(_auth_error(401), at="connect", writes=False)
+    proxy.task_get(slug="x")
+    assert proxy.tokens == ["tok", "fresh-token"]
+
+
+def test_the_refresher_is_given_the_credential_that_was_rejected():
+    """Not left to re-read it: under concurrent 401s the cache may already hold
+    somebody else's fresh token, and refreshing that spends a rotating refresh
+    token for nothing."""
+    proxy = _RefreshingProxy(
+        ExceptionGroup("unhandled", [_auth_error(401)]), at="call", writes=False
+    )
+    proxy.task_get(slug="x")
+    assert proxy.rejected_seen == "tok"
+
+
+def test_a_write_says_no_refresh_was_attempted_rather_than_that_one_failed():
+    """★ The message must report what HAPPENED, not what was configured. A
+    write is re-raised without refreshing, so claiming the refresh already
+    failed tells the reader the recovery is exhausted when it never began."""
+    proxy = _RefreshingProxy(
+        ExceptionGroup("unhandled", [_auth_error(401)]), at="call", writes=True
+    )
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        proxy.memory_store(content="x")
+    message = str(caught.value)
+    assert "No refresh was attempted" in message
+    assert "INDETERMINATE" in message
+    assert "A refresh was attempted" not in message
+
+
+def test_a_read_whose_retry_is_also_rejected_says_the_refresh_failed():
+    """The other half: once the refresh HAS run and the deployment still
+    refuses, re-authenticating really is the next step."""
+
+    class _AlwaysRejects(_RefreshingProxy):
+        def _new_client(self, token):
+            self.tokens.append(token)
+            return _ScriptedProxy(self._exc, at=self._at)._new_client(token)
+
+    proxy = _AlwaysRejects(
+        ExceptionGroup("unhandled", [_auth_error(401)]), at="call", writes=False
+    )
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        proxy.task_get(slug="x")
+    assert "A refresh was attempted" in str(caught.value)
+    assert proxy.tokens == ["tok", "fresh-token"]
