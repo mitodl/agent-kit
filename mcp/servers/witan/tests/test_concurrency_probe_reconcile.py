@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from witan.scripts import concurrency_probe as cp
 from witan.scripts.concurrency_probe import (
     _is_auth_failure,
@@ -179,3 +178,46 @@ def test_a_worker_that_never_reached_the_barrier_claims_no_window(monkeypatch, c
     assert "fired_at" not in row
     assert "done_at" not in row
     assert cp._timing([row], start_at=0.0).n_fired == 0
+
+
+def _row(index, fired, done, **kw):
+    return {"index": index, "fired_at": fired, "done_at": done, **kw}
+
+
+def test_the_write_window_spans_the_errored_writers_too():
+    """★ At the loads worth measuring most writers ERROR. A window drawn from
+    the survivors alone is too narrow, and in an all-errored phase there is no
+    window at all — which is how probe C came to report "no read overlapped any
+    write" over readers that were in the middle of the storm."""
+    rows = [
+        _row(0, 100.0, 130.0, ok=False),
+        _row(1, 100.1, 105.0, ok=True),
+        _row(2, 100.2, 145.0, ok=False),
+    ]
+    assert cp._write_window(rows) == (100.0, 145.0)
+
+
+def test_a_writer_that_never_fired_contributes_no_window():
+    assert cp._write_window([{"index": 0, "ok": False}]) is None
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        (_row(0, 110.0, 120.0), True),  # wholly inside
+        (_row(1, 90.0, 105.0), True),  # overlaps the start
+        (_row(2, 140.0, 160.0), True),  # overlaps the end
+        (_row(3, 80.0, 99.0), False),  # finished before the storm
+        (_row(4, 151.0, 160.0), False),  # started after it
+        ({"index": 5, "ok": False}, False),  # never fired
+    ],
+)
+def test_overlap_is_interval_intersection_not_containment(row, expected):
+    """A reader that started before the first write and was still running when
+    it landed WAS under load; requiring containment would discard exactly the
+    slowest reads, which are the ones the storm produced."""
+    assert cp._in_window(row, (100.0, 150.0)) is expected
+
+
+def test_nothing_overlaps_an_absent_window():
+    assert cp._in_window(_row(0, 100.0, 110.0), None) is False

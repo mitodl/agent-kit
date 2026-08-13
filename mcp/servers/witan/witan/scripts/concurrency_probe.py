@@ -569,6 +569,34 @@ def _timing(rows: list[dict], start_at: float) -> Timing:
     return Timing(late=late, spread_ms=spread, n_fired=len(fired))
 
 
+def _write_window(write_rows: list[dict]) -> tuple[float, float] | None:
+    """First fire to last completion across the writers -- when the storm was on.
+
+    Built from ERRORED writers as well as successful ones, which is the whole
+    point: at the loads worth measuring most writers error, and a window drawn
+    from the survivors alone is both too narrow and, in an all-errored phase,
+    absent entirely.
+    """
+    fired = [r["fired_at"] for r in write_rows if r.get("fired_at")]
+    done = [r["done_at"] for r in write_rows if r.get("done_at")]
+    return (min(fired), max(done)) if fired and done else None
+
+
+def _in_window(row: dict, window: tuple[float, float] | None) -> bool:
+    """Did this worker's call overlap ``window`` at any point?
+
+    A row with no stamps never fired and cannot overlap anything -- saying it
+    did would manufacture the contention the caller is trying to certify.
+    """
+    return bool(
+        window
+        and row.get("fired_at")
+        and row.get("done_at")
+        and row["fired_at"] <= window[1]
+        and row["done_at"] >= window[0]
+    )
+
+
 # ── probe A: mutual exclusion ────────────────────────────────────────────────
 
 
@@ -921,17 +949,16 @@ def probe_writes_and_reads(
     # that started after the last write finished is measuring an idle server,
     # and counting it as clean is how this probe would certify availability
     # under a load it never applied.
-    fired = [r["fired_at"] for r in write_rows if r.get("fired_at")]
-    done = [r["done_at"] for r in write_rows if r.get("done_at")]
-    window = (min(fired), max(done)) if fired and done else None
-    overlapping, disjoint = [], []
-    for row in read_ok:
-        if window is None or not (row.get("fired_at") and row.get("done_at")):
-            disjoint.append(row)
-        elif row["fired_at"] <= window[1] and row["done_at"] >= window[0]:
-            overlapping.append(row)
-        else:
-            disjoint.append(row)
+    window = _write_window(write_rows)
+    overlapping = [r for r in read_ok if _in_window(r, window)]
+    disjoint = [r for r in read_ok if not _in_window(r, window)]
+    # A DEGRADED read is placed in the window too. Only clean reads need it to
+    # justify a PASS, but a failure has to be attributable as well: "12 readers
+    # degraded" means the store under load only if those readers were under it.
+    # Reachable only since errored workers began stamping fired_at -- before
+    # that, an all-degraded phase reported the vacuous "no read overlapped any
+    # write", which reads as a timing defect rather than the outage it was.
+    bad_in_window = [r for r in read_bad if _in_window(r, window)]
 
     # Same rule as the writers: a reader refused a credential measured the
     # harness, not the store. Reads failing at the SAME latency as writes is
@@ -963,6 +990,15 @@ def probe_writes_and_reads(
             f"\n      NOT UNDER LOAD: readers {[r.get('index') for r in disjoint]} "
             "ran outside the write window; their success says nothing about "
             "availability under concurrent writes"
+        )
+    elif not overlapping and read_bad:
+        # Distinguish the two ways C can have nothing to place: every reader
+        # failed (an outage, and the degradation IS the observation) versus the
+        # readers genuinely missing the window (a defective run).
+        c.detail += (
+            f"\n      EVERY READ DEGRADED: {len(bad_in_window)}/{len(read_bad)} of "
+            "them inside the write window, so this is the store under load, not "
+            "a mistimed run"
         )
     elif not overlapping:
         c.detail += "\n      NOT UNDER LOAD: no read overlapped any write"
