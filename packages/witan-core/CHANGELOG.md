@@ -10,9 +10,11 @@ a MINOR bump may include breaking changes).
 
 Makes a saturated deployment answerable. Measured against the CI deployment:
 concurrent writes 502 at exactly 30s, and counting the rows afterwards showed
-one 16-writer burst had committed every write it 502'd on (28/28) while the
-next had not (14/16). So the deadline cuts the *response*, the backend usually
-finishes the write anyway, and nothing in the reply distinguishes the two —
+two runs disagreeing. The first — bursts of 4, then 8, then 16 writers — had
+committed every one of its 28 writes despite 502ing on most of them; the
+second, a standalone 16-writer burst, committed only 14 of 16. So the deadline
+cuts the *response*, the backend usually finishes the write anyway, and
+nothing in the reply distinguishes the two —
 while the client reported all of it as "could not be reached", which is wrong
 twice over and invites the retry that duplicates the row
 ([#225](https://github.com/mitodl/agent-kit/pull/225)).

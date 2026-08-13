@@ -13,8 +13,10 @@ a MINOR bump may include breaking changes).
 - **An index write cut off by a gateway is no longer retried.**
   `RemoteStoreClient` reconnects and retries on a transport fault, which is
   right for a dropped connection and wrong for a 502/504: measured against the
-  deployed service, most writes cut that way had already committed (28 of 28 in
-  one burst, 14 of 16 in the next), so the blind retry writes those rows a
+  deployed service, most writes cut that way had already committed — one run of
+  4-, 8- and 16-writer bursts committed all 28 of its writes, and a later
+  standalone 16-writer burst committed 14 of 16 — so the blind retry writes
+  those rows a
   second time. `_refuse_if_indeterminate` now stops it and says the outcome is
   unknown, matching `_refuse_if_too_large` beside it
   ([#225](https://github.com/mitodl/agent-kit/pull/225)).
