@@ -560,18 +560,34 @@ class _WriteGate:
         )
         wait_deadline = time.monotonic() + wait
         with self._cv:
-            while self._in_flight.get(key, 0) >= limit:
-                remaining = wait_deadline - time.monotonic()
-                if remaining <= 0:
+            while True:
+                # ★ CHECKED BEFORE EVERY WAIT, not once after the queue clears.
+                # Asking only on the way out let a write sit the full queue
+                # timeout and THEN be refused for a reason that was already
+                # true when it arrived — burning the caller's budget to reach a
+                # verdict this could have given immediately. The whole point is
+                # to stop consuming a deadline that cannot be met.
+                self._refuse_if_it_cannot_finish(key, label, call_deadline)
+                if self._in_flight.get(key, 0) < limit:
+                    break
+                waitable = wait_deadline - time.monotonic()
+                # And the wait is bounded by the last moment admission could
+                # still be viable: `wait()` does not wake when the budget runs
+                # out, so without this the thread sleeps past its own deadline
+                # and is refused late for having waited.
+                viable = self._latest_viable_wait(key, call_deadline)
+                if viable is not None:
+                    waitable = min(waitable, viable)
+                if waitable <= 0:
                     raise WriteQueueFull(
                         f"omnigraph {label} was refused before it was sent: "
                         f"{self._in_flight.get(key, 0)} writes are already in "
-                        f"flight against {key} and no slot freed within "
-                        f"{wait:.0f}s. NOTHING WAS WRITTEN — retry once the "
-                        "burst clears."
+                        f"flight against {key}, and waiting longer cannot help "
+                        "— the slot would not free in time for this call to "
+                        "finish. NOTHING WAS WRITTEN — retry once the burst "
+                        "clears."
                     )
-                self._cv.wait(remaining)
-            self._refuse_if_it_cannot_finish(key, label, call_deadline)
+                self._cv.wait(waitable)
             self._in_flight[key] = self._in_flight.get(key, 0) + 1
         started = time.monotonic()
         try:
@@ -585,6 +601,22 @@ class _WriteGate:
                 else:
                     del self._in_flight[key]
                 self._cv.notify_all()
+
+    def _latest_viable_wait(
+        self, key: str, call_deadline: float | None
+    ) -> float | None:
+        """Seconds this write may still wait and hope to finish, or ``None``.
+
+        Caller holds ``self._cv``. ``None`` means there is nothing to bound the
+        wait by — no declared deadline, or no measured service time yet — and
+        the queue timeout is the only limit that applies.
+        """
+        if call_deadline is None:
+            return None
+        estimate = self._service.get(key)
+        if estimate is None:
+            return None
+        return (call_deadline - estimate) - time.monotonic()
 
     def _refuse_if_it_cannot_finish(
         self, key: str, label: str, call_deadline: float | None

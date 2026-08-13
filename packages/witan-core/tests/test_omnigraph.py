@@ -1510,34 +1510,71 @@ def test_no_deadline_means_no_predictive_refusal():
         pass
 
 
-def test_the_estimate_measures_execution_and_not_the_wait():
+def test_the_estimate_measures_execution_and_not_the_wait(monkeypatch):
     """★ THE SUBTLETY THAT WOULD MAKE THIS RUN AWAY. Folding queue time into the
     estimate double-counts it: the queue inflates the estimate, the estimate
     refuses more, and one burst leaves the gate believing every write costs a
     minute. The observed 3s -> 73s spread is mostly queue, not service.
+
+    The waiter must ACTUALLY QUEUE for this to prove anything, so the gate is
+    filled to a limit of one and the holder is released only after the waiter
+    is provably blocked on the condition variable. An earlier version of this
+    test released the holder first and admitted into a gate with a free slot —
+    it measured a near-zero body without ever touching the wait boundary, and
+    so could not have caught the regression it names.
+
+    Asserted on what `_record` was HANDED, not on the resulting EWMA: the
+    holder's own long body lands in the same average, so the average cannot
+    distinguish "the waiter recorded its wait" from "the holder was slow".
     """
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 1)
     gate = og._WriteGate()
-    gate._in_flight["g"] = 1  # one already running, so the next one queues
-    released = threading.Event()
-    holder_done = threading.Event()
+    recorded: list[tuple[str, float]] = []
+    real_record = gate._record
+    monkeypatch.setattr(
+        gate,
+        "_record",
+        lambda k, e: (recorded.append((k, e)), real_record(k, e))[1],
+    )
+
+    holding = threading.Event()
+    may_release = threading.Event()
 
     def holder():
-        released.wait(5)
-        with gate._cv:
-            del gate._in_flight["g"]
-            gate._cv.notify_all()
-        holder_done.set()
+        with gate.admit("g", "mutate"):
+            holding.set()
+            may_release.wait(5)
 
-    t = threading.Thread(target=holder, daemon=True)
-    t.start()
-    time.sleep(0.2)  # ensure the admit below is genuinely waiting
-    released.set()
-    holder_done.wait(5)
+    h = threading.Thread(target=holder, daemon=True)
+    h.start()
+    assert holding.wait(5), "holder never took the slot"
 
-    with gate.admit("g", "mutate", call_deadline=time.monotonic() + 30):
-        pass
-    # Whatever it recorded is the near-zero body above, not the wait before it.
-    assert gate._service["g"] < 0.2
+    waiter_elapsed: list[float] = []
+
+    def waiter():
+        started = time.monotonic()
+        with gate.admit("g", "mutate", call_deadline=time.monotonic() + 30):
+            pass
+        waiter_elapsed.append(time.monotonic() - started)
+
+    w = threading.Thread(target=waiter, daemon=True)
+    w.start()
+    # Give the waiter time to reach `_cv.wait` — it cannot proceed while the
+    # holder occupies the only slot.
+    time.sleep(0.4)
+    assert not waiter_elapsed, "waiter did not queue; the gate had a free slot"
+    may_release.set()
+    h.join(5)
+    w.join(5)
+
+    assert waiter_elapsed and waiter_elapsed[0] > 0.3, "waiter should have waited"
+    # Two records: the holder's long body, then the waiter's near-zero one. The
+    # waiter's is the one that must exclude the 0.4s it spent queueing.
+    waiter_record = recorded[-1][1]
+    assert waiter_record < 0.2, (
+        f"the waiter recorded {waiter_record:.2f}s after waiting "
+        f"{waiter_elapsed[0]:.2f}s — queue time is leaking into the estimate"
+    )
 
 
 def test_the_estimate_rises_faster_than_it_falls():
@@ -1551,3 +1588,48 @@ def test_the_estimate_rises_faster_than_it_falls():
     after_fall = gate._service["g"]
     assert after_rise > 14.0, "a slowdown must move the estimate sharply"
     assert after_fall > 13.0, "a single fast sample must not erase it"
+
+
+def test_a_doomed_write_is_refused_immediately_not_after_the_queue_timeout(
+    monkeypatch,
+):
+    """★ REFUSING LATE IS ITSELF THE BUG. Asking only after the queue cleared
+    let a write sit the full wait — burning the caller's budget to reach a
+    verdict that was already true when it arrived. The point of the gate is to
+    stop consuming a deadline that cannot be met.
+    """
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 1)
+    monkeypatch.setattr(og, "_REMOTE_WRITE_QUEUE_WAIT", 30.0)  # long on purpose
+    gate = og._WriteGate()
+    gate._service["g"] = 40.0  # writes cost far more than the budget below
+    gate._in_flight["g"] = 1  # and the gate is full, so it would queue
+
+    started = time.monotonic()
+    with pytest.raises(og.WriteQueueFull):
+        with gate.admit("g", "mutate", call_deadline=time.monotonic() + 10):
+            pass  # pragma: no cover
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.0, (
+        f"refused after {elapsed:.1f}s — it waited on a queue it could never "
+        "have used in time"
+    )
+
+
+def test_the_wait_is_capped_at_the_last_viable_moment(monkeypatch):
+    """`Condition.wait` does not wake when the budget runs out, so an unbounded
+    wait sleeps past its own deadline and is then refused for having waited.
+    The wait is bounded by `call_deadline - estimate`."""
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 1)
+    monkeypatch.setattr(og, "_REMOTE_WRITE_QUEUE_WAIT", 30.0)
+    gate = og._WriteGate()
+    gate._service["g"] = 1.0
+    gate._in_flight["g"] = 1
+
+    # 1.5s of budget against a 1.0s write: viable for ~0.5s, then hopeless.
+    started = time.monotonic()
+    with pytest.raises(og.WriteQueueFull):
+        with gate.admit("g", "mutate", call_deadline=time.monotonic() + 1.5):
+            pass  # pragma: no cover
+    elapsed = time.monotonic() - started
+    assert elapsed < 2.0, "should give up near the viable boundary, not at 30s"
+    assert elapsed > 0.2, "should have waited while admission was still viable"
