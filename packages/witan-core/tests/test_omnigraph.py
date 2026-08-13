@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1435,3 +1436,118 @@ def test_no_retry_after_keeps_the_blind_schedule(monkeypatch):
 
     assert _write(client, _Transport()) == "ok"
     assert sleeps == [og._ADMISSION_CAP_BASE_DELAY]
+
+
+# ── admission by predicted completion, not by slot availability ────────────
+# MEASURED 2026-08-13 at 24 writers: 56 handlers, durations climbing 3s -> 73s,
+# 26 of them past the caller's 30s deadline, and ZERO refusals — a slot always
+# freed inside the 10s wait cap, so the gate admitted write after write into a
+# system that could not finish them. Bounding concurrency never asked the only
+# question that matters: will this finish in time?
+
+
+def _gate_with(estimate: float | None, in_flight: int = 1) -> og._WriteGate:
+    """A gate that already believes writes to `g` cost `estimate` seconds."""
+    gate = og._WriteGate()
+    if estimate is not None:
+        gate._service["g"] = estimate
+    if in_flight:
+        gate._in_flight["g"] = in_flight
+    return gate
+
+
+def test_a_write_that_cannot_finish_in_the_budget_is_refused_before_sending():
+    """★ THE REGRESSION. 40s of measured service against 10s of remaining
+    budget used to be admitted — and a write admitted here is one the caller is
+    later told failed while it committed anyway."""
+    gate = _gate_with(40.0)
+    with pytest.raises(og.WriteQueueFull) as caught:
+        with gate.admit("g", "mutate", call_deadline=time.monotonic() + 10):
+            pass  # pragma: no cover — admission must not succeed
+    message = str(caught.value)
+    assert "cannot complete in time" in message
+    assert "NOTHING WAS WRITTEN" in message
+
+
+def test_a_write_that_fits_is_admitted():
+    gate = _gate_with(4.0)
+    with gate.admit("g", "mutate", call_deadline=time.monotonic() + 30):
+        pass
+    assert gate._service["g"] > 0
+
+
+def test_an_idle_graph_is_never_refused():
+    """★ A DEADLOCK DRESSED AS BACKPRESSURE. If nothing is in flight this write
+    is all the graph has to do, and refusing it would decline every write
+    forever — the estimate could never be refreshed by a faster sample."""
+    gate = _gate_with(600.0, in_flight=0)
+    with gate.admit("g", "mutate", call_deadline=time.monotonic() + 1):
+        pass
+
+
+def test_a_cold_gate_admits_because_it_has_nothing_to_predict_from():
+    """A process with no samples must not refuse the very writes it needs in
+    order to learn what a write costs."""
+    gate = _gate_with(None)
+    with gate.admit("g", "mutate", call_deadline=time.monotonic() + 1):
+        pass
+
+
+def test_queue_time_is_charged_against_the_budget():
+    """The deadline is absolute, so seconds spent waiting for a slot shrink what
+    the estimate is checked against — no separate accounting needed."""
+    gate = _gate_with(5.0)
+    already_spent = time.monotonic() - 26  # 26s of a 30s budget gone
+    with pytest.raises(og.WriteQueueFull):
+        with gate.admit("g", "mutate", call_deadline=already_spent + 30):
+            pass  # pragma: no cover
+
+
+def test_no_deadline_means_no_predictive_refusal():
+    """The CLI path declares no budget; it must behave as it always did."""
+    gate = _gate_with(600.0)
+    with gate.admit("g", "mutate", call_deadline=None):
+        pass
+
+
+def test_the_estimate_measures_execution_and_not_the_wait():
+    """★ THE SUBTLETY THAT WOULD MAKE THIS RUN AWAY. Folding queue time into the
+    estimate double-counts it: the queue inflates the estimate, the estimate
+    refuses more, and one burst leaves the gate believing every write costs a
+    minute. The observed 3s -> 73s spread is mostly queue, not service.
+    """
+    gate = og._WriteGate()
+    gate._in_flight["g"] = 1  # one already running, so the next one queues
+    released = threading.Event()
+    holder_done = threading.Event()
+
+    def holder():
+        released.wait(5)
+        with gate._cv:
+            del gate._in_flight["g"]
+            gate._cv.notify_all()
+        holder_done.set()
+
+    t = threading.Thread(target=holder, daemon=True)
+    t.start()
+    time.sleep(0.2)  # ensure the admit below is genuinely waiting
+    released.set()
+    holder_done.wait(5)
+
+    with gate.admit("g", "mutate", call_deadline=time.monotonic() + 30):
+        pass
+    # Whatever it recorded is the near-zero body above, not the wait before it.
+    assert gate._service["g"] < 0.2
+
+
+def test_the_estimate_rises_faster_than_it_falls():
+    """Quick to believe a slowdown, slow to forget one — the failure being
+    prevented is admitting DURING a slowdown."""
+    gate = og._WriteGate()
+    gate._record("g", 10.0)
+    gate._record("g", 20.0)
+    after_rise = gate._service["g"]
+    gate._record("g", 10.0)
+    after_fall = gate._service["g"]
+    assert after_rise > 14.0, "a slowdown must move the estimate sharply"
+    assert after_fall > 13.0, "a single fast sample must not erase it"
