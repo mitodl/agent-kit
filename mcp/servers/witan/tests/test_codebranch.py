@@ -144,12 +144,14 @@ def test_upsert_code_branch_touches_existing_branch(server, tmp_path, monkeypatc
     _git(base, "checkout", "-q", "-b", "feature/touch")
     monkeypatch.chdir(base)
 
-    slug1 = srv._upsert_code_branch(REPO, "feature/touch")
-    first = srv.client.read("read.gq", "get_code_branch", {"slug": slug1})[0]
+    # The step builder decides insert-vs-touch and the caller commits it, so
+    # the round trip is build-then-issue rather than one call.
+    srv.client.change_many([srv._upsert_code_branch_step(REPO, "feature/touch")])
+    slug = srv._code_branch_slug(REPO, "feature/touch")
+    first = srv.client.read("read.gq", "get_code_branch", {"slug": slug})[0]
 
-    slug2 = srv._upsert_code_branch(REPO, "feature/touch")
-    second = srv.client.read("read.gq", "get_code_branch", {"slug": slug2})
+    srv.client.change_many([srv._upsert_code_branch_step(REPO, "feature/touch")])
+    second = srv.client.read("read.gq", "get_code_branch", {"slug": slug})
 
-    assert slug1 == slug2
     assert len(second) == 1, "touching an existing branch must not insert a duplicate"
     assert second[0]["updated_at"] >= first["updated_at"]
