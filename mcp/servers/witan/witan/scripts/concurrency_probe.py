@@ -134,9 +134,42 @@ terminated in one 9-minute window. The same load previously killed it outright.
      failures are now counted and named separately, and the per-phase token
      margin was widened after a near-miss (see _PHASE_MARGIN_S).
 
+  3. A BURST WHERE EVERYONE ERRORS READ AS `only 1 worker(s) fired at all`.
+     `fired_at` was stamped after the call RETURNED, so only successful
+     workers carried one — the same "count the successes" blind spot as 1,
+     in the bookkeeping that certifies the run observed contention. At the
+     loads worth measuring most workers error, so a 24-way burst with a 1ms
+     spread reported itself NOT CONCURRENT, and probe C's write window —
+     built from those same stamps — collapsed to `no read overlapped any
+     write` while its readers were in the middle of the storm. Both stamps
+     are now taken around the call regardless of outcome — and ANNOUNCED as
+     a `{"event": "fired"}` line before it, because a worker that hangs past
+     the phase deadline is killed and never prints its result at all. The
+     parent synthesises that row, and synthesising it without timing dropped
+     the intervals of the SLOWEST workers: the write window came out
+     narrowest exactly where the storm was worst.
+
   Consistent across three runs that day, and the only thing that was: THE
   SERVER COMPLETED FAR MORE WRITES THAN THE CLIENT WAS TOLD ABOUT (12, 20 and
   8 of them), while `WriteQueueFull` never meaningfully fired.
+
+── FIRST RUN WITH A WORKING INSTRUMENT, 2026-08-13T17:00Z ──
+Against witan.ci.ol.mit.edu at 3e8e3ff, and confirmed row-for-row against the
+`witan-0` pod log — 32 `memory_store` handlers in the window, ALL `ok`, for the
+32 writes the two runs issued:
+
+  8 writers   PASS. 8 acked, 8/8 readable, 0 indeterminate, spread 1ms.
+  24 writers  FAIL, and this is the finding: 1 acked, 23 errored, and ALL 23 OF
+              THOSE COMMITTED. Not "some" — every single write the client was
+              told had failed was in the graph afterwards. 0 lost.
+  12 readers  alongside them: 0 clean, 12 degraded.
+
+★ SO THE DEPLOYMENT DOES NOT LOSE WRITES; IT LIES ABOUT THEM. At 24 concurrent
+  writers the honest summary is "96% of your writes succeeded and you were told
+  they failed". That is worse than losing them for any caller that retries: a
+  retry duplicates, and not retrying is correct — which no client can know.
+  Filed as tk-a-502-from-the-deployed-witan-does-not-mean-the--f76dcb; the
+  per-graph knee is on tk-concurrent-writes-to-the-deployed-witan-are-canc-02abbd.
 
 ★ A LOCAL CEILING TO KNOW ABOUT: past some worker count this probe stops being
   able to measure the server at all, because each worker is a separate
@@ -272,12 +305,14 @@ def _pinned_token(target: str, needed_s: float) -> tuple[str, float]:
 
 # ── worker ───────────────────────────────────────────────────────────────────
 #
-# Re-entered as a subprocess. Emits exactly one JSON line so the parent can read
-# results without sharing memory.
+# Re-entered as a subprocess. Emits its result as a JSON line so the parent can
+# read it without sharing memory, preceded by a `{"event": "fired"}` line the
+# moment it passes the barrier -- see _worker for why that one is separate.
 
 
 def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
     out: dict[str, Any] = {"index": index, "mode": mode}
+    fired: float | None = None
     try:
         srv = _srv(payload["target"], payload.get("token"))
         # Pay the connect + tool-list cost BEFORE the barrier; otherwise the
@@ -288,7 +323,23 @@ def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
         while time.time() < start_at:
             time.sleep(0.001)
 
-        fired = time.time()
+        # Stamped BEFORE the call and outside the success path. A worker that
+        # errors still fired, and recording the timestamp only on success is
+        # the same blind spot as verifying only acked slugs: at the loads worth
+        # measuring, most workers error, so the run then reports "only 1
+        # worker(s) fired at all" over a burst that was perfectly simultaneous
+        # -- and probe C's write window, built from these stamps, collapses to
+        # "no read overlapped any write" while the readers were in the storm.
+        out["fired_at"] = fired = time.time()
+        # ...and ANNOUNCED before it, not just recorded. A worker that hangs
+        # past the phase deadline is KILLED, so its final row is never printed
+        # and the parent has to synthesise one -- which put the timeout path
+        # back in the blind spot this commit is closing, for the workers most
+        # likely to be in it. The event is flushed now, so it survives the kill.
+        print(
+            json.dumps({"event": "fired", "index": index, "fired_at": fired}),
+            flush=True,
+        )
         if mode == "claim":
             result = srv.task_claim(
                 slug=payload["slug"], assignee=f"probe-worker-{index}"
@@ -316,8 +367,6 @@ def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
         else:  # pragma: no cover - guarded by the caller
             raise ValueError(f"unknown mode {mode!r}")
 
-        out["fired_at"] = fired
-        out["done_at"] = time.time()
         out["ok"] = True
         out["result"] = result
     except BaseException as exc:  # noqa: BLE001 - the failure IS the observation
@@ -325,6 +374,13 @@ def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
         out["error_type"] = type(exc).__name__
         out["error"] = str(exc)[:400]
         out.update(_error_detail(exc))
+    finally:
+        # Same reason as fired_at: a failed call still occupied the server for
+        # however long it took to fail, and that interval is what probe C's
+        # overlap check needs. Only set once the barrier was reached -- a worker
+        # that died during warmup never fired and must not claim a window.
+        if fired is not None:
+            out["done_at"] = time.time()
     print(json.dumps(out), flush=True)
 
 
@@ -442,36 +498,84 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
             proc.kill()
             stdout, stderr = proc.communicate()
             rows.append(
-                {
-                    "index": index,
-                    "mode": mode,
-                    "ok": False,
-                    "error_type": "TimeoutExpired",
-                    "error": (
-                        f"phase deadline reached ({WORKER_TIMEOUT_S:.0f}s after "
-                        "the epoch); killed"
-                    ),
-                }
+                _timed(
+                    {
+                        "index": index,
+                        "mode": mode,
+                        "ok": False,
+                        "error_type": "TimeoutExpired",
+                        "error": (
+                            f"phase deadline reached ({WORKER_TIMEOUT_S:.0f}s after "
+                            "the epoch); killed"
+                        ),
+                    },
+                    stdout,
+                )
             )
             continue
-        line = next(
-            (ln for ln in reversed(stdout.splitlines()) if ln.startswith("{")), None
-        )
-        if line is None:
+        result, fire = _parse_worker_output(stdout)
+        if result is None:
             rows.append(
-                {
-                    "index": index,
-                    "mode": mode,
-                    "ok": False,
-                    "error_type": "NoResult",
-                    "error": f"no result line; stderr={stderr[-300:]}",
-                }
+                _timed(
+                    {
+                        "index": index,
+                        "mode": mode,
+                        "ok": False,
+                        "error_type": "NoResult",
+                        "error": f"no result line; stderr={stderr[-300:]}",
+                    },
+                    stdout,
+                )
             )
         else:
-            row = json.loads(line)
-            row["mode"] = mode
-            rows.append(row)
+            result["mode"] = mode
+            # A worker that printed both is authoritative about its own timing;
+            # the fire event is only a fallback for the rows it never got to
+            # print. Merging the other way would overwrite a real done_at.
+            if fire and "fired_at" not in result:
+                result["fired_at"] = fire["fired_at"]
+            rows.append(result)
     return rows
+
+
+def _parse_worker_output(stdout: str) -> tuple[dict | None, dict | None]:
+    """Split a worker's stdout into its result row and its fire event.
+
+    The result is the last JSON line that is NOT the fire event -- picking the
+    last JSON line outright would hand back the event itself for a worker that
+    was killed after firing, and an event has no `ok`, so the phase would score
+    it as a degraded call rather than the hang it was.
+    """
+    fire, result = None, None
+    for line in stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if parsed.get("event") == "fired":
+            fire = parsed
+        else:
+            result = parsed
+    return result, fire
+
+
+def _timed(row: dict, stdout: str) -> dict:
+    """Give a parent-synthesised row the timing the worker did manage to emit.
+
+    A killed or crashed worker prints no result, so the parent builds the row --
+    and used to build it with no `fired_at`/`done_at` at all. Those workers are
+    the SLOWEST ones, so dropping their intervals shrank the write window
+    exactly where it should have been widest, and made a phase that hung look
+    like a phase that never fired. `done_at` is now, because the call was still
+    outstanding when the parent gave up on it.
+    """
+    _, fire = _parse_worker_output(stdout)
+    if fire:
+        row["fired_at"] = fire["fired_at"]
+        row["done_at"] = time.time()
+    return row
 
 
 @dataclass
@@ -526,6 +630,34 @@ def _timing(rows: list[dict], start_at: float) -> Timing:
     fired = [r["fired_at"] for r in rows if r.get("fired_at")]
     spread = (max(fired) - min(fired)) * 1000 if len(fired) > 1 else None
     return Timing(late=late, spread_ms=spread, n_fired=len(fired))
+
+
+def _write_window(write_rows: list[dict]) -> tuple[float, float] | None:
+    """First fire to last completion across the writers -- when the storm was on.
+
+    Built from ERRORED writers as well as successful ones, which is the whole
+    point: at the loads worth measuring most writers error, and a window drawn
+    from the survivors alone is both too narrow and, in an all-errored phase,
+    absent entirely.
+    """
+    fired = [r["fired_at"] for r in write_rows if r.get("fired_at")]
+    done = [r["done_at"] for r in write_rows if r.get("done_at")]
+    return (min(fired), max(done)) if fired and done else None
+
+
+def _in_window(row: dict, window: tuple[float, float] | None) -> bool:
+    """Did this worker's call overlap ``window`` at any point?
+
+    A row with no stamps never fired and cannot overlap anything -- saying it
+    did would manufacture the contention the caller is trying to certify.
+    """
+    return bool(
+        window
+        and row.get("fired_at")
+        and row.get("done_at")
+        and row["fired_at"] <= window[1]
+        and row["done_at"] >= window[0]
+    )
 
 
 # ── probe A: mutual exclusion ────────────────────────────────────────────────
@@ -880,17 +1012,16 @@ def probe_writes_and_reads(
     # that started after the last write finished is measuring an idle server,
     # and counting it as clean is how this probe would certify availability
     # under a load it never applied.
-    fired = [r["fired_at"] for r in write_rows if r.get("fired_at")]
-    done = [r["done_at"] for r in write_rows if r.get("done_at")]
-    window = (min(fired), max(done)) if fired and done else None
-    overlapping, disjoint = [], []
-    for row in read_ok:
-        if window is None or not (row.get("fired_at") and row.get("done_at")):
-            disjoint.append(row)
-        elif row["fired_at"] <= window[1] and row["done_at"] >= window[0]:
-            overlapping.append(row)
-        else:
-            disjoint.append(row)
+    window = _write_window(write_rows)
+    overlapping = [r for r in read_ok if _in_window(r, window)]
+    disjoint = [r for r in read_ok if not _in_window(r, window)]
+    # A DEGRADED read is placed in the window too. Only clean reads need it to
+    # justify a PASS, but a failure has to be attributable as well: "12 readers
+    # degraded" means the store under load only if those readers were under it.
+    # Reachable only since errored workers began stamping fired_at -- before
+    # that, an all-degraded phase reported the vacuous "no read overlapped any
+    # write", which reads as a timing defect rather than the outage it was.
+    bad_in_window = [r for r in read_bad if _in_window(r, window)]
 
     # Same rule as the writers: a reader refused a credential measured the
     # harness, not the store. Reads failing at the SAME latency as writes is
@@ -922,6 +1053,15 @@ def probe_writes_and_reads(
             f"\n      NOT UNDER LOAD: readers {[r.get('index') for r in disjoint]} "
             "ran outside the write window; their success says nothing about "
             "availability under concurrent writes"
+        )
+    elif not overlapping and read_bad:
+        # Distinguish the two ways C can have nothing to place: every reader
+        # failed (an outage, and the degradation IS the observation) versus the
+        # readers genuinely missing the window (a defective run).
+        c.detail += (
+            f"\n      EVERY READ DEGRADED: {len(bad_in_window)}/{len(read_bad)} of "
+            "them inside the write window, so this is the store under load, not "
+            "a mistimed run"
         )
     elif not overlapping:
         c.detail += "\n      NOT UNDER LOAD: no read overlapped any write"
