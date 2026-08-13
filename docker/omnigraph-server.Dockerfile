@@ -36,15 +36,27 @@ ARG OMNIGRAPH_VERSION=0.10.0
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG.
 ARG OMNIGRAPH_RELEASE_TAG=edge
+ARG OMNIGRAPH_SHA256_X86_64=6fba4673b995396a205a14dccfd6b569e30474470b8ee7bab7e0f978ebcd5536
+ARG OMNIGRAPH_SHA256_ARM64=e5915f2018ed020e33603cb97e7e5bee339f45ed687d1e21a21dd2abc44b719b
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
 FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS fetch
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
+ARG OMNIGRAPH_SHA256_X86_64
+ARG OMNIGRAPH_SHA256_ARM64
 ARG TARGETARCH=amd64
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
+# The tarball is checked against the digest pinned IN THIS REPO, not against the
+# .sha256 published beside it. On a moving tag (`edge`) that published file only
+# attests to whichever build was current at download time, so it cannot tie this
+# image to the build the repo was tested against — and the installer and the two
+# image builds could each resolve the same tag to a different commit while every
+# version/tag check still passed. Keep these in step with
+# witan_core/omnigraph_install.py :: _OMNIGRAPH_ASSET_SHA256;
+# `just check-omnigraph-pins` enforces it.
 RUN set -eux; \
     case "${TARGETARCH}" in \
         amd64) arch=x86_64 ;; \
@@ -54,8 +66,13 @@ RUN set -eux; \
     base="omnigraph-linux-${arch}"; \
     url="https://github.com/ModernRelay/omnigraph/releases/download/${OMNIGRAPH_RELEASE_TAG}"; \
     cd /tmp; \
+    case "${arch}" in \
+        x86_64) want="${OMNIGRAPH_SHA256_X86_64}" ;; \
+        arm64)  want="${OMNIGRAPH_SHA256_ARM64}" ;; \
+    esac; \
+    [ -n "${want}" ] || { echo "no pinned sha256 for ${base}" >&2; exit 1; }; \
     curl -fsSL -o "${base}.tar.gz" "${url}/${base}.tar.gz"; \
-    curl -fsSL -o "${base}.sha256" "${url}/${base}.sha256"; \
+    echo "${want}  ${base}.tar.gz" > "${base}.sha256"; \
     sha256sum -c "${base}.sha256"; \
     mkdir -p /out /stage; \
     tar -xzf "${base}.tar.gz" -C /stage; \

@@ -74,10 +74,20 @@ check-omnigraph-pins:
     installer_tag=$(awk -F'"' '/^_OMNIGRAPH_RELEASE_TAG = /{print $2; exit}' packages/witan-core/witan_core/omnigraph_install.py)
     server_tag=$(awk -F= '/^ARG OMNIGRAPH_RELEASE_TAG=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
     mcp_tag=$(awk -F= '/^ARG OMNIGRAPH_RELEASE_TAG=/{print $2; exit}' docker/witan.Dockerfile)
+    # ★ AND THE DIGEST, which is the only one of the three that actually pins a
+    # BUILD. `edge` is force-updated on every push to upstream main, so equal
+    # tags prove nothing: each tier can resolve the same tag to a different
+    # commit and every check above still passes, leaving a load-test result
+    # impossible to attribute. The linux/x86_64 digest is the one all three
+    # tiers share, so it is the one compared here.
+    installer_sha=$(awk '/^_OMNIGRAPH_ASSET_SHA256/{f=1} f && /omnigraph-linux-x86_64/{getline; gsub(/[^0-9a-f]/,""); print; exit}' packages/witan-core/witan_core/omnigraph_install.py)
+    server_sha=$(awk -F= '/^ARG OMNIGRAPH_SHA256_X86_64=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
+    mcp_sha=$(awk -F= '/^ARG OMNIGRAPH_SHA256_X86_64=/{print $2; exit}' docker/witan.Dockerfile)
     # An empty capture means the line moved or was renamed, not that the pins
     # agree — three empty strings would otherwise compare equal and pass.
     for pair in "installer:$installer" "server:$server" "mcp:$mcp" \
-                "installer_tag:$installer_tag" "server_tag:$server_tag" "mcp_tag:$mcp_tag"; do
+                "installer_tag:$installer_tag" "server_tag:$server_tag" "mcp_tag:$mcp_tag" \
+                "installer_sha:$installer_sha" "server_sha:$server_sha" "mcp_sha:$mcp_sha"; do
         if [[ -z "${pair#*:}" ]]; then
             echo "could not read the omnigraph pin for '${pair%%:*}' — the declaration moved or was renamed" >&2
             exit 1
@@ -97,7 +107,15 @@ check-omnigraph-pins:
         echo "  docker/witan.Dockerfile:                             $mcp_tag" >&2
         exit 1
     fi
-    echo "omnigraph pins agree: $installer (tag $installer_tag)"
+    if [[ "$installer_sha" != "$server_sha" || "$installer_sha" != "$mcp_sha" ]]; then
+        echo "omnigraph linux/x86_64 digest pins have drifted — the tiers would" >&2
+        echo "install DIFFERENT builds even though the version and tag agree:" >&2
+        echo "  packages/witan-core/witan_core/omnigraph_install.py: $installer_sha" >&2
+        echo "  docker/omnigraph-server.Dockerfile:                  $server_sha" >&2
+        echo "  docker/witan.Dockerfile:                             $mcp_sha" >&2
+        exit 1
+    fi
+    echo "omnigraph pins agree: $installer (tag $installer_tag, sha ${installer_sha:0:12}…)"
 
 # Fail if the pinned omnigraph binary reads a storage format this repo does not
 # declare — i.e. if a version bump is secretly a rebuild-every-graph event.

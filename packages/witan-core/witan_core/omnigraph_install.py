@@ -26,6 +26,7 @@ sets the previous version aside as ``omnigraph-<version>`` beside ``dest``, and
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import re
@@ -50,8 +51,14 @@ _OMNIGRAPH_VERSION = "0.10.0"
 #:
 #: ★ A MOVING TAG WEAKENS THAT SKIP CHECK, and the caveat is the price of using
 #: one: two different `edge` builds both report ``0.10.0``, so a machine that
-#: installed yesterday's will not re-download today's. Delete the binary (or
-#: pass a real release tag) when you need to be certain which build you have.
+#: installed yesterday's will not re-download today's.
+#:
+#: There is no flag or environment override for this — the tag is a property of
+#: the repo, not of a run, precisely because all three tiers must agree on it
+#: (``just check-omnigraph-pins``). To be certain which build you are on:
+#: delete the binary and re-run ``witan setup``, which re-downloads and verifies
+#: against the digest pinned below. To move OFF the moving tag, edit this
+#: constant to ``v<version>`` and refresh those digests in the same commit.
 #:
 #: Renovate manages the VERSION line only (see renovate.json). While this is
 #: ``edge`` a bump is not meaningful, so pin a real ``v<version>`` before
@@ -78,6 +85,40 @@ _OMNIGRAPH_INTERNAL_SCHEMA = 6
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
     ("darwin", "arm64"): "omnigraph-macos-arm64.tar.gz",
+}
+
+#: SHA-256 of each asset, pinned in-repo. Keyed by asset NAME rather than by
+#: platform so the two Dockerfiles — which select by ``TARGETARCH``, not by
+#: ``platform.system()`` — can carry the identical values and
+#: ``just check-omnigraph-pins`` can compare them across all three tiers.
+#:
+#: ★ THIS IS WHAT MAKES A MOVING TAG REPRODUCIBLE, AND IT IS NOT OPTIONAL WHILE
+#: WE ARE ON ONE. ``edge`` is force-updated on every push to upstream main, so
+#: the tag alone guarantees nothing: the installer and the two image builds can
+#: each resolve it to a different commit and every version/tag check still
+#: passes. A load-test result measured that way cannot be attributed to a build.
+#: Downloading the published ``.sha256`` alongside the tarball does not fix that
+#: either — it only attests to whichever build was current at download time.
+#:
+#: So the digest is recorded here, and a mismatch is a hard failure. When
+#: upstream pushes, the next fetch FAILS LOUDLY rather than silently installing
+#: a different binary; refreshing these values is then a deliberate act that
+#: says "I am moving to a new build", exactly as editing
+#: ``_OMNIGRAPH_INTERNAL_SCHEMA`` says "I know this rebuilds every graph".
+#:
+#: Refresh with, for each asset:
+#:     curl -fsSL https://github.com/ModernRelay/omnigraph/releases/download/\
+#: <tag>/<asset>.sha256
+_OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
+    "omnigraph-linux-x86_64.tar.gz": (
+        "6fba4673b995396a205a14dccfd6b569e30474470b8ee7bab7e0f978ebcd5536"
+    ),
+    "omnigraph-linux-arm64.tar.gz": (
+        "e5915f2018ed020e33603cb97e7e5bee339f45ed687d1e21a21dd2abc44b719b"
+    ),
+    "omnigraph-macos-arm64.tar.gz": (
+        "5059a08f88b593a5c19381a88b13e64a43d19a330e457c9df15a71313a7cd0f9"
+    ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 #: Anchored, and a full semver — so the sweep that prunes stale set-aside
@@ -284,6 +325,28 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
             except Exception as exc:  # noqa: BLE001
                 console.print(
                     f"  [red]omnigraph download failed[/red] ({exc}); install manually"
+                )
+                return
+            # ★ VERIFY BEFORE EXTRACTING, and refuse rather than warn. Nothing
+            # checked these bytes before this: the installer put whatever the
+            # URL returned onto a developer's PATH. On a moving tag it is also
+            # the only thing tying the binary to the build this repo was tested
+            # against — see _OMNIGRAPH_ASSET_SHA256.
+            expected = _OMNIGRAPH_ASSET_SHA256.get(asset)
+            if expected is None:
+                console.print(
+                    f"  [red]omnigraph[/red] — no pinned checksum for {asset}; "
+                    "refusing to install an unverified binary"
+                )
+                return
+            actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+            if actual != expected:
+                console.print(
+                    f"  [red]omnigraph checksum mismatch[/red] for {asset}\n"
+                    f"    expected {expected}\n    got      {actual}\n"
+                    f"  The '{_OMNIGRAPH_RELEASE_TAG}' tag has moved, or the "
+                    "download was corrupted. Refresh the pinned digest "
+                    "deliberately — do not install this."
                 )
                 return
             with tarfile.open(archive) as tf:
