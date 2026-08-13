@@ -61,32 +61,48 @@ def test_rows_for_run_lists_rather_than_searches():
     assert srv.calls == [{"kind": "agent_context", "repo": "r"}]
 
 
-def test_rows_for_run_never_raises():
-    """It runs after the measurement. A failure to reconcile must degrade the
-    verdict to "found nothing", not destroy a phase's results."""
-    assert _rows_for_run(_Srv([], boom=True), LABEL, repo="r") == {}
+def test_rows_for_run_returns_none_when_it_could_not_look():
+    """★ `None` IS NOT `{}`. An empty listing is a successful look that found
+    nothing, which licenses "absent". A failed listing establishes no absence —
+    collapsing them would print "a clean refusal" about writes whose fate is
+    unknown, the same false certainty the reconciliation removes."""
+    assert _rows_for_run(_Srv([], boom=True), LABEL, repo="r") is None
+    assert _rows_for_run(_Srv([]), LABEL, repo="r") == {}
 
 
 @pytest.mark.parametrize(
     "row",
     [
+        # ★ THE SHAPE A DEPLOYED 401 ACTUALLY ARRIVES IN. The outer exception
+        # says only "Server returned an error response"; the status survives
+        # solely in the structured field `_error_detail` recorded. Classifying
+        # on prose alone counted these as capacity — the bug being fixed.
+        {
+            "error_type": "MCPError",
+            "error": "Server returned an error response",
+            "http_status": 401,
+        },
+        {"error_type": "MCPError", "error": "…", "http_status": 403},
+        # A client that classified it itself may carry no status at all.
         {"error_type": "RemoteCredentialRejected", "error": "…"},
-        {"error_type": "MCPError", "error": "server returned 401 Unauthorized"},
         {"error_type": "X", "error": "it rejected the credential"},
+        {"error_type": "MCPError", "error": "401 Unauthorized"},
     ],
 )
 def test_an_auth_failure_is_recognised(row):
-    """Matched on the message because a worker is a separate PROCESS and hands
-    back JSON, not an exception — and both the classified client error and the
-    raw status have to be accepted."""
     assert _is_auth_failure(row)
 
 
 @pytest.mark.parametrize(
     "row",
     [
-        {"error_type": "TimeoutExpired", "error": "exceeded 90s"},
+        {"error_type": "TimeoutExpired", "error": "phase deadline reached"},
         {"error_type": "MCPError", "error": "Server returned an error response"},
+        # A non-auth status must not be swept in by the structured check.
+        {"error_type": "MCPError", "error": "…", "http_status": 502},
+        # `-32603` contains "401"-adjacent digits in some payloads; the prose
+        # arm must not match on a bare number for that reason.
+        {"error_type": "MCPError", "error": "error_code=-32603 code 4013"},
         {},
     ],
 )

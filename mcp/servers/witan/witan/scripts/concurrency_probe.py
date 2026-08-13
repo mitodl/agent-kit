@@ -420,10 +420,21 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
         proc.stdin.close()
         procs.append((mode, index, proc))
 
+    # ★ ONE ABSOLUTE DEADLINE FOR THE WHOLE PHASE, not a fresh one per worker.
+    #
+    # This loop waits on the workers SEQUENTIALLY, so a per-process timeout
+    # bounds each wait and nothing bounds the phase: N hung workers cost
+    # N x WORKER_TIMEOUT_S, and the caller's token-lifetime arithmetic
+    # (`lead + WORKER_TIMEOUT_S + margin`) is then wrong by a factor of N. That
+    # is how a phase outlived its pinned token and reported the resulting 401s
+    # as saturation. Every remaining wait now shares one budget measured from
+    # the epoch, so the phase cannot outrun what the token was checked against.
+    phase_deadline = start_at + WORKER_TIMEOUT_S
     rows = []
     for mode, index, proc in procs:
+        remaining = max(0.0, phase_deadline - time.time())
         try:
-            stdout, stderr = proc.communicate(timeout=WORKER_TIMEOUT_S)
+            stdout, stderr = proc.communicate(timeout=remaining)
         except subprocess.TimeoutExpired:
             # Kill and REAP it. Letting the exception escape aborted the whole
             # probe and left the worker running against the live deployment,
@@ -436,7 +447,10 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
                     "mode": mode,
                     "ok": False,
                     "error_type": "TimeoutExpired",
-                    "error": f"exceeded {WORKER_TIMEOUT_S:.0f}s; killed",
+                    "error": (
+                        f"phase deadline reached ({WORKER_TIMEOUT_S:.0f}s after "
+                        "the epoch); killed"
+                    ),
                 }
             )
             continue
@@ -594,23 +608,28 @@ def _writer_title(label: str, index: int) -> str:
     return f"{label} writer {index}"
 
 
-def _rows_for_run(srv, label: str, repo: str | None) -> dict[str, str]:
-    """``{title: slug}`` for the rows this run left in the graph.
+def _rows_for_run(srv, label: str, repo: str | None) -> dict[str, str] | None:
+    """``{title: slug}`` for the rows this run left in the graph, or ``None``.
 
     Listed rather than searched: ``memory_search`` returns the top 20 by BM25,
     and a 24-writer run needs all of them — a cap silently becomes "the rest
     were never written", which is the exact false negative being fixed.
 
-    Never raises. This runs after the measurement, and a failure to reconcile
-    must degrade the verdict to "unknown" rather than destroy a phase's results;
-    the caller reads an empty mapping as "found nothing" and the LOST/absent
-    bucket makes that visible.
+    ★ ``None`` MEANS "COULD NOT LOOK", AND IS NOT THE SAME AS ``{}``. An empty
+    mapping is a successful listing that found nothing, which licenses the
+    caller to say a write is absent. A failed listing establishes no absence at
+    all, and collapsing the two would let a listing error print "a clean
+    refusal" about writes whose fate is unknown — manufacturing exactly the
+    false certainty this reconciliation exists to remove.
+
+    Never raises: it runs after the measurement, so a failure here must degrade
+    the verdict to "unverifiable" rather than destroy a phase's results.
     """
     try:
         rows = srv.memory_list(kind="agent_context", repo=repo)
     except BaseException as exc:  # noqa: BLE001 — see docstring
         print(f"  reconcile: could not list rows ({type(exc).__name__}: {exc})")
-        return {}
+        return None
     return {
         r["title"]: r["slug"]
         for r in rows or []
@@ -618,19 +637,28 @@ def _rows_for_run(srv, label: str, repo: str | None) -> dict[str, str]:
     }
 
 
+_AUTH_STATUSES = frozenset({401, 403})
+
+
 def _is_auth_failure(row: dict) -> bool:
     """Whether a worker row failed because its credential was refused.
 
-    Matched on the message because the worker is a separate PROCESS and hands
-    back JSON, not an exception. Both the classified client error and the raw
-    status are accepted: the probe pins a token deliberately, so a client
-    without a refresher reports rather than retries, and older clients say only
-    what the transport said.
+    ★ THE STRUCTURED FIELD FIRST. ``_error_detail`` already walks the exception
+    chain and records ``http_status`` off whichever link kept its response, so
+    that is the reliable signal — and it is the one that matters in practice,
+    because the outer exception a deployed 401 arrives wrapped in says only
+    "Server returned an error response". Classifying on prose alone would go on
+    counting those as capacity, which is the bug this function was added to fix.
+
+    The text match stays as a fallback: the worker is a separate PROCESS handing
+    back JSON, not an exception, and a client that classified the failure itself
+    (``RemoteCredentialRejected``) may report no status at all.
     """
+    if row.get("http_status") in _AUTH_STATUSES:
+        return True
     blob = f"{row.get('error_type', '')} {row.get('error', '')}".lower()
     return (
         "credentialrejected" in blob
-        or "401" in blob
         or "unauthorized" in blob
         or "rejected the credential" in blob
     )
@@ -740,14 +768,27 @@ def probe_writes_and_reads(
     # NOT get a slug back for — those are exactly the orphans that accumulated
     # in the shared graph, one batch per run, because nothing knew they existed.
     already = set(slug_sink)
-    slug_sink.extend(sorted(set(found.values()) - already))
-    indeterminate = sorted(
-        (r["index"], found[attempted[r["index"]]])
-        for r in write_errors
-        if attempted.get(r["index"]) in found
+    slug_sink.extend(sorted(set((found or {}).values()) - already))
+    # A failed listing establishes NO absence, so every errored write is
+    # unverifiable rather than refused. Saying "a clean refusal" here on the
+    # strength of a listing that never ran is the same false certainty the
+    # reconciliation exists to remove.
+    unreconciled = found is None
+    indeterminate = (
+        []
+        if unreconciled
+        else sorted(
+            (r["index"], found[attempted[r["index"]]])
+            for r in write_errors
+            if attempted.get(r["index"]) in found
+        )
     )
-    vanished = sorted(
-        r["index"] for r in write_errors if attempted.get(r["index"]) not in found
+    vanished = (
+        []
+        if unreconciled
+        else sorted(
+            r["index"] for r in write_errors if attempted.get(r["index"]) not in found
+        )
     )
     # An auth failure is the HARNESS losing its credential, not the store
     # failing. Counting it as an errored write reports saturation for an expired
@@ -774,6 +815,7 @@ def probe_writes_and_reads(
             and not unknown
             and not no_slug
             and not indeterminate
+            and not unreconciled
             and write_timing.raced(spread_tol)
         ),
         detail=(
@@ -796,7 +838,14 @@ def probe_writes_and_reads(
             "retry would duplicate them; not retrying loses nothing. This is "
             "the failure the probe exists to detect."
         )
-    if vanished:
+    if unreconciled:
+        b.detail += (
+            f"\n      NOT RECONCILED: the row listing failed, so the "
+            f"{len(write_errors)} errored write(s) are UNVERIFIABLE — nothing "
+            "here establishes they did not commit. Re-run, or check the graph "
+            f"by hand for rows titled {payload_w['label']!r}."
+        )
+    elif vanished:
         b.detail += f"\n      errored and absent (a clean refusal): {vanished}"
     if write_auth:
         b.detail += (
