@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.17.0] - 2026-08-13
+
+Makes a saturated deployment answerable. Measured against the CI deployment:
+concurrent writes 502 at exactly 30s, and counting the rows afterwards showed
+two runs disagreeing. The first — bursts of 4, then 8, then 16 writers — had
+committed every one of its 28 writes despite 502ing on most of them; the
+second, a standalone 16-writer burst, committed only 14 of 16. So the deadline
+cuts the *response*, the backend usually finishes the write anyway, and
+nothing in the reply distinguishes the two —
+while the client reported all of it as "could not be reached", which is wrong
+twice over and invites the retry that duplicates the row
+([#225](https://github.com/mitodl/agent-kit/pull/225)).
+
+### Added
+
+- `WriteQueueFull` and a process-wide, **per-graph** in-flight bound on remote
+  writes, applied around the whole call in `OmnigraphClient._http_execute`.
+  Measured: 4 concurrent single-row writes take 15.5s wall, 6 take 31.2s, 8
+  take 51.1s — against a 30s deadline — so past ~4 in flight the queue provably
+  cannot drain in time. Per graph because the serialisation is: writes to two
+  different graphs each finish in their solo time. Reads are ungated; they hold
+  flat at ~5 req/s from 8 to 36 concurrent readers.
+  The refusal says the one thing a 502 never can: nothing was written.
+- `REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR` (`WITAN_REMOTE_WRITE_MAX_INFLIGHT`,
+  default 4) and `REMOTE_WRITE_QUEUE_WAIT_ENV_VAR`
+  (`WITAN_REMOTE_WRITE_QUEUE_SECONDS`, default 10), read **at call time** so
+  `kubectl set env` moves them on a live pod. An unusable value logs and falls
+  back rather than raising — a typo in a Deployment env var must not turn every
+  write into a crash. `0` is legal and refuses every remote write, which is a
+  real incident answer.
+- `REMOTE_CALL_BUDGET_ENV_VAR` — how long the caller's own deadline allows.
+  Unset means unbounded, which is right for a CLI; a deployment that knows it
+  is cut at 30s sets it and gets the fail-fast below.
+- `remote.proxy.RemoteWriteIndeterminate` and `gateway_failure()`. A 502/504 on
+  a **write** now reports its outcome as unknown and says to re-read before
+  retrying, instead of claiming the service was unreachable. A read cut the same
+  way stays `RemoteUnreachable` — nothing was dispatched — but stops asserting
+  the service was down when it demonstrably answered. 503 is deliberately not in
+  that set: no upstream was tried, so "did not happen" is still exact.
+- `omnigraph_http.parse_retry_after()` and `Outcome.retry_after`.
+
+### Changed
+
+- The admission-cap backoff prefers the server's own `Retry-After` over its
+  blind schedule, where the HTTP transport can see one (the CLI's error path
+  discards response headers, so the subprocess path is unchanged). A hint longer
+  than the call's remaining budget fails immediately, quoting the number, rather
+  than sleeping through a deadline it cannot meet — a sleep that outlives the
+  connection turns a late write into an unknowable one.
+- Gateway status is classified **before** transport-exception type. An APISIX
+  502 arrives as an `httpx2.HTTPStatusError`, which *is* an `httpx2.HTTPError`,
+  so asking about the transport first buried every one of them under "could not
+  be reached". Same ordering trap the 413 handling already carried a note about.
+
 ## [0.16.0] - 2026-08-10
 
 Prepares for omnigraph 0.9.0, which changes the on-disk storage format and —

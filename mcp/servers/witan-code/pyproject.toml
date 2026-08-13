@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.12.3"
+version = "0.13.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -22,13 +22,20 @@ dependencies = [
     # and it has now been tripped THREE times. If you add a witan_core symbol in
     # the same change as its caller, bump this line in that change: the
     # workspace resolves witan-core by path, so nothing here can catch it.
-    # (>=0.14 was required for remote.proxy.RemoteToolFailed, re-exported at
+    # (>=0.17 for remote.proxy.RemoteWriteIndeterminate AND gateway_failure,
+    # both imported at module scope by remote/store.py — so an older witan-core
+    # fails at IMPORT, exactly like the cases above; it does not degrade into
+    # retrying an indeterminate write, because the module holding that retry is
+    # the one that fails to load. Worth pinning precisely because store.py is
+    # the transport index writes actually go out on: the floor is what keeps a
+    # published install from being dead on arrival rather than subtly wrong;
+    # >=0.14 was required for remote.proxy.RemoteToolFailed, re-exported at
     # module scope by witan_code/remote/proxy.py and named by cli.py's cli();
     # >=0.11 for chunking.MCP_LOAD_MAX_BYTES, evaluated as a default argument;
     # >=0.10 for witan_core.chunking + load_batch, both moved up from this
     # package; >=0.9 for observability.middleware; >=0.8 for
     # OmnigraphClient.change_many with chunk_size.)
-    "witan-core[cli,remote,observability]>=0.14,<1",
+    "witan-core[cli,remote,observability]>=0.17,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled
@@ -112,7 +119,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 [tool.bumpversion]
-current_version = "0.12.3"
+current_version = "0.13.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
