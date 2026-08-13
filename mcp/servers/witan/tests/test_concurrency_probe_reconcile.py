@@ -14,8 +14,11 @@ being reported as saturation.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from witan.scripts import concurrency_probe as cp
 from witan.scripts.concurrency_probe import (
     _is_auth_failure,
     _rows_for_run,
@@ -110,3 +113,69 @@ def test_a_capacity_failure_is_not_mistaken_for_auth(row):
     """The direction that matters: calling saturation "auth" would excuse the
     very failure the probe exists to measure."""
     assert not _is_auth_failure(row)
+
+
+class _Boom:
+    """A proxy whose warmup succeeds and whose measured call fails."""
+
+    def task_get(self, **_):
+        return {"slug": "tk-warmup"}
+
+    def memory_store(self, **_):
+        raise RuntimeError("Server returned an error response")
+
+
+def test_an_errored_worker_still_reports_when_it_fired(monkeypatch, capsys):
+    """★ THE SAME BLIND SPOT AS THE SLUGS, in the timing bookkeeping.
+
+    `fired_at` used to be assigned after the call returned, so only successes
+    carried one. At the loads worth measuring most workers error, and a
+    perfectly simultaneous 24-way burst then reported `only 1 worker(s) fired at
+    all` — while probe C's write window, built from the same stamps, collapsed
+    and declared `no read overlapped any write` over readers that were in the
+    middle of the storm. Both were observed on CI on 2026-08-13.
+    """
+    monkeypatch.setattr(cp, "_srv", lambda *a, **k: _Boom())
+    cp._worker(
+        "store",
+        index=3,
+        start_at=0.0,
+        payload={
+            "target": "ci",
+            "warmup_slug": "tk-warmup",
+            "label": LABEL,
+            "run_id": "probe-abc123",
+            "repo": "https://github.com/mitodl/agent-kit",
+        },
+    )
+    row = json.loads(capsys.readouterr().out.strip())
+
+    assert row["ok"] is False
+    assert row["fired_at"] > 0
+    # done_at too: a failed call still occupied the server for as long as it
+    # took to fail, and that interval is the one probe C overlaps against.
+    assert row["done_at"] >= row["fired_at"]
+    assert cp._timing([row], start_at=0.0).n_fired == 1
+
+
+def test_a_worker_that_never_reached_the_barrier_claims_no_window(monkeypatch, capsys):
+    """The other direction: a worker that died in warmup did NOT fire, and
+    stamping it would manufacture contention out of a crash."""
+
+    class _DeadOnWarmup:
+        def task_get(self, **_):
+            raise RuntimeError("connect refused")
+
+    monkeypatch.setattr(cp, "_srv", lambda *a, **k: _DeadOnWarmup())
+    cp._worker(
+        "store",
+        index=0,
+        start_at=0.0,
+        payload={"target": "ci", "warmup_slug": "tk-warmup"},
+    )
+    row = json.loads(capsys.readouterr().out.strip())
+
+    assert row["ok"] is False
+    assert "fired_at" not in row
+    assert "done_at" not in row
+    assert cp._timing([row], start_at=0.0).n_fired == 0

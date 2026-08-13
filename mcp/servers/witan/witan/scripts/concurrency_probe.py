@@ -134,9 +134,37 @@ terminated in one 9-minute window. The same load previously killed it outright.
      failures are now counted and named separately, and the per-phase token
      margin was widened after a near-miss (see _PHASE_MARGIN_S).
 
+  3. A BURST WHERE EVERYONE ERRORS READ AS `only 1 worker(s) fired at all`.
+     `fired_at` was stamped after the call RETURNED, so only successful
+     workers carried one — the same "count the successes" blind spot as 1,
+     in the bookkeeping that certifies the run observed contention. At the
+     loads worth measuring most workers error, so a 24-way burst with a 1ms
+     spread reported itself NOT CONCURRENT, and probe C's write window —
+     built from those same stamps — collapsed to `no read overlapped any
+     write` while its readers were in the middle of the storm. Both stamps
+     are now taken around the call regardless of outcome.
+
   Consistent across three runs that day, and the only thing that was: THE
   SERVER COMPLETED FAR MORE WRITES THAN THE CLIENT WAS TOLD ABOUT (12, 20 and
   8 of them), while `WriteQueueFull` never meaningfully fired.
+
+── FIRST RUN WITH A WORKING INSTRUMENT, 2026-08-13T17:00Z ──
+Against witan.ci.ol.mit.edu at 3e8e3ff, and confirmed row-for-row against the
+`witan-0` pod log — 32 `memory_store` handlers in the window, ALL `ok`, for the
+32 writes the two runs issued:
+
+  8 writers   PASS. 8 acked, 8/8 readable, 0 indeterminate, spread 1ms.
+  24 writers  FAIL, and this is the finding: 1 acked, 23 errored, and ALL 23 OF
+              THOSE COMMITTED. Not "some" — every single write the client was
+              told had failed was in the graph afterwards. 0 lost.
+  12 readers  alongside them: 0 clean, 12 degraded.
+
+★ SO THE DEPLOYMENT DOES NOT LOSE WRITES; IT LIES ABOUT THEM. At 24 concurrent
+  writers the honest summary is "96% of your writes succeeded and you were told
+  they failed". That is worse than losing them for any caller that retries: a
+  retry duplicates, and not retrying is correct — which no client can know.
+  Filed as tk-a-502-from-the-deployed-witan-does-not-mean-the--f76dcb; the
+  per-graph knee is on tk-concurrent-writes-to-the-deployed-witan-are-canc-02abbd.
 
 ★ A LOCAL CEILING TO KNOW ABOUT: past some worker count this probe stops being
   able to measure the server at all, because each worker is a separate
@@ -278,6 +306,7 @@ def _pinned_token(target: str, needed_s: float) -> tuple[str, float]:
 
 def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
     out: dict[str, Any] = {"index": index, "mode": mode}
+    fired: float | None = None
     try:
         srv = _srv(payload["target"], payload.get("token"))
         # Pay the connect + tool-list cost BEFORE the barrier; otherwise the
@@ -288,7 +317,14 @@ def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
         while time.time() < start_at:
             time.sleep(0.001)
 
-        fired = time.time()
+        # Stamped BEFORE the call and outside the success path. A worker that
+        # errors still fired, and recording the timestamp only on success is
+        # the same blind spot as verifying only acked slugs: at the loads worth
+        # measuring, most workers error, so the run then reports "only 1
+        # worker(s) fired at all" over a burst that was perfectly simultaneous
+        # -- and probe C's write window, built from these stamps, collapses to
+        # "no read overlapped any write" while the readers were in the storm.
+        out["fired_at"] = fired = time.time()
         if mode == "claim":
             result = srv.task_claim(
                 slug=payload["slug"], assignee=f"probe-worker-{index}"
@@ -316,8 +352,6 @@ def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
         else:  # pragma: no cover - guarded by the caller
             raise ValueError(f"unknown mode {mode!r}")
 
-        out["fired_at"] = fired
-        out["done_at"] = time.time()
         out["ok"] = True
         out["result"] = result
     except BaseException as exc:  # noqa: BLE001 - the failure IS the observation
@@ -325,6 +359,13 @@ def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
         out["error_type"] = type(exc).__name__
         out["error"] = str(exc)[:400]
         out.update(_error_detail(exc))
+    finally:
+        # Same reason as fired_at: a failed call still occupied the server for
+        # however long it took to fail, and that interval is what probe C's
+        # overlap check needs. Only set once the barrier was reached -- a worker
+        # that died during warmup never fired and must not claim a window.
+        if fired is not None:
+            out["done_at"] = time.time()
     print(json.dumps(out), flush=True)
 
 
