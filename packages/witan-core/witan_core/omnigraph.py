@@ -523,9 +523,14 @@ class _WriteGate:
     def __init__(self) -> None:
         self._cv = threading.Condition()
         self._in_flight: dict[str, int] = {}
+        #: EWMA of how long an ADMITTED write takes to execute, per graph.
+        #: See ``_record`` for why this is execution time and not the wait.
+        self._service: dict[str, float] = {}
 
     @contextmanager
-    def admit(self, key: str, label: str) -> Iterator[None]:
+    def admit(
+        self, key: str, label: str, call_deadline: float | None = None
+    ) -> Iterator[None]:
         """Hold one write slot for ``key``, or raise :class:`WriteQueueFull`.
 
         Both bounds are resolved HERE, on entry, rather than captured at import
@@ -533,6 +538,19 @@ class _WriteGate:
         an env override set on the Deployment and a test's monkeypatch both take
         effect on the very next call
         ([[les-witan-core-monkeypatch-constants]]).
+
+        ★ ``call_deadline`` IS WHAT MAKES THIS AN ADMISSION POLICY RATHER THAN A
+        QUEUE. Bounding concurrency and capping the wait does not ask the only
+        question that matters — *will this finish in time?* — so the gate used
+        to admit a write that waited 3s for a slot and then ran for 40s. Watched
+        live at 24 writers: 56 handlers, durations climbing 3s → 73s, 26 of them
+        past the caller's 30s deadline, and ZERO refusals, because a slot always
+        freed inside the 10s cap. It let through exactly the writes that strand.
+
+        Now a write is admitted only if the graph's measured service time still
+        fits in what the call has left. Time spent queueing is charged
+        automatically: ``call_deadline`` is absolute, so every second waited
+        shrinks the remaining budget the check is made against.
         """
         limit = _env_override(
             REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR, _REMOTE_WRITE_MAX_INFLIGHT, int
@@ -540,32 +558,126 @@ class _WriteGate:
         wait = _env_override(
             REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, _REMOTE_WRITE_QUEUE_WAIT, float
         )
-        deadline = time.monotonic() + wait
+        wait_deadline = time.monotonic() + wait
         with self._cv:
-            while self._in_flight.get(key, 0) >= limit:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
+            while True:
+                # ★ CHECKED BEFORE EVERY WAIT, not once after the queue clears.
+                # Asking only on the way out let a write sit the full queue
+                # timeout and THEN be refused for a reason that was already
+                # true when it arrived — burning the caller's budget to reach a
+                # verdict this could have given immediately. The whole point is
+                # to stop consuming a deadline that cannot be met.
+                self._refuse_if_it_cannot_finish(key, label, call_deadline)
+                if self._in_flight.get(key, 0) < limit:
+                    break
+                waitable = wait_deadline - time.monotonic()
+                # And the wait is bounded by the last moment admission could
+                # still be viable: `wait()` does not wake when the budget runs
+                # out, so without this the thread sleeps past its own deadline
+                # and is refused late for having waited.
+                viable = self._latest_viable_wait(key, call_deadline)
+                if viable is not None:
+                    waitable = min(waitable, viable)
+                if waitable <= 0:
                     raise WriteQueueFull(
                         f"omnigraph {label} was refused before it was sent: "
                         f"{self._in_flight.get(key, 0)} writes are already in "
-                        f"flight against {key} and no slot freed within "
-                        f"{wait:.0f}s. This graph serialises writes at roughly "
-                        "one every 4 seconds, so a write queued this long is "
-                        "unlikely to complete before the caller stops waiting. "
-                        "NOTHING WAS WRITTEN — retry once the burst clears."
+                        f"flight against {key}, and waiting longer cannot help "
+                        "— the slot would not free in time for this call to "
+                        "finish. NOTHING WAS WRITTEN — retry once the burst "
+                        "clears."
                     )
-                self._cv.wait(remaining)
+                self._cv.wait(waitable)
             self._in_flight[key] = self._in_flight.get(key, 0) + 1
+        started = time.monotonic()
         try:
             yield
         finally:
             with self._cv:
+                self._record(key, time.monotonic() - started)
                 remaining_writes = self._in_flight[key] - 1
                 if remaining_writes:
                     self._in_flight[key] = remaining_writes
                 else:
                     del self._in_flight[key]
                 self._cv.notify_all()
+
+    def _latest_viable_wait(
+        self, key: str, call_deadline: float | None
+    ) -> float | None:
+        """Seconds this write may still wait and hope to finish, or ``None``.
+
+        Caller holds ``self._cv``. ``None`` means there is nothing to bound the
+        wait by — no declared deadline, or no measured service time yet — and
+        the queue timeout is the only limit that applies.
+        """
+        if call_deadline is None:
+            return None
+        estimate = self._service.get(key)
+        if estimate is None:
+            return None
+        return (call_deadline - estimate) - time.monotonic()
+
+    def _refuse_if_it_cannot_finish(
+        self, key: str, label: str, call_deadline: float | None
+    ) -> None:
+        """Refuse a write the graph cannot serve inside the caller's budget.
+
+        Caller holds ``self._cv``.
+
+        ★ NEVER REFUSES AN IDLE GRAPH. If nothing is in flight, this write is
+        the only thing the graph has to do, and refusing it would be a deadlock
+        dressed as backpressure: a graph whose service time exceeds the budget
+        would decline every write forever and never gather a faster sample to
+        recover on. Under load the same rule keeps the gate honest — the
+        estimate can only refuse work that is genuinely queued behind something.
+
+        With no samples yet the gate falls back to the pre-existing behaviour.
+        A cold process must not refuse the very writes it needs in order to
+        learn what a write costs.
+        """
+        if call_deadline is None or not self._in_flight.get(key):
+            return
+        estimate = self._service.get(key)
+        if estimate is None:
+            return
+        remaining = call_deadline - time.monotonic()
+        if estimate <= remaining:
+            return
+        raise WriteQueueFull(
+            f"omnigraph {label} was refused before it was sent: writes to "
+            f"{key} are currently taking about {estimate:.0f}s and this call "
+            f"has {max(remaining, 0.0):.0f}s left, so it cannot complete in "
+            "time. NOTHING WAS WRITTEN — retry once the burst clears. "
+            "(Admitting it anyway is how a write ends up committed while the "
+            "caller is told it failed.)"
+        )
+
+    #: How fast the service-time estimate reacts. Deliberately asymmetric —
+    #: quick to believe things got slower, slow to believe they got faster.
+    #: The failure being prevented is admitting during a slowdown, and a mean
+    #: that decays as fast as it climbs spends most of a burst under-predicting
+    #: exactly when the tail is what stranded the write.
+    _RISE = 0.5
+    _FALL = 0.1
+
+    def _record(self, key: str, elapsed: float) -> None:
+        """Fold one write's EXECUTION time into the estimate for ``key``.
+
+        Caller holds ``self._cv``.
+
+        ★ EXECUTION, NOT TOTAL. ``elapsed`` is measured from admission, after
+        any queueing — feeding the wait back in would double-count it: the
+        queue would inflate the estimate, the inflated estimate would refuse
+        more, and one burst would leave the gate convinced every write costs a
+        minute. The measured 3s → 73s spread is mostly queue, not service.
+        """
+        previous = self._service.get(key)
+        if previous is None:
+            self._service[key] = elapsed
+            return
+        alpha = self._RISE if elapsed > previous else self._FALL
+        self._service[key] = previous + alpha * (elapsed - previous)
 
 
 _WRITE_GATE = _WriteGate()
@@ -1469,7 +1581,9 @@ class OmnigraphClient:
         )
         deadline = time.monotonic() + budget if budget else None
         gate = (
-            _WRITE_GATE.admit(f"{self.server_url}|{self.graph_id}", label)
+            _WRITE_GATE.admit(
+                f"{self.server_url}|{self.graph_id}", label, call_deadline=deadline
+            )
             if gate_write
             else nullcontext()
         )
