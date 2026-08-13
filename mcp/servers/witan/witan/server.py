@@ -229,6 +229,12 @@ class _ActorScopedClient:
 
 client = _ActorScopedClient()
 
+# One named mutation and its parameters: ``(query_file, query_name, params)``,
+# the triple both ``client.change`` and ``client.change_many`` take. Named so a
+# helper can hand its caller a mutation to commit *with* the caller's own —
+# several rows in one Lance commit instead of one commit each.
+_Step = tuple[str, str, dict]
+
 
 def apply_schema() -> dict:
     """Apply the bundled ``schema.pg`` to the configured store (idempotent).
@@ -2765,89 +2771,141 @@ def _code_branch_slug(repo: str, branch: str) -> str:
     return f"{repo}|{branch}"
 
 
-def _upsert_code_branch(repo: str, branch: str) -> str:
-    """Return the CodeBranch slug for (repo, branch), creating/touching it.
+def _upsert_code_branch_step(repo: str, branch: str) -> _Step:
+    """The mutation that creates or touches the CodeBranch for (repo, branch).
 
     A fresh branch is inserted with status ``active``; an existing one is
     just touched (``updated_at`` bumped, status reset to ``active`` — a
     branch resuming work after being marked ``abandoned`` is active again).
+
+    Returns the step rather than issuing it so the caller can commit it
+    together with whatever else its tool call is writing — see
+    :func:`_code_branch_steps`. The read that decides insert-vs-touch still
+    happens here; only the write is deferred.
     """
     slug = _code_branch_slug(repo, branch)
     now = now_iso()
     if client.read("read.gq", "get_code_branch", {"slug": slug}):
-        client.change(
+        return (
             "mutations.gq",
             "touch_code_branch",
             {"slug": slug, "status": "active", "updated_at": now},
         )
-    else:
-        client.change(
-            "mutations.gq",
-            "insert_code_branch",
-            {
-                "slug": slug,
-                "repo": repo,
-                "branch": branch,
-                "status": "active",
-                "created_at": now,
-                "updated_at": now,
-            },
-        )
-    return slug
+    return (
+        "mutations.gq",
+        "insert_code_branch",
+        {
+            "slug": slug,
+            "repo": repo,
+            "branch": branch,
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        },
+    )
 
 
-def _link_works_on(branch_slug: str, task_slug: str) -> None:
+def _works_on_step(branch_slug: str, task_slug: str) -> _Step | None:
     """Idempotent WorksOn edge — task_claim re-calls (lease renewal) must not
-    pile up duplicate edges between the same branch and task."""
-    if not client.read(
+    pile up duplicate edges between the same branch and task. ``None`` when the
+    edge already exists."""
+    if client.read(
         "read.gq",
         "code_branch_works_on_edge",
         {"branch_slug": branch_slug, "task_slug": task_slug},
     ):
-        client.change(
-            "mutations.gq", "link_works_on", {"from": branch_slug, "to": task_slug}
-        )
+        return None
+    return ("mutations.gq", "link_works_on", {"from": branch_slug, "to": task_slug})
 
 
-def _link_for_project(branch_slug: str, project_slug: str) -> None:
-    """Idempotent ForProject edge — see ``_link_works_on``."""
-    if not client.read(
+def _for_project_step(branch_slug: str, project_slug: str) -> _Step | None:
+    """Idempotent ForProject edge — see :func:`_works_on_step`."""
+    if client.read(
         "read.gq",
         "code_branch_for_project_edge",
         {"branch_slug": branch_slug, "project_slug": project_slug},
     ):
-        client.change(
-            "mutations.gq",
-            "link_for_project",
-            {"from": branch_slug, "to": project_slug},
-        )
+        return None
+    return (
+        "mutations.gq",
+        "link_for_project",
+        {"from": branch_slug, "to": project_slug},
+    )
 
 
-def _track_code_branch(
+def _code_branch_steps(
     repo: str | None, *, task_slug: str | None = None, project_slug: str | None = None
-) -> None:
-    """Best-effort CodeBranch upsert + edge link for the current checkout.
+) -> list[_Step]:
+    """Mutations tracking the current checkout's CodeBranch, for a caller's batch.
 
-    No-ops when there's no repo context or no current git branch (detached
-    HEAD, outside a repo) — never raises, since this is metadata riding
-    alongside a task/workflow tool call, not the tool's actual purpose.
+    Returns ``[]`` when there is no repo context, no current git branch
+    (detached HEAD, outside a repo), or when everything is already recorded.
+
+    ★ BEST-EFFORT IS PRESERVED, AND ITS SCOPE IS NOW EXACT. This is metadata
+    riding alongside a task/workflow tool call, not the tool's purpose, so it
+    must never be what fails that call. What can fail here is CONSTRUCTION —
+    shelling out to git for the branch name, and the reads that decide
+    insert-vs-touch and whether an edge already exists — and all of it is
+    caught. The returned steps then commit inside the CALLER's mutation, where
+    a failure is the caller's own write failing and is rightly fatal: the
+    alternative is a tool that reports success having written nothing.
+
+    That split is the whole point of returning steps. Issuing these separately
+    cost `workflow_session_start` up to three extra Lance commits — at ~3.5-4s
+    each against the deployed store, against a 30s deadline for the whole tool
+    call (tk-batch-the-hot-witan-write-paths-one-tool-call-is-a8227e).
     """
     if not repo:
-        return
+        return []
     branch = repo_module.current_branch()
     if not branch:
-        return
+        return []
     try:
-        slug = _upsert_code_branch(repo, branch)
-        if task_slug:
-            _link_works_on(slug, task_slug)
-        if project_slug:
-            _link_for_project(slug, project_slug)
+        steps = [_upsert_code_branch_step(repo, branch)]
+        branch_slug = _code_branch_slug(repo, branch)
+        # Edges may reference a node inserted earlier in the SAME mutation
+        # body — endpoint validation resolves against the in-flight statements
+        # — so the CodeBranch and its edges legitimately share one commit.
+        if task_slug and (step := _works_on_step(branch_slug, task_slug)):
+            steps.append(step)
+        if project_slug and (step := _for_project_step(branch_slug, project_slug)):
+            steps.append(step)
     except Exception as exc:  # noqa: BLE001 — coordination metadata, never fatal
         logger.warning(
             "witan.code_branch.tracking_failed",
             repo=repo,
             branch=branch,
+            task=task_slug,
+            project=project_slug,
+            error=str(exc),
+            exc_info=True,
+        )
+        return []
+    return steps
+
+
+def _track_code_branch(
+    repo: str | None, *, task_slug: str | None = None, project_slug: str | None = None
+) -> None:
+    """Issue :func:`_code_branch_steps` as one standalone commit.
+
+    For callers that cannot fold the steps into their own write. ``task_claim``
+    is the case: its claim is a compare-and-swap with a post-write verification
+    read, and the branch metadata must only be recorded once the claim is known
+    won — so it cannot ride along, and retrying the claim must not re-apply it.
+
+    Still never raises, for the same reason the step builder doesn't: this is
+    metadata beside the tool's purpose. One commit now instead of up to three.
+    """
+    steps = _code_branch_steps(repo, task_slug=task_slug, project_slug=project_slug)
+    if not steps:
+        return
+    try:
+        client.change_many(steps)
+    except Exception as exc:  # noqa: BLE001 — coordination metadata, never fatal
+        logger.warning(
+            "witan.code_branch.tracking_failed",
+            repo=repo,
             task=task_slug,
             project=project_slug,
             error=str(exc),
@@ -4021,6 +4079,15 @@ def workflow_session_start(
     detected_repo = repo_module.detect(override=repo)
     existing = _open_session_for_key(project_slug, session_id)
 
+    # ONE commit for everything this call writes. Each of the four writes below
+    # used to be its own `mutate` — insert+edge, the project's repo set, the
+    # CodeBranch upsert, the ForProject edge — and against the deployed store
+    # each costs ~3.5-4s, so a session start could spend 14-16s of ToolHive's
+    # 30s deadline before another user contended for anything. They are
+    # independent rows with no read-back between them, which is exactly the
+    # shape `change_many` exists for.
+    steps: list[_Step] = []
+
     if existing:
         slug = existing["slug"]
         # Merge, never clear: a repeat call that omits repo/tags must not wipe
@@ -4032,41 +4099,40 @@ def workflow_session_start(
         if merged_repo != existing.get("repo") or merged_tags != (
             existing.get("tags") or []
         ):
-            client.change(
-                "mutations.gq",
-                "update_workflow_session_meta",
-                {"slug": slug, "repo": merged_repo, "tags": merged_tags or None},
+            steps.append(
+                (
+                    "mutations.gq",
+                    "update_workflow_session_meta",
+                    {"slug": slug, "repo": merged_repo, "tags": merged_tags or None},
+                )
             )
         phase = existing.get("phase") or phase
         started_at = existing.get("started_at") or now
     else:
         slug = _make_slug("workflow_session", project_slug)
         started_at = now
-        client.change_many(
-            [
-                (
-                    "mutations.gq",
-                    "insert_workflow_session",
-                    {
-                        "slug": slug,
-                        "project_slug": project_slug,
-                        "session_id": session_id,
-                        "repo": detected_repo,
-                        "phase": phase,
-                        "summary": "",
-                        "author": _current_author(),
-                        "tags": tags,
-                        "started_at": now,
-                    },
-                ),
-                (
-                    "mutations.gq",
-                    "link_belongs_to",
-                    {"from": slug, "to": project_slug},
-                ),
-            ]
-        )
-        slug, started_at = _dedupe_open_sessions(project_slug, session_id, slug, now)
+        steps += [
+            (
+                "mutations.gq",
+                "insert_workflow_session",
+                {
+                    "slug": slug,
+                    "project_slug": project_slug,
+                    "session_id": session_id,
+                    "repo": detected_repo,
+                    "phase": phase,
+                    "summary": "",
+                    "author": _current_author(),
+                    "tags": tags,
+                    "started_at": now,
+                },
+            ),
+            (
+                "mutations.gq",
+                "link_belongs_to",
+                {"from": slug, "to": project_slug},
+            ),
+        ]
 
     # Accrete this session's repo into the project's repo set, so a project's
     # association grows as it's worked across repos without explicit declaration.
@@ -4077,17 +4143,29 @@ def workflow_session_start(
         if project_rows:
             current = _project_repos(project_rows[0])
             if detected_repo not in current:
-                client.change(
-                    "mutations.gq",
-                    "update_workflow_project_repos",
-                    {
-                        "slug": project_slug,
-                        "repos": _merge_repos(current, detected_repo),
-                        "updated_at": now,
-                    },
+                steps.append(
+                    (
+                        "mutations.gq",
+                        "update_workflow_project_repos",
+                        {
+                            "slug": project_slug,
+                            "repos": _merge_repos(current, detected_repo),
+                            "updated_at": now,
+                        },
+                    )
                 )
 
-    _track_code_branch(detected_repo, project_slug=project_slug)
+    steps += _code_branch_steps(detected_repo, project_slug=project_slug)
+
+    if steps:
+        client.change_many(steps)
+
+    # AFTER the commit, and only for a new session: the dedupe reads
+    # `sessions_for_key` and has to see this insert plus any racer's, so it
+    # cannot join the batch above — a read cannot observe a write that has not
+    # committed. This is why the floor here is one commit and not zero.
+    if not existing:
+        slug, started_at = _dedupe_open_sessions(project_slug, session_id, slug, now)
 
     handle = {
         "session_slug": slug,
@@ -4243,7 +4321,11 @@ def _unblock_dependents(repo: str | None) -> None:
 
 
 def _update_task(
-    slug: str, changes: dict, *, surface_conflict: bool = False
+    slug: str,
+    changes: dict,
+    *,
+    surface_conflict: bool = False,
+    extra_steps: list[_Step] | None = None,
 ) -> dict | None:
     """Read a task, merge ``changes`` over its mutable fields, write it back.
 
@@ -4253,6 +4335,17 @@ def _update_task(
     ``surface_conflict`` propagates to the write so a compare-and-swap caller
     (``task_claim``) sees an :class:`~witan.graph.OmnigraphConflict` on a lost
     optimistic-concurrency race instead of the write being silently retried.
+
+    ``extra_steps`` ride in the SAME commit as the update — for a caller whose
+    change is one logical edit spanning a row and an edge. ``task_update`` with
+    a ``parent`` is that caller: it used to write the row, then the ParentOf
+    edge, then the row again to record ``parent_slug``, which is three Lance
+    commits (~3.5-4s each deployed) for one edit. They also cannot be seen
+    half-applied now, which is the more important half: the edge and the
+    ``parent_slug`` field are two encodings of one fact.
+
+    A missing task still writes NOTHING, extras included — the early return
+    below happens before any step is issued.
     """
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
@@ -4278,9 +4371,14 @@ def _update_task(
         "claimed_at": changes.get("claimed_at", current.get("claimed_at")),
         "updated_at": now_iso(),
     }
-    client.change(
-        "mutations.gq", "update_task", merged, surface_conflict=surface_conflict
-    )
+    update: _Step = ("mutations.gq", "update_task", merged)
+    if extra_steps:
+        client.change_many([update, *extra_steps], surface_conflict=surface_conflict)
+    else:
+        # Single-statement `change` on the bare path: the compare-and-swap
+        # caller goes through here, and keeping its write exactly as it was
+        # keeps `surface_conflict`'s behaviour untouched.
+        client.change(*update, surface_conflict=surface_conflict)
     return client.read("read.gq", "get_task", {"slug": slug})[0]
 
 
@@ -4535,11 +4633,19 @@ def task_update(
             # for stores/rows written before this existed).
             changes["claimed_at"] = now_iso()
 
-    updated = _update_task(slug, changes)
+    # The parent is one edit in two encodings — the `parent_slug` field and the
+    # ParentOf edge — so it is one commit, not three. It used to update the
+    # row, write the edge, then update the row AGAIN just to record
+    # `parent_slug`; a reader between those commits saw a task parented one way
+    # and not the other.
+    extra_steps: list[_Step] = []
+    if parent is not None:
+        changes["parent_slug"] = parent
+        extra_steps.append(
+            ("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
+        )
 
-    if parent is not None and updated is not None:
-        client.change("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
-        updated = _update_task(slug, {"parent_slug": parent})
+    updated = _update_task(slug, changes, extra_steps=extra_steps)
 
     # Closing here must unblock dependents too, matching task_close.
     if status == "closed" and updated is not None:
