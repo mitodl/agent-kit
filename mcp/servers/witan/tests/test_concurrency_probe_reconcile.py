@@ -14,8 +14,6 @@ being reported as saturation.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 from witan.scripts import concurrency_probe as cp
 from witan.scripts.concurrency_probe import (
@@ -147,7 +145,7 @@ def test_an_errored_worker_still_reports_when_it_fired(monkeypatch, capsys):
             "repo": "https://github.com/mitodl/agent-kit",
         },
     )
-    row = json.loads(capsys.readouterr().out.strip())
+    row, _ = cp._parse_worker_output(capsys.readouterr().out)
 
     assert row["ok"] is False
     assert row["fired_at"] > 0
@@ -172,9 +170,10 @@ def test_a_worker_that_never_reached_the_barrier_claims_no_window(monkeypatch, c
         start_at=0.0,
         payload={"target": "ci", "warmup_slug": "tk-warmup"},
     )
-    row = json.loads(capsys.readouterr().out.strip())
+    row, fire = cp._parse_worker_output(capsys.readouterr().out)
 
     assert row["ok"] is False
+    assert fire is None  # it never reached the barrier, so it announced nothing
     assert "fired_at" not in row
     assert "done_at" not in row
     assert cp._timing([row], start_at=0.0).n_fired == 0
@@ -221,3 +220,53 @@ def test_overlap_is_interval_intersection_not_containment(row, expected):
 
 def test_nothing_overlaps_an_absent_window():
     assert cp._in_window(_row(0, 100.0, 110.0), None) is False
+
+
+def test_the_result_is_the_last_line_that_is_not_the_fire_event():
+    """★ A KILLED WORKER'S LAST JSON LINE IS ITS FIRE EVENT. Taking the last one
+    outright would hand that back as the result — and an event carries no `ok`,
+    so a worker that HUNG would be scored as a call that came back degraded."""
+    stdout = (
+        'noise\n{"event": "fired", "index": 4, "fired_at": 100.0}\n'
+        '{"index": 4, "ok": true, "fired_at": 100.0, "done_at": 101.0}\n'
+    )
+    result, fire = cp._parse_worker_output(stdout)
+    assert result["ok"] is True
+    assert fire["fired_at"] == 100.0
+
+
+def test_a_worker_killed_after_firing_keeps_its_interval():
+    """The parent synthesises the row for a killed worker, and used to
+    synthesise it with no timing at all — dropping the intervals of the SLOWEST
+    workers, which is precisely where the write window should be widest."""
+    stdout = '{"event": "fired", "index": 9, "fired_at": 100.0}\n'
+    row = cp._timed({"index": 9, "ok": False, "error_type": "TimeoutExpired"}, stdout)
+    assert row["fired_at"] == 100.0
+    assert row["done_at"] > row["fired_at"]
+    assert cp._in_window(row, (99.0, 100.5)) is True
+
+
+def test_a_worker_killed_before_firing_still_claims_nothing():
+    row = cp._timed({"index": 0, "ok": False, "error_type": "TimeoutExpired"}, "")
+    assert "fired_at" not in row
+    assert "done_at" not in row
+
+
+def test_the_fire_event_never_overwrites_a_real_result(monkeypatch, capsys):
+    """A worker that printed both is authoritative about its own timing."""
+    monkeypatch.setattr(cp, "_srv", lambda *a, **k: _Boom())
+    cp._worker(
+        "store",
+        index=1,
+        start_at=0.0,
+        payload={
+            "target": "ci",
+            "warmup_slug": "tk-warmup",
+            "label": LABEL,
+            "run_id": "probe-abc123",
+            "repo": "r",
+        },
+    )
+    result, fire = cp._parse_worker_output(capsys.readouterr().out)
+    assert fire["fired_at"] == result["fired_at"]
+    assert result["done_at"] >= result["fired_at"]

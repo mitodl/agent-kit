@@ -142,7 +142,12 @@ terminated in one 9-minute window. The same load previously killed it outright.
      spread reported itself NOT CONCURRENT, and probe C's write window —
      built from those same stamps — collapsed to `no read overlapped any
      write` while its readers were in the middle of the storm. Both stamps
-     are now taken around the call regardless of outcome.
+     are now taken around the call regardless of outcome — and ANNOUNCED as
+     a `{"event": "fired"}` line before it, because a worker that hangs past
+     the phase deadline is killed and never prints its result at all. The
+     parent synthesises that row, and synthesising it without timing dropped
+     the intervals of the SLOWEST workers: the write window came out
+     narrowest exactly where the storm was worst.
 
   Consistent across three runs that day, and the only thing that was: THE
   SERVER COMPLETED FAR MORE WRITES THAN THE CLIENT WAS TOLD ABOUT (12, 20 and
@@ -300,8 +305,9 @@ def _pinned_token(target: str, needed_s: float) -> tuple[str, float]:
 
 # ── worker ───────────────────────────────────────────────────────────────────
 #
-# Re-entered as a subprocess. Emits exactly one JSON line so the parent can read
-# results without sharing memory.
+# Re-entered as a subprocess. Emits its result as a JSON line so the parent can
+# read it without sharing memory, preceded by a `{"event": "fired"}` line the
+# moment it passes the barrier -- see _worker for why that one is separate.
 
 
 def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
@@ -325,6 +331,15 @@ def _worker(mode: str, index: int, start_at: float, payload: dict) -> None:
         # -- and probe C's write window, built from these stamps, collapses to
         # "no read overlapped any write" while the readers were in the storm.
         out["fired_at"] = fired = time.time()
+        # ...and ANNOUNCED before it, not just recorded. A worker that hangs
+        # past the phase deadline is KILLED, so its final row is never printed
+        # and the parent has to synthesise one -- which put the timeout path
+        # back in the blind spot this commit is closing, for the workers most
+        # likely to be in it. The event is flushed now, so it survives the kill.
+        print(
+            json.dumps({"event": "fired", "index": index, "fired_at": fired}),
+            flush=True,
+        )
         if mode == "claim":
             result = srv.task_claim(
                 slug=payload["slug"], assignee=f"probe-worker-{index}"
@@ -483,36 +498,84 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
             proc.kill()
             stdout, stderr = proc.communicate()
             rows.append(
-                {
-                    "index": index,
-                    "mode": mode,
-                    "ok": False,
-                    "error_type": "TimeoutExpired",
-                    "error": (
-                        f"phase deadline reached ({WORKER_TIMEOUT_S:.0f}s after "
-                        "the epoch); killed"
-                    ),
-                }
+                _timed(
+                    {
+                        "index": index,
+                        "mode": mode,
+                        "ok": False,
+                        "error_type": "TimeoutExpired",
+                        "error": (
+                            f"phase deadline reached ({WORKER_TIMEOUT_S:.0f}s after "
+                            "the epoch); killed"
+                        ),
+                    },
+                    stdout,
+                )
             )
             continue
-        line = next(
-            (ln for ln in reversed(stdout.splitlines()) if ln.startswith("{")), None
-        )
-        if line is None:
+        result, fire = _parse_worker_output(stdout)
+        if result is None:
             rows.append(
-                {
-                    "index": index,
-                    "mode": mode,
-                    "ok": False,
-                    "error_type": "NoResult",
-                    "error": f"no result line; stderr={stderr[-300:]}",
-                }
+                _timed(
+                    {
+                        "index": index,
+                        "mode": mode,
+                        "ok": False,
+                        "error_type": "NoResult",
+                        "error": f"no result line; stderr={stderr[-300:]}",
+                    },
+                    stdout,
+                )
             )
         else:
-            row = json.loads(line)
-            row["mode"] = mode
-            rows.append(row)
+            result["mode"] = mode
+            # A worker that printed both is authoritative about its own timing;
+            # the fire event is only a fallback for the rows it never got to
+            # print. Merging the other way would overwrite a real done_at.
+            if fire and "fired_at" not in result:
+                result["fired_at"] = fire["fired_at"]
+            rows.append(result)
     return rows
+
+
+def _parse_worker_output(stdout: str) -> tuple[dict | None, dict | None]:
+    """Split a worker's stdout into its result row and its fire event.
+
+    The result is the last JSON line that is NOT the fire event -- picking the
+    last JSON line outright would hand back the event itself for a worker that
+    was killed after firing, and an event has no `ok`, so the phase would score
+    it as a degraded call rather than the hang it was.
+    """
+    fire, result = None, None
+    for line in stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if parsed.get("event") == "fired":
+            fire = parsed
+        else:
+            result = parsed
+    return result, fire
+
+
+def _timed(row: dict, stdout: str) -> dict:
+    """Give a parent-synthesised row the timing the worker did manage to emit.
+
+    A killed or crashed worker prints no result, so the parent builds the row --
+    and used to build it with no `fired_at`/`done_at` at all. Those workers are
+    the SLOWEST ones, so dropping their intervals shrank the write window
+    exactly where it should have been widest, and made a phase that hung look
+    like a phase that never fired. `done_at` is now, because the call was still
+    outstanding when the parent gave up on it.
+    """
+    _, fire = _parse_worker_output(stdout)
+    if fire:
+        row["fired_at"] = fire["fired_at"]
+        row["done_at"] = time.time()
+    return row
 
 
 @dataclass
