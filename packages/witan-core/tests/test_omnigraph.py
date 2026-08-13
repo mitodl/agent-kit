@@ -1035,3 +1035,403 @@ def test_apply_if_changed_reapplies_when_the_stamp_is_unreadable(
 
     og.schema_apply_if_changed("omnigraph", fake_schema, store)
     assert len(calls) == 2
+
+
+# ── client-side write admission (remote stores only) ───────────────
+#
+# MEASURED 2026-08-12 against the CI data tier, N threads released from a
+# barrier: n=4 concurrent single-row writes take 15.5s wall, n=6 take 31.2s,
+# n=8 take 51.1s with a median of 33.3s. The tool call carrying them is cut at
+# 30s. So past ~4 in flight per graph, admitting a write means producing a 502
+# whose outcome nobody can determine — the gate refuses instead, BEFORE
+# anything is sent, which is the one answer a 502 can never give.
+#
+# The data tier's own cap cannot do this job: it is per ACTOR, and the deadline
+# sees total concurrency. Ten users at one write each satisfies every per-actor
+# cap and still blows it. This process is the single point every user's write
+# passes through, so it is the only place the total is visible.
+
+
+class _StubTransport:
+    """A transport whose mutate/query block until released, and count calls."""
+
+    def __init__(self, server_url="https://graph.example"):
+        self.server_url = server_url
+        self.calls: list[str] = []
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.release.set()
+
+    def _respond(self, verb):
+        self.calls.append(verb)
+        self.entered.set()
+        self.release.wait(5)
+        return og._http.Outcome(kind=og._http.OK, body='{"rows": []}')
+
+    def mutate(self, graph_id, source, params, token):
+        return self._respond("mutate")
+
+    def query(self, graph_id, source, params, token):
+        return self._respond("query")
+
+
+def _write(client, transport, label="mutate"):
+    return client._http_execute(transport, "mutate", "query x() {}", {}, label)
+
+
+def test_a_write_past_the_bound_is_refused_before_it_is_sent(monkeypatch):
+    """★ The whole point: a refusal, not a torn-down connection.
+
+    The bound is monkeypatched to 1, which also pins that it is read at CALL
+    time rather than captured at import — the gate is a module-level singleton
+    built long before this test runs.
+    """
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 1)
+    monkeypatch.setattr(og, "_REMOTE_WRITE_QUEUE_WAIT", 0.05)
+    client = _client(monkeypatch)
+    transport = _StubTransport()
+    transport.release.clear()
+
+    holder = threading.Thread(target=_write, args=(client, transport), daemon=True)
+    holder.start()
+    assert transport.entered.wait(5), "the first write never reached the transport"
+
+    with pytest.raises(og.WriteQueueFull) as caught:
+        _write(client, transport)
+
+    message = str(caught.value)
+    assert "NOTHING WAS WRITTEN" in message
+    assert "1 writes are already in flight" in message
+    # ★ The refusal is what a 502 cannot be: provably pre-send.
+    assert transport.calls == ["mutate"]
+
+    transport.release.set()
+    holder.join(5)
+
+
+def test_the_cli_write_path_is_gated_too(monkeypatch):
+    """★ THE BOUND MUST NOT BE WALKABLE-AROUND BY CHOOSING A TRANSPORT.
+
+    Gating only ``_http_execute`` left two real remote-write paths unbounded,
+    and both are ones a burst actually travels: ``load_batch`` shells out to
+    ``omnigraph load`` (there is no HTTP form of it), so every batch of a
+    ``store_merge`` escaped — two people migrating at once being exactly the
+    multi-user burst this exists to bound — and witan-code's branched clients
+    fall back to the CLI by design, so every write from a branch view escaped
+    as well.
+
+    Driven through ``_run`` rather than a transport, so it fails if admission
+    ever moves back to the HTTP branch.
+    """
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 0)
+    monkeypatch.setattr(og, "_REMOTE_WRITE_QUEUE_WAIT", 0.05)
+    client = _client(monkeypatch)
+    ran = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        ran["n"] += 1
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(og.WriteQueueFull):
+        client._run("mutate", "--source", "x")
+    assert ran["n"] == 0, "refused writes must not reach the subprocess"
+
+    # A READ over the same transport is ungated — reads do not queue.
+    client._run("query", "--source", "x")
+    assert ran["n"] == 1
+
+
+def test_a_local_store_write_is_not_gated(monkeypatch, tmp_path):
+    """The bound is about saturating a shared server. A local store has none —
+    it is serialised by its own flock — so gating it would only add latency."""
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 0)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient(str(tmp_path / "g.omni"), Path("/queries"), graph_id="g")
+    ran = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        ran["n"] += 1
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    client._run("mutate", "--source", "x")
+    assert ran["n"] == 1
+
+
+def test_the_slot_is_released_so_writes_queue_rather_than_fail(monkeypatch):
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 1)
+    client = _client(monkeypatch)
+    transport = _StubTransport()
+
+    for _ in range(3):
+        _write(client, transport)
+    assert transport.calls == ["mutate"] * 3
+
+
+def test_the_slot_is_released_even_when_the_write_fails(monkeypatch):
+    """A failed write that kept its slot would wedge the graph after N failures."""
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 1)
+    monkeypatch.setattr(og, "_REMOTE_WRITE_QUEUE_WAIT", 0.05)
+    client = _client(monkeypatch)
+
+    class _Failing(_StubTransport):
+        def mutate(self, graph_id, source, params, token):
+            self.calls.append("mutate")
+            return og._http.Outcome(kind=og._http.FATAL, error="denied")
+
+    transport = _Failing()
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="denied"):
+            _write(client, transport)
+    assert transport.calls == ["mutate"] * 2
+
+
+def test_reads_are_not_gated(monkeypatch):
+    """Reads hold flat at ~5 req/s from 8 to 36 concurrent readers — they do not
+    serialise, so gating them would add latency to the one path that has none."""
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 0)
+    client = _client(monkeypatch)
+    transport = _StubTransport()
+
+    client._http_execute(transport, "query", "query x() {}", {}, "read")
+    assert transport.calls == ["query"]
+    # ...and the same client's write is refused outright at that bound.
+    with pytest.raises(og.WriteQueueFull):
+        _write(client, transport)
+
+
+def test_two_graphs_do_not_block_each_other(monkeypatch):
+    """★ PER GRAPH, not per server. Measured: 4 writes to `code-bridge` and 4 to
+    `code-…-lehrer` fired together each finished in their solo time. A repo's
+    reindex must not be able to stall a memory write."""
+    monkeypatch.setattr(og, "_REMOTE_WRITE_MAX_INFLIGHT", 1)
+    monkeypatch.setattr(og, "_REMOTE_WRITE_QUEUE_WAIT", 0.05)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    council = OmnigraphClient("https://graph.example", Path("/q"), graph_id="council")
+    code = OmnigraphClient("https://graph.example", Path("/q"), graph_id="code-bridge")
+    transport = _StubTransport()
+    transport.release.clear()
+
+    holder = threading.Thread(target=_write, args=(council, transport), daemon=True)
+    holder.start()
+    assert transport.entered.wait(5)
+
+    # The other graph is admitted immediately rather than waiting out the bound.
+    transport.release.set()
+    _write(code, transport)
+    assert transport.calls == ["mutate", "mutate"]
+    holder.join(5)
+
+
+def test_the_bound_is_settable_from_the_environment(monkeypatch):
+    """★ Retuning a deployment must not need a release.
+
+    These numbers came from one measurement of one data tier and will move when
+    the per-write cost does. A bound that can only be changed by editing code,
+    cutting a release and rebuilding an image is a bound nobody can correct
+    during an incident.
+    """
+    monkeypatch.setenv(og.REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR, "1")
+    monkeypatch.setenv(og.REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, "0.05")
+    client = _client(monkeypatch)
+    transport = _StubTransport()
+    transport.release.clear()
+
+    holder = threading.Thread(target=_write, args=(client, transport), daemon=True)
+    holder.start()
+    assert transport.entered.wait(5)
+
+    # The module default is 4; the environment says 1, and the environment wins.
+    with pytest.raises(og.WriteQueueFull):
+        _write(client, transport)
+
+    transport.release.set()
+    holder.join(5)
+
+
+@pytest.mark.parametrize("value", ["not-a-number", "-1", ""])
+def test_an_unusable_env_override_falls_back_instead_of_raising(monkeypatch, value):
+    """A typo in a Deployment env var must not turn every write into a crash —
+    that is the one failure worse than the mis-sizing it was correcting."""
+    monkeypatch.setenv(og.REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR, value)
+    assert (
+        og._env_override(og.REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR, 4, int) == 4
+    )  # the default, not an exception
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "Infinity", "NaN"])
+def test_a_non_finite_env_override_falls_back(monkeypatch, value):
+    """★ The one bad value that passes every other check.
+
+    ``float()`` accepts these, and ``nan`` compares False against everything —
+    so ``nan < 0`` is False and a negative-only guard waves it straight through
+    to ``Condition.wait(nan)``, which raises out of the gate. That is exactly
+    the "a bad env var turns every write into a crash" failure the fallback
+    exists to prevent, arriving through the input nobody type-checks.
+    """
+    monkeypatch.setenv(og.REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, value)
+    assert og._env_override(og.REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, 10.0, float) == 10.0
+
+
+def test_a_non_finite_queue_wait_does_not_break_the_gate(monkeypatch):
+    """The end-to-end form of the above: the gate still refuses cleanly with
+    ``WriteQueueFull`` rather than raising ValueError/OverflowError out of
+    ``Condition.wait``."""
+    monkeypatch.setenv(og.REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, "nan")
+    monkeypatch.setenv(og.REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR, "0")
+    gate = og._WriteGate()
+    with pytest.raises(og.WriteQueueFull):
+        with gate.admit("graph", "mutate"):
+            pass  # pragma: no cover — admission must not succeed at limit 0
+
+
+def test_zero_disables_admission_rather_than_reading_as_unset(monkeypatch):
+    """0 is a legal operational answer (refuse every remote write), and it must
+    not be mistaken for "no value set" — which would silently re-enable them."""
+    monkeypatch.setenv(og.REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR, "0")
+    monkeypatch.setenv(og.REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, "0")
+    client = _client(monkeypatch)
+    transport = _StubTransport()
+
+    with pytest.raises(og.WriteQueueFull):
+        _write(client, transport)
+    assert transport.calls == []
+
+
+# ── the server's own Retry-After (HTTP transport only) ─────────────
+
+
+def _capped(retry_after):
+    return og._http.Outcome(
+        kind=og._http.ADMISSION_CAP,
+        error="actor in-flight count cap exceeded",
+        status=429,
+        retry_after=retry_after,
+    )
+
+
+def test_a_short_retry_after_replaces_the_blind_schedule(monkeypatch):
+    client = _client(monkeypatch)
+    sleeps: list[float] = []
+    monkeypatch.setattr(og.time, "sleep", lambda s: sleeps.append(s))
+    outcomes = [_capped(1.5), og._http.Outcome(kind=og._http.OK, body="ok")]
+
+    class _Transport(_StubTransport):
+        def mutate(self, graph_id, source, params, token):
+            return outcomes.pop(0)
+
+    assert _write(client, _Transport()) == "ok"
+    assert sleeps == [1.5]  # the server's number, not 0.25 * 2**n
+
+
+def test_a_retry_after_longer_than_the_call_can_wait_fails_immediately(monkeypatch):
+    """★ Obeying it is not an option, so quoting it is the honest answer.
+
+    Only when the deployment has SAID it has a deadline. Given a 30s budget, a
+    60s sleep can only end as a torn-down connection whose outcome the caller
+    cannot determine. Failing now — with the server's own number in the message
+    — hands the wait to whoever schedules the retry instead.
+    """
+    monkeypatch.setenv(og.REMOTE_CALL_BUDGET_ENV_VAR, "30")
+    client = _client(monkeypatch)
+    sleeps: list[float] = []
+    monkeypatch.setattr(og.time, "sleep", lambda s: sleeps.append(s))
+    calls = {"n": 0}
+
+    class _Transport(_StubTransport):
+        def mutate(self, graph_id, source, params, token):
+            calls["n"] += 1
+            return _capped(60.0)
+
+    with pytest.raises(RuntimeError, match="retry in 60s"):
+        _write(client, _Transport())
+    assert calls["n"] == 1  # not six attempts of sleeping through a wall
+    assert sleeps == []
+
+
+def test_a_retry_after_that_fits_the_budget_is_obeyed(monkeypatch):
+    """★ 5s is longer than the per-sleep backoff cap and still fits in 30s.
+
+    The regression this pins: the threshold used to be
+    ``_ADMISSION_CAP_MAX_DELAY`` (4.0), which is how long ONE backoff sleep may
+    be — not how long the call has left. Measured against that, a perfectly
+    affordable ``Retry-After: 5`` was refused outright.
+    """
+    monkeypatch.setenv(og.REMOTE_CALL_BUDGET_ENV_VAR, "30")
+    client = _client(monkeypatch)
+    sleeps: list[float] = []
+    monkeypatch.setattr(og.time, "sleep", lambda s: sleeps.append(s))
+    outcomes = [_capped(5.0), og._http.Outcome(kind=og._http.OK, body="ok")]
+
+    class _Transport(_StubTransport):
+        def mutate(self, graph_id, source, params, token):
+            return outcomes.pop(0)
+
+    assert _write(client, _Transport()) == "ok"
+    assert sleeps == [5.0]
+
+
+def test_repeated_affordable_hints_stop_at_the_call_budget(monkeypatch):
+    """★ The other half of the same conflation, and the dangerous half.
+
+    Each ``Retry-After: 4`` is individually affordable, so a per-sleep test
+    admits every one of them and the total marches past the cut-off it meant to
+    stay inside — the write gate's own queue wait having already eaten part of
+    the same budget. Against one absolute deadline the SEQUENCE stops, and it
+    stops on the budget rather than on ``_ADMISSION_CAP_MAX_ATTEMPTS``: the
+    remaining budget here (15s) runs out at the fourth hint, well before the
+    sixth attempt.
+    """
+    monkeypatch.setenv(og.REMOTE_CALL_BUDGET_ENV_VAR, "15")
+    client = _client(monkeypatch)
+    now = {"t": 0.0}
+    monkeypatch.setattr(og.time, "monotonic", lambda: now["t"])
+    monkeypatch.setattr(og.time, "sleep", lambda s: now.__setitem__("t", now["t"] + s))
+
+    class _Transport(_StubTransport):
+        def mutate(self, graph_id, source, params, token):
+            return _capped(4.0)
+
+    with pytest.raises(RuntimeError, match="longer than the"):
+        _write(client, _Transport())
+    assert now["t"] <= 15.0  # never slept past the budget it was given
+
+
+def test_without_a_declared_budget_any_hint_is_obeyed(monkeypatch):
+    """★ THE LAYERING GUARANTEE: witan-core assumes no deadline of its own.
+
+    The same client runs behind a hosting layer that cuts requests, from an
+    interactive CLI that does not, and from a batch Job happy to wait minutes.
+    Only the deployment knows which, so with the budget unset a 60s hint is
+    obeyed rather than refused — no hosting layer's timeout is baked in here.
+    """
+    monkeypatch.delenv(og.REMOTE_CALL_BUDGET_ENV_VAR, raising=False)
+    client = _client(monkeypatch)
+    sleeps: list[float] = []
+    monkeypatch.setattr(og.time, "sleep", lambda s: sleeps.append(s))
+    outcomes = [_capped(60.0), og._http.Outcome(kind=og._http.OK, body="ok")]
+
+    class _Transport(_StubTransport):
+        def mutate(self, graph_id, source, params, token):
+            return outcomes.pop(0)
+
+    assert _write(client, _Transport()) == "ok"
+    assert sleeps == [60.0]
+
+
+def test_no_retry_after_keeps_the_blind_schedule(monkeypatch):
+    """The CLI path never has the header — its backoff must be unchanged."""
+    client = _client(monkeypatch)
+    sleeps: list[float] = []
+    monkeypatch.setattr(og.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(og.random, "uniform", lambda a, b: 0.0)
+    outcomes = [_capped(None), og._http.Outcome(kind=og._http.OK, body="ok")]
+
+    class _Transport(_StubTransport):
+        def mutate(self, graph_id, source, params, token):
+            return outcomes.pop(0)
+
+    assert _write(client, _Transport()) == "ok"
+    assert sleeps == [og._ADMISSION_CAP_BASE_DELAY]

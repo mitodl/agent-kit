@@ -93,12 +93,43 @@ class Outcome(NamedTuple):
     stdout, so callers parse one format regardless of transport, with no
     re-serialization on the hot path. ``error`` is the human-readable message for
     a failure, and is what ends up in the ``RuntimeError`` the client raises.
+
+    ``retry_after`` is the server's own ``Retry-After``, in seconds, when it sent
+    one. The CLI path cannot have it — omnigraph's error path prints the JSON
+    body's message and discards the response headers — so this is a signal only
+    the HTTP transport can carry, and the policy loop treats its absence as
+    "no hint" rather than as "retry immediately".
     """
 
     kind: str
     body: str = ""
     error: str = ""
     status: int | None = None
+    retry_after: float | None = None
+
+
+def parse_retry_after(value: str | None) -> float | None:
+    """Seconds from a ``Retry-After`` header value, or None if there is no usable one.
+
+    Only the delta-seconds form is read. RFC 9110 also allows an HTTP-date, but
+    omnigraph-server sends delta-seconds (``Retry-After: 60``), and honouring a
+    date would mean trusting the caller's clock against the server's — a wrong
+    answer in the one direction that matters, since a skewed clock turns "wait a
+    minute" into "wait an hour" or into no wait at all. Anything unparseable is
+    None, which the policy loop reads as "the server gave no hint" and falls
+    back to its own schedule.
+
+    Negative values are dropped for the same reason a missing header is: a
+    sleep of a negative duration is not what the server asked for, and treating
+    it as zero would silently turn a malformed header into a hot retry.
+    """
+    if value is None:
+        return None
+    try:
+        seconds = float(value.strip())
+    except (ValueError, AttributeError):
+        return None
+    return seconds if seconds >= 0 else None
 
 
 def classify_status(status: int, message: str) -> str:
@@ -326,6 +357,7 @@ class PooledTransport:
                 kind=classify_status(response.status, message),
                 error=message,
                 status=response.status,
+                retry_after=parse_retry_after(response.getheader("Retry-After")),
             )
 
         # Unreachable: the loop either returns or continues exactly once.

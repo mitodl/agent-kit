@@ -36,6 +36,8 @@ from witan_core.observability import get_logger
 from witan_core.remote.proxy import (
     RemotePayloadTooLarge,
     RemoteToolFailed,
+    RemoteWriteIndeterminate,
+    gateway_failure,
     payload_too_large,
 )
 
@@ -125,6 +127,54 @@ def _load_refusal(exc: BaseException, *, batch: int, mode: str, max_bytes: int) 
 # asked rather than assumed — see `RemoteStoreClient.change_many`.
 _MUTATE_MANY_TOOL = "code_store_mutate_many"
 
+# The store tools that change nothing. Everything else on this transport is
+# treated as a write.
+#
+# ★ THE READS ARE LISTED, NOT THE WRITES, so an unclassified tool defaults to
+# "assume it wrote" — the same asymmetry `RemoteMCPProxy._writes` is built on.
+# Calling a read a write costs one over-careful sentence; calling a write a read
+# tells somebody their index landed when it may not have, or invites the retry
+# that writes it twice.
+#
+# `code_store_open` is deliberately absent: opening can create the store, so it
+# is not a read.
+_READ_ONLY_STORE_TOOLS = frozenset({"code_store_read", "code_store_views"})
+
+
+def _refuse_if_indeterminate(exc: BaseException, tool: str, url: str) -> None:
+    """Re-raise a WRITE cut off by a gateway as indeterminate. Otherwise no-op.
+
+    ★ THIS TRANSPORT'S RECONNECT-AND-RETRY IS WHY THIS HAS TO EXIST. A 502/504
+    is not a ``ToolError``, so it lands in the generic arm of
+    :meth:`StoreSession.call`, which reconnects and re-invokes — and for a write
+    cut off mid-flight, re-invoking is the duplicate this whole change exists to
+    prevent. Measured against CI: a burst's 502s mostly HAD committed (28 of 28
+    in one run, 14 of 16 in another), so the blind retry writes those rows a
+    second time.
+
+    Exactly the shape of ``_refuse_if_too_large`` above, and called from the
+    same two places for the same reason: retrying cannot help, and the retry
+    actively hurts.
+
+    Reads fall through untouched — repeating one changes nothing, and the
+    reconnect is the right response to a dropped session.
+    """
+    if tool in _READ_ONLY_STORE_TOOLS:
+        return
+    cut_off = gateway_failure(exc)
+    if cut_off is None:
+        return
+    status = cut_off.response.status_code
+    msg = (
+        f"The deployed store at {url} answered HTTP {status} for `{tool}`: the "
+        f"request reached it and was cut off before a reply came back. `{tool}` "
+        "writes, so ITS OUTCOME IS INDETERMINATE — it may or may not have been "
+        "applied, and nothing in this response says which. This was NOT "
+        "retried, because retrying blind writes it twice if it did land. "
+        "Re-read the store before deciding; a reindex is safe to re-run."
+    )
+    raise RemoteWriteIndeterminate(msg) from exc
+
 
 class _LoopThread:
     """A private event loop on a daemon thread, driven from synchronous code."""
@@ -189,6 +239,11 @@ class StoreSession:
                 raise RemoteToolFailed(str(exc)) from exc
             except Exception as exc:  # noqa: BLE001 — transport-shaped; retry once
                 _refuse_if_too_large(exc, tool, self.url)
+                # BEFORE the reconnect, and that order is the whole point: a
+                # gateway cut-off on a write must not be re-invoked, because the
+                # backend usually finished it and re-invoking writes the row
+                # twice. Only unclassified transport faults reach the retry.
+                _refuse_if_indeterminate(exc, tool, self.url)
                 # Info: one reconnect is routine (idle session dropped), but a
                 # deployment that reconnects on every call is pathological and
                 # invisible without this.
@@ -204,6 +259,14 @@ class StoreSession:
                     # arm exists to prevent.
                     _refuse_if_too_large(refused, tool, self.url)
                     raise RemoteToolFailed(str(refused)) from refused
+                except Exception as retried:  # noqa: BLE001 — same two rules
+                    # The reconnect landed and the SECOND call was cut off. The
+                    # write is just as indeterminate as it would have been the
+                    # first time, so it gets the same sentence rather than
+                    # escaping as a traceback.
+                    _refuse_if_too_large(retried, tool, self.url)
+                    _refuse_if_indeterminate(retried, tool, self.url)
+                    raise
 
     def has_tool(self, tool: str) -> bool:
         """Whether the deployment serves ``tool``.

@@ -46,6 +46,24 @@ class RemoteServerProxy(RemoteMCPProxy):
     def _is_admin_tool(self, name: str) -> bool:
         return name in _LOCAL_ONLY
 
+    def _writes(self, name: str) -> bool:
+        # Nothing THIS PROXY dispatches remotely writes. `code_reindex` is the
+        # only tool on this surface that does, and `_LOCAL_ONLY` refuses it
+        # before it can ever reach a transport — so a gateway cut-off here is
+        # always a read that returned nothing, never a write whose fate is
+        # unknown. Stated as a rule rather than a list because it follows from
+        # `_LOCAL_ONLY` above: anything that starts writing has to be added
+        # there or here, and both are three lines apart.
+        #
+        # ★ NOT the same thing as "witan-code never writes remotely". Index
+        # writes go to the deployed store over a DIFFERENT transport —
+        # `remote.store.RemoteStoreClient`, dispatching `code_store_mutate`,
+        # `code_store_mutate_many` and `code_store_load` — which does its own
+        # gateway classification, and has to, because it reconnects and retries
+        # (`_refuse_if_indeterminate`). Reading this `False` as covering that
+        # path is the mistake this note exists to stop.
+        return False
+
     def _unreachable_hint(self) -> str:
         # Two ways to name the wrong setting here, and this avoids both.
         # `remote_url` is what routes a client to this proxy — NOT

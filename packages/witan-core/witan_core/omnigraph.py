@@ -50,6 +50,8 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
+import math
 import os
 import random
 import re
@@ -60,11 +62,14 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypeVar
 
 from witan_core import omnigraph_http as _http
+
+_log = logging.getLogger(__name__)
+T = TypeVar("T", int, float)
 
 # omnigraph local stores use optimistic concurrency (Lance manifest versions) and
 # are NOT safe for concurrent writers. We serialize writes with a per-store
@@ -83,18 +88,107 @@ _STORAGE_VERSION_MISMATCH_MARKERS = ("stamped at internal schema", "reads only")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 # omnigraph-server (remote http(s)/s3 stores) enforces a hard per-actor
-# admission cap — both an in-flight *count* (default 16) and a concurrent
-# *byte* budget — and rejects excess concurrent writes outright (HTTP 429)
-# rather than queuing them. The CLI's error path only surfaces the JSON body's
-# message text, not the `Retry-After: 60` header, so this can't read it and
-# backs off on its own, much shorter, schedule. Independent of _MAX_ATTEMPTS
-# and of surface_conflict (it isn't a compare-and-swap race, just admission
-# control). Lives in the shared base because witan-code also writes to the
-# deployed omnigraph-server.
+# admission cap — both an in-flight *count* and a concurrent *byte* budget —
+# and rejects excess concurrent writes outright (HTTP 429) rather than queuing
+# them. Independent of _MAX_ATTEMPTS and of surface_conflict (it isn't a
+# compare-and-swap race, just admission control). Lives in the shared base
+# because witan-code also writes to the deployed omnigraph-server.
+#
+# THE SERVER'S OWN `Retry-After` IS NOW READ, over the HTTP transport only. The
+# CLI's error path prints the JSON body's message and discards the response
+# headers, so the subprocess path still has nothing but this blind schedule.
+# Where the header IS present it is preferred over the schedule — and where it
+# asks for longer than the call has left (REMOTE_CALL_BUDGET_ENV_VAR, when the
+# deployment has told us it has a deadline at all) the call is failed
+# immediately rather than slept through, since a sleep past the caller's
+# cut-off can only end as a torn-down connection. Quoting the server's number
+# in the error is worth more than obeying it into a wall.
 _ADMISSION_CAP_MARKERS = ("in-flight count cap", "byte budget exceeded")
 _ADMISSION_CAP_MAX_ATTEMPTS = 6
 _ADMISSION_CAP_BASE_DELAY = 0.25
 _ADMISSION_CAP_MAX_DELAY = 4.0
+
+# How long one remote call has, end to end, before something ABOVE this library
+# stops waiting for it. witan-core does not know that number and must not
+# assume one: the same client runs under a hosting layer with a request
+# deadline, from an interactive CLI with none, and from a batch Job that may
+# happily wait minutes. Whoever deploys it behind a deadline is the only party
+# that knows what it is, so they set this; unset means "no known cut-off", and
+# a retry hint is then obeyed rather than second-guessed.
+#
+# What it BUYS when set: sleeping past the caller's deadline cannot succeed. The
+# response arrives after the connection is gone, so the write's outcome becomes
+# unknowable rather than merely late — the indeterminate-502 failure this whole
+# change exists to stop producing. Refusing while there is still time to say so
+# turns that into an ordinary, retryable answer.
+#
+# NOT the same quantity as _ADMISSION_CAP_MAX_DELAY, and keeping them separate
+# is the point: that one bounds how long ONE backoff sleep may be, this one
+# bounds the WHOLE call including the write-gate queue and every retry so far.
+# Using the per-sleep cap as a budget test rejected hints that fit easily and
+# admitted sequences of hints that did not.
+REMOTE_CALL_BUDGET_ENV_VAR = "WITAN_REMOTE_CALL_BUDGET_SECONDS"
+_REMOTE_CALL_BUDGET = 0.0  # 0 = no deadline known; obey the server's hints
+
+# ── Client-side write admission (remote stores only) ─────────────────────────
+#
+# WHY THIS EXISTS AT ALL: the data tier's admission cap is PER ACTOR, and a
+# per-actor cap cannot bound a shared service. Ten users at one write each is
+# ten writes in flight with every per-actor cap satisfied, and the deadline that
+# actually kills them sees the total, not the per-actor share. Every user's
+# write reaches the data tier through ONE process — the single-replica witan MCP
+# pod — so this is where a global bound can exist at all.
+#
+# MEASURED, against the CI data tier directly (2026-08-12, port-forward to
+# svc/omnigraph-server, no vMCP and no APISIX, N real threads released from a
+# barrier). Single-row inserts into a 1,045-row graph:
+#
+#     n=1   wall  3.45s     n=4   wall 15.54s     n=8   wall 51.08s (p50 33.29s)
+#     n=2   wall  6.49s     n=6   wall 31.20s
+#
+# Writes are strictly serialised and get *worse* per write as writers are added
+# (throughput falls 0.31 → 0.16 req/s), because one single-row insert is a full
+# Lance commit cycle against S3 plus a FilteredRead of the whole table. Reads are
+# unaffected and hold flat at ~5 req/s, which is why only writes are gated.
+#
+# So 4 is not a guess — but note what it is calibrated AGAINST: the deployment
+# these numbers were measured on stops waiting for a call after 30s. At n=4
+# every admitted write still lands inside that; at n=6 the slowest is already
+# past it. Admitting a fifth writer does not make it faster — it makes it a 502
+# whose outcome the caller cannot even determine
+# (tk-a-502-from-the-deployed-witan-does-not-mean-the--f76dcb). A refusal here
+# is strictly better: it is unambiguous, and it happens BEFORE anything was
+# sent.
+#
+# A deployment with a different deadline — or none — has a different right
+# answer, which is why this is a default and not a constant. witan-core itself
+# holds no opinion about who is waiting on the other end.
+#
+# PER GRAPH, not per server, because the serialisation is: 4 writes to
+# `code-bridge` and 4 to `code-github-com-mitodl-lehrer` fired together each
+# finished in their solo time. A repo's reindex must not block a memory write.
+#
+# The wait is bounded by what the measured deployment's deadline could still
+# afford: a full gate of 4 drains in ~15.5s, so a write that queues longer than
+# ~10s could not finish inside its 30s even once admitted. Waiting past that
+# only converts a clean refusal into a torn-down connection.
+#
+# ★ BOTH ARE DEFAULTS, NOT FIXED VALUES. Each is overridable by an env var, so
+# retuning a deployment is a Deployment env change rather than a code change +
+# release + image rebuild — the same reasoning as HTTP_TRANSPORT_ENV_VAR above,
+# and it matters more here: these numbers were derived from ONE measurement of
+# ONE data tier, and the next thing that changes them is the write-cost work
+# upstream (tk-upstream-omnigraph-a-single-row-insert-costs-a-f-eeeae3), which
+# will move the knee without touching this repo. A value that has to be right
+# in a release is a value nobody can correct during an incident.
+#
+# Read AT CALL TIME (see `_WriteGate.admit`), which is what makes both the env
+# override and a test's monkeypatch take effect on the very next call —
+# [[les-witan-core-monkeypatch-constants]].
+REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR = "WITAN_REMOTE_WRITE_MAX_INFLIGHT"
+REMOTE_WRITE_QUEUE_WAIT_ENV_VAR = "WITAN_REMOTE_WRITE_QUEUE_SECONDS"
+_REMOTE_WRITE_MAX_INFLIGHT = 4
+_REMOTE_WRITE_QUEUE_WAIT = 10.0
 
 # The deployed omnigraph-server goes away entirely for a stretch on every
 # restart, and restarts are routine: adding a user to the actor-tokens map is
@@ -328,6 +422,10 @@ class _AttemptResult(NamedTuple):
     body: str = ""
     error: str = ""
     returncode: int | None = None
+    #: The server's own `Retry-After`, in seconds, when it sent one. HTTP
+    #: transport only — the CLI never sees response headers — so `None` here
+    #: means "no hint", not "retry now".
+    retry_after: float | None = None
 
 
 def _classify_cli_error(stderr: str) -> str:
@@ -365,6 +463,112 @@ def shared_transport(server_url: str) -> _http.PooledTransport:
             transport = _http.PooledTransport(server_url)
             _TRANSPORTS[server_url] = transport
         return transport
+
+
+def _env_override(name: str, default: T, cast: Callable[[str], T]) -> T:
+    """``name`` from the environment as a number, or ``default``.
+
+    A BAD VALUE FALLS BACK RATHER THAN RAISING, and says so in the log. These
+    are read on the write path of a deployed server: a typo in a Deployment env
+    var must not turn every write into a crash, which is the one failure mode
+    worse than the mis-sizing it was trying to correct. The log line is what
+    keeps that from being silent — a knob that appears to be set and is not is
+    how a tuning session ends up chasing the wrong variable for an hour.
+
+    Zero is a legal value (it disables admission entirely, which is a real
+    operational answer during an incident). Negative is not — it would mean an
+    unbounded wait or a gate nobody can pass — so it is refused like a typo.
+
+    NON-FINITE IS REFUSED TOO, and it is the one that does not look like a typo.
+    ``float("nan")`` and ``float("inf")`` are both accepted by ``float()`` and
+    both survive a ``< 0`` test — ``nan`` compares False against everything —
+    so a ``WITAN_REMOTE_WRITE_QUEUE_SECONDS=nan`` would reach
+    ``Condition.wait(nan)`` and raise out of the gate. That is precisely the
+    "a bad env var turns every write into a crash" failure this function exists
+    to prevent, arriving through the one input that passes every other check.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = cast(raw)
+    except ValueError:
+        _log.warning("%s=%r is not a number; using %r", name, raw, default)
+        return default
+    if not math.isfinite(value):
+        _log.warning("%s=%r is not finite; using %r", name, raw, default)
+        return default
+    if value < 0:
+        _log.warning("%s=%r is negative; using %r", name, raw, default)
+        return default
+    return value
+
+
+class _WriteGate:
+    """Bounded, per-graph admission for remote writes made by this process.
+
+    PROCESS-wide for the same reason the transports above are, and for a
+    stronger one: a bound that lived on the client would bound nothing, since
+    witan builds a fresh ``OmnigraphClient`` per request (ADR-0004). Shared
+    state is the whole mechanism here rather than an optimisation — this IS the
+    global limiter the per-actor cap in the data tier cannot be. See the sizing
+    note on ``_REMOTE_WRITE_MAX_INFLIGHT``.
+
+    One condition variable guards a count per graph key. ``notify_all`` rather
+    than ``notify`` because waiters for *different* graphs share it: waking one
+    arbitrary waiter can wake somebody whose graph is still full while the
+    thread that could have proceeded goes on sleeping.
+    """
+
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._in_flight: dict[str, int] = {}
+
+    @contextmanager
+    def admit(self, key: str, label: str) -> Iterator[None]:
+        """Hold one write slot for ``key``, or raise :class:`WriteQueueFull`.
+
+        Both bounds are resolved HERE, on entry, rather than captured at import
+        — a generator-based context manager runs its body at ``__enter__``, so
+        an env override set on the Deployment and a test's monkeypatch both take
+        effect on the very next call
+        ([[les-witan-core-monkeypatch-constants]]).
+        """
+        limit = _env_override(
+            REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR, _REMOTE_WRITE_MAX_INFLIGHT, int
+        )
+        wait = _env_override(
+            REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, _REMOTE_WRITE_QUEUE_WAIT, float
+        )
+        deadline = time.monotonic() + wait
+        with self._cv:
+            while self._in_flight.get(key, 0) >= limit:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise WriteQueueFull(
+                        f"omnigraph {label} was refused before it was sent: "
+                        f"{self._in_flight.get(key, 0)} writes are already in "
+                        f"flight against {key} and no slot freed within "
+                        f"{wait:.0f}s. This graph serialises writes at roughly "
+                        "one every 4 seconds, so a write queued this long is "
+                        "unlikely to complete before the caller stops waiting. "
+                        "NOTHING WAS WRITTEN — retry once the burst clears."
+                    )
+                self._cv.wait(remaining)
+            self._in_flight[key] = self._in_flight.get(key, 0) + 1
+        try:
+            yield
+        finally:
+            with self._cv:
+                remaining_writes = self._in_flight[key] - 1
+                if remaining_writes:
+                    self._in_flight[key] = remaining_writes
+                else:
+                    del self._in_flight[key]
+                self._cv.notify_all()
+
+
+_WRITE_GATE = _WriteGate()
 
 
 # The .gq sources are packaged data and effectively immutable at runtime, but a
@@ -665,6 +869,23 @@ class OmnigraphConflict(RuntimeError):
     where the retry would blindly re-apply the claim over whoever won the race.
     A caller passing ``surface_conflict=True`` gets this exception instead so it
     can re-read and decide (see ``task_claim``)."""
+
+
+class WriteQueueFull(RuntimeError):
+    """This process already has as many writes in flight against one graph as the
+    graph can serve inside the caller's deadline, and the wait for a slot expired.
+
+    ★ THE ONE THING THIS SAYS THAT A 502 CANNOT: NOTHING WAS WRITTEN. ★
+    The failure this replaces is a write admitted into a queue it could not clear
+    in time, torn down mid-flight, and surfaced as a gateway error whose outcome
+    nobody can determine — the write usually committed, sometimes did not, and
+    the response distinguishes neither. Refusing before anything is sent turns
+    that into an ordinary, retryable answer.
+
+    A ``RuntimeError`` subclass so every existing ``except RuntimeError`` renders
+    it as one red line, and its own type so a caller that wants to queue and
+    retry can recognise it without matching on prose.
+    """
 
 
 def _is_storage_version_mismatch(msg: str) -> bool:
@@ -1013,7 +1234,15 @@ class OmnigraphClient:
         *,
         surface_conflict: bool = False,
     ) -> str:
-        """Run one query/mutate over HTTP under the shared retry policy."""
+        """Run one query/mutate over HTTP under the shared retry policy.
+
+        A write additionally holds a slot in the process-wide :data:`_WRITE_GATE`
+        for the whole call, retries included — a write being retried is still
+        occupying the graph, and accounting for it any other way would let the
+        backoff sleeps hide a queue that is still there. Reads are ungated: they
+        do not serialise (~5 req/s flat from 8 to 36 concurrent readers), so a
+        bound on them would only add latency to the one path that has none.
+        """
         is_write = verb == "mutate"
         call = transport.mutate if is_write else transport.query
 
@@ -1021,7 +1250,12 @@ class OmnigraphClient:
 
         def attempt() -> _AttemptResult:
             outcome = call(self.graph_id, source, params, token)
-            return _AttemptResult(outcome.kind, body=outcome.body, error=outcome.error)
+            return _AttemptResult(
+                outcome.kind,
+                body=outcome.body,
+                error=outcome.error,
+                retry_after=outcome.retry_after,
+            )
 
         return self._with_retry_policy(
             attempt,
@@ -1203,7 +1437,67 @@ class OmnigraphClient:
         pooled HTTP transport feed this same loop, so a restarting server, an
         admission cap, or an optimistic-concurrency conflict is handled
         identically no matter how the call was made.
+
+        ★ AND THAT IS WHY WRITE ADMISSION LIVES HERE, not in ``_http_execute``.
+        Being the one place every call converges makes it the only place a bound
+        cannot be walked around. Gating the HTTP branch alone left two real
+        remote-write paths ungated:
+
+        * ``load_batch`` shells out to ``omnigraph load`` — it has no HTTP form
+          at all — so every batch of a ``store_merge`` bypassed the bound. Two
+          people migrating at once is precisely the multi-user burst this exists
+          to bound.
+        * witan-code's BRANCHED clients deliberately fall back to the CLI
+          (``_transport`` returns ``None`` when ``_extra_args`` is non-empty,
+          because 0.8.1's HTTP API has no request-side branch selector), so
+          every write from a branch view bypassed it too.
+
+        The deadline is established here for the same reason, and BEFORE the gate
+        is entered: the queue wait is the largest single consumer of the budget,
+        and one measured from after admission would let a write sit 10s in the
+        gate and still believe it had its whole budget left to retry.
         """
+        # Remote writes only. A local store is serialised by its own flock and
+        # has no server to saturate, and reads do not queue (~5 req/s flat from
+        # 8 to 36 concurrent readers) so bounding them would only add latency to
+        # the one path that has none.
+        gate_write = is_write and self.is_remote
+        budget = (
+            _env_override(REMOTE_CALL_BUDGET_ENV_VAR, _REMOTE_CALL_BUDGET, float)
+            if self.is_remote
+            else 0.0
+        )
+        deadline = time.monotonic() + budget if budget else None
+        gate = (
+            _WRITE_GATE.admit(f"{self.server_url}|{self.graph_id}", label)
+            if gate_write
+            else nullcontext()
+        )
+        with gate:
+            return self._retry_loop(
+                attempt_once,
+                label,
+                env=env,
+                is_write=is_write,
+                surface_conflict=surface_conflict,
+                deadline=deadline,
+            )
+
+    def _retry_loop(
+        self,
+        attempt_once: Callable[[], _AttemptResult],
+        label: str,
+        *,
+        env: dict,
+        is_write: bool,
+        surface_conflict: bool,
+        deadline: float | None,
+    ) -> str:
+        """The loop itself, inside whatever admission :meth:`_with_retry_policy`
+        decided on. ``deadline`` is a ``time.monotonic()`` stamp past which this
+        call cannot usefully still be running, or ``None`` when no cut-off is
+        known — in which case a ``Retry-After`` is obeyed rather than
+        second-guessed."""
         lock_fh = self._acquire_write_lock(is_write)
         try:
             attempt = 0
@@ -1275,9 +1569,52 @@ class OmnigraphClient:
                 if kind == _http.ADMISSION_CAP:
                     # Independent budget/backoff from the drift retries below —
                     # doesn't consume _MAX_ATTEMPTS and ignores surface_conflict.
+                    #
+                    # The server's own Retry-After wins over the blind schedule
+                    # when there is one — but only when THE CALL CAN STILL
+                    # AFFORD IT, and that is measured against the remaining
+                    # budget, not against _ADMISSION_CAP_MAX_DELAY. Those are
+                    # different quantities and conflating them was wrong in both
+                    # directions: it rejected a `Retry-After: 5` that fits
+                    # comfortably inside a 30s budget, while happily sleeping
+                    # five separate 4s hints for a total of 20s on top of
+                    # whatever the write gate had already spent queueing —
+                    # arriving at exactly the cut-off it meant to stay inside.
+                    #
+                    # With no deadline (the CLI path) there is no cut-off to
+                    # respect and any hint is obeyed, which is the pre-existing
+                    # behaviour for that transport.
                     admission_cap_attempt += 1
+                    hint = result.retry_after
+                    delay = (
+                        hint
+                        if hint is not None
+                        else _admission_cap_backoff(admission_cap_attempt)
+                    )
+                    remaining = (
+                        None if deadline is None else deadline - time.monotonic()
+                    )
+                    if remaining is not None and delay > remaining:
+                        # Sleeping past the deadline can only end as a torn-down
+                        # connection whose outcome the caller cannot determine.
+                        # Failing NOW, quoting what the server asked for, is the
+                        # honest answer — the wait it wants belongs to whoever
+                        # schedules the retry, not to a call that cannot extend
+                        # its own deadline.
+                        asked = (
+                            f"which asked to be retried in {hint:.0f}s"
+                            if hint is not None
+                            else "and the backoff before another attempt"
+                        )
+                        raise RuntimeError(
+                            f"omnigraph {label} was refused by the server's "
+                            f"admission cap, {asked} — longer than the "
+                            f"{max(remaining, 0.0):.1f}s this call has left. "
+                            f"Nothing was written; retry in {delay:.0f}s:\n"
+                            f"{err.strip()}"
+                        )
                     if admission_cap_attempt < _ADMISSION_CAP_MAX_ATTEMPTS:
-                        time.sleep(_admission_cap_backoff(admission_cap_attempt))
+                        time.sleep(delay)
                         continue
                     raise RuntimeError(
                         f"omnigraph {label} failed after "

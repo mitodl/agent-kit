@@ -23,6 +23,7 @@ from witan_code import config as cfg_module
 from witan_code import store as store_module
 from witan_code.remote.store import (
     RemotePayloadTooLarge,
+    RemoteWriteIndeterminate,
     RemoteStoreClient,
     RemoteStoreUnsupported,
     StoreSession,
@@ -789,3 +790,68 @@ def test_a_reconnect_re_asks_the_surface():
     client.change_many(_steps(1))
     session.close()
     assert [entry for entry, _ in log].count("list_tools") == 2
+
+
+def _gateway(status: int):
+    import httpx2
+
+    request = httpx2.Request("POST", "http://x/mcp")
+    response = httpx2.Response(status, request=request, text="<html>502 Bad Gateway")
+    return httpx2.HTTPStatusError(str(status), request=request, response=response)
+
+
+@pytest.mark.parametrize("status", [502, 504])
+def test_a_write_cut_off_by_a_gateway_is_never_re_invoked(status):
+    """★ THE RETRY IS THE BUG, and here it duplicates data rather than wasting a
+    round trip.
+
+    A 502/504 is not a ``ToolError``, so it lands in the generic arm — which
+    reconnects and sends the write AGAIN. Measured against CI, the backend
+    usually finished the write before the deadline cut the response (28 of 28
+    committed in one burst, 14 of 16 in another), so that second invocation
+    writes the rows a second time. The outcome is indeterminate, not failed, and
+    the only safe response is to stop and say so.
+    """
+    log: list = []
+    exc = _gateway(status)
+    clients = iter([_RefusesForSize(log, exc), _RefusesForSize(log, exc)])
+    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: next(clients))
+    with pytest.raises(RemoteWriteIndeterminate) as caught:
+        RemoteStoreClient(REPO, session).load([{"id": "n1", "type": "Symbol"}])
+    # Exactly one attempt: the reconnect-and-retry must not have happened.
+    assert [entry[0] for entry in log] == ["connect", "attempt"]
+    message = str(caught.value)
+    assert "INDETERMINATE" in message
+    assert "NOT retried" in message
+    assert f"HTTP {status}" in message
+    assert "`code_store_load`" in message
+
+
+def test_a_read_cut_off_by_a_gateway_still_reconnects():
+    """The other half: repeating a read changes nothing, so a dropped session is
+    exactly what the reconnect is for. Refusing it would be a strict loss."""
+    log: list = []
+
+    class _FailsOnceWithGateway(_FakeClient):
+        def __init__(self, log, fail):
+            super().__init__(log)
+            self._fail = fail
+
+        async def call_tool(self, name, arguments):
+            if self._fail:
+                self._log.append(("attempt", name))
+                raise _gateway(502)
+            return await super().call_tool(name, arguments)
+
+    clients = iter(
+        [_FailsOnceWithGateway(log, True), _FailsOnceWithGateway(log, False)]
+    )
+    session = StoreSession("http://x/mcp", lambda: "jwt", lambda _t: next(clients))
+    assert RemoteStoreClient(REPO, session).list_branches() == ["main"]
+    assert [entry[0] for entry in log] == [
+        "connect",
+        "attempt",
+        "disconnect",
+        "connect",
+        "code_store_views",
+    ]

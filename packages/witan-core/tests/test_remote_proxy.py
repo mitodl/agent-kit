@@ -21,6 +21,7 @@ from witan_core.remote.proxy import (
     RemoteToolFailed,
     RemoteToolUnavailable,
     RemoteUnreachable,
+    RemoteWriteIndeterminate,
     _tool_input_schema,
     _transport_failure,
     console_elicitation_handler,
@@ -601,6 +602,117 @@ def test_a_413_carries_the_underlying_error_as_its_cause():
     proxy = _ScriptedProxy(original, at="call")
     with pytest.raises(RemotePayloadTooLarge) as caught:
         proxy.task_get(slug="x")
+    assert caught.value.__cause__ is original
+
+
+# ── a call the gateway cut off after dispatching it ───────────────────────
+# OBSERVED LIVE 2026-08-12 against the CI deployment, counted from the rows
+# afterwards: two 16-writer bursts, every 502 arriving at ~30.0s (ToolHive's
+# hardcoded backend deadline). The first burst committed all 28 of the writes it
+# 502'd on; the second committed 14 of 16. So the deadline cuts the RESPONSE,
+# the backend usually finishes the write anyway, and the reply says nothing
+# about which happened. These tests pin the one thing the client can honestly
+# say about that, and stop it saying the two things that are false.
+
+
+def _gateway_error(status: int) -> httpx2.HTTPStatusError:
+    """What a direct connection raises when APISIX answers HTML for the vMCP."""
+    request = httpx2.Request("POST", ENDPOINT)
+    response = httpx2.Response(status, request=request, text="<html>502 Bad Gateway")
+    return httpx2.HTTPStatusError(
+        f"Server error '{status}'", request=request, response=response
+    )
+
+
+class _ReadingProxy(_ScriptedProxy):
+    """A proxy whose tools are all reads — witan-code's shape."""
+
+    def _writes(self, name):
+        return False
+
+
+@pytest.mark.parametrize("status", [502, 504])
+def test_a_gateway_cutoff_on_a_write_is_indeterminate_not_unreachable(status):
+    # ★ THE ORDERING TEST, second instance. Same trap as the 413: this is an
+    # httpx2.HTTPStatusError and therefore an httpx2.HTTPError, so asking
+    # `_transport_failure` first reports "could not be reached" about a service
+    # that answered — and on a write that message invites the retry which
+    # duplicates the row.
+    proxy = _ScriptedProxy(
+        ExceptionGroup("unhandled", [_gateway_error(status)]), at="call"
+    )
+    with pytest.raises(RemoteWriteIndeterminate) as caught:
+        proxy.memory_store(content="x")
+    message = str(caught.value)
+    assert not isinstance(caught.value, RemoteUnreachable)
+    assert "could not be reached" not in message
+    assert "INDETERMINATE" in message
+    assert f"HTTP {status}" in message
+    assert "`memory_store`" in message
+    assert "Re-read before retrying" in message
+
+
+def test_a_gateway_cutoff_on_a_read_is_unreachable_but_says_it_was_reached():
+    # Nothing was dispatched that could have changed anything, so the retry
+    # advice is unqualified — but the old "could not be reached" was still
+    # wrong about WHY, and sent readers to check an endpoint that is merely
+    # saturated.
+    proxy = _ReadingProxy(ExceptionGroup("unhandled", [_gateway_error(502)]), at="call")
+    with pytest.raises(RemoteUnreachable) as caught:
+        proxy.task_get(slug="x")
+    message = str(caught.value)
+    assert not isinstance(caught.value, RemoteWriteIndeterminate)
+    assert "safe to retry" in message
+    assert "saturated" in message
+
+
+def test_an_unclassified_tool_is_assumed_to_write():
+    """The default has to be the cautious one — see ``RemoteMCPProxy._writes``.
+
+    A tool added to a server and not added to its read-only list gets an
+    over-careful sentence. The inverse default would tell somebody their write
+    did not happen when it may have, which is the mistake that costs data.
+    """
+    proxy = _ScriptedProxy(
+        ExceptionGroup("unhandled", [_gateway_error(502)]), at="call"
+    )
+    with pytest.raises(RemoteWriteIndeterminate):
+        proxy.task_get(slug="x")  # a read, but this proxy classifies nothing
+
+
+def test_a_503_is_still_plainly_unreachable():
+    """★ 503 is deliberately NOT in the gateway list.
+
+    It means no upstream was available to try, so nothing was dispatched and
+    nothing can have been written. Folding it in with 502 would relabel an
+    unambiguous "did not happen" as an ambiguous "may have", which is a strict
+    loss of information on exactly the calls that still have a safe answer.
+    """
+    proxy = _ScriptedProxy(
+        ExceptionGroup("unhandled", [_gateway_error(503)]), at="call"
+    )
+    with pytest.raises(RemoteUnreachable) as caught:
+        proxy.memory_store(content="x")
+    assert not isinstance(caught.value, RemoteWriteIndeterminate)
+    assert "could not be reached" in str(caught.value)
+
+
+def test_a_gateway_cutoff_during_teardown_is_still_classified():
+    # Same reason the 413 has this test: anyio re-raises a background failure
+    # while the client is closing, and a write cut off there is exactly as
+    # indeterminate as one cut off in the call.
+    proxy = _ScriptedProxy(
+        ExceptionGroup("unhandled", [_gateway_error(502)]), at="teardown"
+    )
+    with pytest.raises(RemoteWriteIndeterminate):
+        proxy.memory_store(content="x")
+
+
+def test_an_indeterminate_write_carries_the_underlying_error_as_its_cause():
+    original = ExceptionGroup("unhandled", [_gateway_error(502)])
+    proxy = _ScriptedProxy(original, at="call")
+    with pytest.raises(RemoteWriteIndeterminate) as caught:
+        proxy.memory_store(content="x")
     assert caught.value.__cause__ is original
 
 
