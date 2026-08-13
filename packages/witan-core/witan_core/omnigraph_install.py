@@ -37,7 +37,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-_OMNIGRAPH_VERSION = "0.10.0"
+_OMNIGRAPH_VERSION = "0.9.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which
@@ -63,7 +63,7 @@ _OMNIGRAPH_VERSION = "0.10.0"
 #: Renovate manages the VERSION line only (see renovate.json). While this is
 #: ``edge`` a bump is not meaningful, so pin a real ``v<version>`` before
 #: treating dependency updates here as authoritative.
-_OMNIGRAPH_RELEASE_TAG = "edge"
+_OMNIGRAPH_RELEASE_TAG = "v0.9.0"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
 #: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
@@ -111,13 +111,13 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: <tag>/<asset>.sha256
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "6fba4673b995396a205a14dccfd6b569e30474470b8ee7bab7e0f978ebcd5536"
+        "507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "e5915f2018ed020e33603cb97e7e5bee339f45ed687d1e21a21dd2abc44b719b"
+        "6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "5059a08f88b593a5c19381a88b13e64a43d19a330e457c9df15a71313a7cd0f9"
+        "69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
