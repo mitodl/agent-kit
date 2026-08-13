@@ -5,6 +5,7 @@ duplicated). The per-server test_setup.py files keep only their own
 registration-bundle tests.
 """
 
+import hashlib
 import io
 import subprocess
 import tarfile
@@ -39,6 +40,24 @@ class _FakeResponse:
 
     def read(self) -> bytes:
         return self._data
+
+
+def _serve(monkeypatch, blob: bytes) -> None:
+    """Stub the download AND pin the digest of exactly what it will return.
+
+    The installer verifies the tarball against ``_OMNIGRAPH_ASSET_SHA256``
+    before extracting, so a fixture that stubbed only the transport is now
+    refused — correctly, since that is the whole point of the pin. Registering
+    the fake's own digest keeps these tests going THROUGH the verification path
+    rather than around it; `test_a_tampered_download_is_refused` covers the
+    mismatch case.
+    """
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResponse(blob))
+    monkeypatch.setitem(
+        oi._OMNIGRAPH_ASSET_SHA256,
+        "omnigraph-linux-x86_64.tar.gz",
+        hashlib.sha256(blob).hexdigest(),
+    )
 
 
 def _dest(tmp_path: Path) -> Path:
@@ -79,10 +98,7 @@ def test_install_omnigraph_downloads_and_extracts(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
     monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *a, **k: _FakeResponse(_fake_release_tarball(b"#!/bin/sh\necho fake")),
-    )
+    _serve(monkeypatch, _fake_release_tarball(b"#!/bin/sh\necho fake"))
 
     oi.install_omnigraph(dry_run=False)
 
@@ -112,10 +128,7 @@ def test_install_omnigraph_redownloads_when_version_differs(tmp_path, monkeypatc
     monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
     monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
     _write_fake_binary(_dest(tmp_path), "0.1.0")
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *a, **k: _FakeResponse(_fake_release_tarball(b"#!/bin/sh\necho fake")),
-    )
+    _serve(monkeypatch, _fake_release_tarball(b"#!/bin/sh\necho fake"))
 
     oi.install_omnigraph(dry_run=False)
 
@@ -134,10 +147,7 @@ def _upgrade_from(tmp_path, monkeypatch, version: str = _OLD) -> Path:
     monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
     monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
     _write_fake_binary(_dest(tmp_path), version)
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *a, **k: _FakeResponse(_fake_release_tarball(b"#!/bin/sh\necho new")),
-    )
+    _serve(monkeypatch, _fake_release_tarball(b"#!/bin/sh\necho new"))
     oi.install_omnigraph(dry_run=False)
     return _dest(tmp_path)
 
@@ -210,10 +220,7 @@ def test_first_install_preserves_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
     monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *a, **k: _FakeResponse(_fake_release_tarball(b"#!/bin/sh\necho new")),
-    )
+    _serve(monkeypatch, _fake_release_tarball(b"#!/bin/sh\necho new"))
 
     oi.install_omnigraph(dry_run=False)
 
@@ -304,3 +311,46 @@ def test_installed_version_none_on_nonzero_exit(tmp_path):
     dest.chmod(0o755)
 
     assert oi._installed_version(dest) is None
+
+
+def test_a_tampered_download_is_refused(tmp_path, monkeypatch, capsys):
+    """★ The pin's whole purpose: bytes that are not the build this repo was
+    tested against must not reach a developer's PATH.
+
+    On a moving tag (`edge`) this is also the only thing tying the installed
+    binary to a specific upstream commit — equal version and tag strings can
+    still resolve to different builds. Refuse, do not warn: a warning during
+    `witan setup` is read as noise, and the binary is already installed by then.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
+    blob = _fake_release_tarball(b"#!/bin/sh\necho tampered")
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResponse(blob))
+    monkeypatch.setitem(
+        oi._OMNIGRAPH_ASSET_SHA256, "omnigraph-linux-x86_64.tar.gz", "00" * 32
+    )
+
+    oi.install_omnigraph(dry_run=False)
+
+    assert not _dest(tmp_path).exists(), "a mismatched download must not install"
+    out = capsys.readouterr().out
+    assert "checksum mismatch" in out
+    assert "has moved" in out  # names the likely cause on a moving tag
+
+
+def test_an_asset_with_no_pinned_digest_is_refused(tmp_path, monkeypatch, capsys):
+    """A platform added to `_OMNIGRAPH_ASSETS` and forgotten in the digest map
+    must fail closed. The inverse — installing unverified because the pin is
+    absent — is how the verification quietly stops applying."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
+    blob = _fake_release_tarball(b"#!/bin/sh\necho fake")
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResponse(blob))
+    monkeypatch.delitem(oi._OMNIGRAPH_ASSET_SHA256, "omnigraph-linux-x86_64.tar.gz")
+
+    oi.install_omnigraph(dry_run=False)
+
+    assert not _dest(tmp_path).exists()
+    assert "no pinned checksum" in capsys.readouterr().out
