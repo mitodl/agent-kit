@@ -24,6 +24,7 @@ from typing import Callable
 from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records, describe_budget
 from witan_core.omnigraph import store_cli_args, store_subprocess_env
 from witan_core.remote.proxy import (
+    RemoteCredentialRejected,
     RemoteMCPProxy,
     RemotePayloadTooLarge,
     RemoteToolFailed,
@@ -37,6 +38,7 @@ from .. import session_state
 from ..config import RemoteConfig
 
 __all__ = [
+    "RemoteCredentialRejected",
     "RemotePayloadTooLarge",
     "RemoteServerProxy",
     "RemoteToolFailed",
@@ -252,8 +254,13 @@ _READ_ONLY = frozenset(
 class RemoteServerProxy(RemoteMCPProxy):
     """Mirrors the ``witan.server`` tool surface, dispatching over MCP."""
 
-    def __init__(self, cfg: RemoteConfig, token_provider: Callable[[], str]) -> None:
-        super().__init__(cfg.url, token_provider)
+    def __init__(
+        self,
+        cfg: RemoteConfig,
+        token_provider: Callable[[], str],
+        token_refresher: Callable[[], str] | None = None,
+    ) -> None:
+        super().__init__(cfg.url, token_provider, token_refresher)
         self._url_source = cfg.url_source
 
     def _is_admin_tool(self, name: str) -> bool:

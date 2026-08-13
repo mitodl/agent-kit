@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx2
 import pytest
 
+from witan_core.remote import oidc
 from witan_core.remote.oidc import (
     DeviceAuth,
     NeedsLogin,
@@ -486,3 +487,69 @@ def test_concurrent_refreshes_collapse_into_one(cache_path, tmp_path):
     assert all(r.startswith("ok ") for r in results), results
     assert len(set(results)) == 1  # everyone ends up on the same token
     assert refresh_log.read_text().count("refresh") == 1
+
+
+# ── the refresh skew has to outlast the call it is fetched for ─────────────
+# OBSERVED LIVE 2026-08-13: 8 of 24 concurrent writers got
+# `"POST /mcp HTTP/1.1" 401 Unauthorized` mid-run. `default_token_provider` is
+# consulted PER REQUEST and returned any token with >30s of life, while a single
+# `memory_store` was measured at 3-51s against the same deployment. So a token
+# with 31 seconds left was handed to a call needing 45 and died in flight —
+# tk-the-oidc-refresh-skew-30s-is-shorter-than-a-writ-8b04db.
+
+
+def _entry(*, lifetime: float, remaining: float) -> dict:
+    now = time.time()
+    return {
+        "access_token": "a",
+        "refresh_token": "r",
+        "expires_at": now + remaining,
+        "obtained_at": now + remaining - lifetime,
+    }
+
+
+def test_a_token_that_cannot_outlast_a_slow_write_is_not_usable(auth):
+    """★ THE REGRESSION. 40s of life used to pass (>30) and be handed to a call
+    that can take 51s. It must not."""
+    assert not auth._usable(_entry(lifetime=300, remaining=40))
+
+
+def test_a_token_with_room_for_the_slowest_write_is_usable(auth):
+    assert auth._usable(_entry(lifetime=300, remaining=120))
+
+
+def test_the_skew_is_read_at_call_time(auth, monkeypatch):
+    """So an operator can move it on a running process — the same property the
+    remote-write knobs have, and for the same reason: the number came from one
+    deployment's measured write cost."""
+    entry = _entry(lifetime=300, remaining=40)
+    assert not auth._usable(entry)
+    monkeypatch.setenv(oidc.EXPIRY_SKEW_ENV_VAR, "10")
+    assert auth._usable(entry)
+
+
+@pytest.mark.parametrize("value", ["not-a-number", "-5", "nan", "inf"])
+def test_an_unusable_skew_override_falls_back_rather_than_raising(
+    auth, monkeypatch, value
+):
+    """A typo in a deployment env var must not turn every authenticated request
+    into a crash. `nan` matters most: float() accepts it and it compares False
+    against every bound, so a negative-only guard would let it through and make
+    `_usable` silently always-false — a refresh on every single call."""
+    monkeypatch.setenv(oidc.EXPIRY_SKEW_ENV_VAR, value)
+    assert auth._usable(_entry(lifetime=300, remaining=120))
+    assert not auth._usable(_entry(lifetime=300, remaining=40))
+
+
+def test_the_skew_is_capped_at_half_a_short_token_s_life(auth, monkeypatch):
+    """★ A SKEW LONGER THAN THE TOKEN WOULD REFRESH ON EVERY CALL.
+
+    An IdP issuing 60s tokens against a 90s skew makes no entry ever usable, so
+    every request mints a new token and a fleet stampedes the token endpoint —
+    the exact failure the cache lock exists to prevent. Capped at half the
+    token's own life, a short token is still used for half of it.
+    """
+    monkeypatch.setenv(oidc.EXPIRY_SKEW_ENV_VAR, "90")
+    # 60s token, 40s left: uncapped this fails (40 < 90); capped at 30 it passes.
+    assert auth._usable(_entry(lifetime=60, remaining=40))
+    assert not auth._usable(_entry(lifetime=60, remaining=20))

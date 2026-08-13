@@ -20,6 +20,8 @@ from __future__ import annotations
 import base64
 import fcntl
 import json
+import logging
+import math
 import os
 import threading
 import time
@@ -30,8 +32,36 @@ from typing import Callable, Iterator, Protocol
 
 import httpx2
 
+_log = logging.getLogger(__name__)
+
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
-_EXPIRY_SKEW_S = 30
+
+# How much life a cached access token must have left to be handed to a caller.
+#
+# ★ THIS IS A BOUND ON THE SLOWEST CALL THE TOKEN WILL BE USED FOR, not a
+# round-trip allowance. `default_token_provider` is consulted PER REQUEST and
+# returns any token with more than this left — so a skew of 30s hands back a
+# token with 31 seconds of life for a call that may take 45, and the token dies
+# mid-flight. Measured against the CI deployment 2026-08-13, one `memory_store`
+# took 3-51s under a 24-writer burst (p95 ~44s). 30s was sized for a call that
+# takes milliseconds; this service does not have one.
+#
+# The default therefore clears the observed maximum with headroom. Configurable
+# because it is the same kind of number as WITAN_REMOTE_CALL_BUDGET_SECONDS —
+# derived from one deployment's measured write cost, and due to move when that
+# cost does (tk-upstream-omnigraph-a-single-row-insert-costs-a-f-eeeae3).
+EXPIRY_SKEW_ENV_VAR = "WITAN_OIDC_EXPIRY_SKEW_SECONDS"
+_EXPIRY_SKEW_S = 90
+
+# ★ AND A CEILING, BECAUSE A SKEW LONGER THAN THE TOKEN IS A REFRESH STORM.
+# If the IdP issues tokens shorter than the skew, no cached entry is ever
+# "usable", every request refreshes, and a fleet of agents stampedes the token
+# endpoint — precisely the failure the cache lock below exists to prevent
+# (tk-concurrent-agents-stampede-the-oidc-token-refres-677984). Rather than let
+# a misconfiguration or a short-token realm turn every call into a refresh, the
+# effective skew is capped at half the token's own lifetime: a short token then
+# still gets used for half its life instead of none of it.
+_MAX_SKEW_FRACTION = 0.5
 
 
 DEFAULT_CACHE_PATH = Path.home() / ".config" / "witan" / "tokens.json"
@@ -102,6 +132,33 @@ class OidcEndpoint(Protocol):
     oidc_issuer: str
     oidc_client_id: str
     oidc_audience: str | None
+
+
+def _env_seconds(name: str, default: float) -> float:
+    """``name`` from the environment as a non-negative, finite number of seconds.
+
+    A BAD VALUE FALLS BACK AND SAYS SO, rather than raising. This is read on the
+    path to every authenticated request: a typo in a deployment env var must not
+    turn every call into a crash, which is strictly worse than the mis-sizing it
+    was meant to correct. Same rule, and the same reasoning, as
+    ``witan_core.omnigraph._env_override``.
+
+    ``nan``/``inf`` are refused explicitly — ``float()`` accepts both and ``nan``
+    compares False against every bound, so a negative-only check waves them
+    through and the comparison in ``_usable`` silently becomes always-false.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        _log.warning("%s=%r is not a number; using %r", name, raw, default)
+        return default
+    if not math.isfinite(value) or value < 0:
+        _log.warning("%s=%r is not a usable duration; using %r", name, raw, default)
+        return default
+    return value
 
 
 class RemoteAuthError(Exception):
@@ -311,8 +368,23 @@ class DeviceAuth:
                 pass  # raced with another sweeper, or not ours to delete
 
     def _usable(self, entry: dict) -> bool:
-        """Is this cached entry good for longer than the refresh skew?"""
-        return entry["expires_at"] - time.time() > _EXPIRY_SKEW_S
+        """Is this cached entry good for longer than the refresh skew?
+
+        The skew is read AT CALL TIME so an operator can move it on a running
+        process and a test's monkeypatch takes effect on the next call
+        ([[les-witan-core-monkeypatch-constants]]).
+
+        It is also capped at half this token's own lifetime — see
+        ``_MAX_SKEW_FRACTION``. The lifetime comes from the entry itself rather
+        than from configuration, because it is the IdP's decision and can differ
+        per realm; ``obtained_at`` has always been stored, so this needs no
+        cache-schema change and an entry written by an older client still works.
+        """
+        skew = _env_seconds(EXPIRY_SKEW_ENV_VAR, _EXPIRY_SKEW_S)
+        lifetime = entry["expires_at"] - entry.get("obtained_at", entry["expires_at"])
+        if lifetime > 0:
+            skew = min(skew, lifetime * _MAX_SKEW_FRACTION)
+        return entry["expires_at"] - time.time() > skew
 
     # ── request helpers ────────────────────────────────────────────────────
     def _auth_params(self) -> dict:
@@ -428,6 +500,48 @@ class DeviceAuth:
                 # token, which a rotating IdP treats as replay.
                 current = self._load_cache().get(self._cache_key()) or entry
                 if self._usable(current):
+                    return current["access_token"]
+                refresh_token = current.get("refresh_token") or entry["refresh_token"]
+                return self._refresh(refresh_token, client)["access_token"]
+        finally:
+            if owns:
+                client.close()
+
+    def force_refresh(self, *, client: httpx2.Client | None = None) -> str:
+        """Mint a new access token, ignoring how healthy the cached one looks.
+
+        For the one case :meth:`get_valid_token` cannot serve: the DEPLOYMENT
+        rejected a token this client still considers usable. Asking again
+        through the normal path would return that same token from cache and
+        turn a retry into a second 401, so the cache check has to be skipped
+        rather than re-run.
+
+        Still takes the cache lock and still re-reads under it, for the reason
+        :meth:`get_valid_token` documents — a fleet that hits an expiry
+        boundary together arrives here together, and whoever refreshed a moment
+        ago has already stored a good token. The difference is only that a
+        cached token is accepted here when it is NEWER than the one that was
+        rejected; an equally-stale one is refreshed rather than handed back.
+        """
+        entry = self._load_cache().get(self._cache_key())
+        if not entry:
+            raise NeedsLogin(
+                f"Not logged in to {self._cfg.url} — run `{self._login_hint}` first."
+            )
+        if not entry.get("refresh_token"):
+            raise NeedsLogin(
+                f"Session expired — run `{self._login_hint}` to re-authenticate."
+            )
+        rejected = entry["access_token"]
+        owns = client is None
+        client = client or httpx2.Client(timeout=15)
+        try:
+            with _cache_lock(self._cache_path):
+                current = self._load_cache().get(self._cache_key()) or entry
+                # Somebody else already replaced it — take theirs rather than
+                # spending a second refresh token on the same expiry, which a
+                # rotating IdP treats as replay.
+                if current.get("access_token") != rejected and self._usable(current):
                     return current["access_token"]
                 refresh_token = current.get("refresh_token") or entry["refresh_token"]
                 return self._refresh(refresh_token, client)["access_token"]
