@@ -5,10 +5,12 @@
 # Usage:
 #   echo "<body>" | bash post-standup-comment.sh -d DISCUSSION_ID
 #   bash post-standup-comment.sh -d DISCUSSION_ID -b "$(cat standup.md)"
+#   bash post-standup-comment.sh -d DISCUSSION_ID -f /path/to/standup.md
 #
 # Options:
 #   -d DISCUSSION_ID   GraphQL node ID of the discussion (required)
-#   -b BODY            Comment body text; reads from stdin if omitted
+#   -b BODY            Comment body text; reads from stdin if neither -b nor -f
+#   -f FILE            Read body from FILE instead of -b / stdin
 #
 # Output: URL of the newly created comment
 # Requires: gh (authenticated), jq
@@ -17,12 +19,14 @@ set -euo pipefail
 
 DISCUSSION_ID=""
 BODY=""
+FILE=""
 
-while getopts "d:b:" opt; do
+while getopts "d:b:f:" opt; do
   case "$opt" in
     d) DISCUSSION_ID="$OPTARG" ;;
     b) BODY="$OPTARG" ;;
-    *) echo "Usage: $0 -d DISCUSSION_ID [-b BODY]" >&2; exit 1 ;;
+    f) FILE="$OPTARG" ;;
+    *) echo "Usage: $0 -d DISCUSSION_ID [-b BODY | -f FILE]" >&2; exit 1 ;;
   esac
 done
 
@@ -31,12 +35,19 @@ if [[ -z "$DISCUSSION_ID" ]]; then
   exit 1
 fi
 
-if [[ -z "$BODY" ]]; then
+# Resolve body: -f FILE takes precedence over -b, then stdin
+if [[ -n "$FILE" ]]; then
+  if [[ ! -f "$FILE" ]]; then
+    echo "Error: file not found: $FILE" >&2
+    exit 1
+  fi
+  BODY="$(cat "$FILE")"
+elif [[ -z "$BODY" ]]; then
   BODY="$(cat)"
 fi
 
 if [[ -z "$BODY" ]]; then
-  echo "Error: comment body is empty (pass -b or pipe via stdin)" >&2
+  echo "Error: comment body is empty (pass -b, -f FILE, or pipe via stdin)" >&2
   exit 1
 fi
 

@@ -416,27 +416,116 @@ _<Display Name>_
 
 ## Step 5 — Confirm and post
 
-Display the rendered standup, then use `ask_user` to confirm:
+First put the rendered standup in the draft file. Prepare the directory and
+learn the absolute path:
+
+```bash
+mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup" \
+  && chmod 700 "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup" \
+  && rm -f "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md" \
+  && printf '%s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md"
+```
+
+The `chmod 700` is not incidental. The draft holds private repository activity,
+agent session summaries and whatever off-GitHub work the user described, and it
+is retained on disk after the run. `mkdir` applies the caller's umask, commonly
+`022`, which would leave the directory world-traversable and the `Write`-created
+file world-readable on a shared machine. Pinning the directory to owner-only
+blocks that, the same way
+[`renovate-security-triage/scripts/paths.sh`](../renovate-security-triage/scripts/paths.sh)
+does for its retained artifacts.
+
+Then write the standup to the printed path with the **`Write` tool**.
+
+**Never put the standup text in a shell command — not as an argument, not as a
+heredoc body.** The rendered standup is multi-line markdown full of blank lines,
+`>` block quotes and backticks; passing it through bash gets it silently
+mangled, and the corrupted text is what would be posted. A quoted heredoc is
+not a workaround: it is what this skill used to do, and the parser dropped and
+spliced lines mid-sentence. `Write` takes the content as a tool argument with no
+shell involved, so it is the only safe way to get the draft onto disk.
+
+The path is fixed rather than session-scoped so the commands are identical every
+run and can be approved once. The prepare step deletes any draft left over from
+a previous run, so the first `Write` always creates the file fresh. The draft is
+the single source of truth for what gets posted: every branch below reads it
+back rather than trusting the copy held in context.
+
+Display the draft, then use `ask_user` to confirm:
 
 ```json
 {
   "action": {
     "type": "string",
     "title": "Post this standup?",
-    "enum": ["Post it", "Edit first", "Cancel"],
-    "description": "Post as a comment on <target title> (<target url>), make edits, or cancel."
+    "enum": ["Post it", "Edit (Interactive)", "Edit (Editor)", "Cancel"],
+    "description": "Post as a comment on <target title> (<target url>), edit here, edit in $EDITOR, or cancel."
   }
 }
 ```
 
 **Do not post unless the user selects "Post it".**
 
-On confirmation, post using the bundled script:
+### Edit (Interactive)
+
+Ask in conversation what to change, apply it, rewrite the draft file with the
+`Write` tool (same path, same no-shell rule), re-display it, and return to this
+menu.
+
+### Edit (Editor)
+
+Give the user the exact command for their configured editor:
 
 ```bash
-echo "<rendered standup>" \
-  | bash skills/process/generate-standup/scripts/post-standup-comment.sh \
-      -d "<target id>"
+printf '%s %q\n' "${VISUAL:-${EDITOR:-vi}}" \
+  "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md"
+```
+
+The two conversions differ on purpose. The editor is printed with `%s` so a
+multi-word setting like `code --wait` stays multiple arguments, and the path is
+printed with `%q` so a `$HOME` or `XDG_CACHE_HOME` containing spaces or shell
+metacharacters still arrives at the editor as one argument.
+
+Tell them to run it **in their own terminal window**, not through the agent.
+The agent's shell has no TTY, and neither do most harness bash modes, so a
+terminal editor started there hangs or exits with an error — this handoff is
+deliberate, not an oversight.
+
+Then wait with a second `ask_user`:
+
+```json
+{
+  "edit_status": {
+    "type": "string",
+    "title": "Done editing?",
+    "enum": ["Saved — reload it", "Discard my edits"],
+    "description": "Reload the draft from <printed draft path>, or throw away the editor session and restore the draft as it was."
+  }
+}
+```
+
+Use the path the command above printed, not a hard-coded `~/.cache` — the two
+differ whenever `XDG_CACHE_HOME` is set.
+
+On "Saved", read the draft file back, display it, and return to the menu. The
+user's edits are final — do not re-render, re-wrap, or reapply the Step 4
+formatting rules to text they hand-edited.
+
+On "Discard my edits", rewrite the draft file with the `Write` tool from the
+version you last displayed, then return to the menu. This branch has to write:
+the editor saves straight over the source of truth, so by the time this question
+is answered the file may already hold edits, and a "Post it" afterwards reads
+the file — doing nothing here would post the very text the user asked to throw
+away. The pre-edit draft is still in context, so no backup copy is needed.
+
+### Post it
+
+Post using the bundled script:
+
+```bash
+bash skills/process/generate-standup/scripts/post-standup-comment.sh \
+  -d "<target id>" \
+  -f "${XDG_CACHE_HOME:-$HOME/.cache}/generate-standup/draft.md"
 ```
 
 The target is the one [chosen in Step 1](#choosing-the-post-target) from the
