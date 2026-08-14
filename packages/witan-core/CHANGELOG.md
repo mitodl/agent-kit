@@ -6,7 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.20.0] - 2026-08-14
+
+### Fixed
+
+- **Tool-call spans now really do join the caller's trace.** 0.19.0 claimed this
+  and did not deliver it; see the correction under that release below.
+
+  ToolHive injects W3C trace context into **HTTP headers** — both hops, and only
+  there (`transparent_proxy.go`, `vmcp/client/client.go`). FastMCP reads the MCP
+  `_meta` object (`server/telemetry.py:_get_parent_trace_context`). ToolHive's
+  `_meta` injector exists but nothing calls it. So the context crossed the
+  boundary intact and neither side picked it up, and every span here started a
+  rival root trace.
+
+  Fixed with an ASGI middleware
+  (`witan_core.observability.asgi.TraceContextASGIMiddleware`) that adopts the
+  request's `traceparent` and creates **no span of its own**. FastMCP uses
+  ambient context when `_meta` is empty, so attaching is sufficient and its
+  `tools/call` span becomes the joined root. Wired in `witan serve` through
+  FastMCP's `http_app(middleware=...)` hook.
+
+  `opentelemetry-instrumentation-starlette` was the obvious alternative and was
+  measured: it also joins, but emits a SERVER span plus four `http
+  receive`/`http send` children per request (~3.5x span volume), and its
+  `exclude_spans` option is not honoured through the global instrumentor. The
+  attach-only middleware gets the same join at one span per call with no added
+  dependency.
+
+### Removed
+
+- `ObservabilityMiddleware`'s `_meta` parent extraction, added in 0.19.0. It
+  duplicated what FastMCP already does one layer up, against the same empty
+  `_meta`. Its span still nests correctly — now because the ASGI layer has
+  adopted the context before FastMCP builds anything.
+
 ## [0.19.0] - 2026-08-14
+
+> **Correction (0.20.0):** the fix below did not work, and its description of
+> the mechanism is wrong. ToolHive propagates over HTTP headers, not `_meta`;
+> its `InjectMetaTraceContext` is dead code with no callers. Extracting `_meta`
+> in the middleware duplicated FastMCP's own extraction and changed nothing.
+> Verified against QA on witan-core 0.19.0: witan spans were still separate
+> roots (`serviceStats {qa-witan: 3}`, ToolHive absent).
 
 ### Fixed
 

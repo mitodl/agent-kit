@@ -485,16 +485,29 @@ def test_serve_defaults_to_stdio(monkeypatch):
 def test_serve_streamable_http_passes_transport_kwargs(monkeypatch):
     from witan.cli import serve
 
+    from witan_core.observability.asgi import TraceContextASGIMiddleware
+
     fake = _patch_mcp(monkeypatch)
     serve(transport="streamable-http", host="0.0.0.0", port=9001, path="/witan")
-    assert fake.run_calls == [
-        {
-            "transport": "streamable-http",
-            "host": "0.0.0.0",
-            "port": 9001,
-            "path": "/witan",
-        }
-    ]
+    (call,) = fake.run_calls
+    assert {
+        "transport": call["transport"],
+        "host": call["host"],
+        "port": call["port"],
+        "path": call["path"],
+    } == {
+        "transport": "streamable-http",
+        "host": "0.0.0.0",
+        "port": 9001,
+        "path": "/witan",
+    }
+    # ★ The middleware is what joins witan's spans to ToolHive's trace, and it
+    # only takes effect if it reaches `run()` — a deployed server whose spans
+    # silently form their own trace looks healthy in every metric. Asserted
+    # here rather than left to the witan-core unit tests, which cover the
+    # middleware itself but not that anything installs it.
+    (entry,) = call["middleware"]
+    assert entry.cls is TraceContextASGIMiddleware
 
 
 def test_serve_http_prepends_missing_leading_slash(monkeypatch):

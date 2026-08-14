@@ -22,14 +22,15 @@ dependencies = [
     # and it has now been tripped THREE times. If you add a witan_core symbol in
     # the same change as its caller, bump this line in that change: the
     # workspace resolves witan-core by path, so nothing here can catch it.
-    # (>=0.19 is the ODD ONE OUT: nothing here imports a new symbol, so an
-    # older witan-core still starts. It is pinned because the failure is SILENT
-    # — 0.18 and earlier start every tool-call span against ambient context
-    # instead of the W3C context ToolHive puts in MCP `_meta`, so spans never
-    # join the proxy's trace and the sampler re-rolls instead of inheriting.
-    # Every other entry below is an import-or-AttributeError floor; this one is
-    # a correctness floor, kept because telemetry that looks fine and answers
-    # nothing is harder to catch than a crash;
+    # (>=0.20 is the ODD ONE OUT: nothing here imports a new symbol, so an
+    # older witan-core still starts. It is a CORRECTNESS floor, not the
+    # import-or-AttributeError kind every other entry below is — 0.19 and
+    # earlier never adopt the caller's trace context, so every span starts a
+    # rival root trace and the telemetry looks fine while answering nothing.
+    #
+    # ★ 0.19 CLAIMED THIS FIX AND DID NOT DELIVER IT. It read MCP `_meta`;
+    # ToolHive propagates over HTTP headers. Do not read the 0.19 floor
+    # rationale in git history as accurate;
     # >=0.17 for remote.proxy.RemoteWriteIndeterminate AND gateway_failure,
     # both imported at module scope by remote/store.py — so an older witan-core
     # fails at IMPORT, exactly like the cases above; it does not degrade into
@@ -43,7 +44,7 @@ dependencies = [
     # >=0.10 for witan_core.chunking + load_batch, both moved up from this
     # package; >=0.9 for observability.middleware; >=0.8 for
     # OmnigraphClient.change_many with chunk_size.)
-    "witan-core[cli,remote,observability]>=0.19,<1",
+    "witan-core[cli,remote,observability]>=0.20,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled

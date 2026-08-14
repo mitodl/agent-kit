@@ -16,25 +16,27 @@ from typing import Annotated, Literal
 
 import cyclopts
 
-from ._common import app, console
 from .. import config as cfg_module
-from .output import OutputFormat, set_output_format
-from .run_helpers import _run_task_slug
 
 # Import submodules to trigger @app.command / @*_app.command registrations.
-from . import auth  # noqa: F401
-from . import graph  # noqa: F401
-from . import hooks  # noqa: F401
-from . import maintenance  # noqa: F401
-from . import memory  # noqa: F401
-from . import projects  # noqa: F401
-from . import scan  # noqa: F401
-from . import session  # noqa: F401
-from . import setup_cmd  # noqa: F401
-from . import targets  # noqa: F401
-from . import tasks  # noqa: F401
-from . import traces  # noqa: F401
+from . import (
+    auth,  # noqa: F401
+    graph,  # noqa: F401
+    hooks,  # noqa: F401
+    maintenance,  # noqa: F401
+    memory,  # noqa: F401
+    projects,  # noqa: F401
+    scan,  # noqa: F401
+    session,  # noqa: F401
+    setup_cmd,  # noqa: F401
+    targets,  # noqa: F401
+    tasks,  # noqa: F401
+    traces,  # noqa: F401
+)
+from ._common import app, console
 from .migrate import migrate_app
+from .output import OutputFormat, set_output_format
+from .run_helpers import _run_task_slug
 
 # Mount `witan migrate …` (sub-app, not a flat command).
 app.command(migrate_app, name="migrate")
@@ -105,7 +107,21 @@ def serve(
         # Starlette routing asserts a leading slash; be forgiving of `mcp`.
         if not path.startswith("/"):
             path = f"/{path}"
-        witan_mcp.run(transport=transport, host=host, port=port, path=path)
+        # ASGI, not FastMCP, middleware: FastMCP builds its span at the protocol
+        # layer BEFORE its own middleware chain runs, so the caller's context
+        # has to be attached further out or the span is already a rival root.
+        # This is what joins witan's spans to ToolHive's trace — ToolHive
+        # propagates over HTTP headers, which nothing else here reads. See
+        # `witan_core.observability.asgi`.
+        from witan_core.observability import trace_context_middleware
+
+        witan_mcp.run(
+            transport=transport,
+            host=host,
+            port=port,
+            path=path,
+            middleware=trace_context_middleware(),
+        )
 
 
 @app.command
