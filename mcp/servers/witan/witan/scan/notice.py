@@ -37,10 +37,14 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+from witan_core.observability import get_logger
 
 from .models import Category, Finding
+
+logger = get_logger("witan.scan")
 
 
 class RedactionNotice(BaseModel):
@@ -51,6 +55,17 @@ class RedactionNotice(BaseModel):
     query_name: str
     """The mutation whose params were rewritten, e.g. ``update_task``."""
 
+    slug: str | None
+    """Which row lost content — ``params['slug']``, where the mutation has one.
+
+    ★ WITHOUT THIS A REPORT CAN BE WORSE THAN NO REPORT. One tool call can
+    rewrite many rows: ``migrate_repo_keys`` walks every task and memory in the
+    graph. Two rows whose match lands in the same field at the same offsets are
+    indistinguishable without the slug, so the dedupe below would drop one as a
+    duplicate — telling the caller one row was altered when two were, and not
+    saying which.
+    """
+
     field: str
     detector: str
     category: Category
@@ -60,7 +75,14 @@ class RedactionNotice(BaseModel):
 
     @property
     def key(self) -> tuple:
-        return (self.query_name, self.field, self.detector, self.start, self.end)
+        return (
+            self.query_name,
+            self.slug,
+            self.field,
+            self.detector,
+            self.start,
+            self.end,
+        )
 
 
 # The notices recorded so far on this call.
@@ -82,13 +104,18 @@ _recorded: ContextVar[tuple[RedactionNotice, ...]] = ContextVar(
 )
 
 
-def record(query_name: str, field: str, findings: list[Finding]) -> None:
-    """Note that ``findings`` were redacted out of ``field``.
+def record(
+    query_name: str, slug: str | None, field: str, findings: list[Finding]
+) -> None:
+    """Note that ``findings`` were redacted out of ``field`` of row ``slug``.
 
-    Deduplicated on the full span identity because one tool call legitimately
-    issues the same write twice: ``_store_memory`` retries its batch without the
-    provenance edge when the edge endpoint is stale, and reporting that as two
-    redactions would misdescribe one rewrite as two.
+    Deduplicated on the full span identity — INCLUDING the slug — because one
+    tool call legitimately issues the same write twice: ``_store_memory``
+    retries its batch without the provenance edge when the edge endpoint is
+    stale, and reporting that as two redactions would misdescribe one rewrite as
+    two. Dedupe must separate a genuine retry of ONE row from the same span in a
+    DIFFERENT row, which is why the slug is part of the key and not merely
+    reported alongside it.
     """
     existing = _recorded.get()
     seen = {n.key for n in existing}
@@ -96,6 +123,7 @@ def record(query_name: str, field: str, findings: list[Finding]) -> None:
     for f in findings:
         notice = RedactionNotice(
             query_name=query_name,
+            slug=slug,
             field=field,
             detector=f.detector,
             category=f.category,
@@ -135,7 +163,9 @@ def no_redactions() -> Iterator[None]:
 def describe(notices: tuple[RedactionNotice, ...]) -> str:
     """A one-line, secret-free sentence a caller can act on."""
     spans = ", ".join(
-        f"{n.field}[{n.start}:{n.end}] matched {n.detector}" for n in notices
+        f"{n.slug + '.' if n.slug else ''}{n.field}[{n.start}:{n.end}] "
+        f"matched {n.detector}"
+        for n in notices
     )
     return (
         f"⚠ CONTENT WAS ALTERED BEFORE STORAGE: {spans}. "
@@ -147,14 +177,29 @@ def describe(notices: tuple[RedactionNotice, ...]) -> str:
     )
 
 
-def annotate(result: dict | None) -> dict | None:
+def annotate(result: Any) -> Any:
     """Attach this call's redaction notices to a tool result, if there are any.
 
-    A ``None`` result (the "no such row" convention) is passed through: there is
-    nothing to attach to, and no write happened to report on.
+    Applied to EVERY tool (see ``witan.server._tool``), so most calls pass
+    through untouched — a read records nothing, and a clean write records
+    nothing. Only a call that actually rewrote content grows keys.
+
+    Anything that is not a ``dict`` is returned unchanged: a listing, a scalar,
+    or the ``None`` that means "no such row" has nowhere to carry the report.
+    That case is LOGGED rather than dropped quietly, because it means a write
+    altered content and the caller is about to be told nothing — the exact
+    failure this module exists to end. There is no such tool today; the log line
+    is what makes it visible if one is ever added.
     """
     notices = take_redactions()
-    if not notices or result is None:
+    if not notices:
+        return result
+    if not isinstance(result, dict):
+        logger.warning(
+            "witan.scan.redaction_unreportable",
+            result_type=type(result).__name__,
+            redactions=[n.model_dump() for n in notices],
+        )
         return result
     return {
         **result,

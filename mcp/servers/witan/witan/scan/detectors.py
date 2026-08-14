@@ -188,12 +188,20 @@ def _validate_credit_card(match: re.Match) -> tuple[int, int] | None:
 # most likely to hold long digit runs is measurement, which is the content it
 # hurts most to lose.
 #
-# Requiring a 4-6 digit FIRST group and 3+ digit continuations (bar a trailing
-# 2-digit group, which Diners really is printed with) costs nothing real: nobody
-# writes a card as `4 111 1111 1111 1111`. Contiguous runs are unaffected, so an
-# unformatted card is caught exactly as before.
+# Requiring a 4-6 digit FIRST group and 3+ digit continuations costs nothing
+# real: nobody writes a card as `4 111 1111 1111 1111`. Contiguous runs are
+# unaffected, so an unformatted card is caught exactly as before.
+#
+# ★ THE SHORT TRAILING GROUP IS NOT AN AFTERTHOUGHT — it is two real cards.
+# Diners is printed 4-4-4-2 and the 13-digit Visa is printed 4-4-4-1, so a
+# continuation floor of 3 applied to the LAST group silently dropped both:
+# `4222 2222 2222 2` is Luhn-valid, 13 digits, and was matched by the rule this
+# replaces. Narrowing false positives must not open a detection hole, so the
+# final group is allowed to be 1-2 digits. It cannot widen the false-positive
+# class it was written to close: the 4-6 digit first group is what rejects a
+# table of small numbers, and that is unchanged.
 _CREDIT_CARD_PATTERN = (
-    r"(?<!\d)(?:\d{13,19}|\d{4,6}(?:[ -]\d{3,6}){1,4}(?:[ -]\d{2})?)(?!\d)"
+    r"(?<!\d)(?:\d{13,19}|\d{4,6}(?:[ -]\d{3,6}){1,4}(?:[ -]\d{1,2})?)(?!\d)"
 )
 
 

@@ -124,6 +124,11 @@ def test_credit_card_luhn_validated():
         "3782 822463 10005",  # Amex 4-6-5
         "3056 930902 5904",  # Diners 4-6-4
         "3056 9309 0259 04",  # Diners 4-4-4-2
+        # 13-digit Visa, 4-4-4-1. A continuation floor of 3 digits dropped this
+        # and the Diners 4-4-4-2 above — both Luhn-valid, both matched by the
+        # rule the grouping pattern replaced. Narrowing false positives must not
+        # open a detection hole.
+        "4222 2222 2222 2",
     ],
 )
 def test_credit_card_still_catches_every_printed_grouping(sample):

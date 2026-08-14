@@ -90,10 +90,24 @@ def test_the_same_write_issued_twice_reports_one_redaction():
     """`_store_memory` retries its batch without the provenance edge when the
     session handle is stale. One rewrite must not be reported as two."""
     guard = _guard(pii_action="redact")
-    params = {"title": "t", "content": f"pay {CARD} ok"}
+    params = {"slug": "mem-1", "title": "t", "content": f"pay {CARD} ok"}
     guard("insert_memory", params)
     guard("insert_memory", params)
     assert len(take_redactions()) == 1
+
+
+def test_two_rows_losing_the_same_span_are_two_redactions():
+    """Dedupe must separate a retry of ONE row from the same span in a DIFFERENT
+    row. `migrate_repo_keys` rewrites every task and memory in the graph, so
+    identical matches at identical offsets across rows are routine — collapsing
+    them would report one altered row when two were, and not say which."""
+    guard = _guard(pii_action="redact")
+    for slug in ("mem-1", "mem-2"):
+        guard("update_memory", {"slug": slug, "content": f"pay {CARD} ok"})
+
+    notices = take_redactions()
+    assert [n.slug for n in notices] == ["mem-1", "mem-2"]
+    assert "mem-1" in describe(notices) and "mem-2" in describe(notices)
 
 
 def test_two_fields_are_reported_separately():
@@ -191,3 +205,76 @@ def test_task_update_tells_the_caller_its_description_was_rewritten(guarded_serv
     )
     assert "redaction_note" in updated
     assert updated["redactions"][0]["field"] == "description"
+    assert updated["redactions"][0]["slug"] == created["slug"]
+
+
+# ── the report must survive the whole tool call, not just one helper ─────────
+#
+# Every test below failed when annotation lived in the write helpers
+# (`_store_memory`, `_update_memory`, `_update_task`): reading a notice consumes
+# it, so a helper that reported early either ran before the tool's later writes
+# or handed its annotated dict to a caller that dropped it. `witan.server._tool`
+# moves the report to the outermost boundary, where neither is expressible.
+
+
+@requires_omnigraph
+def test_a_redacted_tag_surfaces_though_topics_are_written_after_the_memory(
+    guarded_server,
+):
+    """`memory_update` writes its tag→Topic batch AFTER `_update_memory`
+    returns, so a Topic name redacted by `insert_topic` was recorded past the
+    point anything looked."""
+    stored = guarded_server.memory_store(kind="agent_context", title="t", content="c")
+    updated = guarded_server.memory_update(slug=stored["slug"], tags=[CARD])
+
+    assert "redaction_note" in updated
+    assert {n["query_name"] for n in updated["redactions"]} == {"insert_topic"}
+
+
+@requires_omnigraph
+def test_memory_link_surfaces_a_redacted_topic_name(guarded_server):
+    """`memory_link(kind="tagged")` issues a guarded `insert_topic` and returns
+    a dict of its own — a write path that was never wired up at all."""
+    a = guarded_server.memory_store(kind="agent_context", title="a", content="c")
+    # `name:kind`, the spec form that actually creates a Topic — a bare string
+    # does not resolve and the tool returns `linked: False` without writing.
+    result = guarded_server.memory_link(
+        from_slug=a["slug"], to_slug=f"{CARD}:topic", kind="tagged"
+    )
+    assert result["linked"] is True
+    assert "redaction_note" in result
+    assert result["redactions"][0]["query_name"] == "insert_topic"
+
+
+@requires_omnigraph
+def test_task_claim_surfaces_a_redaction_it_did_not_build_its_result_from(
+    guarded_server,
+):
+    """`task_claim` calls `_update_task` but builds its own response, so the
+    annotated dict — and the only record of the redaction — was discarded.
+
+    A claim rewrites every merged text field, so an older row that newly matches
+    a detector loses content during a state-only operation. That is the case
+    most in need of a report and was the least likely to produce one."""
+    created = guarded_server.task_create(title="t", description="tbd")
+    # Land the card by a route that does not scan, so the claim below is the
+    # first write to see it — exactly the "older row, newer detector" shape.
+    guarded_server.task_update(slug=created["slug"], description="tbd")
+    from witan import server as srv
+
+    srv.client.guard = None
+    srv.client.change(
+        "mutations.gq",
+        "update_task",
+        {
+            **srv.client.read("read.gq", "get_task", {"slug": created["slug"]})[0],
+            "description": f"durations {CARD} observed",
+        },
+    )
+    srv.client.guard = write_guard_from_config(
+        ScanConfig(enabled=True, pii_action="redact")
+    )
+
+    claimed = guarded_server.task_claim(slug=created["slug"], assignee="pytest")
+    assert "redaction_note" in claimed
+    assert claimed["redactions"][0]["slug"] == created["slug"]

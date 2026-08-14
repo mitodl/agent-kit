@@ -163,7 +163,7 @@ class WriteGuard:
                     # detectors did, and tells the caller nothing. A redaction
                     # the caller never hears about is an unrecoverable edit to
                     # their data reported as a clean success — see notice.py.
-                    notice.record(query_name, field, to_redact)
+                    notice.record(query_name, slug, field, to_redact)
 
         if write_blocked:
             raise WriteBlocked(query_name, blocked)
