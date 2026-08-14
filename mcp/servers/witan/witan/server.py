@@ -1089,7 +1089,11 @@ def migrate_repo_keys() -> dict:
         )
         counts["code_branches_migrated"] += 1
 
-    return {**counts, "repos_changed": repos_changed}
+    # Annotated like every other write path, and it matters MORE here: this
+    # rewrites rows that are already stored, so the guard sees content nobody is
+    # re-authoring. A row written before a detector existed can be redacted by a
+    # migration that was only ever meant to fold repo keys.
+    return scan.annotate({**counts, "repos_changed": repos_changed})
 
 
 # ── Storage-format migration ────────────────────────────────────
@@ -2244,7 +2248,7 @@ def _update_memory(slug: str, changes: dict) -> dict | None:
     }
     client.change("mutations.gq", "update_memory", merged)
     rows = client.read("read.gq", "get_memory", {"slug": slug})
-    return rows[0] if rows else None
+    return scan.annotate(rows[0] if rows else None)
 
 
 def _store_memory(
@@ -2353,7 +2357,7 @@ def _store_memory(
             "first if this memory should roll up to the project's history, and "
             "pass the session_slug it returns."
         )
-    return result
+    return scan.annotate(result)
 
 
 @mcp.tool
@@ -3062,7 +3066,7 @@ def workflow_project_create(
             "updated_at": now,
         },
     )
-    return {"slug": slug, "repos": repo_set, "phase": phase}
+    return scan.annotate({"slug": slug, "repos": repo_set, "phase": phase})
 
 
 @mcp.tool
@@ -3484,7 +3488,9 @@ async def workflow_project_complete(
         ]
     )
 
-    return {"project_slug": slug, "trace_slug": trace_slug, "existed": False}
+    return scan.annotate(
+        {"project_slug": slug, "trace_slug": trace_slug, "existed": False}
+    )
 
 
 @mcp.tool
@@ -4198,7 +4204,7 @@ def workflow_session_start(
     if _is_local_stdio():
         session_state.write_handle(session_id, handle)
 
-    return handle
+    return scan.annotate(handle)
 
 
 @mcp.tool
@@ -4251,7 +4257,7 @@ def workflow_session_end(
     if _is_local_stdio():
         session_state.clear_handle_for_slug(session_slug)
 
-    return {"session_slug": session_slug, "ended_at": now}
+    return scan.annotate({"session_slug": session_slug, "ended_at": now})
 
 
 @mcp.tool
@@ -4394,7 +4400,7 @@ def _update_task(
         # caller goes through here, and keeping its write exactly as it was
         # keeps `surface_conflict`'s behaviour untouched.
         client.change(*update, surface_conflict=surface_conflict)
-    return client.read("read.gq", "get_task", {"slug": slug})[0]
+    return scan.annotate(client.read("read.gq", "get_task", {"slug": slug})[0])
 
 
 @mcp.tool
@@ -4508,7 +4514,7 @@ async def task_create(
         )
     client.change_many(steps)
 
-    return {"slug": slug, "status": status, "repo": detected_repo}
+    return scan.annotate({"slug": slug, "status": status, "repo": detected_repo})
 
 
 @mcp.tool

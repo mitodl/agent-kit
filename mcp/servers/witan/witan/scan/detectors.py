@@ -173,6 +173,30 @@ def _validate_credit_card(match: re.Match) -> tuple[int, int] | None:
     return None
 
 
+# A card number is 13-19 digits written either as one run or in the groups a
+# card is actually printed in: 4-4-4-4, Amex's 4-6-5, Diners' 4-6-4 and 4-4-4-2.
+#
+# ★ THE GROUPING IS THE WHOLE POINT, and it is what the first version of this
+# pattern (`\b\d(?:[ -]?\d){12,18}\b`) left out. Allowing a separator between
+# ANY two digits makes a card indistinguishable from a whitespace-separated
+# table of small numbers, and Luhn does not break the tie: it is a
+# transcription checksum with a 1-in-10 hit rate on arbitrary digits, not an
+# identifier of card numbers. So roughly one measurement table in ten was
+# silently rewritten to «redacted:credit_card». That is not hypothetical — a
+# real `task_update` carrying handler latencies lost them exactly this way
+# (tk-write-path-redaction-silently-rewrites-content-a-aec2b6), and the content
+# most likely to hold long digit runs is measurement, which is the content it
+# hurts most to lose.
+#
+# Requiring a 4-6 digit FIRST group and 3+ digit continuations (bar a trailing
+# 2-digit group, which Diners really is printed with) costs nothing real: nobody
+# writes a card as `4 111 1111 1111 1111`. Contiguous runs are unaffected, so an
+# unformatted card is caught exactly as before.
+_CREDIT_CARD_PATTERN = (
+    r"(?<!\d)(?:\d{13,19}|\d{4,6}(?:[ -]\d{3,6}){1,4}(?:[ -]\d{2})?)(?!\d)"
+)
+
+
 # ── Rule set ────────────────────────────────────────────────────────────────────
 
 
@@ -225,7 +249,7 @@ def default_scanners() -> list:
         RegexScanner(
             "credit_card",
             "pii",
-            r"\b\d(?:[ -]?\d){12,18}\b",
+            _CREDIT_CARD_PATTERN,
             validate=_validate_credit_card,
         ),
     ]

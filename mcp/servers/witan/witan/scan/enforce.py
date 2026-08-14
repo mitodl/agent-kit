@@ -12,7 +12,7 @@ from __future__ import annotations
 from witan_core.observability import get_logger
 
 from ..config import ScanAction, ScanConfig
-from . import audit
+from . import audit, notice
 from .allowlist import compile_allowlist, suppression_reason
 from .models import Finding, ScannerError
 from .redact import flag_redacted, redact_spans
@@ -158,6 +158,12 @@ class WriteGuard:
                 to_redact = [f for f, a, _ in resolved if a == "redact"]
                 if to_redact:
                     redactions[field] = redact_spans(value, to_redact)
+                    # Recorded HERE, next to the rewrite, rather than left to
+                    # the audit log: the audit trail tells an operator what the
+                    # detectors did, and tells the caller nothing. A redaction
+                    # the caller never hears about is an unrecoverable edit to
+                    # their data reported as a clean success — see notice.py.
+                    notice.record(query_name, field, to_redact)
 
         if write_blocked:
             raise WriteBlocked(query_name, blocked)
