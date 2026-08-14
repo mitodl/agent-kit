@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Fixed
+
+- **Tool-call spans now join the caller's trace instead of starting their own.**
+  ToolHive propagates W3C trace context through the MCP `_meta` object rather
+  than an HTTP header (`InjectMetaTraceContext`,
+  `pkg/telemetry/propagation.go`), and nothing in this process reads headers —
+  there is no ASGI instrumentation. `ObservabilityMiddleware` started every span
+  against ambient context, so every one of them was a parentless root.
+
+  That broke two things at once. witan's spans never appeared in ToolHive's
+  trace, leaving the proxy → witan boundary unmeasurable per request — the exact
+  capability the ToolHive telemetry rollout (ol-infrastructure#5414) was
+  justified by. And `OTEL_TRACES_SAMPLER=parentbased_traceidratio` quietly
+  degraded to its *root* sampler, re-rolling the ratio locally instead of
+  inheriting the decision already made upstream.
+
+  Measured in QA on 2026-08-14 before the fix: six authenticated `memory_search`
+  calls produced a 12-span trace spanning `qa-witan-vmcp` and
+  `qa-witan-mcp-proxy` with witan in none of it, zero traces under `qa-witan`
+  over a full hour, and yet `witan_tool_calls_total` and six `mcp.tool_call` log
+  lines from that same middleware — metrics exporting while traces were sampled
+  away for want of a parent.
+
+  Local CLI and stdio use are unaffected: no `_meta` means no parent, which is
+  the correct root-span behaviour there.
+
 ## [0.18.0] - 2026-08-13
 
 Makes write admission answer the question that decides the outcome: *will this

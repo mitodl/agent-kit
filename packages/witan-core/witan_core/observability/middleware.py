@@ -83,6 +83,44 @@ def _tracer() -> Any:
     return trace.get_tracer("witan")
 
 
+def _parent_context(context: Any) -> Any:
+    """The caller's trace context, pulled out of the request's MCP ``_meta``.
+
+    ★ ToolHive PROPAGATES THROUGH ``_meta``, NOT AN HTTP HEADER. Its
+    ``InjectMetaTraceContext`` (``pkg/telemetry/propagation.go``) writes
+    ``traceparent``/``tracestate`` into the JSON-RPC ``_meta`` object, because
+    that is the only channel that survives an MCP hop. Nothing in this process
+    reads HTTP headers — there is no ASGI instrumentation — so without this
+    function every span here is a parentless ROOT.
+
+    That was the state until 2026-08-14, and it cost two things at once:
+
+    1. witan's spans never joined ToolHive's trace, so the proxy -> witan
+       boundary could not be separated per request. Measured in QA: one
+       ``memory_search`` produced a 12-span trace across ``*-vmcp`` and
+       ``*-mcp-proxy``, with witan in none of it.
+    2. ``OTEL_TRACES_SAMPLER=parentbased_traceidratio`` silently degraded to
+       its ROOT sampler. With no parent to inherit from it re-rolled the ratio
+       locally, so witan sampled 0.25 where ToolHive had already decided 1.0 —
+       which is why zero of six QA calls produced a trace at all.
+
+    Returns ``None`` when there is no usable context, which
+    ``start_as_current_span`` treats as "use the ambient one" — the correct
+    behaviour for stdio and local CLI use, where no ``_meta`` exists.
+    """
+    try:
+        from opentelemetry.propagate import extract
+    except ImportError:  # pragma: no cover - requires the `observability` extra
+        return None
+    meta = getattr(getattr(context, "message", None), "meta", None)
+    if not meta:
+        return None
+    # `RequestParamsMeta` is a TypedDict, so this is already a plain mapping —
+    # copied rather than passed through because the propagator's getter is
+    # documented against a Mapping and this keeps a model's view from leaking.
+    return extract(dict(meta))
+
+
 def _instruments() -> tuple[Any, Any]:
     """The call counter and duration histogram, or ``(None, None)``."""
     try:
@@ -160,7 +198,18 @@ class ObservabilityMiddleware(Middleware):  # type: ignore[misc,valid-type]
         outcome = "error"
         span_cm = (
             self._tracer.start_as_current_span(
-                f"mcp.tool/{name}", attributes=dict(identity)
+                f"mcp.tool/{name}",
+                # The caller's context, so this span nests under ToolHive's
+                # rather than starting a rival root trace. See
+                # `_parent_context` for why this cannot come from a header.
+                context=_parent_context(context),
+                # The caller's context, so this span nests under ToolHive's
+                # rather than starting a rival root trace. See
+                # `_parent_context` for why this cannot come from a header.
+                # The caller's context, so this span nests under ToolHive's
+                # rather than starting a rival root trace. See
+                # `_parent_context` for why this cannot come from a header.
+                attributes=dict(identity),
             )
             if self._tracer
             else _null_context()
