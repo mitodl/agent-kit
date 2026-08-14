@@ -27,7 +27,16 @@ dependencies = [
   # witan_core symbol in the same change as its caller, bump this line in that
   # change: the workspace resolves witan-core by path, so nothing here can
   # catch it.
-  # (>=0.17 for remote.proxy.RemoteWriteIndeterminate — imported at module
+  # (>=0.19 is the ODD ONE OUT: nothing here imports a new symbol, so an older
+  # witan-core still starts. It is pinned because the failure is SILENT rather
+  # than loud — 0.18 and earlier start every tool-call span against ambient
+  # context instead of the W3C context ToolHive puts in MCP `_meta`, so the
+  # spans never join the proxy's trace and the sampler re-rolls instead of
+  # inheriting. A published install would emit telemetry that looks fine and
+  # answers nothing. Every other entry below is an import-or-AttributeError
+  # floor; this one is a correctness floor, and it is here because a wrong
+  # answer is harder to notice than a crash;
+  # >=0.17 for remote.proxy.RemoteWriteIndeterminate — imported at module
   # scope by witan/remote/proxy.py, re-exported there, and named in
   # cli/__init__.py's main() except-tuple, so an older witan-core fails the
   # import rather than degrading; >=0.16 for omnigraph_install.preserved_binaries, called by server.py's
@@ -42,7 +51,7 @@ dependencies = [
   # remote.proxy.RemotePayloadTooLarge; >=0.11 for chunking.MCP_LOAD_MAX_BYTES;
   # >=0.10 for witan_core.chunking + load_batch + config_file.resolve_config_path;
   # >=0.9 for observability.middleware; >=0.8 for OmnigraphClient.change_many.)
-  "witan-core[cli,remote,observability]>=0.17,<1",
+  "witan-core[cli,remote,observability]>=0.19,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
