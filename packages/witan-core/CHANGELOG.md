@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.18.0] - 2026-08-13
+
+Makes write admission answer the question that decides the outcome: *will this
+write finish before the caller stops waiting?*
+
+### Changed
+
+- **Write admission is now predictive.** The gate previously bounded concurrency
+  (4 in flight) and how long a write would wait for a slot (10s), and neither
+  predicts how long the work takes once admitted. Watched live at 24 concurrent
+  writers, with the gate active and holding the deadline it needed: 56 handlers,
+  durations climbing 3s to 73s, 26 of them past the caller's 30s budget, and
+  ZERO refusals — a slot always freed inside the wait cap, so it admitted write
+  after write into a system that could not serve them. It let through exactly
+  the writes that strand, and a stranded write is the indeterminate one:
+  committed while its caller is told it failed
+  ([#232](https://github.com/mitodl/agent-kit/pull/232)).
+
+  The gate now measures how long an *admitted* write actually takes against each
+  graph and refuses when that no longer fits the call's remaining budget. Queue
+  time needs no separate accounting — the deadline is absolute, so every second
+  waited shrinks what the estimate is checked against.
+
+  Three properties are load-bearing and should survive any rewrite: the estimate
+  measures EXECUTION and not the wait (folding queue time back in double-counts
+  it, and one burst leaves the gate convinced every write costs a minute); an
+  idle graph is never refused (otherwise a graph slower than the budget declines
+  every write forever and never gathers a faster sample); and a cold gate admits
+  (a process must not refuse the writes it needs in order to learn what a write
+  costs).
+
+  This does **not** raise the ceiling. The same writes succeed and throughput is
+  unchanged. What changes is that the ones which cannot are refused before
+  anything is sent — an ordinary retryable error instead of a write whose
+  outcome nobody can determine.
+
+- A doomed write is refused on arrival rather than after the queue timeout, and
+  the wait is bounded by the last moment admission could still be viable —
+  `Condition.wait` does not wake when the budget runs out, so an unbounded wait
+  sleeps past its own deadline and is then refused for having waited.
+
 ## [0.17.0] - 2026-08-13
 
 Makes a saturated deployment answerable. Measured against the CI deployment:
