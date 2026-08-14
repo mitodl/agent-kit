@@ -13,14 +13,22 @@ a MINOR bump may include breaking changes).
 - **Tool-call spans now really do join the caller's trace.** 0.19.0 claimed this
   and did not deliver it; see the correction under that release below.
 
-  The hop that reaches this process injects W3C trace context into **HTTP
-  headers** (`transparent_proxy.go`); FastMCP reads the MCP `_meta` object
-  (`server/telemetry.py:_get_parent_trace_context`). ToolHive does also inject
-  `_meta` elsewhere (`vmcp/session/internal/backend/mcp_session.go` wraps
-  outgoing `CallTool` params in `MetaWithTraceContext`), so this is not a
-  missing upstream feature — it is that our path delivers the header and not a
-  usable `_meta`. Measured, not inferred: on 0.19.0 a QA tool call produced a
-  ToolHive trace and a separate `qa-witan` root, so FastMCP got no parent.
+  ToolHive carries W3C context on **both** carriers depending on the path, and
+  FastMCP reads only one. On the Legacy (session-based) backend path it injects
+  MCP `_meta` (`vmcp/session/internal/backend/mcp_session.go`, with an upstream
+  integration test asserting `traceparent` reaches `params._meta`), which
+  FastMCP picks up unaided. On the Modern/stateless path and through the
+  transparent proxy it injects **HTTP headers**, which nothing in this process
+  reads.
+
+  So the gap is specific to the header-carrying paths — not a missing upstream
+  feature, and not true of ToolHive in general. Measured, not inferred: on
+  0.19.0 a QA tool call produced a ToolHive trace and a separate `qa-witan`
+  root, so on our deployment's path FastMCP got no parent.
+
+  Safe when both carriers are present: FastMCP passes its `_meta` context
+  explicitly, and an explicit context beats the ambient one this attaches, so a
+  Legacy path is unchanged.
 
   Fixed with an ASGI middleware
   (`witan_core.observability.asgi.TraceContextASGIMiddleware`) that adopts the
@@ -39,9 +47,9 @@ a MINOR bump may include breaking changes).
 ### Removed
 
 - `ObservabilityMiddleware`'s `_meta` parent extraction, added in 0.19.0. It
-  duplicated what FastMCP already does one layer up, against the same empty
-  `_meta`. Its span still nests correctly — now because the ASGI layer has
-  adopted the context before FastMCP builds anything.
+  duplicated what FastMCP already does one layer up, and on our path against the
+  same empty `_meta`. Its span still nests correctly — now because the ASGI
+  layer has adopted the context before FastMCP builds anything.
 
 ## [0.19.0] - 2026-08-14
 
@@ -49,8 +57,9 @@ a MINOR bump may include breaking changes).
 > the middleware duplicated FastMCP's own extraction and changed nothing —
 > verified against QA on witan-core 0.19.0, where witan spans were still
 > separate roots (`serviceStats {qa-witan: 3}`, ToolHive absent). Its claim that
-> ToolHive propagates through `_meta` is also wrong for the hop that reaches
-> this process, which uses an HTTP header.
+> ToolHive propagates through `_meta` "NOT AN HTTP HEADER" is an absolute that
+> does not hold either way: ToolHive uses `_meta` on its Legacy backend path and
+> HTTP headers on the Modern/proxy paths.
 
 ### Fixed
 

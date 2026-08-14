@@ -22,15 +22,13 @@ dependencies = [
     # and it has now been tripped THREE times. If you add a witan_core symbol in
     # the same change as its caller, bump this line in that change: the
     # workspace resolves witan-core by path, so nothing here can catch it.
-    # (>=0.20 is the ODD ONE OUT: nothing here imports a new symbol, so an
-    # older witan-core still starts. It is a CORRECTNESS floor, not the
-    # import-or-AttributeError kind every other entry below is — 0.19 and
-    # earlier never adopt the caller's trace context, so every span starts a
-    # rival root trace and the telemetry looks fine while answering nothing.
-    #
-    # ★ 0.19 CLAIMED THIS FIX AND DID NOT DELIVER IT. It read MCP `_meta`;
-    # ToolHive propagates over HTTP headers. Do not read the 0.19 floor
-    # rationale in git history as accurate;
+    # (NOT raised for witan-core 0.19/0.20's trace-context work, deliberately.
+    # Nothing here imports `trace_context_middleware`, and standalone
+    # `witan-code serve` is stdio-only — the ASGI middleware is installed by
+    # `witan serve`, whose own package declares the floor it needs. Raising this
+    # one would buy no behaviour and would misstate the minimum. Floors here
+    # track what this package actually imports, not what was released alongside
+    # it;
     # >=0.17 for remote.proxy.RemoteWriteIndeterminate AND gateway_failure,
     # both imported at module scope by remote/store.py — so an older witan-core
     # fails at IMPORT, exactly like the cases above; it does not degrade into
@@ -44,7 +42,7 @@ dependencies = [
     # >=0.10 for witan_core.chunking + load_batch, both moved up from this
     # package; >=0.9 for observability.middleware; >=0.8 for
     # OmnigraphClient.change_many with chunk_size.)
-    "witan-core[cli,remote,observability]>=0.20,<1",
+    "witan-core[cli,remote,observability]>=0.17,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled

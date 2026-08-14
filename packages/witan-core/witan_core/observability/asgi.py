@@ -1,33 +1,38 @@
 """ASGI middleware that adopts the caller's W3C trace context.
 
-★ WHY THIS EXISTS: TWO HALVES THAT BOTH WORK AND STILL DO NOT MEET ★
-ToolHive and FastMCP each implement distributed tracing, against different
-carriers, so a request crosses the boundary with its context intact and nothing
-picks it up:
+★ WHY THIS EXISTS ★
+ToolHive carries W3C context on BOTH carriers, depending on the path, and
+FastMCP reads only one of them:
 
-* **The hop that reaches this process injects HTTP HEADERS.**
-  ``pkg/transport/proxy/transparent/transparent_proxy.go`` --
-  ``Inject(ctx, propagation.HeaderCarrier(pr.Out.Header))``. The vMCP's own
-  client does the same on its outbound requests
-  (``pkg/vmcp/client/client.go``).
-* **FastMCP reads MCP ``_meta``.** ``server/telemetry.py``
-  ``_get_parent_trace_context()`` -> ``extract_trace_context(req_ctx.meta)``,
-  which it passes as the parent when building its ``tools/call`` span.
+* **``_meta``, on the Legacy (session-based) backend path.**
+  ``pkg/vmcp/session/internal/backend/mcp_session.go`` wraps outgoing
+  ``CallTool`` params in ``telemetry.MetaWithTraceContext``, and upstream has an
+  integration test asserting ``traceparent`` reaches ``params._meta``. FastMCP
+  picks this up unaided -- ``server/telemetry.py``
+  ``_get_parent_trace_context()`` -> ``extract_trace_context(req_ctx.meta)``.
+* **HTTP HEADERS, on the Modern/stateless path and through the transparent
+  proxy.** ``pkg/transport/proxy/transparent/transparent_proxy.go`` --
+  ``Inject(ctx, propagation.HeaderCarrier(pr.Out.Header))``; the vMCP client
+  does the same on its outbound requests. NOTHING in this process reads HTTP
+  headers: there is no ASGI instrumentation, and FastMCP looks only at
+  ``_meta``.
 
-ToolHive does ALSO inject ``_meta`` in one place --
-``pkg/vmcp/session/internal/backend/mcp_session.go`` wraps outgoing
-``CallTool`` params in ``telemetry.MetaWithTraceContext``. So this is not a
-missing feature upstream; it is that whatever path our traffic takes does not
-deliver a usable ``_meta`` to the backend, and the header is what actually
-arrives.
+So the gap is specific to the header-carrying paths, NOT a missing feature
+upstream and NOT true of ToolHive in general. Two earlier versions of this
+comment got that wrong in opposite directions; state the path, not an absolute.
 
-★ THE EMPIRICAL FACT, WHICH IS WHAT THIS CODE RESTS ON: measured against QA on
-2026-08-14 with witan-core 0.19.0, a tool call produced a ToolHive trace and a
-wholly separate ``qa-witan`` root (``serviceStats {qa-witan: 3}``, ToolHive
-absent), so FastMCP got no parent from ``_meta``. Adopting the header — which
-the proxy demonstrably sets — closes it. Do not rewrite this comment into a
-claim about upstream's intent without re-measuring; an earlier version of it
-asserted ToolHive had no ``_meta`` injector at all, which is false.
+★ THE EMPIRICAL FACT THIS CODE RESTS ON: measured against QA on 2026-08-14 with
+witan-core 0.19.0, a tool call produced a ToolHive trace and a wholly separate
+``qa-witan`` root (``serviceStats {qa-witan: 3}``, ToolHive absent), so on OUR
+deployment's path FastMCP got no parent from ``_meta`` while the proxy
+demonstrably set the header. Which ToolHive path that is has not been
+characterised; adopting the header closes the gap either way.
+
+★ IT IS SAFE WHEN BOTH CARRIERS ARE PRESENT. FastMCP passes its ``_meta``
+context to ``start_as_current_span`` EXPLICITLY, and an explicit context beats
+the ambient one this attaches. So on a Legacy path ``_meta`` still wins and the
+result is identical; this only supplies a parent where there would otherwise be
+none.
 
 ★ THIS ATTACHES CONTEXT AND CREATES NO SPAN, ON PURPOSE ★
 The obvious alternative is ``opentelemetry-instrumentation-starlette``, which

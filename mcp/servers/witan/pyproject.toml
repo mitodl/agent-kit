@@ -27,17 +27,15 @@ dependencies = [
   # witan_core symbol in the same change as its caller, bump this line in that
   # change: the workspace resolves witan-core by path, so nothing here can
   # catch it.
-  # (>=0.20 is the ODD ONE OUT: nothing here imports a new symbol, so an older
-  # witan-core still starts. It is a CORRECTNESS floor, not the
-  # import-or-AttributeError kind every other entry below is — 0.19 and earlier
-  # never adopt the caller's trace context, so every span starts a rival root
-  # trace and the telemetry looks fine while answering nothing. `witan serve`
-  # passes `witan_core.observability.trace_context_middleware()` to FastMCP, so
-  # an older witan-core would also fail to export the name.
+  # (>=0.20 for observability.trace_context_middleware, imported by
+  # cli/__init__.py's serve() and passed to FastMCP as ASGI middleware — so an
+  # older witan-core fails the import, exactly like every other entry here. It
+  # is what adopts the caller's trace context from the HTTP header; without it
+  # witan's spans start a rival root trace and the telemetry looks fine while
+  # answering nothing.
   #
-  # ★ 0.19 CLAIMED THIS FIX AND DID NOT DELIVER IT. It read MCP `_meta`;
-  # ToolHive propagates over HTTP headers. Do not read the 0.19 floor rationale
-  # in git history as accurate;
+  # ★ The 0.19 floor in git history claimed to be an exceptional
+  # "correctness floor" for a fix that did not work. Ignore that rationale;
   # >=0.17 for remote.proxy.RemoteWriteIndeterminate — imported at module
   # scope by witan/remote/proxy.py, re-exported there, and named in
   # cli/__init__.py's main() except-tuple, so an older witan-core fails the
