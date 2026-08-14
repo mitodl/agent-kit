@@ -19,6 +19,10 @@ Logging is always configured, because a local run benefits from it too.
 Requires the ``observability`` extra.
 """
 
+from witan_core.observability.asgi import (
+    TraceContextASGIMiddleware,
+    trace_context_middleware,
+)
 from witan_core.observability.logging import (
     configure_logging,
     get_logger,
@@ -32,12 +36,14 @@ from witan_core.observability.telemetry import (
 )
 
 __all__ = [
+    "TraceContextASGIMiddleware",
     "auto_instrument",
     "configure_logging",
     "configure_metrics",
     "configure_observability",
     "configure_tracing",
     "get_logger",
+    "trace_context_middleware",
     "reset_logging",
     "reset_telemetry",
 ]
