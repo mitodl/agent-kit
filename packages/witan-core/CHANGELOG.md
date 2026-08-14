@@ -13,12 +13,14 @@ a MINOR bump may include breaking changes).
 - **Tool-call spans now really do join the caller's trace.** 0.19.0 claimed this
   and did not deliver it; see the correction under that release below.
 
-  ToolHive injects W3C trace context into **HTTP headers** — both hops, and only
-  there (`transparent_proxy.go`, `vmcp/client/client.go`). FastMCP reads the MCP
-  `_meta` object (`server/telemetry.py:_get_parent_trace_context`). ToolHive's
-  `_meta` injector exists but nothing calls it. So the context crossed the
-  boundary intact and neither side picked it up, and every span here started a
-  rival root trace.
+  The hop that reaches this process injects W3C trace context into **HTTP
+  headers** (`transparent_proxy.go`); FastMCP reads the MCP `_meta` object
+  (`server/telemetry.py:_get_parent_trace_context`). ToolHive does also inject
+  `_meta` elsewhere (`vmcp/session/internal/backend/mcp_session.go` wraps
+  outgoing `CallTool` params in `MetaWithTraceContext`), so this is not a
+  missing upstream feature — it is that our path delivers the header and not a
+  usable `_meta`. Measured, not inferred: on 0.19.0 a QA tool call produced a
+  ToolHive trace and a separate `qa-witan` root, so FastMCP got no parent.
 
   Fixed with an ASGI middleware
   (`witan_core.observability.asgi.TraceContextASGIMiddleware`) that adopts the
@@ -43,12 +45,12 @@ a MINOR bump may include breaking changes).
 
 ## [0.19.0] - 2026-08-14
 
-> **Correction (0.20.0):** the fix below did not work, and its description of
-> the mechanism is wrong. ToolHive propagates over HTTP headers, not `_meta`;
-> its `InjectMetaTraceContext` is dead code with no callers. Extracting `_meta`
-> in the middleware duplicated FastMCP's own extraction and changed nothing.
-> Verified against QA on witan-core 0.19.0: witan spans were still separate
-> roots (`serviceStats {qa-witan: 3}`, ToolHive absent).
+> **Correction (0.20.0):** the fix below did not work. Extracting `_meta` in
+> the middleware duplicated FastMCP's own extraction and changed nothing —
+> verified against QA on witan-core 0.19.0, where witan spans were still
+> separate roots (`serviceStats {qa-witan: 3}`, ToolHive absent). Its claim that
+> ToolHive propagates through `_meta` is also wrong for the hop that reaches
+> this process, which uses an HTTP header.
 
 ### Fixed
 

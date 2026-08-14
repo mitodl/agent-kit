@@ -5,23 +5,29 @@ ToolHive and FastMCP each implement distributed tracing, against different
 carriers, so a request crosses the boundary with its context intact and nothing
 picks it up:
 
-* **ToolHive injects HTTP HEADERS.** Both hops do it and only that:
+* **The hop that reaches this process injects HTTP HEADERS.**
   ``pkg/transport/proxy/transparent/transparent_proxy.go`` --
-  ``Inject(ctx, propagation.HeaderCarrier(pr.Out.Header))`` -- and
-  ``pkg/vmcp/client/client.go`` ("Inject W3C Trace Context headers
-  (traceparent/tracestate) into outgoing requests").
+  ``Inject(ctx, propagation.HeaderCarrier(pr.Out.Header))``. The vMCP's own
+  client does the same on its outbound requests
+  (``pkg/vmcp/client/client.go``).
 * **FastMCP reads MCP ``_meta``.** ``server/telemetry.py``
   ``_get_parent_trace_context()`` -> ``extract_trace_context(req_ctx.meta)``,
   which it passes as the parent when building its ``tools/call`` span.
-* ToolHive HAS a ``_meta`` injector -- ``InjectMetaTraceContext``,
-  ``pkg/telemetry/propagation.go`` -- and NOTHING CALLS IT. Searching the repo
-  for the symbol returns its own file and its own test.
 
-So the traceparent sits in a header no one in this process reads, ``_meta`` is
-empty, FastMCP gets ``None``, and every span here starts a rival root trace.
-Measured in QA on 2026-08-14: a tool call produced a 12-span ToolHive trace and
-a wholly separate ``qa-witan`` root, with the proxy -> witan boundary therefore
-unmeasurable.
+ToolHive does ALSO inject ``_meta`` in one place --
+``pkg/vmcp/session/internal/backend/mcp_session.go`` wraps outgoing
+``CallTool`` params in ``telemetry.MetaWithTraceContext``. So this is not a
+missing feature upstream; it is that whatever path our traffic takes does not
+deliver a usable ``_meta`` to the backend, and the header is what actually
+arrives.
+
+★ THE EMPIRICAL FACT, WHICH IS WHAT THIS CODE RESTS ON: measured against QA on
+2026-08-14 with witan-core 0.19.0, a tool call produced a ToolHive trace and a
+wholly separate ``qa-witan`` root (``serviceStats {qa-witan: 3}``, ToolHive
+absent), so FastMCP got no parent from ``_meta``. Adopting the header — which
+the proxy demonstrably sets — closes it. Do not rewrite this comment into a
+claim about upstream's intent without re-measuring; an earlier version of it
+asserted ToolHive had no ``_meta`` injector at all, which is false.
 
 ★ THIS ATTACHES CONTEXT AND CREATES NO SPAN, ON PURPOSE ★
 The obvious alternative is ``opentelemetry-instrumentation-starlette``, which
