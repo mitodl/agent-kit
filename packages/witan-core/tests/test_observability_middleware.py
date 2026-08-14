@@ -436,5 +436,31 @@ def test_unusable_meta_does_not_break_the_call(monkeypatch):
     )
 
     assert calls == [1]
-    (span,) = exporter.get_finished_spans()
-    assert span.parent is None
+    assert exporter.get_finished_spans()
+
+
+def test_unusable_meta_keeps_the_ambient_parent(monkeypatch):
+    # ★ `extract` SEEDS FROM AN EMPTY CONTEXT BY DEFAULT, so a `_meta` that
+    # carries no usable traceparent yields an empty context — and
+    # `start_as_current_span` honours that by dropping whatever parent was in
+    # scope. "This metadata told us nothing" would become "this span is a
+    # root", which is worse than never reading `_meta`.
+    #
+    # An earlier version of this test asserted `span.parent is None` here,
+    # which pinned the bug rather than the requirement.
+    exporter = _record_spans(monkeypatch)
+
+    tracer = middleware_module._tracer()
+    with tracer.start_as_current_span("ambient") as ambient:
+        ambient_span_id = ambient.get_span_context().span_id
+        _run(
+            ObservabilityMiddleware(),
+            _MetaContext("memory_search", {"progressToken": "p"}),
+            _ok,
+        )
+
+    tool_span = next(
+        s for s in exporter.get_finished_spans() if s.name == "mcp.tool/memory_search"
+    )
+    assert tool_span.parent is not None, "unusable _meta discarded the ambient parent"
+    assert tool_span.parent.span_id == ambient_span_id

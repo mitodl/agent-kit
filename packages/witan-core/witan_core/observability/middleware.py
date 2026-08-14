@@ -104,11 +104,22 @@ def _parent_context(context: Any) -> Any:
        locally, so witan sampled 0.25 where ToolHive had already decided 1.0 —
        which is why zero of six QA calls produced a trace at all.
 
-    Returns ``None`` when there is no usable context, which
+    Returns ``None`` when there is no ``_meta`` at all, which
     ``start_as_current_span`` treats as "use the ambient one" — the correct
-    behaviour for stdio and local CLI use, where no ``_meta`` exists.
+    behaviour for stdio and local CLI use.
+
+    ★ THE ``context=`` SEED IS NOT OPTIONAL. ``extract`` defaults to seeding
+    from an EMPTY context, not the current one, so a ``_meta`` carrying no
+    usable ``traceparent`` — a bare ``progressToken``, a malformed header —
+    would return an empty context that ``start_as_current_span`` honours by
+    discarding whatever ambient parent was in scope. That turns "this metadata
+    told us nothing" into "this span is a root", which is worse than not
+    looking at ``_meta`` in the first place. Seeding from the current context
+    makes the remote parent an override rather than a replacement, and leaves
+    ambient baggage intact.
     """
     try:
+        from opentelemetry.context import get_current
         from opentelemetry.propagate import extract
     except ImportError:  # pragma: no cover - requires the `observability` extra
         return None
@@ -118,7 +129,7 @@ def _parent_context(context: Any) -> Any:
     # `RequestParamsMeta` is a TypedDict, so this is already a plain mapping —
     # copied rather than passed through because the propagator's getter is
     # documented against a Mapping and this keeps a model's view from leaking.
-    return extract(dict(meta))
+    return extract(dict(meta), context=get_current())
 
 
 def _instruments() -> tuple[Any, Any]:
@@ -203,12 +214,6 @@ class ObservabilityMiddleware(Middleware):  # type: ignore[misc,valid-type]
                 # rather than starting a rival root trace. See
                 # `_parent_context` for why this cannot come from a header.
                 context=_parent_context(context),
-                # The caller's context, so this span nests under ToolHive's
-                # rather than starting a rival root trace. See
-                # `_parent_context` for why this cannot come from a header.
-                # The caller's context, so this span nests under ToolHive's
-                # rather than starting a rival root trace. See
-                # `_parent_context` for why this cannot come from a header.
                 attributes=dict(identity),
             )
             if self._tracer
