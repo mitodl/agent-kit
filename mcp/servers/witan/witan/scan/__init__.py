@@ -20,6 +20,13 @@ from .models import (
     Severity,
     masked_preview,
 )
+from .notice import (
+    RedactionNotice,
+    annotate,
+    describe,
+    no_redactions,
+    take_redactions,
+)
 from .redact import REDACTED_TAG, flag_redacted, redact_spans
 from .registry import ENTRY_POINT_GROUP, ScannerRegistry, builtin_scanners
 
@@ -31,15 +38,20 @@ __all__ = [
     "AuditOutcome",
     "Category",
     "Finding",
+    "RedactionNotice",
     "Scanner",
     "ScannerError",
     "ScannerRegistry",
     "Severity",
     "WriteBlocked",
     "WriteGuard",
+    "annotate",
     "builtin_scanners",
+    "describe",
     "flag_redacted",
     "masked_preview",
+    "no_redactions",
     "redact_spans",
+    "take_redactions",
     "write_guard_from_config",
 ]

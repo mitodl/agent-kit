@@ -116,6 +116,50 @@ def test_credit_card_luhn_validated():
     assert run("credit_card", "num 4111 1111 1111 1112") == []  # fails Luhn
 
 
+@pytest.mark.parametrize(
+    "sample",
+    [
+        "4111111111111111",  # contiguous
+        "4111-1111-1111-1111",  # dashed 4-4-4-4
+        "3782 822463 10005",  # Amex 4-6-5
+        "3056 930902 5904",  # Diners 4-6-4
+        "3056 9309 0259 04",  # Diners 4-4-4-2
+        # 13-digit Visa, 4-4-4-1. A continuation floor of 3 digits dropped this
+        # and the Diners 4-4-4-2 above — both Luhn-valid, both matched by the
+        # rule the grouping pattern replaced. Narrowing false positives must not
+        # open a detection hole.
+        "4222 2222 2222 2",
+    ],
+)
+def test_credit_card_still_catches_every_printed_grouping(sample):
+    """The grouping rule below must not cost real coverage — these are the ways
+    a card is actually written."""
+    assert matched("credit_card", f"card {sample} end") == [sample]
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        # The ORIGINAL loss: server-side handler durations from a task_update.
+        # 15..29 is 18 digits once the spaces come out, and Luhn-valid.
+        "3 3 5 6 8 8 10 10 11 13 13 15 17 18 19 20 22 25 27 29 31 33 36",
+        "15 17 18 19 20 22 25 27 29",
+        "ports 8080 8443 9090 3000 5432",
+        "output_rows=1045 iops=3095 requests=3095 bytes_read=1095907",
+    ],
+)
+def test_credit_card_does_not_eat_a_table_of_numbers(sample):
+    """A run of small numbers is not card-shaped, whatever Luhn says about it.
+
+    Luhn is a transcription checksum with a 1-in-10 hit rate on arbitrary
+    digits, so under the old `\\b\\d(?:[ -]?\\d){12,18}\\b` roughly one
+    measurement table in ten was silently rewritten — and measurement is
+    exactly the content it hurts most to lose
+    (tk-write-path-redaction-silently-rewrites-content-a-aec2b6).
+    """
+    assert run("credit_card", sample) == []
+
+
 # ── end-to-end through the real guard ────────────────────────────────────────────
 
 

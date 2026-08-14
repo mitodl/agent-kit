@@ -1,4 +1,6 @@
+import functools
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -337,6 +339,51 @@ mcp.add_middleware(ObservabilityMiddleware())
 # Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
 # server→client back-channel to run them on. Inert on the handshake eras.
 mcp.add_middleware(elicit.MRTRElicitationMiddleware())
+
+
+def _tool(fn):
+    """Register an MCP tool, reporting any content its writes rewrote.
+
+    ★ EVERY TOOL, AND AT THE OUTERMOST BOUNDARY — both halves are load-bearing,
+    and the first attempt at this got both wrong by calling ``scan.annotate``
+    inside the write helpers (``_store_memory``, ``_update_memory``,
+    ``_update_task``). Reading a notice CONSUMES it, so a helper that reports
+    early both misses later writes and destroys the evidence for its caller:
+
+    * ``memory_update`` writes its tag→Topic batch AFTER ``_update_memory``
+      returns, so a redacted Topic name was recorded past the point anything
+      looked, and the already-built result went back clean.
+    * ``workflow_trace_mine`` keeps only ``_store_memory(...)["slug"]`` and
+      ``task_claim``/``task_release`` build their own responses from
+      ``_update_task``, so the annotated dict — and with it the only record of
+      the redaction — was dropped on the floor.
+    * ``memory_link`` and ``migrate_topics`` issue guarded ``insert_topic``
+      mutations and were never wired up at all.
+
+    Wrapping the tool function is what makes those unrepresentable rather than
+    merely fixed: the wrapper cannot run before the tool's last write, and there
+    is no caller between it and the client to discard what it returns. A new
+    write tool is covered by construction — which the enumerate-the-write-paths
+    approach could never promise, and had already failed to deliver four times.
+
+    Read tools pay one ``take_redactions()`` on an empty contextvar.
+
+    ``functools.wraps`` copies ``__wrapped__``, so ``inspect.signature`` — and
+    therefore FastMCP's schema generation — still sees the real parameters.
+    """
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            return scan.annotate(await fn(*args, **kwargs))
+    else:
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return scan.annotate(fn(*args, **kwargs))
+
+    return mcp.tool(wrapper)
+
 
 # ── Helpers ───────────────────────────────────────────────────────
 
@@ -1839,7 +1886,7 @@ def _data_tier_outage_reads_as_retryable():
         ) from exc
 
 
-@mcp.tool
+@_tool
 def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
     """Merge a batch of exported rows into this deployment's graph, as you.
 
@@ -2102,7 +2149,7 @@ def _rerank(
 # ── Tools ─────────────────────────────────────────────────────────
 
 
-@mcp.tool
+@_tool
 def memory_search(
     query: str,
     repo: str | None = None,
@@ -2147,7 +2194,7 @@ def memory_search(
     )[:_SEARCH_LIMIT]
 
 
-@mcp.tool
+@_tool
 def memory_list(
     kind: MemoryKind | None = None,
     repo: str | None = None,
@@ -2356,7 +2403,7 @@ def _store_memory(
     return result
 
 
-@mcp.tool
+@_tool
 async def memory_store(
     kind: MemoryKind,
     title: str,
@@ -2436,7 +2483,7 @@ async def memory_store(
     )
 
 
-@mcp.tool
+@_tool
 def memory_get(slug: str, include_topics: bool = False) -> dict | None:
     """
     Retrieve a single memory by its slug.
@@ -2458,7 +2505,7 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
     return node
 
 
-@mcp.tool
+@_tool
 def memory_update(
     slug: str,
     title: str | None = None,
@@ -2531,7 +2578,7 @@ def memory_update(
     return updated
 
 
-@mcp.tool
+@_tool
 def memory_delete(slug: str, confirm: bool = False) -> dict:
     """
     Hard-delete a memory. Graph hygiene only — NOT a way to erase secrets.
@@ -2593,7 +2640,7 @@ def memory_delete(slug: str, confirm: bool = False) -> dict:
     return {"slug": slug, "deleted": True, "memory": node}
 
 
-@mcp.tool
+@_tool
 async def memory_link(
     from_slug: str, to_slug: str, kind: MemoryLinkKind, ctx: Context | None = None
 ) -> dict:
@@ -2695,7 +2742,7 @@ async def memory_link(
     return {"from": from_slug, "to": to_slug, "kind": kind, "linked": True}
 
 
-@mcp.tool
+@_tool
 def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> dict:
     """
     Return the memories directly linked to ``slug``, grouped by edge kind.
@@ -2727,7 +2774,7 @@ def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> di
     return {"slug": slug, "neighbors": neighbors}
 
 
-@mcp.tool
+@_tool
 def topic_get(topic: str) -> dict | None:
     """
     Resolve a Topic and return it with the memories tagged to it.
@@ -2997,7 +3044,7 @@ def _active_session_slug() -> str | None:
     return (handle or {}).get("session_slug") or None
 
 
-@mcp.tool
+@_tool
 def workflow_project_create(
     title: str,
     description: str,
@@ -3065,7 +3112,7 @@ def workflow_project_create(
     return {"slug": slug, "repos": repo_set, "phase": phase}
 
 
-@mcp.tool
+@_tool
 def workflow_project_get(slug: str) -> dict | None:
     """
     Retrieve a single workflow project by slug.
@@ -3131,7 +3178,7 @@ def _latest_session_summary(project_slug: str) -> dict | None:
     }
 
 
-@mcp.tool
+@_tool
 def workflow_project_status(slug: str) -> dict | None:
     """One-call "what should I do next" resume view for a workflow project.
 
@@ -3168,7 +3215,7 @@ def workflow_project_status(slug: str) -> dict | None:
     }
 
 
-@mcp.tool
+@_tool
 def workflow_project_list(
     repo: str | None = None,
     status: WorkflowStatus | None = "active",
@@ -3224,7 +3271,7 @@ def workflow_project_list(
     return rows
 
 
-@mcp.tool
+@_tool
 def workflow_project_update(
     slug: str,
     title: str | None = None,
@@ -3323,7 +3370,7 @@ def workflow_project_update(
     return updated[0] if updated else payload
 
 
-@mcp.tool
+@_tool
 async def workflow_project_advance(
     slug: str,
     phase: WorkflowPhase,
@@ -3380,7 +3427,7 @@ async def workflow_project_advance(
     return result
 
 
-@mcp.tool
+@_tool
 async def workflow_project_complete(
     slug: str,
     outcome: str,
@@ -3487,7 +3534,7 @@ async def workflow_project_complete(
     return {"project_slug": slug, "trace_slug": trace_slug, "existed": False}
 
 
-@mcp.tool
+@_tool
 def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
     """
     Link a memory to a workflow project (the ``Informed`` edge).
@@ -3512,7 +3559,7 @@ def workflow_project_link_memory(project_slug: str, memory_slug: str) -> dict:
     return {"project_slug": project_slug, "memory_slug": memory_slug}
 
 
-@mcp.tool
+@_tool
 def workflow_project_memories(
     project_slug: str, group_by_session: bool = False
 ) -> dict:
@@ -3560,7 +3607,7 @@ def workflow_project_memories(
 # ── Workflow Traces (corpus) ───────────────────────────────────────
 
 
-@mcp.tool
+@_tool
 def workflow_trace_list(
     repo: str | None = None,
     tags: list[str] | None = None,
@@ -3603,7 +3650,7 @@ def workflow_trace_list(
     return rows[:limit]
 
 
-@mcp.tool
+@_tool
 def workflow_trace_get(slug: str) -> dict | None:
     """
     Retrieve a single corpus WorkflowTrace by slug.
@@ -3668,7 +3715,7 @@ def _annotate_trace(
     }
 
 
-@mcp.tool
+@_tool
 def workflow_trace_annotate(
     trace_slug: str,
     lessons_slug: list[str] | None = None,
@@ -3697,7 +3744,7 @@ def workflow_trace_annotate(
     )
 
 
-@mcp.tool
+@_tool
 def workflow_trace_mine(
     trace_slug: str,
     patterns: list[dict] | None = None,
@@ -3810,7 +3857,7 @@ def workflow_trace_mine(
     return {"created_patterns": created_patterns, "created_lessons": created_lessons}
 
 
-@mcp.tool
+@_tool
 def workflow_project_block(slug: str, blocks_slug: str) -> dict:
     """
     Declare that one project must complete before another can begin.
@@ -3857,7 +3904,7 @@ def workflow_project_block(slug: str, blocks_slug: str) -> dict:
     return {"blocker": slug, "blocked": blocks_slug, "linked": True}
 
 
-@mcp.tool
+@_tool
 def workflow_project_unblock(slug: str, blocks_slug: str) -> dict:
     """
     Remove a project dependency declared with ``workflow_project_block``.
@@ -3898,7 +3945,7 @@ def workflow_project_unblock(slug: str, blocks_slug: str) -> dict:
     }
 
 
-@mcp.tool
+@_tool
 def workflow_project_get_blockers(slug: str) -> list[dict]:
     """
     Return all projects that are blocking the given project.
@@ -4024,7 +4071,7 @@ def _dedupe_open_sessions(
     return canonical["slug"], canonical.get("started_at") or started_at
 
 
-@mcp.tool
+@_tool
 def workflow_session_start(
     project_slug: str,
     session_id: str,
@@ -4201,7 +4248,7 @@ def workflow_session_start(
     return handle
 
 
-@mcp.tool
+@_tool
 def workflow_session_end(
     session_slug: str,
     summary: str,
@@ -4254,7 +4301,7 @@ def workflow_session_end(
     return {"session_slug": session_slug, "ended_at": now}
 
 
-@mcp.tool
+@_tool
 def workflow_session_list(
     project_slug: str | None = None,
     open_only: bool = False,
@@ -4397,7 +4444,7 @@ def _update_task(
     return client.read("read.gq", "get_task", {"slug": slug})[0]
 
 
-@mcp.tool
+@_tool
 async def task_create(
     title: str,
     description: str,
@@ -4511,14 +4558,14 @@ async def task_create(
     return {"slug": slug, "status": status, "repo": detected_repo}
 
 
-@mcp.tool
+@_tool
 def task_get(slug: str) -> dict | None:
     """Retrieve a single task by slug. Returns the full node or ``null``."""
     rows = client.read("read.gq", "get_task", {"slug": slug})
     return rows[0] if rows else None
 
 
-@mcp.tool
+@_tool
 def task_list(
     repo: str | None = None,
     status: TaskStatus | None = None,
@@ -4586,7 +4633,7 @@ def task_list(
     return rows
 
 
-@mcp.tool
+@_tool
 def task_update(
     slug: str,
     title: str | None = None,
@@ -4669,7 +4716,7 @@ def task_update(
     return updated
 
 
-@mcp.tool
+@_tool
 def task_close(slug: str, resolution: str | None = None) -> dict | None:
     """
     Close a task: set status ``closed``, stamp ``closed_at``, record a resolution.
@@ -4686,7 +4733,7 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
     return closed
 
 
-@mcp.tool
+@_tool
 async def task_claim(
     slug: str,
     assignee: str | None = None,
@@ -4854,7 +4901,7 @@ async def task_claim(
     }
 
 
-@mcp.tool
+@_tool
 def task_release(
     slug: str,
     assignee: str | None = None,
@@ -4912,7 +4959,7 @@ def task_release(
     return {"slug": slug, "released": True, "status": status}
 
 
-@mcp.tool
+@_tool
 def task_ready(
     repo: str | None = None,
     project_slug: str | None = None,
@@ -4979,7 +5026,7 @@ def task_ready(
     return ready[:limit]
 
 
-@mcp.tool
+@_tool
 def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     """
     Link two tasks (or a task to a memory).
@@ -5113,7 +5160,7 @@ def _unlink_edge(kind: str, from_slug: str, to_slug: str) -> bool:
     return True
 
 
-@mcp.tool
+@_tool
 def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     """
     Remove a link between two tasks (or a task and a memory) — the inverse of
@@ -5159,7 +5206,7 @@ def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     return {"from": from_slug, "to": to_slug, "kind": kind, "removed": removed}
 
 
-@mcp.tool
+@_tool
 def symbol_context(symbol_id: str) -> dict:
     """
     Memories and tasks attached to a code symbol (direction: symbol → work).
@@ -5222,7 +5269,7 @@ def _code_server():
     return _code_server._cached
 
 
-@mcp.tool
+@_tool
 def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict:
     """
     What do we know about a contract (env_var / endpoint / package / service)?
@@ -5285,7 +5332,7 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
     }
 
 
-@mcp.tool
+@_tool
 def memory_symbols(slug: str) -> dict:
     """
     Code symbols a memory concerns (direction: memory → symbols).
@@ -5346,7 +5393,7 @@ def _expand_neighbors(slug: str) -> set[str]:
     return out
 
 
-@mcp.tool
+@_tool
 def recall(
     query: str | None = None,
     symbol_id: str | None = None,

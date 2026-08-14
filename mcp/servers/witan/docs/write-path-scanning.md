@@ -67,7 +67,8 @@ an explicit `action` that overrides its category's configured default:
 - **`redact`** — the matched span is replaced in place with
   `«redacted:<detector>»` and the write proceeds. The node is also tagged
   `scan:redacted` (via its `tags` list, where the mutation has one) so
-  redacted content is discoverable later.
+  redacted content is discoverable later, **and the tool result tells the
+  caller** — see [Redaction is reported back](#redaction-is-reported-back).
 - **`warn`** — an audit event is emitted and the write proceeds unchanged.
   Useful for rolling out a new detector or policy change without blocking
   anyone yet.
@@ -78,6 +79,49 @@ useful). If a scanner itself raises, the default is fail-closed
 (`on_scanner_error = "block"`) so a broken detector can't silently let
 everything through.
 
+## Redaction is reported back
+
+A redaction is an **unrecoverable edit to the caller's data**: the original
+span is kept nowhere, so there is nothing to restore from once it is gone.
+It used to be invisible from the outside — the tool returned success and the
+caller only found out by reading the row back. That cost a real measurement
+(`tk-write-path-redaction-silently-rewrites-content-a-aec2b6`).
+
+Every tool now reports what it altered. When (and only when) something was
+rewritten, the result grows two keys:
+
+```json
+{
+  "slug": "tk-…",
+  "redactions": [
+    {"query_name": "update_task", "slug": "tk-…", "field": "description",
+     "detector": "credit_card", "category": "pii", "start": 41, "end": 60}
+  ],
+  "redaction_note": "⚠ CONTENT WAS ALTERED BEFORE STORAGE: tk-….description[41:60] matched credit_card. …"
+}
+```
+
+The report is attached by `witan.server._tool`, which wraps **every** tool
+rather than an enumerated list of write paths — so it necessarily runs after
+the tool's last write, no intermediate caller can discard it, and a newly
+added write tool is covered without being remembered. `slug` names the row
+that lost content, which matters when one call rewrites many: `migrate_repo_keys`
+walks every task and memory in the graph.
+
+`start`/`end` index the value **as the caller sent it**, so you can find the
+span in your own input. The matched text itself is deliberately absent: a tool
+result goes into the caller's transcript, which is a worse place for a
+`secret`-category match than a log line (ADR 0001 §D3).
+
+A clean write grows no keys at all.
+
+**If it was a false positive**, re-send the content in a shape the detector
+does not claim, then correct the stored value. For the `credit_card` rule,
+separating long digit runs with commas or units (`3s, 5s, 8s`) is enough.
+There is no "store it anyway" override today — see
+`tk-the-cli-can-never-reach-the-server-s-steal-promp-555c64` for why an
+elicitation-based one would silently do nothing for CLI users.
+
 ## Built-in detectors
 
 Zero-dependency regex + entropy rules, each independently addressable by name
@@ -87,7 +131,12 @@ in `enabled_detectors`/`disabled_detectors`:
   `google_api_key`, `private_key_block`, `jwt`, `secret_assignment` (generic
   `password=`/`api_key=`/`token=` patterns), `high_entropy_string` (Shannon
   entropy over long base64/hex-looking tokens).
-- **PII:** `email`, `phone`, `us_ssn`, `credit_card` (Luhn-validated).
+- **PII:** `email`, `phone`, `us_ssn`, `credit_card` (Luhn-validated, and
+  additionally required to be *grouped* the way a card is printed — 4-4-4-4,
+  Amex's 4-6-5, Diners' 4-6-4 and 4-4-4-2, the 13-digit Visa's 4-4-4-1, or one
+  contiguous run. Luhn alone is a transcription checksum with a 1-in-10 hit rate
+  on arbitrary digits, so without the grouping rule a whitespace-separated table
+  of numbers was card-shaped and roughly one in ten of them was silently eaten).
 
 Run `witan scan rules` to see exactly what's active in your environment (see
 below) rather than trusting this list to stay in sync — detectors can be
