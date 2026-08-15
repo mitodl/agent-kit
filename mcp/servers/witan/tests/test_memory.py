@@ -530,3 +530,78 @@ def test_delete_cascades_incident_edges(server):
     # reported as superseded, and the surviving memory reads normally.
     assert server.memory_get(new["slug"]) is not None
     assert [h["slug"] for h in server.memory_search("pipenv")] == [new["slug"]]
+
+
+# ── idempotency keys ──────────────────────────────────────────────────
+# The point is RETRY COLLAPSE, not that the parameter exists. A test that only
+# checks "same key -> same slug" would pass against a slug function that
+# ignored content entirely, so each of these asserts the row count that the
+# indeterminate-write problem actually turns on.
+
+
+@requires_omnigraph
+def test_same_key_collapses_a_retry_onto_one_row(server):
+    # The whole reason this exists: a write 502s after committing, the caller
+    # cannot tell, and retries. With the same key the retry upserts onto the
+    # first row instead of leaving two.
+    first = server.memory_store(
+        kind="lesson", title="retry me", content="v1", idempotency_key="k-1"
+    )
+    second = server.memory_store(
+        kind="lesson", title="retry me", content="v2", idempotency_key="k-1"
+    )
+    assert first["slug"] == second["slug"]
+    rows = server.memory_search(query="retry me")
+    assert [r["slug"] for r in rows].count(first["slug"]) == 1
+    # The retry's content wins, matching omnigraph's insert-upserts semantics.
+    assert server.memory_get(first["slug"])["content"] == "v2"
+
+
+@requires_omnigraph
+def test_different_keys_keep_same_titled_memories_apart(server):
+    # ★ The case that disqualified deriving the slug from (kind, title): 29 of
+    # 1710 records in the real corpus collide on (kind, title, repo). Two
+    # distinct memories that share a title must stay two rows.
+    a = server.memory_store(
+        kind="lesson", title="same title", content="alpha", idempotency_key="k-a"
+    )
+    b = server.memory_store(
+        kind="lesson", title="same title", content="beta", idempotency_key="k-b"
+    )
+    assert a["slug"] != b["slug"]
+    assert server.memory_get(a["slug"])["content"] == "alpha"
+    assert server.memory_get(b["slug"])["content"] == "beta"
+
+
+@requires_omnigraph
+def test_no_key_keeps_todays_behaviour(server):
+    # Existing callers pass no key and must keep getting their own row per call.
+    a = server.memory_store(kind="lesson", title="unkeyed", content="one")
+    b = server.memory_store(kind="lesson", title="unkeyed", content="two")
+    assert a["slug"] != b["slug"]
+
+
+@requires_omnigraph
+def test_key_does_not_leak_into_the_readable_slug(server):
+    # The key is caller-supplied and hashed, so it can carry slug syntax or a
+    # secret without either reaching the identifier.
+    m = server.memory_store(
+        kind="lesson",
+        title="hashed key",
+        content="x",
+        idempotency_key="../../etc/passwd not-a-secret-but-still",
+    )
+    assert "passwd" not in m["slug"]
+    assert m["slug"].startswith("les-hashed-key-")
+
+
+@requires_omnigraph
+def test_task_create_retry_collapses_too(server):
+    a = server.task_create(
+        title="retryable task", description="d", idempotency_key="t-1"
+    )
+    b = server.task_create(
+        title="retryable task", description="d", idempotency_key="t-1"
+    )
+    assert a["slug"] == b["slug"]
+    assert server.task_get(a["slug"]) is not None

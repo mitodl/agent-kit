@@ -161,6 +161,22 @@ class RemoteWriteIndeterminate(RuntimeError):
 
     A read cut the same way stays :class:`RemoteUnreachable`: no answer came
     back, nothing changed server-side, and repeating it is free.
+
+    ★ A RETRY IS SAFE IF — AND ONLY IF — THE ORIGINAL CARRIED AN
+    ``idempotency_key``. ``memory_store`` and ``task_create`` derive the slug's
+    suffix from that key, so a retry reusing it writes the SAME slug, and
+    omnigraph's ``insert`` upserts on the ``@key`` (verified against 0.9.0: two
+    inserts of one slug leave one row holding the second write's content). The
+    duplicate this class warns about is then structurally impossible.
+
+    Without a key the warning above stands unchanged: the suffix is random per
+    attempt, so a retry writes a second row whenever the first one landed.
+    Generate the key BEFORE the first attempt — one cannot be invented
+    afterwards, because by then the slug the server chose is unknowable.
+
+    This does not make the outcome KNOWN, only convergent. Learning whether the
+    first attempt landed needs the write receipts omnigraph added after 0.9.0
+    (upstream #479), which the deployment does not yet run.
     """
 
 

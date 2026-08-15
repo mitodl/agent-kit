@@ -610,11 +610,36 @@ def _merge_repos(*sources: list[str] | str | None) -> list[str]:
     return out
 
 
-def _make_slug(kind: str, title: str) -> str:
-    """Generate a stable, human-readable slug from kind and title."""
+def _make_slug(kind: str, title: str, idempotency_key: str | None = None) -> str:
+    """Generate a human-readable slug from kind and title.
+
+    ``idempotency_key`` makes the suffix a FUNCTION OF THE REQUEST rather than
+    fresh per attempt, which is what lets a retry after an indeterminate
+    outcome land on the same row instead of writing a second one. Same key,
+    same slug; `insert` upserts on the ``@key`` (verified against 0.9.0: two
+    inserts of one slug leave ONE row carrying the second write's content), so
+    the retry converges instead of duplicating.
+
+    ★ THE SUFFIX IS DERIVED FROM THE KEY, NOT FROM THE CONTENT, AND THAT IS THE
+    WHOLE POINT. Deriving it from (kind, title) instead would look simpler and
+    need no parameter — and would silently merge distinct memories that happen
+    to share a title. Measured on the real corpus 2026-08-15: 29 of 1710 titled
+    records collide on (kind, title, repo), one of them three ways. `insert`
+    upserts, so those merges would be silent data loss. A retry is identified
+    by the REQUEST, not by what the request happens to say.
+
+    Without a key the suffix stays random, so existing callers are unchanged and
+    two stores of the same title still get their own rows.
+    """
     prefix = _KIND_PREFIX.get(kind, "mem")
     sanitised = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:48]
-    short_id = uuid.uuid4().hex[:6]
+    if idempotency_key:
+        # Hashed rather than used raw: the key is caller-supplied and must not
+        # be able to inject slug syntax, blow the length budget, or leak its
+        # own content into a human-readable identifier.
+        short_id = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:6]
+    else:
+        short_id = uuid.uuid4().hex[:6]
     return f"{prefix}-{sanitised}-{short_id}"
 
 
@@ -2307,6 +2332,7 @@ def _store_memory(
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
     session_slug: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Create a Memory node — shared by memory_store and workflow_trace_mine."""
     if isinstance(tags, str):
@@ -2314,7 +2340,7 @@ def _store_memory(
     if isinstance(symbol_refs, str):
         symbol_refs = [symbol_refs]
     now = now_iso()
-    slug = _make_slug(kind, title)
+    slug = _make_slug(kind, title, idempotency_key)
     detected_repo = repo_module.detect(override=repo)
 
     # The whole memory — node, its topics, its edges — is ONE commit. Every
@@ -2416,6 +2442,7 @@ async def memory_store(
     symbol_refs: list[str] | None = None,
     confidence: float | None = None,
     session_slug: str | None = None,
+    idempotency_key: str | None = None,
     ctx: Context | None = None,
 ) -> dict:
     """
@@ -2463,6 +2490,21 @@ async def memory_store(
         protocol carries no session state, so against a deployed service this is
         the only way the ``SessionProduced`` provenance edge can be created.
         Omit it under a local stdio server, which finds the handle itself.
+    idempotency_key:
+        An opaque string identifying THIS write attempt. Retrying a call that
+        failed with an indeterminate outcome — a 502 or timeout, where the
+        write may or may not have landed — is only safe when the retry carries
+        the SAME key: it makes the slug identical, and the second write upserts
+        onto the first row instead of creating a duplicate.
+
+        Generate one per logical write (a uuid4 is fine) and reuse it for every
+        retry of that write. Do NOT derive it from the content: two genuinely
+        different memories may share a title, and reusing a key across them
+        would silently merge them.
+
+        Omit it and the slug keeps a random suffix, i.e. today's behaviour —
+        every call creates its own row and a retry after an indeterminate
+        failure may duplicate.
     """
     # When no repo is known (not passed, and detection finds none), offer to
     # scope it rather than silently persisting an unscoped node. Falls back to
@@ -2480,6 +2522,7 @@ async def memory_store(
         symbol_refs=symbol_refs,
         confidence=confidence,
         session_slug=session_slug,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -4458,6 +4501,7 @@ async def task_create(
     external_uri: str | None = None,
     symbol_refs: list[str] | None = None,
     tags: list[str] | None = None,
+    idempotency_key: str | None = None,
     ctx: Context | None = None,
 ) -> dict:
     """
@@ -4492,9 +4536,15 @@ async def task_create(
         Code-graph symbol ids (``repo#path::Name``) this task concerns.
     tags:
         Optional free-form tags.
+    idempotency_key:
+        An opaque string identifying THIS write attempt, so that retrying an
+        indeterminate failure lands on the same task instead of creating a
+        second one. Generate one per logical create and reuse it across
+        retries; do not derive it from the title. Omitted, the slug keeps a
+        random suffix and a retry may duplicate. See ``memory_store``.
     """
     now = now_iso()
-    slug = _make_slug("task", title)
+    slug = _make_slug("task", title, idempotency_key)
     # Offer to scope the task when nothing is detected; falls back to an
     # unscoped task (today's behavior) under automation / an unsupported client.
     repo = await elicit.repo_or_detect(ctx, repo)

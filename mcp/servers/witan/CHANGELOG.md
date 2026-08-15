@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.13.0] - 2026-08-15
+
+### Added
+
+- **`idempotency_key` on `memory_store` and `task_create`**, so a retry after an
+  indeterminate write converges on one row instead of creating a second.
+
+  The slug's 6-char suffix becomes `sha256(key)[:6]` instead of a fresh
+  `uuid4()`, so the same key yields the same slug and omnigraph's `insert`
+  upserts onto the first row. Verified against 0.9.0 rather than assumed: two
+  inserts of one slug leave ONE row holding the second write's content.
+
+  This is what makes the retry safe. Measured in QA on 2026-08-15, 16
+  concurrent writers produced 15 indeterminate writes — the store committed
+  every one while ToolHive cut the response at exactly 30.000s and the caller
+  was told it failed. Without a key, retrying that duplicates the row; with
+  one, it cannot.
+
+  ★ The key identifies the REQUEST, not the content, and must be generated
+  before the first attempt — afterwards the slug the server chose is
+  unknowable. Deriving the suffix from `(kind, title)` instead would need no
+  parameter and would silently merge distinct memories: 29 of 1710 titled
+  records in the real corpus collide on `(kind, title, repo)`, one of them
+  three ways, and `insert` upserts, so the merge would be silent data loss.
+
+  Omitting the key keeps today's behaviour exactly — random suffix, a row per
+  call. This makes an indeterminate outcome CONVERGENT, not known; learning
+  whether the first attempt landed needs the write receipts omnigraph added
+  after 0.9.0 (upstream #479), which the deployment does not run.
+
 ## [0.12.0] - 2026-08-13
 
 ### Changed
