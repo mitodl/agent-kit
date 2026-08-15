@@ -1,5 +1,6 @@
 import functools
 import hashlib
+import importlib.metadata
 import inspect
 import json
 import math
@@ -21,6 +22,8 @@ from typing import Literal
 from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from witan_core import caching, chunking, normalise, now_iso
 from witan_core import omnigraph_install
 from witan_core.observability import get_logger
@@ -47,6 +50,20 @@ from .identity import ActorTokenResolver, derive_actor_id
 # ── Startup ───────────────────────────────────────────────────────
 
 logger = get_logger("witan.server")
+
+# Reported by `/health`, so "which image is actually serving?" is answerable
+# with a curl instead of an exec into the pod — the question every rollout of
+# this workload asks first. Resolved once at import: the answer cannot change
+# while the process lives, and a probe endpoint should not do work per request.
+# Falls back rather than raising, because a missing distribution must not be
+# what makes a healthy process report itself unhealthy.
+# The DISTRIBUTION name, which is `witan-council` — the import package is
+# `witan`, and asking for that returns "unknown" without raising, so getting
+# this wrong is silent.
+try:
+    _VERSION = importlib.metadata.version("witan-council")
+except importlib.metadata.PackageNotFoundError:  # pragma: no cover - installed in situ
+    _VERSION = "unknown"
 
 _SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "schema.pg"
 
@@ -339,6 +356,39 @@ mcp.add_middleware(ObservabilityMiddleware())
 # Carries `elicit.confirm`/`elicit.text` asks over MCP 2026-07-28, which has no
 # server→client back-channel to run them on. Inert on the handshake eras.
 mcp.add_middleware(elicit.MRTRElicitationMiddleware())
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(_request: Request) -> JSONResponse:
+    """Liveness/readiness for a deployed witan. Deliberately shallow.
+
+    ★ THIS MUST NEVER TOUCH THE GRAPH, and that is the whole design. The
+    handler answers from process state alone: if the event loop can run this
+    coroutine, the process is alive, and that is the only question a kubelet
+    probe is entitled to ask.
+
+    A probe that checks the data tier looks more truthful and is strictly
+    worse. It is the exact failure that took the deployed service down on
+    2026-08-12: ToolHive's proxy `/health` synchronously pinged its backend
+    (upstream `pkg/healthcheck/healthcheck.go:CheckHealth`), a burst of
+    concurrent writes saturated that backend, the ping stopped answering, and
+    the kubelet's 5s liveness probe killed a container that was working
+    perfectly — turning a slow write queue into ~60s of total outage for
+    readers too. Depth converts backend SLOWNESS into frontend DEATH, and
+    under load it fires precisely when killing the pod is most harmful.
+
+    witan cannot serve a tool call without omnigraph, so a graph outage is
+    real — but the signal for it belongs in alerting on the spans and metrics
+    witan already emits, where it degrades a dashboard instead of a pod.
+
+    Unauthenticated, unlike every MCP tool: FastMCP applies `auth=` to the
+    protocol endpoint only, so a `custom_route` is reachable without a bearer
+    token — which is required here, since the kubelet carries none. Verified
+    against fastmcp 4.0.0b2 rather than assumed: a JWT-guarded server answers
+    GET /health 200 and POST /mcp 401. Nothing here is worth authenticating;
+    the response carries no graph data and no per-actor state.
+    """
+    return JSONResponse({"status": "ok", "service": "witan", "version": _VERSION})
 
 
 def _tool(fn):
