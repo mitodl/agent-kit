@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.13.0] - 2026-08-15
+
+### Added
+
+- **An unauthenticated `GET /health` route**, so witan can be probed by a
+  kubelet directly and no longer needs a ToolHive proxy in front of it to be
+  deployable. Returns `{"status", "service", "version"}`; the version is the
+  installed `witan-council` distribution, which makes "did my image actually
+  roll out?" a `curl` instead of an exec into the pod.
+
+  **It is deliberately shallow and must stay that way.** The handler answers
+  from process state alone and never touches the graph. A probe that checked
+  the data tier would be the exact failure that took the deployed service down
+  on 2026-08-12: ToolHive's proxy `/health` synchronously pinged its backend,
+  a burst of concurrent writes saturated that backend, the ping stopped
+  answering, and the kubelet's 5s liveness probe killed a container that was
+  working perfectly — turning a slow write queue into ~60s of outage for
+  readers too. Depth converts backend *slowness* into frontend *death*, and
+  fires precisely when killing the pod is most harmful. A graph outage is real
+  and belongs in alerting on the spans witan already emits, where it degrades
+  a dashboard instead of a pod. A test asserts the handler cannot reach the
+  client at all, so a later "just one quick lookup" fails CI rather than
+  production.
+
+  Unauthenticated because the kubelet carries no bearer token. The exemption
+  is the route, not the auth provider: fastmcp applies `auth=` to the protocol
+  endpoint only, verified against 4.0.0b2 by a test that mounts this same
+  handler on a JWT-guarded server and asserts `/health` 200 alongside `/mcp`
+  401.
+
 ## [0.12.0] - 2026-08-13
 
 ### Changed
