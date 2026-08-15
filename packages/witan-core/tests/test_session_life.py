@@ -156,7 +156,39 @@ def test_a_cache_entry_from_an_older_client_is_unknown(auth):
 
 
 def test_session_life_on_a_never_logged_in_cache_does_not_raise(auth):
-    assert auth.session_life() == (None, None, "unknown")
+    assert auth.session_life() == (None, None, "unknown", False)
+
+
+def test_a_session_with_no_refresh_token_is_not_renewable(auth):
+    """`_store_token` accepts a response with no refresh_token, and such a
+    session cannot be renewed by anything — `get_valid_token` raises NeedsLogin
+    the moment the access token lapses. It lands in `unknown` for want of
+    anywhere else to go, so without `renewable` it is indistinguishable from an
+    IdP that was merely silent, and `whoami` promised renewal that cannot
+    happen."""
+    _expired_entry(auth)
+    auth.get_valid_token(
+        client=_client(
+            _responds(200, json={"access_token": _jwt({"sub": "u"}), "expires_in": 300})
+        )
+    )
+
+    life = auth.session_life()
+    assert life.renewable is False
+    assert life.refresh_state == "unknown"
+
+
+def test_a_session_with_a_refresh_token_is_renewable(auth):
+    _seed_refresh(
+        auth,
+        {
+            "access_token": _jwt({"sub": "u"}),
+            "refresh_token": "r-new",
+            "expires_in": 300,
+            "refresh_expires_in": 1800,
+        },
+    )
+    assert auth.session_life().renewable is True
 
 
 def test_session_life_does_not_refresh_the_thing_it_measures(auth):
@@ -182,16 +214,23 @@ def test_a_5xx_from_the_token_endpoint_is_retryable_not_a_logout(auth):
     with pytest.raises(RemoteAuthError) as caught:
         auth.get_valid_token(client=_client(_responds(503, text="upstream sad")))
 
+    message = str(caught.value)
     assert not isinstance(caught.value, NeedsLogin)
-    assert "503" in str(caught.value)
-    assert "witan login" not in str(caught.value)
+    assert "503" in message
+    assert "witan login" not in message
+    assert "retryable" in message
     # And the refresh token survives, so the retry has something to use.
     assert auth._load_cache()[auth._cache_key()]["refresh_token"] == "r-old"
 
 
 def test_only_invalid_grant_ends_the_session(auth):
     """A 400 that is not invalid_grant is a client/config fault, not an expired
-    login — re-authenticating would not fix it, so do not advise it."""
+    login — re-authenticating would not fix it, so do not advise it.
+
+    And it must not be advertised as RETRYABLE either: the request is malformed
+    or the client is not what the realm thinks it is, so repeating it verbatim
+    fails identically forever. "Not invalid_grant" is not the same as "try
+    again", and the first version of this change promised exactly that."""
     _expired_entry(auth)
 
     with pytest.raises(RemoteAuthError) as caught:
@@ -199,8 +238,33 @@ def test_only_invalid_grant_ends_the_session(auth):
             client=_client(_responds(400, json={"error": "invalid_client"}))
         )
 
+    message = str(caught.value)
     assert not isinstance(caught.value, NeedsLogin)
-    assert "invalid_client" in str(caught.value)
+    assert "invalid_client" in message
+    assert "retrying will not help" in message or "neither will retrying" in message
+    # The fact worth preserving in BOTH branches: this is not a dead login.
+    assert "NOT rejected" in message
+
+
+def test_a_transport_failure_is_a_clean_retryable_error_not_a_traceback(auth):
+    """`_refresh` was the one HTTP call in this module that let an httpx2 error
+    escape raw — `discover_endpoints` and `login` both wrap theirs. A timeout on
+    the renewal POST is precisely the "renewal failed, session is fine" case,
+    and it reached the CLI as a traceback."""
+    _expired_entry(auth)
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        raise httpx2.ConnectTimeout("token endpoint unreachable")
+
+    with pytest.raises(RemoteAuthError) as caught:
+        auth.get_valid_token(client=_client(handler))
+
+    assert not isinstance(caught.value, NeedsLogin)
+    assert "retryable" in str(caught.value)
+    # The refresh token never left the machine, so it is still good.
+    assert auth._load_cache()[auth._cache_key()]["refresh_token"] == "r-old"
 
 
 def test_invalid_grant_still_ends_the_session(auth):

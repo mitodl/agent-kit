@@ -180,11 +180,21 @@ class NeedsLogin(RemoteAuthError):
 
 #: OAuth 2 error codes that mean the refresh token itself is finished —
 #: expired, revoked, or already spent by a rotating IdP (RFC 6749 §5.2). These
-#: are the only answers a user can do anything about, and the only ones worth a
-#: `NeedsLogin`. Everything else — a 502 from a proxy, a DNS failure, a realm
-#: briefly down, `temporarily_unavailable` — leaves the session intact and is
-#: reported as an ordinary retryable error.
+#: are the only answers a user can do anything about by logging in again, and
+#: so the only ones worth a `NeedsLogin`.
 _DEAD_GRANT_ERRORS = frozenset({"invalid_grant"})
+
+#: HTTP statuses where trying the same request again can plausibly work: the
+#: IdP is up but unhappy right now, or something between us and it is.
+#:
+#: ★ "NOT invalid_grant" IS NOT THE SAME AS "RETRYABLE", and conflating them
+#: promises a recovery that cannot happen. `invalid_client` and
+#: `unsupported_grant_type` are persistent configuration faults — the request
+#: is malformed or the client is not what the realm thinks it is, so repeating
+#: it verbatim fails identically forever. The fact worth keeping in BOTH cases
+#: is that the refresh token was not rejected, so re-authenticating is not the
+#: answer; what differs is whether waiting helps.
+_RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
 
 class SessionLife(NamedTuple):
@@ -198,11 +208,22 @@ class SessionLife(NamedTuple):
     ``"unknown"`` the IdP did not say, or this entry predates the client
                   storing it. NOT the same as "never" — do not render it as
                   reassurance.
+
+    ★ ``renewable`` IS A SEPARATE QUESTION FROM ``refresh_state``, and the two
+    were briefly conflated. A token response with no ``refresh_token`` at all
+    is accepted and cached — ``_store_token`` allows it — and such a session
+    cannot be renewed by anything: ``get_valid_token`` raises ``NeedsLogin``
+    the moment the access token lapses. It lands in ``refresh_state ==
+    "unknown"`` for want of anywhere else to go, which is indistinguishable
+    from "the IdP was merely silent about the lifetime". Without this flag a
+    caller cannot tell the two apart, and reporting "renews automatically" for
+    the first is a promise nothing can keep.
     """
 
     access_expires_at: float | None
     refresh_expires_at: float | None
     refresh_state: str
+    renewable: bool
 
 
 def _json(resp: httpx2.Response, what: str) -> dict:
@@ -529,14 +550,26 @@ class DeviceAuth:
 
     def _refresh(self, refresh_token: str, client: httpx2.Client) -> dict:
         meta = discover_endpoints(self._cfg.oidc_issuer, client=client)
-        resp = client.post(
-            meta["token_endpoint"],
-            data={
-                **self._auth_params(),
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-            },
-        )
+        try:
+            resp = client.post(
+                meta["token_endpoint"],
+                data={
+                    **self._auth_params(),
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+            )
+        except httpx2.HTTPError as exc:
+            # The one HTTP call in this module that used to let a transport
+            # failure escape raw, while `discover_endpoints` and `login` both
+            # wrapped theirs. A timeout or connection reset here is exactly the
+            # "renewal failed but the session is fine" case, and it reached the
+            # CLI as an httpx2 traceback instead of the sentence below.
+            raise RemoteAuthError(
+                f"Could not reach the token endpoint to renew the session: "
+                f"{exc}. The refresh token was never sent, so the login is "
+                "intact — this is retryable."
+            ) from exc
         if resp.status_code != 200:
             # ★ "COULD NOT RENEW" IS NOT "YOU ARE LOGGED OUT". Every non-200
             # used to become `NeedsLogin`, so a 503, a proxy hiccup or a realm
@@ -550,11 +583,19 @@ class DeviceAuth:
                     f"Session expired — run `{self._login_hint}` to re-authenticate."
                 )
             detail = f" ({error})" if error else ""
+            if resp.status_code in _RETRYABLE_STATUSES:
+                raise RemoteAuthError(
+                    f"Could not renew the session: the token endpoint answered "
+                    f"HTTP {resp.status_code}{detail}. The refresh token was not "
+                    "rejected, so the login is intact — this is retryable."
+                )
             raise RemoteAuthError(
-                f"Could not renew the session: the token endpoint answered "
-                f"HTTP {resp.status_code}{detail}. The login itself looks "
-                "intact — this is retryable, and re-authenticating is not "
-                "required."
+                f"Could not renew the session: the token endpoint rejected the "
+                f"request with HTTP {resp.status_code}{detail}. The refresh "
+                "token was NOT rejected, so re-authenticating will not help, "
+                "and neither will retrying — this is a client or realm "
+                "configuration fault. Check the configured client id against "
+                "the realm's settings."
             )
         return self._store_token(_json(resp, "token endpoint"))
 
@@ -680,7 +721,9 @@ class DeviceAuth:
             state, refresh_at = "never", None
         else:
             state, refresh_at = "finite", float(entry["refresh_expires_at"])
-        return SessionLife(entry.get("expires_at"), refresh_at, state)
+        return SessionLife(
+            entry.get("expires_at"), refresh_at, state, bool(entry.get("refresh_token"))
+        )
 
     def logout(self) -> bool:
         """Drop the cached token for this deployment. True if one existed."""

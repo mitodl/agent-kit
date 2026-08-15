@@ -91,6 +91,11 @@ def _login_validity(life: oidc.SessionLife) -> str:
     predates this client storing it. Printing "valid" there would be a guess
     with the same shape as a fact.
     """
+    # Checked FIRST because it outranks every lifetime below it: with no refresh
+    # token there is nothing to renew, so the login ends when the access token
+    # does no matter what any expiry says.
+    if not life.renewable:
+        return "ends when the token above expires — no refresh token was issued"
     if life.refresh_state == "never":
         return "does not expire (offline token)"
     if life.refresh_state == "unknown":
@@ -144,9 +149,14 @@ def whoami(*, target: str | None = None) -> None:
     # again?". Reporting only the access token's expiry showed a number minutes
     # away and invited the reader to conclude their login was about to lapse,
     # when a refresh renews it silently and the session may have days left.
+    life = oidc.session_life(remote)
     exp = claims.get("exp")
     if exp:
         when = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()
-        console.print(f"[bold]Token[/bold]     {when} (renews automatically)")
-    life = oidc.session_life(remote)
+        # "renews automatically" is conditional on there being something to
+        # renew with. A token response may carry no refresh_token at all — the
+        # cache accepts that — and promising renewal there is a claim the next
+        # call disproves with a NeedsLogin.
+        renews = " (renews automatically)" if life.renewable else ""
+        console.print(f"[bold]Token[/bold]     {when}{renews}")
     console.print(f"[bold]Login[/bold]     {_login_validity(life)}")
