@@ -653,6 +653,44 @@ def test_a_gateway_cutoff_on_a_write_is_indeterminate_not_unreachable(status):
     assert "Re-read before retrying" in message
 
 
+def test_a_keyed_write_is_told_the_retry_is_safe():
+    """★ The remedy has to follow the facts, and the key changes them.
+
+    The outcome is equally unknown with or without a key — the gateway saw to
+    that. What differs is what to do next: the server derives the slug from the
+    key, recognises the row and writes nothing further, so reissuing the call
+    converges. Telling a keyed caller to re-read first is the advice that made
+    supplying the key look pointless.
+    """
+    proxy = _ScriptedProxy(
+        ExceptionGroup("unhandled", [_gateway_error(502)]), at="call"
+    )
+    with pytest.raises(RemoteWriteIndeterminate) as caught:
+        proxy.memory_store(content="x", idempotency_key="k-1")
+    message = str(caught.value)
+    # Still honest about the ambiguity — the key does not reveal what happened.
+    assert "INDETERMINATE" in message
+    assert "RETRYING IT IS SAFE" in message
+    assert "Re-read before retrying" not in message
+
+
+def test_a_blank_key_does_not_earn_the_safe_wording():
+    """`""` is not a key: the server rejects it, so a retry would NOT converge.
+
+    Without this, the falsy-check that makes `idempotency_key=""` behave as no
+    key at all would still hand the caller the reassuring message, which is the
+    worst combination — unsafe behaviour described as safe.
+    """
+    proxy = _ScriptedProxy(
+        ExceptionGroup("unhandled", [_gateway_error(502)]), at="call"
+    )
+    with pytest.raises(RemoteWriteIndeterminate) as caught:
+        proxy.memory_store(content="x", idempotency_key="   ")
+    message = str(caught.value)
+    assert "RETRYING IT IS SAFE" not in message
+    assert "Re-read before retrying" in message
+
+
 def test_a_gateway_cutoff_on_a_read_is_unreachable_but_says_it_was_reached():
     # Nothing was dispatched that could have changed anything, so the retry
     # advice is unqualified — but the old "could not be reached" was still

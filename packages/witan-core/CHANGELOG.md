@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.21.0] - 2026-08-15
+
+### Changed
+
+- **`RemoteWriteIndeterminate` now tells a keyed caller to retry, instead of
+  telling everyone to re-read.** The message is what callers actually see —
+  `str(exc)` — and it always ended "retrying blind writes it twice if it did
+  land", even when the call carried an `idempotency_key` that makes the retry
+  converge. So the one piece of advice that mattered contradicted the feature
+  supplied to fix it, and the contract lived only in a docstring nobody reads
+  at the point of failure.
+
+  The outcome is equally unknown either way; that is the gateway's doing and no
+  client-side argument changes it. What differs is the remedy, so only the
+  remedy sentence changes. A blank key does not earn the safe wording — the
+  server rejects `""`, so a retry carrying it would NOT converge, and
+  describing unsafe behaviour as safe is the worst of the four combinations.
+
 ## [0.20.0] - 2026-08-14
 
 ### Fixed

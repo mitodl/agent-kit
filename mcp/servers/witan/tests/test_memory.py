@@ -1,5 +1,8 @@
 """End-to-end tests for the memory tools."""
 
+import json
+import subprocess
+
 import pytest
 
 from .conftest import requires_omnigraph
@@ -539,6 +542,33 @@ def test_delete_cascades_incident_edges(server):
 # indeterminate-write problem actually turns on.
 
 
+def _exported_edges(tmp_path) -> list[dict]:
+    """Every edge row in the test store, read from `omnigraph export`.
+
+    ★ RAW ROWS, NOT A TRAVERSAL, AND THE DISTINCTION IS THE WHOLE POINT OF THE
+    EDGE TESTS BELOW. `topics_for_memory` returns a PROJECTION: three identical
+    `Tagged` edges collapse into two topic rows, so asserting against it says
+    "2 tags, looks right" while the store holds a duplicate. Export emits one
+    line per stored edge, which is the question actually being asked.
+    """
+    store = tmp_path / "graph.omni"
+    result = subprocess.run(
+        ["omnigraph", "export", "--store", f"file://{store}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    rows = []
+    for line in result.stdout.splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("edge"):
+            rows.append(row)
+    return rows
+
+
 @requires_omnigraph
 def test_same_key_collapses_a_retry_onto_one_row(server):
     # The whole reason this exists: a write 502s after committing, the caller
@@ -553,8 +583,12 @@ def test_same_key_collapses_a_retry_onto_one_row(server):
     assert first["slug"] == second["slug"]
     rows = server.memory_search(query="retry me")
     assert [r["slug"] for r in rows].count(first["slug"]) == 1
-    # The retry's content wins, matching omnigraph's insert-upserts semantics.
-    assert server.memory_get(first["slug"])["content"] == "v2"
+    # ★ FIRST WRITE WINS, and the retry says so rather than pretending it wrote.
+    # An earlier version of this feature leaned on omnigraph's insert-upsert, so
+    # "v2" landed — which fixed the node and left every tag/provenance edge
+    # duplicated. The retry is now detected and skipped outright.
+    assert second["idempotent_replay"] is True
+    assert server.memory_get(first["slug"])["content"] == "v1"
 
 
 @requires_omnigraph
@@ -604,4 +638,96 @@ def test_task_create_retry_collapses_too(server):
         title="retryable task", description="d", idempotency_key="t-1"
     )
     assert a["slug"] == b["slug"]
+    assert b["idempotent_replay"] is True
     assert server.task_get(a["slug"]) is not None
+
+
+@requires_omnigraph
+def test_a_blank_key_is_rejected_rather_than_ignored(server):
+    # `""` is falsy, so the obvious implementation takes the random-suffix
+    # branch and every "retry" writes another row — the feature reporting
+    # itself as on while doing the opposite. Callers hit this with an unset
+    # variable, not on purpose, which is exactly why it must not be silent.
+    with pytest.raises(ValueError, match="non-empty"):
+        server.memory_store(
+            kind="lesson", title="blank key", content="x", idempotency_key=""
+        )
+    with pytest.raises(ValueError, match="non-empty"):
+        server.memory_store(
+            kind="lesson", title="blank key", content="x", idempotency_key="   "
+        )
+
+
+@requires_omnigraph
+def test_a_keyed_retry_does_not_duplicate_tag_or_provenance_edges(server, tmp_path):
+    """★ The finding a deterministic slug alone does NOT fix.
+
+    The node upserts; the `Tagged` and `SessionProduced` edges beside it are
+    unconditional inserts, so a keyed retry used to leave one memory carrying
+    two of every edge. Counted from the RAW EXPORT, because `topics_for_memory`
+    projects duplicates away and reported a reassuring 2 while the store held 3.
+    """
+    project = server.workflow_project_create(
+        title="edge dupe project", description="d", phase="spec"
+    )
+    session = server.workflow_session_start(
+        project_slug=project["slug"], session_id="sess-edge-dupe", phase="spec"
+    )
+
+    for _ in range(3):
+        stored = server.memory_store(
+            kind="lesson",
+            title="tagged retry",
+            content="c",
+            tags=["alpha", "beta"],
+            session_slug=session["session_slug"],
+            idempotency_key="edge-k",
+        )
+
+    slug = stored["slug"]
+    edges = _exported_edges(tmp_path)
+
+    tagged = [e for e in edges if e["edge"] == "Tagged" and e["from"] == slug]
+    produced = [e for e in edges if e["edge"] == "SessionProduced" and e["to"] == slug]
+
+    assert len(tagged) == 2, f"3 keyed writes left {len(tagged)} Tagged edges"
+    assert len(produced) == 1, (
+        f"3 keyed writes left {len(produced)} SessionProduced edges"
+    )
+
+
+@requires_omnigraph
+def test_a_keyed_task_retry_does_not_duplicate_any_relationship_edge(server, tmp_path):
+    """Every edge type `task_create` can arrive with, not just an edge-free task.
+
+    The original test created a task with no relationships at all, so it would
+    have passed while all four of these duplicated.
+    """
+    project = server.workflow_project_create(
+        title="task edge project", description="d", phase="spec"
+    )
+    parent = server.task_create(title="parent task", description="p")
+    blocker = server.task_create(title="blocker task", description="b")
+    source = server.task_create(title="source task", description="s")
+
+    for _ in range(3):
+        created = server.task_create(
+            title="fully connected task",
+            description="d",
+            project_slug=project["slug"],
+            parent=parent["slug"],
+            blocked_by=[blocker["slug"]],
+            discovered_from=[source["slug"]],
+            idempotency_key="task-edge-k",
+        )
+
+    slug = created["slug"]
+    edges = _exported_edges(tmp_path)
+
+    def count(edge_type: str, *, endpoint: str) -> int:
+        return len([e for e in edges if e["edge"] == edge_type and e[endpoint] == slug])
+
+    assert count("TaskBelongsTo", endpoint="from") == 1
+    assert count("ParentOf", endpoint="to") == 1
+    assert count("Blocks", endpoint="to") == 1
+    assert count("DiscoveredFrom", endpoint="from") == 1

@@ -164,10 +164,22 @@ class RemoteWriteIndeterminate(RuntimeError):
 
     ★ A RETRY IS SAFE IF — AND ONLY IF — THE ORIGINAL CARRIED AN
     ``idempotency_key``. ``memory_store`` and ``task_create`` derive the slug's
-    suffix from that key, so a retry reusing it writes the SAME slug, and
-    omnigraph's ``insert`` upserts on the ``@key`` (verified against 0.9.0: two
-    inserts of one slug leave one row holding the second write's content). The
-    duplicate this class warns about is then structurally impossible.
+    suffix from that key, so a retry reusing it addresses the SAME slug; the
+    server finds that row, returns it as ``idempotent_replay`` and writes
+    nothing. The duplicate this class warns about is then structurally
+    impossible.
+
+    Note the mechanism is a skip, NOT an upsert, and the difference is the
+    edges. Letting `insert` upsert the node would fix only the node: the
+    ``Tagged``, ``SessionProduced``, ``ParentOf``, ``Blocks``,
+    ``TaskBelongsTo`` and ``DiscoveredFrom`` writes beside it are unconditional
+    inserts, and three keyed attempts were measured leaving one memory with
+    three copies of each tag edge.
+
+    ★ AND THIS IS SAID IN THE MESSAGE, NOT ONLY HERE. Callers see ``str(exc)``,
+    so :meth:`RemoteMCPProxy._indeterminate_error` takes a ``keyed`` flag and
+    tells a keyed caller to retry rather than to re-read. A docstring-only
+    contract left the feature looking useless from the seat that needed it.
 
     Without a key the warning above stands unchanged: the suffix is random per
     attempt, so a retry writes a second row whenever the first one landed.
@@ -498,7 +510,7 @@ class RemoteMCPProxy:
         """
         return True
 
-    def _indeterminate_error(self, name: str, status: int) -> str:
+    def _indeterminate_error(self, name: str, status: int, *, keyed: bool) -> str:
         """Message for a write whose fate the gateway made unknowable.
 
         Names the ambiguity in the first sentence. An earlier version of this
@@ -506,18 +518,40 @@ class RemoteMCPProxy:
         wrong in the expensive direction: the service was reached, and the
         remedy it implies — try again — is what duplicates the row.
 
+        ★ ``keyed`` CHANGES THE ADVICE, BECAUSE THE KEY CHANGES THE FACTS. The
+        outcome is equally unknown either way — that is the gateway's doing and
+        no client-side argument fixes it. What differs is the remedy. Without a
+        key, retrying writes the row twice if the first attempt landed, so the
+        only safe move is to re-read. With one, the server recognises the slug
+        the key determines and returns the original row untouched, so the retry
+        converges instead of duplicating and there is nothing to check first.
+
+        Telling a keyed caller to re-read anyway is not merely noise: it is the
+        advice that made this feature look useless, since the whole point of
+        supplying the key was to make the retry safe.
+
         The STATUS is quoted rather than the exception, whose ``str`` is
         httpx's three-line "for more information check…" paragraph. The number
         is the whole content; the rest is chained on ``__cause__`` for anyone
         who wants it.
         """
+        if keyed:
+            remedy = (
+                "This call carried an idempotency_key, so RETRYING IT IS SAFE: "
+                "reissue the identical call with the same key. If the write did "
+                "land, the server returns that row and writes nothing further."
+            )
+        else:
+            remedy = (
+                "Re-read before retrying; retrying blind writes it twice if it "
+                "did land. Passing an idempotency_key would make the retry safe."
+            )
         return (
             f"The deployed service at {self._url} answered HTTP {status} for "
             f"`{name}`: the request reached it and was cut off before a reply "
             f"came back. `{name}` writes, so ITS OUTCOME IS INDETERMINATE — the "
             "write may or may not have been applied, and nothing in this "
-            "response says which. Re-read before retrying; retrying blind "
-            "writes it twice if it did land."
+            f"response says which. {remedy}"
         )
 
     def _credential_rejected_error(
@@ -693,7 +727,7 @@ class RemoteMCPProxy:
 
     @asynccontextmanager
     async def _reclassifying(
-        self, name: str, *, refreshed: bool = False
+        self, name: str, *, refreshed: bool = False, keyed: bool = False
     ) -> AsyncIterator[None]:
         """Report a fault raised in this block as the sentence it deserves.
 
@@ -746,7 +780,7 @@ class RemoteMCPProxy:
                 status = cut_off.response.status_code
                 if self._writes(name):
                     raise RemoteWriteIndeterminate(
-                        self._indeterminate_error(name, status)
+                        self._indeterminate_error(name, status, keyed=keyed)
                     ) from exc
                 raise RemoteUnreachable(self._gateway_read_error(name, status)) from exc
             rejected = auth_failure(exc)
@@ -832,8 +866,15 @@ class RemoteMCPProxy:
         so a message can say what was actually tried rather than what was
         configured.
         """
+        # Whether THIS invocation can be safely retried, which is a property of
+        # the call's arguments and not of the tool. Read from kwargs only: these
+        # tools are dispatched by keyword (`_invoke` forwards the caller's
+        # kwargs verbatim), and guessing a positional index would be wrong the
+        # first time a signature gained a parameter. A blank key is not a key —
+        # the server rejects it outright, so it must not earn the safe wording.
+        keyed = bool(str(kwargs.get("idempotency_key") or "").strip())
         async with (
-            self._reclassifying(name, refreshed=refreshed),
+            self._reclassifying(name, refreshed=refreshed, keyed=keyed),
             AsyncExitStack() as stack,
         ):
             try:

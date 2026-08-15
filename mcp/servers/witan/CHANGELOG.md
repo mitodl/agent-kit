@@ -14,15 +14,39 @@ a MINOR bump may include breaking changes).
   indeterminate write converges on one row instead of creating a second.
 
   The slug's 6-char suffix becomes `sha256(key)[:6]` instead of a fresh
-  `uuid4()`, so the same key yields the same slug and omnigraph's `insert`
-  upserts onto the first row. Verified against 0.9.0 rather than assumed: two
-  inserts of one slug leave ONE row holding the second write's content.
+  `uuid4()`, so the same key yields the same slug. The server then looks that
+  slug up, and on a hit returns it as `idempotent_replay: true` without writing
+  anything — **first write wins**.
 
   This is what makes the retry safe. Measured in QA on 2026-08-15, 16
   concurrent writers produced 15 indeterminate writes — the store committed
   every one while ToolHive cut the response at exactly 30.000s and the caller
   was told it failed. Without a key, retrying that duplicates the row; with
   one, it cannot.
+
+  ★ **A skip, not an upsert — and the difference is the EDGES.** The first
+  implementation leaned on omnigraph's `insert` upserting the node, which is
+  real (two inserts of one slug leave one row) and not enough: every `Tagged`,
+  `SessionProduced`, `TaskBelongsTo`, `ParentOf`, `Blocks` and
+  `DiscoveredFrom` write in the same batch is an unconditional insert. Three
+  keyed attempts left one memory carrying **six** tag edges where two belong,
+  and a keyed task with three copies of each relationship. Counted from the raw
+  export, because the traversal query projects duplicates away and reported a
+  reassuring 2 while the store held 3.
+
+  Clearing the edges and re-adding them was the obvious repair and is refused
+  by the engine — `mutation ... mixes inserts/updates and deletes; split into
+  separate mutations`. Splitting costs a second Lance commit per keyed write
+  and opens a window with no tag edges at all, so a crash mid-recovery leaves
+  the graph worse than the failure being recovered from. Skipping the whole
+  write is cheaper (one read, no commits) and correct by construction: each of
+  these writes is already ONE atomic commit, so the node existing proves its
+  edges do.
+
+- **A blank `idempotency_key` is rejected** rather than silently treated as
+  absent. `""` is falsy, so it would take the random-suffix branch and let
+  every "retry" duplicate — the feature reporting itself as on while doing the
+  opposite. Callers reach this with an unset variable, not on purpose.
 
   ★ The key identifies the REQUEST, not the content, and must be generated
   before the first attempt — afterwards the slug the server chose is

@@ -616,9 +616,16 @@ def _make_slug(kind: str, title: str, idempotency_key: str | None = None) -> str
     ``idempotency_key`` makes the suffix a FUNCTION OF THE REQUEST rather than
     fresh per attempt, which is what lets a retry after an indeterminate
     outcome land on the same row instead of writing a second one. Same key,
-    same slug; `insert` upserts on the ``@key`` (verified against 0.9.0: two
-    inserts of one slug leave ONE row carrying the second write's content), so
-    the retry converges instead of duplicating.
+    same slug — and the callers then use that determinism to detect the retry
+    and skip it outright (see ``_replayed``), rather than relying on `insert`
+    upserting, which would fix the NODE and leave every edge duplicated.
+
+    ★ A BLANK KEY IS REJECTED, NOT TREATED AS ABSENT. ``""`` satisfies the
+    parameter's type and is falsy, so it would silently take the random-suffix
+    branch and every "retry" would write another row — the exact failure the
+    key exists to prevent, presenting as if the feature were on. A caller
+    passing an empty string has a bug upstream (an unset variable, a stripped
+    field); saying so is more useful than quietly doing the wrong thing.
 
     ★ THE SUFFIX IS DERIVED FROM THE KEY, NOT FROM THE CONTENT, AND THAT IS THE
     WHOLE POINT. Deriving it from (kind, title) instead would look simpler and
@@ -631,6 +638,13 @@ def _make_slug(kind: str, title: str, idempotency_key: str | None = None) -> str
     Without a key the suffix stays random, so existing callers are unchanged and
     two stores of the same title still get their own rows.
     """
+    if idempotency_key is not None and not idempotency_key.strip():
+        msg = (
+            "idempotency_key must be a non-empty string, or omitted entirely. "
+            "A blank key cannot identify a retry, so it would silently behave "
+            "as no key at all and let a retry duplicate the row."
+        )
+        raise ValueError(msg)
     prefix = _KIND_PREFIX.get(kind, "mem")
     sanitised = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:48]
     if idempotency_key:
@@ -641,6 +655,51 @@ def _make_slug(kind: str, title: str, idempotency_key: str | None = None) -> str
     else:
         short_id = uuid.uuid4().hex[:6]
     return f"{prefix}-{sanitised}-{short_id}"
+
+
+def _replayed(query: str, slug: str, idempotency_key: str | None) -> dict | None:
+    """The row this keyed write already created, or ``None`` to go ahead.
+
+    ★ THIS, NOT AN UPSERT, IS WHAT MAKES A KEYED WRITE IDEMPOTENT — and the
+    difference is the edges. A deterministic slug alone fixes only the NODE:
+    `insert` upserts it, but every `Tagged`, `SessionProduced`, `ParentOf`,
+    `Blocks`, `TaskBelongsTo` and `DiscoveredFrom` edge in the same batch is an
+    unconditional `insert` that appends a SECOND identical edge. Three keyed
+    attempts left one memory and three copies of each tag edge — measured by
+    exporting raw rows, since the traversal query projects duplicates away and
+    reported a reassuring 2.
+
+    ── WHY NOT DELETE-THEN-INSERT ──
+    The obvious repair is to clear the edges and re-add them in the same
+    commit. The engine refuses outright (omnigraph 0.9.0):
+
+        mutation 'witan_batch' on the same query mixes inserts/updates and
+        deletes; split into separate mutations ... A query is deliberately
+        constructive or destructive, not both
+
+    Splitting them costs a second Lance commit per keyed write — undoing the
+    batching work that made one tool call one commit — and opens a window where
+    the memory has NO tag edges, so a crash between the two leaves the graph
+    worse than the failure being recovered from. Rejected on that basis, not on
+    taste.
+
+    ── WHY THE EXISTENCE CHECK IS SOUND ──
+    Because each of these writes is ALREADY one atomic commit: the node and
+    every edge it arrives with go in a single ``change_many``. So the node
+    existing proves its edges do too, and there is no partial state to repair.
+    One read replaces all of it, and nothing is written twice.
+
+    This makes a keyed write FIRST-WRITE-WINS, which is the ordinary meaning of
+    an idempotency key elsewhere (a replay returns the original outcome rather
+    than overwriting it). It differs from a plain upsert only when a caller
+    reuses one key for genuinely different content — which the parameter
+    already tells them not to do, and which silently merged their two writes
+    before.
+    """
+    if not idempotency_key:
+        return None
+    rows = client.read("read.gq", query, {"slug": slug})
+    return rows[0] if rows else None
 
 
 _SLIM_KEYS = ("slug", "kind", "title", "tags")
@@ -2341,6 +2400,30 @@ def _store_memory(
         symbol_refs = [symbol_refs]
     now = now_iso()
     slug = _make_slug(kind, title, idempotency_key)
+
+    # A retry of a write that already landed: return what it produced and touch
+    # nothing. Skipping is what keeps the TAG and PROVENANCE edges from being
+    # written a second time — the node would have upserted cleanly, the edges
+    # would not. See `_replayed`.
+    replay = _replayed("get_memory", slug, idempotency_key)
+    if replay is not None:
+        return {
+            "slug": slug,
+            "kind": kind,
+            "repo": replay.get("repo"),
+            # Deliberately null rather than a boolean: this call linked no
+            # session because it wrote nothing at all, and reporting False
+            # would read as "provenance is missing" when the original write's
+            # link — whatever it was — still stands untouched.
+            "session_linked": None,
+            "idempotent_replay": True,
+            "note": (
+                f"`{slug}` already exists from an earlier call with this "
+                "idempotency_key. Nothing was written. If the first attempt "
+                "reported an indeterminate failure, this confirms it landed."
+            ),
+        }
+
     detected_repo = repo_module.detect(override=repo)
 
     # The whole memory — node, its topics, its edges — is ONE commit. Every
@@ -2494,17 +2577,24 @@ async def memory_store(
         An opaque string identifying THIS write attempt. Retrying a call that
         failed with an indeterminate outcome — a 502 or timeout, where the
         write may or may not have landed — is only safe when the retry carries
-        the SAME key: it makes the slug identical, and the second write upserts
-        onto the first row instead of creating a duplicate.
+        the SAME key: the key determines the slug, so the server recognises the
+        row the first attempt created, returns it, and writes nothing further.
+
+        A replay is reported as ``idempotent_replay: true``, and the FIRST
+        write's content is what stands. That also means the retry does not
+        duplicate the memory's tag or provenance edges, which a plain upsert
+        would have.
 
         Generate one per logical write (a uuid4 is fine) and reuse it for every
         retry of that write. Do NOT derive it from the content: two genuinely
         different memories may share a title, and reusing a key across them
-        would silently merge them.
+        would silently merge them. Reusing one key with *changed* content is
+        not an edit — the change is ignored; use ``memory_update``.
 
         Omit it and the slug keeps a random suffix, i.e. today's behaviour —
         every call creates its own row and a retry after an indeterminate
-        failure may duplicate.
+        failure may duplicate. An empty string is rejected rather than treated
+        as omitted.
     """
     # When no repo is known (not passed, and detection finds none), offer to
     # scope it rather than silently persisting an unscoped node. Falls back to
@@ -4539,12 +4629,36 @@ async def task_create(
     idempotency_key:
         An opaque string identifying THIS write attempt, so that retrying an
         indeterminate failure lands on the same task instead of creating a
-        second one. Generate one per logical create and reuse it across
-        retries; do not derive it from the title. Omitted, the slug keeps a
-        random suffix and a retry may duplicate. See ``memory_store``.
+        second one. The retry is detected and skipped, reported as
+        ``idempotent_replay: true`` — so the task's project, parent, blocker
+        and discovered-from edges are not written a second time either.
+
+        Generate one per logical create and reuse it across retries; do not
+        derive it from the title. Omitted, the slug keeps a random suffix and a
+        retry may duplicate. An empty string is rejected. See ``memory_store``.
     """
     now = now_iso()
     slug = _make_slug("task", title, idempotency_key)
+
+    # A retry of a create that already landed. Checked BEFORE the elicitation
+    # below as well as before the write: re-asking a human to scope a task that
+    # already exists is its own bug. See `_replayed` — the node existing proves
+    # its TaskBelongsTo/ParentOf/Blocks/DiscoveredFrom edges do too, since they
+    # share one commit, and re-running the inserts would duplicate every one.
+    replay = _replayed("get_task", slug, idempotency_key)
+    if replay is not None:
+        return {
+            "slug": slug,
+            "status": replay.get("status"),
+            "repo": replay.get("repo"),
+            "idempotent_replay": True,
+            "note": (
+                f"`{slug}` already exists from an earlier call with this "
+                "idempotency_key. Nothing was written. If the first attempt "
+                "reported an indeterminate failure, this confirms it landed."
+            ),
+        }
+
     # Offer to scope the task when nothing is detected; falls back to an
     # unscoped task (today's behavior) under automation / an unsupported client.
     repo = await elicit.repo_or_detect(ctx, repo)
