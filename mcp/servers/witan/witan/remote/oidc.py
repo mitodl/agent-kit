@@ -22,6 +22,7 @@ from witan_core.remote.oidc import (
     DeviceAuth,
     NeedsLogin,
     RemoteAuthError,
+    SessionLife,
     cache_path,
     decode_claims,
     device_auth,
@@ -35,6 +36,7 @@ _LOGIN_HINT = "witan login"
 __all__ = [
     "NeedsLogin",
     "RemoteAuthError",
+    "SessionLife",
     "cache_path",
     "decode_claims",
     "default_token_provider",
@@ -43,6 +45,7 @@ __all__ = [
     "get_valid_token",
     "login",
     "logout",
+    "session_life",
 ]
 
 
@@ -69,6 +72,11 @@ def get_valid_token(cfg: RemoteConfig, *, client: httpx2.Client | None = None) -
 def logout(cfg: RemoteConfig) -> bool:
     """Drop the cached token for this deployment. True if one existed."""
     return _auth(cfg).logout()
+
+
+def session_life(cfg: RemoteConfig) -> SessionLife:
+    """When the cached access token, and the login behind it, run out."""
+    return _auth(cfg).session_life()
 
 
 def default_token_provider(cfg: RemoteConfig) -> Callable[[], str]:

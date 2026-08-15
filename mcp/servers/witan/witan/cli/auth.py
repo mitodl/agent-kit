@@ -83,6 +83,37 @@ def logout(*, target: str | None = None) -> None:
         console.print("[yellow]No cached session to clear.[/yellow]")
 
 
+def _login_validity(life: oidc.SessionLife) -> str:
+    """One line for how long the login lasts, honest about not knowing.
+
+    ``unknown`` is rendered as unknown rather than as anything comforting: it
+    means the IdP did not send ``refresh_expires_in``, or the cache entry
+    predates this client storing it. Printing "valid" there would be a guess
+    with the same shape as a fact.
+    """
+    # Checked FIRST because it outranks every lifetime below it: with no refresh
+    # token there is nothing to renew, so the login ends when the access token
+    # does no matter what any expiry says.
+    if not life.renewable:
+        return "ends when the token above expires — no refresh token was issued"
+    if life.refresh_state == "never":
+        return "does not expire (offline token)"
+    if life.refresh_state == "unknown":
+        return "unknown — the IdP did not report a refresh lifetime"
+    remaining = life.refresh_expires_at - datetime.now(tz=timezone.utc).timestamp()
+    # Whole seconds, matching the `exp` claim on the line above — the refresh
+    # expiry is computed locally and would otherwise print six decimal places
+    # of spurious precision next to a timestamp that has none.
+    when = datetime.fromtimestamp(
+        int(life.refresh_expires_at), tz=timezone.utc
+    ).isoformat()
+    if remaining <= 0:
+        return f"EXPIRED at {when} — run `witan login`"
+    hours, minutes = divmod(int(remaining) // 60, 60)
+    span = f"{hours}h {minutes}m" if hours else f"{minutes}m"
+    return f"{when} ({span} left)"
+
+
 @app.command
 def whoami(*, target: str | None = None) -> None:
     """Show the identity the CLI presents to the deployed witan service.
@@ -97,6 +128,12 @@ def whoami(*, target: str | None = None) -> None:
     except oidc.NeedsLogin as exc:
         console.print(f"[yellow]{exc}[/yellow]")
         raise SystemExit(1) from None
+    except oidc.RemoteAuthError as exc:
+        # Caught separately from NeedsLogin above so a token endpoint that is
+        # merely unreachable does not read as "log in again" — the whole point
+        # of classifying the two.
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
     claims = oidc.decode_claims(token)
     sub = claims.get("sub", "")
     if remote.target_name:
@@ -108,7 +145,18 @@ def whoami(*, target: str | None = None) -> None:
     console.print(f"[bold]sub[/bold]       {sub}")
     if sub:
         console.print(f"[bold]actor[/bold]     {derive_actor_id(sub)}")
+    # TWO clocks, and the second is the one that answers "will I have to log in
+    # again?". Reporting only the access token's expiry showed a number minutes
+    # away and invited the reader to conclude their login was about to lapse,
+    # when a refresh renews it silently and the session may have days left.
+    life = oidc.session_life(remote)
     exp = claims.get("exp")
     if exp:
         when = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()
-        console.print(f"[bold]Expires[/bold]   {when}")
+        # "renews automatically" is conditional on there being something to
+        # renew with. A token response may carry no refresh_token at all — the
+        # cache accepts that — and promising renewal there is a claim the next
+        # call disproves with a NeedsLogin.
+        renews = " (renews automatically)" if life.renewable else ""
+        console.print(f"[bold]Token[/bold]     {when}{renews}")
+    console.print(f"[bold]Login[/bold]     {_login_validity(life)}")
