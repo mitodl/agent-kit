@@ -28,7 +28,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator, Protocol
+from typing import Callable, Iterator, NamedTuple, Protocol
 
 import httpx2
 
@@ -170,7 +170,39 @@ class NeedsLogin(RemoteAuthError):
 
     Raised by :meth:`DeviceAuth.get_valid_token` when there is no cached access
     token and no refresh token to renew one — the caller must log in again.
+
+    ★ RESERVED FOR SESSIONS THAT ARE ACTUALLY OVER. Raising it for a token
+    endpoint that merely could not be reached sends the user through a device
+    flow they did not need, and abandons a refresh token that was fine. The
+    IdP distinguishes the two and so must this: see ``_DEAD_GRANT_ERRORS``.
     """
+
+
+#: OAuth 2 error codes that mean the refresh token itself is finished —
+#: expired, revoked, or already spent by a rotating IdP (RFC 6749 §5.2). These
+#: are the only answers a user can do anything about, and the only ones worth a
+#: `NeedsLogin`. Everything else — a 502 from a proxy, a DNS failure, a realm
+#: briefly down, `temporarily_unavailable` — leaves the session intact and is
+#: reported as an ordinary retryable error.
+_DEAD_GRANT_ERRORS = frozenset({"invalid_grant"})
+
+
+class SessionLife(NamedTuple):
+    """How long the access token and the login behind it have left.
+
+    Two different clocks, and only the second one answers "do I have to log in
+    again?". ``refresh_state`` says how much is actually known about it:
+
+    ``"finite"``  ``refresh_expires_at`` is a real timestamp.
+    ``"never"``   the refresh token does not expire (an offline token).
+    ``"unknown"`` the IdP did not say, or this entry predates the client
+                  storing it. NOT the same as "never" — do not render it as
+                  reassurance.
+    """
+
+    access_expires_at: float | None
+    refresh_expires_at: float | None
+    refresh_state: str
 
 
 def _json(resp: httpx2.Response, what: str) -> dict:
@@ -336,6 +368,26 @@ class DeviceAuth:
             "expires_at": now + float(token.get("expires_in", 0)),
             "obtained_at": now,
         }
+        # ★ HOW LONG THE *LOGIN* LASTS, which is not `expires_at`. The access
+        # token is minutes; the refresh token is what decides whether the user
+        # has to run the device flow again, and the IdP has been telling us all
+        # along in `refresh_expires_in` — we threw it away. Without it the
+        # client cannot answer "am I still logged in?", cannot warn before a
+        # session lapses, and `whoami` can only report the short number, which
+        # reads alarmingly and is not the one anybody wants.
+        #
+        # THREE STATES, and collapsing them loses the interesting one.
+        # `refresh_expires_in: 0` is Keycloak for "this refresh token does not
+        # expire" (what `offline_access` mints) — the opposite of "expired", so
+        # a naive `now + 0` would mark an eternal session as already dead.
+        # Absent entirely means the IdP did not say; that is not the same as
+        # "never", and an entry written by an older client has neither key.
+        # `session_life` is the one place that reads this back, so no caller
+        # has to know the convention.
+        refresh_expires_in = token.get("refresh_expires_in")
+        if token.get("refresh_token") and refresh_expires_in is not None:
+            seconds = float(refresh_expires_in)
+            entry["refresh_expires_at"] = now + seconds if seconds > 0 else None
         # Read-modify-write of the *whole* file, so it has to be serialized:
         # two processes refreshing different deployments concurrently would
         # each write back a snapshot taken before the other's, and one
@@ -486,8 +538,23 @@ class DeviceAuth:
             },
         )
         if resp.status_code != 200:
-            raise NeedsLogin(
-                f"Refresh token rejected — run `{self._login_hint}` to re-authenticate."
+            # ★ "COULD NOT RENEW" IS NOT "YOU ARE LOGGED OUT". Every non-200
+            # used to become `NeedsLogin`, so a 503, a proxy hiccup or a realm
+            # restarting told the user their session had ended and sent them
+            # through a device flow — discarding a refresh token that was
+            # perfectly good. The IdP already distinguishes the two cases; only
+            # `invalid_grant` means the grant itself is finished.
+            error = str(_json_safe(resp).get("error", ""))
+            if error in _DEAD_GRANT_ERRORS:
+                raise NeedsLogin(
+                    f"Session expired — run `{self._login_hint}` to re-authenticate."
+                )
+            detail = f" ({error})" if error else ""
+            raise RemoteAuthError(
+                f"Could not renew the session: the token endpoint answered "
+                f"HTTP {resp.status_code}{detail}. The login itself looks "
+                "intact — this is retryable, and re-authenticating is not "
+                "required."
             )
         return self._store_token(_json(resp, "token endpoint"))
 
@@ -594,6 +661,26 @@ class DeviceAuth:
         if not entry:
             return {}
         return decode_claims(entry.get("access_token", ""))
+
+    def session_life(self) -> SessionLife:
+        """When the cached access token and the login behind it run out.
+
+        Offline and refresh-free, like :meth:`cached_claims` and for the same
+        reason: this is asked in order to *report* on a session, and a call that
+        renewed the thing it was measuring would change the answer by asking.
+
+        Everything absent when there is no cached entry at all —
+        ``refresh_state`` is then ``"unknown"``, which is the truth: nothing is
+        known about a login that was never made.
+        """
+        entry = self._load_cache().get(self._cache_key()) or {}
+        if "refresh_expires_at" not in entry:
+            state, refresh_at = "unknown", None
+        elif entry["refresh_expires_at"] is None:
+            state, refresh_at = "never", None
+        else:
+            state, refresh_at = "finite", float(entry["refresh_expires_at"])
+        return SessionLife(entry.get("expires_at"), refresh_at, state)
 
     def logout(self) -> bool:
         """Drop the cached token for this deployment. True if one existed."""
