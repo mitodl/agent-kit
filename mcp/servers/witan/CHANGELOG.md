@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.15.0] - 2026-08-16
+
+### Fixed
+
+- **`witan serve` no longer drops in-flight requests two seconds into a
+  shutdown.** FastMCP builds its uvicorn config with a hardcoded
+  `timeout_graceful_shutdown: 2`, so on SIGTERM the server stopped accepting
+  connections, gave running requests two seconds, and dropped the rest. A witan
+  write has been measured at **27s** under load, so every one in flight was
+  severed by a deploy, an eviction or a node drain — and a severed write is
+  precisely the indeterminate outcome a caller cannot safely retry.
+
+  `serve` now passes `uvicorn_config={"timeout_graceful_shutdown": …}`,
+  defaulting to 120s to match the request budget the deployment enforces at its
+  gateway, and settable via `--shutdown-grace-seconds` /
+  `WITAN_MCP_SHUTDOWN_GRACE_SECONDS`.
+
+  ★ **This could not be fixed from the deployment side.** ol-infrastructure sets
+  `terminationGracePeriodSeconds: 150` so the kubelet waits — but uvicorn
+  declined to use it, so the pod-side setting bought time nothing spent. Both
+  halves are required, and the pod-side half is the one that looks sufficient;
+  a comment there asserted exactly that until this was found.
+
+  Verified against the real library rather than the test double: with
+  `uvicorn.Config` instrumented, `120.0` arrives where fastmcp's `2` would have
+  been. stdio runs are unaffected — they pass no uvicorn config at all.
+
 ## [0.14.0] - 2026-08-16
 
 ### Fixed

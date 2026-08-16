@@ -38,6 +38,30 @@ from .migrate import migrate_app
 from .output import OutputFormat, set_output_format
 from .run_helpers import _run_task_slug
 
+# ── How long a shutting-down server waits for work already in flight ─────────
+#
+# ★ FASTMCP'S OWN DEFAULT IS 2 SECONDS, AND THAT SILENTLY TRUNCATES A ROLLOUT.
+# `FastMCP.run_http_async` builds its uvicorn config with a hardcoded
+# `timeout_graceful_shutdown: 2` (fastmcp 4.0.0b2), so on SIGTERM uvicorn stops
+# accepting connections, gives in-flight requests two seconds, and drops the
+# rest. A witan write has been measured at 27s under load, so every one of them
+# is severed by a deploy, an eviction or a node drain — and a severed write is
+# the indeterminate outcome the caller cannot safely retry, which is the exact
+# failure class this deployment has spent weeks removing elsewhere.
+#
+# It also cannot be fixed from the deployment side alone. ol-infrastructure sets
+# `terminationGracePeriodSeconds: 150` so the kubelet will wait; uvicorn declines
+# to use it. Both halves are required, and the pod-side one is the half that
+# looks sufficient — a comment there asserted exactly that until this was found.
+#
+# 120s matches the request budget the deployment enforces at APISIX
+# (`WITAN_REQUEST_TIMEOUT`), on the principle that shutdown should be willing to
+# wait as long as a request was allowed to take. Anything already past that
+# budget is being cut off upstream anyway. Local stdio runs never reach this
+# code, and a local HTTP run has nothing in flight worth waiting for, so the
+# default is safe everywhere rather than only in the cluster.
+DEFAULT_SHUTDOWN_GRACE_SECONDS = 120.0
+
 # Mount `witan migrate …` (sub-app, not a flat command).
 app.command(migrate_app, name="migrate")
 
@@ -61,6 +85,9 @@ def serve(
     host: Annotated[str, cyclopts.Parameter(env_var="WITAN_MCP_HOST")] = "127.0.0.1",
     port: Annotated[int, cyclopts.Parameter(env_var="WITAN_MCP_PORT")] = 8000,
     path: Annotated[str, cyclopts.Parameter(env_var="WITAN_MCP_PATH")] = "/mcp",
+    shutdown_grace_seconds: Annotated[
+        float, cyclopts.Parameter(env_var="WITAN_MCP_SHUTDOWN_GRACE_SECONDS")
+    ] = DEFAULT_SHUTDOWN_GRACE_SECONDS,
 ) -> None:
     """Run the witan MCP server.
 
@@ -82,6 +109,12 @@ def serve(
     host: Interface to bind for HTTP transports. ``0.0.0.0`` inside a container.
         Env: ``WITAN_MCP_HOST``.
     port: Port to bind for HTTP transports. Env: ``WITAN_MCP_PORT``.
+    shutdown_grace_seconds: How long uvicorn waits for in-flight requests after
+        SIGTERM before dropping them. FastMCP's own default is **2 seconds**,
+        which silently truncates any deployment that expects a rollout to drain
+        — a witan write has been measured at 27s. Set this to the deployment's
+        termination grace period. Env:
+        ``WITAN_MCP_SHUTDOWN_GRACE_SECONDS``.
     path: URL path the MCP endpoint is served on (HTTP transports only).
         Env: ``WITAN_MCP_PATH``.
     """
@@ -121,6 +154,11 @@ def serve(
             port=port,
             path=path,
             middleware=trace_context_middleware(),
+            # Overrides FastMCP's hardcoded 2s. See
+            # DEFAULT_SHUTDOWN_GRACE_SECONDS — without this the deployment's
+            # 150s termination grace buys time uvicorn refuses to use, and every
+            # in-flight write is severed by a rollout.
+            uvicorn_config={"timeout_graceful_shutdown": shutdown_grace_seconds},
         )
 
 
