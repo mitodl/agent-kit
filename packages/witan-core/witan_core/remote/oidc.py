@@ -43,6 +43,11 @@ DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 _LOGIN_SCOPE = "openid offline_access"
 _FALLBACK_LOGIN_SCOPE = "openid"
 
+# The only status on which a scope refusal is retried. RFC 6749 §5.2 puts
+# `invalid_scope` at 400; anything else carrying that body is a different
+# failure and must propagate.
+_SCOPE_REJECTED_STATUS = 400
+
 # How much life a cached access token must have left to be handed to a caller.
 #
 # ★ THIS IS A BOUND ON THE SLOWEST CALL THE TOKEN WILL BE USED FOR, not a
@@ -542,7 +547,15 @@ class DeviceAuth:
         )
         if resp.status_code == 200:
             return resp
-        if _json_safe(resp).get("error") == "invalid_scope":
+        # ★ THE STATUS IS PART OF THE TEST, not just the body. RFC 6749 §5.2
+        # defines `invalid_scope` as a 400, so a 500 that happens to carry that
+        # string is an outage wearing a scope error's clothes — retrying it
+        # would contradict the guarantee stated above and bury the original
+        # failure behind an identical second one.
+        if (
+            resp.status_code == _SCOPE_REJECTED_STATUS
+            and _json_safe(resp).get("error") == "invalid_scope"
+        ):
             resp = client.post(
                 endpoint,
                 data={**self._auth_params(), "scope": _FALLBACK_LOGIN_SCOPE},

@@ -676,3 +676,31 @@ def test_a_non_scope_failure_at_the_device_endpoint_is_not_retried(auth):
             sleep=lambda _s: None,
         )
     assert seen == ["hit"], "a non-scope failure must not be retried"
+
+
+def test_an_invalid_scope_body_on_a_500_is_not_retried(auth):
+    """★ The status is part of the test, not just the body.
+
+    RFC 6749 §5.2 defines `invalid_scope` as a 400. A 500 carrying that string
+    is an outage wearing a scope error's clothes — retrying it would contradict
+    the no-retry guarantee and bury the original failure behind an identical
+    second one. Matching on the body alone (the first version of this) passed
+    every other test here, because none of them sent that combination.
+    """
+    seen: list[str] = []
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            seen.append("hit")
+            return httpx2.Response(500, json={"error": "invalid_scope"})
+        raise AssertionError("token endpoint must not be reached")
+
+    with pytest.raises(RemoteAuthError):
+        auth.login(
+            on_prompt=lambda _d: None,
+            client=_client(handler),
+            sleep=lambda _s: None,
+        )
+    assert seen == ["hit"], "invalid_scope on a non-400 must not be retried"
