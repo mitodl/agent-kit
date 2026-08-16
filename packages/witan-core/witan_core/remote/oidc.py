@@ -36,6 +36,13 @@ _log = logging.getLogger(__name__)
 
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
+# Scopes asked for at login, and what to settle for when the realm says no.
+# `offline_access` is what decouples the refresh token's life from the
+# interactive SSO session — see `_request_device_code` for why that is needed,
+# what it widens, and why the fallback exists rather than a hard failure.
+_LOGIN_SCOPE = "openid offline_access"
+_FALLBACK_LOGIN_SCOPE = "openid"
+
 # How much life a cached access token must have left to be handed to a caller.
 #
 # ★ THIS IS A BOUND ON THE SLOWEST CALL THE TOKEN WILL BE USED FOR, not a
@@ -493,6 +500,56 @@ class DeviceAuth:
             params["audience"] = self._cfg.oidc_audience
         return params
 
+    def _request_device_code(
+        self, meta: dict, client: httpx2.Client
+    ) -> httpx2.Response:
+        """Start the device grant, asking for a session that outlives one call.
+
+        ★ WHY ``offline_access`` AT ALL. Without it the realm's ordinary SSO
+        session governs the refresh token, and on this deployment that is about
+        five minutes — short enough that a login goes stale while the work it
+        was for is still running. The concurrency probe made this concrete on
+        2026-08-16: it needs ~8 minutes across two phases, pinned a token fine
+        for the first, and got ``invalid_grant`` on the second because the
+        session had already ended. No retry helps; a fresh login dies at the
+        same point. ``offline_access`` is what Keycloak offers for exactly this
+        — a refresh token whose life is not tied to the interactive session, and
+        which it advertises as ``refresh_expires_in: 0`` (``_store_token``
+        already understands that as "never", not "already expired").
+
+        ★ AND THE TRADE, STATED PLAINLY: the cached refresh token stops
+        expiring on its own, so a stolen cache file is usable until the grant is
+        revoked at the IdP rather than until the session lapses. That is a real
+        widening. It is accepted because the cache is written by ``os.open``
+        with ``0o600`` from creation — never briefly group- or world-readable —
+        and because the alternative on offer was raising the realm's SSO
+        timeouts, which would lengthen EVERY session for every client rather
+        than just this credential. Revocation moves to the IdP; there is no
+        longer a short clock doing it for us.
+
+        ★ FALLS BACK RATHER THAN FAILING. A realm that does not grant
+        ``offline_access`` to this client answers the device-authorization
+        endpoint with ``invalid_scope``, and raising there would turn a
+        convenience into "nobody can log in at all" — strictly worse than the
+        short session this exists to fix. So the scope is requested, and a
+        refusal of THAT SPECIFIC KIND retries with plain ``openid``. Any other
+        failure still propagates: it is not a scope problem and hiding it would
+        cost a real diagnosis.
+        """
+        endpoint = meta["device_authorization_endpoint"]
+        resp = client.post(
+            endpoint, data={**self._auth_params(), "scope": _LOGIN_SCOPE}
+        )
+        if resp.status_code == 200:
+            return resp
+        if _json_safe(resp).get("error") == "invalid_scope":
+            resp = client.post(
+                endpoint,
+                data={**self._auth_params(), "scope": _FALLBACK_LOGIN_SCOPE},
+            )
+        resp.raise_for_status()
+        return resp
+
     # ── public flow ────────────────────────────────────────────────────────
     def login(
         self,
@@ -511,9 +568,7 @@ class DeviceAuth:
         client = client or httpx2.Client(timeout=15)
         try:
             meta = discover_endpoints(self._cfg.oidc_issuer, client=client)
-            req = {**self._auth_params(), "scope": "openid"}
-            resp = client.post(meta["device_authorization_endpoint"], data=req)
-            resp.raise_for_status()
+            resp = self._request_device_code(meta, client)
             device = _json(resp, "device authorization endpoint")
             on_prompt(device)
 

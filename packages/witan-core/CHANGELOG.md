@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.21.0] - 2026-08-16
+
+### Changed
+
+- **`witan login` now asks for `offline_access`, so a session outlives the work
+  it was started for.** The device grant requested `openid` alone, which ties
+  the refresh token to the interactive SSO session — about five minutes on this
+  deployment. A login therefore went stale mid-task, and no retry helped
+  because a fresh login died at the same point.
+
+  Made concrete by the concurrency probe on 2026-08-16, which needs ~8 minutes
+  across two phases: it pinned a token for phase A, then got `invalid_grant`
+  pinning phase B, four minutes after a successful login. That blocked the
+  phase-exit measurement for the witan deployment outright.
+
+  Keycloak advertises such a token as `refresh_expires_in: 0`, which
+  `_store_token` already reads as "never expires" rather than "already
+  expired", so nothing downstream needed changing.
+
+  ★ **The trade, stated plainly:** the cached refresh token stops expiring on
+  its own, so a stolen cache file is usable until the grant is revoked at the
+  IdP rather than until the session lapses. Accepted because the cache is
+  created by `os.open` with `0o600` — never briefly group- or world-readable —
+  and because the alternative was raising the realm's SSO timeouts, which would
+  lengthen every session for every client rather than just this credential.
+  Revocation now belongs to the IdP; there is no longer a short clock doing it
+  implicitly.
+
+  ★ **It degrades rather than failing.** A realm that does not grant the scope
+  answers `invalid_scope`, and raising there would turn a convenience into a
+  total outage of the login path. That specific refusal retries with plain
+  `openid`; any other failure still propagates, and is deliberately *not*
+  retried, so a 500 is diagnosed rather than hidden behind a second identical
+  attempt.
+
 ## [0.20.0] - 2026-08-14
 
 ### Fixed
