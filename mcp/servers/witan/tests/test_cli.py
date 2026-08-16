@@ -518,6 +518,48 @@ def test_serve_http_prepends_missing_leading_slash(monkeypatch):
     assert fake.run_calls[0]["path"] == "/mcp"
 
 
+def test_serve_overrides_fastmcps_two_second_shutdown_grace(monkeypatch):
+    """★ FastMCP hardcodes `timeout_graceful_shutdown: 2`, which severs writes.
+
+    A witan write has been measured at 27s under load. At the library default,
+    every one in flight is dropped two seconds into a rollout, eviction or node
+    drain — and a severed write is exactly the indeterminate outcome the caller
+    cannot safely retry. The deployment's 150s `terminationGracePeriodSeconds`
+    does not help on its own: it makes the kubelet willing to wait for time
+    uvicorn declines to use.
+    """
+    from witan.cli import DEFAULT_SHUTDOWN_GRACE_SECONDS, serve
+
+    fake = _patch_mcp(monkeypatch)
+    serve(transport="streamable-http")
+    (call,) = fake.run_calls
+    assert call["uvicorn_config"]["timeout_graceful_shutdown"] == (
+        DEFAULT_SHUTDOWN_GRACE_SECONDS
+    )
+    assert DEFAULT_SHUTDOWN_GRACE_SECONDS > 2, (  # noqa: PLR2004
+        "the whole point is exceeding fastmcp's 2s default"
+    )
+
+
+def test_serve_shutdown_grace_is_tunable(monkeypatch):
+    """So a deployment can match it to its own termination grace period."""
+    from witan.cli import serve
+
+    fake = _patch_mcp(monkeypatch)
+    serve(transport="streamable-http", shutdown_grace_seconds=45.0)
+    assert fake.run_calls[0]["uvicorn_config"]["timeout_graceful_shutdown"] == 45.0  # noqa: PLR2004
+
+
+def test_stdio_serve_passes_no_uvicorn_config(monkeypatch):
+    """stdio has no HTTP server to configure; passing one would be a TypeError
+    waiting for the next fastmcp release to enforce it."""
+    from witan.cli import serve
+
+    fake = _patch_mcp(monkeypatch)
+    serve()
+    assert fake.run_calls == [{}]
+
+
 # ── witan project update ──────────────────────────────────────────
 
 
