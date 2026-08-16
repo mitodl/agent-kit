@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.14.0] - 2026-08-16
+
+### Fixed
+
+- **`witan login` was broken for anyone installing from PyPI**, with an
+  `ImportError` before the CLI could start:
+
+  ```
+  ImportError: cannot import name 'SessionLife' from 'witan_core.remote.oidc'
+  ```
+
+  0.13.0 imports `SessionLife` at module scope in `witan/remote/oidc.py`, but
+  its floor was `witan-core>=0.20`, and 0.20.0 does not export it. The symbol
+  and its caller landed in the same change (#239) without bumping either the
+  library's version or this floor. The workspace resolves witan-core by path,
+  so every test passed while a `uv tool install` resolved a pair that cannot
+  import each other.
+
+  Floor raised to `witan-core>=0.21`. This is the **fifth** time this exact
+  failure has shipped, and the first to reach a user — the pin comment now says
+  so, at the place where the next person will be adding a symbol.
+
+  Nothing in CI catches this; only a real install does.
+
 ## [0.13.0] - 2026-08-15
 
 ### Added

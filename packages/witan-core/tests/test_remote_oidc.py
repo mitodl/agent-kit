@@ -578,3 +578,129 @@ def test_a_long_token_caps_nothing_and_logs_nothing(auth, monkeypatch, caplog):
     with caplog.at_level("WARNING"):
         assert auth._usable(_entry(lifetime=300, remaining=200))
     assert "capping the skew" not in caplog.text
+
+
+# ── offline_access at login ───────────────────────────────────────────────
+# The refresh token's life decides whether a login survives the work it was for.
+# Without `offline_access` that is the interactive SSO session's life, which on
+# this deployment is ~5 minutes — short enough that the concurrency probe could
+# not finish a two-phase run (it pinned a token for phase A, then got
+# `invalid_grant` for phase B). These pin the request and, more importantly, the
+# fallback: a realm that refuses the scope must still be able to log in.
+
+
+def _device_flow_handler(seen_scopes: list[str], *, device_status):
+    """Handler recording every scope asked of the device endpoint.
+
+    ``device_status`` maps the requested scope to the status to answer with, so
+    a test can have `offline_access` refused while plain `openid` succeeds.
+    """
+    access = _jwt({"sub": "u-1", "preferred_username": "alice"})
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            scope = httpx2.QueryParams(req.content.decode()).get("scope", "")
+            seen_scopes.append(scope)
+            if device_status(scope) != 200:
+                return httpx2.Response(400, json={"error": "invalid_scope"})
+            return httpx2.Response(
+                200,
+                json={
+                    "device_code": "dev-code",
+                    "user_code": "WXYZ",
+                    "verification_uri": "https://sso.example.org/device",
+                    "interval": 1,
+                    "expires_in": 300,
+                },
+            )
+        return httpx2.Response(
+            200,
+            json={"access_token": access, "refresh_token": "r-1", "expires_in": 300},
+        )
+
+    return handler
+
+
+def test_login_asks_for_offline_access(auth):
+    """The whole point: a refresh token not tied to the SSO session."""
+    seen: list[str] = []
+    auth.login(
+        on_prompt=lambda _d: None,
+        client=_client(_device_flow_handler(seen, device_status=lambda _s: 200)),
+        sleep=lambda _s: None,
+    )
+    assert seen == ["openid offline_access"]
+
+
+def test_login_falls_back_when_the_realm_refuses_offline_access(auth):
+    """★ A realm that does not grant the scope must still be able to log in.
+
+    Raising on `invalid_scope` would turn a convenience into a total outage of
+    the login path — strictly worse than the short session being fixed.
+    """
+    seen: list[str] = []
+    claims = auth.login(
+        on_prompt=lambda _d: None,
+        client=_client(
+            _device_flow_handler(
+                seen,
+                device_status=lambda s: 400 if "offline_access" in s else 200,
+            )
+        ),
+        sleep=lambda _s: None,
+    )
+    assert seen == ["openid offline_access", "openid"]
+    assert claims["preferred_username"] == "alice"
+
+
+def test_a_non_scope_failure_at_the_device_endpoint_is_not_retried(auth):
+    """Only `invalid_scope` is retried. A 500 is not a scope problem, and
+    retrying it would hide a real diagnosis behind a second identical failure.
+    """
+    seen: list[str] = []
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            seen.append("hit")
+            return httpx2.Response(500, json={"error": "server_error"})
+        raise AssertionError("token endpoint must not be reached")
+
+    with pytest.raises(RemoteAuthError):
+        auth.login(
+            on_prompt=lambda _d: None,
+            client=_client(handler),
+            sleep=lambda _s: None,
+        )
+    assert seen == ["hit"], "a non-scope failure must not be retried"
+
+
+def test_an_invalid_scope_body_on_a_500_is_not_retried(auth):
+    """★ The status is part of the test, not just the body.
+
+    RFC 6749 §5.2 defines `invalid_scope` as a 400. A 500 carrying that string
+    is an outage wearing a scope error's clothes — retrying it would contradict
+    the no-retry guarantee and bury the original failure behind an identical
+    second one. Matching on the body alone (the first version of this) passed
+    every other test here, because none of them sent that combination.
+    """
+    seen: list[str] = []
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            seen.append("hit")
+            return httpx2.Response(500, json={"error": "invalid_scope"})
+        raise AssertionError("token endpoint must not be reached")
+
+    with pytest.raises(RemoteAuthError):
+        auth.login(
+            on_prompt=lambda _d: None,
+            client=_client(handler),
+            sleep=lambda _s: None,
+        )
+    assert seen == ["hit"], "invalid_scope on a non-400 must not be retried"

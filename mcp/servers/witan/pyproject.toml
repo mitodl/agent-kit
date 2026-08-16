@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.13.0"
+version = "0.14.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -23,11 +23,24 @@ dependencies = [
   # >=0.13: witan/graph.py imports witan_core.omnigraph.StoreUnavailable at
   # module scope, which 0.12 does not export. A looser floor lets an external
   # install resolve a witan-core the server cannot even import — the failure
-  # this pin exists to prevent, and one it has now hit FOUR times. If you add a
+  # this pin exists to prevent, and one it has now hit FIVE times. If you add a
   # witan_core symbol in the same change as its caller, bump this line in that
   # change: the workspace resolves witan-core by path, so nothing here can
   # catch it.
-  # (>=0.20 for observability.trace_context_middleware, imported by
+  #
+  # ★ THE FIFTH TIME WAS #239, AND IT REACHED A USER. That PR added
+  # `SessionLife` to witan-core and imported it from witan/remote/oidc.py in the
+  # same change, bumping neither witan-core's version nor this floor. The
+  # workspace resolved it by path so every test passed; a `uv tool install`
+  # resolved published witan-core 0.20.0 and `witan login` died at import:
+  #     ImportError: cannot import name 'SessionLife' from
+  #     'witan_core.remote.oidc'
+  # Hence >=0.21 below. Nothing in CI catches this — read the sentence above
+  # before adding a witan_core symbol, because the tests will not tell you.
+  #
+  # (>=0.21 for remote.oidc.SessionLife, imported at module scope by
+  # witan/remote/oidc.py and re-exported in its __all__;
+  # >=0.20 for observability.trace_context_middleware, imported by
   # cli/__init__.py's serve() and passed to FastMCP as ASGI middleware — so an
   # older witan-core fails the import, exactly like every other entry here. It
   # is what adopts the caller's trace context from the HTTP header; without it
@@ -51,7 +64,7 @@ dependencies = [
   # remote.proxy.RemotePayloadTooLarge; >=0.11 for chunking.MCP_LOAD_MAX_BYTES;
   # >=0.10 for witan_core.chunking + load_batch + config_file.resolve_config_path;
   # >=0.9 for observability.middleware; >=0.8 for OmnigraphClient.change_many.)
-  "witan-core[cli,remote,observability]>=0.20,<1",
+  "witan-core[cli,remote,observability]>=0.21,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -96,7 +109,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.13.0"
+current_version = "0.14.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
