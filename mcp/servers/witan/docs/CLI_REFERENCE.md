@@ -61,6 +61,7 @@ server.
 | `--host` | str | `127.0.0.1` | `WITAN_MCP_HOST` | Interface to bind for HTTP transports (`0.0.0.0` inside a container) |
 | `--port` | int | `8000` | `WITAN_MCP_PORT` | Port to bind for HTTP transports |
 | `--path` | str | `/mcp` | `WITAN_MCP_PATH` | URL path the MCP endpoint is served on (HTTP transports only) |
+| `--shutdown-grace-seconds` | float | `120` | `WITAN_MCP_SHUTDOWN_GRACE_SECONDS` | How long the server waits for in-flight requests after `SIGTERM` before dropping them (HTTP transports only). Overrides FastMCP's hardcoded 2s, which is short enough to sever a witan write mid-flight — set it to at least the deployment's termination grace period |
 
 ```bash
 witan serve --transport streamable-http --host 0.0.0.0 --port 8080
