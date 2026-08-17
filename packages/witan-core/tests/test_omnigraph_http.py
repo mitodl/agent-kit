@@ -166,6 +166,30 @@ def err(status: int, message: str, code: str | None = None) -> FakeResponse:
         (409, "some future conflict wording nobody has written yet", ogh.RETRYABLE),
         (500, "manifest table version mismatch", ogh.RETRYABLE),
         (500, "head is ahead of manifest, run omnigraph repair", ogh.NEEDS_REPAIR),
+        # ★ 412 IS THE INVERSE OF THE 409 ABOVE, and the pair is parametrised
+        # together on purpose: they look like the same family and mean opposite
+        # things. 409 = the head moved, re-send. 412 = the condition you stated
+        # is false, do NOT re-send.
+        (412, "precondition_failure", ogh.PRECONDITION_FAILED),
+        (
+            412,
+            "graph commit 01M08E24Y… no longer current",
+            ogh.PRECONDITION_FAILED,
+        ),
+        # The CLI has no status, so the body wording has to carry it too.
+        (200, "precondition_failure {expected: A, actual: B}", ogh.PRECONDITION_FAILED),
+        # ★ NOT EVERY 503 IS "WAIT FOR THE SERVER". This one warns that table
+        # effects may already need recovery, so the blanket UNAVAILABLE retry
+        # would re-apply a partly-present write.
+        (
+            503,
+            "recovery required for operation 01KZY…: pending Load recovery "
+            "operation blocks writes on branch 'main'",
+            ogh.RECOVERY_REQUIRED,
+        ),
+        (503, "recovery_required", ogh.RECOVERY_REQUIRED),
+        # …but a plain 503 still is.
+        (503, "service temporarily overloaded", ogh.UNAVAILABLE),
         # A denial is not a transient condition. Retrying a Cedar denial just
         # burns the budget and reports the same thing 8 attempts later.
         (403, "policy denied action 'change' for unknown actor 'act-x'", ogh.FATAL),
@@ -684,6 +708,108 @@ def test_a_409_over_http_surfaces_as_a_conflict_to_a_cas_caller(
     # ONE attempt. A retry would re-apply the claim over whoever won the race,
     # which is the entire reason `surface_conflict` exists.
     assert len(_fake_http.created[0].requests) == 1
+
+
+def test_a_412_is_terminal_for_an_ordinary_writer(monkeypatch, tmp_path, _fake_http):
+    """★ THE ASYMMETRY THAT MATTERS, and the reason this asserts a COUNT.
+
+    The 409 test below proves a conflict is retried. This proves a precondition
+    failure is NOT — one attempt, then a hard error. Retrying it would re-send a
+    write the server has explicitly told us it will never replay, over whoever
+    won the race.
+
+    Scripting only ONE response is itself part of the assertion: a second
+    attempt would exhaust the script and blow up differently.
+    """
+    _fake_http.script = [err(412, "precondition_failure", code="precondition_failed")]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(RuntimeError, match="must not be retried"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_a_412_surfaces_as_a_conflict_to_a_cas_caller(
+    monkeypatch, tmp_path, _fake_http
+):
+    """`task_claim` catches `OmnigraphConflict` to re-read and answer lost_race.
+
+    A conditional claim that loses must reach that handler, not a bare
+    RuntimeError — same destination as the 409 path, reached from a status that
+    must never be retried.
+    """
+    _fake_http.script = [err(412, "precondition_failure", code="precondition_failed")]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(OmnigraphConflict):
+        client.change("mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=True)
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_recovery_required_retries_on_its_own_budget(monkeypatch, tmp_path, _fake_http):
+    """The branch-wide barrier is transient and self-clearing, so it retries.
+
+    Measured: six concurrent appends to DISTINCT keys leave five losers holding
+    this, and a write issued immediately afterwards succeeds. Classified FATAL
+    (the old behaviour) those five got a permanent-looking error for a condition
+    that clears by itself.
+    """
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(503, "recovery required for operation 01KZY…: pending Load recovery"),
+        ok({"affected_nodes": 1, "affected_edges": 0}),
+    ]
+    # ★ `connect_retry=False` IS WHAT MAKES THIS TEST DISCRIMINATE, and the
+    # first draft of it did not. Classified UNAVAILABLE (the old behaviour) a
+    # 503 ALSO retries, so a plain "did it try twice?" assertion passed with and
+    # without the fix and proved nothing. With connect_retry off, UNAVAILABLE is
+    # downgraded to FATAL and raises on attempt 1, while RECOVERY_REQUIRED keeps
+    # its own budget — so the two now behave differently and the test can tell.
+    client = _client(
+        monkeypatch,
+        "http://host:8080",
+        _mutation_dir(tmp_path),
+        graph_id="council",
+        connect_retry=False,
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 2
+
+
+def test_recovery_required_is_never_a_lost_race(monkeypatch, tmp_path, _fake_http):
+    """★ THE SUBTLE ONE. A CAS caller must NOT read the barrier as losing.
+
+    Five of six concurrent writers to distinct keys get this while contending
+    with nobody. If `surface_conflict` swallowed it, `task_claim` would report
+    `lost_race` to callers that never raced anyone — a confident, wrong answer.
+    So it retries even for a CAS caller, and only a genuine conflict surfaces.
+    """
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(503, "recovery required for operation 01KZY…: pending Load recovery"),
+        ok({"affected_nodes": 1, "affected_edges": 0}),
+    ]
+    client = _client(
+        monkeypatch,
+        "http://host:8080",
+        _mutation_dir(tmp_path),
+        graph_id="council",
+        connect_retry=False,
+    )
+
+    # No OmnigraphConflict: the barrier is not a lost race, so the CAS caller
+    # rides it out and its write lands.
+    client.change("mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=True)
+
+    assert len(_fake_http.created[0].requests) == 2
 
 
 def test_a_409_over_http_is_retried_for_an_ordinary_writer(

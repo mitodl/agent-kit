@@ -99,6 +99,25 @@ _RETRYABLE = (
     "reprepare from the current branch",
 )
 _NEEDS_REPAIR = ("ahead of manifest", "omnigraph repair")
+
+# The CLI's form of the two conditions `classify_status` keys on by status.
+# Prose again, for the same reason as `_RETRYABLE`: `omnigraph` prints the
+# message and throws the response away, so there is no 412 and no 503 to read
+# here — only what it wrote to stderr.
+#
+# ★ ORDER MATTERS AGAINST `_RETRYABLE`, and the two are checked in the order
+# declared in `_classify_cli_error`. A precondition failure must be recognised
+# BEFORE the retryable markers: it is terminal, and letting a conflict-ish word
+# in the same message win would retry a write the server has told us not to
+# replay. See `_http.PRECONDITION_FAILED` for why 409 and 412 are opposites.
+_PRECONDITION_FAILED = ("precondition_failure", "precondition failed")
+
+# The branch-wide write barrier. Both spellings observed in one local repro,
+# 2026-08-13: "pending Load recovery operation blocks writes on branch 'main'"
+# and "… blocks the synchronous write/control recovery barrier (tables
+# node:ClaimRow); reopen the graph read-write before retrying". Matching the
+# stem they share rather than either sentence.
+_RECOVERY_REQUIRED = ("recovery required", "recovery_required")
 _MAX_ATTEMPTS = 8
 
 # omnigraph uses strict single-version storage: a release that bumps the
@@ -128,6 +147,21 @@ _ADMISSION_CAP_MARKERS = ("in-flight count cap", "byte budget exceeded")
 _ADMISSION_CAP_MAX_ATTEMPTS = 6
 _ADMISSION_CAP_BASE_DELAY = 0.25
 _ADMISSION_CAP_MAX_DELAY = 4.0
+
+# Budget for the branch-wide recovery barrier (see _RECOVERY_REQUIRED). Modelled
+# on the admission cap because it is the same species — the store telling us to
+# come back — and deliberately SHORTER, because the measured barrier is brief:
+# in the 2026-08-13 repro a plain write issued immediately after the losing race
+# succeeded, so the condition clears in well under a second rather than needing
+# a restart-length window like _UNAVAILABLE_MAX_WAIT.
+#
+# Sized so the whole sequence (0.2 + 0.4 + 0.8 + 1.6 + 3.2, capped) stays around
+# 6s: long enough to ride out a barrier raised by a concurrent writer, short
+# enough that a genuinely stuck branch is reported rather than slept through
+# while the caller's deadline burns.
+_RECOVERY_MAX_ATTEMPTS = 6
+_RECOVERY_BASE_DELAY = 0.2
+_RECOVERY_MAX_DELAY = 3.2
 
 # How long one remote call has, end to end, before something ABOVE this library
 # stops waiting for it. witan-core does not know that number and must not
@@ -456,6 +490,12 @@ def _classify_cli_error(stderr: str) -> str:
         return _http.UNAVAILABLE
     if any(m in lowered for m in _ADMISSION_CAP_MARKERS):
         return _http.ADMISSION_CAP
+    # Ahead of _RETRYABLE deliberately — see _PRECONDITION_FAILED. Terminal
+    # beats retryable when a message could be read as either.
+    if any(m in lowered for m in _PRECONDITION_FAILED):
+        return _http.PRECONDITION_FAILED
+    if any(m in lowered for m in _RECOVERY_REQUIRED):
+        return _http.RECOVERY_REQUIRED
     if any(m in lowered for m in _NEEDS_REPAIR):
         return _http.NEEDS_REPAIR
     if any(m in lowered for m in _RETRYABLE):
@@ -911,6 +951,10 @@ def _admission_cap_backoff(attempt: int) -> float:
 
 def _unavailable_backoff(attempt: int) -> float:
     return _jittered_backoff(attempt, _UNAVAILABLE_BASE_DELAY, _UNAVAILABLE_MAX_DELAY)
+
+
+def _recovery_backoff(attempt: int) -> float:
+    return _jittered_backoff(attempt, _RECOVERY_BASE_DELAY, _RECOVERY_MAX_DELAY)
 
 
 # ── Re-entrant per-store write lock ───────────────────────────────
@@ -1637,6 +1681,7 @@ class OmnigraphClient:
         try:
             attempt = 0
             admission_cap_attempt = 0
+            recovery_attempt = 0
             unavailable_attempt = 0
             unavailable_started: float | None = None
             while True:
@@ -1755,6 +1800,48 @@ class OmnigraphClient:
                         f"omnigraph {label} failed after "
                         f"{_ADMISSION_CAP_MAX_ATTEMPTS} attempts (actor "
                         f"admission cap exceeded):\n{err.strip()}"
+                    )
+                if kind == _http.RECOVERY_REQUIRED:
+                    # The branch-wide write barrier: transient, self-clearing,
+                    # and NOT a conflict over this write. Its own budget, like
+                    # the admission cap — it neither consumes _MAX_ATTEMPTS nor
+                    # honours surface_conflict.
+                    #
+                    # ★ THE surface_conflict EXEMPTION IS THE SUBTLE PART. A CAS
+                    # caller must lose a GENUINE race, not mistake a bystander
+                    # barrier for one: five of six concurrent writers to
+                    # DISTINCT keys get this, so treating it as a lost race
+                    # would have `task_claim` report `lost_race` to callers
+                    # that never contended with anyone. Retrying is right
+                    # precisely because nothing was written and the barrier
+                    # clears on its own.
+                    recovery_attempt += 1
+                    if recovery_attempt < _RECOVERY_MAX_ATTEMPTS:
+                        time.sleep(_recovery_backoff(recovery_attempt))
+                        continue
+                    raise RuntimeError(
+                        f"omnigraph {label} failed after {_RECOVERY_MAX_ATTEMPTS} "
+                        f"attempts — a recovery barrier on the branch kept "
+                        f"blocking the write. Nothing was written:\n{err.strip()}"
+                    )
+                if kind == _http.PRECONDITION_FAILED:
+                    # TERMINAL. The caller stated a precondition and it was
+                    # false, so re-sending this exact write is never right —
+                    # upstream never replays it either. A CAS caller still gets
+                    # `OmnigraphConflict` so `task_claim` can re-read and answer
+                    # `lost_race`; everyone else gets a hard error rather than
+                    # a silent retry over the winner.
+                    #
+                    # Note this raises on the FIRST attempt in both branches: it
+                    # does not fall through to the retry counter below, which is
+                    # the difference between this and a 409.
+                    if surface_conflict:
+                        raise OmnigraphConflict(err.strip()) from None
+                    raise RuntimeError(
+                        f"omnigraph {label} was refused because its stated "
+                        f"precondition no longer held — the graph moved since "
+                        f"you read it. NOTHING WAS WRITTEN, and this write must "
+                        f"not be retried as-is; re-read and decide:\n{err.strip()}"
                     )
                 if surface_conflict and kind == _http.RETRYABLE:
                     # A compare-and-swap caller wants to lose the race, not

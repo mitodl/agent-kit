@@ -60,6 +60,45 @@ NEEDS_REPAIR = "needs_repair"
 FATAL = "fatal"
 OK = "ok"
 
+#: A conditional write whose stated precondition was false — omnigraph's
+#: ``/mutate/if-graph-commit`` answering 412, or the CLI's ``--if-commit``
+#: exiting 4 (upstream #470).
+#:
+#: ★ TERMINAL, AND DELIBERATELY NOT :data:`RETRYABLE`, WHICH IS THE WHOLE POINT
+#: OF GIVING IT ITS OWN NAME. 409 and 412 look like the same family and mean
+#: opposite things:
+#:
+#:     409  the branch head moved under you. Nothing was written. Try again —
+#:          the same write is still what you want.
+#:     412  the precondition YOU STATED is false. Nothing was written. Do NOT
+#:          re-send this write; re-read and decide what you now want.
+#:
+#: Retrying a 412 re-applies a claim over whoever won the race, which is the
+#: exact failure ``surface_conflict`` exists to prevent. Upstream is explicit
+#: that it "is never replayed by the insert-only reprepare loop", and this
+#: classification is what makes that true on our side too.
+PRECONDITION_FAILED = "precondition_failed"
+
+#: The branch-wide write barrier: "recovery required for operation …: pending
+#: Load recovery operation blocks writes on branch 'main'".
+#:
+#: Transient and self-clearing — reproduced locally in ~20s with six concurrent
+#: single-row appends to DISTINCT keys, where five losers got this and a plain
+#: write issued immediately afterwards succeeded with no ``omnigraph repair``
+#: and no intervention. So it is the store saying "come back", the same species
+#: as the admission cap, and it gets its own budget for the same reason.
+#:
+#: ★ NOT :data:`NEEDS_REPAIR`. Running ``omnigraph repair --force`` on a store
+#: that merely had a concurrent writer is a far heavier hammer than the
+#: situation warrants, and the repro showed nothing needed repairing.
+#:
+#: ★ AND NOT SOMETHING ``surface_conflict`` MAY SWALLOW. A CAS caller must lose
+#: a GENUINE race rather than treat a bystander barrier as a lost race — this
+#: is a different condition from the conflict that primitive exists for, and
+#: collapsing them would make a claim report ``lost_race`` to a caller that
+#: never actually contended with anyone.
+RECOVERY_REQUIRED = "recovery_required"
+
 # A pooled connection idle longer than this is closed and reopened rather than
 # reused. It is not a performance knob — it is what keeps the connect-failure
 # classification honest.
@@ -144,12 +183,33 @@ def classify_status(status: int, message: str) -> str:
     """
     if status == 429:
         return ADMISSION_CAP
+    lowered = message.lower()
+    if status == 412 or "precondition_failure" in lowered:
+        # See PRECONDITION_FAILED: terminal, and the inverse of the 409 rule
+        # further down. Checked BEFORE the message markers because a
+        # precondition failure is not up for reinterpretation by prose — the
+        # server has told us our stated condition was false, and no wording
+        # makes that retryable.
+        return PRECONDITION_FAILED
     if status == 503:
+        # ★ NOT EVERY 503 IS "WAIT FOR THE SERVER". The blanket rule below rests
+        # on a premise this one breaks: that a 503 proves the request was
+        # rejected rather than applied. `recovery_required` carries the
+        # opposite warning — upstream #470 says "table effects may already
+        # require recovery" — so retrying it for the full unavailable budget
+        # could re-apply a write whose effects are partly present. That is the
+        # indeterminate write this project spent four defects removing,
+        # arriving through the status code we trust most.
+        #
+        # It gets its own kind and its own budget instead: transient and
+        # self-clearing (see RECOVERY_REQUIRED), but not a plain "server is
+        # down", and never surfaced to a CAS caller as a lost race.
+        if "recovery required" in lowered or "recovery_required" in lowered:
+            return RECOVERY_REQUIRED
         # The server is up enough to answer but not to serve. Same remedy as an
         # unreachable server (wait for it), and the response proves the request
         # was rejected rather than applied, so it is safe for writes too.
         return UNAVAILABLE
-    lowered = message.lower()
     if any(marker in lowered for marker in ("ahead of manifest", "omnigraph repair")):
         return NEEDS_REPAIR
     if any(
