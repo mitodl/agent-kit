@@ -639,6 +639,75 @@ def test_change_posts_to_mutate(monkeypatch, tmp_path, _fake_http):
     assert json.loads(request["body"])["params"] == {"slug": "a"}
 
 
+# ── the seam: a real 409 response all the way out to OmnigraphConflict ───
+
+# What omnigraph-server actually returns to a racing writer, captured from a QA
+# `task_claim` race on 2026-08-17.
+_WRITE_AUTHORITY_409 = (
+    "write authority 'graph_head:main' changed during preparation "
+    "(expected 01M08E24Y2WWC3QVE9MD3K6CWN, current 01M08E27K5J56HF8QZ7GX61X3F) "
+    "— reprepare from the current branch state"
+)
+
+
+def _mutation_dir(tmp_path):
+    (tmp_path / "mutations.gq").write_text(
+        "query claim($slug: String) {\n    insert Task { slug: $slug }\n}\n"
+    )
+    return tmp_path
+
+
+def test_a_409_over_http_surfaces_as_a_conflict_to_a_cas_caller(
+    monkeypatch, tmp_path, _fake_http
+):
+    """★ THE TEST THE DEFECT SLIPPED THROUGH, and the reason it is here rather
+    than beside the classifier unit tests.
+
+    `classify_status` was tested alone, and `task_claim`'s conflict handling was
+    tested alone by RAISING `OmnigraphConflict` directly (see
+    `test_claim_conflict_reports_lost_race_without_clobber` in the witan suite).
+    Both passed throughout. Nothing exercised the JOIN — whether a real 409
+    response ever becomes that exception — so a 409 classified FATAL left every
+    compare-and-swap caller unreachable while its own tests stayed green.
+
+    This drives the whole path: HTTP 409 -> classify_status -> _retry_loop ->
+    OmnigraphConflict, over the transport the DEPLOYED service actually uses.
+    """
+    _fake_http.script = [err(409, _WRITE_AUTHORITY_409, code="conflict")]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(OmnigraphConflict, match="write authority"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=True)
+
+    # ONE attempt. A retry would re-apply the claim over whoever won the race,
+    # which is the entire reason `surface_conflict` exists.
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_a_409_over_http_is_retried_for_an_ordinary_writer(
+    monkeypatch, tmp_path, _fake_http
+):
+    """The non-CAS half, which is the larger blast radius.
+
+    Every plain `memory_store` that merely lost a race died outright where one
+    retry would have committed. Classified retryable, the second attempt lands.
+    """
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(409, _WRITE_AUTHORITY_409, code="conflict"),
+        ok({"affected_nodes": 1, "affected_edges": 0}),
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 2
+
+
 def test_change_many_sends_one_composed_request(monkeypatch, tmp_path, _fake_http):
     """One commit per batch is the property that keeps the store from
     fragmenting; the transport must not undo it by splitting the batch."""
