@@ -176,8 +176,13 @@ def err(status: int, message: str, code: str | None = None) -> FakeResponse:
             "graph commit 01M08E24Y… no longer current",
             ogh.PRECONDITION_FAILED,
         ),
-        # The CLI has no status, so the body wording has to carry it too.
-        (200, "precondition_failure {expected: A, actual: B}", ogh.PRECONDITION_FAILED),
+        # A 4xx/5xx carrying the wording but not the status — the server is
+        # entitled to reword, and the body is a second, independent signal.
+        # (NOT a 200: `_send` returns OK for any 2xx without ever consulting
+        # this function, so a 200 case here would test an unreachable path and
+        # say nothing about the CLI classifier, which lives in omnigraph.py and
+        # is covered in test_omnigraph.py.)
+        (500, "precondition_failure {expected: A, actual: B}", ogh.PRECONDITION_FAILED),
         # ★ NOT EVERY 503 IS "WAIT FOR THE SERVER". This one warns that table
         # effects may already need recovery, so the blanket UNAVAILABLE retry
         # would re-apply a partly-present write.
@@ -830,63 +835,83 @@ def test_a_412_surfaces_as_a_conflict_to_a_cas_caller(
     assert len(_fake_http.created[0].requests) == 1
 
 
-def test_recovery_required_retries_on_its_own_budget(monkeypatch, tmp_path, _fake_http):
-    """The branch-wide barrier is transient and self-clearing, so it retries.
+def test_recovery_required_on_a_write_is_indeterminate_and_terminal(
+    monkeypatch, tmp_path, _fake_http
+):
+    """★ ONE SIGNAL COVERS TWO CONDITIONS, SO THE WRITE STOPS.
 
-    Measured: six concurrent appends to DISTINCT keys leave five losers holding
-    this, and a write issued immediately afterwards succeeds. Classified FATAL
-    (the old behaviour) those five got a permanent-looking error for a condition
-    that clears by itself.
+    `recovery_required` is both an effect-free bystander barrier (measured: six
+    concurrent appends to DISTINCT keys, five losers, a write immediately after
+    succeeds) AND a request whose table effects may already have landed
+    (upstream #470). Nothing on the wire separates them.
+
+    An earlier version of this code retried it on a short budget. That was
+    wrong, and shortening the budget was the tell: it narrows the window in
+    which a duplicate is created after recovery rolls the original forward
+    rather than closing it. Scripting only ONE response is part of the
+    assertion — a retry would exhaust the script.
     """
     monkeypatch.setattr(og.time, "sleep", lambda *_: None)
     _fake_http.script = [
-        err(503, "recovery required for operation 01KZY…: pending Load recovery"),
-        ok({"affected_nodes": 1, "affected_edges": 0}),
+        err(503, "recovery required for operation 01KZY…: pending Load recovery")
     ]
-    # ★ `connect_retry=False` IS WHAT MAKES THIS TEST DISCRIMINATE, and the
-    # first draft of it did not. Classified UNAVAILABLE (the old behaviour) a
-    # 503 ALSO retries, so a plain "did it try twice?" assertion passed with and
-    # without the fix and proved nothing. With connect_retry off, UNAVAILABLE is
-    # downgraded to FATAL and raises on attempt 1, while RECOVERY_REQUIRED keeps
-    # its own budget — so the two now behave differently and the test can tell.
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(og.WriteIndeterminate, match="INDETERMINATE"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_recovery_required_on_a_write_is_never_a_lost_race(
+    monkeypatch, tmp_path, _fake_http
+):
+    """★ AND IT IS STILL NOT A CONFLICT, even though it is now terminal.
+
+    The barrier fires for writers contending with nobody, so a CAS caller must
+    NOT receive `OmnigraphConflict` here — `task_claim` would answer
+    `lost_race` to someone who never raced anyone, which is a confident wrong
+    answer and worse than an error. It gets the indeterminate error like any
+    other writer.
+    """
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(503, "recovery required for operation 01KZY…: pending Load recovery")
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(og.WriteIndeterminate):
+        client.change("mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=True)
+
+
+def test_recovery_required_on_a_read_still_retries(monkeypatch, tmp_path, _fake_http):
+    """A read cannot duplicate anything, and the barrier does clear itself.
+
+    ★ `connect_retry=False` IS WHAT MAKES THIS DISCRIMINATE, and the first draft
+    did not. Classified UNAVAILABLE (the old behaviour) a 503 ALSO retries, so a
+    plain "did it try twice?" passed with and without the change. With
+    connect_retry off, UNAVAILABLE degrades to FATAL and raises on attempt 1,
+    while RECOVERY_REQUIRED keeps its budget — so the two diverge.
+    """
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
+    _fake_http.script = [
+        err(503, "recovery required for operation 01KZY…: pending Load recovery"),
+        ok({"rows": [{"m.slug": "a"}]}),
+    ]
     client = _client(
         monkeypatch,
         "http://host:8080",
-        _mutation_dir(tmp_path),
+        tmp_path,
         graph_id="council",
         connect_retry=False,
     )
 
-    client.change("mutations.gq", "claim", {"slug": "t-1"})
-
-    assert len(_fake_http.created[0].requests) == 2
-
-
-def test_recovery_required_is_never_a_lost_race(monkeypatch, tmp_path, _fake_http):
-    """★ THE SUBTLE ONE. A CAS caller must NOT read the barrier as losing.
-
-    Five of six concurrent writers to distinct keys get this while contending
-    with nobody. If `surface_conflict` swallowed it, `task_claim` would report
-    `lost_race` to callers that never raced anyone — a confident, wrong answer.
-    So it retries even for a CAS caller, and only a genuine conflict surfaces.
-    """
-    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
-    _fake_http.script = [
-        err(503, "recovery required for operation 01KZY…: pending Load recovery"),
-        ok({"affected_nodes": 1, "affected_edges": 0}),
-    ]
-    client = _client(
-        monkeypatch,
-        "http://host:8080",
-        _mutation_dir(tmp_path),
-        graph_id="council",
-        connect_retry=False,
-    )
-
-    # No OmnigraphConflict: the barrier is not a lost race, so the CAS caller
-    # rides it out and its write lands.
-    client.change("mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=True)
-
+    assert client.read("read.gq", "find_memory", {"slug": "a"}) == [{"slug": "a"}]
     assert len(_fake_http.created[0].requests) == 2
 
 

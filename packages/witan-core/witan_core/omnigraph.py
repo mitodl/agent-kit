@@ -1048,6 +1048,42 @@ class OmnigraphConflict(RuntimeError):
     can re-read and decide (see ``task_claim``)."""
 
 
+class WriteIndeterminate(RuntimeError):
+    """A write whose outcome CANNOT BE DETERMINED from the response.
+
+    Raised for `recovery_required` on a write. The store is telling us a
+    recovery operation is outstanding on the branch, and upstream #470 is
+    explicit that the request's "table effects may already require recovery" —
+    so this request may have landed, wholly or partly, and the response does
+    not say which.
+
+    ★ WHY THIS IS TERMINAL RATHER THAN RETRIED, WHICH IS A REVERSAL. An earlier
+    version of this code retried it on a short budget, reasoning from a 0.9.0
+    repro where the same message was a purely transient BYSTANDER BARRIER: six
+    concurrent appends to distinct keys, five losers, and a write issued
+    immediately afterwards succeeded with nothing to repair. That reading is not
+    wrong — it is just not the ONLY thing this response means, and the two are
+    indistinguishable on the wire.
+
+    Given one signal covering both an effect-free barrier and a possibly-applied
+    write, a shorter retry window does not make the retry safe: it only narrows
+    the window in which a duplicate is created after recovery rolls the original
+    forward. So a write stops here and says so, and the caller re-reads.
+
+    A READ carrying the same condition is still retried — repeating a query
+    cannot duplicate anything, and the barrier does clear on its own.
+
+    ★ AND IT IS NOT A `surface_conflict` OUTCOME. A CAS caller must lose a
+    GENUINE race, and this is not evidence of one: the barrier fires for writers
+    contending with nobody. Reporting it as `lost_race` would be a confident
+    wrong answer, which is worse than an error the caller can see.
+
+    Sibling of the transport-level indeterminacy the proxy already raises for a
+    502 — same species of unknowable outcome, same advice: re-read before
+    retrying, because retrying blind writes it twice if it did land.
+    """
+
+
 class WriteQueueFull(RuntimeError):
     """This process already has as many writes in flight against one graph as the
     graph can serve inside the caller's deadline, and the wait for a slot expired.
@@ -1880,19 +1916,31 @@ class OmnigraphClient:
                         f"admission cap exceeded):\n{err.strip()}"
                     )
                 if kind == _http.RECOVERY_REQUIRED:
-                    # The branch-wide write barrier: transient, self-clearing,
-                    # and NOT a conflict over this write. Its own budget, like
-                    # the admission cap — it neither consumes _MAX_ATTEMPTS nor
-                    # honours surface_conflict.
+                    # ★ A WRITE STOPS HERE. See `WriteIndeterminate`: this one
+                    # response covers both an effect-free bystander barrier and
+                    # a request whose table effects may already have landed, and
+                    # nothing on the wire separates them. Retrying the ambiguous
+                    # case duplicates the mutation once recovery rolls the
+                    # original forward, and a shorter budget only shrinks the
+                    # window in which that happens rather than closing it.
                     #
-                    # ★ THE surface_conflict EXEMPTION IS THE SUBTLE PART. A CAS
-                    # caller must lose a GENUINE race, not mistake a bystander
-                    # barrier for one: five of six concurrent writers to
-                    # DISTINCT keys get this, so treating it as a lost race
-                    # would have `task_claim` report `lost_race` to callers
-                    # that never contended with anyone. Retrying is right
-                    # precisely because nothing was written and the barrier
-                    # clears on its own.
+                    # Deliberately NOT honouring surface_conflict either: the
+                    # barrier fires for writers contending with nobody, so
+                    # reporting it as a lost race would be a confident wrong
+                    # answer.
+                    if is_write:
+                        raise WriteIndeterminate(
+                            f"omnigraph {label} hit a recovery barrier on the "
+                            f"branch. ITS OUTCOME IS INDETERMINATE — the write "
+                            f"may already have landed, wholly or partly, and "
+                            f"the response does not say which. Re-read before "
+                            f"retrying; retrying blind writes it twice if it "
+                            f"did land:\n{err.strip()}"
+                        ) from None
+                    # A READ is safe to repeat, and the barrier does clear on
+                    # its own — measured self-clearing in under a second. Its
+                    # own budget, like the admission cap: neither consumes
+                    # _MAX_ATTEMPTS.
                     recovery_attempt += 1
                     if recovery_attempt < _RECOVERY_MAX_ATTEMPTS:
                         time.sleep(_recovery_backoff(recovery_attempt))
@@ -1900,7 +1948,7 @@ class OmnigraphClient:
                     raise RuntimeError(
                         f"omnigraph {label} failed after {_RECOVERY_MAX_ATTEMPTS} "
                         f"attempts — a recovery barrier on the branch kept "
-                        f"blocking the write. Nothing was written:\n{err.strip()}"
+                        f"blocking the read:\n{err.strip()}"
                     )
                 if kind == _http.PRECONDITION_FAILED:
                     # TERMINAL. The caller stated a precondition and it was

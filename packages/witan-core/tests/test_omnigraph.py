@@ -430,6 +430,79 @@ def test_surface_conflict_loses_the_race_on_a_write_authority_conflict(monkeypat
     assert calls["n"] == 1
 
 
+# The CLI's own wording for the two conditions `classify_status` keys on by
+# status. `omnigraph` prints the message and discards the response, so on this
+# path the prose is the ONLY signal — which is exactly why these need their own
+# tests rather than being assumed covered by the HTTP ones.
+_PRECONDITION_STDERR = (
+    "omnigraph mutate failed:\n"
+    "precondition_failure {expected: 01M08E24Y2WWC3QVE9MD3K6CWN, "
+    "actual: 01M08E27K5J56HF8QZ7GX61X3F}"
+)
+_RECOVERY_STDERR = (
+    "omnigraph mutate failed:\n"
+    "recovery required for operation 01KZY7Q0J2: pending Load recovery "
+    "operation blocks writes on branch 'main'"
+)
+
+
+def test_cli_precondition_failure_is_terminal(monkeypatch):
+    """★ THE CLI PATH HAS NO STATUS TO READ, so this is the only thing standing
+    between a 412-equivalent and the retry loop.
+
+    One attempt, then a hard error. A retry here re-sends a write the server has
+    told us it will never replay, over whoever won the race.
+    """
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_PRECONDITION_STDERR)
+
+    with pytest.raises(RuntimeError, match="must not be retried"):
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert calls["n"] == 1
+
+
+def test_cli_precondition_failure_surfaces_conflict_to_a_cas_caller(monkeypatch):
+    """A conditional claim losing on the CLI path must still reach
+    `task_claim`'s handler as `OmnigraphConflict`, not a bare RuntimeError."""
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_PRECONDITION_STDERR)
+
+    with pytest.raises(OmnigraphConflict, match="precondition_failure"):
+        client._execute(
+            ["omnigraph", "mutate"], "mutate", is_write=True, surface_conflict=True
+        )
+    assert calls["n"] == 1
+
+
+def test_cli_recovery_required_on_a_write_is_indeterminate(monkeypatch):
+    """The branch-wide barrier, on the path where only the prose identifies it.
+
+    Terminal for a write, and typed: the outcome genuinely is unknown, so the
+    caller must re-read rather than be handed a retry that might duplicate.
+    """
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_RECOVERY_STDERR)
+
+    with pytest.raises(og.WriteIndeterminate, match="INDETERMINATE"):
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert calls["n"] == 1
+
+
+def test_cli_recovery_required_on_a_read_retries(monkeypatch):
+    """…but a read repeats harmlessly, and the barrier does clear on its own.
+
+    Classified FATAL (the behaviour before this change) a reader caught behind
+    someone else's barrier got a permanent-looking error for a condition that
+    resolves in under a second.
+    """
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_RECOVERY_STDERR)
+
+    with pytest.raises(RuntimeError):
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+    assert calls["n"] > 1
+
+
 def test_write_authority_conflict_is_retried_when_not_surfaced(monkeypatch):
     """An ordinary writer that merely lost a race should try again, not die.
 

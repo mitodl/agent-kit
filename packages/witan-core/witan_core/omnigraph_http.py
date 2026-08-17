@@ -82,21 +82,32 @@ PRECONDITION_FAILED = "precondition_failed"
 #: The branch-wide write barrier: "recovery required for operation …: pending
 #: Load recovery operation blocks writes on branch 'main'".
 #:
-#: Transient and self-clearing — reproduced locally in ~20s with six concurrent
-#: single-row appends to DISTINCT keys, where five losers got this and a plain
-#: write issued immediately afterwards succeeded with no ``omnigraph repair``
-#: and no intervention. So it is the store saying "come back", the same species
-#: as the admission cap, and it gets its own budget for the same reason.
+#: ★ ONE SIGNAL, TWO CONDITIONS, AND THE CLIENT CANNOT TELL THEM APART. That
+#: ambiguity is the whole reason this has its own name, and it is why a WRITE
+#: carrying it is terminal rather than retried:
+#:
+#:   * an effect-free BYSTANDER BARRIER — reproduced locally in ~20s with six
+#:     concurrent single-row appends to DISTINCT keys, where five losers got
+#:     this and a write issued immediately afterwards succeeded with no
+#:     ``omnigraph repair`` and no intervention; and
+#:   * a request whose TABLE EFFECTS MAY ALREADY HAVE LANDED — upstream #470 is
+#:     explicit that a foreign writer winning after local arbitration returns
+#:     this, "not a false 412", with recovery outstanding.
+#:
+#: A shorter retry budget does not make the second case safe. It only narrows
+#: the window in which a duplicate mutation is created once recovery rolls the
+#: original operation forward. So ``_retry_loop`` raises
+#: :class:`~witan_core.omnigraph.WriteIndeterminate` for a write and lets the
+#: caller re-read, and retries only READS, which cannot duplicate anything.
 #:
 #: ★ NOT :data:`NEEDS_REPAIR`. Running ``omnigraph repair --force`` on a store
 #: that merely had a concurrent writer is a far heavier hammer than the
 #: situation warrants, and the repro showed nothing needed repairing.
 #:
 #: ★ AND NOT SOMETHING ``surface_conflict`` MAY SWALLOW. A CAS caller must lose
-#: a GENUINE race rather than treat a bystander barrier as a lost race — this
-#: is a different condition from the conflict that primitive exists for, and
-#: collapsing them would make a claim report ``lost_race`` to a caller that
-#: never actually contended with anyone.
+#: a GENUINE race rather than treat a bystander barrier as a lost race — the
+#: barrier fires for writers contending with nobody, so reporting ``lost_race``
+#: there would be a confident wrong answer.
 RECOVERY_REQUIRED = "recovery_required"
 
 #: The conditional-write precondition header (upstream #470). Sent raw and
@@ -205,14 +216,13 @@ def classify_status(status: int, message: str) -> str:
         # on a premise this one breaks: that a 503 proves the request was
         # rejected rather than applied. `recovery_required` carries the
         # opposite warning — upstream #470 says "table effects may already
-        # require recovery" — so retrying it for the full unavailable budget
-        # could re-apply a write whose effects are partly present. That is the
-        # indeterminate write this project spent four defects removing,
-        # arriving through the status code we trust most.
+        # require recovery" — so retrying it could re-apply a write whose
+        # effects are partly present. That is the indeterminate write this
+        # project spent four defects removing, arriving through the status code
+        # we trust most.
         #
-        # It gets its own kind and its own budget instead: transient and
-        # self-clearing (see RECOVERY_REQUIRED), but not a plain "server is
-        # down", and never surfaced to a CAS caller as a lost race.
+        # It gets its own kind so `_retry_loop` can act on that distinction:
+        # terminal for a write, retried for a read. See RECOVERY_REQUIRED.
         if "recovery required" in lowered or "recovery_required" in lowered:
             return RECOVERY_REQUIRED
         # The server is up enough to answer but not to serve. Same remedy as an
