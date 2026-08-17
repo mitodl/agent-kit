@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.16.0"
+version = "0.16.1"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -64,7 +64,28 @@ dependencies = [
   # remote.proxy.RemotePayloadTooLarge; >=0.11 for chunking.MCP_LOAD_MAX_BYTES;
   # >=0.10 for witan_core.chunking + load_batch + config_file.resolve_config_path;
   # >=0.9 for observability.middleware; >=0.8 for OmnigraphClient.change_many.)
-  "witan-core[cli,remote,observability]>=0.21,<1",
+  #
+  # ★ >=0.22 IS THE FIRST BEHAVIOURAL FLOOR HERE, and it deliberately widens the
+  # rule stated above. Every entry before it is an IMPORT floor: an older
+  # witan-core fails to load and the failure is loud. This one imports fine and
+  # is wrong quietly, which is why it is called out rather than appended to the
+  # list.
+  #
+  # 0.22 makes an HTTP 409 (and the CLI's write-authority conflict) RETRYABLE.
+  # `_retry_loop` raises `OmnigraphConflict` only for that classification, and
+  # `task_claim` catches exactly that exception to re-read and answer
+  # `{"claimed": false, "reason": "lost_race"}`. On 0.21 the classification is
+  # FATAL, so that branch is unreachable and this package's DOCUMENTED CONTRACT
+  # — a structured refusal, which ADR-0003 has parallel agents rely on — is
+  # silently not honoured: measured at 6 of 8 racers getting an opaque
+  # RuntimeError instead. Mutual exclusion still holds either way; what breaks
+  # is the answer the losers get.
+  #
+  # So the floor is not "released alongside" bookkeeping: a published
+  # witan-council on 0.21 ships a task_claim that cannot keep its promise.
+  # Maintainer decision 2026-08-17 to pin it rather than let an external install
+  # resolve that pair.
+  "witan-core[cli,remote,observability]>=0.22,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -109,7 +130,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.16.0"
+current_version = "0.16.1"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
