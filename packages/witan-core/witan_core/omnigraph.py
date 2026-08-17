@@ -1120,6 +1120,31 @@ class OmnigraphClient:
 
     # ── Public API ────────────────────────────────────────────────
 
+    def read_with_commit(
+        self,
+        query_file: str,
+        query_name: str,
+        params: dict,
+    ) -> tuple[list[dict], str | None]:
+        """:meth:`read`, plus the ``graph_commit_id`` its rows were read at.
+
+        That token is the input to :meth:`change`'s ``if_commit``: it names the
+        branch head this snapshot came from, so a later write can demand the
+        head has not moved since. Read and write have to come from the SAME
+        snapshot for the pair to mean anything, which is why this returns both
+        together rather than offering a separate "what is the head now" call —
+        a head fetched independently is already stale by construction.
+
+        ``None`` when the server did not supply one: a pre-#470 omnigraph, or
+        the CLI path, which prints rows and discards the envelope. A caller must
+        treat ``None`` as "no precondition available" and fall back to the
+        best-effort path rather than passing it on — ``if_commit=None`` means an
+        UNCONDITIONAL write, which is exactly what you did not ask for.
+        """
+        rows, envelope = self._read_rows(query_file, query_name, params)
+        commit = envelope.get("graph_commit_id") if isinstance(envelope, dict) else None
+        return rows, commit
+
     def read(
         self,
         query_file: str,
@@ -1127,6 +1152,22 @@ class OmnigraphClient:
         params: dict,
     ) -> list[dict]:
         """Run a named read query. Returns a list of result rows."""
+        return self._read_rows(query_file, query_name, params)[0]
+
+    def _read_rows(
+        self,
+        query_file: str,
+        query_name: str,
+        params: dict,
+    ) -> tuple[list[dict], dict | None]:
+        """The shared read path: rows, plus the response envelope they came in.
+
+        One implementation behind both :meth:`read` and
+        :meth:`read_with_commit` on purpose — the alias-stripping and the
+        0.7.0-envelope handling below are exactly the kind of parsing that
+        drifts when it is copied, and a drift here would show up as a read that
+        works on one path and silently returns different keys on the other.
+        """
         transport = self._http_transport()
         if transport is not None:
             # The server answers with the same JSON body the CLI prints on
@@ -1152,15 +1193,17 @@ class OmnigraphClient:
                 "json",
             )
         if not result.strip():
-            return []
+            return [], None
         try:
             parsed = json.loads(result)
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"omnigraph returned non-JSON: {result!r}") from exc
         # v0.7.0 wraps results in {rows: [...], columns: [...], ...}
+        envelope = parsed if isinstance(parsed, dict) else None
         rows = parsed.get("rows", parsed) if isinstance(parsed, dict) else parsed
         # strip alias prefixes: "p.slug" → "slug"
-        return [{k.split(".", 1)[-1]: v for k, v in row.items()} for row in rows]
+        stripped = [{k.split(".", 1)[-1]: v for k, v in row.items()} for row in rows]
+        return stripped, envelope
 
     def change(
         self,
@@ -1169,6 +1212,7 @@ class OmnigraphClient:
         params: dict,
         *,
         surface_conflict: bool = False,
+        if_commit: str | None = None,
     ) -> None:
         """Run a named mutation query.
 
@@ -1180,6 +1224,24 @@ class OmnigraphClient:
         optimistic-concurrency conflict instead of transparently retrying the
         write. Callers implementing a compare-and-swap (e.g. ``task_claim``) need
         this so a lost race is detectable rather than silently clobbered.
+
+        ``if_commit``: a ``graph_commit_id`` from :meth:`read_with_commit`. The
+        write applies ONLY while that branch head is still current; otherwise it
+        is refused, terminally, having changed nothing.
+
+        ★ THE TWO ARE COMPLEMENTARY, NOT ALTERNATIVES, and a CAS caller wants
+        both. ``if_commit`` is what makes losing a race a FACT rather than an
+        inference — without it the claim path is read, write, re-read and hope.
+        ``surface_conflict`` is what turns that fact into an
+        :class:`OmnigraphConflict` the caller can catch instead of a hard error.
+
+        ★ AND ``if_commit`` IS COARSE. The precondition is the whole branch
+        head, not this row: ANY concurrent write to the graph invalidates the
+        token, so a rival claim and an unrelated ``memory_store`` are
+        indistinguishable. That makes false conflicts a function of total write
+        traffic rather than of contention on what you are claiming. It is still
+        worth having — a refusal is now truthful — but a caller must expect to
+        re-read and retry more often than the contention alone would suggest.
         """
         if self.guard is not None:
             params = self.guard(query_name, params)
@@ -1192,8 +1254,10 @@ class OmnigraphClient:
                 params,
                 "mutate",
                 surface_conflict=surface_conflict,
+                if_graph_commit=if_commit,
             )
             return
+        extra = ["--if-commit", if_commit] if if_commit is not None else []
         self._run(
             "mutate",
             "--query",
@@ -1201,6 +1265,7 @@ class OmnigraphClient:
             query_name,
             "--params",
             json.dumps(params),
+            *extra,
             surface_conflict=surface_conflict,
         )
 
@@ -1410,6 +1475,7 @@ class OmnigraphClient:
         label: str,
         *,
         surface_conflict: bool = False,
+        if_graph_commit: str | None = None,
     ) -> str:
         """Run one query/mutate over HTTP under the shared retry policy.
 
@@ -1421,12 +1487,24 @@ class OmnigraphClient:
         bound on them would only add latency to the one path that has none.
         """
         is_write = verb == "mutate"
-        call = transport.mutate if is_write else transport.query
 
         token = self._resolve_token()
 
         def attempt() -> _AttemptResult:
-            outcome = call(self.graph_id, source, params, token)
+            if not is_write:
+                outcome = transport.query(self.graph_id, source, params, token)
+            elif if_graph_commit is None:
+                # Deliberately not `mutate(..., None)`: an unconditional write
+                # calls the transport exactly as it always did. Keeping the
+                # argument off the call entirely is what lets the precondition
+                # be additive — nothing that does not ask for one can be
+                # affected by its existence, including the several test doubles
+                # implementing the older signature.
+                outcome = transport.mutate(self.graph_id, source, params, token)
+            else:
+                outcome = transport.mutate(
+                    self.graph_id, source, params, token, if_graph_commit
+                )
             return _AttemptResult(
                 outcome.kind,
                 body=outcome.body,

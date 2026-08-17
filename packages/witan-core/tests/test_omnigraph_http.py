@@ -663,6 +663,84 @@ def test_change_posts_to_mutate(monkeypatch, tmp_path, _fake_http):
     assert json.loads(request["body"])["params"] == {"slug": "a"}
 
 
+# ── conditional writes (upstream #470) ───────────────────────────────
+
+
+def test_if_commit_selects_the_conditional_route_and_sends_the_header(
+    monkeypatch, tmp_path, _fake_http
+):
+    """Route and header move together, because #470 requires exactly that.
+
+    The ordinary `/mutate` REJECTS the header rather than ignoring it, and an
+    old server 404s the conditional route before executing — both of which only
+    protect us if we never send one without the other.
+    """
+    _fake_http.script = [ok({"affected_nodes": 1, "affected_edges": 0})]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"}, if_commit="01M08E24Y")
+
+    request = _fake_http.created[0].requests[0]
+    assert request["path"] == "/graphs/council/mutate/if-graph-commit"
+    assert request["headers"][ogh.IF_GRAPH_COMMIT_HEADER] == "01M08E24Y"
+
+
+def test_an_ordinary_write_sends_no_precondition_header(
+    monkeypatch, tmp_path, _fake_http
+):
+    """★ THE SAFETY DIRECTION. A write that did not ask for a precondition must
+    reach the plain route with no header — otherwise every existing caller
+    silently acquires a whole-branch precondition and starts failing under any
+    concurrent write at all."""
+    _fake_http.script = [ok({"affected_nodes": 1, "affected_edges": 0})]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    request = _fake_http.created[0].requests[0]
+    assert request["path"] == "/graphs/council/mutate"
+    assert ogh.IF_GRAPH_COMMIT_HEADER not in request["headers"]
+
+
+def test_read_with_commit_returns_the_snapshot_token(monkeypatch, tmp_path, _fake_http):
+    """The token has to come back with the rows it belongs to.
+
+    A head fetched separately is stale by construction, so the pairing is the
+    whole point — `_update_task` fences the interval between THIS read and its
+    own write.
+    """
+    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
+    _fake_http.script = [
+        ok({"rows": [{"m.slug": "a"}], "graph_commit_id": "01M08E24Y"})
+    ]
+    client = _client(monkeypatch, "http://host:8080", tmp_path, graph_id="council")
+
+    rows, commit = client.read_with_commit("read.gq", "find_memory", {"slug": "a"})
+
+    assert rows == [{"slug": "a"}]
+    assert commit == "01M08E24Y"
+
+
+def test_read_with_commit_tolerates_a_server_that_supplies_none(
+    monkeypatch, tmp_path, _fake_http
+):
+    """A pre-#470 tier answers without the field, and that must be a clean
+    `None` rather than a KeyError — it is the signal to fall back to the
+    best-effort path, which is a supported state, not a broken one."""
+    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
+    _fake_http.script = [ok({"rows": [{"m.slug": "a"}]})]
+    client = _client(monkeypatch, "http://host:8080", tmp_path, graph_id="council")
+
+    rows, commit = client.read_with_commit("read.gq", "find_memory", {"slug": "a"})
+
+    assert rows == [{"slug": "a"}]
+    assert commit is None
+
+
 # ── the seam: a real 409 response all the way out to OmnigraphConflict ───
 
 # What omnigraph-server actually returns to a racing writer, captured from a QA

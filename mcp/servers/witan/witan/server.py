@@ -4509,6 +4509,7 @@ def _update_task(
     changes: dict,
     *,
     surface_conflict: bool = False,
+    conditional: bool = False,
     extra_steps: list[_Step] | None = None,
 ) -> dict | None:
     """Read a task, merge ``changes`` over its mutable fields, write it back.
@@ -4519,6 +4520,22 @@ def _update_task(
     ``surface_conflict`` propagates to the write so a compare-and-swap caller
     (``task_claim``) sees an :class:`~witan.graph.OmnigraphConflict` on a lost
     optimistic-concurrency race instead of the write being silently retried.
+
+    ``conditional`` makes the write a real compare-and-swap: it is applied only
+    while the branch head this function READ is still current, and otherwise
+    refused terminally, having changed nothing (omnigraph #470). Combined with
+    ``surface_conflict`` the refusal arrives as ``OmnigraphConflict``, which is
+    what turns "I lost" from an inference into a fact.
+
+    ★ IT DEGRADES TO THE OLD BEHAVIOUR RATHER THAN FAILING, and that is a
+    deliberate choice worth knowing about. A server without #470 — or the CLI
+    path, which prints rows and discards the envelope — supplies no
+    ``graph_commit_id``, so there is no precondition to state and the write goes
+    out unconditional. That is exactly today's best-effort claim, and
+    ``task_claim``'s post-write verification still catches a clobber, so the
+    fallback is safe rather than silently broken. It is NOT equivalent, though:
+    losing becomes an inference again. Anything depending on the stronger
+    guarantee must check that it is actually getting it.
 
     ``extra_steps`` ride in the SAME commit as the update — for a caller whose
     change is one logical edit spanning a row and an edge. ``task_update`` with
@@ -4531,7 +4548,15 @@ def _update_task(
     A missing task still writes NOTHING, extras included — the early return
     below happens before any step is issued.
     """
-    rows = client.read("read.gq", "get_task", {"slug": slug})
+    if conditional and extra_steps:
+        # Refused rather than silently downgraded. `change_many` composes the
+        # batch into one mutate, and pairing a whole-branch precondition with a
+        # multi-step commit needs its own thought about what a partial refusal
+        # means — nobody needs it yet, so the combination is an error instead of
+        # a quietly unconditional write.
+        msg = "conditional=True does not support extra_steps"
+        raise ValueError(msg)
+    rows, read_commit = client.read_with_commit("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
     current = rows[0]
@@ -4562,7 +4587,18 @@ def _update_task(
         # Single-statement `change` on the bare path: the compare-and-swap
         # caller goes through here, and keeping its write exactly as it was
         # keeps `surface_conflict`'s behaviour untouched.
-        client.change(*update, surface_conflict=surface_conflict)
+        #
+        # ★ THE PRECONDITION IS THE COMMIT FROM *THIS* FUNCTION'S OWN READ, a
+        # few lines up — not one the caller supplies. That is the invariant
+        # that makes the compare-and-swap mean anything: `merged` is built from
+        # THAT snapshot, so demanding the head has not moved since is exactly
+        # "nothing changed under the values I am about to write back". A token
+        # from any earlier read would fence the wrong interval.
+        client.change(
+            *update,
+            surface_conflict=surface_conflict,
+            if_commit=read_commit if conditional else None,
+        )
     return client.read("read.gq", "get_task", {"slug": slug})[0]
 
 
@@ -4964,14 +5000,36 @@ async def task_claim(
 
     now = now_iso()
     claim = {"status": "in_progress", "assignee": holder, "claimed_at": now}
-    # omnigraph has no conditional-write (CAS) primitive, so on each surfaced
-    # optimistic-concurrency conflict we re-read and either bail (a rival won) or
-    # re-attempt the claim. surface_conflict stays on for every attempt — a
+    # The claim is a compare-and-swap: `conditional=True` states the branch head
+    # the merged row was read at, so the write applies only while nothing else
+    # has committed. On each surfaced conflict we re-read and either bail (a
+    # rival won) or re-attempt. surface_conflict stays on for every attempt — a
     # consecutive conflict must never fall back to the blind-retry path, which
     # would re-apply the claim over whoever committed in the meantime.
+    #
+    # ★ WHAT CHANGED, AND WHAT DID NOT. Before omnigraph #470 there was no
+    # conditional-write primitive at all, so this loop was read → write →
+    # re-read → hope, with the post-write verification below as the only real
+    # backstop. The precondition now makes a refusal AUTHORITATIVE: a 412 is the
+    # store saying the write did not apply, rather than us inferring it from a
+    # conflict that might have been someone else's.
+    #
+    # ★ THE VERIFICATION BELOW STAYS ANYWAY, and deliberately. It is what covers
+    # the degraded path (a tier that supplies no graph_commit_id writes
+    # unconditionally — see `_update_task`), and it is cheap next to a claim.
+    # Removing it would make correctness depend on a server capability this code
+    # cannot see from here.
+    #
+    # ★ EXPECT MORE CONFLICTS THAN CONTENTION. The precondition is the whole
+    # branch head, not this row, so ANY concurrent write to the graph invalidates
+    # it — a rival claim and an unrelated `memory_store` are indistinguishable.
+    # That is why _CLAIM_MAX_ATTEMPTS exists and why a re-read that finds the
+    # task still claimable retries rather than reporting a lost race.
     for attempt in range(_CLAIM_MAX_ATTEMPTS):
         try:
-            await _offload(_update_task, slug, claim, surface_conflict=True)
+            await _offload(
+                _update_task, slug, claim, surface_conflict=True, conditional=True
+            )
             break
         except OmnigraphConflict:
             # A concurrent writer committed between our read and our write.

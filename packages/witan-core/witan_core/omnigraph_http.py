@@ -99,6 +99,15 @@ PRECONDITION_FAILED = "precondition_failed"
 #: never actually contended with anyone.
 RECOVERY_REQUIRED = "recovery_required"
 
+#: The conditional-write precondition header (upstream #470). Sent raw and
+#: exactly once, and ONLY to the dedicated routes below — the ordinary
+#: ``/mutate`` rejects it outright rather than ignoring an unknown header,
+#: which is what stops a precondition from being silently dropped.
+IF_GRAPH_COMMIT_HEADER = "Omnigraph-If-Graph-Commit"
+
+#: Path suffix selecting the conditional variant of a write route.
+IF_GRAPH_COMMIT_SUFFIX = "/if-graph-commit"
+
 # A pooled connection idle longer than this is closed and reopened rather than
 # reused. It is not a performance knob — it is what keeps the connect-failure
 # classification honest.
@@ -344,9 +353,17 @@ class PooledTransport:
         token: str | None,
         *,
         idempotent: bool,
+        if_graph_commit: str | None = None,
     ) -> Outcome:
         """POST ``payload`` as JSON to ``path`` and classify the result."""
-        return self._send("POST", path, json.dumps(payload), token, idempotent)
+        return self._send(
+            "POST",
+            path,
+            json.dumps(payload),
+            token,
+            idempotent,
+            if_graph_commit=if_graph_commit,
+        )
 
     def get(self, path: str, token: str | None) -> Outcome:
         """GET ``path``. A read, so always safe to repeat."""
@@ -359,6 +376,8 @@ class PooledTransport:
         body: str | None,
         token: str | None,
         idempotent: bool,  # noqa: FBT001 — positional from two private callers
+        *,
+        if_graph_commit: str | None = None,
     ) -> Outcome:
         """Send one request and classify the result.
 
@@ -386,6 +405,14 @@ class PooledTransport:
             headers["Content-Length"] = str(len(body.encode()))
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        if if_graph_commit is not None:
+            # Upstream #470 requires EXACTLY ONE of these, sent raw, and only to
+            # the dedicated `/…/if-graph-commit` routes — the ordinary routes
+            # reject the header rather than ignoring it. That fail-closed design
+            # is deliberate and worth preserving on this side: an old server
+            # 404s the conditional route before executing anything, instead of
+            # silently dropping the precondition and mutating unconditionally.
+            headers[IF_GRAPH_COMMIT_HEADER] = if_graph_commit
 
         for attempt in range(2):
             conn, reused = self._checkout()
@@ -460,13 +487,31 @@ class PooledTransport:
             idempotent=True,
         )
 
-    def mutate(self, graph_id: str, source: str, params: dict, token: str | None):
-        """``POST /graphs/<id>/mutate`` — a write. Never repeated implicitly."""
+    def mutate(
+        self,
+        graph_id: str,
+        source: str,
+        params: dict,
+        token: str | None,
+        if_graph_commit: str | None = None,
+    ):
+        """``POST /graphs/<id>/mutate`` — a write. Never repeated implicitly.
+
+        With ``if_graph_commit`` this becomes ``…/mutate/if-graph-commit``,
+        applying only while that branch head is still current. A stale token is
+        a terminal 412 (:data:`PRECONDITION_FAILED`), never a silent
+        unconditional write — the route and the header move together precisely
+        so there is no way to ask for a precondition and not get one.
+        """
+        path = f"/graphs/{graph_id}/mutate"
+        if if_graph_commit is not None:
+            path += IF_GRAPH_COMMIT_SUFFIX
         return self.post(
-            f"/graphs/{graph_id}/mutate",
+            path,
             {"query": source, "params": params},
             token,
             idempotent=False,
+            if_graph_commit=if_graph_commit,
         )
 
     def graphs(self, token: str | None):
