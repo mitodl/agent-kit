@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.13.2] - 2026-08-17
+
+### Changed
+
+- **Raised the `witan-core` floor to `>=0.23`**, continuing the behavioural
+  floor added in 0.13.1 and for a reason specific to this package's write path.
+
+  0.22 retried `recovery_required` on a write; 0.23 makes it terminal, because
+  the same response can also mean the write's table effects already landed. The
+  ambiguous half of that is a **foreign writer** winning after local
+  arbitration — and this package's branched clients are exactly that, falling
+  back to the embedded CLI subprocess rather than going through the single
+  served writer process. So an index write racing another writer is precisely
+  where a wrong retry would duplicate rows.
+
 ## [0.13.1] - 2026-08-17
 
 ### Fixed

@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.23.0] - 2026-08-17
+
+### Added
+
+- **Conditional writes (compare-and-swap), via omnigraph #470.**
+  `read_with_commit()` returns rows plus the `graph_commit_id` they were read
+  at; `change(..., if_commit=...)` states it, selecting
+  `POST /graphs/<id>/mutate/if-graph-commit` with the
+  `Omnigraph-If-Graph-Commit` header (or `omnigraph mutate --if-commit` on the
+  CLI path). The write applies only while that branch head is still current.
+
+  Route and header move together deliberately: #470 is fail-closed on both
+  halves — the ordinary route *rejects* the header rather than ignoring it, and
+  an old server 404s the conditional route before executing — so there is no way
+  to ask for a precondition and silently not get one.
+
+  ★ **The precondition is coarser than it looks.** It is the whole branch head,
+  not the row, so any concurrent write to the graph invalidates the token and a
+  rival claim is indistinguishable from an unrelated `memory_store`. What it
+  buys is not a low conflict rate but a *truthful* one: a refusal is now the
+  store stating the write did not apply, rather than the caller inferring it.
+
+### Changed
+
+- **`recovery_required` on a write is now terminal and typed
+  (`WriteIndeterminate`), not retried.** BREAKING relative to 0.22.0's
+  behaviour, and a deliberate reversal.
+
+  One wire signal covers two conditions with nothing to separate them: an
+  effect-free bystander barrier (six concurrent appends to distinct keys leave
+  five losers holding it, and a write immediately after succeeds) and a request
+  whose table effects may already have landed (#470, a foreign writer winning
+  after local arbitration — "not a false 412").
+
+  0.22.0 retried it on a short budget. That was wrong, and the short budget was
+  the tell: it narrows the window in which a duplicate is created after recovery
+  rolls the original operation forward rather than closing it. A write now stops
+  and the caller re-reads. A **read** still retries — repeating a query cannot
+  duplicate anything, and the barrier does clear itself.
+
+  It is still not a `surface_conflict` outcome: the barrier fires for writers
+  contending with nobody, so answering `lost_race` there would be confidently
+  wrong.
+
+- **A 412 precondition failure is terminal.** The inverse of 0.22.0's 409 rule,
+  which made conflicts retryable. 409 means the head moved — re-send. 412 means
+  the condition you stated is false — do not re-send; re-read and decide.
+  Retrying a 412 re-applies a claim over whoever won the race, and upstream
+  never replays it either. A `surface_conflict` caller still receives
+  `OmnigraphConflict` so a lost claim stays catchable.
+
 ## [0.22.0] - 2026-08-17
 
 ### Fixed
