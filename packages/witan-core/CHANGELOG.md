@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.22.0] - 2026-08-17
+
+### Fixed
+
+- **An HTTP 409 is now retryable, so a compare-and-swap caller can lose a race
+  cleanly instead of dying on it.** `classify_status` recognised a write
+  conflict only by its *prose*, and the markers it matched (`stale view`,
+  `manifest table version`, `refresh and retry`) were tuned against wordings
+  omnigraph no longer uses for a racing writer. It now rejects one with a
+  sentence none of them match:
+
+      write authority 'graph_head:main' changed during preparation
+      (expected 01M08E24Y…, current 01M08E27K…) — reprepare from the current
+      branch state (HTTP 409, conflict)
+
+  So the most literal "retry me" signal in the write path fell through to
+  `FATAL`, and that made the CAS branch unreachable: `_retry_loop` raises
+  `OmnigraphConflict` only for `RETRYABLE`, which is exactly what witan's
+  `task_claim` catches to re-read and answer `{"claimed": false, "reason":
+  "lost_race"}`.
+
+  Measured against the QA deployment on 2026-08-17 with 8 racers on one task:
+  1 claimed, 1 refused, **6 opaque errors**, where every run back to 2026-08-07
+  had produced 7 structured refusals. Mutual exclusion was never affected —
+  exactly one racer wins, every time — but the losers were told in a way they
+  could not act on, and `task_claim` is the coordination primitive for parallel
+  agents.
+
+  Keyed on the **status** rather than adding a fourth prose marker: the server
+  has reworded this precondition twice, and each reword silently turned a
+  losable race back into a hard failure. Message markers stay *ahead* of the
+  status rule so a 409 that also names a repair condition still repairs. The
+  CLI path prints the message and discards the response, so it has no status to
+  read and keeps prose markers (`write authority`, `reprepare from the current
+  branch`).
+
+  Safe for writes alongside the existing 429/503 rules for the same reason
+  those are: the server rejects at *prepare*, before the commit, so the
+  response proves nothing was written.
+
+  ★ The defect survived a green suite because **both sides of it were already
+  tested and the seam was not**. `classify_status` had a `(409, "stale view;
+  refresh and retry") -> RETRYABLE` case, which passes on the *message* and
+  therefore established nothing about the status; witan's `task_claim` tests
+  raise `OmnigraphConflict` *directly*, proving only what happens once the
+  exception exists. New tests drive a real 409 response through the HTTP
+  transport — the one the deployed service uses — out to `OmnigraphConflict`,
+  and are confirmed to fail without the fix.
+
+  The same misclassification also made an ordinary (non-CAS) writer that merely
+  lost a race fail outright where a retry would have committed. That half is
+  defensive rather than observed: in the QA run all 18 conflicts came from the
+  8 `task_claim` racers and none from 16 concurrent `memory_store` writers.
+
 ## [0.21.0] - 2026-08-16
 
 ### Changed
