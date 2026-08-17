@@ -37,7 +37,15 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-_OMNIGRAPH_VERSION = "0.9.0"
+#: ★ TEMPORARILY ON `edge` (0.10.0) FOR A RE-TEST — NOT A DECISION TO ADOPT IT.
+#: 0.10.0 was reverted on 2026-08-14 for halving the write ceiling
+#: (agent-kit#233). Three witan-side confounds have since been fixed and the
+#: measurement is worth repeating; see
+#: tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2 for the
+#: hypothesis and the revert procedure. If you are reading this after the
+#: experiment concluded, it should already be back on 0.9.0/v0.9.0 — if it is
+#: not, that is the bug.
+_OMNIGRAPH_VERSION = "0.10.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which
@@ -63,7 +71,7 @@ _OMNIGRAPH_VERSION = "0.9.0"
 #: Renovate manages the VERSION line only (see renovate.json). While this is
 #: ``edge`` a bump is not meaningful, so pin a real ``v<version>`` before
 #: treating dependency updates here as authoritative.
-_OMNIGRAPH_RELEASE_TAG = "v0.9.0"
+_OMNIGRAPH_RELEASE_TAG = "edge"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
 #: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
@@ -109,15 +117,22 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: Refresh with, for each asset:
 #:     curl -fsSL https://github.com/ModernRelay/omnigraph/releases/download/\
 #: <tag>/<asset>.sha256
+#: ★ THESE ARE THE `edge` BUILD OF 2026-08-16T23:05Z, NOT v0.9.0's. Recorded as
+#: a deliberate act per the paragraph above: this is the 0.10.0 re-test
+#: (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2). Reverting the
+#: experiment means restoring the v0.9.0 triple, which was:
+#:     linux-x86_64  507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197
+#:     linux-arm64   6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881
+#:     macos-arm64   69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197"
+        "5a8e6ace9ed9a05e46c543236ebfe74a2256096a7133ed53f90ff5307dacaef4"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881"
+        "212ede0b18c0e17c5737e95d49bba9553b494ba9cadf3222703c45ff01c0ed2e"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e"
+        "053468ac71e7cacd84d3aeecf88474044da7df8e4df52892548cf5b47e174234"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")

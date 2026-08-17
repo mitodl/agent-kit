@@ -30,14 +30,14 @@
 # exists because this file went a full release cycle claiming the manager
 # covered it when it did not, and a partial bump is silent until deploy.
 
-ARG OMNIGRAPH_VERSION=0.9.0
+ARG OMNIGRAPH_VERSION=0.10.0
 # Upstream tag to fetch from. `edge` is the rolling build of upstream main,
 # republished on every push there; a real release is `v${OMNIGRAPH_VERSION}`.
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG.
-ARG OMNIGRAPH_RELEASE_TAG=v0.9.0
-ARG OMNIGRAPH_SHA256_X86_64=507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197
-ARG OMNIGRAPH_SHA256_ARM64=6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881
+ARG OMNIGRAPH_RELEASE_TAG=edge
+ARG OMNIGRAPH_SHA256_X86_64=5a8e6ace9ed9a05e46c543236ebfe74a2256096a7133ed53f90ff5307dacaef4
+ARG OMNIGRAPH_SHA256_ARM64=212ede0b18c0e17c5737e95d49bba9553b494ba9cadf3222703c45ff01c0ed2e
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
 FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS fetch
