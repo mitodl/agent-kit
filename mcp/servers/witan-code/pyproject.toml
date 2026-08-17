@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.13.0"
+version = "0.13.1"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -42,7 +42,30 @@ dependencies = [
     # >=0.10 for witan_core.chunking + load_batch, both moved up from this
     # package; >=0.9 for observability.middleware; >=0.8 for
     # OmnigraphClient.change_many with chunk_size.)
-    "witan-core[cli,remote,observability]>=0.17,<1",
+    #
+    # ★ >=0.22 IS A BEHAVIOURAL FLOOR, the first here, and it is a deliberate
+    # exception to the "floors here track what this package actually imports"
+    # rule stated above — so read this before treating that rule as absolute.
+    # Nothing new is imported; an older witan-core loads fine and is wrong
+    # quietly.
+    #
+    # 0.22 classifies a write-authority conflict (HTTP 409, and the CLI's
+    # equivalent prose) as RETRYABLE rather than FATAL. That matters HERE, and
+    # not for the CAS reason it matters in witan-council: `change` above never
+    # sets `surface_conflict`, so the compare-and-swap half is irrelevant to the
+    # code graph. The ordinary-writer half is not. This package's BRANCHED
+    # clients deliberately fall back to the CLI subprocess — `_transport()`
+    # returns None whenever `_extra_args` is non-empty, because omnigraph's HTTP
+    # API has no request-side branch selector — so every write from a branch
+    # view is classified by `_classify_cli_error`, where the conflict was fatal.
+    # On 0.21 an index write that merely lost a race to a concurrent writer on
+    # the shared graph fails outright; on 0.22 it retries and commits.
+    #
+    # Maintainer decision 2026-08-17. Note this is the case the earlier
+    # parenthetical explicitly declined for 0.19/0.20 — the difference is that
+    # trace-context work changed nothing on this package's write path, and this
+    # does.
+    "witan-core[cli,remote,observability]>=0.22,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled
@@ -126,7 +149,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 [tool.bumpversion]
-current_version = "0.13.0"
+current_version = "0.13.1"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

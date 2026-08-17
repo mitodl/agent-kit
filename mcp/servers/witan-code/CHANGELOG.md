@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.13.1] - 2026-08-17
+
+### Fixed
+
+- **Raised the `witan-core` floor to `>=0.22`, so an index write that loses a
+  race retries instead of failing outright.** 0.22 classifies a write-authority
+  conflict (HTTP 409, and the CLI's equivalent wording) as retryable rather
+  than fatal.
+
+  That matters here for a different reason than it does in `witan-council`, and
+  the difference is worth stating: `RemoteStoreClient.change` never sets
+  `surface_conflict`, so the compare-and-swap half of that fix is irrelevant to
+  the code graph. The ordinary-writer half is not. This package's **branched**
+  clients deliberately fall back to the CLI subprocess — `_transport()` returns
+  `None` whenever `_extra_args` is non-empty, because omnigraph's HTTP API has
+  no request-side branch selector — so every write from a branch view is
+  classified by `_classify_cli_error`, which treated the conflict as fatal.
+
+  On witan-core 0.21, a branch-view write that merely raced another writer on
+  the shared graph fails; on 0.22 it retries and commits.
+
+  A **behavioural** floor, and a deliberate exception to this package's stated
+  "floors track what this package actually imports" rule — the same rule under
+  which the 0.19/0.20 trace-context releases were explicitly *not* pinned. The
+  difference is that those changed nothing on this package's write path.
+
 ## [0.13.0] - 2026-08-13
 
 ### Fixed

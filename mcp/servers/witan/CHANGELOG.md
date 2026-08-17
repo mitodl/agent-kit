@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.16.1] - 2026-08-17
+
+### Fixed
+
+- **Raised the `witan-core` floor to `>=0.22`, so a published install cannot
+  ship a `task_claim` that fails to keep its contract.** 0.22 classifies a
+  write-authority conflict (HTTP 409) as retryable; `_retry_loop` raises
+  `OmnigraphConflict` only for that classification, and `task_claim` catches
+  exactly that exception to re-read and answer `{"claimed": false, "reason":
+  "lost_race"}`.
+
+  On witan-core 0.21 the classification is `FATAL`, so that branch is
+  unreachable and the losers of a race get an opaque `RuntimeError` instead of
+  the structured refusal ADR-0003 has parallel agents rely on — measured
+  against QA at 6 of 8 racers. Mutual exclusion was never affected; exactly one
+  racer wins either way.
+
+  Note this is a **behavioural** floor, the first in this package — every other
+  entry in that pin's comment is an import floor, where an older witan-core
+  fails loudly at load. This one imports cleanly and is wrong quietly, which is
+  why it is documented at length rather than appended to the list.
+
 ## [0.16.0] - 2026-08-17
 
 ### Fixed

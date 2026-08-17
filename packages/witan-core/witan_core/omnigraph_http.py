@@ -157,6 +157,34 @@ def classify_status(status: int, message: str) -> str:
         for marker in ("stale view", "manifest table version", "refresh and retry")
     ):
         return RETRYABLE
+    if status == 409:
+        # ★ A CONFLICT IS THE ONE STATUS THAT MEANS "RETRY ME" MOST LITERALLY,
+        # and it was falling through to FATAL because this function only ever
+        # recognised a conflict by its PROSE. The markers above were tuned
+        # against the wordings omnigraph used when they were written; 0.10.0
+        # rejects a racing writer with a sentence none of them match:
+        #
+        #   write authority 'graph_head:main' changed during preparation
+        #   (expected 01M08E24Y…, current 01M08E27K…) — reprepare from the
+        #   current branch state (HTTP 409, conflict)
+        #
+        # Classifying on the STATUS fixes that permanently: the server can
+        # reword the precondition — and it has, twice — without silently
+        # turning a losable race back into a hard failure. Message markers stay
+        # first so a 409 that also names a repair condition still repairs.
+        #
+        # SAFE FOR WRITES, which is why it may sit alongside 429/503 rather
+        # than only being retried for idempotent calls: the server rejected
+        # this at PREPARE, before the commit, so the response proves nothing
+        # was written. That is the same guarantee that makes 503 safe here.
+        #
+        # ★ AND IT IS WHAT MAKES A COMPARE-AND-SWAP LOSER LEGIBLE. `_retry_loop`
+        # turns RETRYABLE into `OmnigraphConflict` for a `surface_conflict`
+        # caller, which `task_claim` catches to re-read and return a structured
+        # `{"claimed": false, "reason": "lost_race"}`. Left FATAL, that whole
+        # path is unreachable and 6 of 8 racers got an opaque RuntimeError
+        # instead of an answer they could act on.
+        return RETRYABLE
     return FATAL
 
 

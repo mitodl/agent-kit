@@ -148,6 +148,22 @@ def err(status: int, message: str, code: str | None = None) -> FakeResponse:
         # rather than applied, so it is safe to retry even for a write.
         (503, "service unavailable", ogh.UNAVAILABLE),
         (409, "stale view; refresh and retry", ogh.RETRYABLE),
+        # ★ THE SAME STATUS WITH A MESSAGE NO MARKER MATCHES. Verbatim from a QA
+        # `task_claim` race, 2026-08-17. The line above passed on its PROSE, so
+        # it never established that a 409 is retryable — and this one fell
+        # through to FATAL, which is what broke the compare-and-swap path. The
+        # status is now the signal, so the server may reword the precondition
+        # (it has, twice) without silently making a losable race fatal again.
+        (
+            409,
+            "write authority 'graph_head:main' changed during preparation "
+            "(expected 01M08E24Y2WWC3QVE9MD3K6CWN, current 01M08E27K5J56HF8QZ7GX61X3F)"
+            " — reprepare from the current branch state",
+            ogh.RETRYABLE,
+        ),
+        # Prose the classifier has never seen, on a status that speaks for
+        # itself. This is the case the status rule exists for.
+        (409, "some future conflict wording nobody has written yet", ogh.RETRYABLE),
         (500, "manifest table version mismatch", ogh.RETRYABLE),
         (500, "head is ahead of manifest, run omnigraph repair", ogh.NEEDS_REPAIR),
         # A denial is not a transient condition. Retrying a Cedar denial just
@@ -169,6 +185,17 @@ def test_repair_wins_over_retryable_when_both_words_appear():
     """
     message = "stale view: head is ahead of manifest, run omnigraph repair"
     assert ogh.classify_status(500, message) == ogh.NEEDS_REPAIR
+
+
+def test_repair_still_wins_over_a_conflict_status():
+    """The message markers must stay ahead of the 409 rule, not behind it.
+
+    A store that needs reconciling cannot be fixed by trying again, however the
+    status is labelled — so a 409 that names a repair condition must still
+    repair. Ordering is the only thing enforcing that, hence a test on it.
+    """
+    message = "head is ahead of manifest, run omnigraph repair"
+    assert ogh.classify_status(409, message) == ogh.NEEDS_REPAIR
 
 
 def test_error_message_uses_the_servers_own_wording():
@@ -610,6 +637,75 @@ def test_change_posts_to_mutate(monkeypatch, tmp_path, _fake_http):
     request = _fake_http.created[0].requests[0]
     assert request["path"] == "/graphs/council/mutate"
     assert json.loads(request["body"])["params"] == {"slug": "a"}
+
+
+# ── the seam: a real 409 response all the way out to OmnigraphConflict ───
+
+# What omnigraph-server actually returns to a racing writer, captured from a QA
+# `task_claim` race on 2026-08-17.
+_WRITE_AUTHORITY_409 = (
+    "write authority 'graph_head:main' changed during preparation "
+    "(expected 01M08E24Y2WWC3QVE9MD3K6CWN, current 01M08E27K5J56HF8QZ7GX61X3F) "
+    "— reprepare from the current branch state"
+)
+
+
+def _mutation_dir(tmp_path):
+    (tmp_path / "mutations.gq").write_text(
+        "query claim($slug: String) {\n    insert Task { slug: $slug }\n}\n"
+    )
+    return tmp_path
+
+
+def test_a_409_over_http_surfaces_as_a_conflict_to_a_cas_caller(
+    monkeypatch, tmp_path, _fake_http
+):
+    """★ THE TEST THE DEFECT SLIPPED THROUGH, and the reason it is here rather
+    than beside the classifier unit tests.
+
+    `classify_status` was tested alone, and `task_claim`'s conflict handling was
+    tested alone by RAISING `OmnigraphConflict` directly (see
+    `test_claim_conflict_reports_lost_race_without_clobber` in the witan suite).
+    Both passed throughout. Nothing exercised the JOIN — whether a real 409
+    response ever becomes that exception — so a 409 classified FATAL left every
+    compare-and-swap caller unreachable while its own tests stayed green.
+
+    This drives the whole path: HTTP 409 -> classify_status -> _retry_loop ->
+    OmnigraphConflict, over the transport the DEPLOYED service actually uses.
+    """
+    _fake_http.script = [err(409, _WRITE_AUTHORITY_409, code="conflict")]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(OmnigraphConflict, match="write authority"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=True)
+
+    # ONE attempt. A retry would re-apply the claim over whoever won the race,
+    # which is the entire reason `surface_conflict` exists.
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_a_409_over_http_is_retried_for_an_ordinary_writer(
+    monkeypatch, tmp_path, _fake_http
+):
+    """The non-CAS half, which is the larger blast radius.
+
+    Every plain `memory_store` that merely lost a race died outright where one
+    retry would have committed. Classified retryable, the second attempt lands.
+    """
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(409, _WRITE_AUTHORITY_409, code="conflict"),
+        ok({"affected_nodes": 1, "affected_edges": 0}),
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 2
 
 
 def test_change_many_sends_one_composed_request(monkeypatch, tmp_path, _fake_http):

@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from witan_core import omnigraph as og
+from witan_core import omnigraph_http as _http
 from witan_core.omnigraph import OmnigraphClient, OmnigraphConflict
 
 
@@ -384,6 +385,59 @@ def test_surface_conflict_raises_on_occ_conflict(monkeypatch):
 def test_conflict_is_retried_when_not_surfaced(monkeypatch):
     client = _client(monkeypatch)
     calls = _stub_run(monkeypatch, returncode=1, stderr="commit failed: stale view")
+
+    with pytest.raises(RuntimeError, match="failed"):
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert calls["n"] > 1
+
+
+# The remote write-authority precondition, verbatim from a QA `task_claim` race
+# on 2026-08-17 (8 racers, witan 0.16.0). Kept as a literal because every defect
+# here has been a wording the classifier did not anticipate — a paraphrase would
+# test the paraphrase.
+_WRITE_AUTHORITY_STDERR = (
+    "omnigraph mutate failed:\n"
+    "write authority 'graph_head:main' changed during preparation "
+    "(expected 01M08E24Y2WWC3QVE9MD3K6CWN, current 01M08E27K5J56HF8QZ7GX61X3F) "
+    "— reprepare from the current branch state (HTTP 409, conflict)"
+)
+
+
+def test_write_authority_conflict_is_retryable_not_fatal():
+    """The CLI path has no status, so this wording is the only signal there is.
+
+    Classified FATAL, it took down the compare-and-swap path entirely: 6 of 8
+    concurrent `task_claim` racers got an opaque RuntimeError where the contract
+    promises a structured refusal.
+    """
+    assert og._classify_cli_error(_WRITE_AUTHORITY_STDERR) == _http.RETRYABLE
+
+
+def test_surface_conflict_loses_the_race_on_a_write_authority_conflict(monkeypatch):
+    """The whole point of the fix: a CAS caller must get `OmnigraphConflict`.
+
+    That is what `task_claim` catches to re-read and answer `lost_race`. And it
+    must surface on the FIRST attempt — a retry would re-apply the claim over
+    whoever actually won.
+    """
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_WRITE_AUTHORITY_STDERR)
+
+    with pytest.raises(OmnigraphConflict, match="write authority"):
+        client._execute(
+            ["omnigraph", "mutate"], "mutate", is_write=True, surface_conflict=True
+        )
+    assert calls["n"] == 1
+
+
+def test_write_authority_conflict_is_retried_when_not_surfaced(monkeypatch):
+    """An ordinary writer that merely lost a race should try again, not die.
+
+    This is the non-CAS half of the same defect: every plain `memory_store` that
+    raced another writer failed outright where a retry would have committed.
+    """
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_WRITE_AUTHORITY_STDERR)
 
     with pytest.raises(RuntimeError, match="failed"):
         client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
