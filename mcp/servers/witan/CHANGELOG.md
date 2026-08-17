@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.16.0] - 2026-08-17
+
+### Fixed
+
+- **witan's `async` tools ran blocking omnigraph subprocesses on the event
+  loop, stalling every other request — including `/health`.** FastMCP
+  dispatches *sync* tool functions through a threadpool, so they may block
+  freely. Six tools are `async def` — solely so they can `await` an elicitation
+  helper — and those run *on* the loop. Each then called straight into
+  `client.read`/`change`/`change_many`, which shell out to the `omnigraph`
+  binary. While that subprocess ran, nothing else could be scheduled.
+
+  ★ **The CPU figure is what identifies it.** Measured in QA at 16 concurrent
+  writers: the pod used **0.011 cores** — 1.1% of one CPU, with no limit set —
+  while `/health` failed probes at 5s *and* 10s, readiness ejected the only
+  replica, and the gateway returned 503 to every caller while all 16 writes
+  committed. A loop that is merely *busy* burns CPU. A loop that cannot
+  schedule a trivial coroutine for ten seconds at 1% CPU is *blocked*, waiting
+  on I/O it never yielded from.
+
+  All 19 store calls across the six tools now route through `_offload`, which
+  runs them in a worker thread. Wrapping each call rather than the whole
+  handler is deliberate: the loop is released *between* calls too, so a tool
+  making several lets other coroutines interleave.
+
+  ★ **`_offload` carries a context, and that is not ceremony.** Redaction
+  notices live in a `ContextVar`, which is *copied* into a worker thread rather
+  than shared — the property that stops one caller's redactions bleeding into
+  another's. `scan.notice` states the resulting invariant plainly: "`record`
+  and `annotate` must run in the SAME context." The first version of this fix
+  ignored it, and three tools began rewriting content while reporting nothing —
+  the exact data-loss path that module exists to close. Caught by the existing
+  `test_scan_notice` tests. `_offload` now runs the call inside a `Context` it
+  owns and merges the notices back via `notice.adopt`.
+
+  This was never a regression from any recent change: it has been there as long
+  as these tools have been `async`, masked by ToolHive's 30s deadline failing
+  the call before the pattern could show itself.
+
+### Added
+
+- `test_event_loop_blocking.py`, a structural guard asserting no `async def`
+  tool reaches the store without `_offload`. Functional tests cannot catch this
+  — the store returns the same rows whether or not the loop was blocked, so it
+  was only ever visible in production as probe timeouts. Includes a test that
+  the guard itself can fail, since a pure AST walk over a clean file looks
+  identical to a broken detector.
+
 ## [0.15.0] - 2026-08-16
 
 ### Fixed

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import Context, ContextVar
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -130,6 +130,40 @@ def record(
             start=f.start,
             end=f.end,
         )
+        if notice.key not in seen:
+            seen.add(notice.key)
+            added.append(notice)
+    if added:
+        _recorded.set((*existing, *added))
+
+
+def adopt(ctx: Context) -> None:
+    """Merge notices recorded inside ``ctx`` into the CURRENT context.
+
+    ★ THIS EXISTS TO KEEP THE INVARIANT ABOVE TRUE WHEN THE WRITE MOVES OFF THE
+    EVENT LOOP. ``_recorded`` is a ``ContextVar``, deliberately: it is copied
+    into a worker thread rather than shared, which is what stops one caller's
+    redactions bleeding into another's on a busy replica. The cost is that a
+    ``.set()`` made inside that thread is invisible to the context that spawned
+    it — so once ``witan.server._offload`` started running the store calls in a
+    thread, every notice was recorded where nothing would ever read it, and
+    three tools began silently rewriting content while reporting nothing.
+
+    ``_offload`` therefore runs the blocking call inside a ``Context`` it owns
+    and hands it here afterwards. Mutations made under ``Context.run`` persist
+    on that object, so the notices survive the thread even though the variable
+    was never shared.
+
+    Deduplicated on the same span identity ``record`` uses, so a retry that
+    re-records an identical span across two offloaded calls still reports once.
+    """
+    inner = ctx.get(_recorded, ())
+    if not inner:
+        return
+    existing = _recorded.get()
+    seen = {n.key for n in existing}
+    added = []
+    for notice in inner:
         if notice.key not in seen:
             seen.add(notice.key)
             added.append(notice)

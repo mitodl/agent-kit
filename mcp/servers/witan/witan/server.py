@@ -1,3 +1,4 @@
+import contextvars
 import functools
 import hashlib
 import importlib.metadata
@@ -19,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
+import anyio.to_thread
 from fastmcp import Context, FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
@@ -389,6 +391,54 @@ async def health(_request: Request) -> JSONResponse:
     the response carries no graph data and no per-actor state.
     """
     return JSONResponse({"status": "ok", "service": "witan", "version": _VERSION})
+
+
+async def _offload(fn, /, *args, **kwargs):
+    """Run blocking store work off the event loop.
+
+    ★ EVERY OMNIGRAPH CALL SHELLS OUT TO A SUBPROCESS, AND AN ``async def`` TOOL
+    RUNS ON THE EVENT LOOP. FastMCP dispatches SYNC tool functions through a
+    threadpool, so they can block all they like; the handful of tools that are
+    ``async`` — only so they can ``await`` an elicitation helper — run on the
+    loop itself. A synchronous ``client.read``/``change``/``change_many`` inside
+    one of those stops the loop dead for the length of the subprocess, and
+    nothing else gets scheduled: not another request, not ``/health``.
+
+    ★ THAT IS NOT A CAPACITY PROBLEM, WHICH IS WHY IT LOOKED SO STRANGE.
+    Measured in QA on 2026-08-17 at 16 concurrent writers: the pod used **0.011
+    cores** — 1.1% of one CPU, with no limit set — while ``/health`` failed
+    probes at 5s AND at 10s, readiness ejected the only replica, and APISIX
+    answered every caller with 503 while all 16 writes committed. A loop that is
+    merely BUSY burns CPU; a loop that cannot schedule a trivial coroutine for
+    ten seconds at 1% CPU is BLOCKED, waiting on I/O it never yielded from.
+
+    Wrapping each store call rather than the whole handler is deliberate: the
+    loop is released between calls too, so a tool making several of them lets
+    other coroutines interleave instead of holding a thread for the whole body.
+
+    ``functools.partial`` because ``anyio.to_thread.run_sync`` takes positional
+    arguments only — keywords are what most of these calls use.
+
+    ★ THE CONTEXT DANCE IS NOT CEREMONY — WITHOUT IT THIS SILENTLY LOSES
+    REDACTION NOTICES. ``witan.scan.notice`` records them in a ``ContextVar``,
+    which is COPIED into a worker thread rather than shared, so a ``.set()``
+    made in there is invisible to the caller. ``scan.notice``'s own comment
+    states the invariant this breaks: "``record`` and ``annotate`` must run in
+    the SAME context". The first version of this helper ignored that, and three
+    tools began rewriting content while telling the caller nothing — the exact
+    data-loss path that module exists to close.
+
+    So the call runs inside a ``Context`` this function owns. Mutations under
+    ``Context.run`` persist on that object, so ``notice.adopt`` can merge them
+    back into the caller's context afterwards. Caught by the existing
+    ``test_scan_notice`` tests, which is why they are worth having.
+    """
+    ctx = contextvars.copy_context()
+    result = await anyio.to_thread.run_sync(
+        functools.partial(ctx.run, functools.partial(fn, *args, **kwargs))
+    )
+    scan.notice.adopt(ctx)
+    return result
 
 
 def _tool(fn):
@@ -2518,7 +2568,8 @@ async def memory_store(
     # scope it rather than silently persisting an unscoped node. Falls back to
     # None (today's behavior) under automation / an unsupported client.
     repo = await elicit.repo_or_detect(ctx, repo)
-    return _store_memory(
+    return await _offload(
+        _store_memory,
         kind,
         title,
         content,
@@ -2724,7 +2775,9 @@ async def memory_link(
         }
 
     if kind == "tagged":
-        if not client.read("read.gq", "get_memory", {"slug": from_slug}):
+        if not await _offload(
+            client.read, "read.gq", "get_memory", {"slug": from_slug}
+        ):
             return {
                 "from": from_slug,
                 "to": to_slug,
@@ -2741,11 +2794,12 @@ async def memory_link(
                 "linked": False,
                 "missing": [to_slug],
             }
-        client.change_many(
+        await _offload(
+            client.change_many,
             [
                 *topic_steps,
                 ("mutations.gq", "link_tagged", {"from": from_slug, "to": topic_slug}),
-            ]
+            ],
         )
         return {"from": from_slug, "to": topic_slug, "kind": kind, "linked": True}
 
@@ -2753,7 +2807,7 @@ async def memory_link(
     present = {
         slug
         for slug in endpoints
-        if client.read("read.gq", "get_memory", {"slug": slug})
+        if await _offload(client.read, "read.gq", "get_memory", {"slug": slug})
     }
     missing = sorted(endpoints - present)
     if missing:
@@ -2783,7 +2837,8 @@ async def memory_link(
             "reason": "declined",
         }
 
-    client.change(
+    await _offload(
+        client.change,
         "mutations.gq",
         _MEMORY_LINK_MUTATIONS[kind],
         {"from": from_slug, "to": to_slug},
@@ -3443,7 +3498,9 @@ async def workflow_project_advance(
         URL of the GitHub PR if one has been opened.
     """
     now = now_iso()
-    before = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    before = await _offload(
+        client.read, "read.gq", "get_workflow_project", {"slug": slug}
+    )
     prev_phase = before[0].get("phase") if before else None
     advisory = _advance_advisory(prev_phase, phase)
 
@@ -3463,12 +3520,15 @@ async def workflow_project_advance(
         current = before[0] if before else {"slug": slug, "phase": prev_phase}
         return {**current, "advisory": advisory, "advanced": False}
 
-    client.change(
+    await _offload(
+        client.change,
         "mutations.gq",
         "update_workflow_project_phase",
         {"slug": slug, "phase": phase, "github_pr": github_pr, "updated_at": now},
     )
-    rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    rows = await _offload(
+        client.read, "read.gq", "get_workflow_project", {"slug": slug}
+    )
     result = rows[0] if rows else {"slug": slug, "phase": phase}
 
     # Soft validation: flag an unusual transition without blocking it.
@@ -3504,7 +3564,7 @@ async def workflow_project_complete(
     now = now_iso()
 
     trace_slug = f"wt-{slug}"
-    existing = client.read("read.gq", "get_trace", {"slug": trace_slug})
+    existing = await _offload(client.read, "read.gq", "get_trace", {"slug": trace_slug})
     if existing:
         return {"project_slug": slug, "trace_slug": trace_slug, "existed": True}
 
@@ -3521,7 +3581,8 @@ async def workflow_project_complete(
             title="Outcome narrative",
         )
 
-    client.change(
+    await _offload(
+        client.change,
         "mutations.gq",
         "update_workflow_project_complete",
         {
@@ -3533,7 +3594,9 @@ async def workflow_project_complete(
         },
     )
 
-    project_rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
+    project_rows = await _offload(
+        client.read, "read.gq", "get_workflow_project", {"slug": slug}
+    )
     project = project_rows[0] if project_rows else {}
 
     sessions = _project_sessions(slug)
@@ -3555,7 +3618,8 @@ async def workflow_project_complete(
             except (ValueError, TypeError):
                 pass
 
-    client.change_many(
+    await _offload(
+        client.change_many,
         [
             (
                 "mutations.gq",
@@ -3578,7 +3642,7 @@ async def workflow_project_complete(
                 },
             ),
             ("mutations.gq", "link_produced", {"from": slug, "to": trace_slug}),
-        ]
+        ],
     )
 
     return {"project_slug": slug, "trace_slug": trace_slug, "existed": False}
@@ -4553,7 +4617,9 @@ async def task_create(
     # now and would never be auto-unblocked.
     status: TaskStatus = "open"
     for blocker_slug in blocked_by or []:
-        fetched = client.read("read.gq", "get_task", {"slug": blocker_slug})
+        fetched = await _offload(
+            client.read, "read.gq", "get_task", {"slug": blocker_slug}
+        )
         if fetched and fetched[0].get("status") != "closed":
             status = "blocked"
             break
@@ -4603,7 +4669,7 @@ async def task_create(
         steps.append(
             ("mutations.gq", "link_discovered_from", {"from": slug, "to": source})
         )
-    client.change_many(steps)
+    await _offload(client.change_many, steps)
 
     return {"slug": slug, "status": status, "repo": detected_repo}
 
@@ -4839,7 +4905,7 @@ async def task_claim(
     # also upserts a CodeBranch for the checkout's repo+branch and links it
     # WorksOn this task (best-effort).
     holder = _claim_holder(assignee, session_id)
-    rows = client.read("read.gq", "get_task", {"slug": slug})
+    rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
     task = rows[0]
@@ -4851,7 +4917,7 @@ async def task_claim(
         # unblock sweep before rejecting so stale status doesn't permanently prevent
         # claiming.
         _unblock_dependents(task.get("repo"))
-        rows = client.read("read.gq", "get_task", {"slug": slug})
+        rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
         if not rows or rows[0].get("status") == "blocked":
             return {"slug": slug, "claimed": False, "reason": "blocked"}
         task = rows[0]
@@ -4897,11 +4963,11 @@ async def task_claim(
     # would re-apply the claim over whoever committed in the meantime.
     for attempt in range(_CLAIM_MAX_ATTEMPTS):
         try:
-            _update_task(slug, claim, surface_conflict=True)
+            await _offload(_update_task, slug, claim, surface_conflict=True)
             break
         except OmnigraphConflict:
             # A concurrent writer committed between our read and our write.
-            rows = client.read("read.gq", "get_task", {"slug": slug})
+            rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
             fresh = rows[0] if rows else {}
             rival = fresh.get("assignee")
             fresh_lease_started_at = fresh.get("claimed_at") or fresh.get("updated_at")
@@ -4929,7 +4995,7 @@ async def task_claim(
     # Post-write verification: with no store-level CAS, a rival's claim could
     # still have landed last. Re-read and confirm we actually hold it before
     # reporting success, so at most one caller ever sees claimed=True.
-    rows = client.read("read.gq", "get_task", {"slug": slug})
+    rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
     winner = rows[0].get("assignee") if rows else None
     if winner != holder and not force:
         winner_claimed_at = rows[0].get("claimed_at") if rows else None
