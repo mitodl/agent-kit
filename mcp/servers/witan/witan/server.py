@@ -434,11 +434,19 @@ async def _offload(fn, /, *args, **kwargs):
     ``test_scan_notice`` tests, which is why they are worth having.
     """
     ctx = contextvars.copy_context()
-    result = await anyio.to_thread.run_sync(
-        functools.partial(ctx.run, functools.partial(fn, *args, **kwargs))
-    )
-    scan.notice.adopt(ctx)
-    return result
+    try:
+        return await anyio.to_thread.run_sync(
+            functools.partial(ctx.run, functools.partial(fn, *args, **kwargs))
+        )
+    finally:
+        # ★ IN A `finally` BECAUSE THE GUARD RECORDS BEFORE THE WRITE IS ISSUED.
+        # `scan.enforce` notes the redaction and then hands the rewritten params
+        # to the mutation, so a call that redacts and *then* raises — an
+        # `OmnigraphConflict` from `_update_task(surface_conflict=True)`, say —
+        # has already produced a notice. Adopting only on success would discard
+        # it, which is the silent-rewrite failure this module exists to prevent,
+        # just narrowed to the error path.
+        scan.notice.adopt(ctx)
 
 
 def _tool(fn):
@@ -2785,7 +2793,7 @@ async def memory_link(
                 "linked": False,
                 "missing": [from_slug],
             }
-        topic_slug, topic_steps = _resolve_topic_steps(to_slug)
+        topic_slug, topic_steps = await _offload(_resolve_topic_steps, to_slug)
         if topic_slug is None:
             return {
                 "from": from_slug,
@@ -3599,7 +3607,7 @@ async def workflow_project_complete(
     )
     project = project_rows[0] if project_rows else {}
 
-    sessions = _project_sessions(slug)
+    sessions = await _offload(_project_sessions, slug)
 
     session_count = len(sessions)
     phases_seen = list(
@@ -4916,7 +4924,7 @@ async def task_claim(
         # A task can be stale-blocked (blocked_by is empty or all closed). Run the
         # unblock sweep before rejecting so stale status doesn't permanently prevent
         # claiming.
-        _unblock_dependents(task.get("repo"))
+        await _offload(_unblock_dependents, task.get("repo"))
         rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
         if not rows or rows[0].get("status") == "blocked":
             return {"slug": slug, "claimed": False, "reason": "blocked"}
@@ -5007,7 +5015,7 @@ async def task_claim(
             "claimed_at": winner_claimed_at,
             "remedy": _claim_remedy(slug, winner or _UNKNOWN_HOLDER, winner_claimed_at),
         }
-    _track_code_branch(repo_module.detect(), task_slug=slug)
+    await _offload(_track_code_branch, repo_module.detect(), task_slug=slug)
     return {
         "slug": slug,
         "claimed": True,
