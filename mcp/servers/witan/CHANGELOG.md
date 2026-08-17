@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.17.0] - 2026-08-17
+
+### Changed
+
+- **`task_claim` is now a real compare-and-swap.** `_update_task(conditional=…)`
+  states the `graph_commit_id` its own read saw, so the claim applies only while
+  the branch head has not moved (omnigraph #470, witan-core 0.23.0).
+
+  ★ The precondition comes from `_update_task`'s **own** read, not from the
+  caller. That is the invariant the whole thing rests on: the merged row is
+  built from that snapshot, so "the head has not moved" is exactly "nothing
+  changed under the values I am about to write back". A token from any earlier
+  read — including `task_claim`'s own status check — would fence the wrong
+  interval and be worse than no precondition, because it would look rigorous
+  while guaranteeing nothing.
+
+  What this buys is a **truthful** refusal, not a rarer one. Losing was
+  previously inferred from a conflict that might have belonged to someone else;
+  a 412 is the store saying the write did not apply. Expect MORE conflicts than
+  contention, since the precondition is the whole branch head — an unrelated
+  `memory_store` invalidates it exactly like a rival claim.
+
+  Degrades rather than fails: a tier supplying no `graph_commit_id` (pre-#470,
+  or the CLI path) writes unconditionally, which is the previous best-effort
+  claim. The post-write verification therefore STAYS — it is what covers that
+  path, and removing it would make correctness depend on a server capability
+  this code cannot see from where it runs.
+
+- **Raised the `witan-core` floor to `>=0.23`.** Mandatory, not cosmetic:
+  `_update_task` calls `read_with_commit`, added to witan-core in the same
+  change, so 0.22 raises AttributeError on every task update.
+
 ## [0.16.1] - 2026-08-17
 
 ### Fixed

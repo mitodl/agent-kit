@@ -99,6 +99,25 @@ _RETRYABLE = (
     "reprepare from the current branch",
 )
 _NEEDS_REPAIR = ("ahead of manifest", "omnigraph repair")
+
+# The CLI's form of the two conditions `classify_status` keys on by status.
+# Prose again, for the same reason as `_RETRYABLE`: `omnigraph` prints the
+# message and throws the response away, so there is no 412 and no 503 to read
+# here — only what it wrote to stderr.
+#
+# ★ ORDER MATTERS AGAINST `_RETRYABLE`, and the two are checked in the order
+# declared in `_classify_cli_error`. A precondition failure must be recognised
+# BEFORE the retryable markers: it is terminal, and letting a conflict-ish word
+# in the same message win would retry a write the server has told us not to
+# replay. See `_http.PRECONDITION_FAILED` for why 409 and 412 are opposites.
+_PRECONDITION_FAILED = ("precondition_failure", "precondition failed")
+
+# The branch-wide write barrier. Both spellings observed in one local repro,
+# 2026-08-13: "pending Load recovery operation blocks writes on branch 'main'"
+# and "… blocks the synchronous write/control recovery barrier (tables
+# node:ClaimRow); reopen the graph read-write before retrying". Matching the
+# stem they share rather than either sentence.
+_RECOVERY_REQUIRED = ("recovery required", "recovery_required")
 _MAX_ATTEMPTS = 8
 
 # omnigraph uses strict single-version storage: a release that bumps the
@@ -128,6 +147,21 @@ _ADMISSION_CAP_MARKERS = ("in-flight count cap", "byte budget exceeded")
 _ADMISSION_CAP_MAX_ATTEMPTS = 6
 _ADMISSION_CAP_BASE_DELAY = 0.25
 _ADMISSION_CAP_MAX_DELAY = 4.0
+
+# Budget for the branch-wide recovery barrier (see _RECOVERY_REQUIRED). Modelled
+# on the admission cap because it is the same species — the store telling us to
+# come back — and deliberately SHORTER, because the measured barrier is brief:
+# in the 2026-08-13 repro a plain write issued immediately after the losing race
+# succeeded, so the condition clears in well under a second rather than needing
+# a restart-length window like _UNAVAILABLE_MAX_WAIT.
+#
+# Sized so the whole sequence (0.2 + 0.4 + 0.8 + 1.6 + 3.2, capped) stays around
+# 6s: long enough to ride out a barrier raised by a concurrent writer, short
+# enough that a genuinely stuck branch is reported rather than slept through
+# while the caller's deadline burns.
+_RECOVERY_MAX_ATTEMPTS = 6
+_RECOVERY_BASE_DELAY = 0.2
+_RECOVERY_MAX_DELAY = 3.2
 
 # How long one remote call has, end to end, before something ABOVE this library
 # stops waiting for it. witan-core does not know that number and must not
@@ -456,6 +490,12 @@ def _classify_cli_error(stderr: str) -> str:
         return _http.UNAVAILABLE
     if any(m in lowered for m in _ADMISSION_CAP_MARKERS):
         return _http.ADMISSION_CAP
+    # Ahead of _RETRYABLE deliberately — see _PRECONDITION_FAILED. Terminal
+    # beats retryable when a message could be read as either.
+    if any(m in lowered for m in _PRECONDITION_FAILED):
+        return _http.PRECONDITION_FAILED
+    if any(m in lowered for m in _RECOVERY_REQUIRED):
+        return _http.RECOVERY_REQUIRED
     if any(m in lowered for m in _NEEDS_REPAIR):
         return _http.NEEDS_REPAIR
     if any(m in lowered for m in _RETRYABLE):
@@ -913,6 +953,10 @@ def _unavailable_backoff(attempt: int) -> float:
     return _jittered_backoff(attempt, _UNAVAILABLE_BASE_DELAY, _UNAVAILABLE_MAX_DELAY)
 
 
+def _recovery_backoff(attempt: int) -> float:
+    return _jittered_backoff(attempt, _RECOVERY_BASE_DELAY, _RECOVERY_MAX_DELAY)
+
+
 # ── Re-entrant per-store write lock ───────────────────────────────
 #
 # Stores flock cannot coordinate: an http(s) server (writers are other
@@ -1004,6 +1048,42 @@ class OmnigraphConflict(RuntimeError):
     can re-read and decide (see ``task_claim``)."""
 
 
+class WriteIndeterminate(RuntimeError):
+    """A write whose outcome CANNOT BE DETERMINED from the response.
+
+    Raised for `recovery_required` on a write. The store is telling us a
+    recovery operation is outstanding on the branch, and upstream #470 is
+    explicit that the request's "table effects may already require recovery" —
+    so this request may have landed, wholly or partly, and the response does
+    not say which.
+
+    ★ WHY THIS IS TERMINAL RATHER THAN RETRIED, WHICH IS A REVERSAL. An earlier
+    version of this code retried it on a short budget, reasoning from a 0.9.0
+    repro where the same message was a purely transient BYSTANDER BARRIER: six
+    concurrent appends to distinct keys, five losers, and a write issued
+    immediately afterwards succeeded with nothing to repair. That reading is not
+    wrong — it is just not the ONLY thing this response means, and the two are
+    indistinguishable on the wire.
+
+    Given one signal covering both an effect-free barrier and a possibly-applied
+    write, a shorter retry window does not make the retry safe: it only narrows
+    the window in which a duplicate is created after recovery rolls the original
+    forward. So a write stops here and says so, and the caller re-reads.
+
+    A READ carrying the same condition is still retried — repeating a query
+    cannot duplicate anything, and the barrier does clear on its own.
+
+    ★ AND IT IS NOT A `surface_conflict` OUTCOME. A CAS caller must lose a
+    GENUINE race, and this is not evidence of one: the barrier fires for writers
+    contending with nobody. Reporting it as `lost_race` would be a confident
+    wrong answer, which is worse than an error the caller can see.
+
+    Sibling of the transport-level indeterminacy the proxy already raises for a
+    502 — same species of unknowable outcome, same advice: re-read before
+    retrying, because retrying blind writes it twice if it did land.
+    """
+
+
 class WriteQueueFull(RuntimeError):
     """This process already has as many writes in flight against one graph as the
     graph can serve inside the caller's deadline, and the wait for a slot expired.
@@ -1076,6 +1156,31 @@ class OmnigraphClient:
 
     # ── Public API ────────────────────────────────────────────────
 
+    def read_with_commit(
+        self,
+        query_file: str,
+        query_name: str,
+        params: dict,
+    ) -> tuple[list[dict], str | None]:
+        """:meth:`read`, plus the ``graph_commit_id`` its rows were read at.
+
+        That token is the input to :meth:`change`'s ``if_commit``: it names the
+        branch head this snapshot came from, so a later write can demand the
+        head has not moved since. Read and write have to come from the SAME
+        snapshot for the pair to mean anything, which is why this returns both
+        together rather than offering a separate "what is the head now" call —
+        a head fetched independently is already stale by construction.
+
+        ``None`` when the server did not supply one: a pre-#470 omnigraph, or
+        the CLI path, which prints rows and discards the envelope. A caller must
+        treat ``None`` as "no precondition available" and fall back to the
+        best-effort path rather than passing it on — ``if_commit=None`` means an
+        UNCONDITIONAL write, which is exactly what you did not ask for.
+        """
+        rows, envelope = self._read_rows(query_file, query_name, params)
+        commit = envelope.get("graph_commit_id") if isinstance(envelope, dict) else None
+        return rows, commit
+
     def read(
         self,
         query_file: str,
@@ -1083,6 +1188,22 @@ class OmnigraphClient:
         params: dict,
     ) -> list[dict]:
         """Run a named read query. Returns a list of result rows."""
+        return self._read_rows(query_file, query_name, params)[0]
+
+    def _read_rows(
+        self,
+        query_file: str,
+        query_name: str,
+        params: dict,
+    ) -> tuple[list[dict], dict | None]:
+        """The shared read path: rows, plus the response envelope they came in.
+
+        One implementation behind both :meth:`read` and
+        :meth:`read_with_commit` on purpose — the alias-stripping and the
+        0.7.0-envelope handling below are exactly the kind of parsing that
+        drifts when it is copied, and a drift here would show up as a read that
+        works on one path and silently returns different keys on the other.
+        """
         transport = self._http_transport()
         if transport is not None:
             # The server answers with the same JSON body the CLI prints on
@@ -1108,15 +1229,17 @@ class OmnigraphClient:
                 "json",
             )
         if not result.strip():
-            return []
+            return [], None
         try:
             parsed = json.loads(result)
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"omnigraph returned non-JSON: {result!r}") from exc
         # v0.7.0 wraps results in {rows: [...], columns: [...], ...}
+        envelope = parsed if isinstance(parsed, dict) else None
         rows = parsed.get("rows", parsed) if isinstance(parsed, dict) else parsed
         # strip alias prefixes: "p.slug" → "slug"
-        return [{k.split(".", 1)[-1]: v for k, v in row.items()} for row in rows]
+        stripped = [{k.split(".", 1)[-1]: v for k, v in row.items()} for row in rows]
+        return stripped, envelope
 
     def change(
         self,
@@ -1125,6 +1248,7 @@ class OmnigraphClient:
         params: dict,
         *,
         surface_conflict: bool = False,
+        if_commit: str | None = None,
     ) -> None:
         """Run a named mutation query.
 
@@ -1136,6 +1260,24 @@ class OmnigraphClient:
         optimistic-concurrency conflict instead of transparently retrying the
         write. Callers implementing a compare-and-swap (e.g. ``task_claim``) need
         this so a lost race is detectable rather than silently clobbered.
+
+        ``if_commit``: a ``graph_commit_id`` from :meth:`read_with_commit`. The
+        write applies ONLY while that branch head is still current; otherwise it
+        is refused, terminally, having changed nothing.
+
+        ★ THE TWO ARE COMPLEMENTARY, NOT ALTERNATIVES, and a CAS caller wants
+        both. ``if_commit`` is what makes losing a race a FACT rather than an
+        inference — without it the claim path is read, write, re-read and hope.
+        ``surface_conflict`` is what turns that fact into an
+        :class:`OmnigraphConflict` the caller can catch instead of a hard error.
+
+        ★ AND ``if_commit`` IS COARSE. The precondition is the whole branch
+        head, not this row: ANY concurrent write to the graph invalidates the
+        token, so a rival claim and an unrelated ``memory_store`` are
+        indistinguishable. That makes false conflicts a function of total write
+        traffic rather than of contention on what you are claiming. It is still
+        worth having — a refusal is now truthful — but a caller must expect to
+        re-read and retry more often than the contention alone would suggest.
         """
         if self.guard is not None:
             params = self.guard(query_name, params)
@@ -1148,8 +1290,10 @@ class OmnigraphClient:
                 params,
                 "mutate",
                 surface_conflict=surface_conflict,
+                if_graph_commit=if_commit,
             )
             return
+        extra = ["--if-commit", if_commit] if if_commit is not None else []
         self._run(
             "mutate",
             "--query",
@@ -1157,6 +1301,7 @@ class OmnigraphClient:
             query_name,
             "--params",
             json.dumps(params),
+            *extra,
             surface_conflict=surface_conflict,
         )
 
@@ -1366,6 +1511,7 @@ class OmnigraphClient:
         label: str,
         *,
         surface_conflict: bool = False,
+        if_graph_commit: str | None = None,
     ) -> str:
         """Run one query/mutate over HTTP under the shared retry policy.
 
@@ -1377,12 +1523,24 @@ class OmnigraphClient:
         bound on them would only add latency to the one path that has none.
         """
         is_write = verb == "mutate"
-        call = transport.mutate if is_write else transport.query
 
         token = self._resolve_token()
 
         def attempt() -> _AttemptResult:
-            outcome = call(self.graph_id, source, params, token)
+            if not is_write:
+                outcome = transport.query(self.graph_id, source, params, token)
+            elif if_graph_commit is None:
+                # Deliberately not `mutate(..., None)`: an unconditional write
+                # calls the transport exactly as it always did. Keeping the
+                # argument off the call entirely is what lets the precondition
+                # be additive — nothing that does not ask for one can be
+                # affected by its existence, including the several test doubles
+                # implementing the older signature.
+                outcome = transport.mutate(self.graph_id, source, params, token)
+            else:
+                outcome = transport.mutate(
+                    self.graph_id, source, params, token, if_graph_commit
+                )
             return _AttemptResult(
                 outcome.kind,
                 body=outcome.body,
@@ -1637,6 +1795,7 @@ class OmnigraphClient:
         try:
             attempt = 0
             admission_cap_attempt = 0
+            recovery_attempt = 0
             unavailable_attempt = 0
             unavailable_started: float | None = None
             while True:
@@ -1755,6 +1914,60 @@ class OmnigraphClient:
                         f"omnigraph {label} failed after "
                         f"{_ADMISSION_CAP_MAX_ATTEMPTS} attempts (actor "
                         f"admission cap exceeded):\n{err.strip()}"
+                    )
+                if kind == _http.RECOVERY_REQUIRED:
+                    # ★ A WRITE STOPS HERE. See `WriteIndeterminate`: this one
+                    # response covers both an effect-free bystander barrier and
+                    # a request whose table effects may already have landed, and
+                    # nothing on the wire separates them. Retrying the ambiguous
+                    # case duplicates the mutation once recovery rolls the
+                    # original forward, and a shorter budget only shrinks the
+                    # window in which that happens rather than closing it.
+                    #
+                    # Deliberately NOT honouring surface_conflict either: the
+                    # barrier fires for writers contending with nobody, so
+                    # reporting it as a lost race would be a confident wrong
+                    # answer.
+                    if is_write:
+                        raise WriteIndeterminate(
+                            f"omnigraph {label} hit a recovery barrier on the "
+                            f"branch. ITS OUTCOME IS INDETERMINATE — the write "
+                            f"may already have landed, wholly or partly, and "
+                            f"the response does not say which. Re-read before "
+                            f"retrying; retrying blind writes it twice if it "
+                            f"did land:\n{err.strip()}"
+                        ) from None
+                    # A READ is safe to repeat, and the barrier does clear on
+                    # its own — measured self-clearing in under a second. Its
+                    # own budget, like the admission cap: neither consumes
+                    # _MAX_ATTEMPTS.
+                    recovery_attempt += 1
+                    if recovery_attempt < _RECOVERY_MAX_ATTEMPTS:
+                        time.sleep(_recovery_backoff(recovery_attempt))
+                        continue
+                    raise RuntimeError(
+                        f"omnigraph {label} failed after {_RECOVERY_MAX_ATTEMPTS} "
+                        f"attempts — a recovery barrier on the branch kept "
+                        f"blocking the read:\n{err.strip()}"
+                    )
+                if kind == _http.PRECONDITION_FAILED:
+                    # TERMINAL. The caller stated a precondition and it was
+                    # false, so re-sending this exact write is never right —
+                    # upstream never replays it either. A CAS caller still gets
+                    # `OmnigraphConflict` so `task_claim` can re-read and answer
+                    # `lost_race`; everyone else gets a hard error rather than
+                    # a silent retry over the winner.
+                    #
+                    # Note this raises on the FIRST attempt in both branches: it
+                    # does not fall through to the retry counter below, which is
+                    # the difference between this and a 409.
+                    if surface_conflict:
+                        raise OmnigraphConflict(err.strip()) from None
+                    raise RuntimeError(
+                        f"omnigraph {label} was refused because its stated "
+                        f"precondition no longer held — the graph moved since "
+                        f"you read it. NOTHING WAS WRITTEN, and this write must "
+                        f"not be retried as-is; re-read and decide:\n{err.strip()}"
                     )
                 if surface_conflict and kind == _http.RETRYABLE:
                     # A compare-and-swap caller wants to lose the race, not

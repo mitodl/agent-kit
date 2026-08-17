@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.13.1"
+version = "0.13.2"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -65,7 +65,15 @@ dependencies = [
     # parenthetical explicitly declined for 0.19/0.20 — the difference is that
     # trace-context work changed nothing on this package's write path, and this
     # does.
-    "witan-core[cli,remote,observability]>=0.22,<1",
+    # >=0.23 continues the behavioural floor above, for a reason specific to
+    # THIS package's write path: 0.22 retried `recovery_required` on a write,
+    # and 0.23 makes it terminal because the same response can mean the effects
+    # already landed. The ambiguous half of that is a FOREIGN WRITER winning
+    # after local arbitration — and this package's branched clients are exactly
+    # that, since they fall back to the embedded CLI subprocess rather than the
+    # single served writer process. So an index write racing another writer is
+    # where a wrong retry would actually duplicate rows.
+    "witan-core[cli,remote,observability]>=0.23,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled
@@ -149,7 +157,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 [tool.bumpversion]
-current_version = "0.13.1"
+current_version = "0.13.2"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

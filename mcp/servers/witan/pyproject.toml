@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.16.1"
+version = "0.17.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -85,7 +85,19 @@ dependencies = [
   # witan-council on 0.21 ships a task_claim that cannot keep its promise.
   # Maintainer decision 2026-08-17 to pin it rather than let an external install
   # resolve that pair.
-  "witan-core[cli,remote,observability]>=0.22,<1",
+  # ★ >=0.23 IS AN IMPORT/ATTRIBUTE FLOOR, i.e. the ordinary kind, and it is the
+  # exact case the paragraph at the top of this block warns about after five
+  # occurrences: `server.py`'s `_update_task` calls
+  # `client.read_with_commit(...)`, a method ADDED to witan-core in the same
+  # change as its caller. On 0.22 that is an AttributeError on every task
+  # update, not a soft degradation. The workspace resolves witan-core by path
+  # so nothing in CI catches it; only a published install does.
+  #
+  # (0.23 also makes `recovery_required` on a write terminal instead of retried
+  # and a 412 terminal — behaviour `task_claim` now depends on — but the
+  # AttributeError above is what makes this floor mandatory rather than a
+  # judgement call.)
+  "witan-core[cli,remote,observability]>=0.23,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -130,7 +142,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.16.1"
+current_version = "0.17.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

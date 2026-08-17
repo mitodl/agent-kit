@@ -60,6 +60,65 @@ NEEDS_REPAIR = "needs_repair"
 FATAL = "fatal"
 OK = "ok"
 
+#: A conditional write whose stated precondition was false — omnigraph's
+#: ``/mutate/if-graph-commit`` answering 412, or the CLI's ``--if-commit``
+#: exiting 4 (upstream #470).
+#:
+#: ★ TERMINAL, AND DELIBERATELY NOT :data:`RETRYABLE`, WHICH IS THE WHOLE POINT
+#: OF GIVING IT ITS OWN NAME. 409 and 412 look like the same family and mean
+#: opposite things:
+#:
+#:     409  the branch head moved under you. Nothing was written. Try again —
+#:          the same write is still what you want.
+#:     412  the precondition YOU STATED is false. Nothing was written. Do NOT
+#:          re-send this write; re-read and decide what you now want.
+#:
+#: Retrying a 412 re-applies a claim over whoever won the race, which is the
+#: exact failure ``surface_conflict`` exists to prevent. Upstream is explicit
+#: that it "is never replayed by the insert-only reprepare loop", and this
+#: classification is what makes that true on our side too.
+PRECONDITION_FAILED = "precondition_failed"
+
+#: The branch-wide write barrier: "recovery required for operation …: pending
+#: Load recovery operation blocks writes on branch 'main'".
+#:
+#: ★ ONE SIGNAL, TWO CONDITIONS, AND THE CLIENT CANNOT TELL THEM APART. That
+#: ambiguity is the whole reason this has its own name, and it is why a WRITE
+#: carrying it is terminal rather than retried:
+#:
+#:   * an effect-free BYSTANDER BARRIER — reproduced locally in ~20s with six
+#:     concurrent single-row appends to DISTINCT keys, where five losers got
+#:     this and a write issued immediately afterwards succeeded with no
+#:     ``omnigraph repair`` and no intervention; and
+#:   * a request whose TABLE EFFECTS MAY ALREADY HAVE LANDED — upstream #470 is
+#:     explicit that a foreign writer winning after local arbitration returns
+#:     this, "not a false 412", with recovery outstanding.
+#:
+#: A shorter retry budget does not make the second case safe. It only narrows
+#: the window in which a duplicate mutation is created once recovery rolls the
+#: original operation forward. So ``_retry_loop`` raises
+#: :class:`~witan_core.omnigraph.WriteIndeterminate` for a write and lets the
+#: caller re-read, and retries only READS, which cannot duplicate anything.
+#:
+#: ★ NOT :data:`NEEDS_REPAIR`. Running ``omnigraph repair --force`` on a store
+#: that merely had a concurrent writer is a far heavier hammer than the
+#: situation warrants, and the repro showed nothing needed repairing.
+#:
+#: ★ AND NOT SOMETHING ``surface_conflict`` MAY SWALLOW. A CAS caller must lose
+#: a GENUINE race rather than treat a bystander barrier as a lost race — the
+#: barrier fires for writers contending with nobody, so reporting ``lost_race``
+#: there would be a confident wrong answer.
+RECOVERY_REQUIRED = "recovery_required"
+
+#: The conditional-write precondition header (upstream #470). Sent raw and
+#: exactly once, and ONLY to the dedicated routes below — the ordinary
+#: ``/mutate`` rejects it outright rather than ignoring an unknown header,
+#: which is what stops a precondition from being silently dropped.
+IF_GRAPH_COMMIT_HEADER = "Omnigraph-If-Graph-Commit"
+
+#: Path suffix selecting the conditional variant of a write route.
+IF_GRAPH_COMMIT_SUFFIX = "/if-graph-commit"
+
 # A pooled connection idle longer than this is closed and reopened rather than
 # reused. It is not a performance knob — it is what keeps the connect-failure
 # classification honest.
@@ -144,12 +203,32 @@ def classify_status(status: int, message: str) -> str:
     """
     if status == 429:
         return ADMISSION_CAP
+    lowered = message.lower()
+    if status == 412 or "precondition_failure" in lowered:
+        # See PRECONDITION_FAILED: terminal, and the inverse of the 409 rule
+        # further down. Checked BEFORE the message markers because a
+        # precondition failure is not up for reinterpretation by prose — the
+        # server has told us our stated condition was false, and no wording
+        # makes that retryable.
+        return PRECONDITION_FAILED
     if status == 503:
+        # ★ NOT EVERY 503 IS "WAIT FOR THE SERVER". The blanket rule below rests
+        # on a premise this one breaks: that a 503 proves the request was
+        # rejected rather than applied. `recovery_required` carries the
+        # opposite warning — upstream #470 says "table effects may already
+        # require recovery" — so retrying it could re-apply a write whose
+        # effects are partly present. That is the indeterminate write this
+        # project spent four defects removing, arriving through the status code
+        # we trust most.
+        #
+        # It gets its own kind so `_retry_loop` can act on that distinction:
+        # terminal for a write, retried for a read. See RECOVERY_REQUIRED.
+        if "recovery required" in lowered or "recovery_required" in lowered:
+            return RECOVERY_REQUIRED
         # The server is up enough to answer but not to serve. Same remedy as an
         # unreachable server (wait for it), and the response proves the request
         # was rejected rather than applied, so it is safe for writes too.
         return UNAVAILABLE
-    lowered = message.lower()
     if any(marker in lowered for marker in ("ahead of manifest", "omnigraph repair")):
         return NEEDS_REPAIR
     if any(
@@ -284,9 +363,17 @@ class PooledTransport:
         token: str | None,
         *,
         idempotent: bool,
+        if_graph_commit: str | None = None,
     ) -> Outcome:
         """POST ``payload`` as JSON to ``path`` and classify the result."""
-        return self._send("POST", path, json.dumps(payload), token, idempotent)
+        return self._send(
+            "POST",
+            path,
+            json.dumps(payload),
+            token,
+            idempotent,
+            if_graph_commit=if_graph_commit,
+        )
 
     def get(self, path: str, token: str | None) -> Outcome:
         """GET ``path``. A read, so always safe to repeat."""
@@ -299,6 +386,8 @@ class PooledTransport:
         body: str | None,
         token: str | None,
         idempotent: bool,  # noqa: FBT001 — positional from two private callers
+        *,
+        if_graph_commit: str | None = None,
     ) -> Outcome:
         """Send one request and classify the result.
 
@@ -326,6 +415,14 @@ class PooledTransport:
             headers["Content-Length"] = str(len(body.encode()))
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        if if_graph_commit is not None:
+            # Upstream #470 requires EXACTLY ONE of these, sent raw, and only to
+            # the dedicated `/…/if-graph-commit` routes — the ordinary routes
+            # reject the header rather than ignoring it. That fail-closed design
+            # is deliberate and worth preserving on this side: an old server
+            # 404s the conditional route before executing anything, instead of
+            # silently dropping the precondition and mutating unconditionally.
+            headers[IF_GRAPH_COMMIT_HEADER] = if_graph_commit
 
         for attempt in range(2):
             conn, reused = self._checkout()
@@ -400,13 +497,31 @@ class PooledTransport:
             idempotent=True,
         )
 
-    def mutate(self, graph_id: str, source: str, params: dict, token: str | None):
-        """``POST /graphs/<id>/mutate`` — a write. Never repeated implicitly."""
+    def mutate(
+        self,
+        graph_id: str,
+        source: str,
+        params: dict,
+        token: str | None,
+        if_graph_commit: str | None = None,
+    ):
+        """``POST /graphs/<id>/mutate`` — a write. Never repeated implicitly.
+
+        With ``if_graph_commit`` this becomes ``…/mutate/if-graph-commit``,
+        applying only while that branch head is still current. A stale token is
+        a terminal 412 (:data:`PRECONDITION_FAILED`), never a silent
+        unconditional write — the route and the header move together precisely
+        so there is no way to ask for a precondition and not get one.
+        """
+        path = f"/graphs/{graph_id}/mutate"
+        if if_graph_commit is not None:
+            path += IF_GRAPH_COMMIT_SUFFIX
         return self.post(
-            f"/graphs/{graph_id}/mutate",
+            path,
             {"query": source, "params": params},
             token,
             idempotent=False,
+            if_graph_commit=if_graph_commit,
         )
 
     def graphs(self, token: str | None):

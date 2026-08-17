@@ -1,5 +1,7 @@
 """End-to-end tests for the dependency-aware task tracker."""
 
+import pytest
+
 from .conftest import requires_omnigraph
 
 
@@ -752,3 +754,93 @@ def test_claim_consecutive_conflicts_stay_surfaced_no_clobber(server, monkeypatc
     # both conflicts were surfaced (never fell through to a blind-retry write)
     assert calls["n"] == 2
     assert server.task_get(t["slug"])["assignee"] == "agentB"
+
+
+# ── conditional claims (omnigraph #470 compare-and-swap) ─────────────
+
+
+@requires_omnigraph
+def test_claim_states_the_precondition_from_its_own_read(server, monkeypatch):
+    """★ THE INVARIANT THAT MAKES THE CAS MEAN ANYTHING.
+
+    The token must be the one `_update_task` read the merged row at — not one
+    from any earlier read — because `merged` is built from THAT snapshot. A
+    token from a different read fences the wrong interval, which is worse than
+    no precondition at all: it looks rigorous and guarantees nothing.
+    """
+    from witan import server as srv
+
+    t = server.task_create(title="conditional", description="x")
+    seen = {}
+    real_read = srv.client.read_with_commit
+    real_change = srv.client.change
+
+    def spy_read(*args, **kwargs):
+        rows, commit = real_read(*args, **kwargs)
+        seen["read_commit"] = commit
+        return rows, commit
+
+    def spy_change(*args, if_commit=None, **kwargs):
+        seen.setdefault("if_commit", if_commit)
+        return real_change(*args, **kwargs)
+
+    monkeypatch.setattr(srv.client, "read_with_commit", spy_read)
+    monkeypatch.setattr(srv.client, "change", spy_change)
+
+    server.task_claim(t["slug"], assignee="agentA")
+
+    assert "if_commit" in seen, "the claim write stated no precondition at all"
+    assert seen["if_commit"] == seen["read_commit"]
+
+
+@requires_omnigraph
+def test_claim_still_works_when_the_tier_supplies_no_commit(server, monkeypatch):
+    """The degraded path must stay a working claim, not an exception.
+
+    A pre-#470 server (and the CLI path) returns no `graph_commit_id`. That is a
+    supported state — it is exactly today's best-effort claim, with the
+    post-write verification as the backstop — so it must not raise, and it must
+    not send a precondition it does not have.
+    """
+    from witan import server as srv
+
+    t = server.task_create(title="no-commit-tier", description="x")
+    real_read = srv.client.read_with_commit
+    real_change = srv.client.change
+    sent = {}
+
+    def read_without_commit(*args, **kwargs):
+        rows, _ = real_read(*args, **kwargs)
+        return rows, None
+
+    def spy_change(*args, if_commit=None, **kwargs):
+        sent.setdefault("if_commit", if_commit)
+        return real_change(*args, **kwargs)
+
+    monkeypatch.setattr(srv.client, "read_with_commit", read_without_commit)
+    monkeypatch.setattr(srv.client, "change", spy_change)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+
+    assert res["claimed"] is True
+    assert sent["if_commit"] is None
+
+
+@requires_omnigraph
+def test_conditional_update_refuses_to_ride_with_extra_steps(server):
+    """Refused, not silently downgraded to an unconditional multi-step commit.
+
+    A caller asking for a precondition and not getting one is the failure mode
+    this whole change exists to remove, so the unsupported combination is an
+    error rather than a quiet weakening.
+    """
+    from witan import server as srv
+
+    t = server.task_create(title="batched", description="x")
+    with pytest.raises(ValueError, match="extra_steps"):
+        srv._update_task(
+            t["slug"],
+            {"status": "in_progress"},
+            conditional=True,
+            extra_steps=[("mutations.gq", "update_task", {"slug": t["slug"]})],
+        )

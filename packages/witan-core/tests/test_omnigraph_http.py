@@ -166,6 +166,35 @@ def err(status: int, message: str, code: str | None = None) -> FakeResponse:
         (409, "some future conflict wording nobody has written yet", ogh.RETRYABLE),
         (500, "manifest table version mismatch", ogh.RETRYABLE),
         (500, "head is ahead of manifest, run omnigraph repair", ogh.NEEDS_REPAIR),
+        # ★ 412 IS THE INVERSE OF THE 409 ABOVE, and the pair is parametrised
+        # together on purpose: they look like the same family and mean opposite
+        # things. 409 = the head moved, re-send. 412 = the condition you stated
+        # is false, do NOT re-send.
+        (412, "precondition_failure", ogh.PRECONDITION_FAILED),
+        (
+            412,
+            "graph commit 01M08E24Y… no longer current",
+            ogh.PRECONDITION_FAILED,
+        ),
+        # A 4xx/5xx carrying the wording but not the status — the server is
+        # entitled to reword, and the body is a second, independent signal.
+        # (NOT a 200: `_send` returns OK for any 2xx without ever consulting
+        # this function, so a 200 case here would test an unreachable path and
+        # say nothing about the CLI classifier, which lives in omnigraph.py and
+        # is covered in test_omnigraph.py.)
+        (500, "precondition_failure {expected: A, actual: B}", ogh.PRECONDITION_FAILED),
+        # ★ NOT EVERY 503 IS "WAIT FOR THE SERVER". This one warns that table
+        # effects may already need recovery, so the blanket UNAVAILABLE retry
+        # would re-apply a partly-present write.
+        (
+            503,
+            "recovery required for operation 01KZY…: pending Load recovery "
+            "operation blocks writes on branch 'main'",
+            ogh.RECOVERY_REQUIRED,
+        ),
+        (503, "recovery_required", ogh.RECOVERY_REQUIRED),
+        # …but a plain 503 still is.
+        (503, "service temporarily overloaded", ogh.UNAVAILABLE),
         # A denial is not a transient condition. Retrying a Cedar denial just
         # burns the budget and reports the same thing 8 attempts later.
         (403, "policy denied action 'change' for unknown actor 'act-x'", ogh.FATAL),
@@ -639,6 +668,84 @@ def test_change_posts_to_mutate(monkeypatch, tmp_path, _fake_http):
     assert json.loads(request["body"])["params"] == {"slug": "a"}
 
 
+# ── conditional writes (upstream #470) ───────────────────────────────
+
+
+def test_if_commit_selects_the_conditional_route_and_sends_the_header(
+    monkeypatch, tmp_path, _fake_http
+):
+    """Route and header move together, because #470 requires exactly that.
+
+    The ordinary `/mutate` REJECTS the header rather than ignoring it, and an
+    old server 404s the conditional route before executing — both of which only
+    protect us if we never send one without the other.
+    """
+    _fake_http.script = [ok({"affected_nodes": 1, "affected_edges": 0})]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"}, if_commit="01M08E24Y")
+
+    request = _fake_http.created[0].requests[0]
+    assert request["path"] == "/graphs/council/mutate/if-graph-commit"
+    assert request["headers"][ogh.IF_GRAPH_COMMIT_HEADER] == "01M08E24Y"
+
+
+def test_an_ordinary_write_sends_no_precondition_header(
+    monkeypatch, tmp_path, _fake_http
+):
+    """★ THE SAFETY DIRECTION. A write that did not ask for a precondition must
+    reach the plain route with no header — otherwise every existing caller
+    silently acquires a whole-branch precondition and starts failing under any
+    concurrent write at all."""
+    _fake_http.script = [ok({"affected_nodes": 1, "affected_edges": 0})]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    request = _fake_http.created[0].requests[0]
+    assert request["path"] == "/graphs/council/mutate"
+    assert ogh.IF_GRAPH_COMMIT_HEADER not in request["headers"]
+
+
+def test_read_with_commit_returns_the_snapshot_token(monkeypatch, tmp_path, _fake_http):
+    """The token has to come back with the rows it belongs to.
+
+    A head fetched separately is stale by construction, so the pairing is the
+    whole point — `_update_task` fences the interval between THIS read and its
+    own write.
+    """
+    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
+    _fake_http.script = [
+        ok({"rows": [{"m.slug": "a"}], "graph_commit_id": "01M08E24Y"})
+    ]
+    client = _client(monkeypatch, "http://host:8080", tmp_path, graph_id="council")
+
+    rows, commit = client.read_with_commit("read.gq", "find_memory", {"slug": "a"})
+
+    assert rows == [{"slug": "a"}]
+    assert commit == "01M08E24Y"
+
+
+def test_read_with_commit_tolerates_a_server_that_supplies_none(
+    monkeypatch, tmp_path, _fake_http
+):
+    """A pre-#470 tier answers without the field, and that must be a clean
+    `None` rather than a KeyError — it is the signal to fall back to the
+    best-effort path, which is a supported state, not a broken one."""
+    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
+    _fake_http.script = [ok({"rows": [{"m.slug": "a"}]})]
+    client = _client(monkeypatch, "http://host:8080", tmp_path, graph_id="council")
+
+    rows, commit = client.read_with_commit("read.gq", "find_memory", {"slug": "a"})
+
+    assert rows == [{"slug": "a"}]
+    assert commit is None
+
+
 # ── the seam: a real 409 response all the way out to OmnigraphConflict ───
 
 # What omnigraph-server actually returns to a racing writer, captured from a QA
@@ -684,6 +791,128 @@ def test_a_409_over_http_surfaces_as_a_conflict_to_a_cas_caller(
     # ONE attempt. A retry would re-apply the claim over whoever won the race,
     # which is the entire reason `surface_conflict` exists.
     assert len(_fake_http.created[0].requests) == 1
+
+
+def test_a_412_is_terminal_for_an_ordinary_writer(monkeypatch, tmp_path, _fake_http):
+    """★ THE ASYMMETRY THAT MATTERS, and the reason this asserts a COUNT.
+
+    The 409 test below proves a conflict is retried. This proves a precondition
+    failure is NOT — one attempt, then a hard error. Retrying it would re-send a
+    write the server has explicitly told us it will never replay, over whoever
+    won the race.
+
+    Scripting only ONE response is itself part of the assertion: a second
+    attempt would exhaust the script and blow up differently.
+    """
+    _fake_http.script = [err(412, "precondition_failure", code="precondition_failed")]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(RuntimeError, match="must not be retried"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_a_412_surfaces_as_a_conflict_to_a_cas_caller(
+    monkeypatch, tmp_path, _fake_http
+):
+    """`task_claim` catches `OmnigraphConflict` to re-read and answer lost_race.
+
+    A conditional claim that loses must reach that handler, not a bare
+    RuntimeError — same destination as the 409 path, reached from a status that
+    must never be retried.
+    """
+    _fake_http.script = [err(412, "precondition_failure", code="precondition_failed")]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(OmnigraphConflict):
+        client.change("mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=True)
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_recovery_required_on_a_write_is_indeterminate_and_terminal(
+    monkeypatch, tmp_path, _fake_http
+):
+    """★ ONE SIGNAL COVERS TWO CONDITIONS, SO THE WRITE STOPS.
+
+    `recovery_required` is both an effect-free bystander barrier (measured: six
+    concurrent appends to DISTINCT keys, five losers, a write immediately after
+    succeeds) AND a request whose table effects may already have landed
+    (upstream #470). Nothing on the wire separates them.
+
+    An earlier version of this code retried it on a short budget. That was
+    wrong, and shortening the budget was the tell: it narrows the window in
+    which a duplicate is created after recovery rolls the original forward
+    rather than closing it. Scripting only ONE response is part of the
+    assertion — a retry would exhaust the script.
+    """
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(503, "recovery required for operation 01KZY…: pending Load recovery")
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(og.WriteIndeterminate, match="INDETERMINATE"):
+        client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert len(_fake_http.created[0].requests) == 1
+
+
+def test_recovery_required_on_a_write_is_never_a_lost_race(
+    monkeypatch, tmp_path, _fake_http
+):
+    """★ AND IT IS STILL NOT A CONFLICT, even though it is now terminal.
+
+    The barrier fires for writers contending with nobody, so a CAS caller must
+    NOT receive `OmnigraphConflict` here — `task_claim` would answer
+    `lost_race` to someone who never raced anyone, which is a confident wrong
+    answer and worse than an error. It gets the indeterminate error like any
+    other writer.
+    """
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    _fake_http.script = [
+        err(503, "recovery required for operation 01KZY…: pending Load recovery")
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    with pytest.raises(og.WriteIndeterminate):
+        client.change("mutations.gq", "claim", {"slug": "t-1"}, surface_conflict=True)
+
+
+def test_recovery_required_on_a_read_still_retries(monkeypatch, tmp_path, _fake_http):
+    """A read cannot duplicate anything, and the barrier does clear itself.
+
+    ★ `connect_retry=False` IS WHAT MAKES THIS DISCRIMINATE, and the first draft
+    did not. Classified UNAVAILABLE (the old behaviour) a 503 ALSO retries, so a
+    plain "did it try twice?" passed with and without the change. With
+    connect_retry off, UNAVAILABLE degrades to FATAL and raises on attempt 1,
+    while RECOVERY_REQUIRED keeps its budget — so the two diverge.
+    """
+    monkeypatch.setattr(og.time, "sleep", lambda *_: None)
+    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
+    _fake_http.script = [
+        err(503, "recovery required for operation 01KZY…: pending Load recovery"),
+        ok({"rows": [{"m.slug": "a"}]}),
+    ]
+    client = _client(
+        monkeypatch,
+        "http://host:8080",
+        tmp_path,
+        graph_id="council",
+        connect_retry=False,
+    )
+
+    assert client.read("read.gq", "find_memory", {"slug": "a"}) == [{"slug": "a"}]
+    assert len(_fake_http.created[0].requests) == 2
 
 
 def test_a_409_over_http_is_retried_for_an_ordinary_writer(
