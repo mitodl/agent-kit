@@ -148,6 +148,22 @@ def err(status: int, message: str, code: str | None = None) -> FakeResponse:
         # rather than applied, so it is safe to retry even for a write.
         (503, "service unavailable", ogh.UNAVAILABLE),
         (409, "stale view; refresh and retry", ogh.RETRYABLE),
+        # ★ THE SAME STATUS WITH A MESSAGE NO MARKER MATCHES. Verbatim from a QA
+        # `task_claim` race, 2026-08-17. The line above passed on its PROSE, so
+        # it never established that a 409 is retryable — and this one fell
+        # through to FATAL, which is what broke the compare-and-swap path. The
+        # status is now the signal, so the server may reword the precondition
+        # (it has, twice) without silently making a losable race fatal again.
+        (
+            409,
+            "write authority 'graph_head:main' changed during preparation "
+            "(expected 01M08E24Y2WWC3QVE9MD3K6CWN, current 01M08E27K5J56HF8QZ7GX61X3F)"
+            " — reprepare from the current branch state",
+            ogh.RETRYABLE,
+        ),
+        # Prose the classifier has never seen, on a status that speaks for
+        # itself. This is the case the status rule exists for.
+        (409, "some future conflict wording nobody has written yet", ogh.RETRYABLE),
         (500, "manifest table version mismatch", ogh.RETRYABLE),
         (500, "head is ahead of manifest, run omnigraph repair", ogh.NEEDS_REPAIR),
         # A denial is not a transient condition. Retrying a Cedar denial just
@@ -169,6 +185,17 @@ def test_repair_wins_over_retryable_when_both_words_appear():
     """
     message = "stale view: head is ahead of manifest, run omnigraph repair"
     assert ogh.classify_status(500, message) == ogh.NEEDS_REPAIR
+
+
+def test_repair_still_wins_over_a_conflict_status():
+    """The message markers must stay ahead of the 409 rule, not behind it.
+
+    A store that needs reconciling cannot be fixed by trying again, however the
+    status is labelled — so a 409 that names a repair condition must still
+    repair. Ordering is the only thing enforcing that, hence a test on it.
+    """
+    message = "head is ahead of manifest, run omnigraph repair"
+    assert ogh.classify_status(409, message) == ogh.NEEDS_REPAIR
 
 
 def test_error_message_uses_the_servers_own_wording():

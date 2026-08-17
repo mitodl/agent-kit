@@ -76,7 +76,28 @@ T = TypeVar("T", int, float)
 # advisory lock (prevention) and, as a safety net, retry transient "stale view"
 # conflicts and `omnigraph repair` stores already in the drifted state.
 _WRITE_SUBCOMMANDS = {"mutate", "load", "optimize", "cleanup"}
-_RETRYABLE = ("stale view", "manifest table version", "refresh and retry")
+# The last two markers are the REMOTE write-authority precondition — a racing
+# writer whose branch head moved between prepare and commit. Over HTTP that
+# arrives as a 409 and `classify_status` keys on the status, which is strictly
+# better; the CLI prints the message and throws the response away, so here the
+# prose is all there is. Both spellings are matched because the sentence names
+# the condition twice and neither half is guaranteed to survive a reword:
+#
+#   write authority 'graph_head:main' changed during preparation
+#   (expected 01M08E24Y…, current 01M08E27K…) — reprepare from the current
+#   branch state (HTTP 409, conflict)
+#
+# It belongs with the local Lance conflicts rather than in its own kind because
+# the remedy is identical: re-read and try again, and — for a CAS caller that
+# passed `surface_conflict` — lose the race cleanly instead of re-applying the
+# write over whoever won it.
+_RETRYABLE = (
+    "stale view",
+    "manifest table version",
+    "refresh and retry",
+    "write authority",
+    "reprepare from the current branch",
+)
 _NEEDS_REPAIR = ("ahead of manifest", "omnigraph repair")
 _MAX_ATTEMPTS = 8
 
