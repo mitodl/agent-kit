@@ -4594,6 +4594,27 @@ def _update_task(
         # THAT snapshot, so demanding the head has not moved since is exactly
         # "nothing changed under the values I am about to write back". A token
         # from any earlier read would fence the wrong interval.
+        if conditional:
+            # ★ THE OTHER HALF OF THE CLAIM TRACE. Pairing this with
+            # `witan.task_claim.verify` is what makes the double-claim
+            # investigation possible at all: for each racer you get the commit
+            # it FENCED against and the commit its verification READ was served
+            # at. A racer that wrote against a stale head, or verified at one,
+            # is then visible rather than hypothesised.
+            #
+            # `read_commit is None` is itself a finding worth seeing — it means
+            # the tier supplied no graph_commit_id and the write went out
+            # UNCONDITIONAL, which is the documented degraded path and would
+            # explain a lost mutual exclusion without any staleness at all.
+            logger.info(
+                "witan.task_update.conditional",
+                extra={
+                    "task_slug": slug,
+                    "assignee": changes.get("assignee"),
+                    "if_graph_commit_id": read_commit,
+                    "unconditional_fallback": read_commit is None,
+                },
+            )
         client.change(
             *update,
             surface_conflict=surface_conflict,
@@ -5061,8 +5082,37 @@ async def task_claim(
     # Post-write verification: with no store-level CAS, a rival's claim could
     # still have landed last. Re-read and confirm we actually hold it before
     # reporting success, so at most one caller ever sees claimed=True.
-    rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
+    #
+    # ★ READ THE COMMIT ID ALONGSIDE, AND LOG IT, BECAUSE THIS BACKSTOP HAS BEEN
+    # OBSERVED TO FAIL. On 2026-08-18 two of eight racers both came out of here
+    # with `claimed: true` on the same task
+    # (tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd). For that,
+    # both re-reads must have shown their own holder — i.e. at least one was
+    # served from a snapshot predating the rival's commit.
+    #
+    # That is a HYPOTHESIS, and this line is what confirms or kills it. Two
+    # racers verifying at DIFFERENT `graph_commit_id`s while each sees itself
+    # proves the stale read directly. Two racers verifying at the SAME commit
+    # and still disagreeing kills it, and the mechanism is something else.
+    #
+    # Worth the log line because the failure is SILENT: every handler reports
+    # `outcome: ok`, so nothing in the existing telemetry distinguishes a
+    # correct claim from a double one. That is the position the first
+    # investigation was in, and it is why it could only infer.
+    rows, verify_commit = await _offload(
+        client.read_with_commit, "read.gq", "get_task", {"slug": slug}
+    )
     winner = rows[0].get("assignee") if rows else None
+    logger.info(
+        "witan.task_claim.verify",
+        extra={
+            "task_slug": slug,
+            "holder": holder,
+            "winner_seen": winner,
+            "verify_graph_commit_id": verify_commit,
+            "claim_granted": winner == holder or force,
+        },
+    )
     if winner != holder and not force:
         winner_claimed_at = rows[0].get("claimed_at") if rows else None
         return {
