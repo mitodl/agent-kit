@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.17.1"
+version = "0.17.2"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -97,7 +97,12 @@ dependencies = [
   # and a 412 terminal — behaviour `task_claim` now depends on — but the
   # AttributeError above is what makes this floor mandatory rather than a
   # judgement call.)
-  "witan-core[cli,remote,observability]>=0.23,<1",
+  #
+  # >=0.24 for the `sentry` extra requested above: 0.23 has no such extra
+  # published, so anything resolving below 0.24 would silently install
+  # without sentry-sdk (or error on the unknown extra) rather than getting
+  # Sentry reporting at all.
+  "witan-core[cli,remote,observability,sentry]>=0.24,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -142,7 +147,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.17.1"
+current_version = "0.17.2"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

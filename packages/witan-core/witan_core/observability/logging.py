@@ -52,6 +52,38 @@ _EXCEPTION_RENDERER = structlog.processors.ExceptionRenderer(
 # the reference package's list, minus its Django/Celery entries.
 _NOISY_LOGGERS = ("botocore", "boto3", "urllib3", "httpx", "httpcore", "hpack")
 
+
+def _wrap_for_formatter_preserving_exc_info(
+    logger: Any, name: str, event_dict: Any
+) -> Any:
+    """Like ``ProcessorFormatter.wrap_for_formatter``, but forwards ``exc_info``
+    onto the stdlib ``LogRecord`` it produces.
+
+    structlog's own ``wrap_for_formatter`` packages the whole event dict as a
+    single positional arg and does not forward ``exc_info``/``stack_info`` to
+    the record at all -- by design, since it expects *this formatter's own*
+    processor chain (``formatter_processors`` below) to re-render the
+    exception from the event dict at format time, not from ``record.exc_info``.
+    That leaves ``record.exc_info`` permanently ``None`` for every
+    structlog-native call: invisible to anything that inspects the raw stdlib
+    record for it, which is exactly what Sentry's ``LoggingIntegration`` does
+    (see ``observability.telemetry.configure_sentry``) -- it would see an
+    ERROR record with no exception and report a bare message, silently
+    discarding the traceback and breaking issue grouping. Forwarding it here
+    costs nothing for JSON/console rendering: the pipeline no longer consumes
+    ``exc_info`` before this point (see ``set_exc_info`` in
+    :func:`configure_logging`), so it is still present in the event dict for
+    the formatter's own ``_EXCEPTION_RENDERER`` pass to render exactly once.
+    """
+    args, kwargs = structlog.stdlib.ProcessorFormatter.wrap_for_formatter(
+        logger, name, event_dict
+    )
+    exc_info = event_dict.get("exc_info")
+    if exc_info:
+        kwargs["exc_info"] = exc_info
+    return args, kwargs
+
+
 _configured = False
 
 
@@ -148,22 +180,22 @@ def configure_logging(
     shared = _shared_processors()
 
     if fmt == "console":
-        # ConsoleRenderer formats exc_info tuples itself, so the pipeline only
-        # has to make sure exc_info is populated.
-        exception_processor: Any = structlog.dev.set_exc_info
+        # ConsoleRenderer formats exc_info tuples itself.
         renderer: Any = structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty())
         formatter_processors = [
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             renderer,
         ]
     else:
-        exception_processor = _EXCEPTION_RENDERER
         renderer = structlog.processors.JSONRenderer()
-        # The exception renderer is listed twice on purpose. The pipeline copy
-        # handles structlog-native events; the formatter copy handles foreign
-        # stdlib records, whose exc_info is attached by ProcessorFormatter after
-        # the pipeline has already run. Dropping either one loses tracebacks
-        # from that half of the sources.
+        # The exception renderer runs here, at format time, for BOTH sources:
+        # a foreign stdlib record's exc_info is attached by ProcessorFormatter
+        # right before this chain runs, and a structlog-native record's
+        # exc_info survives to this point too -- the pipeline below only
+        # *normalizes* it (set_exc_info), it does not render/consume it early.
+        # Rendering it any earlier is what silently dropped exc_info off the
+        # stdlib LogRecord for every native call; see
+        # _wrap_for_formatter_preserving_exc_info.
         formatter_processors = [
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             _EXCEPTION_RENDERER,
@@ -173,8 +205,14 @@ def configure_logging(
     structlog.configure(
         processors=[
             *shared,
-            exception_processor,
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+            # Normalizes exc_info=True to a real (type, value, traceback)
+            # tuple without rendering/consuming it -- rendering happens once,
+            # in formatter_processors above, at format time. This is what
+            # keeps exc_info alive long enough for
+            # _wrap_for_formatter_preserving_exc_info to forward it onto the
+            # stdlib LogRecord.
+            structlog.dev.set_exc_info,
+            _wrap_for_formatter_preserving_exc_info,
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
         logger_factory=structlog.stdlib.LoggerFactory(),

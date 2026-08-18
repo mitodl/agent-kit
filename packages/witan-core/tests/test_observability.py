@@ -15,6 +15,7 @@ from witan_core.observability.logging import (
 from witan_core.observability.processors import inject_k8s_context, inject_otel_context
 from witan_core.observability.telemetry import (
     configure_metrics,
+    configure_sentry,
     configure_tracing,
     reset_telemetry,
 )
@@ -129,6 +130,35 @@ def test_exception_is_rendered_for_stdlib_records(capsys):
         logging.getLogger("dep").exception("failed")
     payload = json.loads(capsys.readouterr().err.strip())
     assert payload["exception"]
+
+
+def test_exc_info_reaches_the_stdlib_record_for_structlog_events():
+    # The rendered JSON having an "exception" key (test above) is not enough
+    # to prove this works: that field is produced from the *event dict*,
+    # while Sentry's LoggingIntegration inspects the raw stdlib LogRecord's
+    # exc_info attribute directly (see configure_sentry). Those are two
+    # different pieces of data, and it's possible for the first to be
+    # correct while the second is silently None -- which is exactly what
+    # happened before _wrap_for_formatter_preserving_exc_info existed: the
+    # pipeline rendered the JSON fine but stripped exc_info before it ever
+    # reached the record. Assert on the record itself, not the rendered
+    # output, to catch that class of regression.
+    configure_logging(log_format="json", level="INFO")
+    records = []
+    logging.getLogger().addHandler(
+        type(
+            "_Capture", (logging.Handler,), {"emit": lambda self, r: records.append(r)}
+        )()
+    )
+    try:
+        msg = "boom"
+        raise ValueError(msg)
+    except ValueError:
+        get_logger("test").exception("failed")
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[0] is ValueError
+    assert str(records[0].exc_info[1]) == "boom"
 
 
 def test_level_filters_below_threshold(capsys):
@@ -304,3 +334,62 @@ def test_configure_observability_wires_everything(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert json.loads(captured.err.strip())["event"] == "wired"
+
+
+# ── Sentry gating ───────────────────────────────────────────────────────────
+# A syntactically valid DSN. sentry_sdk.init() never makes a network call --
+# only sending an actual event would -- so this is safe to use unconditionally
+# in tests.
+_VALID_DSN = "https://abc123@o123456.ingest.sentry.io/123456"
+
+
+def test_sentry_is_skipped_without_a_dsn(monkeypatch):
+    # Every local CLI run and every stdio session lands here, same as tracing
+    # without an OTel endpoint.
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    assert configure_sentry() is None
+
+
+def test_sentry_is_configured_with_a_dsn(monkeypatch):
+    monkeypatch.setenv("SENTRY_DSN", _VALID_DSN)
+    client = configure_sentry()
+    assert client is not None
+    assert client.is_active()
+
+
+def test_repeat_sentry_calls_return_the_same_client(monkeypatch):
+    # Same contract as configure_tracing/configure_metrics: the return value
+    # answers "what is installed", not "did this call install it".
+    monkeypatch.setenv("SENTRY_DSN", _VALID_DSN)
+    first = configure_sentry()
+    assert configure_sentry() is first
+
+
+def test_sentry_setup_never_raises_on_a_bad_dsn(monkeypatch):
+    # sentry_sdk.init() raises BadDsn synchronously for a malformed DSN. That
+    # must degrade to an un-instrumented process, not take the server down on
+    # boot -- same contract as a misconfigured OTel exporter.
+    monkeypatch.setenv("SENTRY_DSN", "not-a-real-dsn")
+    assert configure_sentry() is None
+
+
+def test_configure_observability_configures_sentry_too(monkeypatch):
+    monkeypatch.setenv("SENTRY_DSN", _VALID_DSN)
+    configure_observability(log_format="json", level="INFO", instrument=False)
+    assert configure_sentry().is_active()
+
+
+def test_sentry_breadcrumbs_include_debug_records(monkeypatch):
+    # LoggingIntegration's own default breadcrumb threshold is INFO, which
+    # would silently drop every DEBUG-level exc_info=True call this codebase
+    # makes for expected, already-handled failures (see configure_sentry's
+    # docstring) rather than turning them into breadcrumbs. configure_sentry
+    # must pass level=DEBUG explicitly to override that default.
+    import sentry_sdk
+
+    monkeypatch.setenv("SENTRY_DSN", _VALID_DSN)
+    configure_logging(log_format="json", level="DEBUG")
+    configure_sentry()
+    get_logger("test").debug("a debug breadcrumb")
+    breadcrumbs = list(sentry_sdk.get_isolation_scope()._breadcrumbs)
+    assert any(b["message"].find("a debug breadcrumb") != -1 for b in breadcrumbs)

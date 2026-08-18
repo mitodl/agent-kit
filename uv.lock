@@ -1684,6 +1684,19 @@ wheels = [
 ]
 
 [[package]]
+name = "sentry-sdk"
+version = "2.68.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5b/94/23b7dd072acb9628907bd3f4fbf61794a7b12a9db8f33c1276f70ae5ac92/sentry_sdk-2.68.0.tar.gz", hash = "sha256:648c58e9887311a03470a41539e24bdbbf64a30ca4f5336f7e3dcc87276400b3", size = 1008854, upload-time = "2026-08-13T09:06:21.268Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7d/9b/e2421d08956d0bc4691d995393d835e563886bff499d8fb10fdefae85a8d/sentry_sdk-2.68.0-py3-none-any.whl", hash = "sha256:538e56c2d03679d42f7c0cb5f1af73a7a510b00abc7e296c13ac49b107b713a4", size = 518670, upload-time = "2026-08-13T09:06:19.735Z" },
+]
+
+[[package]]
 name = "shellingham"
 version = "1.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2188,7 +2201,7 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.13.2"
+version = "0.13.3"
 source = { editable = "mcp/servers/witan-code" }
 dependencies = [
     { name = "agent-config-kit" },
@@ -2207,7 +2220,7 @@ dependencies = [
     { name = "tree-sitter-sql" },
     { name = "tree-sitter-typescript" },
     { name = "tree-sitter-yaml" },
-    { name = "witan-core", extra = ["cli", "observability", "remote"] },
+    { name = "witan-core", extra = ["cli", "observability", "remote", "sentry"] },
 ]
 
 [package.optional-dependencies]
@@ -2241,7 +2254,7 @@ requires-dist = [
     { name = "tree-sitter-sql", specifier = ">=0.3,<0.4" },
     { name = "tree-sitter-typescript", specifier = ">=0.23,<0.24" },
     { name = "tree-sitter-yaml", specifier = ">=0.7,<0.8" },
-    { name = "witan-core", extras = ["cli", "remote", "observability"], editable = "packages/witan-core" },
+    { name = "witan-core", extras = ["cli", "remote", "observability", "sentry"], editable = "packages/witan-core" },
 ]
 provides-extras = ["tasks"]
 
@@ -2254,7 +2267,7 @@ test = [
 
 [[package]]
 name = "witan-core"
-version = "0.23.0"
+version = "0.24.0"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
@@ -2276,6 +2289,9 @@ remote = [
     { name = "fastmcp" },
     { name = "httpx2" },
 ]
+sentry = [
+    { name = "sentry-sdk" },
+]
 
 [package.dev-dependencies]
 test = [
@@ -2288,6 +2304,7 @@ test = [
     { name = "opentelemetry-sdk" },
     { name = "pytest" },
     { name = "rich" },
+    { name = "sentry-sdk" },
     { name = "structlog" },
 ]
 
@@ -2302,9 +2319,10 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'observability'", specifier = ">=1.31" },
     { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.31" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
+    { name = "sentry-sdk", marker = "extra == 'sentry'", specifier = ">=2.20,<3" },
     { name = "structlog", marker = "extra == 'observability'", specifier = ">=25" },
 ]
-provides-extras = ["cli", "mcp", "remote", "observability"]
+provides-extras = ["cli", "mcp", "remote", "observability", "sentry"]
 
 [package.metadata.requires-dev]
 test = [
@@ -2317,12 +2335,13 @@ test = [
     { name = "opentelemetry-sdk", specifier = ">=1.31" },
     { name = "pytest", specifier = ">=8" },
     { name = "rich", specifier = ">=13" },
+    { name = "sentry-sdk", specifier = ">=2.20,<3" },
     { name = "structlog", specifier = ">=25" },
 ]
 
 [[package]]
 name = "witan-council"
-version = "0.17.1"
+version = "0.17.2"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },
@@ -2333,7 +2352,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
     { name = "tomli-w" },
-    { name = "witan-core", extra = ["cli", "observability", "remote"] },
+    { name = "witan-core", extra = ["cli", "observability", "remote", "sentry"] },
 ]
 
 [package.dev-dependencies]
@@ -2351,7 +2370,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "rich", specifier = ">=13" },
     { name = "tomli-w", specifier = ">=1,<2" },
-    { name = "witan-core", extras = ["cli", "remote", "observability"], editable = "packages/witan-core" },
+    { name = "witan-core", extras = ["cli", "remote", "observability", "sentry"], editable = "packages/witan-core" },
 ]
 
 [package.metadata.requires-dev]

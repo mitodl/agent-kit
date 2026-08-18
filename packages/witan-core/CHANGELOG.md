@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.24.0] - 2026-08-18
+
+### Added
+
+- **`observability.configure_sentry()` and the `sentry` extra.** Gated on
+  `SENTRY_DSN`, idempotent, and never-fatal — same contract as
+  `configure_tracing`/`configure_metrics`. Hooks `sentry_sdk`'s stdlib
+  `LoggingIntegration` onto the chain `configure_logging()` already
+  terminates in, so `log.error`/`log.exception` reach Sentry with grouped,
+  traceback-carrying issues and no separate `capture_exception()` call
+  needed at the site.
+
+  Kept as its own extra rather than folded into `observability`, since not
+  every deployment wants a second SaaS error-tracking dependency pulled in
+  by default. Capped `sentry-sdk<3` — the workspace's blanket
+  `prerelease = "allow"` (needed for `fastmcp-slim`) would otherwise resolve
+  Sentry's 3.0 alpha, which bundles its own `opentelemetry-sdk`.
+
+### Fixed
+
+- **`configure_logging()` no longer silently drops `exc_info` off the stdlib
+  `LogRecord` for structlog-native calls.** The JSON pipeline rendered a
+  correct `exception` field in the log line while *also* handing the
+  underlying `logging.LogRecord` an empty `exc_info` — because structlog's
+  own `ProcessorFormatter.wrap_for_formatter` packages the whole event dict
+  as a single positional arg and never forwards `exc_info`/`stack_info` to
+  the record at all. Anything that inspects the raw record for it — like
+  `LoggingIntegration` above — saw an ERROR record with no exception and
+  reported a bare message, discarding the traceback. Fixed by normalizing
+  (not rendering) `exc_info` earlier in the pipeline and forwarding it
+  explicitly in a new `_wrap_for_formatter_preserving_exc_info`; log output
+  is unchanged, since the exception is still rendered exactly once, now at
+  format time for every source instead of early for structlog-native ones.
+
 ## [0.23.0] - 2026-08-17
 
 ### Added

@@ -17,11 +17,18 @@ answer, so a ``MeterProvider`` is installed alongside the tracer.
 
 Telemetry is never allowed to take the server down: a misconfigured endpoint or
 a missing exporter package degrades to a warning and an un-instrumented process.
+
+**Sentry is gated on its own variable, independent of OTel.** Alloy/Tempo
+already have every span; Sentry's value-add is issue grouping and regression
+alerting on top of the exceptions this process already logs, so it hooks the
+same stdlib logging chain ``configure_logging`` terminates in rather than
+standing up a second tracing pipeline.
 """
 
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 import os
 from typing import Any
 
@@ -36,6 +43,7 @@ _instrumented = False
 # cannot tell them apart.
 _tracer_provider: Any | None = None
 _meter_provider: Any | None = None
+_sentry_client: Any | None = None
 
 
 def _endpoint() -> str | None:
@@ -178,6 +186,66 @@ def configure_metrics() -> Any | None:
     return provider
 
 
+def configure_sentry() -> Any | None:
+    """Install the Sentry SDK. Returns the client in effect, or ``None``.
+
+    Same idempotency and never-fatal contract as :func:`configure_tracing`:
+    ``None`` means genuinely unconfigured (no ``SENTRY_DSN``, or a client that
+    failed to install), and a repeat call returns the client already in effect
+    rather than re-initializing.
+
+    ``LoggingIntegration``'s ``event_level`` (``ERROR``) is passed explicitly
+    because the whole point of hooking it onto the stdlib chain
+    ``configure_logging`` terminates in is that it does the filtering: the
+    many ``exc_info=True`` calls throughout witan at DEBUG/INFO/WARNING for
+    expected, already-handled failures stay exactly that — breadcrumbs, not
+    Sentry issues — while an actual ``log.error``/``log.exception`` reaches
+    Sentry with no separate ``capture_exception`` call needed at the site.
+    ``level`` (the breadcrumb threshold) is passed as ``DEBUG`` too, rather
+    than left at the SDK's own ``INFO`` default: the sentence above is only
+    true if DEBUG records become breadcrumbs rather than being silently
+    dropped by a second, stricter threshold underneath ours — the process's
+    own ``WITAN_LOG_LEVEL``/root logger level already decides what reaches a
+    handler at all, and this should not gate more tightly than that.
+    """
+    global _sentry_client  # noqa: PLW0603 - module-level singleton
+    if _sentry_client is not None:
+        return _sentry_client
+    dsn = os.environ.get("SENTRY_DSN")
+    if not dsn:
+        return None
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+
+        sentry_sdk.init(
+            dsn=dsn,
+            environment=os.environ.get("SENTRY_ENVIRONMENT")
+            or os.environ.get("KUBERNETES_NAMESPACE"),
+            release=os.environ.get("SENTRY_RELEASE"),
+            # Tempo (via the OTel setup above) already carries every span;
+            # Sentry's own tracing would just be a second, disconnected
+            # sample of the same requests.
+            traces_sample_rate=0.0,
+            send_default_pii=False,
+            integrations=[
+                LoggingIntegration(level=logging.DEBUG, event_level=logging.ERROR)
+            ],
+        )
+        client = sentry_sdk.get_client()
+        if not client.is_active():
+            # A malformed-but-not-raising config (e.g. a DSN string sentry_sdk
+            # accepts syntactically but treats as inert) lands here rather than
+            # in the except below.
+            log.warning("sentry.setup_produced_inactive_client")
+            return None
+    except Exception:  # noqa: BLE001 - telemetry must never be fatal
+        log.warning("sentry.setup_failed", exc_info=True)
+        return None
+    _sentry_client = client
+    return client
+
+
 def auto_instrument() -> None:
     """Apply every installed OTel instrumentor.
 
@@ -211,7 +279,7 @@ def auto_instrument() -> None:
 
 
 def reset_telemetry() -> None:
-    """Clear the once-only guards and the OTel globals. For tests.
+    """Clear the once-only guards and the OTel/Sentry globals. For tests.
 
     Clearing our own guards is not enough. ``set_tracer_provider`` /
     ``set_meter_provider`` install process-wide singletons that outlive the test
@@ -221,11 +289,23 @@ def reset_telemetry() -> None:
     not provide a Meter" onto stderr. That lands in the middle of an unrelated
     test's captured output and breaks it. Reaching for the private globals is
     what the OTel SDK's own test suite does for the same reason.
+
+    Sentry's SDK carries an equivalent process-wide global (its "current
+    scope"'s client), cleared the same way: through the public
+    ``get_global_scope().set_client(None)`` rather than a private attribute,
+    since the SDK exposes one.
     """
-    global _tracer_provider, _meter_provider, _instrumented  # noqa: PLW0603
+    global _tracer_provider, _meter_provider, _instrumented, _sentry_client  # noqa: PLW0603
     _tracer_provider = None
     _meter_provider = None
     _instrumented = False
+    _sentry_client = None
+    try:
+        import sentry_sdk
+
+        sentry_sdk.get_global_scope().set_client(None)
+    except ImportError:  # pragma: no cover - requires the `sentry` extra
+        pass
     try:
         from opentelemetry import metrics, trace
         from opentelemetry.util import _once
