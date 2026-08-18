@@ -6,6 +6,7 @@ import inspect
 import json
 import math
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -695,9 +696,31 @@ def _claim_remedy(slug: str, held_by: str, lease_started_at: str | None) -> str:
 
 # Bounded re-tries for the best-effort CAS claim loop: on each surfaced
 # optimistic-concurrency conflict we re-read and either bail (a rival won) or
-# re-attempt the claim. Small, since a claim conflicting this many times in a row
-# without a rival taking it is pathological.
-_CLAIM_MAX_ATTEMPTS = 3
+# re-attempt the claim. Was 3 with no backoff between attempts — three
+# back-to-back immediate re-attempts have no chance against the contention
+# windows tk-the-write-gate-is-sized-against-a-3-45s-solo-wri-73fc2b measured
+# (loaded writes taking 17-44s), so an unrelated conflict on a hot table (e.g.
+# node:Task, written by every claim/update/close across every session) would
+# exhaust this budget and escape as a raw OmnigraphConflict — see
+# tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414. Widened and
+# paired with a short jittered backoff below; still deliberately short next to
+# the 30s call deadline, since a real fix for multi-second contention is the
+# write-gate/batching work, not a longer spin here.
+_CLAIM_MAX_ATTEMPTS = 5
+_CLAIM_BACKOFF_BASE = 0.25
+_CLAIM_BACKOFF_CAP = 3.0
+
+
+def _claim_backoff(attempt: int) -> float:
+    """Jittered exponential backoff between CAS retry attempts.
+
+    Jitter matters here specifically because the trigger case is a burst of
+    concurrent claimers on the same task/table — lockstep exponential backoff
+    would just have them collide again on the next attempt.
+    """
+    delay = _CLAIM_BACKOFF_BASE * (2 ** (attempt - 1))
+    jitter = random.uniform(0, 0.1 * delay)
+    return min(delay + jitter, _CLAIM_BACKOFF_CAP)
 
 # Bounds for task_claim's post-write verification catch-up loop (see the
 # comment at the call site) — sized above the largest staleness gap actually
@@ -4947,7 +4970,9 @@ async def task_claim(
     The coordination primitive for parallel/multi-user agents — call it before
     starting a ready task so others see it is taken. Returns ``{"claimed": true,
     …}`` on success, or ``{"claimed": false, "reason": …}`` when the task is
-    closed, still blocked, or held by someone else. The lease (``claimed_at``)
+    closed, still blocked, held by someone else (``"held"``/``"lost_race"``),
+    or the graph is too busy to complete the CAS after retrying
+    (``"contention"`` — safe and expected to retry). The lease (``claimed_at``)
     expires if the holder never closes/releases, making the task reclaimable
     (see ``task_ready``); re-calling renews it. Pass ``force`` to steal a live
     claim.
@@ -5095,9 +5120,34 @@ async def task_claim(
                     ),
                 }
             # The conflict was unrelated (or the rival's lease has lapsed) —
-            # retry the claim now that the manifest has advanced.
+            # back off and retry the claim now that the manifest has advanced.
             if attempt + 1 == _CLAIM_MAX_ATTEMPTS:
-                raise
+                # Exhausted the budget without ever seeing a rival hold the
+                # task — this is contention from OTHER writes on the graph
+                # (see the "expect more conflicts than contention" note
+                # above), not a real race for this task. Report it as a
+                # retryable condition rather than leaking the raw omnigraph
+                # "write authority ... changed during preparation" text to
+                # the caller (tk-task-claim-exhausts-its-3-attempt-no-backoff-
+                # cas-674414).
+                logger.warning(
+                    "witan.task_claim.contention_exhausted",
+                    task_slug=slug,
+                    holder=holder,
+                    attempts=_CLAIM_MAX_ATTEMPTS,
+                )
+                return {
+                    "slug": slug,
+                    "claimed": False,
+                    "reason": "contention",
+                    "remedy": (
+                        f"{_CLAIM_MAX_ATTEMPTS} claim attempts each hit an "
+                        "unrelated write conflict elsewhere on the graph, "
+                        "not a rival holder of this task. The graph is under "
+                        "heavy write load; retry task_claim."
+                    ),
+                }
+            await anyio.sleep(_claim_backoff(attempt + 1))
 
     # Post-write verification: with no store-level CAS, a rival's claim could
     # still have landed last. Re-read and confirm we actually hold it before

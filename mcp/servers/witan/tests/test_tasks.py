@@ -756,6 +756,78 @@ def test_claim_consecutive_conflicts_stay_surfaced_no_clobber(server, monkeypatc
     assert server.task_get(t["slug"])["assignee"] == "agentB"
 
 
+@requires_omnigraph
+def test_claim_exhausted_conflicts_report_contention_not_raise(server, monkeypatch):
+    """Every retry attempt hits an OCC conflict from unrelated writes elsewhere
+    on the graph — no rival ever actually holds the task. task_claim must
+    exhaust its retry budget and report a structured ``{"claimed": false,
+    "reason": "contention"}`` — not leak the raw `OmnigraphConflict` (the
+    omnigraph "write authority ... changed during preparation" prose) to the
+    caller. See tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414."""
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    t = server.task_create(title="perpetually-contended", description="x")
+    calls = {"n": 0}
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(srv.anyio, "sleep", no_sleep)
+
+    def always_conflict(*args, surface_conflict=False, **kwargs):
+        if surface_conflict:
+            calls["n"] += 1
+            raise graph_mod.OmnigraphConflict(
+                "write authority 'table_head:node:Task' changed during preparation"
+            )
+        raise AssertionError("unconditional write attempted mid-claim")
+
+    monkeypatch.setattr(srv.client, "change", always_conflict)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+
+    assert res["claimed"] is False
+    assert res["reason"] == "contention"
+    assert calls["n"] == srv._CLAIM_MAX_ATTEMPTS
+    # left exactly as it started, not half-claimed
+    assert server.task_get(t["slug"])["status"] == "open"
+
+
+@requires_omnigraph
+def test_claim_retries_back_off_between_attempts(server, monkeypatch):
+    """A retry after an unrelated conflict must wait, not immediately re-fire —
+    three back-to-back attempts have no chance against multi-second write
+    contention. See tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414."""
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    t = server.task_create(title="briefly-contended", description="x")
+    real_change = srv.client.change
+    calls = {"n": 0}
+    sleeps = []
+
+    async def recording_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(srv.anyio, "sleep", recording_sleep)
+
+    def flaky_once(*args, surface_conflict=False, **kwargs):
+        if surface_conflict and calls["n"] == 0:
+            calls["n"] += 1
+            raise graph_mod.OmnigraphConflict("stale view")
+        return real_change(*args, surface_conflict=surface_conflict, **kwargs)
+
+    monkeypatch.setattr(srv.client, "change", flaky_once)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+
+    assert res["claimed"] is True
+    # attempt 1's backoff: base delay plus up to 10% jitter (see _claim_backoff)
+    assert len(sleeps) == 1
+    assert srv._CLAIM_BACKOFF_BASE <= sleeps[0] <= srv._CLAIM_BACKOFF_BASE * 1.1
+
+
 # ── conditional claims (omnigraph #470 compare-and-swap) ─────────────
 
 
