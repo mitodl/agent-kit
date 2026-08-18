@@ -194,13 +194,19 @@ def configure_sentry() -> Any | None:
     failed to install), and a repeat call returns the client already in effect
     rather than re-initializing.
 
-    ``LoggingIntegration``'s default ``event_level`` (``ERROR``) is passed
-    explicitly because the whole point of hooking it onto the stdlib chain
+    ``LoggingIntegration``'s ``event_level`` (``ERROR``) is passed explicitly
+    because the whole point of hooking it onto the stdlib chain
     ``configure_logging`` terminates in is that it does the filtering: the
     many ``exc_info=True`` calls throughout witan at DEBUG/INFO/WARNING for
     expected, already-handled failures stay exactly that — breadcrumbs, not
     Sentry issues — while an actual ``log.error``/``log.exception`` reaches
     Sentry with no separate ``capture_exception`` call needed at the site.
+    ``level`` (the breadcrumb threshold) is passed as ``DEBUG`` too, rather
+    than left at the SDK's own ``INFO`` default: the sentence above is only
+    true if DEBUG records become breadcrumbs rather than being silently
+    dropped by a second, stricter threshold underneath ours — the process's
+    own ``WITAN_LOG_LEVEL``/root logger level already decides what reaches a
+    handler at all, and this should not gate more tightly than that.
     """
     global _sentry_client  # noqa: PLW0603 - module-level singleton
     if _sentry_client is not None:
@@ -222,7 +228,9 @@ def configure_sentry() -> Any | None:
             # sample of the same requests.
             traces_sample_rate=0.0,
             send_default_pii=False,
-            integrations=[LoggingIntegration(event_level=logging.ERROR)],
+            integrations=[
+                LoggingIntegration(level=logging.DEBUG, event_level=logging.ERROR)
+            ],
         )
         client = sentry_sdk.get_client()
         if not client.is_active():

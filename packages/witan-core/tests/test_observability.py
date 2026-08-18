@@ -132,6 +132,35 @@ def test_exception_is_rendered_for_stdlib_records(capsys):
     assert payload["exception"]
 
 
+def test_exc_info_reaches_the_stdlib_record_for_structlog_events():
+    # The rendered JSON having an "exception" key (test above) is not enough
+    # to prove this works: that field is produced from the *event dict*,
+    # while Sentry's LoggingIntegration inspects the raw stdlib LogRecord's
+    # exc_info attribute directly (see configure_sentry). Those are two
+    # different pieces of data, and it's possible for the first to be
+    # correct while the second is silently None -- which is exactly what
+    # happened before _wrap_for_formatter_preserving_exc_info existed: the
+    # pipeline rendered the JSON fine but stripped exc_info before it ever
+    # reached the record. Assert on the record itself, not the rendered
+    # output, to catch that class of regression.
+    configure_logging(log_format="json", level="INFO")
+    records = []
+    logging.getLogger().addHandler(
+        type(
+            "_Capture", (logging.Handler,), {"emit": lambda self, r: records.append(r)}
+        )()
+    )
+    try:
+        msg = "boom"
+        raise ValueError(msg)
+    except ValueError:
+        get_logger("test").exception("failed")
+    assert len(records) == 1
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[0] is ValueError
+    assert str(records[0].exc_info[1]) == "boom"
+
+
 def test_level_filters_below_threshold(capsys):
     configure_logging(log_format="json", level="WARNING")
     get_logger("test").info("suppressed")
@@ -348,3 +377,19 @@ def test_configure_observability_configures_sentry_too(monkeypatch):
     monkeypatch.setenv("SENTRY_DSN", _VALID_DSN)
     configure_observability(log_format="json", level="INFO", instrument=False)
     assert configure_sentry().is_active()
+
+
+def test_sentry_breadcrumbs_include_debug_records(monkeypatch):
+    # LoggingIntegration's own default breadcrumb threshold is INFO, which
+    # would silently drop every DEBUG-level exc_info=True call this codebase
+    # makes for expected, already-handled failures (see configure_sentry's
+    # docstring) rather than turning them into breadcrumbs. configure_sentry
+    # must pass level=DEBUG explicitly to override that default.
+    import sentry_sdk
+
+    monkeypatch.setenv("SENTRY_DSN", _VALID_DSN)
+    configure_logging(log_format="json", level="DEBUG")
+    configure_sentry()
+    get_logger("test").debug("a debug breadcrumb")
+    breadcrumbs = list(sentry_sdk.get_isolation_scope()._breadcrumbs)
+    assert any(b["message"].find("a debug breadcrumb") != -1 for b in breadcrumbs)
