@@ -5101,10 +5101,25 @@ async def task_claim(
             # A concurrent writer committed between our read and our write.
             rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
             fresh = rows[0] if rows else {}
+            fresh_status = fresh.get("status")
+            # ★ REVALIDATE CLAIMABILITY BEFORE EVER RETRYING, not just before
+            # giving up. `_update_task`'s merge sets `status` from `claim`
+            # unconditionally (see its docstring) — it does not care what the
+            # fresh row it reads says — so a retry that goes ahead while the
+            # task is now closed/blocked would silently resurrect it to
+            # in_progress rather than conflict again. That window used to be
+            # a bare network round-trip; the backoff below (and the wider
+            # attempt budget) makes it wide enough to matter. Bail with the
+            # real reason instead of looping back into a write that would
+            # stomp it.
+            if fresh_status == "closed":
+                return {"slug": slug, "claimed": False, "reason": "closed"}
+            if fresh_status == "blocked":
+                return {"slug": slug, "claimed": False, "reason": "blocked"}
             rival = fresh.get("assignee")
             fresh_lease_started_at = fresh.get("claimed_at") or fresh.get("updated_at")
             if (
-                fresh.get("status") == "in_progress"
+                fresh_status == "in_progress"
                 and rival != holder
                 and not _lease_expired(fresh_lease_started_at)
                 and not force
@@ -5119,13 +5134,15 @@ async def task_claim(
                         slug, rival or _UNKNOWN_HOLDER, fresh_lease_started_at
                     ),
                 }
-            # The conflict was unrelated (or the rival's lease has lapsed) —
-            # back off and retry the claim now that the manifest has advanced.
+            # The task itself still looks claimable, so the conflict came
+            # from something else on the branch (an unrelated write, a rival
+            # claim already released, a same-holder update, or — with
+            # `force=True` — a still-live rival we intend to steal anyway).
+            # The branch-head precondition does not tell us which; back off
+            # and retry now that the manifest has advanced.
             if attempt + 1 == _CLAIM_MAX_ATTEMPTS:
                 # Exhausted the budget without ever seeing a rival hold the
-                # task — this is contention from OTHER writes on the graph
-                # (see the "expect more conflicts than contention" note
-                # above), not a real race for this task. Report it as a
+                # task or the task become closed/blocked. Report it as a
                 # retryable condition rather than leaking the raw omnigraph
                 # "write authority ... changed during preparation" text to
                 # the caller (tk-task-claim-exhausts-its-3-attempt-no-backoff-
@@ -5141,10 +5158,12 @@ async def task_claim(
                     "claimed": False,
                     "reason": "contention",
                     "remedy": (
-                        f"{_CLAIM_MAX_ATTEMPTS} claim attempts each hit an "
-                        "unrelated write conflict elsewhere on the graph, "
-                        "not a rival holder of this task. The graph is under "
-                        "heavy write load; retry task_claim."
+                        f"{_CLAIM_MAX_ATTEMPTS} claim attempts each hit a "
+                        "write conflict on the graph without the task itself "
+                        "becoming closed, blocked, or held by a rival — most "
+                        "likely heavy write load elsewhere on the graph, "
+                        "though the branch-head precondition cannot fully "
+                        "rule out a same-task race. Retry task_claim."
                     ),
                 }
             await anyio.sleep(_claim_backoff(attempt + 1))
