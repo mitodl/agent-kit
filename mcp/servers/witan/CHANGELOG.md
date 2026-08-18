@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.17.4] - 2026-08-18
+
+### Fixed
+
+- **`task_claim` no longer leaks a raw omnigraph conflict to callers under
+  write contention.** Fixes
+  tk-task-claim-exhausts-its-3-attempt-no-backoff-cas-674414: the CAS retry
+  loop fired 3 immediate, unbacked-off attempts and, on exhaustion, re-raised
+  the raw `OmnigraphConflict` — surfacing omnigraph's internal "write
+  authority ... changed during preparation" text straight through the MCP
+  boundary whenever an unrelated write kept colliding on a hot table (most
+  often `node:Task`, written by every claim/update/close across every
+  session). Widened the retry budget to 5 attempts, added jittered backoff
+  between them, and report exhaustion as a structured `{"claimed": false,
+  "reason": "contention"}` instead.
+- **A CAS retry no longer risks resurrecting a task that closed mid-retry.**
+  `_update_task`'s merge sets `status` from the caller's `claim` dict
+  unconditionally, regardless of what its own fresh read shows, so a retry
+  that didn't revalidate first could silently revert a close (or a new
+  block) committed during the backoff window back to `in_progress`. The
+  post-conflict re-read now checks for `closed`/`blocked` and reports that
+  reason instead of ever looping back into a write that would stomp it.
+
 ## [0.17.3] - 2026-08-18
 
 ### Fixed
