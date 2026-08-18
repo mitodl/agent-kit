@@ -777,7 +777,16 @@ def test_claim_states_the_precondition_from_its_own_read(server, monkeypatch):
 
     def spy_read(*args, **kwargs):
         rows, commit = real_read(*args, **kwargs)
-        seen["read_commit"] = commit
+        # setdefault, not assignment: `task_claim` calls `read_with_commit`
+        # MORE THAN ONCE — `_update_task`'s own read, and then the post-write
+        # verification. Only the FIRST is the one the precondition must match,
+        # and recording every call let a later one overwrite it.
+        #
+        # This assertion silently changed meaning when the verification read
+        # was switched from `read` to `read_with_commit`: it began comparing
+        # the precondition against the VERIFICATION commit, which legitimately
+        # differs, and failed. The invariant under test never changed.
+        seen.setdefault("read_commit", commit)
         return rows, commit
 
     def spy_change(*args, if_commit=None, **kwargs):

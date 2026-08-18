@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.17.1] - 2026-08-18
+
+### Added
+
+- **Claim tracing: `witan.task_update.conditional` and
+  `witan.task_claim.verify`.** Together they record, per racer, the
+  `graph_commit_id` its conditional claim FENCED against and the one its
+  post-write verification read was SERVED AT.
+
+  Diagnostic for a mutual-exclusion violation observed against CI on
+  2026-08-18, where two of eight racers both left `task_claim` with
+  `claimed: true` on the same task. That failure is **silent** — all eight
+  handlers reported `outcome: ok` with normal durations — so nothing in the
+  existing telemetry separates a correct claim from a double one, and the first
+  investigation could only infer a mechanism it had no way to test.
+
+  The pair is what makes it testable: two racers verifying at *different*
+  commits while each sees itself proves a stale verification read directly;
+  verifying at the *same* commit and still disagreeing kills that hypothesis.
+  `unconditional_fallback` covers a third case nobody has checked — a tier
+  supplying no `graph_commit_id` sends the write unconditional, which would
+  explain a lost mutual exclusion with no staleness involved.
+
+  Kept at INFO rather than DEBUG on purpose: claims are low-frequency, and this
+  is the record of which of two callers was actually granted a task.
+
 ## [0.17.0] - 2026-08-17
 
 ### Changed
