@@ -102,7 +102,14 @@ dependencies = [
   # published, so anything resolving below 0.24 would silently install
   # without sentry-sdk (or error on the unknown extra) rather than getting
   # Sentry reporting at all.
-  "witan-core[cli,remote,observability,sentry]>=0.24,<1",
+  #
+  # ★ >=0.25 IS AN IMPORT/ATTRIBUTE FLOOR: `task_claim`'s post-write
+  # verification now calls `client.read_with_commit(..., at_commit=write_commit)`,
+  # a keyword ADDED to witan-core in the same change as this call site. On
+  # 0.24 that raises `TypeError: read_with_commit() got an unexpected
+  # keyword argument 'at_commit'` on every claim — loud, not a soft
+  # degradation, exactly the case the top of this block warns about.
+  "witan-core[cli,remote,observability,sentry]>=0.25,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code

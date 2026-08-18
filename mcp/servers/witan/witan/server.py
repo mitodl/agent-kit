@@ -4511,11 +4511,18 @@ def _update_task(
     surface_conflict: bool = False,
     conditional: bool = False,
     extra_steps: list[_Step] | None = None,
-) -> dict | None:
+) -> tuple[dict | None, str | None]:
     """Read a task, merge ``changes`` over its mutable fields, write it back.
 
     Mirrors the read-merge-write pattern documented for ``update_memory`` so we
-    avoid per-field update queries. Returns the updated node or ``None``.
+    avoid per-field update queries. Returns ``(updated_node, new_commit)`` —
+    the node is ``None`` when the task did not exist (nothing was written).
+    ``new_commit`` is the ``graph_commit_id`` THIS write produced (only ever
+    non-``None`` when ``conditional=True`` over HTTP — see :meth:`change`),
+    for a caller whose own verification read must not be older than the write
+    it just made. Every caller before ``task_claim`` ignored the row too, so
+    this widened almost nobody's call site — see the tuple-unpack at each of
+    the two callers that actually use the row.
 
     ``surface_conflict`` propagates to the write so a compare-and-swap caller
     (``task_claim``) sees an :class:`~witan.graph.OmnigraphConflict` on a lost
@@ -4558,7 +4565,7 @@ def _update_task(
         raise ValueError(msg)
     rows, read_commit = client.read_with_commit("read.gq", "get_task", {"slug": slug})
     if not rows:
-        return None
+        return None, None
     current = rows[0]
     merged = {
         "slug": slug,
@@ -4581,6 +4588,7 @@ def _update_task(
         "updated_at": now_iso(),
     }
     update: _Step = ("mutations.gq", "update_task", merged)
+    new_commit: str | None = None
     if extra_steps:
         client.change_many([update, *extra_steps], surface_conflict=surface_conflict)
     else:
@@ -4613,12 +4621,12 @@ def _update_task(
                 if_graph_commit_id=read_commit,
                 unconditional_fallback=read_commit is None,
             )
-        client.change(
+        new_commit = client.change(
             *update,
             surface_conflict=surface_conflict,
             if_commit=read_commit if conditional else None,
         )
-    return client.read("read.gq", "get_task", {"slug": slug})[0]
+    return client.read("read.gq", "get_task", {"slug": slug})[0], new_commit
 
 
 @_tool
@@ -4886,7 +4894,7 @@ def task_update(
             ("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
         )
 
-    updated = _update_task(slug, changes, extra_steps=extra_steps)
+    updated, _new_commit = _update_task(slug, changes, extra_steps=extra_steps)
 
     # Closing here must unblock dependents too, matching task_close.
     if status == "closed" and updated is not None:
@@ -4903,7 +4911,7 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
     Closing a blocker is what unblocks its dependents — they become visible to
     ``task_ready`` once every blocker is closed.
     """
-    closed = _update_task(
+    closed, _new_commit = _update_task(
         slug,
         {"status": "closed", "closed_at": now_iso(), "resolution": resolution},
     )
@@ -5044,9 +5052,10 @@ async def task_claim(
     # it — a rival claim and an unrelated `memory_store` are indistinguishable.
     # That is why _CLAIM_MAX_ATTEMPTS exists and why a re-read that finds the
     # task still claimable retries rather than reporting a lost race.
+    write_commit: str | None = None
     for attempt in range(_CLAIM_MAX_ATTEMPTS):
         try:
-            await _offload(
+            _, write_commit = await _offload(
                 _update_task, slug, claim, surface_conflict=True, conditional=True
             )
             break
@@ -5081,24 +5090,28 @@ async def task_claim(
     # still have landed last. Re-read and confirm we actually hold it before
     # reporting success, so at most one caller ever sees claimed=True.
     #
-    # ★ READ THE COMMIT ID ALONGSIDE, AND LOG IT, BECAUSE THIS BACKSTOP HAS BEEN
-    # OBSERVED TO FAIL. On 2026-08-18 two of eight racers both came out of here
-    # with `claimed: true` on the same task
-    # (tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd). For that,
-    # both re-reads must have shown their own holder — i.e. at least one was
-    # served from a snapshot predating the rival's commit.
+    # ★ PINNED TO THE COMMIT OUR OWN WRITE JUST PRODUCED, NOT AN UNCONSTRAINED
+    # "CURRENT MAIN" READ — this is the actual fix for
+    # tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd. On
+    # 2026-08-18, two of eight racers both came out of an unconstrained re-read
+    # here with `claimed: true` on the same task: one racer's verification read
+    # returned a snapshot 2 SECONDS OLDER than a rival's write that had already
+    # committed. A read against `main` has no freshness guarantee; a read
+    # pinned to `write_commit` (this call's own `graph_commit_id`) has exactly
+    # one possible answer regardless of whatever caused that staleness. See
+    # `OmnigraphClient.read_with_commit`'s `at_commit` parameter.
     #
-    # That is a HYPOTHESIS, and this line is what confirms or kills it. Two
-    # racers verifying at DIFFERENT `graph_commit_id`s while each sees itself
-    # proves the stale read directly. Two racers verifying at the SAME commit
-    # and still disagreeing kills it, and the mechanism is something else.
-    #
-    # Worth the log line because the failure is SILENT: every handler reports
-    # `outcome: ok`, so nothing in the existing telemetry distinguishes a
-    # correct claim from a double one. That is the position the first
-    # investigation was in, and it is why it could only infer.
+    # `write_commit is None` — the degraded path (a tier that supplied no
+    # `graph_commit_id`, or the CLI transport, which never does) — falls back
+    # to the SAME unconstrained read this replaces, which is why the log line
+    # below stays: it is what would show that degrade happening in production,
+    # and what would show a re-run of the original bug if the fix regresses.
     rows, verify_commit = await _offload(
-        client.read_with_commit, "read.gq", "get_task", {"slug": slug}
+        client.read_with_commit,
+        "read.gq",
+        "get_task",
+        {"slug": slug},
+        at_commit=write_commit,
     )
     winner = rows[0].get("assignee") if rows else None
     logger.info(

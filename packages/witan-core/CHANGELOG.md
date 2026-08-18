@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.25.0] - 2026-08-18
+
+### Added
+
+- **`OmnigraphClient.read_with_commit(..., at_commit=...)` and
+  `PooledTransport.query(..., snapshot=...)`.** Pins a read to an exact,
+  already-known `graph_commit_id` (omnigraph #470) instead of whatever
+  `main` currently resolves to. HTTP sends `snapshot` on `POST
+  /graphs/<id>/query`; the CLI path sends `--snapshot`. Fixes a real
+  mutual-exclusion violation in witan-council's `task_claim`, proven via
+  paired `witan.task_claim.verify` / `witan.task_update.conditional` traces:
+  a post-write verification read against unpinned `main` could return a
+  snapshot up to 2s older than the write it was meant to confirm, letting
+  two racers both observe themselves as the winning claimant.
+
+- **`OmnigraphClient.change()` now returns the `graph_commit_id` its own
+  write produced** (`str | None`), read straight out of the HTTP
+  transport's `ChangeOutput.commit.graph_commit_id` — no extra read needed
+  to learn it. HTTP only; the CLI path still returns `None` (see the
+  `change()` docstring for why `--json` can't safely close that gap: on a
+  lost `--if-commit` race it moves the precondition-failure message off
+  stderr entirely, which `_classify_cli_error` depends on).
+
 ## [0.24.0] - 2026-08-18
 
 ### Added
