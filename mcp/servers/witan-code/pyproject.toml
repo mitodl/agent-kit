@@ -73,7 +73,7 @@ dependencies = [
     # that, since they fall back to the embedded CLI subprocess rather than the
     # single served writer process. So an index write racing another writer is
     # where a wrong retry would actually duplicate rows.
-    "witan-core[cli,remote,observability]>=0.23,<1",
+    "witan-core[cli,remote,observability,sentry]>=0.23,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled

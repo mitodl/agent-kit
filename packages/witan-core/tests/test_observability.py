@@ -15,6 +15,7 @@ from witan_core.observability.logging import (
 from witan_core.observability.processors import inject_k8s_context, inject_otel_context
 from witan_core.observability.telemetry import (
     configure_metrics,
+    configure_sentry,
     configure_tracing,
     reset_telemetry,
 )
@@ -304,3 +305,46 @@ def test_configure_observability_wires_everything(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert json.loads(captured.err.strip())["event"] == "wired"
+
+
+# ── Sentry gating ───────────────────────────────────────────────────────────
+# A syntactically valid DSN. sentry_sdk.init() never makes a network call --
+# only sending an actual event would -- so this is safe to use unconditionally
+# in tests.
+_VALID_DSN = "https://abc123@o123456.ingest.sentry.io/123456"
+
+
+def test_sentry_is_skipped_without_a_dsn(monkeypatch):
+    # Every local CLI run and every stdio session lands here, same as tracing
+    # without an OTel endpoint.
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    assert configure_sentry() is None
+
+
+def test_sentry_is_configured_with_a_dsn(monkeypatch):
+    monkeypatch.setenv("SENTRY_DSN", _VALID_DSN)
+    client = configure_sentry()
+    assert client is not None
+    assert client.is_active()
+
+
+def test_repeat_sentry_calls_return_the_same_client(monkeypatch):
+    # Same contract as configure_tracing/configure_metrics: the return value
+    # answers "what is installed", not "did this call install it".
+    monkeypatch.setenv("SENTRY_DSN", _VALID_DSN)
+    first = configure_sentry()
+    assert configure_sentry() is first
+
+
+def test_sentry_setup_never_raises_on_a_bad_dsn(monkeypatch):
+    # sentry_sdk.init() raises BadDsn synchronously for a malformed DSN. That
+    # must degrade to an un-instrumented process, not take the server down on
+    # boot -- same contract as a misconfigured OTel exporter.
+    monkeypatch.setenv("SENTRY_DSN", "not-a-real-dsn")
+    assert configure_sentry() is None
+
+
+def test_configure_observability_configures_sentry_too(monkeypatch):
+    monkeypatch.setenv("SENTRY_DSN", _VALID_DSN)
+    configure_observability(log_format="json", level="INFO", instrument=False)
+    assert configure_sentry().is_active()

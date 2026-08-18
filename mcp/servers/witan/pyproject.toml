@@ -97,7 +97,7 @@ dependencies = [
   # and a 412 terminal — behaviour `task_claim` now depends on — but the
   # AttributeError above is what makes this floor mandatory rather than a
   # judgement call.)
-  "witan-core[cli,remote,observability]>=0.23,<1",
+  "witan-core[cli,remote,observability,sentry]>=0.23,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code

@@ -40,6 +40,18 @@ observability = [
     "opentelemetry-sdk>=1.31",
     "opentelemetry-exporter-otlp-proto-http>=1.31",
 ]
+# observability/telemetry.py::configure_sentry. Kept separate from
+# `observability` rather than folded in: Sentry hooks the stdlib logging chain
+# `observability` already sets up, not a new pipeline, so it needs nothing else
+# from that extra — and a deployment that already ships Loki/Tempo via OTel may
+# not want a second, SaaS error-tracking dependency pulled in by default.
+#
+# Capped below 3.0: the workspace's blanket `prerelease = "allow"` (root
+# pyproject.toml, needed for fastmcp-slim) would otherwise let the resolver
+# pick 3.0's alpha line, which bundles its own opentelemetry-sdk dependency —
+# a second, unrelated copy of the exact package `observability` above already
+# pins and configures.
+sentry = ["sentry-sdk>=2.20,<3"]
 
 [project.urls]
 Homepage = "https://github.com/mitodl/agent-kit/tree/main/packages/witan-core"
@@ -70,7 +82,8 @@ replace = 'version = "{new_version}"'
 # the device-auth tests drive it via httpx2.MockTransport. All test-only — the
 # base package requires none of them. structlog + opentelemetry: the
 # `observability` extra; the tests assert on the rendered JSON and on which
-# providers get installed.
+# providers get installed. sentry-sdk: the `sentry` extra; the tests assert on
+# configure_sentry's DSN gating and never-fatal behavior.
 test = [
     "pytest>=8",
     "rich>=13",
@@ -82,6 +95,7 @@ test = [
     "opentelemetry-api>=1.31",
     "opentelemetry-sdk>=1.31",
     "opentelemetry-exporter-otlp-proto-http>=1.31",
+    "sentry-sdk>=2.20,<3",
 ]
 
 [tool.uv.sources]

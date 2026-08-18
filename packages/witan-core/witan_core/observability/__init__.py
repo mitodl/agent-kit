@@ -14,9 +14,11 @@ One call sets everything up::
 It is safe to call more than once and safe to call with nothing configured: with
 no ``OTEL_EXPORTER_OTLP_ENDPOINT`` in the environment, no OTel provider is
 installed and the API's no-op implementations make every span and counter free.
-Logging is always configured, because a local run benefits from it too.
+Sentry is the same shape, gated on ``SENTRY_DSN`` instead. Logging is always
+configured, because a local run benefits from it too.
 
-Requires the ``observability`` extra.
+Requires the ``observability`` extra; Sentry additionally requires the
+``sentry`` extra (kept separate since not every deployment wants it).
 """
 
 from witan_core.observability.asgi import (
@@ -31,6 +33,7 @@ from witan_core.observability.logging import (
 from witan_core.observability.telemetry import (
     auto_instrument,
     configure_metrics,
+    configure_sentry,
     configure_tracing,
     reset_telemetry,
 )
@@ -41,6 +44,7 @@ __all__ = [
     "configure_logging",
     "configure_metrics",
     "configure_observability",
+    "configure_sentry",
     "configure_tracing",
     "get_logger",
     "trace_context_middleware",
@@ -55,11 +59,14 @@ def configure_observability(
     level: str | None = None,
     instrument: bool = True,
 ) -> None:
-    """Configure logging, tracing and metrics in the order they depend on.
+    """Configure logging, tracing, metrics and Sentry in the order they depend on.
 
     Logging goes first so that a failure while setting up telemetry has somewhere
     to be reported — the alternative is a warning emitted through an unconfigured
-    root logger, which is how a broken exporter stays invisible.
+    root logger, which is how a broken exporter stays invisible. Sentry goes last
+    and independently of the OTel calls before it: it hooks the logging chain
+    those calls report through, not the OTel providers, so it has no dependency
+    on either succeeding.
 
     :param log_format: ``console`` or ``json``. Defaults to whether stderr is a
         terminal, so a deployed pod emits JSON and a developer gets colors.
@@ -72,3 +79,4 @@ def configure_observability(
     configure_metrics()
     if instrument:
         auto_instrument()
+    configure_sentry()
