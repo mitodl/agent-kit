@@ -699,6 +699,14 @@ def _claim_remedy(slug: str, held_by: str, lease_started_at: str | None) -> str:
 # without a rival taking it is pathological.
 _CLAIM_MAX_ATTEMPTS = 3
 
+# Bounds for task_claim's post-write verification catch-up loop (see the
+# comment at the call site) — sized above the largest staleness gap actually
+# measured (~2s, tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd),
+# so a genuinely-stale read path gets a real chance to catch up before the
+# loop gives up and falls back to trusting whatever it last saw.
+_VERIFY_CAUGHT_UP_MAX_ATTEMPTS = 6
+_VERIFY_CAUGHT_UP_BACKOFF_SECONDS = 0.5
+
 
 def _project_repos(row: dict) -> list[str]:
     """The repo set of a project/trace row (empty list when floating)."""
@@ -4517,10 +4525,15 @@ def _update_task(
     Mirrors the read-merge-write pattern documented for ``update_memory`` so we
     avoid per-field update queries. Returns ``(updated_node, new_commit)`` —
     the node is ``None`` when the task did not exist (nothing was written).
-    ``new_commit`` is the ``graph_commit_id`` THIS write produced (only ever
-    non-``None`` when ``conditional=True`` over HTTP — see :meth:`change`),
-    for a caller whose own verification read must not be older than the write
-    it just made. Every caller before ``task_claim`` ignored the row too, so
+    ``new_commit`` is the ``graph_commit_id`` THIS write produced. Non-``None``
+    for any single-step write over HTTP whenever the server supplies one —
+    regardless of ``conditional`` — since ``change()`` reads it straight out
+    of the mutate response; ``None`` only for the CLI transport (never
+    supplies one), a server predating omnigraph #470, or ``extra_steps``
+    (routed through ``change_many``, which does not return a commit). See
+    :meth:`change`. ``task_claim`` uses this as the floor its post-write
+    verification's own re-read must catch up to before being trusted — see
+    the call site. Every caller before ``task_claim`` ignored the row too, so
     this widened almost nobody's call site — see the tuple-unpack at each of
     the two callers that actually use the row.
 
@@ -5090,36 +5103,58 @@ async def task_claim(
     # still have landed last. Re-read and confirm we actually hold it before
     # reporting success, so at most one caller ever sees claimed=True.
     #
-    # ★ PINNED TO THE COMMIT OUR OWN WRITE JUST PRODUCED, NOT AN UNCONSTRAINED
-    # "CURRENT MAIN" READ — this is the actual fix for
-    # tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd. On
-    # 2026-08-18, two of eight racers both came out of an unconstrained re-read
-    # here with `claimed: true` on the same task: one racer's verification read
-    # returned a snapshot 2 SECONDS OLDER than a rival's write that had already
-    # committed. A read against `main` has no freshness guarantee; a read
-    # pinned to `write_commit` (this call's own `graph_commit_id`) has exactly
-    # one possible answer regardless of whatever caused that staleness. See
-    # `OmnigraphClient.read_with_commit`'s `at_commit` parameter.
+    # ★ UNCONSTRAINED, NOT PINNED TO OUR OWN WRITE. An earlier version of this
+    # fix pinned the read to `write_commit` (our own write's `graph_commit_id`)
+    # and shipped in agent-kit#248 before review caught the flaw: a read fixed
+    # to our own commit can only ever show what WE wrote — it is structurally
+    # blind to a legitimate LATER write (a rival's `force` claim, a concurrent
+    # `task_update`), which is exactly the clobber this verification exists to
+    # catch (see `test_claim_post_write_verification_catches_last_writer`).
+    # Pinning made that test pass for the wrong reason: it runs over the CLI
+    # locally, where `write_commit` is always `None`, so the pinned branch
+    # never actually ran.
     #
-    # `write_commit is None` — the degraded path (a tier that supplied no
-    # `graph_commit_id`, or the CLI transport, which never does) — falls back
-    # to the SAME unconstrained read this replaces, which is why the log line
-    # below stays: it is what would show that degrade happening in production,
-    # and what would show a re-run of the original bug if the fix regresses.
+    # ★ BUT AN UNCONSTRAINED READ HAS NO FRESHNESS GUARANTEE EITHER, which is
+    # the bug tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd
+    # actually proved: on 2026-08-18, one racer's verification read returned a
+    # snapshot 2 SECONDS OLDER than a rival's write that had already
+    # committed — by its OWN reported `graph_commit_id`, so the read was not
+    # lying about what it served, it genuinely served stale data.
+    #
+    # So: read unconstrained (to stay able to see a later clobber), but do not
+    # TRUST it until its own reported commit has caught up to (or passed)
+    # `write_commit` — omnigraph's commit ids are ULIDs
+    # (docs/user/concepts/storage.md upstream), lexicographically sortable by
+    # creation time, so a plain string comparison is a valid "at least as new"
+    # check. A read that is still behind ours is retried rather than trusted;
+    # `write_commit is None` (the degraded path: a tier that supplied no
+    # `graph_commit_id`, or the CLI transport, which never does) skips the
+    # catch-up check entirely, since there is nothing to catch up to.
     rows, verify_commit = await _offload(
-        client.read_with_commit,
-        "read.gq",
-        "get_task",
-        {"slug": slug},
-        at_commit=write_commit,
+        client.read_with_commit, "read.gq", "get_task", {"slug": slug}
     )
+    verify_attempts = 1
+    if write_commit is not None:
+        while verify_attempts < _VERIFY_CAUGHT_UP_MAX_ATTEMPTS and (
+            verify_commit is None or verify_commit < write_commit
+        ):
+            await anyio.sleep(_VERIFY_CAUGHT_UP_BACKOFF_SECONDS)
+            rows, verify_commit = await _offload(
+                client.read_with_commit, "read.gq", "get_task", {"slug": slug}
+            )
+            verify_attempts += 1
     winner = rows[0].get("assignee") if rows else None
+    caught_up = write_commit is None or (
+        verify_commit is not None and verify_commit >= write_commit
+    )
     logger.info(
         "witan.task_claim.verify",
         task_slug=slug,
         holder=holder,
         winner_seen=winner,
         verify_graph_commit_id=verify_commit,
+        verify_attempts=verify_attempts,
+        caught_up=caught_up,
         claim_granted=winner == holder or force,
     )
     if winner != holder and not force:

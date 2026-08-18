@@ -503,45 +503,6 @@ def test_cli_recovery_required_on_a_read_retries(monkeypatch):
     assert calls["n"] > 1
 
 
-def test_at_commit_adds_snapshot_to_the_cli_read(monkeypatch):
-    """The CLI half of the mutual-exclusion fix: `--snapshot <id>` pins a
-    `query` the same way `snapshot=` does over HTTP. Confirmed against the real
-    `edge` binary, 2026-08-18 — `omnigraph query --help` documents `--snapshot
-    <SNAPSHOT>` alongside `--branch`."""
-    captured = {}
-
-    def fake_run(cmd, **kwargs):
-        captured["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
-
-    _force_cli(monkeypatch)
-    monkeypatch.setattr(og.subprocess, "run", fake_run)
-    client = _built_client(monkeypatch, "http://host:8080", graph_id="council")
-
-    client.read_with_commit("read.gq", "q", {}, at_commit="01BEFORE")
-
-    cmd = captured["cmd"]
-    assert cmd[cmd.index("--snapshot") + 1] == "01BEFORE"
-
-
-def test_unpinned_cli_read_sends_no_snapshot_flag(monkeypatch):
-    """★ THE SAFETY DIRECTION. An unpinned read must not silently start
-    selecting a snapshot no caller asked for."""
-    captured = {}
-
-    def fake_run(cmd, **kwargs):
-        captured["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
-
-    _force_cli(monkeypatch)
-    monkeypatch.setattr(og.subprocess, "run", fake_run)
-    client = _built_client(monkeypatch, "http://host:8080", graph_id="council")
-
-    client.read("read.gq", "q", {})
-
-    assert "--snapshot" not in captured["cmd"]
-
-
 def test_cli_change_never_sends_json_and_returns_no_commit(monkeypatch):
     """★ THE GUARDRAIL, NOT JUST A GAP. `--json` was deliberately NOT added to
     close this gap on the CLI path: verified empirically against the real CLI,

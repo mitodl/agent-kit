@@ -746,45 +746,15 @@ def test_read_with_commit_tolerates_a_server_that_supplies_none(
     assert commit is None
 
 
-def test_at_commit_pins_the_read_to_a_snapshot(monkeypatch, tmp_path, _fake_http):
-    """The mechanism the mutual-exclusion fix depends on: `snapshot` actually
-    reaches the wire. Confirmed against the real omnigraph API (`QueryRequest`
-    in crates/omnigraph-api-types/src/lib.rs, 2026-08-18) — `snapshot` is a
-    top-level field on `POST /query`, mutually exclusive with `branch`."""
-    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
-    _fake_http.script = [ok({"rows": [{"m.slug": "a"}], "graph_commit_id": "01AFTER"})]
-    client = _client(monkeypatch, "http://host:8080", tmp_path, graph_id="council")
-
-    client.read_with_commit(
-        "read.gq", "find_memory", {"slug": "a"}, at_commit="01BEFORE"
-    )
-
-    body = json.loads(_fake_http.created[0].requests[0]["body"])
-    assert body["snapshot"] == "01BEFORE"
-
-
-def test_an_unpinned_read_sends_no_snapshot_field(monkeypatch, tmp_path, _fake_http):
-    """★ THE SAFETY DIRECTION, matching the mutate-side test above. A read that
-    did not ask to be pinned must not silently start sending one — that would
-    change every existing read's semantics without anyone asking for it."""
-    (tmp_path / "read.gq").write_text(QUERY_SOURCE)
-    _fake_http.script = [ok({"rows": [{"m.slug": "a"}]})]
-    client = _client(monkeypatch, "http://host:8080", tmp_path, graph_id="council")
-
-    client.read_with_commit("read.gq", "find_memory", {"slug": "a"})
-
-    body = json.loads(_fake_http.created[0].requests[0]["body"])
-    assert "snapshot" not in body
-
-
 def test_change_returns_the_commit_its_own_write_produced(
     monkeypatch, tmp_path, _fake_http
 ):
     """`change()`'s return value is the NEW head, not the one fenced on — the
-    piece `task_claim`'s verification pins to. Shape verified against the real
-    CLI, 2026-08-18: `omnigraph mutate --json` on a real store answers exactly
-    `{"commit": {"graph_commit_id": ..., ...}}`, and the HTTP `ChangeOutput`
-    struct is the same type serialized either way.
+    floor `task_claim`'s verification compares a later unconstrained read's
+    own commit against, to tell "caught up" from "still stale". Shape
+    verified against the real CLI, 2026-08-18: `omnigraph mutate --json` on a
+    real store answers exactly `{"commit": {"graph_commit_id": ..., ...}}`,
+    and the HTTP `ChangeOutput` struct is the same type serialized either way.
     """
     _fake_http.script = [
         ok(

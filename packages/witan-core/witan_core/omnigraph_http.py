@@ -494,29 +494,9 @@ class PooledTransport:
         source: str,
         params: dict,
         token: str | None,
-        snapshot: str | None = None,
     ):
-        """``POST /graphs/<id>/query`` — a read. Always safe to repeat.
-
-        ``snapshot`` pins the read to an immutable graph snapshot id — the same
-        ``graph_commit_id`` a prior read or write returned — instead of
-        whatever ``branch`` (default ``main``) currently resolves to. Mutually
-        exclusive with ``branch`` server-side; witan never sends ``branch``
-        explicitly, so this only ever narrows an otherwise-default read.
-
-        ★ WHY THIS EXISTS: a plain read against ``main`` has no freshness
-        guarantee — two reads issued back to back, one right after a write
-        commits, can observe the SAME state or DIFFERENT ones depending on
-        whatever the server's read path happens to do, and #470's own routes
-        made no promise either way. A read pinned to a specific commit id has
-        exactly one possible answer regardless of that. See
-        ``OmnigraphClient.read_with_commit``'s ``at_commit`` parameter, which
-        is what threads a value in here — this is the transport plumbing, not
-        the policy decision.
-        """
+        """``POST /graphs/<id>/query`` — a read. Always safe to repeat."""
         payload = {"query": source, "params": params}
-        if snapshot is not None:
-            payload["snapshot"] = snapshot
         return self.post(
             f"/graphs/{graph_id}/query",
             payload,

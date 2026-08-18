@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.17.3] - 2026-08-18
+
+### Fixed
+
+- **`task_claim`'s post-write verification no longer trusts a stale
+  re-read.** Fixes tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd:
+  under concurrent load, an unconstrained verification read could return a
+  snapshot up to 2 seconds older than a rival's write that had already
+  committed, letting two racers both observe themselves as the winning
+  claimant. The verification read stays unconstrained (so it can still see
+  a legitimate later clobber — a rival `force` claim, a concurrent
+  `task_update`) but now retries, comparing its own reported
+  `graph_commit_id` against the claiming write's, until it has caught up.
+  Raised the `witan-core` floor to `>=0.25` for `change()`'s widened return
+  value, which supplies that comparison floor.
+
 ## [0.17.2] - 2026-08-18
 
 ### Changed

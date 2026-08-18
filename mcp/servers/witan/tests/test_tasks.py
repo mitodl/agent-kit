@@ -835,6 +835,104 @@ def test_claim_still_works_when_the_tier_supplies_no_commit(server, monkeypatch)
     assert sent["if_commit"] is None
 
 
+async def _instant_sleep(_seconds):
+    """Stand-in for ``anyio.sleep`` in the catch-up-retry tests below — the
+    loop's correctness is about attempt COUNT and comparison, not real time,
+    and there is no reason a unit test should actually wait out the backoff."""
+
+
+@requires_omnigraph
+def test_claim_verification_retries_until_caught_up(server, monkeypatch):
+    """★ THE CATCH-UP LOOP, THE ACTUAL FIX FOR
+    tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd. The proven bug
+    was a verification read reporting a genuinely OLDER commit than a write
+    that had already landed — not a lie about its own content, an honestly
+    stale read. A read reporting an older commit than our own write must be
+    retried, not trusted, until it reports one that is at least as new.
+
+    An earlier version of this fix PINNED the verification read to our own
+    write's commit instead of retrying an unconstrained one — review (Copilot,
+    agent-kit#248) caught that a pinned read can never see a later write from
+    someone else, defeating `test_claim_post_write_verification_catches_last_
+    writer` on any transport where the pin actually engages. This test is the
+    replacement design's regression guard: unconstrained, but not trusted
+    until caught up.
+    """
+    from witan import server as srv
+
+    t = server.task_create(title="catch-up", description="x")
+    real_read_with_commit = srv.client.read_with_commit
+    real_change = srv.client.change
+
+    def fake_change(*args, **kwargs):
+        # The real write still happens — this only substitutes the returned
+        # commit id, so the row content read back afterwards is genuine.
+        real_change(*args, **kwargs)
+        return "01WRITE"
+
+    calls = {"n": 0}
+    verify_calls = {"n": 0}
+
+    def staggered_read(*args, **kwargs):
+        rows, real_commit = real_read_with_commit(*args, **kwargs)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # `_update_task`'s own precondition read — must stay real, or the
+            # write's CAS precondition would be fenced against a fabricated
+            # commit the real store never had.
+            return rows, real_commit
+        verify_calls["n"] += 1
+        if verify_calls["n"] < 3:
+            return rows, "00STALE"
+        return rows, "01WRITE"
+
+    monkeypatch.setattr(srv.client, "change", fake_change)
+    monkeypatch.setattr(srv.client, "read_with_commit", staggered_read)
+    monkeypatch.setattr(srv.anyio, "sleep", _instant_sleep)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+
+    assert res["claimed"] is True
+    assert verify_calls["n"] == 3, "must retry past the two stale reads"
+
+
+@requires_omnigraph
+def test_claim_verification_gives_up_after_max_attempts(server, monkeypatch):
+    """A verification read that never catches up must not retry forever — the
+    loop is bounded and exits, trusting whatever it last saw, rather than
+    hanging the claim on a genuinely wedged read path."""
+    from witan import server as srv
+
+    t = server.task_create(title="never-catches-up", description="x")
+    real_read_with_commit = srv.client.read_with_commit
+    real_change = srv.client.change
+
+    def fake_change(*args, **kwargs):
+        real_change(*args, **kwargs)
+        return "01WRITE"
+
+    calls = {"n": 0}
+
+    def always_stale_read(*args, **kwargs):
+        rows, real_commit = real_read_with_commit(*args, **kwargs)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return rows, real_commit
+        return rows, "00STALE"
+
+    monkeypatch.setattr(srv.client, "change", fake_change)
+    monkeypatch.setattr(srv.client, "read_with_commit", always_stale_read)
+    monkeypatch.setattr(srv.anyio, "sleep", _instant_sleep)
+
+    res = server.task_claim(t["slug"], assignee="agentA")
+
+    # 1 for `_update_task`'s own read, plus every bounded verify attempt.
+    assert calls["n"] == 1 + srv._VERIFY_CAUGHT_UP_MAX_ATTEMPTS
+    # No rival ever wrote, so even the still-stale last read shows agentA —
+    # the point here is termination, not this particular outcome.
+    assert res["claimed"] is True
+
+
 @requires_omnigraph
 def test_conditional_update_refuses_to_ride_with_extra_steps(server):
     """Refused, not silently downgraded to an unconditional multi-step commit.

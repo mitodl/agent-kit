@@ -1186,8 +1186,6 @@ class OmnigraphClient:
         query_file: str,
         query_name: str,
         params: dict,
-        *,
-        at_commit: str | None = None,
     ) -> tuple[list[dict], str | None]:
         """:meth:`read`, plus the ``graph_commit_id`` its rows were read at.
 
@@ -1203,19 +1201,8 @@ class OmnigraphClient:
         treat ``None`` as "no precondition available" and fall back to the
         best-effort path rather than passing it on — ``if_commit=None`` means an
         UNCONDITIONAL write, which is exactly what you did not ask for.
-
-        ``at_commit``: pin this read to an EXACT snapshot rather than "wherever
-        the branch currently resolves". Use this for a verification read that
-        must not be older than a write you just made — pass that write's own
-        returned commit id (from :meth:`change`), not the one you fenced ON.
-        See omnigraph_http.PooledTransport.query for the guarantee this buys
-        and tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd for the
-        bug it exists to close: a plain re-read, 2 SECONDS after a rival's
-        write committed, still returned a snapshot that did not contain it.
         """
-        rows, envelope = self._read_rows(
-            query_file, query_name, params, at_commit=at_commit
-        )
+        rows, envelope = self._read_rows(query_file, query_name, params)
         commit = envelope.get("graph_commit_id") if isinstance(envelope, dict) else None
         return rows, commit
 
@@ -1233,8 +1220,6 @@ class OmnigraphClient:
         query_file: str,
         query_name: str,
         params: dict,
-        *,
-        at_commit: str | None = None,
     ) -> tuple[list[dict], dict | None]:
         """The shared read path: rows, plus the response envelope they came in.
 
@@ -1256,10 +1241,8 @@ class OmnigraphClient:
                 self._query_source(query_file, query_name),
                 params,
                 "query",
-                at_commit=at_commit,
             )
         else:
-            extra = ["--snapshot", at_commit] if at_commit is not None else []
             result = self._run(
                 "query",
                 "--query",
@@ -1269,7 +1252,6 @@ class OmnigraphClient:
                 json.dumps(params),
                 "--format",
                 "json",
-                *extra,
             )
         if not result.strip():
             return [], None
@@ -1326,11 +1308,13 @@ class OmnigraphClient:
         #470's ``ChangeOutput.commit.graph_commit_id``), or ``None`` when the
         tier does not supply one. Distinct from ``if_commit``, which is the
         commit you fenced ON before the call — this is the commit that exists
-        AFTER it, and is what a caller should pass as
-        :meth:`read_with_commit`'s ``at_commit`` for a verification read that
-        must see this write. Empirically confirmed via HTTP (2026-08-18): the
-        server always answers a mutate with the new commit inline, so no
-        separate read is needed to learn it.
+        AFTER it, and is a floor a caller can compare a later unconstrained
+        read's own reported commit against, to tell a genuinely fresher read
+        apart from one that is still stale (omnigraph's commit ids are ULIDs —
+        docs/user/concepts/storage.md — so string comparison orders them).
+        Empirically confirmed via HTTP (2026-08-18): the server always answers
+        a mutate with the new commit inline, so no separate read is needed to
+        learn it.
 
         ★ HTTP ONLY. The CLI path always returns ``None`` here, DELIBERATELY —
         see the paragraph in the CLI branch below before trying to close that
@@ -1584,7 +1568,6 @@ class OmnigraphClient:
         *,
         surface_conflict: bool = False,
         if_graph_commit: str | None = None,
-        at_commit: str | None = None,
     ) -> str:
         """Run one query/mutate over HTTP under the shared retry policy.
 
@@ -1601,15 +1584,7 @@ class OmnigraphClient:
 
         def attempt() -> _AttemptResult:
             if not is_write:
-                # Deliberately not `query(..., None)`: same reasoning as the
-                # mutate branch below — an unpinned read calls the transport
-                # exactly as it always did, so `at_commit` is additive.
-                if at_commit is None:
-                    outcome = transport.query(self.graph_id, source, params, token)
-                else:
-                    outcome = transport.query(
-                        self.graph_id, source, params, token, at_commit
-                    )
+                outcome = transport.query(self.graph_id, source, params, token)
             elif if_graph_commit is None:
                 # Deliberately not `mutate(..., None)`: an unconditional write
                 # calls the transport exactly as it always did. Keeping the
