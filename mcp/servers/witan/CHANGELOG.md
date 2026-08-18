@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.17.2] - 2026-08-18
+
+### Changed
+
+- **Raised the `witan-core` floor to `>=0.24`** and requested its new
+  `sentry` extra. 0.23 has no `sentry` extra published, so a lower floor
+  would let an external install resolve a witan-core that silently lacks
+  Sentry support (or errors on the unknown extra) rather than getting the
+  `SENTRY_DSN`-gated reporting this release adds.
+
 ## [0.17.1] - 2026-08-18
 
 ### Added
