@@ -4608,12 +4608,10 @@ def _update_task(
             # explain a lost mutual exclusion without any staleness at all.
             logger.info(
                 "witan.task_update.conditional",
-                extra={
-                    "task_slug": slug,
-                    "assignee": changes.get("assignee"),
-                    "if_graph_commit_id": read_commit,
-                    "unconditional_fallback": read_commit is None,
-                },
+                task_slug=slug,
+                assignee=changes.get("assignee"),
+                if_graph_commit_id=read_commit,
+                unconditional_fallback=read_commit is None,
             )
         client.change(
             *update,
@@ -5105,13 +5103,11 @@ async def task_claim(
     winner = rows[0].get("assignee") if rows else None
     logger.info(
         "witan.task_claim.verify",
-        extra={
-            "task_slug": slug,
-            "holder": holder,
-            "winner_seen": winner,
-            "verify_graph_commit_id": verify_commit,
-            "claim_granted": winner == holder or force,
-        },
+        task_slug=slug,
+        holder=holder,
+        winner_seen=winner,
+        verify_graph_commit_id=verify_commit,
+        claim_granted=winner == holder or force,
     )
     if winner != holder and not force:
         winner_claimed_at = rows[0].get("claimed_at") if rows else None
