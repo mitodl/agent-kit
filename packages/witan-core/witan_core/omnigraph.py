@@ -1114,6 +1114,31 @@ def _friendly_storage_error(raw: str, hint: str) -> str:
     return f"{cleaned}\n\n{hint}"
 
 
+def _commit_id_from_mutate_body(body: str) -> str | None:
+    """Pull ``commit.graph_commit_id`` out of a raw mutate response body.
+
+    Deliberately lenient rather than raising: an empty body, non-JSON body, or
+    a body with no ``commit`` (a pre-#470 server) are all just "no commit id
+    available", which callers already treat as a normal degrade — the same
+    posture as :meth:`OmnigraphClient.read_with_commit` returning ``None``.
+    A write itself must never fail because this one piece of BONUS
+    information could not be parsed out of an otherwise-successful response.
+    """
+    if not body.strip():
+        return None
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    commit = parsed.get("commit")
+    if not isinstance(commit, dict):
+        return None
+    graph_commit_id = commit.get("graph_commit_id")
+    return graph_commit_id if isinstance(graph_commit_id, str) else None
+
+
 class OmnigraphClient:
     """Subprocess wrapper for the omnigraph CLI (shared base)."""
 
@@ -1249,7 +1274,7 @@ class OmnigraphClient:
         *,
         surface_conflict: bool = False,
         if_commit: str | None = None,
-    ) -> None:
+    ) -> str | None:
         """Run a named mutation query.
 
         The optional ``guard`` runs first: it may raise to reject the write, or
@@ -1278,12 +1303,28 @@ class OmnigraphClient:
         traffic rather than of contention on what you are claiming. It is still
         worth having — a refusal is now truthful — but a caller must expect to
         re-read and retry more often than the contention alone would suggest.
+
+        Returns the NEW ``graph_commit_id`` this write produced (omnigraph
+        #470's ``ChangeOutput.commit.graph_commit_id``), or ``None`` when the
+        tier does not supply one. Distinct from ``if_commit``, which is the
+        commit you fenced ON before the call — this is the commit that exists
+        AFTER it, and is a floor a caller can compare a later unconstrained
+        read's own reported commit against, to tell a genuinely fresher read
+        apart from one that is still stale (omnigraph's commit ids are ULIDs —
+        docs/user/concepts/storage.md — so string comparison orders them).
+        Empirically confirmed via HTTP (2026-08-18): the server always answers
+        a mutate with the new commit inline, so no separate read is needed to
+        learn it.
+
+        ★ HTTP ONLY. The CLI path always returns ``None`` here, DELIBERATELY —
+        see the paragraph in the CLI branch below before trying to close that
+        gap with ``--json``.
         """
         if self.guard is not None:
             params = self.guard(query_name, params)
         transport = self._http_transport()
         if transport is not None:
-            self._http_execute(
+            body = self._http_execute(
                 transport,
                 "mutate",
                 self._query_source(query_file, query_name),
@@ -1292,7 +1333,21 @@ class OmnigraphClient:
                 surface_conflict=surface_conflict,
                 if_graph_commit=if_commit,
             )
-            return
+            return _commit_id_from_mutate_body(body)
+        # ★ DO NOT ADD --json HERE TO CLOSE THIS GAP. Verified empirically
+        # against the real CLI, 2026-08-18: a LOST --if-commit race reports its
+        # failure differently depending on --json. Without it, the message
+        # lands on STDERR — "precondition failed on branch 'main': expected
+        # head '…' but current is …" — which is exactly what
+        # `_classify_cli_error`'s `_PRECONDITION_FAILED` markers are tuned
+        # against. WITH --json, that same failure moves ENTIRELY to a JSON
+        # body on STDOUT and STDERR COMES BACK EMPTY. `_execute`'s `attempt()`
+        # classifies from `result.stderr` only, so adding --json here would
+        # silently starve that classifier on every CLI-path precondition
+        # failure — the exact 412 handling shipped in agent-kit#245/#246 this
+        # morning. The CLI path stays without a returned commit id rather than
+        # risk that; a caller degrades to an unconstrained verification read,
+        # same as it already does when `if_commit` itself is unavailable.
         extra = ["--if-commit", if_commit] if if_commit is not None else []
         self._run(
             "mutate",
@@ -1304,6 +1359,7 @@ class OmnigraphClient:
             *extra,
             surface_conflict=surface_conflict,
         )
+        return None
 
     def change_many(
         self,

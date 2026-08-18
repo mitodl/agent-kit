@@ -488,11 +488,18 @@ class PooledTransport:
         # Unreachable: the loop either returns or continues exactly once.
         raise AssertionError("_send() retry loop fell through")
 
-    def query(self, graph_id: str, source: str, params: dict, token: str | None):
+    def query(
+        self,
+        graph_id: str,
+        source: str,
+        params: dict,
+        token: str | None,
+    ):
         """``POST /graphs/<id>/query`` — a read. Always safe to repeat."""
+        payload = {"query": source, "params": params}
         return self.post(
             f"/graphs/{graph_id}/query",
-            {"query": source, "params": params},
+            payload,
             token,
             idempotent=True,
         )

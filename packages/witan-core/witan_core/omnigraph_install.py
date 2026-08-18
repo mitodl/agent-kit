@@ -117,22 +117,28 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: Refresh with, for each asset:
 #:     curl -fsSL https://github.com/ModernRelay/omnigraph/releases/download/\
 #: <tag>/<asset>.sha256
-#: ★ THESE ARE THE `edge` BUILD OF 2026-08-16T23:05Z, NOT v0.9.0's. Recorded as
-#: a deliberate act per the paragraph above: this is the 0.10.0 re-test
-#: (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2). Reverting the
-#: experiment means restoring the v0.9.0 triple, which was:
+#: ★ THESE ARE THE `edge` BUILD OF 2026-08-18T16:30Z (commit a2fd5f9237, "test
+#: (merge): split Blob coverage to fit default stack"), NOT v0.9.0's. Refreshed
+#: from the 2026-08-16T23:05Z triple after CI started failing the checksum
+#: check on 2026-08-18: confirmed via `gh api repos/ModernRelay/omnigraph/commits`
+#: that a2fd5f9237 is the only commit that landed on upstream main in between,
+#: and it touches only a test file (crates/omnigraph/tests/branching.rs) and a
+#: docs line — no engine/production code — so the drift is edge's normal
+#: rebuild-every-push churn, not a functional or suspicious change. This is
+#: still the 0.10.0 re-test (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2).
+#: Reverting the experiment means restoring the v0.9.0 triple, which was:
 #:     linux-x86_64  507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197
 #:     linux-arm64   6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881
 #:     macos-arm64   69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "5a8e6ace9ed9a05e46c543236ebfe74a2256096a7133ed53f90ff5307dacaef4"
+        "9f4dccb07cc3a4e4f6d1b367877f18f5ed9c7899c48c91c18da2a84e86a5c99e"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "212ede0b18c0e17c5737e95d49bba9553b494ba9cadf3222703c45ff01c0ed2e"
+        "cfdf6c9950ee7f0b1ea26969e42d5f2e67ffa9b80c656e24474612687dea489d"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "053468ac71e7cacd84d3aeecf88474044da7df8e4df52892548cf5b47e174234"
+        "293972552599dc34281ab614dc75c479c826d2853d4ce4c0c27b03af9d46701e"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")

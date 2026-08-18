@@ -503,6 +503,35 @@ def test_cli_recovery_required_on_a_read_retries(monkeypatch):
     assert calls["n"] > 1
 
 
+def test_cli_change_never_sends_json_and_returns_no_commit(monkeypatch):
+    """★ THE GUARDRAIL, NOT JUST A GAP. `--json` was deliberately NOT added to
+    close this gap on the CLI path: verified empirically against the real CLI,
+    2026-08-18, a lost `--if-commit` race reports its failure differently
+    depending on `--json` — WITHOUT it the message is on stderr (what
+    `_classify_cli_error`'s `_PRECONDITION_FAILED` markers are tuned against);
+    WITH it, stderr comes back EMPTY and the failure moves entirely to a JSON
+    body on stdout. `_execute` classifies from `result.stderr` only, so `--json`
+    here would silently starve that classifier on every CLI-path precondition
+    failure. This is a regression guard on the ABSENCE of a flag — if this test
+    ever needs to change because someone adds `--json`, read this comment and
+    the one on `change()` in omnigraph.py before touching it.
+    """
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    _force_cli(monkeypatch)
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    client = _built_client(monkeypatch, "http://host:8080", graph_id="council")
+
+    new_commit = client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert "--json" not in captured["cmd"]
+    assert new_commit is None
+
+
 def test_write_authority_conflict_is_retried_when_not_surfaced(monkeypatch):
     """An ordinary writer that merely lost a race should try again, not die.
 

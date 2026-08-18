@@ -746,6 +746,53 @@ def test_read_with_commit_tolerates_a_server_that_supplies_none(
     assert commit is None
 
 
+def test_change_returns_the_commit_its_own_write_produced(
+    monkeypatch, tmp_path, _fake_http
+):
+    """`change()`'s return value is the NEW head, not the one fenced on — the
+    floor `task_claim`'s verification compares a later unconstrained read's
+    own commit against, to tell "caught up" from "still stale". Shape
+    verified against the real CLI, 2026-08-18: `omnigraph mutate --json` on a
+    real store answers exactly `{"commit": {"graph_commit_id": ..., ...}}`,
+    and the HTTP `ChangeOutput` struct is the same type serialized either way.
+    """
+    _fake_http.script = [
+        ok(
+            {
+                "branch": "main",
+                "query_name": "claim",
+                "affected_nodes": 1,
+                "affected_edges": 0,
+                "actor_id": None,
+                "commit": {"graph_commit_id": "01AFTER", "manifest_version": 2},
+            }
+        )
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    new_commit = client.change("mutations.gq", "claim", {"slug": "t-1"})
+
+    assert new_commit == "01AFTER"
+
+
+def test_change_returns_none_when_the_tier_supplies_no_commit(
+    monkeypatch, tmp_path, _fake_http
+):
+    """A pre-#470 tier, or one that simply omits `commit`: `None`, not a
+    KeyError — the caller's documented signal to fall back to an unconstrained
+    verification read, same posture as `read_with_commit`."""
+    _fake_http.script = [
+        ok({"branch": "main", "query_name": "claim", "affected_nodes": 1})
+    ]
+    client = _client(
+        monkeypatch, "http://host:8080", _mutation_dir(tmp_path), graph_id="council"
+    )
+
+    assert client.change("mutations.gq", "claim", {"slug": "t-1"}) is None
+
+
 # ── the seam: a real 409 response all the way out to OmnigraphConflict ───
 
 # What omnigraph-server actually returns to a racing writer, captured from a QA

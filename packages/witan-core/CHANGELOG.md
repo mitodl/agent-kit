@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.25.0] - 2026-08-18
+
+### Added
+
+- **`OmnigraphClient.change()` now returns the `graph_commit_id` its own
+  write produced** (`str | None`), read straight out of the HTTP
+  transport's `ChangeOutput.commit.graph_commit_id` — no extra read needed
+  to learn it. HTTP only; the CLI path still returns `None` (see the
+  `change()` docstring for why `--json` can't safely close that gap: on a
+  lost `--if-commit` race it moves the precondition-failure message off
+  stderr entirely, which `_classify_cli_error` depends on).
+
+  Fixes a real mutual-exclusion violation in witan-council's `task_claim`,
+  proven via paired `witan.task_claim.verify` / `witan.task_update.conditional`
+  traces: a post-write verification read could return a snapshot up to 2s
+  older than the write it was meant to confirm, letting two racers both
+  observe themselves as the winning claimant — the read wasn't lying about
+  what it served, it was genuinely stale. `task_claim` uses this new return
+  value as a floor: its verification read stays unconstrained (so it can
+  still see a legitimate later write from someone else) but now retries,
+  comparing its own reported commit against the claiming write's, until it
+  has caught up — closing the staleness gap without losing the ability to
+  detect a clobber. (An earlier version of this fix pinned the verification
+  read to an exact snapshot instead; review caught that a pinned read is
+  structurally blind to any later write, so that approach — and the
+  `read_with_commit`/`query` `at_commit`/`snapshot` plumbing it needed — was
+  dropped in favor of the retry.)
+
 ## [0.24.0] - 2026-08-18
 
 ### Added
