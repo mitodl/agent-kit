@@ -722,6 +722,7 @@ def _claim_backoff(attempt: int) -> float:
     jitter = random.uniform(0, 0.1 * delay)
     return min(delay + jitter, _CLAIM_BACKOFF_CAP)
 
+
 # Bounds for task_claim's post-write verification catch-up loop (see the
 # comment at the call site) — sized above the largest staleness gap actually
 # measured (~2s, tk-mutual-exclusion-violated-2-of-8-racers-both-got-52b3dd),
@@ -3830,19 +3831,27 @@ def workflow_trace_get(slug: str) -> dict | None:
     return rows[0] if rows else None
 
 
-def _annotate_trace(
+def _annotate_trace_step(
     trace_slug: str,
     lessons_slug: list[str] | None = None,
     patterns_slug: list[str] | None = None,
-) -> dict:
-    """Union new lesson/pattern slugs into a trace's annotation fields."""
+) -> tuple[_Step, dict] | None:
+    """Build the union-merge step for annotating a trace, without committing it.
+
+    Split out of ``_annotate_trace`` so ``workflow_trace_mine`` can land this
+    step in the SAME commit as the ``link_informed`` edges it writes for newly
+    mined memories, rather than one more trailing commit after them — the same
+    "return the mutation, let the caller commit it" shape as the CodeBranch
+    step builders. Returns ``None`` when the trace does not exist, leaving the
+    caller to decide what that means for its own return value.
+    """
     if isinstance(lessons_slug, str):
         lessons_slug = [lessons_slug]
     if isinstance(patterns_slug, str):
         patterns_slug = [patterns_slug]
     rows = client.read("read.gq", "get_trace", {"slug": trace_slug})
     if not rows:
-        return {"slug": trace_slug, "error": "no such trace"}
+        return None
     trace = rows[0]
 
     merged_lessons = list(
@@ -3851,8 +3860,7 @@ def _annotate_trace(
     merged_patterns = list(
         dict.fromkeys([*(trace.get("patterns_slug") or []), *(patterns_slug or [])])
     )
-
-    client.change(
+    step: _Step = (
         "mutations.gq",
         "update_workflow_trace_annotations",
         {
@@ -3861,11 +3869,28 @@ def _annotate_trace(
             "patterns_slug": merged_patterns or None,
         },
     )
-    return {
+    result = {
         "slug": trace_slug,
         "lessons_slug": merged_lessons or None,
         "patterns_slug": merged_patterns or None,
     }
+    return step, result
+
+
+def _annotate_trace(
+    trace_slug: str,
+    lessons_slug: list[str] | None = None,
+    patterns_slug: list[str] | None = None,
+) -> dict:
+    """Union new lesson/pattern slugs into a trace's annotation fields."""
+    built = _annotate_trace_step(
+        trace_slug, lessons_slug=lessons_slug, patterns_slug=patterns_slug
+    )
+    if built is None:
+        return {"slug": trace_slug, "error": "no such trace"}
+    step, result = built
+    client.change(*step)
+    return result
 
 
 @_tool
@@ -3992,20 +4017,25 @@ def workflow_trace_mine(
         for spec in lessons or []
     ]
 
-    for slug in (*created_patterns, *created_lessons):
-        client.change(
-            "mutations.gq",
-            "link_informed",
-            {"from": trace["project_slug"], "to": slug},
-        )
+    # One commit for every trailing write, not N+1: an `Informed` edge per
+    # mined memory plus the trace's own annotation update used to be N+1
+    # separate commits after the (unavoidably separate, one per row)
+    # `_store_memory` calls above.
+    steps: list[_Step] = [
+        ("mutations.gq", "link_informed", {"from": trace["project_slug"], "to": slug})
+        for slug in (*created_patterns, *created_lessons)
+    ]
     if created_patterns or created_lessons:
         _invalidate_edge_index()  # Informed feeds corroboration
 
-    _annotate_trace(
+    annotate = _annotate_trace_step(
         trace_slug,
         lessons_slug=created_lessons or None,
         patterns_slug=created_patterns or None,
     )
+    if annotate is not None:
+        steps.append(annotate[0])
+    client.change_many(steps)
 
     return {"created_patterns": created_patterns, "created_lessons": created_lessons}
 
@@ -4038,22 +4068,30 @@ def workflow_project_block(slug: str, blocks_slug: str) -> dict:
             "reason": "a project cannot block itself",
         }
     now = now_iso()
-    client.change(
-        "mutations.gq", "link_project_blocks", {"from": slug, "to": blocks_slug}
-    )
+    # The edge always lands; the denormalized `blocked_by` sync only when
+    # there's something new to add. Read BEFORE writing so both can land in
+    # ONE commit via `change_many` when the sync applies — the edge write
+    # doesn't touch `blocks_slug`'s own row, so reading it first changes
+    # nothing about what's read.
+    steps: list[_Step] = [
+        ("mutations.gq", "link_project_blocks", {"from": slug, "to": blocks_slug})
+    ]
     blocked = client.read("read.gq", "get_workflow_project", {"slug": blocks_slug})
     if blocked:
         existing = blocked[0].get("blocked_by") or []
         if slug not in existing:
-            client.change(
-                "mutations.gq",
-                "update_workflow_project_blocked_by",
-                {
-                    "slug": blocks_slug,
-                    "blocked_by": [*existing, slug],
-                    "updated_at": now,
-                },
+            steps.append(
+                (
+                    "mutations.gq",
+                    "update_workflow_project_blocked_by",
+                    {
+                        "slug": blocks_slug,
+                        "blocked_by": [*existing, slug],
+                        "updated_at": now,
+                    },
+                )
             )
+    client.change_many(steps)
     return {"blocker": slug, "blocked": blocks_slug, "linked": True}
 
 
@@ -5392,8 +5430,18 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     the wrong direction.
     """
     if kind == "blocks":
-        client.change("mutations.gq", "link_blocks", {"from": from_slug, "to": to_slug})
+        # The edge always lands; the denormalized `blocked_by`/`status` sync
+        # only when there's something new to sync. Reading `to_slug` FIRST
+        # (rather than after, as this used to) is what lets the two land in
+        # ONE commit via `extra_steps` when both apply — order doesn't change
+        # what's read, since the edge write doesn't touch `to_slug`'s row.
+        link_step: _Step = (
+            "mutations.gq",
+            "link_blocks",
+            {"from": from_slug, "to": to_slug},
+        )
         blocked = client.read("read.gq", "get_task", {"slug": to_slug})
+        changes = None
         if blocked:
             existing = blocked[0].get("blocked_by") or []
             if from_slug not in existing:
@@ -5402,12 +5450,21 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
                     blocker = client.read("read.gq", "get_task", {"slug": from_slug})
                     if blocker and blocker[0].get("status") != "closed":
                         changes["status"] = "blocked"
-                _update_task(to_slug, changes)
+        if changes is not None:
+            _update_task(to_slug, changes, extra_steps=[link_step])
+        else:
+            client.change(*link_step)
     elif kind == "parent":
-        client.change(
-            "mutations.gq", "link_parent_of", {"from": from_slug, "to": to_slug}
+        # Edge + `parent_slug` sync are one logical edit, always both — the
+        # same `extra_steps` mechanism `_update_task`'s own `parent_slug`
+        # writes already use for their CodeBranch edges.
+        _update_task(
+            to_slug,
+            {"parent_slug": from_slug},
+            extra_steps=[
+                ("mutations.gq", "link_parent_of", {"from": from_slug, "to": to_slug})
+            ],
         )
-        _update_task(to_slug, {"parent_slug": from_slug})
     elif kind == "discovered_from":
         client.change(
             "mutations.gq", "link_discovered_from", {"from": from_slug, "to": to_slug}

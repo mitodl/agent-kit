@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.17.5] - 2026-08-19
+
+### Changed
+
+- **Collapsed several more multi-commit write paths to one commit each**,
+  continuing #226's audit: `task_link`'s `blocks` and `parent` kinds (edge +
+  denormalized field sync), `workflow_project_block` (edge + `blocked_by`
+  sync), and `workflow_trace_mine`'s trailing writes (an `Informed` edge per
+  mined memory plus the trace's own annotation update, previously N+1
+  separate commits after the mined memories themselves). Nothing about what
+  gets written or returned changes — only how many Lance commits it costs.
+  `workflow_project_unblock`/`task_unlink`'s edge-removal paths are
+  deliberately NOT touched here: `_unlink_edge`'s delete-then-reinsert
+  sequence can't share a commit with the trailing field update anyway —
+  omnigraph rejects a mutate body mixing deletes with inserts/updates — so
+  batching those needs a different shape, not this pass's mechanism.
+
 ## [0.17.4] - 2026-08-18
 
 ### Fixed

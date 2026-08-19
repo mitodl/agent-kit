@@ -2341,7 +2341,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.17.4"
+version = "0.17.5"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },
