@@ -27,7 +27,9 @@ witan-code --help
 Version bumps go through [`bump-my-version`](https://github.com/callowayproject/bump-my-version)
 (config in `[tool.bumpversion]`), same as `agent-config-kit`, `witan`, and
 `witan-code`. `dependencies` versions in `pyproject.toml` are open-ended
-floors (`agent-config-kit[cli]>=0.3.7`, `witan-council>=0.2.0`,
-`witan-code>=0.2.0` — no upper bound), so a new release of any of the three
-is picked up by a fresh install automatically without needing a matching
-`ol-agent-kit` release.
+floors with no upper bound, so a new release of any of the three is picked up
+by a fresh install automatically without needing a matching `ol-agent-kit`
+release. The floors themselves move as the meta-package comes to depend on
+newer behaviour — currently the two servers are floored at the releases that
+speak MCP 2026-07-28 — so read them from `pyproject.toml` rather than from
+here.

@@ -8,9 +8,9 @@ repository's symbols (functions, methods, classes, modules) and their
 relationships, then exposes definition / reference / caller / impact queries to
 the agent.
 
-It is a self-contained sibling of `witan` (Layer 1) and shares its
-subprocess/CLI conventions, but stores a **separate, per-repo, local-only**
-graph.
+It is a sibling of `witan` (Layer 1) — it never imports it, though both build on
+`witan-core` — and shares its subprocess/CLI conventions, but stores a
+**separate, per-repo** graph rather than writing into Layer 1's.
 
 > **Wiring it into your agents locally** (MCP server, the `PostToolUse` reindex
 > hook, and the indexer CLI, run straight from your checkout): see
@@ -37,7 +37,14 @@ resolution, not a true call graph) — see
 | Layer | Server | Stores | Scope | Synced |
 |------|--------|--------|-------|--------|
 | 1 | `witan` | patterns, project facts, lessons, workflow traces | team-wide | yes (S3) |
-| 2 | `witan-code` | code symbols + edges | per-repo | **no — local only** |
+| 2 | `witan-code` | code symbols + edges | per-repo | local by default; shareable |
+
+Layer 2 was local-only originally and is no longer. A code graph can live on a
+shared `omnigraph-server` (`WITAN_CODE_SERVER` in-cluster, or through the
+deployed witan MCP tier from outside it), where a CI indexer owns each repo's
+default `main` view and every other writer gets its own per-actor branch view.
+On a local store there is one user, who is its writer, and none of that
+arbitration applies. See [`docs/BRANCH_INDEXING.md`](docs/BRANCH_INDEXING.md).
 
 The two layers compose through **soft symbol-ID references**. A Layer-1 node
 (e.g. a `lesson` or `agent_context`) can record symbol ids of the form:
@@ -82,7 +89,7 @@ The per-repo graph stops at a repo boundary, but service-oriented architectures
 couple repos through **shared contracts**: an env var that infra sets and an app
 reads, an HTTP endpoint one service serves and another calls, a package one repo
 publishes and others import. The bridge records these as **interface bindings**
-in a single shared, local-only store (`_bridge.omni`, a sibling of the per-repo
+in a single shared store (`_bridge.omni` locally, a sibling of the per-repo
 stores) so linkages can be queried across every indexed repo.
 
 It is **zero-config**: every `index`/reindex of a repo also extracts that repo's
