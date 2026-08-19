@@ -1,3 +1,13 @@
+<!--
+  MIRRORED FILE — DO NOT EDIT HERE.
+  Edit mcp/servers/witan/docs/USER_GUIDE.md instead; `just docs-gen` copies it into the site.
+-->
+
+!!! info "This page lives with the code"
+
+    The authoritative copy is
+    [`mcp/servers/witan/docs/USER_GUIDE.md`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/USER_GUIDE.md).
+
 # witan User Guide
 
 witan is a team-wide shared knowledge and coordination graph for coding
@@ -19,18 +29,18 @@ taken); the import path, console command, and every tool/CLI name are still
 - **Memory search & store** — full-text (BM25) search over patterns, project
   facts, lessons, and agent context, with graph-aware re-ranking. See
   [Day-to-day loop](#day-to-day-loop) below and the `memory` command in the
-  [CLI Reference](CLI_REFERENCE.md#memory).
+  [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md#memory).
 - **Workflow project tracking** — track an engineering objective across
   multiple agent sessions (discovery → spec → implementation → delivery
   phases), with session hand-off state. See
-  [`witan-project-tracker`](../witan/skills/witan-project-tracker/SKILL.md)
+  [`witan-project-tracker`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md)
   and the `project`/`projects` commands in the
-  [CLI Reference](CLI_REFERENCE.md#projects).
+  [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md#projects).
 - **Task tracking with dependencies** — a hierarchical, dependency-aware task
   tracker (epics → sub-issues, `blocked_by`, advisory claims with lease
   expiry) shared across agents/users. See
-  [`witan-task`](../witan/skills/witan-task/SKILL.md) and the
-  [CLI Reference](CLI_REFERENCE.md#tasks).
+  [`witan-task`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/witan/skills/witan-task/SKILL.md) and the
+  [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md#tasks).
 - **Code-branch tracking** — links a git branch to the task/project it
   carries, wired in automatically by `task_claim` and
   `workflow_session_start`. See [Code branch tracking](#code-branch-tracking).
@@ -38,12 +48,12 @@ taken); the import path, console command, and every tool/CLI name are still
   write is scanned for secrets and PII before it's persisted, with
   block/redact/warn enforcement and a plugin mechanism. See
   [`docs/write-path-scanning.md`](write-path-scanning.md) and the
-  [`scan` command](CLI_REFERENCE.md#scan).
+  [`scan` command](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md#scan).
 - **Code graph integration (`witan-code`)** — when the sibling `witan-code`
   package is installed, `witan code …` mounts tree-sitter-derived symbol
   search, references, and cross-repo impact analysis into the same CLI/MCP
-  server. See the [CLI Reference](CLI_REFERENCE.md#code-witan-code-only) and
-  [`../witan-code/README.md`](../../witan-code/README.md).
+  server. See the [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md#code-witan-code-only) and
+  [`../witan-code/README.md`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan-code/README.md).
 
 ## Installation
 
@@ -81,7 +91,7 @@ Two install shapes, depending on whether your agent platform needs the
       witan setup --agent copilot   # or: opencode | kilo
   ```
 
-See the main [README](../README.md#quick-start) for the manual-wiring
+See the main [README](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/README.md#quick-start) for the manual-wiring
 fallback (`./install.sh` + hand-editing agent MCP config).
 
 ## First-run setup
@@ -128,7 +138,7 @@ A typical session:
 
    Sets the task `in_progress` under your author name (an advisory lease,
    not a hard lock — see `task_claim` in the
-   [CLI Reference](CLI_REFERENCE.md#run)), then launches your configured
+   [CLI Reference](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/CLI_REFERENCE.md#run)), then launches your configured
    agent CLI with a prompt seeded from the task's title/description/symbol
    refs. Pass `--dry-run` to print that prompt without claiming or
    launching, or `--claim=false` to launch without claiming.
@@ -164,7 +174,7 @@ A typical session:
    ```
 
    Then `workflow_session_start` at the top of each session (the
-   [`witan-workflow`](../witan/skills/witan-workflow/SKILL.md) skill
+   [`witan-workflow`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/witan/skills/witan-workflow/SKILL.md) skill
    automates the picker), and `workflow_session_end` with a summary before
    you stop — this is what lets a *different* session or agent pick the
    thread back up later. `workflow_project_advance` moves the project to
@@ -196,7 +206,7 @@ Three ways to point witan at a store, in increasing order of shared-ness:
   Configured with a `[targets.*]` block plus `witan login`.
 
 To join a deployed service, follow
-[**Pointing your CLI and agent at the deployed witan**](deployed-witan-onboarding.md),
+[**Pointing your CLI and agent at the deployed witan**](deployed-witan.md),
 and migrate the history you already have with the
 [migration runbook](migration-runbook.md#local-shared-the-cutover). Sequence
 the two together — a store you keep writing to after its export was taken has
@@ -206,7 +216,7 @@ Note that pointing `WITAN_MEMORY_URI` straight at an omnigraph-server is a
 *different*, lower-level mode: it addresses the data tier directly with a
 shared bearer token and no per-user identity. That is how a self-hosted or
 in-cluster maintenance process connects, not how a person does. See
-[`docs/internals/agent-memory.md` § Operating Modes](../../../../docs/internals/agent-memory.md#6-operating-modes)
+[`docs/internals/agent-memory.md` § Operating Modes](https://github.com/mitodl/agent-kit/blob/main/docs/internals/agent-memory.md#6-operating-modes)
 for the graph schema and server-deployment mechanics.
 
 `config.toml` can also define named `[targets.*]` sections that route

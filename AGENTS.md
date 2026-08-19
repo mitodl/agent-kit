@@ -28,7 +28,12 @@ packages/        # Standalone, independently-versioned Python libraries
   agent-config-kit/      # Cross-agent MCP/skill/hook registration library
   agent-kit/              # PyPI meta-package (ol-agent-kit): agent-config-kit[cli] + witan + witan-code
 configs/         # Sample / reference agent configurations
-docs/            # Design docs and implementation specs
+docs/            # The witan-context documentation site (Zensical -> Read the Docs)
+  getting-started/  # Tutorials (handwritten)
+  guides/           # How-to (mostly MIRRORED from the packages by bin/gen_docs.py)
+  reference/        # GENERATED from live code by bin/gen_docs.py -- never edit
+  explanation/      # Architecture, memory model, coordination, ADRs
+  internals/        # Historical design docs and implementation specs
 ```
 
 ## Dev Setup
@@ -100,4 +105,4 @@ See [`skills/workflow/creating-skills/SKILL.md`](./skills/workflow/creating-skil
 - [`mcp/README.md`](./mcp/README.md) — MCP server structure and available servers
 - [`mcp/servers/witan/README.md`](./mcp/servers/witan/README.md) — witan graph-memory server
 - [`custom-agents/README.md`](./custom-agents/README.md) — agent definitions for Claude/Copilot
-- [`docs/`](./docs/) — design docs and implementation specs
+- [`docs/`](./docs/) — the **witan-context** documentation site (https://witan-context.readthedocs.io). `docs/reference/` is GENERATED and `docs/guides/` is mostly MIRRORED from the packages — do not hand-edit either; run `just docs-gen` and commit. `just docs-check` gates this in CI, and `just docs-serve` previews locally. Historical specs live in `docs/internals/`.

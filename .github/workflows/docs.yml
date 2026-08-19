@@ -1,0 +1,97 @@
+name: docs
+
+# The witan-context documentation site. Two independent questions:
+#
+#   freshness — do the committed generated/mirrored pages still match the code?
+#   build     — does the site actually render, with no broken links?
+#
+# Path-filter rule (same as witan-tests.yml): trigger on every input the
+# generator reads, not just docs/. The reference pages are derived from the tool
+# objects, the cyclopts command tree, and the .pg schemas, so a change to any of
+# those can make a committed page stale without touching docs/ at all.
+#
+# The two path lists below are duplicated rather than shared via a YAML anchor:
+# GitHub Actions does not support anchors or aliases in workflow files. Keep
+# them in sync by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mcp/servers/witan/**"
+      - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "docker/**"
+      - "bin/gen_docs.py"
+      - "zensical.toml"
+      - ".readthedocs.yaml"
+      - "uv.lock"
+      - "pyproject.toml"
+      - "justfile"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mcp/servers/witan/**"
+      - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "docker/**"
+      - "bin/gen_docs.py"
+      - "zensical.toml"
+      - ".readthedocs.yaml"
+      - "uv.lock"
+      - "pyproject.toml"
+      - "justfile"
+      - ".github/workflows/docs.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    name: docs (generated pages match the code)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Install dependencies
+        # --all-packages: the generator imports BOTH servers to read their
+        # registered tool objects, so a single-package sync cannot run it.
+        run: uv sync --frozen --all-packages
+
+      - name: Check generated documentation is up to date
+        # Fails with a diff naming every stale page. The fix is always the same
+        # — run `just docs-gen` and commit the result.
+        run: just docs-check
+
+  build:
+    name: docs (site builds, no broken links)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Build the site and fail on unresolved links
+        # Version-pinned to match .readthedocs.yaml. Zensical is pre-1.0 and
+        # ships behaviour changes between patch releases, so an unpinned install
+        # would let CI and Read the Docs disagree silently — CI green, published
+        # site broken. Renovate bumps both together.
+        #
+        # `zensical build` reports missing pages and anchors as warnings and
+        # still exits 0, so the summary line is what decides this job. A
+        # silently-broken link is precisely what a docs CI job exists to catch.
+        run: |
+          set -o pipefail
+          uvx zensical@0.0.56 build 2>&1 | tee build.log
+          if grep -q "issues found" build.log; then
+            echo "::error::Zensical reported unresolved links or anchors."
+            exit 1
+          fi

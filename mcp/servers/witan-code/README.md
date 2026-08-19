@@ -14,7 +14,7 @@ graph.
 
 > **Wiring it into your agents locally** (MCP server, the `PostToolUse` reindex
 > hook, and the indexer CLI, run straight from your checkout): see
-> [Local Development Setup](../../../docs/agent-memory.md#local-development-setup).
+> [Local Development Setup](../../../docs/internals/agent-memory.md#local-development-setup).
 
 ## When to use this vs. grep / the `Explore` agent
 

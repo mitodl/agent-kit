@@ -49,7 +49,7 @@ ln -sf "$(pwd)/extensions/workflow-context.ts" ~/.pi/agent/extensions/
 ```
 
 The MCP servers themselves are configured separately in `~/.pi/agent/mcp.json`
-(see [Local Development Setup](../../docs/agent-memory.md#local-development-setup)).
+(see [Local Development Setup](../../docs/internals/agent-memory.md#local-development-setup)).
 
 ## Not covered
 

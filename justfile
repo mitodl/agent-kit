@@ -242,3 +242,27 @@ bump package part:
     # bump — `just check-versions` above runs uv and refreshes it. Left behind,
     # the next `uv lock --check` (and CI) fails on a repo that looks untouched.
     echo "  uv.lock"
+
+# ── Documentation site (witan-context, published on Read the Docs) ──────────
+#
+# Three kinds of page live under docs/: GENERATED (docs/reference/, built from
+# the live tool objects, cyclopts command tree, and .pg schemas), MIRRORED
+# (guides and ADRs copied from the package that owns them), and HANDWRITTEN
+# (tutorials, overviews, explanation). `docs-gen` produces the first two;
+# `docs-check` is the CI gate that stops them drifting from the code.
+
+# Regenerate and re-mirror every non-handwritten docs page.
+docs-gen:
+    ./bin/gen_docs.py
+
+# Fail if any generated or mirrored page is out of date. Runs in CI.
+docs-check:
+    ./bin/gen_docs.py --check
+
+# Build the static site into site/.
+docs-build:
+    uvx zensical build
+
+# Serve the docs locally with incremental rebuilds.
+docs-serve:
+    uvx zensical serve

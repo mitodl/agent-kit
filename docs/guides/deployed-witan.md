@@ -1,3 +1,13 @@
+<!--
+  MIRRORED FILE — DO NOT EDIT HERE.
+  Edit mcp/servers/witan/docs/deployed-witan-onboarding.md instead; `just docs-gen` copies it into the site.
+-->
+
+!!! info "This page lives with the code"
+
+    The authoritative copy is
+    [`mcp/servers/witan/docs/deployed-witan-onboarding.md`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/deployed-witan-onboarding.md).
+
 # Pointing your CLI and agent at the deployed witan
 
 How to stop using your local `~/.local/share/witan/graph.omni` and start using
@@ -21,7 +31,7 @@ its export was taken is a store whose tail nobody will merge.
 
 The switch is opt-in and per-config: with `remote_url` unset the CLI runs
 exactly as it does today. See
-[ADR-0005](adr/0005-secure-cli-path-into-deployed-witan.md) for the design.
+[ADR-0005](../explanation/decisions/0005-secure-cli-path-into-deployed-witan.md) for the design.
 
 ## Prerequisites
 
@@ -95,11 +105,10 @@ precedence order. To force a target regardless, `WITAN_TARGET=ol witan …`.
 
 Note the corollary: a target with **no** `match_*` selectors never selects
 itself, so it is only ever reached explicitly. **Export `WITAN_TARGET=ol` for
-that case** — the read and write commands (`witan tasks`, `witan memory`, …)
-resolve their target from the environment and the checkout, and take no
-by-name flag. `WITAN_TARGET` covers every command; the by-name flags cover
-`login`/`logout`/`whoami` (`--target <name>`) and `witan migrate merge`
-(`--from <name>`/`--to <name>`, which name the two ends of a merge).
+that case** — `--target` is a flag on `login`/`logout`/`whoami` only, not on
+the read and write commands (`witan tasks`, `witan memory`, `witan migrate
+merge`, …), which resolve their target from the environment and the checkout.
+`WITAN_TARGET` covers every command; `--target` does not.
 
 Selector precedence is by **specificity, not file order**: every target's
 `match_paths` is checked before any `match_repos`, then `match_hosts`, then
@@ -151,7 +160,7 @@ ADR-0004 chain (JWT → actor → that actor's own omnigraph bearer token → Ce
 memory_store(kind="lesson", title="onboarding probe", content="delete me")
 ```
 
-…from an agent session, then `witan memory --kind <kind>` to confirm, and
+…from an agent session, then `witan memory show <slug>` to confirm, and
 `memory_delete` to clean up. A write that returns a Cedar denial rather than a
 slug means your actor has a token but no policy grant — quote the `act-…` from
 `witan whoami` when reporting it.
@@ -273,9 +282,8 @@ Reads are unaffected by all of this and stay fast under the same load.
   across. See the
   [migration runbook](migration-runbook.md#local-shared-the-cutover).
 - **`witan migrate merge --target …` is refused.** Against a deployment the
-  target is the deployment's own graph, resolved server-side. Name the
-  deployment with `--to <name>` instead, or unset `remote_url` to merge
-  between stores you address yourself.
+  target is the deployment's own graph, resolved server-side. Unset
+  `remote_url` to merge between stores you address yourself.
 - **witan-code went remote and you didn't want it to.** Expected — one endpoint
   serves both tool surfaces, so the four `remote_*`/`oidc_*` keys route both
   CLIs. Indexing stays local either way (it needs your checkout); only reads
@@ -283,10 +291,10 @@ Reads are unaffected by all of this and stay fast under the same load.
 
 ## References
 
-- [ADR-0005](adr/0005-secure-cli-path-into-deployed-witan.md) — the CLI's
+- [ADR-0005](../explanation/decisions/0005-secure-cli-path-into-deployed-witan.md) — the CLI's
   remote MCP-client mode (path a) and the in-cluster admin path (path b).
-- [ADR-0004](adr/0004-keycloak-jwt-per-user-actor-mapping.md) — JWT → actor →
+- [ADR-0004](../explanation/decisions/0004-keycloak-jwt-per-user-actor-mapping.md) — JWT → actor →
   token mapping, i.e. what `witan whoami`'s `actor` line is showing you.
-- [ADR-0007](adr/0007-local-to-shared-store-migration-transport.md) /
+- [ADR-0007](../explanation/decisions/0007-local-to-shared-store-migration-transport.md) /
   [migration runbook](migration-runbook.md) — the data half of the cutover.
 - ol-infrastructure `docs/adr/0009-…` — the deployment this connects to.
