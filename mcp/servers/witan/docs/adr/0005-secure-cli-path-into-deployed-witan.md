@@ -9,7 +9,7 @@
   server-side JWT→actor→token mapping this reuses); ol-infrastructure
   `docs/adr/0009-deploy-witan-as-shared-multi-tenant-mcp-service.md`
   (ClusterIP-only omnigraph-server, the `svc-witan-admin` sketch);
-  `docs/adr/0006-stateless-mcp-protocol-era.md` (the 2026-07-28 era this path
+  `docs/adr/0009-stateless-mcp-protocol-era.md` (the 2026-07-28 era this path
   now runs on — read it alongside every `streamable-http` reference below,
   which describes the handshake-era shape)
 
@@ -247,6 +247,6 @@ already actor-resolving.
   - **Amendment (2026-07-30):** largely moot against a 2026-07-28 deployment.
     That era has no `initialize` handshake and no session id, so a fresh
     connection per call costs a connection, not a negotiation — see
-    `docs/adr/0006-stateless-mcp-protocol-era.md`. The proxy also gained an
+    `docs/adr/0009-stateless-mcp-protocol-era.md`. The proxy also gained an
     elicitation handler, so a prompt the deployment raises now reaches the
     human at the terminal instead of degrading to the tool's default.

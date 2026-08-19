@@ -9,7 +9,7 @@
   `witan-users` group); ol-infrastructure
   `docs/adr/0009-deploy-witan-as-shared-multi-tenant-mcp-service.md`;
   `tk-ol-infrastructure-toolhive-witan-pulumi-stack-e843b3`;
-  `docs/adr/0006-stateless-mcp-protocol-era.md` (the JWT→actor mapping below is
+  `docs/adr/0009-stateless-mcp-protocol-era.md` (the JWT→actor mapping below is
   unchanged by the stateless era — it reads the token on each request and never
   depended on session state — but the `streamable-http` connection it describes
   no longer carries a handshake or a session id)

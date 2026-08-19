@@ -1,4 +1,4 @@
-# 6. Serving the stateless MCP protocol era (2026-07-28)
+# 9. Serving the stateless MCP protocol era (2026-07-28)
 
 - Status: Accepted
 - Date: 2026-07-30

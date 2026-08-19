@@ -143,7 +143,7 @@ class IdentityConfig(BaseModel):
     Sourced entirely from ``WITAN_OIDC_*``/``WITAN_ACTOR_TOKENS_FILE`` env
     vars — this is deployment/ops config for the shared ``streamable-http``
     service, not something an individual local user sets in config.toml.
-    Unaffected by the stateless 2026-07-28 era (ADR-0006): the mapping reads
+    Unaffected by the stateless 2026-07-28 era (ADR-0009): the mapping reads
     the JWT on every request and never depended on session state.
     ``oidc_issuer`` unset means the deployed-auth path is disabled entirely
     (local ``stdio`` usage never sets it).
