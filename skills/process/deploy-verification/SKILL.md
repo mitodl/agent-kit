@@ -54,8 +54,16 @@ picked it up. Check pod age against the deploy time:
 
 ```bash
 kubectl get pods -n <namespace> -l app=<app> -o wide
-kubectl rollout status deployment/<name> -n <namespace>
+kubectl rollout status deployment/<name> -n <namespace> --timeout=5m
 ```
+
+Always bound `rollout status` with `--timeout`. Its default is `--timeout=0s`,
+which kubectl documents as "zero means never" — an unbounded watch, so a
+stalled rollout hangs the verification instead of reporting anything. A
+non-zero exit on timeout is itself a finding: the rollout did not complete
+within the window, which is exactly the "looks deployed but isn't" case this
+checklist exists to catch. Report it as a failed step, not as a flaky command
+to retry with a longer wait.
 
 If pod `AGE` predates the pipeline run, the workload did not restart. This
 is the single most common silent failure in this checklist: a
