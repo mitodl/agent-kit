@@ -57,6 +57,7 @@ cyclopts-cli-scripts            = "skills/python/cyclopts-cli-scripts/SKILL.md"
 dagster-code-location-structure = "skills/dagster/dagster-code-location-structure/SKILL.md"
 dependency-pruning              = "skills/process/dependency-pruning/SKILL.md"
 dependency-updates              = "skills/process/dependency-updates/SKILL.md"
+deploy-verification             = "skills/process/deploy-verification/SKILL.md"
 docker-uv-image-builds          = "skills/containers/docker-uv-image-builds/SKILL.md"
 generate-standup                = "skills/process/generate-standup/SKILL.md"
 github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
@@ -84,7 +85,7 @@ skills = ["cyclopts-cli-scripts", "uv-python-workflow"]
 
 [profiles.infrastructure]
 inherits = ["universal"]
-skills = ["pulumi-modify-existing", "vault-k8s-auth", "docker-uv-image-builds"]
+skills = ["pulumi-modify-existing", "vault-k8s-auth", "docker-uv-image-builds", "deploy-verification"]
 
 [profiles.data]
 inherits = ["universal"]
@@ -96,6 +97,7 @@ skills = [
     "address-pr-feedback",
     "dependency-pruning",
     "dependency-updates",
+    "deploy-verification",
     "github-issue-triage",
     "github-pr-triage",
     "renovate-security-triage",
