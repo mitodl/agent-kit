@@ -156,6 +156,16 @@ leave everything in `COMMENTED` state with the real content in the thread
 comments, same as noted in
 [`github-pr-triage`](../github-pr-triage/SKILL.md#phase-3--classify).
 
+**A human reviewer's comment gets more deliberate handling than a bot's,
+even when the fix looks equally obvious.** A bot flags a pattern; a human
+colleague is making a judgment call, and a quick autonomous fix-and-resolve
+can read as brushing off their input. For human-authored threads: don't
+auto-resolve on your own judgment alone — bring the proposed fix (or your
+reasoning for declining) to the operator before pushing and resolving, and
+use their framing in the reply rather than your paraphrase. Bot-authored
+threads (Copilot, Gemini, CodeQL, etc.) don't need that same checkpoint —
+address, reply, and resolve those directly per the rest of this skill.
+
 Failing checks split into three kinds that get handled differently in
 Phase 3 — tag each one on the way in:
 
@@ -183,6 +193,13 @@ For each actionable item: make the code change, run the relevant
 tests/lint/build for that change before moving to the next one. Commit with
 a message that names what was addressed, not just "address PR feedback".
 
+When the item is a genuine bug (not a style/naming nit), prefer proving the
+fix over asserting it: extend or add a test that fails against the unfixed
+code, confirm the failure, then apply the fix and confirm it passes. This
+before/after result is worth citing in the reply or PR summary — it's
+stronger evidence than "fixed" on its own, and it's cheap when the bug is
+already localized by the reviewer's comment.
+
 **Disagreeing with a reviewer is a legitimate outcome — but it must be
 verified, not assumed.** Before skipping a suggestion because it "looks
 unnecessary": read the actual code path the reviewer is pointing at and
@@ -195,6 +212,16 @@ or "will consider". A good decline reads like: *"Verified — `write_bindings`
 always calls `ensure_bridge_store` first at every call site, so this
 fallback path is unreachable. Not adding it; would reintroduce the redundant
 read this PR removes."*
+
+**The same verify-before-asserting rule applies to any claim about runtime
+or production behavior**, not just code-path reasoning — "prod never showed
+this", "this is why the metric moved", "the library defaults to X". Code
+reading alone doesn't verify those; check the live source instead
+(Prometheus/Grafana over a window of at least 7 days so a short blip doesn't
+look like a trend, the actual library source/docs rather than memory, or the
+infra definition as deployed rather than as written). A claim you can't
+verify before replying gets flagged as unverified or left out — it doesn't
+ship as fact and get walked back after a reviewer catches it.
 
 For a failing check, read `action_run_logs[<run_id>]` (from Phase 1b) before
 touching code — a stack trace or assertion diff tells you exactly what broke,
