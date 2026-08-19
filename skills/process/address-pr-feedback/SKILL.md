@@ -100,7 +100,12 @@ not" summary).
 Output shape: `{repo, pr, review_threads: [...], discussion_comments: [...],
 reviews: [...]}`. Each `review_threads[]` entry carries the GraphQL `id`
 (pass this straight to `resolve-thread.sh`), `isResolved`, `isOutdated`,
-`path`/`line`, and its `comments`.
+`path`/`line`, and its `comments`. Every comment, discussion comment, and
+review also carries `author_type` alongside `author` — GitHub's own actor
+type (`User`, `Bot`, `Organization`, `Mannequin`), normalized from GraphQL's
+`__typename` and REST's `user.type` so it reads the same regardless of which
+call produced the record. Classify authorship from that field, not from
+whether you recognize the login.
 
 ## Phase 1b — Checks
 
@@ -166,6 +171,20 @@ use their framing in the reply rather than your paraphrase. Bot-authored
 threads (Copilot, Gemini, CodeQL, etc.) don't need that same checkpoint —
 address, reply, and resolve those directly per the rest of this skill.
 
+Decide which branch applies from `author_type` (Phase 1's output), never
+from whether the login *looks* like a bot — an unfamiliar GitHub App or a
+newly-added reviewer has no recognizable name, and guessing wrong applies
+the wrong handling to a colleague. `Bot` (and `Mannequin`, an imported
+placeholder identity) take the bot branch; `Organization` is rare on review
+threads and takes the human branch.
+
+`User` is the one value that doesn't settle it: a service account driving
+automation through a normal user token reports `User` exactly like a person
+does, because GitHub has no field that distinguishes them. When a `User`
+thread reads like machine output — templated phrasing, a severity badge, an
+identical comment repeated across files — say that's your read and ask,
+rather than silently taking the bot branch on a thread a colleague wrote.
+
 Failing checks split into three kinds that get handled differently in
 Phase 3 — tag each one on the way in:
 
@@ -217,9 +236,16 @@ read this PR removes."*
 or production behavior**, not just code-path reasoning — "prod never showed
 this", "this is why the metric moved", "the library defaults to X". Code
 reading alone doesn't verify those; check the live source instead
-(Prometheus/Grafana over a window of at least 7 days so a short blip doesn't
-look like a trend, the actual library source/docs rather than memory, or the
-infra definition as deployed rather than as written). A claim you can't
+(Prometheus/Grafana, the actual library source/docs rather than memory, or
+the infra definition as deployed rather than as written). Size the query
+window to the claim: an assertion about a *period* — "prod never showed
+this", "this has been broken since the July deploy" — is only supported by a
+window covering that whole period, and if retention won't reach that far
+back, the claim gets narrowed to what you actually queried ("no occurrences
+in the last 30 days") rather than asserted whole. Seven days is the floor
+for *trend* claims, where the window exists to keep a short blip from
+reading as a trend — it is a minimum, not a sufficient window for an
+absence claim. A claim you can't
 verify before replying gets flagged as unverified or left out — it doesn't
 ship as fact and get walked back after a reviewer catches it.
 
