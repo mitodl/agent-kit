@@ -34,6 +34,7 @@ import difflib
 import itertools
 import os
 import re
+import shutil
 import sys
 import tempfile
 import tomllib
@@ -52,9 +53,50 @@ DATA = DOCS / "_data"
 # than at the real graph: generation only reads registered tool metadata, and it
 # must never be able to touch — or lazily initialise — someone's actual store.
 # A non-writable path is not an option; `_ensure_graph` would raise on the mkdir.
-os.environ["WITAN_MEMORY_URI"] = str(
-    Path(tempfile.gettempdir()) / "witan-docs-generation" / "graph.omni"
-)
+_DOC_STORE = Path(tempfile.gettempdir()) / "witan-docs-generation" / "graph.omni"
+os.environ["WITAN_MEMORY_URI"] = str(_DOC_STORE)
+
+# ★ AND THE STORE HAS TO ALREADY EXIST, OR THIS NEEDS THE OMNIGRAPH BINARY.
+# `witan.server._ensure_graph` branches on it: an existing store tolerates a
+# missing binary (it catches the RuntimeError and returns), while a missing one
+# must be `omnigraph init`-ed and therefore cannot. Generating documentation has
+# no business requiring a downloaded binary — it reads tool metadata and never
+# opens a graph — and requiring one coupled the docs CI job to the binary's
+# availability. That bill came due immediately: the upstream `edge` tag moved,
+# the pinned checksum stopped matching, the install step failed, and a docs-only
+# change went red for a reason that had nothing to do with docs.
+#
+# Creating the directory is enough to take the tolerant branch. Nothing ever
+# reads or writes it.
+_DOC_STORE.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_omnigraph_on_path() -> None:
+    """Put a no-op ``omnigraph`` on PATH when no real one is installed.
+
+    ``OmnigraphClient.__init__`` resolves the binary eagerly, and both servers
+    construct a module-level client, so importing them needs *something* named
+    ``omnigraph`` even though generation never opens a graph. On a machine with
+    witan set up this does nothing — the real binary is found first and
+    behaviour is identical to before. It only fires in a bare environment such
+    as the docs CI job, which has no reason to download a 12MB binary to read
+    docstrings.
+
+    The stub is a no-op rather than an error: with the store pre-created above,
+    the only thing that runs it is ``schema_apply_if_changed``, which is
+    comparing a schema against a store nothing will ever read.
+    """
+    if shutil.which("omnigraph") or (Path.home() / ".local/bin/omnigraph").exists():
+        return
+    stub_dir = Path(tempfile.gettempdir()) / "witan-docs-generation" / "bin"
+    stub_dir.mkdir(parents=True, exist_ok=True)
+    stub = stub_dir / "omnigraph"
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(0o755)
+    os.environ["PATH"] = f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
+_ensure_omnigraph_on_path()
 
 BANNER = """<!--
   GENERATED FILE — DO NOT EDIT BY HAND.
