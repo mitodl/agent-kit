@@ -754,6 +754,63 @@ class RemoteMCPProxy:
             # lands on __context__.
             raise RemoteToolFailed(str(refused)) from refused
 
+    async def dispatch(self, name: str, /, **kwargs: Any) -> Any:
+        """Await one tool call by name — the async entry point.
+
+        ``__getattr__`` wraps this in ``asyncio.run`` for the synchronous CLI.
+        A caller that is ALREADY inside an event loop — notably the local MCP
+        server that re-serves this surface (``witan.remote.serve``) — cannot
+        use that form, because ``asyncio.run`` refuses to nest. It gets the
+        same dispatch, the same argument mapping, and the same error
+        classification by awaiting here instead.
+
+        Keyword-only by design: :meth:`_map_args` refuses positional arguments
+        outright (the wire format is a name->value object and JSON Schema
+        ``properties`` is unordered), so accepting them here would only defer
+        the same refusal to a less obvious place.
+        """
+        if self._is_admin_tool(name):
+            raise RemoteToolUnavailable(self._admin_error(name))
+        return await self._invoke(name, (), kwargs)
+
+    async def remote_tools(self) -> list[Any]:
+        """The deployment's advertised tools, as listed MCP tool objects.
+
+        For a caller that must REPUBLISH this surface rather than call into it,
+        and therefore needs each tool's schema and description, not just the
+        parameter names :meth:`_refresh_param_names` caches.
+
+        Deliberately returns what the deployment actually advertises rather
+        than anything derived from local code: the whole point of asking is
+        that the deployed version is the authority on its own surface, and a
+        locally-generated schema would drift from it on every release.
+        """
+        token = self._token_provider()
+        async with (
+            self._reclassifying("list_tools"),
+            AsyncExitStack() as stack,
+        ):
+            try:
+                client = await stack.enter_async_context(self._new_client(token))
+            except Exception as exc:  # see _invoke_once
+                rejected = auth_failure(exc)
+                if rejected is not None:
+                    raise RemoteCredentialRejected(
+                        self._credential_rejected_error(
+                            "list_tools", rejected.response.status_code
+                        )
+                    ) from exc
+                raise RemoteUnreachable(self._unreachable_error(exc)) from exc
+            tools: list[Any] = []
+            cursor: str | None = None
+            while True:
+                page = await client.list_tools_mcp(cursor=cursor)
+                tools.extend(page.tools)
+                cursor = _next_cursor(page)
+                if not cursor:
+                    break
+            return tools
+
     async def _invoke(self, name: str, args: tuple, kwargs: dict) -> Any:
         """Dispatch one tool call, classifying an unreachable deployment.
 

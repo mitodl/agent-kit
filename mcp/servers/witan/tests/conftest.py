@@ -60,6 +60,40 @@ class _Tools:
         return fn
 
 
+@pytest.fixture(autouse=True)
+def no_real_remote(tmp_path_factory, monkeypatch):
+    """Keep the developer's own ``[targets.*]`` out of the test run.
+
+    Config resolution reads the REAL ``~/.config/witan/config.toml``, so on a
+    machine whose current checkout matches a deployed target it answers with
+    that deployment — and any test that reaches routing then behaves
+    differently depending on who ran it, or talks to production outright.
+
+    Not hypothetical: ``witan serve`` dispatches to the deployment when a
+    remote target matches, so with a developer's production target in scope
+    ``test_serve_defaults_to_stdio`` built a real proxying server and
+    ``serve()`` blocked forever on a genuine stdio listener. Autouse, for the
+    same reason ``no_background_optimize`` exists: the unit suite must not
+    depend on — or touch — a real deployment.
+
+    ★ Isolates the config SOURCE rather than stubbing ``load_remote_config``.
+    Stubbing it is the obvious move and it is wrong: a dozen tests in
+    test_config.py exist to check what that function returns, and a stub makes
+    every one of them assert against the stub. Pointing ``WITAN_CONFIG`` at a
+    path that does not exist leaves the real resolution running — it simply
+    finds no targets. Tests that need targets set ``WITAN_CONFIG`` themselves,
+    and the later ``setenv`` wins.
+
+    The two environment overrides are cleared for the same reason: they bypass
+    the file entirely, so leaving them set would reintroduce exactly the leak
+    the temp path closes.
+    """
+    absent = tmp_path_factory.mktemp("witan-config") / "config.toml"
+    monkeypatch.setenv("WITAN_CONFIG", str(absent))
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+
+
 @pytest.fixture
 def tmp_state_dir(tmp_path, monkeypatch):
     """Redirect the system temp dir, which is where witan parks process state.

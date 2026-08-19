@@ -75,6 +75,76 @@ except ImportError:
     pass
 
 
+def _warn_if_code_graph_is_local() -> None:
+    """Warn when the memory graph is deployed but code graphs are not.
+
+    The two are routed by SEPARATE settings — ``remote_url`` sends the
+    work/memory graph to the deployment, ``code_transport = "mcp"`` sends the
+    code graphs — and nothing ties them together. A target that sets the first
+    and not the second gives you an agent whose memory is shared and whose code
+    graph is a directory on one laptop, which defeats the point of indexing a
+    branch at all: the reason branches are indexed per writer is so another
+    session, and another developer, can see work that is still in flight.
+
+    A warning rather than a refusal. Unlike the memory-graph fallback this
+    module exists to stop, this one is legible from the outside — `witan code`
+    reports the store path it used — and a local code graph is a legitimate
+    choice for someone who has not provisioned cluster graphs yet.
+    """
+    try:
+        from witan_code import config as code_cfg_module
+    except ImportError:
+        return
+    code_cfg = code_cfg_module.load()
+    if code_cfg.code_transport == code_cfg_module.CODE_TRANSPORT_MCP:
+        return
+    where = f"target [{code_cfg.target_name}]" if code_cfg.target_name else "config"
+    console.print(
+        f"[yellow]witan: memory graph is deployed, code graphs are local "
+        f"(code_transport = {code_cfg.code_transport!r}). Branches indexed here "
+        f'stay on this machine. Set code_transport = "mcp" on {where} to share '
+        f"them.[/yellow]"
+    )
+
+
+def _serve_target():
+    """The FastMCP server to run: the deployment's surface, or the local store.
+
+    Resolved the same way ``witan.cli._common._srv`` resolves the CLI's tool
+    provider, which is the entire point — before this, ``serve`` was the one
+    caller that ignored ``remote_url`` and opened the local store instead,
+    silently splitting an agent's writes from its operator's commands.
+
+    Refuses to start rather than falling back. An unreachable deployment or an
+    expired session is a reason to stop and say so; it is not a reason to write
+    somewhere else and let a merge nobody knew to run accumulate.
+    """
+    import asyncio
+
+    from .remote_errors import remote_startup_failure
+
+    try:
+        remote = cfg_module.load_remote_config()
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
+
+    if remote is None:
+        from ..server import mcp as witan_mcp
+
+        return witan_mcp
+
+    from ..remote.serve import build_remote_server
+
+    try:
+        server = asyncio.run(build_remote_server(remote))
+    except Exception as exc:  # noqa: BLE001 — every failure mode is the same answer
+        console.print(f"[red]{remote_startup_failure(remote, exc)}[/red]")
+        raise SystemExit(1) from None
+    _warn_if_code_graph_is_local()
+    return server
+
+
 @app.command
 def serve(
     *,
@@ -125,7 +195,7 @@ def serve(
 
     configure_observability()
 
-    from ..server import mcp as witan_mcp
+    witan_mcp = _serve_target()
 
     try:
         from witan_code.server import mcp as code_mcp
