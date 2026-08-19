@@ -206,6 +206,111 @@ def test_code_branch_tracking_survives_a_write_failure(server, tmp_path, monkeyp
 
 
 @requires_omnigraph
+def test_task_link_blocks_with_status_sync_is_one_commit(server, commits):
+    """It used to be two: the `Blocks` edge, then a separate update flipping
+    the blocked task's `blocked_by` and (here) its `status` to `blocked`."""
+    blocker = server.task_create(title="blocker", description="b", repo=REPO)
+    blocked = server.task_create(title="blocked", description="c", repo=REPO)
+    commits.clear()
+
+    server.task_link(blocker["slug"], blocked["slug"], kind="blocks")
+
+    assert len(commits) == 1, f"expected one commit, got {commits}"
+    updated = server.task_get(blocked["slug"])
+    assert updated["blocked_by"] == [blocker["slug"]]
+    assert updated["status"] == "blocked"
+
+
+@requires_omnigraph
+def test_task_link_blocks_already_recorded_is_still_one_commit(server, commits):
+    """The edge-only path — the blocker is already in `blocked_by`, so there
+    is nothing left to sync — must not regress to zero commits or silently
+    drop the (redundant, but requested) edge write."""
+    blocker = server.task_create(title="blocker2", description="b", repo=REPO)
+    blocked = server.task_create(title="blocked2", description="c", repo=REPO)
+    server.task_link(blocker["slug"], blocked["slug"], kind="blocks")
+    commits.clear()
+
+    server.task_link(blocker["slug"], blocked["slug"], kind="blocks")
+
+    assert commits == ["link_blocks"], f"expected the bare edge write: {commits}"
+
+
+@requires_omnigraph
+def test_task_link_parent_is_one_commit(server, commits):
+    """Mirrors `task_update(parent=…)`'s own batching — `task_link` is the
+    other way to set the same edge and must cost the same one commit."""
+    from witan import server as srv
+
+    parent = server.task_create(title="parent-link", description="p", repo=REPO)
+    child = server.task_create(title="child-link", description="c", repo=REPO)
+    commits.clear()
+
+    server.task_link(parent["slug"], child["slug"], kind="parent")
+
+    assert len(commits) == 1, f"expected one commit, got {commits}"
+    row = srv.client.read("read.gq", "get_task", {"slug": child["slug"]})[0]
+    assert row["parent_slug"] == parent["slug"]
+
+
+@requires_omnigraph
+def test_workflow_project_block_with_sync_is_one_commit(server, commits):
+    """The `ProjectBlocks` edge and the blocked project's denormalized
+    `blocked_by` used to be two separate commits."""
+    blocker = server.workflow_project_create(title="blocker-proj", description="d")
+    blocked = server.workflow_project_create(title="blocked-proj", description="d")
+    commits.clear()
+
+    server.workflow_project_block(blocker["slug"], blocked["slug"])
+
+    assert len(commits) == 1, f"expected one commit, got {commits}"
+    updated = server.workflow_project_get(blocked["slug"])
+    assert updated["blocked_by"] == [blocker["slug"]]
+
+
+@requires_omnigraph
+def test_workflow_project_block_already_recorded_is_still_one_commit(server, commits):
+    """Mirrors the task-link case: once `blocker` is already in `blocked_by`,
+    a repeat call has nothing to sync and must be the bare edge write."""
+    blocker = server.workflow_project_create(title="blocker-proj2", description="d")
+    blocked = server.workflow_project_create(title="blocked-proj2", description="d")
+    server.workflow_project_block(blocker["slug"], blocked["slug"])
+    commits.clear()
+
+    server.workflow_project_block(blocker["slug"], blocked["slug"])
+
+    assert commits == ["link_project_blocks"], f"expected the bare edge: {commits}"
+
+
+@requires_omnigraph
+def test_trace_mine_trailing_writes_are_one_commit(server, commits):
+    """It used to be N+1: an `Informed` edge per mined memory, one at a time,
+    plus a separate trailing update to the trace's own annotation fields. The
+    per-memory `_store_memory` commits themselves stay separate — each is a
+    genuinely distinct row — only the WRAP-UP after them collapses to one."""
+    proj = server.workflow_project_create(title="mine batched", description="d")
+    done = server.workflow_project_complete(proj["slug"], outcome="shipped it")
+    commits.clear()
+
+    created = server.workflow_trace_mine(
+        done["trace_slug"],
+        patterns=[{"title": "a pattern", "content": "do X because Y"}],
+        lessons=[{"title": "a lesson", "content": "watch out for Z"}],
+    )
+
+    # 2 commits for the two mined memories (unavoidable, one row each) + 1
+    # batched commit for both `Informed` edges and the trace annotation —
+    # NOT the 4 it used to be (2 memories + 2 edges + 1 annotate).
+    assert len(commits) == 3, f"expected 3 commits, got {commits}"
+    expected_batch = "link_informed+link_informed+update_workflow_trace_annotations"
+    assert commits[-1] == expected_batch, (
+        f"expected the trailing batch, got {commits[-1]!r}"
+    )
+    assert len(created["created_patterns"]) == 1
+    assert len(created["created_lessons"]) == 1
+
+
+@requires_omnigraph
 def test_step_builders_are_pure_until_the_caller_commits(server, tmp_path, monkeypatch):
     """The property the refactor rests on: building steps writes nothing.
 
