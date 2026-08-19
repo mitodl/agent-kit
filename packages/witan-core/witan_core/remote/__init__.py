@@ -4,7 +4,7 @@ The generic mechanism a witan MCP server's CLI needs to talk to its *deployed*
 self over ``streamable-http`` with a per-user OIDC identity (ADR-0005, path a),
 factored out of witan-council so a second server (e.g. a deployed witan-code)
 can reuse it instead of copy-pasting. On MCP 2026-07-28 that transport carries
-no handshake and no session id, so every call stands alone (witan ADR-0006):
+no handshake and no session id, so every call stands alone (witan ADR-0009):
 
 - :mod:`witan_core.remote.config` — :class:`~witan_core.remote.config.RemoteConfig`,
   which deployment to talk to and how to authenticate to it, resolved from the

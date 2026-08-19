@@ -149,5 +149,5 @@ ENTRYPOINT ["witan"]
 # deployed invocation and keeps the image runnable standalone. The transport
 # serves both protocol eras: a 2026-07-28 client is answered statelessly (no
 # handshake, no Mcp-Session-Id, so replicas need no session affinity), an older
-# one still gets the handshake. See mcp/servers/witan/docs/adr/0006.
+# one still gets the handshake. See mcp/servers/witan/docs/adr/0009.
 CMD ["serve", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000"]
