@@ -57,13 +57,16 @@ an extra, so neither server carries weight it does not use:
 | `observability` | `structlog`, OpenTelemetry | Structured logs and traces |
 | `sentry` | `sentry-sdk` | Error reporting, hooked onto the logging chain above |
 
-Two of these splits are deliberate and worth the note. `observability` is not in
-the base package because a local stdio session exports nothing and an OTLP
-exporter is a lot of weight for a `pip install`. `sentry` is separate from
-`observability` because it hooks the stdlib logging chain that `observability`
-already sets up rather than introducing a new pipeline — so it needs nothing
-else, and folding it in would force the OTel weight on anyone who only wanted
-error reports.
+`observability` is not in the base package because a local stdio session exports
+nothing and an OTLP exporter is a lot of weight for a `pip install`.
+
+`sentry` is **additive to `observability`, not an alternative to it**. It hooks
+the stdlib logging chain `observability` already sets up rather than introducing
+a pipeline of its own, and `telemetry.py` imports
+`witan_core.observability.logging`, which imports `structlog` at module scope —
+so installing `sentry` alone gets you an ImportError, not a lighter build. Both
+servers request both extras. The split exists so a deployment can run structured
+logs and traces *without* shipping errors to Sentry, not the other way round.
 
 ## What's in it
 
@@ -104,7 +107,10 @@ single source of the pinned binary version), `maintenance` (the
 stamp/interval/due mechanics for that throttle), `elicit`, `caching`,
 `chunking`, `identity`, and `timeutil.now_iso`.
 
-CLI scaffolding remains local to each server, deliberately.
+CLI scaffolding is **shared**, not local: `witan_core.cli` provides `make_app`,
+`resolve_author`, and `report_install`, and both servers import them. What stays
+local to each server is its own commands and setup behaviour — the surface that
+is genuinely different between a coordination graph and a code index.
 
 ## The version-floor trap
 
@@ -117,7 +123,7 @@ and use it in a server without raising that server's floor:
 
 ```toml
 # mcp/servers/witan/pyproject.toml
-"witan-core>=0.13,<1",   # ← this number
+"witan-core[cli,remote,observability,sentry]>=0.25,<1",   # ← this floor
 ```
 
 Everything passes locally and in CI. Then `pip install witan-council` resolves a
