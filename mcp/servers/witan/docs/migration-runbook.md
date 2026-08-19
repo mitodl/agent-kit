@@ -250,7 +250,13 @@ different records, one is about to silently disappear — this is exactly what
 ## Local → shared: the cutover
 
 Moving your local store onto the deployed service (ADR-0009). **Do it
-yourself** — no kubectl, no port-forward, no AWS credentials:
+yourself** — no kubectl, no port-forward, no AWS credentials. This is the
+**only supported way** to run this cutover: there is no direct-store-URI
+alternative for it, on purpose — a port-forward + raw bearer token variant
+used to be documented here and was removed 2026-08-19 after it caused a real
+mix-up (`--target <the-deployment's-URL>` looks like it should work the same
+way as everywhere else `migrate merge` takes a `--target`, and it does not —
+see the warning below).
 
 ```bash
 witan target add ol --remote-url … --oidc-issuer …     # once, if you haven't
@@ -427,22 +433,6 @@ Keep your local store until you have done this. It is the backup.
 Run steps 1–3 once per person, in sequence, into the same graph. Order only
 matters for genuine slug collisions, and the merge resolves those newest-wins
 either way. Run step 4 once at the end rather than after every user.
-
-### If you have cluster credentials
-
-The same commands work from a laptop over a port-forward, which is a
-convenience rather than a second supported path — it needs your own bearer
-token out of the `actor-tokens` Secret, which most users cannot read:
-
-```bash
-kubectl -n omnigraph port-forward svc/omnigraph-server 8080:8080 &
-OMNIGRAPH_BEARER_TOKEN=<your-actor-token> \
-  witan migrate merge ~/.local/share/witan/graph.omni \
-  --target http://127.0.0.1:8080/graphs/council --dry-run
-```
-
-Note this form merges from the *store* directly — no export step, since the
-store is on the same machine as the command.
 
 ## Procedure
 
