@@ -69,7 +69,12 @@ jobs:
       - name: Install dependencies
         # --all-packages: the generator imports BOTH servers to read their
         # registered tool objects, so a single-package sync cannot run it.
-        run: uv sync --frozen --all-packages
+        #
+        # --python 3.12 matches the pin in bin/gen_docs.py's shebang. FastMCP's
+        # schema derivation orders a Literal's `enum` differently on different
+        # Pythons, so an unpinned sync here would let CI disagree with a
+        # contributor's machine about pages neither of them edited.
+        run: uv sync --frozen --all-packages --python 3.12
 
       - name: Check generated documentation is up to date
         # Fails with a diff naming every stale page. The fix is always the same

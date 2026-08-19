@@ -1188,7 +1188,7 @@ contract B provides). Pass --html PATH to also emit an interactive graph.
 
 **Parameters**:
 
-* `KIND, --kind`: Filter to one contract kind (env_var/package/service/endpoint).  *[choices: env_var, package, service, endpoint]*
+* `KIND, --kind`: Filter to one contract kind (env_var/package/service/endpoint).  *[choices: env_var, endpoint, package, service]*
 * `REPO, --repo`: Keep only links touching a repo whose slug contains this substring.
 * `HTML, --html`: Write a self-contained interactive HTML graph to this path.
 * `OPEN-BROWSER, --open-browser, --no-open-browser`: Open the generated HTML in the default browser.  *[default: False]*

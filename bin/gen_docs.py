@@ -1,4 +1,4 @@
-#!/usr/bin/env -S uv run --quiet --all-packages python
+#!/usr/bin/env -S uv run --quiet --all-packages --python 3.12 python
 """Generate the reference half of the witan-context docs site from live sources.
 
 WHY. A reference page that is written by hand is a reference page that is wrong
@@ -19,6 +19,18 @@ from source; what they mean is not. So the names are discovered here and the
 descriptions live in ``docs/_data/environment.toml``, and a name with no entry
 there is a hard error. That way a newly-added env var cannot ship undocumented,
 but the description is still written by someone who knows what it does.
+
+THE INTERPRETER IS PINNED IN THE SHEBANG, AND HAS TO BE. The JSON Schema
+FastMCP derives from a ``Literal`` does not order its ``enum`` the same way on
+every Python: ``BindingKind`` comes out as
+``env_var, package, service, endpoint`` on 3.14 and
+``env_var, endpoint, package, service`` on 3.12. Nothing here is
+hash-dependent — the order is stable within a version and differs between them
+— so without a pin, generating on one Python and checking on another reports
+pages as stale that nobody edited. That is exactly what happened: CI resolved
+3.12, the author's machine had 3.14, and ``--check`` failed on two pages with
+no change behind them. Pinning makes every contributor and CI agree; the
+version itself is arbitrary, it only has to be fixed.
 
 Usage:
     ./bin/gen_docs.py            # regenerate everything
