@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.17.6] - 2026-08-19
+
+### Changed
+
+- **Every MCP tool parameter now carries a description in its JSON Schema.**
+  62 of 200 parameters across 25 tools had none, because FastMCP builds the
+  schema from the docstring's numpydoc `Parameters` section and a parameter
+  with no entry there gets no `description`. That schema is what reaches the
+  model, so an agent calling `task_update` was choosing among 12 undescribed
+  parameters from names and types alone — this is tool-calling accuracy, not
+  just documentation. The worst gaps were `task_update` (12), `memory_update`
+  (10), and `recall` (9).
+
+  The descriptions record what a parameter *does to the graph* rather than
+  restating its name. Notably: `task_update.status` stamps a lease on
+  `in_progress` and unblocks dependents on `closed`, so it is not a plain
+  field write; `task_update.parent` writes the `parent_slug` field and the
+  `ParentOf` edge in one commit; `memory_update.tags` leaves `Tagged` edges in
+  place for removed tags, because edges cannot be individually retracted;
+  `recall.hops` is clamped to 0–2; and `store_merge.dry_run` is the only way
+  to preview which side wins each `(type, slug)` before the graph changes.
+
 ## [0.17.5] - 2026-08-19
 
 ### Changed

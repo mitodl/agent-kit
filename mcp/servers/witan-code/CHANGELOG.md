@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.13.4] - 2026-08-19
+
+### Changed
+
+- **Every `code_*` tool parameter now carries a description in its JSON
+  Schema.** Seven parameters across seven tools had none — the `symbol_id`
+  argument of `code_callers`, `code_find_references`, `code_impact`, and
+  `code_cross_repo_impact`, the `repo` filter on `code_find_definition` and
+  `code_search_symbol`, and `branch` on `code_indexed_branches`. FastMCP
+  sends these schemas to the model, so an undescribed parameter leaves the
+  calling agent guessing. `symbol_id` in particular now says where the value
+  comes from (the `symbol_id` field of `code_find_definition` /
+  `code_search_symbol`) and what shape it has.
+
 ## [0.13.3] - 2026-08-18
 
 ### Changed

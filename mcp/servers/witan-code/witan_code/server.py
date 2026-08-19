@@ -424,6 +424,12 @@ async def code_find_definition(
     ----------
     name:
         Bare name (``run``) or qualified name (``Service.run``).
+    repo:
+        Canonical repo URI to search. Defaults to the repo detected from the
+        checkout, and fans out across every indexed repo only when no repo is
+        detected at all. Note this differs from the witan memory/task tools:
+        ``repo=""`` does **not** force a fan-out here — it is falsy, so it
+        behaves exactly like omitting the argument.
     branch:
         Git branch whose indexed view to query (e.g. another agent's in-flight
         branch). Defaults to the checkout's branch when querying the current
@@ -464,6 +470,13 @@ async def code_find_references(
 
     Supersets code_callers (references includes calls); use code_callers when
     you want calls only. Heuristic — may miss or over-report.
+
+    Parameters
+    ----------
+    symbol_id:
+        The symbol to start from, as returned in the ``symbol_id`` field of
+        code_find_definition or code_search_symbol. Form:
+        ``<repo>#<path/to/file.py>::<QualifiedName>``.
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
@@ -483,6 +496,13 @@ async def code_callers(symbol_id: str, ctx: Context | None = None) -> list[dict]
 
     Heuristic name-resolution based; not a precise call graph. For calls plus
     other references use code_find_references.
+
+    Parameters
+    ----------
+    symbol_id:
+        The symbol to start from, as returned in the ``symbol_id`` field of
+        code_find_definition or code_search_symbol. Form:
+        ``<repo>#<path/to/file.py>::<QualifiedName>``.
     """
     client = _client_for_symbol(symbol_id)
     if client is None:
@@ -508,6 +528,12 @@ async def code_impact(
 
     Parameters
     ----------
+    symbol_id:
+        The symbol to start from, as returned in the ``symbol_id`` field of
+        code_find_definition or code_search_symbol. Form:
+        ``<repo>#<path/to/file.py>::<QualifiedName>``.
+        This is the symbol you are about to change; the result is its blast
+        radius.
     max_depth:
         Maximum BFS depth (default 5).
     max_nodes:
@@ -635,6 +661,13 @@ def code_search_symbol(
         ``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,
         ``key``, ``table``, ``cte``, or ``block``. Pass e.g. ``kind="function"``
         to exclude the many YAML ``key`` symbols when searching for code.
+    repo:
+        Canonical repo URI to search. Defaults to the repo detected from the
+        checkout, and fans out across every indexed repo only when no repo is
+        detected at all — ``repo=""`` does **not** force that, unlike the witan
+        memory/task tools; it is falsy and behaves like omitting the argument.
+        BM25 ranking is per-store, so a fan-out concatenates each store's
+        ranked results rather than producing one global ordering.
     branch:
         Git branch whose indexed view to query. Defaults to the checkout's
         branch when querying the current repo; when ``repo`` names a different
@@ -767,6 +800,11 @@ async def code_cross_repo_impact(
 
     Parameters
     ----------
+    symbol_id:
+        The symbol whose cross-repo surface to trace, as returned in the
+        ``symbol_id`` field of code_find_definition or code_search_symbol. Its
+        repo prefix also scopes the bridge read, so asking about another repo's
+        symbol does not pick up an unrelated overlay from your own checkout.
     min_precision:
         ``heuristic`` (default) | ``precise`` — see server instructions.
     """
@@ -1018,6 +1056,13 @@ def code_indexed_branches(branch: str | None = None) -> list[dict]:
     sanitized git branch it is a view of, ``actor`` its owner (null on a
     single-writer local store). ``views`` is null for a store that could not be
     listed.
+
+    Parameters
+    ----------
+    branch:
+        A raw git branch name (not a view name) to filter by, showing every
+        writer's view of that one branch — this is how you find a teammate's
+        in-flight work. Omit to list every view of every indexed repo.
     """
     wanted = repo_module.branch_store_name(branch) if branch else None
 
