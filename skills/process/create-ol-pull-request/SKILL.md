@@ -125,7 +125,7 @@ available evidence rather than memory or "it should be fine":
 
 | Claim type | Evidence source |
 |------------|------------------|
-| Metric / production behavior | Prometheus/Grafana via the matching `toolhive-swe-{ci,qa,prod}` MCP tier, over a window of **at least 7 days** so a short blip doesn't read as a trend |
+| Metric / production behavior | Prometheus/Grafana via the matching `toolhive-swe-{ci,qa,prod}` MCP tier, over a window covering the period the claim names — **at least 7 days** for a trend claim, so a short blip doesn't read as a trend; an absence claim ("never happened") needs the full period it names, or gets narrowed to the window actually queried |
 | Library/framework default behavior | The actual library source or its docs — not memory |
 | Infra/config state ("this is deployed", "the value is X in prod") | The deployed state, not the manifest — see the `deploy-verification` skill if the claim is about a live rollout |
 | "This fixes bug X" | A test that failed before the fix and passes after, if one exists or is cheap to add |
