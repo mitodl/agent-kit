@@ -57,6 +57,8 @@ started](../getting-started/index.md) instead.
 | I want to… | Where |
 | --- | --- |
 | Change where the graph is stored | [`WITAN_MEMORY_URI`](../reference/environment.md#store-and-attribution) |
+| Move my local graph onto the team's shared store | [Migration runbook](migration-runbook.md) — never by copying the directory |
+| Point my CLI and agent at a deployed witan | [Using a deployed witan](deployed-witan.md) |
 | Route work repos and personal repos at different stores | [Named targets](witan-user-guide.md) |
 | Stop a detector flagging a false positive | [Write-path scanning](write-path-scanning.md) |
 | Run the code indexer in CI | [`WITAN_CODE_CI_REPOS`](../reference/environment.md#ci-code-graph-indexer) |
