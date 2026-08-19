@@ -117,28 +117,32 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: Refresh with, for each asset:
 #:     curl -fsSL https://github.com/ModernRelay/omnigraph/releases/download/\
 #: <tag>/<asset>.sha256
-#: ★ THESE ARE THE `edge` BUILD OF 2026-08-18T16:30Z (commit a2fd5f9237, "test
-#: (merge): split Blob coverage to fit default stack"), NOT v0.9.0's. Refreshed
-#: from the 2026-08-16T23:05Z triple after CI started failing the checksum
-#: check on 2026-08-18: confirmed via `gh api repos/ModernRelay/omnigraph/commits`
-#: that a2fd5f9237 is the only commit that landed on upstream main in between,
-#: and it touches only a test file (crates/omnigraph/tests/branching.rs) and a
-#: docs line — no engine/production code — so the drift is edge's normal
-#: rebuild-every-push churn, not a functional or suspicious change. This is
-#: still the 0.10.0 re-test (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2).
+#: ★ THESE ARE THE `edge` BUILD OF 2026-08-19T00:53Z (commit da466ba75b,
+#: "feat(changes): commit entity diffs and a durable change feed"), NOT
+#: v0.9.0's. Refreshed from the 2026-08-18T16:30Z triple after CI started
+#: failing the checksum check on 2026-08-19: three commits landed upstream in
+#: between (da466ba75b above; dbcfca3566, "fix: retry raced Lance branch
+#: enumeration"; 28565687d1, "fix(merge): a branch whose edits net to zero can
+#: never be merged") — reviewed each PR's diff before trusting this build:
+#: da466ba75b is a new, additive CLI/API surface (commit diffs + change feed,
+#: RFC-030); dbcfca3566 only retries an existing read-only branch-enumeration
+#: call on a race, no new error contract; 28565687d1 only fixes an explicit
+#: branch-MERGE edge case witan does not use. None touches the `mutate`/
+#: `query`/CAS (`if-graph-commit`) paths witan actually calls. Still the
+#: 0.10.0 re-test (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2).
 #: Reverting the experiment means restoring the v0.9.0 triple, which was:
 #:     linux-x86_64  507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197
 #:     linux-arm64   6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881
 #:     macos-arm64   69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "9f4dccb07cc3a4e4f6d1b367877f18f5ed9c7899c48c91c18da2a84e86a5c99e"
+        "063fc1b31fc2d3528b189573afe2d09094e7983dbf52ef4a819818c7ed736e04"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "cfdf6c9950ee7f0b1ea26969e42d5f2e67ffa9b80c656e24474612687dea489d"
+        "426047934fffe7a94e65a5f63813ff04b9f64d080c3f1780c3db2d269bd23337"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "293972552599dc34281ab614dc75c479c826d2853d4ce4c0c27b03af9d46701e"
+        "7046b37058d0422a45e2306865e43581b4f24f5307214fc5729910b91941c841"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
