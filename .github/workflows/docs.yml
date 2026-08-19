@@ -43,6 +43,11 @@ on:
       - "pyproject.toml"
       - "justfile"
       - ".github/workflows/docs.yml"
+  # Manual trigger. Useful on its own (rebuild the site after an upstream
+  # Zensical release without touching the repo), and an escape hatch for the
+  # case that prompted adding it: a force-push GitHub did not turn into a
+  # `synchronize` event, leaving a PR with no docs checks attached at all.
+  workflow_dispatch:
 
 permissions:
   contents: read
