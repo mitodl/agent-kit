@@ -784,8 +784,27 @@ class RemoteMCPProxy:
         than anything derived from local code: the whole point of asking is
         that the deployed version is the authority on its own surface, and a
         locally-generated schema would drift from it on every release.
+
+        Refreshes once on a rejected credential, exactly as :meth:`_invoke`
+        does for a read. The provider is allowed to answer from cache, so a
+        token the deployment has already rejected while this client still
+        believes it good is the normal way to arrive here — and listing tools
+        writes nothing, so the asymmetry that forbids retrying a write does
+        not apply. Without this the caller most affected is the one least able
+        to recover: ``witan serve`` lists at STARTUP, so a stale cache entry
+        aborted the whole server and told the user to log in when a refresh
+        would have done.
         """
         token = self._token_provider()
+        try:
+            return await self._remote_tools_once(token)
+        except RemoteCredentialRejected:
+            if self._token_refresher is None:
+                raise
+            return await self._remote_tools_once(self._token_refresher(token))
+
+    async def _remote_tools_once(self, token: str) -> list[Any]:
+        """One listing attempt with an already-resolved ``token``."""
         async with (
             self._reclassifying("list_tools"),
             AsyncExitStack() as stack,

@@ -29,6 +29,14 @@ app = make_app(
 )
 console = Console()
 
+# ★ STARTUP DIAGNOSTICS MUST NOT GO TO STDOUT.
+# Under `witan serve`'s default stdio transport, stdout IS the JSON-RPC
+# channel — anything printed there is a non-protocol line in the middle of the
+# stream, which can stop the client completing MCP initialization. That makes
+# the ordinary `console` above unusable for exactly the messages that matter
+# most: the ones explaining why the server is refusing to start.
+stderr_console = Console(stderr=True)
+
 _server = None
 
 

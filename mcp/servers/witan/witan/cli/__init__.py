@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 import cyclopts
+from rich.markup import escape
 
 from .. import config as cfg_module
 
@@ -33,7 +34,7 @@ from . import (
     tasks,  # noqa: F401
     traces,  # noqa: F401
 )
-from ._common import app, console
+from ._common import app, console, stderr_console
 from .migrate import migrate_app
 from .output import OutputFormat, set_output_format
 from .run_helpers import _run_task_slug
@@ -75,6 +76,25 @@ except ImportError:
     pass
 
 
+def _local_code_graph_warning(transport: str, target_name: str | None) -> str:
+    """The warning text, separated from the config read so it can be tested.
+
+    Everything interpolated here is escaped, because the target name lands
+    inside brackets: "target [production]" is valid Rich markup for a style
+    called `production`, so unescaped the name is either swallowed on render or
+    raises on a name Rich cannot parse. Splitting this out also keeps the
+    escaping under test where `witan-code` is not installed — otherwise the
+    only test of it skips, which is no test at all.
+    """
+    where = f"target [{target_name}]" if target_name else "config"
+    return (
+        f"[yellow]witan: memory graph is deployed, code graphs are local "
+        f"(code_transport = {escape(repr(transport))}). Branches indexed here "
+        f'stay on this machine. Set code_transport = "mcp" on {escape(where)} '
+        f"to share them.[/yellow]"
+    )
+
+
 def _warn_if_code_graph_is_local() -> None:
     """Warn when the memory graph is deployed but code graphs are not.
 
@@ -98,16 +118,12 @@ def _warn_if_code_graph_is_local() -> None:
     code_cfg = code_cfg_module.load()
     if code_cfg.code_transport == code_cfg_module.CODE_TRANSPORT_MCP:
         return
-    where = f"target [{code_cfg.target_name}]" if code_cfg.target_name else "config"
-    console.print(
-        f"[yellow]witan: memory graph is deployed, code graphs are local "
-        f"(code_transport = {code_cfg.code_transport!r}). Branches indexed here "
-        f'stay on this machine. Set code_transport = "mcp" on {where} to share '
-        f"them.[/yellow]"
+    stderr_console.print(
+        _local_code_graph_warning(code_cfg.code_transport, code_cfg.target_name)
     )
 
 
-def _serve_target():
+def _serve_target(transport: str):
     """The FastMCP server to run: the deployment's surface, or the local store.
 
     Resolved the same way ``witan.cli._common._srv`` resolves the CLI's tool
@@ -118,15 +134,29 @@ def _serve_target():
     Refuses to start rather than falling back. An unreachable deployment or an
     expired session is a reason to stop and say so; it is not a reason to write
     somewhere else and let a merge nobody knew to run accumulate.
+
+    ★ REMOTE RE-SERVING IS STDIO-ONLY, AND THAT IS A SECURITY BOUNDARY RATHER
+    THAN A LIMITATION. Every forwarded call is authenticated with the cached
+    OIDC token of the user who started the process, and this server has no
+    inbound authentication of its own. Over stdio that is exactly right — the
+    only client is the agent harness that spawned it, as that same user. Bound
+    to a socket it becomes a credential-sharing proxy: anyone who can reach the
+    listener acts as the token's owner, with none of the per-caller JWT->actor
+    mapping (ADR-0004) the real deployment does. `--host 0.0.0.0` is documented
+    on this command, so this is reachable by configuration, not just by
+    mistake.
+
+    The deployment's own `--transport streamable-http` is unaffected: it serves
+    its own graph and has no `remote_url`, so it never reaches this branch.
     """
     import asyncio
 
-    from .remote_errors import remote_startup_failure
+    from .remote_errors import remote_serving_needs_stdio, remote_startup_failure
 
     try:
         remote = cfg_module.load_remote_config()
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        stderr_console.print(f"[red]{escape(str(exc))}[/red]")
         raise SystemExit(1) from None
 
     if remote is None:
@@ -134,12 +164,20 @@ def _serve_target():
 
         return witan_mcp
 
+    if transport != "stdio":
+        stderr_console.print(
+            f"[red]{escape(remote_serving_needs_stdio(remote, transport))}[/red]"
+        )
+        raise SystemExit(1) from None
+
     from ..remote.serve import build_remote_server
 
     try:
         server = asyncio.run(build_remote_server(remote))
     except Exception as exc:  # noqa: BLE001 — every failure mode is the same answer
-        console.print(f"[red]{remote_startup_failure(remote, exc)}[/red]")
+        stderr_console.print(
+            f"[red]{escape(remote_startup_failure(remote, exc))}[/red]"
+        )
         raise SystemExit(1) from None
     _warn_if_code_graph_is_local()
     return server
@@ -195,7 +233,7 @@ def serve(
 
     configure_observability()
 
-    witan_mcp = _serve_target()
+    witan_mcp = _serve_target(transport)
 
     try:
         from witan_code.server import mcp as code_mcp

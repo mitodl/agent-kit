@@ -31,6 +31,15 @@ a MINOR bump may include breaking changes).
   expired session and a rejected credential are classified by the same code
   (and reported in the same sentences) as an ordinary call.
 
+  `remote_tools()` also force-refreshes once on a rejected credential, exactly
+  as `_invoke` does for a read. The token provider is allowed to answer from
+  cache, so a credential the deployment has already rejected while this client
+  still believes it good is the normal way to arrive here — and listing tools
+  writes nothing, so the asymmetry that forbids retrying a *write* does not
+  apply. Without it the caller least able to recover was hit hardest:
+  `witan serve` lists at STARTUP, so one stale cache entry aborted the whole
+  server and told the user to log in when a refresh would have worked.
+
 ## [0.25.0] - 2026-08-18
 
 ### Added

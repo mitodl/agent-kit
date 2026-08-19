@@ -68,7 +68,26 @@ a MINOR bump may include breaking changes).
   cluster, via `code_transport = "mcp"` routing the STORE through the
   deployment's `code_store_*` tools.
 
+- **Re-serving a deployed target is stdio-only.** Every call this process
+  forwards is authenticated with the OIDC token of the user who started it,
+  and the process authenticates nobody inbound — so over a socket it would be
+  a credential-sharing proxy, letting anyone who can reach the port act as
+  that user with none of the per-caller JWT->actor mapping (ADR-0004) the real
+  deployment does. `--host 0.0.0.0` is documented on this command, so that was
+  reachable by configuration rather than only by mistake. The deployment's own
+  `--transport streamable-http` is unaffected: it serves its own graph and has
+  no `remote_url`, so it never takes this branch.
+
 ### Changed
+
+- **Startup diagnostics now go to stderr, not stdout.** Under the default
+  stdio transport stdout IS the JSON-RPC channel, so a message printed there
+  is a non-protocol line mid-stream that can stop the client completing MCP
+  initialization — and it was invisible to the person it was written for.
+  Dynamic text in those messages is Rich-escaped: the code-graph warning
+  interpolates a target name as `target [production]`, which Rich otherwise
+  parses as a style tag and silently swallows, leaving a warning that names
+  no target at all.
 
 - Requires `witan-core>=0.26` for `RemoteMCPProxy.dispatch` and
   `RemoteMCPProxy.remote_tools`.

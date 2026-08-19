@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from ..config import RemoteConfig
 
-__all__ = ["remote_startup_failure"]
+__all__ = ["remote_serving_needs_stdio", "remote_startup_failure"]
 
 
 def remote_startup_failure(remote: RemoteConfig, exc: BaseException) -> str:
@@ -41,4 +41,30 @@ def remote_startup_failure(remote: RemoteConfig, exc: BaseException) -> str:
         "Either restore the connection (`witan whoami`, then `witan login` if "
         "the session has expired), or work against the local store on purpose "
         "by selecting a target that declares one — e.g. WITAN_TARGET=work."
+    )
+
+
+def remote_serving_needs_stdio(remote: RemoteConfig, transport: str) -> str:
+    """Explain why a deployed target may only be re-served over stdio.
+
+    Names the credential rather than the rule. "stdio only" on its own reads
+    like an arbitrary restriction somebody will work around with a reverse
+    proxy; what actually matters is that this server authenticates every
+    forwarded call with ONE cached token — the token of whoever started it —
+    and has no inbound authentication to decide who is asking.
+    """
+    source = remote.url_source or "the configured remote URL"
+    return (
+        f"witan serve: refusing to serve {remote.url} over {transport!r}.\n"
+        f"\n"
+        "Re-serving a deployed witan is stdio-only. Every call this process "
+        "forwards is authenticated with the OIDC token of the user who started "
+        "it, and this process authenticates nobody on the way in — so on a "
+        "socket it would let anyone who can reach the port act as that user, "
+        "with none of the per-caller identity mapping the deployment itself "
+        "does.\n"
+        "\n"
+        f"Either drop --transport (stdio is the default, and is what an agent "
+        f"harness uses), or unset {source} to serve your local store over "
+        "HTTP on purpose."
     )
