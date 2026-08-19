@@ -6,6 +6,92 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.18.0] - 2026-08-19
+
+### Fixed
+
+- **`witan serve` no longer silently opens the LOCAL store when the matched
+  target is a deployed one.** `config.load()` builds `graph_uri` from a
+  target's `server` field only, so a target declaring `remote_url` and no
+  `server` fell through every candidate to the default local store — with no
+  error and no warning. `serve` opened it, while the CLI
+  (`cli._common._srv`) dispatched to the deployment from the same config, in
+  the same directory, at the same moment. An agent's writes and its
+  operator's `witan` commands went to two different graphs, and nothing said
+  so.
+
+  Observed in production on 2026-08-19, the day `[targets.production]` took
+  over `~/code/mit` via `match_paths`: three `workflow_session_start` calls
+  failed against a wedged local store while the deployment's log recorded no
+  such call at all, and the CLI-backed context hook was reading production
+  throughout. It was invisible until then only because the previously
+  matching target declared a *local* `server`, so both paths had agreed.
+
+  This is the failure `RemoteServerProxy._unreachable_hint` already refuses
+  to allow on the CLI side, in its own words: falling back silently "would
+  split your memory across two graphs with no signal that it happened,
+  leaving a merge nobody knew to run."
+
+### Added
+
+- **`witan serve` re-serves a deployed witan's tool surface**
+  (`witan.remote.serve`). The tools are read off the DEPLOYMENT — names,
+  schemas and descriptions — so the deployed release stays the authority on
+  what it serves and a version skew cannot produce a locally-invented schema.
+  Each call dispatches through the same `RemoteServerProxy` the CLI uses, so
+  client-side context injection (`repo`, `session_slug`, `session_id` from
+  the local checkout) and token refresh behave identically either way.
+
+  The local hop exists precisely because the deployment cannot see the
+  caller's checkout; an agent pointed straight at the endpoint would have to
+  know and pass all three itself on every call.
+
+- **A refusal to start, rather than a fallback, when the deployment cannot be
+  reached** (`witan.cli.remote_errors`). An MCP server's stderr is read, if
+  ever, long after the fact — the visible symptom is only that the witan
+  tools are missing — so the message carries the whole diagnosis: the
+  endpoint, which setting supplied it, why no fallback happened, and both
+  ways forward (`witan login`, or `WITAN_TARGET=<local target>`).
+
+- **A startup warning when the memory graph is deployed but code graphs are
+  not.** The two are routed by separate settings (`remote_url` and
+  `code_transport = "mcp"`) with nothing tying them together, and a target
+  that sets only the first leaves branch indexes on one machine — which
+  defeats the reason branches are indexed per writer at all: so another
+  session, and another developer, can see work still in flight. A warning
+  rather than a refusal, since a local code graph is legible from the outside
+  (`witan code` reports its store path) and is a legitimate choice before
+  cluster graphs are provisioned.
+
+  `code_*` is deliberately NOT proxied: indexing reads source files, so
+  witan-code must run where the checkout is. Its graph still belongs in the
+  cluster, via `code_transport = "mcp"` routing the STORE through the
+  deployment's `code_store_*` tools.
+
+- **Re-serving a deployed target is stdio-only.** Every call this process
+  forwards is authenticated with the OIDC token of the user who started it,
+  and the process authenticates nobody inbound — so over a socket it would be
+  a credential-sharing proxy, letting anyone who can reach the port act as
+  that user with none of the per-caller JWT->actor mapping (ADR-0004) the real
+  deployment does. `--host 0.0.0.0` is documented on this command, so that was
+  reachable by configuration rather than only by mistake. The deployment's own
+  `--transport streamable-http` is unaffected: it serves its own graph and has
+  no `remote_url`, so it never takes this branch.
+
+### Changed
+
+- **Startup diagnostics now go to stderr, not stdout.** Under the default
+  stdio transport stdout IS the JSON-RPC channel, so a message printed there
+  is a non-protocol line mid-stream that can stop the client completing MCP
+  initialization — and it was invisible to the person it was written for.
+  Dynamic text in those messages is Rich-escaped: the code-graph warning
+  interpolates a target name as `target [production]`, which Rich otherwise
+  parses as a style tag and silently swallows, leaving a warning that names
+  no target at all.
+
+- Requires `witan-core>=0.26` for `RemoteMCPProxy.dispatch` and
+  `RemoteMCPProxy.remote_tools`.
+
 ## [0.17.6] - 2026-08-19
 
 ### Changed

@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.26.0] - 2026-08-19
+
+### Added
+
+- **`RemoteMCPProxy.dispatch(name, **kwargs)`** — the async entry point for
+  one tool call. `__getattr__` already wrapped the same dispatch in
+  `asyncio.run` for the synchronous CLI, which a caller already inside an
+  event loop cannot use, because `asyncio.run` refuses to nest. The local MCP
+  server that re-serves a deployment's surface
+  (`witan.remote.serve`, witan-council) is exactly that caller. Keyword-only:
+  `_map_args` refuses positional arguments outright, so accepting them here
+  would only move the same refusal somewhere less obvious.
+
+- **`RemoteMCPProxy.remote_tools()`** — the deployment's advertised tools as
+  listed MCP tool objects, for a caller that must REPUBLISH the surface rather
+  than call into it and therefore needs each tool's schema and description,
+  not just the parameter names `_refresh_param_names` caches. Returns what the
+  deployment actually advertises rather than anything derived from local code:
+  the deployed release is the authority on its own surface, and a locally
+  generated schema drifts from it at every version skew.
+
+  Both reuse the existing connection handling, so an unreachable endpoint, an
+  expired session and a rejected credential are classified by the same code
+  (and reported in the same sentences) as an ordinary call.
+
+  `remote_tools()` also force-refreshes once on a rejected credential, exactly
+  as `_invoke` does for a read. The token provider is allowed to answer from
+  cache, so a credential the deployment has already rejected while this client
+  still believes it good is the normal way to arrive here — and listing tools
+  writes nothing, so the asymmetry that forbids retrying a *write* does not
+  apply. Without it the caller least able to recover was hit hardest:
+  `witan serve` lists at STARTUP, so one stale cache entry aborted the whole
+  server and told the user to log in when a refresh would have worked.
+
 ## [0.25.0] - 2026-08-18
 
 ### Added
