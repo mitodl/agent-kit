@@ -5050,7 +5050,11 @@ def task_update(
         ``tk-`` slug of the parent task/epic. Written as both the
         ``parent_slug`` field and the ``ParentOf`` edge in one commit, so a
         concurrent reader never sees the task parented one way and not the
-        other.
+        other. **Re-parenting does not retract the previous edge**: the field
+        moves to the new parent while the old ``ParentOf`` remains, so a task
+        re-parented this way is reachable from both. Call
+        ``task_unlink(kind="parent")`` on the old pair first if the edge
+        matters to you.
     external_uri:
         Reference URI — e.g. the GitHub issue or PR this task tracks.
     symbol_refs:
