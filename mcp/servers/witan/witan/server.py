@@ -2051,6 +2051,16 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
     holds, by the *same* ``_reconcile_nodes`` the in-process path uses. Edges
     carry no slug and pass through additively, exactly as they do there.
 
+    Parameters
+    ----------
+    rows:
+        One batch of ``omnigraph export`` records — ``{"type": Node, "data":
+        {…}}`` for a node, ``{"edge": Edge, "from": …, "to": …}`` for an edge.
+    dry_run:
+        Reconcile and return the per-row ``decisions`` **without writing
+        anything**. Run the whole migration this way first: it is the only way
+        to see which side wins each ``(type, slug)`` before the graph changes.
+
     **Batching is the caller's job, and the caller must send every node before
     any edge** (``witan_core.chunking.chunk_records`` does both). Batches commit
     independently, so a failure part-way leaves earlier ones applied — which is
@@ -2310,6 +2320,8 @@ def memory_search(
         Content matches seed ahead of title-only matches, so they carry the
         higher relevance proxy — but final order is the composite score, which
         also weighs recency, corroboration and confidence.
+    repo:
+        Repo scoping — see instructions.
     kind:
         Optional filter: ``pattern``, ``project_fact``, ``lesson``,
         or ``agent_context``.
@@ -2633,6 +2645,8 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
 
     Parameters
     ----------
+    slug:
+        The ``pat-`` / ``pf-`` / ``les-`` / ``ctx-`` slug to retrieve.
     include_topics:
         When ``True``, attach a ``topics`` list of the Topic nodes this memory is
         tagged with (slug/name/kind).
@@ -2679,6 +2693,42 @@ def memory_update(
 
     ``kind`` is deliberately not updatable: a memory that turns out to be a
     different kind is a different memory — store it and supersede this one.
+
+    Parameters
+    ----------
+    slug:
+        The ``pat-`` / ``pf-`` / ``les-`` / ``ctx-`` slug of the memory to
+        correct.
+    title:
+        New short, human-readable label.
+    content:
+        New full text. Replaces the existing content rather than appending —
+        and note that rewriting content here leaves no record that it changed.
+        If the *knowledge* changed, store a new memory and supersede this one
+        instead.
+    repo:
+        Canonical repo URI to (re)scope the memory to. Case-folded on write, as
+        every other repo-key path does: correcting a mis-scoped memory is this
+        tool's headline use, and a key that does not match what repo detection
+        returns would just mis-scope it again, differently.
+    language:
+        Programming language (``pattern`` kind). e.g. ``python``, ``typescript``.
+    category:
+        Thematic category (``project_fact`` kind). e.g. ``architecture``,
+        ``deployment``, ``testing``, ``dependencies``.
+    severity:
+        Importance (``lesson`` kind): ``info`` | ``warning`` | ``critical``.
+    tags:
+        Free-form tags. Replaces the existing list. Each tag is also promoted to
+        a ``Topic`` and linked. **Tags removed here keep their ``Tagged``
+        edge** — edges cannot be individually retracted, and deleting the Topic
+        to drop one would take out every other memory's edge to it. The string
+        list stays authoritative for what the memory claims to be tagged with.
+    symbol_refs:
+        Code-graph symbol ids (``repo#path::Name``) this memory concerns.
+        Replaces the existing list.
+    confidence:
+        Author/agent trust in this memory, 0.0–1.0. Feeds the recall re-rank.
     """
     if isinstance(tags, str):
         tags = [tags]
@@ -2746,6 +2796,8 @@ def memory_delete(slug: str, confirm: bool = False) -> dict:
 
     Parameters
     ----------
+    slug:
+        The memory to delete permanently.
     confirm:
         Must be ``True``. Without it this is a no-op returning
         ``{"deleted": False, "reason": ...}``.
@@ -2804,6 +2856,21 @@ async def memory_link(
     For memory↔memory kinds both endpoints must already exist as ``Memory`` nodes;
     the edge is not written otherwise (avoids dead off-type edges). A memory cannot
     link to itself. Returns ``linked: False`` in those cases rather than raising.
+
+    Parameters
+    ----------
+    from_slug:
+        The memory the edge points **from**. Direction is load-bearing for the
+        asymmetric kinds — for ``supersedes`` this is the *newer* memory.
+    to_slug:
+        The memory the edge points **to** — for ``supersedes``, the older memory
+        being replaced. For ``kind="tagged"`` this is a Topic instead: either an
+        existing ``tp-`` slug or a ``name:kind`` spec, which auto-creates it.
+    kind:
+        Which edge to write: ``supersedes`` | ``refines`` | ``applies_to`` |
+        ``contradicts`` | ``related_to`` | ``tagged``. See the descriptions
+        above — ``supersedes`` is the one that changes what default reads
+        return.
     """
     if from_slug == to_slug:
         return {
@@ -2931,6 +2998,14 @@ def topic_get(topic: str) -> dict | None:
     one hop apart.
 
     Returns ``{"topic": {...}, "memories": [...]}`` or ``null`` if no such Topic.
+
+    Parameters
+    ----------
+    topic:
+        Either a Topic slug (``tp-...``) or a ``name:kind`` spec (``uv:topic``,
+        ``DATABASE_URL:contract``). A spec resolves through the same
+        deterministic slugify used on write rather than an exact name match, so
+        a tag stored as ``UV`` is still found by ``uv:topic``.
     """
     # A tp- slug hits get_topic directly. A name:kind spec resolves through the
     # deterministic _topic_slug (NOT an exact name match) so that casing/whitespace
@@ -3268,6 +3343,11 @@ def workflow_project_get(slug: str) -> dict | None:
     ``blocked_by`` lists the ``wp-`` slugs of projects that must complete
     before this one is ready. ``blocks`` lists projects this project is
     currently blocking (derived by scanning all active projects).
+
+    Parameters
+    ----------
+    slug:
+        The ``wp-`` slug to retrieve.
     """
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     if not rows:
@@ -3332,6 +3412,11 @@ def workflow_project_status(slug: str) -> dict | None:
     under it (same readiness rule as ``task_ready``), the **last session's
     handoff summary** (and whether it's still open), and any project-level
     **blockers**. Returns ``None`` if the project doesn't exist.
+
+    Parameters
+    ----------
+    slug:
+        The ``wp-`` slug of the project to resume.
     """
     rows = client.read("read.gq", "get_workflow_project", {"slug": slug})
     if not rows:
@@ -3730,6 +3815,15 @@ def workflow_project_memories(
     queries regardless of session count. Pass ``group_by_session=True`` to also
     get a ``by_session`` breakdown — that costs one extra query per session, so
     it is opt-in.
+
+    Parameters
+    ----------
+    project_slug:
+        The ``wp-`` slug whose memories to assemble.
+    group_by_session:
+        Also return a ``by_session`` breakdown of which session produced what.
+        Costs one extra query per session, so leave it off unless you need the
+        attribution.
 
     Returns ``{"project_slug": ..., "memories": [...], "by_session": {...}}``
     (``by_session`` is empty unless ``group_by_session`` is set).
@@ -4821,7 +4915,13 @@ async def task_create(
 
 @_tool
 def task_get(slug: str) -> dict | None:
-    """Retrieve a single task by slug. Returns the full node or ``null``."""
+    """Retrieve a single task by slug. Returns the full node or ``null``.
+
+    Parameters
+    ----------
+    slug:
+        The ``tk-`` slug to retrieve.
+    """
     rows = client.read("read.gq", "get_task", {"slug": slug})
     return rows[0] if rows else None
 
@@ -4921,9 +5021,43 @@ def task_update(
 
     Parameters
     ----------
+    slug:
+        The ``tk-`` slug of the task to update.
+    title:
+        New short label for the work.
+    description:
+        New full description. Replaces the existing text; it is not appended to.
+    type:
+        ``bug`` | ``feature`` | ``task`` | ``chore`` | ``epic``.
+    status:
+        ``open`` | ``in_progress`` | ``blocked`` | ``closed``. Two values have
+        side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease, and
+        ``closed`` stamps ``closed_at`` **and unblocks this task's dependents**,
+        exactly as ``task_close`` does. Prefer ``task_claim`` / ``task_close``
+        for those two transitions — they carry the ownership checks this does
+        not.
+    priority:
+        ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering.
     repo:
         Canonical repo URI to (re)assign this task to. Pass an explicit value to
         correct tasks that were created without proper repo context.
+    assignee:
+        Holder identity to reassign the task to. Prefer ``task_claim`` to take a
+        task for yourself — it checks nobody else holds it, which this does not.
+    project_slug:
+        ``wp-`` slug of the WorkflowProject this task rolls up to.
+    parent:
+        ``tk-`` slug of the parent task/epic. Written as both the
+        ``parent_slug`` field and the ``ParentOf`` edge in one commit, so a
+        concurrent reader never sees the task parented one way and not the
+        other.
+    external_uri:
+        Reference URI — e.g. the GitHub issue or PR this task tracks.
+    symbol_refs:
+        Code-graph symbol ids (``repo#path::Name``) this task concerns.
+        Replaces the existing list.
+    tags:
+        Free-form tags. Replaces the existing list rather than merging into it.
     """
     changes: dict = {}
     if title is not None:
@@ -4984,6 +5118,15 @@ def task_close(slug: str, resolution: str | None = None) -> dict | None:
 
     Closing a blocker is what unblocks its dependents — they become visible to
     ``task_ready`` once every blocker is closed.
+
+    Parameters
+    ----------
+    slug:
+        The ``tk-`` slug to close.
+    resolution:
+        Short note on what was actually done. Worth writing: this is what a
+        later reader sees when asking why the task ended, and closing without
+        one leaves that unanswerable.
     """
     closed, _new_commit = _update_task(
         slug,
@@ -5428,6 +5571,21 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
 
     Reversible: ``task_unlink`` removes any of these, including one recorded in
     the wrong direction.
+
+    Parameters
+    ----------
+    from_slug:
+        The ``tk-`` slug the edge points **from**. Its meaning depends on
+        ``kind`` — see above; for ``blocks`` this is the blocker, for ``parent``
+        the epic, for ``discovered_from`` the newly-found task.
+    to_slug:
+        The slug the edge points **to** — the blocked task, the child, the task
+        the work was discovered during, or (for ``addresses``) a ``Memory``
+        slug.
+    kind:
+        ``blocks`` | ``parent`` | ``discovered_from`` | ``addresses``. Getting
+        the direction wrong is the common mistake here, and it matters: for
+        ``blocks`` it decides which task ``task_ready`` withholds.
     """
     if kind == "blocks":
         # The edge always lands; the denormalized `blocked_by`/`status` sync
@@ -5580,6 +5738,19 @@ def task_unlink(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     Returns ``{"from", "to", "kind", "removed"}``. ``removed`` is ``False``
     when the edge was not there, which is not an error: calling this twice, or
     on a link that never existed, is a safe no-op.
+
+    Parameters
+    ----------
+    from_slug:
+        The ``tk-`` slug the edge points **from** — the same direction it was
+        written with. Pass the endpoints as ``task_link`` received them, not
+        reversed.
+    to_slug:
+        The slug the edge points **to**, or a ``Memory`` slug for
+        ``kind="addresses"``.
+    kind:
+        Which edge to remove: ``blocks`` | ``parent`` | ``discovered_from`` |
+        ``addresses``.
     """
     removed = _unlink_edge(kind, from_slug, to_slug)
 
@@ -5620,6 +5791,12 @@ def symbol_context(symbol_id: str) -> dict:
 
     ``symbol_id`` has the form ``<repo>#<path/to/file.py>::<QualifiedName>``; the
     repo prefix scopes the lookup, or the current repo when the id has no ``#``.
+
+    Parameters
+    ----------
+    symbol_id:
+        The symbol to look up, as returned in the ``symbol_id`` field of the
+        witan-code ``code_*`` tools.
     """
     return _context_for_symbol(symbol_id)
 
@@ -5742,6 +5919,12 @@ def memory_symbols(slug: str) -> dict:
     The reverse of ``symbol_context``: returns each of the memory's ``symbol_refs``,
     enriched with the live definition when witan-code is reachable, or the raw ref
     strings otherwise.
+
+    Parameters
+    ----------
+    slug:
+        The memory whose ``symbol_refs`` to resolve. An unknown slug returns an
+        empty ``symbols`` list rather than raising.
     """
     node = memory_get(slug)
     if node is None:
@@ -5823,6 +6006,41 @@ def recall(
     (default off); ``recall`` works with BM25 only and needs no embedding provider.
 
     Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}``.
+
+    Parameters
+    ----------
+    query:
+        Free-text BM25 query, matched against ``content`` and ``title``.
+    symbol_id:
+        A code-graph symbol id (``repo#path::Name``) to seed from — the memories
+        and tasks whose ``symbol_refs`` include it. Use this before editing a
+        symbol: "what do we already know about this function?"
+    task:
+        A ``tk-`` slug to seed from — the memories it ``Addresses`` plus those
+        sharing its ``symbol_refs``. The one-call way to load context for a task
+        you are about to start.
+    topic:
+        A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,
+        ``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join
+        surface, so this seed in particular can pull in other repositories.
+    repo:
+        Repo scoping — see instructions. Applies to the ``query`` seed only;
+        symbol, task, and topic seeds resolve wherever they live.
+    kind:
+        Restrict the ``query`` seed to one memory kind: ``pattern``,
+        ``project_fact``, ``lesson``, or ``agent_context``.
+    hops:
+        How far to expand from the seeds along ``AppliesTo`` / ``RelatedTo``
+        edges, topic siblings, and provenance siblings. Clamped to 0–2. ``0``
+        disables expansion and returns the seeds alone; ``1`` (the default) is
+        almost always right, since each extra hop widens results faster than it
+        deepens them.
+    limit:
+        Maximum memories to return after re-ranking.
+    include_superseded:
+        When ``True``, keep memories that a newer memory ``Supersedes``. Default
+        ``False`` hides them, which is what makes recall return current
+        knowledge rather than its history.
     """
     hops = max(0, min(hops, 2))
     now = datetime.now(timezone.utc)
