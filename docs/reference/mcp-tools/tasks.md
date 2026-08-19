@@ -98,7 +98,7 @@ lease and refuses if someone else holds it); to close a task prefer
 | `repo` | str? | `null` | Canonical repo URI to (re)assign this task to. Pass an explicit value to<br>correct tasks that were created without proper repo context. |
 | `assignee` | str? | `null` | Holder identity to reassign the task to. Prefer ``task_claim`` to take a<br>task for yourself — it checks nobody else holds it, which this does not. |
 | `project_slug` | str? | `null` | ``wp-`` slug of the WorkflowProject this task rolls up to. |
-| `parent` | str? | `null` | ``tk-`` slug of the parent task/epic. Written as both the<br>``parent_slug`` field and the ``ParentOf`` edge in one commit, so a<br>concurrent reader never sees the task parented one way and not the<br>other. |
+| `parent` | str? | `null` | ``tk-`` slug of the parent task/epic. Written as both the<br>``parent_slug`` field and the ``ParentOf`` edge in one commit, so a<br>concurrent reader never sees the task parented one way and not the<br>other. **Re-parenting does not retract the previous edge**: the field<br>moves to the new parent while the old ``ParentOf`` remains, so a task<br>re-parented this way is reachable from both. Call<br>``task_unlink(kind="parent")`` on the old pair first if the edge<br>matters to you. |
 | `external_uri` | str? | `null` | Reference URI — e.g. the GitHub issue or PR this task tracks. |
 | `symbol_refs` | list[str]? | `null` | Code-graph symbol ids (``repo#path::Name``) this task concerns.<br>Replaces the existing list. |
 | `tags` | list[str]? | `null` | Free-form tags. Replaces the existing list rather than merging into it. |

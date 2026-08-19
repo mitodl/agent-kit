@@ -49,7 +49,7 @@ origin. Feed a returned ``symbol_id`` to code_find_references / code_callers
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `name` | str | **required** | Bare name (``run``) or qualified name (``Service.run``). |
-| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout; pass an explicit URI to look in a different one, or ``""`` to<br>fan out across every indexed repo. |
+| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all. Note this differs from the witan memory/task tools:<br>``repo=""`` does **not** force a fan-out here — it is falsy, so it<br>behaves exactly like omitting the argument. |
 | `branch` | str? | `null` | Git branch whose indexed view to query (e.g. another agent's in-flight<br>branch). Defaults to the checkout's branch when querying the current<br>repo; when ``repo`` names a different repo and ``branch`` is omitted,<br>reads that store's default (main) view. |
 
 ## `code_find_references`
@@ -241,7 +241,7 @@ cross-repo fan-out concatenates each store's ranked results.
 | --- | --- | --- | --- |
 | `query` | str | **required** | Search terms matched against ``qualified_name``. |
 | `kind` | `function` \| `method` \| `class` \| `module` \| `variable` \| `interface` \| `type` \| `enum` \| `key` \| `table` \| `cte` \| `block`? | `null` | Optional filter to a single symbol kind: ``function``, ``method``,<br>``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,<br>``key``, ``table``, ``cte``, or ``block``. Pass e.g. ``kind="function"``<br>to exclude the many YAML ``key`` symbols when searching for code. |
-| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout; pass an explicit URI to search a different one, or ``""`` to<br>fan out across every indexed repo. BM25 ranking is per-store, so a<br>fan-out concatenates each store's ranked results rather than producing<br>one global ordering. |
+| `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all — ``repo=""`` does **not** force that, unlike the witan<br>memory/task tools; it is falsy and behaves like omitting the argument.<br>BM25 ranking is per-store, so a fan-out concatenates each store's<br>ranked results rather than producing one global ordering. |
 | `branch` | str? | `null` | Git branch whose indexed view to query. Defaults to the checkout's<br>branch when querying the current repo; when ``repo`` names a different<br>repo and ``branch`` is omitted, reads that store's default (main) view. |
 
 ## `code_symbols_in_file`
