@@ -17,7 +17,7 @@ in lockstep by a fragile Renovate custom manager).
 
 `witan-core` deliberately reverses that convention. The full rationale, scope,
 and per-extraction contracts live in
-[`docs/design/witan-core-extraction-spec.md`](../../docs/design/witan-core-extraction-spec.md).
+[`docs/internals/design/witan-core-extraction-spec.md`](../../docs/internals/design/witan-core-extraction-spec.md).
 
 ## Invariant
 

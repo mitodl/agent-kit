@@ -2,7 +2,7 @@
 platform without touching disk. Reuses ``plan.py``'s target resolution and
 each platform's own ``mcp_serialize``/``hooks_merge`` projections so there is
 exactly one place that knows a platform's wire format (see
-``docs/design/agent-config-kit-cli-spec.md`` §4.2).
+``docs/internals/design/agent-config-kit-cli-spec.md`` §4.2).
 
 Deviates from that spec's sketch in one way: ``Drift`` has no single ``path``
 field. A platform can write MCP servers, hooks, and skills to three different

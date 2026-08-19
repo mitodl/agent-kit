@@ -2,8 +2,15 @@
 
 The code graph is a tree-sitter index of your repository: every symbol, where it
 is defined, and what refers to it. It exists so an agent can ask *"who calls
-this?"* or *"what breaks if I change this?"* and get an answer that is
-structurally correct rather than a text match.
+this?"* or *"what breaks if I change this?"* and get an answer that understands
+syntax rather than matching text.
+
+Understanding syntax is not the same as being right. Call and reference edges
+come from heuristic name resolution, not a resolved call graph, so they can miss
+a caller or report one that isn't — see [edge precision
+tiers](../explanation/code-graph/edge-precision-tiers.md). They beat grep
+because they know a definition from a mention, not because they are ground
+truth.
 
 ## Build the index
 
@@ -75,14 +82,16 @@ code_cross_repo_impact(symbol_id=...)          # blast radius across repos
 These only work for repositories that are actually indexed — the bridge joins
 what it has. `code_indexed_repos` tells you what that is.
 
-Building the bridge from a repo's exported and external symbols is a separate
-step:
+Indexing already writes the bridge bindings, so there is no extra build step.
+Two read-only commands let you inspect what it produced:
 
 ```bash
-witan code stitch                # join this repo against the others
+witan code stitch                    # print the precise cross-repo edges
+witan code stitch --unresolved       # external refs with no match yet
 witan code symbols --role exported   # this repo's public contract surface
 ```
 
+`stitch` computes and prints the join; it stores nothing.
 [Stage-2 stitching](../explanation/code-graph/stage2-stitching.md) explains what
 that join does and why it is a second pass.
 
@@ -91,11 +100,15 @@ that join does and why it is a second pass.
 Each branch gets its own view, so an index built on a feature branch does not
 disturb what everyone else reads.
 
-One rule is worth knowing before you hit it: **only a CI indexer may write a
-repo's default (`main`) view.** A process that has not declared
-`WITAN_CODE_INDEX_ROLE=ci` is refused that write, along with the stale-file purge
-that goes with it. Your local `witan code index` writes a view for your current
-branch and cannot clobber the one every reader falls back to.
+One rule is worth knowing before you meet it on a shared graph: **there, only
+a CI indexer may write a repo's default (`main`) view.** A process that has not
+declared `WITAN_CODE_INDEX_ROLE=ci` is refused that write and the stale-file
+purge that goes with it, so nobody's reindex can clobber the view every reader
+falls back to.
+
+It does not apply to the local store this tutorial uses. A local store has one
+user, who is its writer, so indexing your checkout on its default branch just
+works.
 
 Idle branch views are reaped after 14 days by default. See [Branch
 indexing](../guides/branch-indexing.md) and [ADR

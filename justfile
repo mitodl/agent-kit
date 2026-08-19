@@ -260,9 +260,15 @@ docs-check:
     ./bin/gen_docs.py --check
 
 # Build the static site into site/.
+#
+# Pinned to the same Zensical as .github/workflows/docs.yml and
+# .readthedocs.yaml. Zensical is pre-1.0 and its output changes between patch
+# releases, so an unpinned local preview would render a different site from the
+# one CI checks and Read the Docs publishes — which is the exact drift the CI
+# pin exists to prevent. Renovate bumps all three together.
 docs-build:
-    uvx zensical build
+    uvx zensical@0.0.56 build
 
 # Serve the docs locally with incremental rebuilds.
 docs-serve:
-    uvx zensical serve
+    uvx zensical@0.0.56 serve

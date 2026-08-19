@@ -54,9 +54,15 @@ witan has two faces over the same graph, and both appear throughout these pages:
 
 - **The `witan` CLI** — what *you* type. Good for browsing, triage, and
   operations.
-- **The MCP tools** — what your *agent* calls. Same behaviour, same graph; the
-  CLI is a thin presentation layer over the very same functions the MCP server
-  exposes, so nothing is available to one and not the other.
+- **The MCP tools** — what your *agent* calls. Where both offer an operation
+  they share an implementation: the CLI calls the very same functions the MCP
+  server exposes, so they cannot disagree about what the graph says.
 
 When a page shows `witan tasks --ready` and then mentions `task_ready`, those
 are the same operation from the two sides.
+
+**The surfaces are not equivalent, though.** Some things are deliberately
+MCP-only, because the intended caller is an agent rather than a person:
+`memory_store` has no CLI equivalent (the CLI reads memory, it does not write
+it), and the code-graph queries are tools only — the `witan code` CLI builds
+and operates the index rather than querying it.

@@ -94,7 +94,7 @@ from the memory/task graph.
 | --- | --- | --- |
 | `WITAN_CODE_DIR` | — | Directory holding the per-repo code-graph stores. |
 | `WITAN_CODE_GRAPH` | — | Graph id to address on `WITAN_CODE_SERVER`. |
-| `WITAN_CODE_INDEX_ROLE` | — | Declares what the indexing process is entitled to write. Only `ci` may write a repo's default (`main`) view and run the stale-file purge that goes with it — every other process is refused, so a developer's local reindex can never clobber the view all readers fall back to. |
+| `WITAN_CODE_INDEX_ROLE` | — | Declares what the indexing process is entitled to write **on a shared graph**. There, only `ci` may write a repo's default (`main`) view and run the stale-file purge that goes with it, so no developer's reindex can clobber the view all readers fall back to. A local store has a single user, who is its writer — this setting does not restrict it, and a local default-branch reindex works with no role declared. |
 | `WITAN_CODE_OPTIMIZE_INTERVAL` | `86400` | Minimum seconds between throttled background `optimize` runs on the code stores. `0` disables. |
 | `WITAN_CODE_SERVER` | — | Base URL of an omnigraph-server hosting the code graphs, for a shared index. |
 | `WITAN_CODE_STORE_TOOLS` | — | Force the low-level store tools on (`1`) or off (`0`), overriding the default. These expose raw graph reads and mutations alongside the curated `code_*` tools. |

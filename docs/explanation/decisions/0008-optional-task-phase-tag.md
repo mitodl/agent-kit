@@ -19,7 +19,7 @@
 - Deciders: witan platform owners
 - Tracking: task `tk-optional-task-phase-tag-per-phase-task-rollup-de-c95687`, project `wp-witan-hooks-workflow-ux-progression-improvements-852aaf`
 - Supersedes: —
-- Related: eval `docs/design/witan-workflow-hooks-elicitation-evaluation.md` §B8; `docs/adr/0003-atomic-task-claims-cas.md`
+- Related: eval `docs/internals/design/witan-workflow-hooks-elicitation-evaluation.md` §B8; `docs/adr/0003-atomic-task-claims-cas.md`
 
 ## Context
 

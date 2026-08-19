@@ -5,7 +5,7 @@ docstring) — nothing removes a previously written entry when it drops out of
 a manifest. This module tracks what a manifest last wrote in a *state file*
 and, on a later ``apply --prune``, removes exactly the entries that were
 written before but are no longer in the manifest — never touching a key the
-manifest never owned. See ``docs/design/agent-config-kit-cli-spec.md`` §5 for
+manifest never owned. See ``docs/internals/design/agent-config-kit-cli-spec.md`` §5 for
 the full design.
 """
 

@@ -19,7 +19,7 @@ bundle = RegistrationBundle(
 apply_all(bundle)
 ```
 
-See `docs/design/agent-config-kit-spec.md` in this repo for the full design.
+See `docs/internals/design/agent-config-kit-spec.md` in this repo for the full design.
 
 ## CLI (`agent-kit`)
 
@@ -85,8 +85,8 @@ skills = ["cyclopts-cli-scripts"]
 
 Table/field names mirror the Python model field names exactly
 (`kind`, `command`, `args`, `env`, `event`, `entry_path`, ...) — see
-`docs/design/agent-config-kit-cli-spec.md` for the full schema and
-rationale, and `docs/design/agent-config-kit-profiles-composition-spec.md`
+`docs/internals/design/agent-config-kit-cli-spec.md` for the full schema and
+rationale, and `docs/internals/design/agent-config-kit-profiles-composition-spec.md`
 for profiles, `include`, the global config file, and directory-prefix/org
 scoping (everything from here through "Precedence & resolution order"
 below).
@@ -312,7 +312,7 @@ Exit codes: `0` success, `2` the manifest failed to load.
 
 Bootstraps the global config file (`${XDG_CONFIG_HOME:-~/.config}/agent-config-kit/config.toml`,
 overridable with `--config` or `AC_KIT_CONFIG`) — see
-`docs/design/agent-config-kit-profiles-composition-spec.md` §7 for the full
+`docs/internals/design/agent-config-kit-profiles-composition-spec.md` §7 for the full
 schema this file drives (per-org and per-directory-prefix default manifests
 for zero-arg `apply`).
 

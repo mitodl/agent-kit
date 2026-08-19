@@ -8,7 +8,7 @@ when two agents work in parallel, neither knows what the other is doing.
 
 witan is the missing layer: a persistent, team-wide graph that agents read from
 and write to. What one session learns, the next one recalls. What one agent
-claims, another cannot take.
+is working on, the others can see.
 
 ---
 
@@ -96,6 +96,6 @@ witan-context covers three published packages, all developed in the
 | [`witan-core`](https://pypi.org/project/witan-core/) | Shared internals: the graph client, OIDC/remote transport, observability |
 | [`ol-agent-kit`](https://pypi.org/project/ol-agent-kit/) | Meta-package that installs all of the above in one shot |
 
-Storage is [omnigraph](https://github.com/mitodl/omnigraph) — a local file, an
+Storage is [omnigraph](https://github.com/ModernRelay/omnigraph) — a local file, an
 `s3://` bucket, or a shared `omnigraph-server`. The same tools work against all
 three; only [`WITAN_MEMORY_URI`](reference/environment.md) changes.

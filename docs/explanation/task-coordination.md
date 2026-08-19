@@ -9,7 +9,14 @@ and — more importantly — how strong the answer actually is.
 A task carries `blocked_by`: the slugs of tasks that must close before it can
 start. "Ready" is derived from that, not stored:
 
-> A task is ready when it is open and every task blocking it has closed.
+> A task is ready when every task blocking it has closed **and** its status
+> makes it claimable.
+
+Claimable is broader than "open". `readiness.status_pickable` treats `open` and
+`blocked` alike — a `blocked` task whose blockers have all closed is exactly
+the case that should become pickable — and it also returns an `in_progress`
+task once its **lease has lapsed**, on the assumption the holder crashed
+without releasing it. Only `closed` is never pickable.
 
 Closing a blocker unblocks its dependents automatically, so the ready list stays
 correct without anyone maintaining it. `task_ready` and `witan tasks --ready`

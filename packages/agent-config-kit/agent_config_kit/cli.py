@@ -125,7 +125,7 @@ def _render_config_toml(
     file is always a usable *and* self-documenting starting point (spec §7.1)."""
     lines = [
         "# agent-config-kit global config.",
-        "# See docs/design/agent-config-kit-profiles-composition-spec.md §7 for",
+        "# See docs/internals/design/agent-config-kit-profiles-composition-spec.md §7 for",
         "# the full schema. Every key below is optional.",
         "",
     ]
@@ -367,7 +367,7 @@ def _render_manifest_toml(skills: list[tuple[str, str]]) -> str:
         "# the target repo, keyed by its frontmatter 'name' (falling back to",
         "# its parent directory name). Review names/paths, then add",
         "# [mcp_servers]/[[hooks]]/[profiles] by hand as needed — see",
-        "# docs/design/agent-config-kit-cli-spec.md for the full schema.",
+        "# docs/internals/design/agent-config-kit-cli-spec.md for the full schema.",
         "",
         "[skills]",
     ]

@@ -47,8 +47,14 @@ witan tasks --all-repos  # across every repo in the store
 ```
 
 "Ready" is computed, not stored: a task is ready when every task it is
-`blocked_by` has closed. Closing a blocker automatically unblocks its
-dependents, so the ready list stays correct without anyone maintaining it.
+`blocked_by` has closed *and* its status still makes it claimable. Closing a
+blocker automatically unblocks its dependents, so the ready list stays correct
+without anyone maintaining it.
+
+Claimable covers more than `open`: a `blocked` task counts once its blockers
+close, and an `in_progress` task comes back when its claim lease lapses — that
+is how work abandoned by a crashed session returns to the list rather than
+being held forever.
 
 ## Claim, work, close
 

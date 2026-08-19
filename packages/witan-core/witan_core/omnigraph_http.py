@@ -8,7 +8,7 @@ compacted store (25.9ms via the CLI vs 5.1ms over a keep-alive connection at one
 worker; 45.8 vs 10.7 at eight). The bare fork/exec floor is only 6.7-14.7ms, so
 the subprocess costs 2-3x the raw spawn — the rest is per-invocation CLI work
 (config resolution, ``.gq`` parse, client construction, a fresh TCP connection
-every time). See docs/design/omnigraph-remote-call-overhead-spike.md.
+every time). See docs/internals/design/omnigraph-remote-call-overhead-spike.md.
 
 This module is that connection. It is deliberately NOT a second
 ``OmnigraphClient``: omnigraph-server 0.8.1 exposes only ``query``, ``mutate``

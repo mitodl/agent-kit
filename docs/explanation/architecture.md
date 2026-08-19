@@ -81,7 +81,7 @@ The same tools work against both. Only
 
 ## Why omnigraph
 
-The store is [omnigraph](https://github.com/mitodl/omnigraph): a
+The store is [omnigraph](https://github.com/ModernRelay/omnigraph): a
 property-graph engine over Lance, addressable as a local file, an `s3://` root,
 or an HTTP server. Three properties made it the right substrate:
 
