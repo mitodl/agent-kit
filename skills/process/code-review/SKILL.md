@@ -32,16 +32,33 @@ table schema and a full worked example.
 
 Resolve what to review from the request, in this order:
 
-1. **No target given** — `git diff` (unstaged) plus `git diff --staged`,
-   combined. If both are empty, fall back to `git diff HEAD~1` and say
-   explicitly that's what's being reviewed instead of silently reporting
-   nothing.
+1. **No target given** — combine three sources: `git diff` (unstaged,
+   tracked changes), `git diff --staged`, and untracked files. Plain `git
+   diff`/`git diff --staged` never show untracked files — a working tree
+   containing only a brand-new file looks empty to both — so check `git
+   status --porcelain` for `??` entries and include them (`git add -N
+   <file>` first makes each show up as an addition in the plain `git diff`
+   without staging its content). Only fall back to `git diff HEAD~1` when
+   all three are empty, and say explicitly that's what's being reviewed
+   instead of silently reporting nothing.
 2. **A branch name** — diff against where it forked from the default
-   branch, not a plain two-dot diff: detect the default branch (`git
-   symbolic-ref refs/remotes/origin/HEAD`), find the merge base (`git
-   merge-base <default> <branch>`), then `git diff <merge-base>...<branch>`.
-3. **A path** — `git diff -- <path>` (or the branch-scoped equivalent above
-   if a branch was also named), same default-branch detection.
+   branch, not a plain two-dot diff: detect the default branch via `git
+   symbolic-ref refs/remotes/origin/HEAD`. That ref only exists once a
+   remote's HEAD has been set (`git clone` usually does this, but a
+   fresh/local-only repo or an unset remote won't have it — verified: a
+   bare `git init` with no remote raises "not a symbolic ref"); when it's
+   missing, fall back to `gh repo view --json defaultBranchRef --jq
+   .defaultBranchRef.name` if `gh` and a GitHub remote are available,
+   otherwise ask the user which branch to diff against rather than
+   guessing `main` or `master`. However the default branch was found, find
+   the merge base (`git merge-base <default> <branch>`), then `git diff
+   <merge-base>...<branch>`.
+3. **A path** — `git diff HEAD -- <path>` (covers staged and unstaged
+   changes to the path in one call — plain `git diff -- <path>` shows only
+   unstaged, so a fully-staged change at that path would otherwise look
+   like an empty diff), plus the same untracked-file handling as rule 1,
+   scoped to that path. Same default-branch detection as rule 2 if a
+   branch was also named.
 4. **A PR number** — when `gh` is available and the repo has a GitHub
    remote, `gh pr diff <number>`.
 
@@ -59,6 +76,15 @@ than presenting them with the same weight as a confirmed bug. There's no
 flag or parameter for this — some platforms this skill runs on have no
 argument-passing mechanism, so the depth signal has to come from reading
 the request, not from a tier number.
+
+Widening depth changes what the [verification pass](#verification-pass)'s
+drop rule means. At the default depth, a finding that doesn't reproduce
+gets dropped, full stop. On a widened pass, a finding that doesn't fully
+reproduce is *kept*, not dropped — as long as it's explicitly labeled
+lower-confidence and its `Failure scenario` states plainly what's
+unconfirmed and why (see the lower-confidence row in
+[references/findings-format.md](references/findings-format.md#worked-example)).
+The drop-if-unreproduced rule is a default-depth rule, not a universal one.
 
 ## Dimensions
 
@@ -78,11 +104,24 @@ Full rubric with worked examples: [references/dimensions.md](references/dimensio
 ## Verification pass
 
 Before a finding goes in the final report, re-read the exact lines it
-claims are broken. If the second read doesn't reproduce the failure
+claims are broken — and don't stop at the diff when the finding's
+correctness turns on something outside it. A guard may already exist in an
+unchanged caller, a changed API may violate a contract defined elsewhere in
+the repo, or reproducing the scenario may need a definition the diff
+doesn't include. The diff is the starting point, not the whole universe of
+evidence — this matches [references/dimensions.md](references/dimensions.md)'s
+own examples, which check every existing call site for a correctness
+non-finding and require citing a real file:line for a reuse finding, not
+just what changed. If a claim depends on code outside the diff's scope
+(a different file, a different repo, a library's actual behavior), read
+that code before the finding ships; if the code needed to verify a claim
+is genuinely out of reach in the time available, that's grounds to drop
+the finding at default depth (see [Depth](#depth) for the widened-pass
+exception) — not to ship it as confirmed anyway.
+
+At default depth, if the second read doesn't reproduce the failure
 scenario as written, drop the finding — don't soften it into a maybe and
-ship it anyway. The diff itself is the evidence here, already in context,
-so this is a re-read, not a separate fetch-and-check pass the way it is
-when reviewing a PR discussion.
+ship it anyway.
 
 For a **reuse** finding specifically, verifying means actually locating the
 existing implementation (file:line) — "this probably exists elsewhere" is
