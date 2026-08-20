@@ -671,6 +671,82 @@ def load_target(name: str) -> _Target:
     return _named_target(_parse_targets(_load_toml()), name)
 
 
+class LocalDispatch(BaseModel):
+    """Why a CLI invocation is about to use a local store, and how deliberate it is.
+
+    Only meaningful when :func:`load_remote_config` returned ``None`` — that is
+    the moment the CLI stops talking to a deployment and opens a file on this
+    machine instead. On a laptop that also has deployed targets configured,
+    those two outcomes are indistinguishable to the caller: every command
+    prints the same success line either way.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    graph_uri: str
+    """The store that will actually take the writes."""
+
+    target_name: str | None
+    """The ``[targets.<name>]`` block in effect, or None when none applied."""
+
+    deployed_targets: tuple[str, ...]
+    """Names of targets declaring a ``remote_url``. Non-empty means this user
+    has a deployment configured, so landing on a local store is a routing
+    outcome rather than the only thing that could have happened."""
+
+    deliberate: bool
+    """Whether something chose this store, as opposed to it being what is left
+    when nothing matched. See :func:`diagnose_local_dispatch`."""
+
+
+def diagnose_local_dispatch(target: str | None = None) -> LocalDispatch | None:
+    """Classify a local-store dispatch as deliberate or accidental.
+
+    Returns ``None`` when there is nothing to be ambiguous about: no target
+    declares a ``remote_url``, so this install has no deployment to have
+    reached instead and the local store is simply what witan is.
+
+    Otherwise ``deliberate`` is True when any of these named the store:
+
+    * a target was selected — either explicitly (``--target`` /
+      ``WITAN_TARGET``) or by ``match_paths``/``match_repos``/``match_hosts``/
+      ``match_orgs`` matching the current checkout. A matched target that
+      declares a local ``server`` is a routing rule doing its job.
+    * ``WITAN_MEMORY_URI`` is set — the caller named a store outright, which
+      outranks every target (see :func:`load`).
+    * config.toml sets a global ``server`` — the documented way to say what the
+      default store is when no target applies.
+
+    ``deliberate=False`` is the case agent-kit#261's CLI-side twin: run from a
+    directory no target matches, the CLI silently opened
+    ``~/.local/share/witan/graph.omni`` and reported success, so five task
+    closes landed on a laptop while the deployed graph still showed them open.
+    Nothing in the output said which graph took the write.
+    """
+    file_cfg = _load_toml()
+    targets = _parse_targets(file_cfg)
+    deployed = tuple(t.name for t in targets if t.remote_url)
+    if not deployed:
+        return None
+
+    selected = _select_target(targets, target or os.environ.get("WITAN_TARGET"))
+    return LocalDispatch(
+        graph_uri=_resolve_path(
+            _first(
+                os.environ.get("WITAN_MEMORY_URI"),
+                selected.server if selected else None,
+                file_cfg.get("server"),
+                default=str(_DEFAULT_GRAPH_URI),
+            )
+        ),
+        target_name=selected.name if selected else None,
+        deployed_targets=deployed,
+        deliberate=bool(
+            selected or os.environ.get("WITAN_MEMORY_URI") or file_cfg.get("server")
+        ),
+    )
+
+
 def _resolve_path(value: str) -> str:
     """Expand ~ in local paths; leave remote URIs untouched."""
     if value.startswith(("http://", "https://", "s3://")):
