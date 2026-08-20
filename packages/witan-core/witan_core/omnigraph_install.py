@@ -114,35 +114,65 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: says "I am moving to a new build", exactly as editing
 #: ``_OMNIGRAPH_INTERNAL_SCHEMA`` says "I know this rebuilds every graph".
 #:
-#: Refresh with, for each asset:
+#: Refresh with, for each asset — note the published digest file drops the
+#: `.tar.gz`, so it is `omnigraph-linux-x86_64.sha256`, not
+#: `omnigraph-linux-x86_64.tar.gz.sha256` (that spelling 404s):
 #:     curl -fsSL https://github.com/ModernRelay/omnigraph/releases/download/\
-#: <tag>/<asset>.sha256
-#: ★ THESE ARE THE `edge` BUILD OF 2026-08-19T00:53Z (commit da466ba75b,
-#: "feat(changes): commit entity diffs and a durable change feed"), NOT
-#: v0.9.0's. Refreshed from the 2026-08-18T16:30Z triple after CI started
-#: failing the checksum check on 2026-08-19: three commits landed upstream in
-#: between (da466ba75b above; dbcfca3566, "fix: retry raced Lance branch
-#: enumeration"; 28565687d1, "fix(merge): a branch whose edits net to zero can
-#: never be merged") — reviewed each PR's diff before trusting this build:
-#: da466ba75b is a new, additive CLI/API surface (commit diffs + change feed,
-#: RFC-030); dbcfca3566 only retries an existing read-only branch-enumeration
-#: call on a race, no new error contract; 28565687d1 only fixes an explicit
-#: branch-MERGE edge case witan does not use. None touches the `mutate`/
-#: `query`/CAS (`if-graph-commit`) paths witan actually calls. Still the
-#: 0.10.0 re-test (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2).
+#: <tag>/<asset-without-.tar.gz>.sha256
+#: and confirm it against the tarball you actually downloaded (`sha256sum`) in
+#: the same sitting — on a moving tag the two assets can be republished a
+#: minute apart, and a digest read across that gap describes neither build.
+#: ★ THESE ARE THE `edge` BUILD OF 2026-08-20T17:18Z (through bee47cd465),
+#: NOT v0.9.0's. Refreshed from the 2026-08-19T00:53Z triple (da466ba75b)
+#: after CI failed the checksum check on 2026-08-20. Eight commits landed in
+#: between. Five are RFC/docs (c03deee47f, 5cc8151f0b, 71dbe05250, 16aa8889e1,
+#: bee47cd465) and one is upstream's own test inventory (0066d775d1). Two
+#: needed reading, and both are the same vocabulary sweep:
+#:
+#:   69d292ce80 (#534) renames omnigraph's ERROR PROSE — "table" →
+#:   "dataset"/"entity"/"node type". No serde field renamed, no CLI flag
+#:   renamed (help text only). But two substrings witan matched on DID
+#:   vanish: "manifest table version" and "ahead of manifest". See
+#:   `_RETRYABLE`/`_NEEDS_REPAIR` in omnigraph.py, updated alongside this
+#:   digest, and the vocabulary tests in tests/test_omnigraph.py.
+#:
+#:   ecf1d6aedd (#538) renames the JSON OUTPUT surface, which is breaking for
+#:   anyone who parses it: `rows_loaded` → `entities_loaded`, `total_rows` →
+#:   `total_entities`, `tables` → `nodes`/`edges`, `table_key` →
+#:   `entity_kind` + `type_name`. witan is not such a caller — it runs the CLI
+#:   WITHOUT `--json` (deliberately; see the "DO NOT ADD --json" note in
+#:   `OmnigraphClient.change`) and classifies on stderr prose, and its own
+#:   `rows_loaded` key is computed in `witan.server.merge_store`, not read
+#:   back from omnigraph. Anything that starts passing `--json` inherits this
+#:   rename.
+#:
+#: ★ AND `edge` MOVED THREE TIMES WHILE THIS WAS BEING WRITTEN — fe5ef3c904…
+#: (what CI fetched at 15:36Z, mid-republish), 1fe062b436…, then the triple
+#: below, inside 75 minutes. That is the cost of the moving tag, not a mishap:
+#: upstream merges several times a day and each push republishes `edge`, so a
+#: digest here can be stale before CI runs. Expect to refresh this on a red
+#: witan-code job rather than on a schedule, and prefer a real `v<version>`
+#: tag the moment 0.10.x has one (there is no v0.10.0 release yet, which is
+#: the only reason this is still on `edge`).
+#:
+#: The digests below were taken by downloading all three tarballs and hashing
+#: them locally, then cross-checking each against the release's published
+#: `.sha256` in the same sitting. Still the 0.10.0 re-test
+#: (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2); version still
+#: reports 0.10.0 and internal-schema still 6, both read off this binary.
 #: Reverting the experiment means restoring the v0.9.0 triple, which was:
 #:     linux-x86_64  507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197
 #:     linux-arm64   6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881
 #:     macos-arm64   69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "063fc1b31fc2d3528b189573afe2d09094e7983dbf52ef4a819818c7ed736e04"
+        "8ecabdbc3a11d60716f569b32de6710834ddcbba328c2342b77f5c529bb7bc4f"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "426047934fffe7a94e65a5f63813ff04b9f64d080c3f1780c3db2d269bd23337"
+        "aef871eeb070532947beee0f7644848552f59bbc8d4100a4bdad6d760acef647"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "7046b37058d0422a45e2306865e43581b4f24f5307214fc5729910b91941c841"
+        "75b3bd0ab4ccfd46af9e70536e8779cbb3af322ab008aa88a2712f14ce9d069e"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")

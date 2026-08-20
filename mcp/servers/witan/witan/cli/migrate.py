@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Annotated, NoReturn
+
 import cyclopts
 
-from ._common import _srv, console
+from ._common import _srv, console, remote_proxy
 
 migrate_app = cyclopts.App(
     name="migrate",
@@ -65,8 +68,127 @@ def _backfill_topics() -> None:
     )
 
 
-def _merge(source: str, target: str | None, dry_run: bool) -> None:
-    s = _srv()
+def _fail(message: str) -> NoReturn:
+    console.print(f"[red]{message}[/red]")
+    raise SystemExit(1)
+
+
+def _named_target(name: str):
+    """The ``[targets.<name>]`` block, or a clean exit naming what is defined."""
+    from .. import config as cfg_module
+
+    try:
+        return cfg_module.load_target(name)
+    except ValueError as exc:
+        _fail(str(exc))
+
+
+def _target_store_uri(name: str, block) -> str:
+    """The store URI a named target addresses, spelled the way a merge needs it.
+
+    Not simply the block's ``server``. Downstream, ``merge_store`` addresses a
+    store it holds no client for (``store_cli_args``), so anything the target
+    keeps in a *separate* key has to be folded in here or it is lost:
+
+    - ``graph`` is a sibling key, and a bare ``http(s)://host:port`` with no
+      ``/graphs/<id>`` is rejected as having no graph id. Folded into the URI,
+      which is the spelling ``store_cli_args`` already reads.
+    - ``token`` has nowhere to go — the merge path takes a per-store credential
+      only from the *configured* client, and falls back to an ambient
+      ``OMNIGRAPH_BEARER_TOKEN`` for any other remote store. Authenticating to
+      somebody's server with whatever token happens to be exported is worse
+      than refusing, so this refuses.
+
+    ``file://`` is stripped here rather than left to ``config._resolve_path``,
+    whose ``Path()`` round-trip collapses the ``//`` and yields a relative path
+    named ``file:``.
+    """
+    server = block.server
+    if server.startswith("file://"):
+        return server[len("file://") :]
+    if not server.startswith(("http://", "https://")):
+        return server if server.startswith("s3://") else str(Path(server).expanduser())
+    if block.token:
+        _fail(
+            f"Target {name!r} declares a `token` for its remote store, and the "
+            "merge path has no way to carry a per-store credential. Export it "
+            "as OMNIGRAPH_BEARER_TOKEN and name the store directly instead."
+        )
+    base = server.rstrip("/")
+    if "/graphs/" in base:
+        return base
+    return f"{base}/graphs/{block.graph}" if block.graph else base
+
+
+def _merge_source(source: str | None, from_target: str | None) -> str:
+    """The store URI to merge from, resolving ``--from <name>`` to its ``server``."""
+    if from_target and source:
+        _fail(
+            "Pass a source store URI or --from <target>, not both — they name "
+            "the same end of the merge."
+        )
+    if from_target:
+        block = _named_target(from_target)
+        if not block.server:
+            _fail(
+                f"No local store configured for target {from_target!r}: it has "
+                "no `server` to export from. A target that only carries a "
+                "`remote_url` cannot be a merge source — witan exports no "
+                "deployment."
+            )
+        return _target_store_uri(from_target, block)
+    if not source:
+        _fail("Nothing to merge from: pass a source store URI, or --from <target>.")
+    return source
+
+
+def _merge_destination(to_target: str | None, target: str | None):
+    """The ``(provider, target URI)`` pair the merge writes through.
+
+    Without ``--to`` this is the ambient resolution every other command uses
+    (``_srv()``, picked from ``WITAN_TARGET``/``match_*`` before any flag is
+    read) and ``--target``'s literal URI, if given. With ``--to <name>`` the
+    destination is the named block instead: its deployment's own proxy when it
+    carries a ``remote_url`` — the same object ``WITAN_TARGET=<name>`` would
+    have produced, chosen on the command line rather than out of the
+    environment — or its ``server`` as a plain target URI when it does not.
+    """
+    from .. import config as cfg_module
+
+    if to_target and target:
+        _fail(
+            "--to names a configured target and --target a store URI; both name "
+            "the destination, so pass one or the other."
+        )
+    if not to_target:
+        return _srv(), target
+
+    block = _named_target(to_target)
+    if block.remote_url:
+        try:
+            remote = cfg_module.load_remote_config(target=to_target)
+        except ValueError as exc:
+            _fail(str(exc))
+        return remote_proxy(remote), None
+    if block.server:
+        from .. import server as server_module
+
+        return server_module, _target_store_uri(to_target, block)
+    _fail(
+        f"Target {to_target!r} configures neither `remote_url` nor `server`, so "
+        "there is nothing to merge into. Give it one, or pass --target <uri>."
+    )
+
+
+def _merge(
+    source: str | None,
+    target: str | None,
+    dry_run: bool,
+    from_target: str | None = None,
+    to_target: str | None = None,
+) -> None:
+    source = _merge_source(source, from_target)
+    s, target = _merge_destination(to_target, target)
     try:
         result = s.merge_store(source, target=target, dry_run=dry_run)
     except RuntimeError as exc:
@@ -171,8 +293,10 @@ def storage(
 
 @migrate_app.command
 def merge(
-    source: str,
+    source: str | None = None,
     *,
+    from_: Annotated[str | None, cyclopts.Parameter(name="--from")] = None,
+    to: Annotated[str | None, cyclopts.Parameter(name="--to")] = None,
     target: str | None = None,
     dry_run: bool = False,
 ) -> None:
@@ -196,6 +320,18 @@ def merge(
         export form to merge a store from another machine: Lance embeds
         absolute paths, so a ``.omni`` directory cannot be copied, but its
         export can.
+    from_:
+        Named ``[targets.<name>]`` block to merge *from*, in place of
+        ``source`` — its ``server`` is the store URI. A target carrying only a
+        ``remote_url`` is refused: there is no remote-export path, so it has
+        nothing to merge from.
+    to:
+        Named ``[targets.<name>]`` block to merge *into*, in place of the
+        ambient destination. Spells out on the command line what setting
+        ``WITAN_TARGET`` does out of the environment: a target with a
+        ``remote_url`` is merged into through that deployment (as you, over
+        MCP), one with only a ``server`` into that store URI. Mutually
+        exclusive with ``target``, which names a store rather than a target.
     target:
         Store URI to merge into. Defaults to the configured store. Created
         automatically if it's a local path that doesn't exist yet. A deployed
@@ -207,7 +343,7 @@ def merge(
         Preview the reconciliation decision for every colliding slug without
         writing anything.
     """
-    _merge(source, target, dry_run)
+    _merge(source, target, dry_run, from_target=from_, to_target=to)
 
 
 @migrate_app.command

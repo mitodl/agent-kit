@@ -61,19 +61,29 @@ def _srv():
             console.print(f"[red]{exc}[/red]")
             raise SystemExit(1) from None
         if remote is not None:
-            from ..remote.oidc import default_token_provider, default_token_refresher
-            from ..remote.proxy import RemoteServerProxy
-
-            _server = RemoteServerProxy(
-                remote,
-                default_token_provider(remote),
-                default_token_refresher(remote),
-            )
+            _server = remote_proxy(remote)
         else:
             from .. import server as server_module
 
             _server = server_module
     return _server
+
+
+def remote_proxy(remote):
+    """Build the network-dispatching proxy for one resolved ``RemoteConfig``.
+
+    Separate from ``_srv()`` because the destination is not always the ambient
+    one: ``witan migrate merge --to <name>`` names a deployment on the command
+    line and builds its proxy directly.
+    """
+    from ..remote.oidc import default_token_provider, default_token_refresher
+    from ..remote.proxy import RemoteServerProxy
+
+    return RemoteServerProxy(
+        remote,
+        default_token_provider(remote),
+        default_token_refresher(remote),
+    )
 
 
 def _fn(tool):

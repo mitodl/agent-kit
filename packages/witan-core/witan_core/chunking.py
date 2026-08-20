@@ -32,7 +32,9 @@ caps ROWS PER TABLE — 8,192 — and that one is enforced on local stores too, 
 just over HTTP. The two limits are independent: 20,000 small Memory rows is
 4.5 MiB, comfortably inside every byte budget here, and is still refused with
 ``resource limit exceeded for keyed rows for node:Memory: actual 8193, limit
-8192``. Byte-only chunking therefore passed a batch omnigraph would not take.
+8192`` (``keyed entities`` since upstream's 2026-08-20 vocabulary sweep — the
+wording moved, the cap did not). Byte-only chunking therefore passed a batch
+omnigraph would not take.
 See ``LOAD_MAX_ROWS``.
 """
 
