@@ -16,3 +16,4 @@ Workflow skills for interacting with external services and developer processes
 | [`github-pr-triage`](./github-pr-triage/SKILL.md) | Categorize open PRs across an org by required action (needs first-pass review, has feedback, approved & ready to merge) and optionally act on them |
 | [`address-pr-feedback`](./address-pr-feedback/SKILL.md) | Fetch, categorize, address, and resolve GitHub PR review feedback, with pagination for large/long-running PRs |
 | [`renovate-security-triage`](./renovate-security-triage/SKILL.md) | Rank open Renovate PRs in your active repos by security urgency using advisory severity, CVSS, and EPSS (read-only) |
+| [`deploy-verification`](./deploy-verification/SKILL.md) | Verify a merged config/infra change actually took effect — CD pipeline, pod rollout, running config, before/after metrics, and unintended-environment scope |
