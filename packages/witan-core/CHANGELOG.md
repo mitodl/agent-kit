@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.27.0] - 2026-08-20
+
+### Changed
+
+- **Refreshed the pinned omnigraph `edge` asset digests** to the
+  2026-08-20T17:18Z build (through upstream `bee47cd465`). The tag had been
+  force-pushed past the previous pin, so `install_omnigraph` refused the
+  download — correctly, that pin is the supply-chain control — and every
+  witan-code CI job since had no binary at all. All three tiers (this
+  installer and both Dockerfiles) move together, verified by hashing each
+  tarball locally and cross-checking the release's published `.sha256` in the
+  same sitting. Version still reports 0.10.0 and internal-schema still 6, so
+  no store rebuild.
+
+  Note for whoever refreshes this next: `edge` moved three times in 75 minutes
+  while this was being written. Prefer a real `v<version>` tag as soon as
+  0.10.x has one — there is no `v0.10.0` release yet, which is the only reason
+  this is still on a moving tag.
+
+- **`_classify_cli_error` follows omnigraph's error-text rename.** Upstream's
+  vocabulary sweep (`69d292ce80`, #534) reworded the messages this classifies
+  on: `expected manifest table version N` → `expected published dataset
+  version N`, and `ahead of manifest version N` → `ahead of published dataset
+  version N`. Both old spellings are kept alongside the new ones — the markers
+  are matched against whatever binary is *installed*, and the rename shipped
+  without a version bump, so both are in the wild simultaneously.
+
+  The new retryable marker deliberately keeps its `expected ` prefix: the bare
+  phrase also appears in `historical published dataset version N was
+  reclaimed`, which is terminal, and matching it would retry a permanent
+  failure until the attempt budget ran out.
+
 ## [0.26.0] - 2026-08-19
 
 ### Added

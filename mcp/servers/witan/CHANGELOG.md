@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.19.0] - 2026-08-20
+
+### Added
+
+- **`witan migrate merge --from <name>` / `--to <name>`** — name a configured
+  `[targets.<name>]` block on either end of a merge, where `--target` stays a
+  literal store URI. `--from` resolves the block's `server` as the source; a
+  target carrying only a `remote_url` has nothing to export and is refused by
+  name rather than silently doing nothing. `--to` builds that target's
+  destination directly: the deployment's proxy when it has a `remote_url` (the
+  explicit spelling of `WITAN_TARGET=<name>`, which was previously the only
+  supported way to aim a cutover), or its `server` as a target URI when it
+  does not.
+
+  `--to` and `--target` are mutually exclusive, as are the positional source
+  and `--from`; both combinations name one end twice, so they are refused
+  rather than resolved by an unstated precedence rule. With neither new flag,
+  resolution is exactly as before: positional source, ambient `_srv()`.
+
+  A named target is resolved *whole*, not reduced to its `server` string: a
+  remote target's `graph` is folded into the URI as `/graphs/<id>` (nothing
+  downstream can recover it otherwise), a `file://` server keeps its scheme,
+  and a target declaring a `token` this path cannot carry is refused rather
+  than authenticated with whatever `OMNIGRAPH_BEARER_TOKEN` happens to be
+  exported.
+
+### Changed
+
+- **`witan-core` floor raised to `>=0.27`** — the one entry in that list that
+  is not about a missing symbol. 0.26.0 pins the moved omnigraph `edge`
+  digest, so `witan setup` against it fails the checksum and installs no
+  binary; `witan/server.py` bootstraps a graph at import time, so the CLI is
+  unusable rather than degraded.
+
+- **`docs/migration-runbook.md` is now a sequence of steps.** The cutover
+  leads with `witan migrate merge <store> --to ol` in place of an
+  `export WITAN_TARGET=ol` line, and gains a take-stock step: inventory the
+  local store by repo before merging it into a shared graph, with a two-pass
+  `jq` filter for anything that should stay behind. The verified `--mode
+  merge` collision behaviour, the slug-collision arithmetic, and the BM25
+  measurement behind "verify by slug, not by search" move to
+  `docs/store-merge-findings.md`.
+
+### Fixed
+
+- **The runbook no longer recommends `witan memory show <slug>`**, which does
+  not exist — `witan memory` is search-or-list only, so the one step "verify
+  by slug, not by search" exists to protect had no working spelling. Replaced
+  with a `witan memory --kind <kind>` listing and `witan task <slug>`, both of
+  which read the graph directly rather than through BM25.
+
 ## [0.18.0] - 2026-08-19
 
 ### Fixed
