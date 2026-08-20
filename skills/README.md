@@ -41,6 +41,7 @@ Skills are organized by **category**. Each skill lives in
 | process | [`github-issue-triage`](./process/github-issue-triage/SKILL.md) | Audit open GitHub issues to identify stale, completed, or superseded items using parallel codebase cross-referencing |
 | process | [`github-pr-triage`](./process/github-pr-triage/SKILL.md) | Categorize open PRs across an org by required action (needs first-pass review, has feedback, approved & ready to merge) and optionally act on them |
 | process | [`address-pr-feedback`](./process/address-pr-feedback/SKILL.md) | Fetch, categorize, address, and resolve GitHub PR review feedback, with pagination for large/long-running PRs |
+| process | [`code-review`](./process/code-review/SKILL.md) | Review a diff, branch, path, or PR for correctness bugs and reuse/simplification/efficiency cleanups, with a verify-before-reporting pass |
 | process | [`renovate-security-triage`](./process/renovate-security-triage/SKILL.md) | Rank open Renovate PRs in your active repos by security urgency using advisory severity, CVSS, and EPSS (read-only) |
 | process | [`deploy-verification`](./process/deploy-verification/SKILL.md) | Verify a merged config/infra change actually took effect — CD pipeline, pod rollout, running config, before/after metrics, and unintended-environment scope |
 

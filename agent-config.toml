@@ -49,6 +49,7 @@ transport = "streamable-http"
 
 [skills]
 address-pr-feedback             = "skills/process/address-pr-feedback/SKILL.md"
+code-review                     = "skills/process/code-review/SKILL.md"
 create-ol-github-issue          = "skills/process/create-ol-github-issue/SKILL.md"
 create-ol-pull-request          = "skills/process/create-ol-pull-request/SKILL.md"
 create-ol-rfc-discussion        = "skills/process/create-ol-rfc-discussion/SKILL.md"
@@ -95,6 +96,7 @@ skills = ["dagster-code-location-structure"]
 inherits = ["universal"]
 skills = [
     "address-pr-feedback",
+    "code-review",
     "dependency-pruning",
     "dependency-updates",
     "deploy-verification",
