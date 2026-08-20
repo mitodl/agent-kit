@@ -313,6 +313,38 @@ def inject_context(
         f"sessions_for={len(sessions_by_project)} project(s)",
     )
 
+    return _render_context_block(
+        cache_key=graph_uri,
+        repo=repo,
+        branch=branch,
+        projects=projects,
+        sessions_by_project=sessions_by_project,
+        ready=ready,
+        open_branch_tasks=open_branch_tasks,
+        stale_repo_case=stale_repo_case,
+        debug=debug,
+    )
+
+
+def _render_context_block(
+    *,
+    cache_key: str,
+    repo: str | None,
+    branch: str | None,
+    projects: list[dict],
+    sessions_by_project: dict[str, list[dict]],
+    ready: list[dict],
+    open_branch_tasks: list[dict],
+    stale_repo_case: bool,
+    debug: bool,
+) -> str:
+    """Render the markdown block both the local and remote data paths share.
+
+    ``cache_key`` stands in for ``graph_uri`` in the output-cache key — for the
+    remote path (:func:`inject_context_remote`) that is the deployment's own
+    URL rather than a store path, so a laptop's local graph and a deployment
+    never collide on the same cache file (see ``_output_cache_file``).
+    """
     lines: list[str] = []
 
     if projects:
@@ -402,13 +434,91 @@ def inject_context(
 
     # Cache the freshly rendered block (including an empty one) so the next
     # prompt in this window skips the graph reads entirely.
-    _write_output_cache(graph_uri, repo, branch, output)
+    _write_output_cache(cache_key, repo, branch, output)
     _dbg(
         debug,
         f"rendered {len(output)} chars"
         + ("" if output else " (empty — no projects, ready tasks, or branch tasks)"),
     )
     return output
+
+
+def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
+    """Same rendered block as :func:`inject_context`, sourced from the
+    deployment's own MCP tool surface instead of a direct :class:`OmnigraphClient`
+    read.
+
+    A ``remote_url``-only deployment target has no direct graph endpoint the
+    CLI is allowed to open — ``inject_context`` calling ``OmnigraphClient``
+    unconditionally is exactly the bug this function fixes (agent-kit#261's
+    mechanism, still live on this path: see
+    tk-witan-hook-context-reads-the-local-store-on-a-de-dfb2c9). ``server`` is
+    a tool-calling proxy built the same way ``_srv()`` builds one for a remote
+    target (``witan.cli._common.remote_proxy``), so this makes exactly the
+    tool calls an agent's own session would make.
+
+    Degrades relative to :func:`inject_context`: branch-linked task
+    association (the ``## In-Flight Branch`` section) and stale-repo-case
+    detection have no remote-tool equivalent yet and are always empty/False
+    here — recorded via ``--debug``, never silently.
+    """
+    try:
+        repo, branch = _cached_repo_and_branch()
+        _dbg(debug, f"detected repo={repo!r} branch={branch!r} (remote)")
+        _dbg(
+            debug, f"remote_url={remote_url!r} output_cache_ttl={_output_cache_ttl()}s"
+        )
+
+        cached = _read_output_cache(remote_url, repo, branch)
+        if cached is not None:
+            _dbg(debug, f"served from output cache ({len(cached)} chars)")
+            return cached
+
+        # Mirrors the local path's gating: no detected repo means no project
+        # list (workflow_project_list(repo="") would return every repo's
+        # active projects, not "none" — see its docstring), but ready tasks
+        # still fall through to the unscoped set either way (task_ready's own
+        # repo_module.detect(override="") resolves to "no repo", matching
+        # list_unscoped_tasks locally). limit=10000 matches the local path's
+        # list_unscoped_tasks cap so a busy graph's header count isn't
+        # silently truncated by task_ready's own default limit=20.
+        projects = (
+            server.workflow_project_list(repo=repo, status="active") if repo else []
+        )
+        ready = server.task_ready(repo=(repo or ""), limit=10000)
+        _dbg(debug, f"remote reads OK: projects={len(projects)} ready={len(ready)}")
+    except Exception:  # noqa: BLE001
+        _dbg_exc(debug, "FAILED building remote context (returning empty block)")
+        return ""
+
+    sessions_by_project: dict[str, list[dict]] = {}
+    for p in projects[:3]:
+        try:
+            sessions_by_project[p["slug"]] = server.workflow_session_list(
+                project_slug=p["slug"]
+            )
+        except Exception:  # noqa: BLE001
+            _dbg_exc(
+                debug, f"sessions read failed for {p['slug']!r} (skipping resume lines)"
+            )
+
+    _dbg(
+        debug,
+        "remote mode: branch-task linkage and stale-repo-case detection "
+        "unavailable (no remote tool equivalent yet)",
+    )
+
+    return _render_context_block(
+        cache_key=remote_url,
+        repo=repo,
+        branch=branch,
+        projects=projects,
+        sessions_by_project=sessions_by_project,
+        ready=ready,
+        open_branch_tasks=[],
+        stale_repo_case=False,
+        debug=debug,
+    )
 
 
 # A project sitting through this many sessions in the same phase without
