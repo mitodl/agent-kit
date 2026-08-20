@@ -100,7 +100,12 @@ not" summary).
 Output shape: `{repo, pr, review_threads: [...], discussion_comments: [...],
 reviews: [...]}`. Each `review_threads[]` entry carries the GraphQL `id`
 (pass this straight to `resolve-thread.sh`), `isResolved`, `isOutdated`,
-`path`/`line`, and its `comments`.
+`path`/`line`, and its `comments`. Every comment, discussion comment, and
+review also carries `author_type` alongside `author` — GitHub's own actor
+type (`User`, `Bot`, `Organization`, `Mannequin`), normalized from GraphQL's
+`__typename` and REST's `user.type` so it reads the same regardless of which
+call produced the record. Classify authorship from that field, not from
+whether you recognize the login.
 
 ## Phase 1b — Checks
 
@@ -156,6 +161,30 @@ leave everything in `COMMENTED` state with the real content in the thread
 comments, same as noted in
 [`github-pr-triage`](../github-pr-triage/SKILL.md#phase-3--classify).
 
+**A human reviewer's comment gets more deliberate handling than a bot's,
+even when the fix looks equally obvious.** A bot flags a pattern; a human
+colleague is making a judgment call, and a quick autonomous fix-and-resolve
+can read as brushing off their input. For human-authored threads: don't
+auto-resolve on your own judgment alone — bring the proposed fix (or your
+reasoning for declining) to the operator before pushing and resolving, and
+use their framing in the reply rather than your paraphrase. Bot-authored
+threads (Copilot, Gemini, CodeQL, etc.) don't need that same checkpoint —
+address, reply, and resolve those directly per the rest of this skill.
+
+Decide which branch applies from `author_type` (Phase 1's output), never
+from whether the login *looks* like a bot — an unfamiliar GitHub App or a
+newly-added reviewer has no recognizable name, and guessing wrong applies
+the wrong handling to a colleague. `Bot` (and `Mannequin`, an imported
+placeholder identity) take the bot branch; `Organization` is rare on review
+threads and takes the human branch.
+
+`User` is the one value that doesn't settle it: a service account driving
+automation through a normal user token reports `User` exactly like a person
+does, because GitHub has no field that distinguishes them. When a `User`
+thread reads like machine output — templated phrasing, a severity badge, an
+identical comment repeated across files — say that's your read and ask,
+rather than silently taking the bot branch on a thread a colleague wrote.
+
 Failing checks split into three kinds that get handled differently in
 Phase 3 — tag each one on the way in:
 
@@ -183,6 +212,13 @@ For each actionable item: make the code change, run the relevant
 tests/lint/build for that change before moving to the next one. Commit with
 a message that names what was addressed, not just "address PR feedback".
 
+When the item is a genuine bug (not a style/naming nit), prefer proving the
+fix over asserting it: extend or add a test that fails against the unfixed
+code, confirm the failure, then apply the fix and confirm it passes. This
+before/after result is worth citing in the reply or PR summary — it's
+stronger evidence than "fixed" on its own, and it's cheap when the bug is
+already localized by the reviewer's comment.
+
 **Disagreeing with a reviewer is a legitimate outcome — but it must be
 verified, not assumed.** Before skipping a suggestion because it "looks
 unnecessary": read the actual code path the reviewer is pointing at and
@@ -195,6 +231,23 @@ or "will consider". A good decline reads like: *"Verified — `write_bindings`
 always calls `ensure_bridge_store` first at every call site, so this
 fallback path is unreachable. Not adding it; would reintroduce the redundant
 read this PR removes."*
+
+**The same verify-before-asserting rule applies to any claim about runtime
+or production behavior**, not just code-path reasoning — "prod never showed
+this", "this is why the metric moved", "the library defaults to X". Code
+reading alone doesn't verify those; check the live source instead
+(Prometheus/Grafana, the actual library source/docs rather than memory, or
+the infra definition as deployed rather than as written). Size the query
+window to the claim: an assertion about a *period* — "prod never showed
+this", "this has been broken since the July deploy" — is only supported by a
+window covering that whole period, and if retention won't reach that far
+back, the claim gets narrowed to what you actually queried ("no occurrences
+in the last 30 days") rather than asserted whole. Seven days is the floor
+for *trend* claims, where the window exists to keep a short blip from
+reading as a trend — it is a minimum, not a sufficient window for an
+absence claim. A claim you can't
+verify before replying gets flagged as unverified or left out — it doesn't
+ship as fact and get walked back after a reviewer catches it.
 
 For a failing check, read `action_run_logs[<run_id>]` (from Phase 1b) before
 touching code — a stack trace or assertion diff tells you exactly what broke,

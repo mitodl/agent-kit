@@ -42,7 +42,7 @@ query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
           path
           line
           comments(first: 50) {
-            nodes { databaseId body author { login } createdAt }
+            nodes { databaseId body author { login __typename } createdAt }
           }
         }
       }
@@ -76,11 +76,17 @@ if [[ "$include_resolved" == false ]]; then
   mv "${threads_file}.tmp" "$threads_file"
 fi
 
+# Normalize GraphQL's Actor __typename into the same author_type field the REST
+# paths below emit, so categorization reads one field regardless of source.
+jq '[.[] | .comments.nodes |= map(.author_type = (.author.__typename // "Unknown"))]' \
+  "$threads_file" > "${threads_file}.tmp"
+mv "${threads_file}.tmp" "$threads_file"
+
 discussion="$(gh api "repos/${repo}/issues/${pr}/comments" --paginate \
-  --jq '[.[] | {id, author: .user.login, body, created_at, html_url}]')"
+  --jq '[.[] | {id, author: .user.login, author_type: .user.type, body, created_at, html_url}]')"
 
 reviews="$(gh api "repos/${repo}/pulls/${pr}/reviews" --paginate \
-  --jq '[.[] | {author: .user.login, state, body, submitted_at}]')"
+  --jq '[.[] | {author: .user.login, author_type: .user.type, state, body, submitted_at}]')"
 
 jq -n \
   --arg repo "$repo" \
