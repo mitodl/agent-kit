@@ -3,7 +3,9 @@ name: create-ol-pull-request
 description: >
   Create a pull request in the mitodl organization using their standard PR template.
   Use this skill when asked to create a PR, open a pull request, or submit changes
-  for review. Guides branch inspection, title/body population, and gh pr create.
+  for review. Guides branch inspection, title/body population, a pre-submit audit
+  of factual/behavioral claims in the PR body against live evidence, and
+  gh pr create.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -108,7 +110,33 @@ Checklist section (uncomment and populate **only** if there are pre-merge steps)
 - [ ] <step>
 ```
 
-## Step 5 — Create the PR
+## Step 5 — Audit factual claims
+
+Before creating the PR, re-read the drafted body for factual or behavioral
+claims — anything an "evidence" question would apply to: "prod never showed
+this", "this fixes the leak", "the library defaults to X", "this improved
+latency", a specific number or timestamp. A change that's purely mechanical
+(a rename, a dependency bump with no behavioral claim, a two-line
+self-evident diff) has nothing to audit — skip this step rather than
+padding the body with an audit table it doesn't need.
+
+When there are claims to check, verify each one against its strongest
+available evidence rather than memory or "it should be fine":
+
+| Claim type | Evidence source |
+|------------|------------------|
+| Metric / production behavior | Prometheus/Grafana via the matching `toolhive-swe-{ci,qa,prod}` MCP tier, over a window covering the period the claim names — **at least 7 days** for a trend claim, so a short blip doesn't read as a trend; an absence claim ("never happened") needs the full period it names, or gets narrowed to the window actually queried |
+| Library/framework default behavior | The actual library source or its docs — not memory |
+| Infra/config state ("this is deployed", "the value is X in prod") | The deployed state, not the manifest — see the `deploy-verification` skill if the claim is about a live rollout |
+| "This fixes bug X" | A test that failed before the fix and passes after, if one exists or is cheap to add |
+
+Mark each claim VERIFIED, UNVERIFIABLE, or CONTRADICTED. Rewrite the body
+before moving on: drop UNVERIFIABLE claims rather than shipping them
+hedged, and correct — don't soften — anything CONTRADICTED. A claim that
+can't be checked before the PR opens doesn't get to ship as fact and get
+walked back after a reviewer catches it.
+
+## Step 6 — Create the PR
 
 ```bash
 gh pr create \
