@@ -476,6 +476,22 @@ def _commits(store: str, branch: str = "main") -> list[dict]:
     return parsed["commits"]
 
 
+#: The branch a commit landed on, as `commit list --json` spells it. Renamed
+#: `manifest_branch` → `graph_branch` by upstream's 2026-08-20 vocabulary sweep
+#: (ecf1d6aedd, #538) with no version bump, so both builds are in the wild and
+#: `witan_code.graph.branch_last_write` reads either. These tests check the
+#: same way, so they pass on either binary and still fail if BOTH disappear.
+_BRANCH_KEYS = ("manifest_branch", "graph_branch")
+
+
+def _branch_of(commit):
+    """The commit's branch tag under whichever key this build uses, or None."""
+    for key in _BRANCH_KEYS:
+        if key in commit:
+            return commit[key]
+    return None
+
+
 def test_commit_list_wraps_commits_in_an_envelope(store):
     """`branch_last_write` reads `{"commits": [...]}` and RAISES on an
     unexpected shape rather than degrading, because a silent None would turn
@@ -483,7 +499,11 @@ def test_commit_list_wraps_commits_in_an_envelope(store):
     commits = _commits(store)
 
     assert isinstance(commits, list) and commits
-    assert all("manifest_branch" in c for c in commits)
+    assert all(any(k in c for k in _BRANCH_KEYS) for c in commits), (
+        "no commit carries a branch tag under any known key; "
+        "witan_code.graph.branch_last_write filters on one of "
+        f"{_BRANCH_KEYS} and would return None for every branch"
+    )
     assert all("created_at" in c for c in commits)
 
 
@@ -492,7 +512,7 @@ def test_a_branchs_own_commits_are_tagged_with_its_name(scratch_store):
     `row["manifest_branch"] == <branch>` selects the writes that belong to a
     view rather than the ones it inherited from main.
 
-    Tested on a NAMED branch, not on main, because `manifest_branch` is null
+    Tested on a NAMED branch, not on main, because the branch tag is null
     for main-line commits — which is correct and is why the reaper documents
     "None means the branch has no commits of its own". A test asserting main
     were tagged would be asserting the opposite of the real behaviour.
@@ -500,7 +520,7 @@ def test_a_branchs_own_commits_are_tagged_with_its_name(scratch_store):
     _run("branch", "create", "view-x", "--store", scratch_store)
 
     before = _commits(scratch_store, "view-x")
-    assert not [c for c in before if c["manifest_branch"] == "view-x"], (
+    assert not [c for c in before if _branch_of(c) == "view-x"], (
         "a freshly created branch already has commits of its own; the reaper's "
         "'no commits of its own' signal no longer means what it reads as"
     )
@@ -520,9 +540,9 @@ def test_a_branchs_own_commits_are_tagged_with_its_name(scratch_store):
         "view-x",
     )
 
-    tagged = [c for c in _commits(scratch_store, "view-x") if c["manifest_branch"]]
+    tagged = [c for c in _commits(scratch_store, "view-x") if _branch_of(c)]
     assert tagged, "a write to view-x produced no commit tagged with that branch"
-    assert all(c["manifest_branch"] == "view-x" for c in tagged)
+    assert all(_branch_of(c) == "view-x" for c in tagged)
 
 
 def test_commit_list_timestamps_are_microseconds(store):
@@ -636,7 +656,12 @@ def test_keyed_load_respects_this_formats_row_cap(scratch_store, bulk_data, cont
     )
     stderr = result.stderr.lower()
     assert "resource limit exceeded" in stderr
-    assert "keyed rows" in stderr
+    # "keyed rows" became "keyed entities" in upstream's 2026-08-20 vocabulary
+    # sweep (ecf1d6aedd, #538), with no version bump — both builds are in the
+    # wild. Only the human-facing wording changed; the cap itself did not.
+    assert "keyed rows" in stderr or "keyed entities" in stderr, (
+        f"the refusal no longer says which limit was hit:\n{result.stderr}"
+    )
     assert "doc" in stderr, "the refusal no longer names the table it applies to"
     assert str(cap) in result.stderr, (
         f"the refusal no longer states the {cap}-row limit, so chunking cannot "

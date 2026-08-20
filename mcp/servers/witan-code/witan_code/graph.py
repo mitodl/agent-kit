@@ -249,11 +249,19 @@ class OmnigraphClient(_BaseOmnigraphClient):
                 f"omnigraph commit list returned no commit array for branch "
                 f"{name!r}: {parsed!r}"
             )
+        # ★ TWO FIELD NAMES, ONE MEANING. omnigraph's 2026-08-20 vocabulary
+        # sweep (upstream ecf1d6aedd, #538) renamed `manifest_branch` to
+        # `graph_branch` in `commit list --json` without bumping the reported
+        # version, so both are in the wild. Reading only one is not a cosmetic
+        # miss here: no row matches, `stamps` is empty, and this returns None —
+        # which the docstring above makes load-bearing as "never reap this
+        # view". The reaper would then quietly stop reaping anything at all,
+        # and nothing would raise to say so.
         stamps = [
             row["created_at"]
             for row in commits
             if isinstance(row, dict)
-            and row.get("manifest_branch") == name
+            and name in (row.get("manifest_branch"), row.get("graph_branch"))
             and isinstance(row.get("created_at"), (int, float))
         ]
         # created_at is microseconds since the epoch.
