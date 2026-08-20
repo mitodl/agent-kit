@@ -91,14 +91,42 @@ _WRITE_SUBCOMMANDS = {"mutate", "load", "optimize", "cleanup"}
 # the remedy is identical: re-read and try again, and — for a CAS caller that
 # passed `surface_conflict` — lose the race cleanly instead of re-applying the
 # write over whoever won it.
+#
+# ★ TWO SPELLINGS OF THE SAME CONDITION, DELIBERATELY. omnigraph's 2026-08-20
+# vocabulary refactor (upstream 69d292ce80) reworded these messages —
+# "expected manifest table version N" became "expected published dataset
+# version N", and "ahead of manifest version N" became "ahead of published
+# dataset version N". The old spellings stay because a marker list is matched
+# against whatever binary the user has INSTALLED, not against the pinned one:
+# `_installed_version` re-downloads only on a version change, and this rename
+# shipped without one (both builds report 0.10.0). Dropping the old wording
+# would silently stop classifying conflicts on every machine that has not
+# re-fetched.
+#
+# ★ AND THE NEW MARKER CARRIES ITS "expected" PREFIX, which is not decoration.
+# The bare phrase "published dataset version" also appears in "historical
+# published dataset version N was reclaimed" — a TERMINAL error (the version a
+# historical read pinned is gone; retrying re-reads the same absence forever).
+# Its old wording was "historical table version …", which contains no
+# "manifest table version" and so was correctly fatal; matching the bare phrase
+# would newly and wrongly make it retryable. The old marker was this specific
+# for the same reason, and the new one has to be too.
 _RETRYABLE = (
     "stale view",
     "manifest table version",
+    "expected published dataset version",
     "refresh and retry",
     "write authority",
     "reprepare from the current branch",
 )
-_NEEDS_REPAIR = ("ahead of manifest", "omnigraph repair")
+# Checked BEFORE _RETRYABLE in `_classify_cli_error`, which is what keeps the
+# drift message — "… ahead of published dataset version 7; run `omnigraph
+# repair` …" — classified as repair rather than as a conflict to retry.
+_NEEDS_REPAIR = (
+    "ahead of manifest",
+    "ahead of published dataset version",
+    "omnigraph repair",
+)
 
 # The CLI's form of the two conditions `classify_status` keys on by status.
 # Prose again, for the same reason as `_RETRYABLE`: `omnigraph` prints the

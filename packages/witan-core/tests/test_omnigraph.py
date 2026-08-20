@@ -413,6 +413,62 @@ def test_write_authority_conflict_is_retryable_not_fatal():
     assert og._classify_cli_error(_WRITE_AUTHORITY_STDERR) == _http.RETRYABLE
 
 
+# ── omnigraph's 2026-08-20 vocabulary rename (upstream 69d292ce80) ──────────
+#
+# It reworded the error text `_classify_cli_error` matches on, WITHOUT bumping
+# the reported version — so both spellings are in the wild simultaneously and
+# both have to classify identically. Literals, not paraphrases, for the reason
+# `_WRITE_AUTHORITY_STDERR` is: every defect here has been a wording the
+# classifier did not anticipate. Taken from the two builds' own strings.
+
+_STALE_VIEW_OLD = (
+    "omnigraph mutate failed:\n"
+    "stale view of 'node:Doc': expected manifest table version 6 "
+    "but current is 7 — refresh and retry"
+)
+_STALE_VIEW_NEW = (
+    "omnigraph mutate failed:\n"
+    "stale view of dataset for node type 'Doc': expected published dataset "
+    "version 6 but current is 7 — refresh and retry"
+)
+_DRIFT_OLD = (
+    "omnigraph mutate failed:\n"
+    "table 'node:Doc' has Lance HEAD version 9 ahead of manifest version 8; "
+    "run `omnigraph repair` before writing"
+)
+_DRIFT_NEW = (
+    "omnigraph mutate failed:\n"
+    "dataset for node type 'Doc' is at Lance HEAD version 9, ahead of "
+    "published dataset version 8; run `omnigraph repair` before writing"
+)
+_RECLAIMED_OLD = "omnigraph query failed:\nhistorical table version 7 was reclaimed"
+_RECLAIMED_NEW = (
+    "omnigraph query failed:\nhistorical published dataset version 7 was reclaimed"
+)
+
+
+@pytest.mark.parametrize("stderr", [_STALE_VIEW_OLD, _STALE_VIEW_NEW])
+def test_stale_view_is_retryable_in_both_vocabularies(stderr):
+    assert og._classify_cli_error(stderr) == _http.RETRYABLE
+
+
+@pytest.mark.parametrize("stderr", [_DRIFT_OLD, _DRIFT_NEW])
+def test_head_drift_needs_repair_in_both_vocabularies(stderr):
+    """NEEDS_REPAIR, not RETRYABLE — and the new wording is the one that can go
+    wrong, since it contains "published dataset version" too. `_NEEDS_REPAIR`
+    is checked first in `_classify_cli_error`; this pins that order."""
+    assert og._classify_cli_error(stderr) == _http.NEEDS_REPAIR
+
+
+@pytest.mark.parametrize("stderr", [_RECLAIMED_OLD, _RECLAIMED_NEW])
+def test_a_reclaimed_historical_version_stays_fatal_in_both_vocabularies(stderr):
+    """The reason `_RETRYABLE` matches "expected published dataset version" and
+    not the bare phrase. A reclaimed version is gone: retrying re-reads the same
+    absence until the attempt budget runs out, then reports a timeout-shaped
+    failure for what is actually a permanent one."""
+    assert og._classify_cli_error(stderr) == _http.FATAL
+
+
 def test_surface_conflict_loses_the_race_on_a_write_authority_conflict(monkeypatch):
     """The whole point of the fix: a CAS caller must get `OmnigraphConflict`.
 
