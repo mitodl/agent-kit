@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, NoReturn
 
 import cyclopts
@@ -82,10 +83,45 @@ def _named_target(name: str):
         _fail(str(exc))
 
 
+def _target_store_uri(name: str, block) -> str:
+    """The store URI a named target addresses, spelled the way a merge needs it.
+
+    Not simply the block's ``server``. Downstream, ``merge_store`` addresses a
+    store it holds no client for (``store_cli_args``), so anything the target
+    keeps in a *separate* key has to be folded in here or it is lost:
+
+    - ``graph`` is a sibling key, and a bare ``http(s)://host:port`` with no
+      ``/graphs/<id>`` is rejected as having no graph id. Folded into the URI,
+      which is the spelling ``store_cli_args`` already reads.
+    - ``token`` has nowhere to go — the merge path takes a per-store credential
+      only from the *configured* client, and falls back to an ambient
+      ``OMNIGRAPH_BEARER_TOKEN`` for any other remote store. Authenticating to
+      somebody's server with whatever token happens to be exported is worse
+      than refusing, so this refuses.
+
+    ``file://`` is stripped here rather than left to ``config._resolve_path``,
+    whose ``Path()`` round-trip collapses the ``//`` and yields a relative path
+    named ``file:``.
+    """
+    server = block.server
+    if server.startswith("file://"):
+        return server[len("file://") :]
+    if not server.startswith(("http://", "https://")):
+        return server if server.startswith("s3://") else str(Path(server).expanduser())
+    if block.token:
+        _fail(
+            f"Target {name!r} declares a `token` for its remote store, and the "
+            "merge path has no way to carry a per-store credential. Export it "
+            "as OMNIGRAPH_BEARER_TOKEN and name the store directly instead."
+        )
+    base = server.rstrip("/")
+    if "/graphs/" in base:
+        return base
+    return f"{base}/graphs/{block.graph}" if block.graph else base
+
+
 def _merge_source(source: str | None, from_target: str | None) -> str:
     """The store URI to merge from, resolving ``--from <name>`` to its ``server``."""
-    from .. import config as cfg_module
-
     if from_target and source:
         _fail(
             "Pass a source store URI or --from <target>, not both — they name "
@@ -100,7 +136,7 @@ def _merge_source(source: str | None, from_target: str | None) -> str:
                 "`remote_url` cannot be a merge source — witan exports no "
                 "deployment."
             )
-        return cfg_module._resolve_path(block.server)
+        return _target_store_uri(from_target, block)
     if not source:
         _fail("Nothing to merge from: pass a source store URI, or --from <target>.")
     return source
@@ -137,7 +173,7 @@ def _merge_destination(to_target: str | None, target: str | None):
     if block.server:
         from .. import server as server_module
 
-        return server_module, cfg_module._resolve_path(block.server)
+        return server_module, _target_store_uri(to_target, block)
     _fail(
         f"Target {to_target!r} configures neither `remote_url` nor `server`, so "
         "there is nothing to merge into. Give it one, or pass --target <uri>."

@@ -1512,6 +1512,76 @@ def test_merge_without_the_new_flags_is_unchanged(targets_config, monkeypatch):
     )
 
 
+def test_merge_from_a_remote_target_folds_in_its_graph_id(targets_config):
+    """A target keeps its graph id in a sibling `graph` key, and the merge
+    addresses a store it holds no client for — so a bare server URL reaches
+    `store_cli_args` with no id and is rejected. Fold it into the URI."""
+    from witan.cli import migrate as cli_migrate
+
+    targets_config(
+        '[targets.work]\nserver = "http://witan.internal:8080"\ngraph = "council"\n'
+    )
+
+    assert (
+        cli_migrate._merge_source(None, "work")
+        == "http://witan.internal:8080/graphs/council"
+    )
+
+
+def test_merge_from_a_remote_target_keeps_an_explicit_graph_path(targets_config):
+    from witan.cli import migrate as cli_migrate
+
+    targets_config(
+        '[targets.work]\nserver = "http://witan.internal:8080/graphs/other"\n'
+        'graph = "council"\n'
+    )
+
+    assert (
+        cli_migrate._merge_source(None, "work")
+        == "http://witan.internal:8080/graphs/other"
+    )
+
+
+def test_merge_from_a_target_with_a_per_store_token_is_refused(targets_config, capsys):
+    """Nothing on the merge path carries a per-store credential — it takes the
+    configured client's token or an ambient one. Authenticating to that server
+    with whatever happens to be exported is worse than refusing."""
+    from witan.cli import migrate as cli_migrate
+
+    targets_config(
+        "[targets.work]\n"
+        'server = "http://witan.internal:8080"\n'
+        'graph = "council"\n'
+        'token = "sekrit"\n'
+    )
+
+    with pytest.raises(SystemExit):
+        cli_migrate._merge_source(None, "work")
+    out = capsys.readouterr().out
+    assert "OMNIGRAPH_BEARER_TOKEN" in out
+    assert "sekrit" not in out
+
+
+def test_merge_from_a_file_uri_target_keeps_the_double_slash(targets_config):
+    """`Path("file:///tmp/a.omni")` collapses to `file:/tmp/a.omni`, which then
+    slips past `merge_store`'s `file://` strip and is read as a relative path
+    named `file:`. Strip the scheme here instead."""
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('[targets.archive]\nserver = "file:///tmp/a.omni"\n')
+
+    assert cli_migrate._merge_source(None, "archive") == "/tmp/a.omni"
+
+
+def test_merge_to_an_s3_target_is_left_alone(targets_config):
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('[targets.cold]\nserver = "s3://bucket/graph.omni"\n')
+
+    _, target = cli_migrate._merge_destination("cold", None)
+    assert target == "s3://bucket/graph.omni"
+
+
 @requires_omnigraph
 def test_merge_from_and_to_reconciles_two_named_local_stores(
     server, tmp_path, targets_config, capsys
@@ -1554,12 +1624,14 @@ def test_merge_from_and_to_reconciles_two_named_local_stores(
 
     merge(from_="personal", to="work")
 
-    out = capsys.readouterr().out
-    assert "1 added" in out and "1 updated" in out
+    # Unwrapped: rich wraps the summary line to the terminal width, which is
+    # narrower under CI than locally, so a raw substring match is a width test.
+    out = " ".join(capsys.readouterr().out.split())
+    assert "1 added, 1 updated" in out
     rows = target.read("read.gq", "get_memory", {"slug": "mem-collides-bbbbbb"})
     assert rows[0]["content"] == "newer"
     assert target.read("read.gq", "get_memory", {"slug": "mem-only-in-source-aaaaaa"})
 
     # Repeatable: a second run finds every row already applied.
     merge(from_="personal", to="work")
-    assert "0 added" in capsys.readouterr().out
+    assert "0 added" in " ".join(capsys.readouterr().out.split())

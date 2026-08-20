@@ -660,12 +660,13 @@ def load_target(name: str) -> _Target:
     """Return the ``[targets.<name>]`` block itself, by name.
 
     ``load()`` and ``load_remote_config()`` resolve a target into fully-merged
-    settings, where env vars and global config.toml keys outrank the block.
-    Callers that need the block's *own* fields read it here instead —
-    ``witan migrate merge --from/--to`` resolves a named target's ``server``
-    and ``remote_url`` to the two ends of the merge, and an ambient
-    ``WITAN_MEMORY_URI`` overriding the name the user just typed on the command
-    line would defeat the point of typing it.
+    settings, applying their own precedence around it: env vars outrank the
+    block, and global config.toml keys fill in behind it. Callers that need the
+    block's *own* fields read it here instead — ``witan migrate merge
+    --from/--to`` resolves a named target's ``server`` and ``remote_url`` to
+    the two ends of the merge, and an ambient ``WITAN_MEMORY_URI`` overriding
+    the name the user just typed on the command line would defeat the point of
+    typing it.
     """
     return _named_target(_parse_targets(_load_toml()), name)
 
