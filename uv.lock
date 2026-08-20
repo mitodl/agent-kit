@@ -2413,7 +2413,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.19.0"
+version = "0.20.0"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },

@@ -670,6 +670,7 @@ def load_target(name: str) -> _Target:
     """
     return _named_target(_parse_targets(_load_toml()), name)
 
+
 class LocalDispatch(BaseModel):
     """Why a CLI invocation is about to use a local store, and how deliberate it is.
 
