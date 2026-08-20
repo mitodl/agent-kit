@@ -47,6 +47,11 @@ def _srv():
     ``RemoteServerProxy`` when ``WITAN_REMOTE_URL`` is set (ADR-0005). The
     proxy mirrors the server module's tool surface, so every call site is
     identical either way.
+
+    The in-process branch is wrapped by ``guard_local_store`` when a deployment
+    is configured but nothing routed this invocation to it — see
+    ``witan.cli.local_dispatch``. Falling through to the local store there is
+    how a task close reported success against a graph nobody was reading.
     """
     global _server
     if _server is None:
@@ -64,8 +69,11 @@ def _srv():
             _server = remote_proxy(remote)
         else:
             from .. import server as server_module
+            from .local_dispatch import guard_local_store
 
-            _server = server_module
+            _server = guard_local_store(
+                server_module, cfg_module.diagnose_local_dispatch()
+            )
     return _server
 
 

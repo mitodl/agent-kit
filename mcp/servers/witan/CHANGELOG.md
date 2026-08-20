@@ -6,6 +6,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.20.0] - 2026-08-20
+
+### Fixed
+
+- **A CLI write run from a directory no target matches no longer lands on the
+  local store and reports success.** Target selection is path-based, so
+  `[targets.production]` claiming `~/code/mit` via `match_paths` routes to the
+  deployment from inside a matched checkout and to
+  `~/.local/share/witan/graph.omni` from anywhere else. Nothing in the output
+  distinguished the two: `witan task close` printed `Closed <slug>` and the
+  full resolution text, exited 0, and the deployed graph still showed the task
+  `open` with `closed_at: null` nine days later. Found by tripping over it —
+  five closes run from a scratch directory, none of which applied.
+
+  The same family as the `witan serve` defect fixed in 0.18.0, on the other
+  path out of the same config file. `serve` now refuses to start rather than
+  fall back; the CLI kept falling back, per command.
+
+  Writes now refuse, naming the store they would have written, the deployed
+  targets that exist, and the three ways forward (run from a matched checkout,
+  `WITAN_TARGET=<name>`, or `WITAN_MEMORY_URI` to choose a local store on
+  purpose). Reads still fall back — a stale read is recoverable in a way a
+  write to the wrong graph is not — but announce which store answered.
+
+  Scoped to the ambiguous case only. An install with no `remote_url` target
+  has no deployment it could have meant, and behaves exactly as before; so
+  does one where a target matched, `WITAN_MEMORY_URI` is set, or config.toml
+  sets a global `server`, all of which name the store deliberately.
+
+  The message names `WITAN_TARGET` rather than `--target` deliberately: the
+  flag exists only on `login`/`logout`/`whoami`/`run`/`migrate merge`, and not
+  on `task close` — the command that produced this report. The env var is read
+  for every command.
+
+  Two defects in the first revision were caught in review, both real. The
+  guard imported `witan.server` before refusing, and that import runs
+  `_ensure_graph` at module scope — so it created the local store and
+  re-applied its schema before saying no. Refusing after the side effect is
+  not refusing; the import is now deferred behind the first allowed read.
+  And `witan session list`, `witan trace show` and `witan project show` call
+  `s.client.read(...)` directly, going around the tool surface a tool-name
+  allowlist covers, so refusing `client` wholesale broke three working read
+  commands. `client` is now a facade over `read`/`graph_uri` only — handing
+  back the real client would let the one path that already bypasses the tool
+  layer bypass the guard too.
+
+### Added
+
+- `config.diagnose_local_dispatch()` / `config.LocalDispatch` — classifies a
+  local-store dispatch as deliberate or accidental, and
+  `witan.cli.local_dispatch` acts on it. The guard is a proxy over the
+  in-process server rather than a check at each of the ~50 dispatch sites,
+  which are not uniform (`_fn(s.tool)` in most of the CLI, `s.tool()` in
+  `witan migrate`) — a per-site list would have the same shape as the bug,
+  where the one site somebody forgets is indistinguishable from it.
+
+
 ## [0.19.0] - 2026-08-20
 
 ### Added
