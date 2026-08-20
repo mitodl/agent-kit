@@ -30,6 +30,11 @@ a MINOR bump may include breaking changes).
   purpose). Reads still fall back — a stale read is recoverable in a way a
   write to the wrong graph is not — but announce which store answered.
 
+  The message names `WITAN_TARGET` rather than `--target` deliberately: the
+  flag exists only on `login`/`logout`/`whoami`/`run`/`migrate merge`, and not
+  on `task close` — the command that produced this report. The env var is read
+  for every command.
+
   Scoped to the ambiguous case only. An install with no `remote_url` target
   has no deployment it could have meant, and behaves exactly as before; so
   does one where a target matched, `WITAN_MEMORY_URI` is set, or config.toml

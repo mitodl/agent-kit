@@ -17,7 +17,7 @@ while their onboarding produced nothing in the shared graph.
 
 So writes refuse and say why, and a local store is never used silently.
 Reads are allowed to fall back — a stale read is recoverable in a way a write
-to the wrong graph is not — but still announce where they read from.
+to the wrong graph is not — but still announce which store answered.
 """
 
 from __future__ import annotations
@@ -25,7 +25,12 @@ from __future__ import annotations
 from ..config import LocalDispatch
 from ._common import stderr_console
 
-__all__ = ["READ_TOOLS", "guard_local_store", "local_write_refused"]
+__all__ = [
+    "READ_TOOLS",
+    "guard_local_store",
+    "local_store_notice",
+    "local_write_refused",
+]
 
 READ_TOOLS = frozenset(
     {
@@ -70,6 +75,14 @@ def local_write_refused(tool: str, diagnosis: LocalDispatch) -> str:
     that is not the shared one, and how to reach either — rather than the
     ``remote mode is not configured`` line the CLI used to keep to itself and
     print only if you separately ran ``witan whoami``.
+
+    ``WITAN_TARGET`` rather than ``--target``: the flag exists only on the
+    handful of commands that take one (``login``, ``logout``, ``whoami``,
+    ``run``, ``migrate merge``), and notably not on ``task close`` — the
+    command that produced this report. The environment variable is read by
+    ``config._select_target`` for every command, so it is the form that always
+    works. Naming a flag the reader's command does not accept would leave them
+    exactly where they started.
     """
     deployed = ", ".join(diagnosis.deployed_targets)
     return (
@@ -84,23 +97,26 @@ def local_write_refused(tool: str, diagnosis: LocalDispatch) -> str:
         "\n"
         "Choose one:\n"
         "  run the command from a checkout one of those targets matches, or\n"
-        f"  name the deployment:  witan --target {diagnosis.deployed_targets[0]} …"
-        f"  (or WITAN_TARGET)\n"
+        f"  name the deployment:  WITAN_TARGET={diagnosis.deployed_targets[0]} witan …\n"
         "  write locally on purpose:  WITAN_MEMORY_URI=<path> witan …"
     )
 
 
-def local_read_notice(diagnosis: LocalDispatch) -> str:
+def local_store_notice(diagnosis: LocalDispatch) -> str:
     """The one-line banner naming the local store a command is about to use.
 
     Printed whenever a deployment is configured and the CLI is not using it,
     which is the whole ambiguity: with both a local and a deployed target in
     one config file, identical output means two different graphs. Cheap enough
     to always print, and stderr keeps it out of ``--output-format json``.
+
+    "using", not "reading" — on the deliberate path this fires for writes too,
+    and a write announcing itself as a read is its own small lie about where
+    the data went.
     """
     where = f"target [{diagnosis.target_name}]" if diagnosis.target_name else "no match"
     return (
-        f"[dim]witan: reading local store {diagnosis.graph_uri} "
+        f"[dim]witan: using local store {diagnosis.graph_uri} "
         f"({where}) — deployed targets: "
         f"{', '.join(diagnosis.deployed_targets)}[/dim]"
     )
@@ -109,7 +125,7 @@ def local_read_notice(diagnosis: LocalDispatch) -> str:
 class _LocalStoreGuard:
     """Passes reads through to the in-process server; refuses everything else.
 
-    A proxy rather than a check at each call site. There are ~40 dispatch
+    A proxy rather than a check at each call site. There are ~50 dispatch
     points across the CLI package and they are not uniform — most go through
     ``_fn(s.tool)``, ``witan migrate`` calls ``s.tool()`` directly — so a
     per-site guard would be a list to keep in sync, and the one site somebody
@@ -131,7 +147,7 @@ class _LocalStoreGuard:
         if name in READ_TOOLS:
             if not self._announced:
                 self._announced = True
-                stderr_console.print(local_read_notice(self._diagnosis))
+                stderr_console.print(local_store_notice(self._diagnosis))
             return getattr(self._inner, name)
         stderr_console.print(f"[red]{local_write_refused(name, self._diagnosis)}[/red]")
         raise SystemExit(1)
@@ -147,6 +163,6 @@ def guard_local_store(inner, diagnosis: LocalDispatch | None):
     if diagnosis is None:
         return inner
     if diagnosis.deliberate:
-        stderr_console.print(local_read_notice(diagnosis))
+        stderr_console.print(local_store_notice(diagnosis))
         return inner
     return _LocalStoreGuard(inner, diagnosis)
