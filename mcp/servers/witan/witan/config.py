@@ -216,17 +216,7 @@ def load_remote_config(target: str | None = None) -> RemoteConfig | None:
     """
     file_cfg = _load_toml()
     targets = _parse_targets(file_cfg)
-
-    explicit = target or os.environ.get("WITAN_TARGET")
-    if explicit:
-        selected = next((t for t in targets if t.name == explicit), None)
-        if selected is None:
-            available = ", ".join(t.name for t in targets) or "(none defined)"
-            raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
-    else:
-        selected = match_target(
-            targets, repo_uri=repo_module.detect(), local_path=local_project_path()
-        )
+    selected = _select_target(targets, target or os.environ.get("WITAN_TARGET"))
 
     return resolve_remote_config(file_cfg, selected)
 
@@ -643,6 +633,43 @@ def _parse_targets(raw: dict) -> list[_Target]:
     return [_Target(name=name, **cfg) for name, cfg in parse_target_tables(raw).items()]
 
 
+def _named_target(targets: list[_Target], name: str) -> _Target:
+    """The target called ``name``, or a ValueError listing the defined ones.
+
+    A named target that is not defined is an error rather than a fall-through
+    to auto-detection: silently routing to whatever the checkout matches sends
+    writes somewhere the caller did not ask for.
+    """
+    selected = next((t for t in targets if t.name == name), None)
+    if selected is None:
+        available = ", ".join(t.name for t in targets) or "(none defined)"
+        raise ValueError(f"Unknown target {name!r}. Available: {available}")
+    return selected
+
+
+def _select_target(targets: list[_Target], explicit: str | None) -> _Target | None:
+    """Pick the target block by name, or by auto-detection when none is named."""
+    if explicit:
+        return _named_target(targets, explicit)
+    return match_target(
+        targets, repo_uri=repo_module.detect(), local_path=local_project_path()
+    )
+
+
+def load_target(name: str) -> _Target:
+    """Return the ``[targets.<name>]`` block itself, by name.
+
+    ``load()`` and ``load_remote_config()`` resolve a target into fully-merged
+    settings, where env vars and global config.toml keys outrank the block.
+    Callers that need the block's *own* fields read it here instead —
+    ``witan migrate merge --from/--to`` resolves a named target's ``server``
+    and ``remote_url`` to the two ends of the merge, and an ambient
+    ``WITAN_MEMORY_URI`` overriding the name the user just typed on the command
+    line would defeat the point of typing it.
+    """
+    return _named_target(_parse_targets(_load_toml()), name)
+
+
 def _resolve_path(value: str) -> str:
     """Expand ~ in local paths; leave remote URIs untouched."""
     if value.startswith(("http://", "https://", "s3://")):
@@ -704,21 +731,9 @@ def load(target: str | None = None) -> Config:
 
     Raises ValueError for an explicitly-requested target that is not defined.
     """
-    from . import repo as repo_module
-
     file_cfg = _load_toml()
     targets = _parse_targets(file_cfg)
-
-    explicit = target or os.environ.get("WITAN_TARGET")
-    if explicit:
-        selected = next((t for t in targets if t.name == explicit), None)
-        if selected is None:
-            available = ", ".join(t.name for t in targets) or "(none defined)"
-            raise ValueError(f"Unknown target {explicit!r}. Available: {available}")
-    else:
-        selected = match_target(
-            targets, repo_uri=repo_module.detect(), local_path=local_project_path()
-        )
+    selected = _select_target(targets, target or os.environ.get("WITAN_TARGET"))
 
     raw_server = _first(
         os.environ.get("WITAN_MEMORY_URI"),

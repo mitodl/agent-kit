@@ -1284,7 +1284,8 @@ def test_store_merge_rows_are_findable_by_search_not_just_readable(server):
     cannot reproduce the deployed symptom, which is a corpus-size property of
     the engine's BM25: a term whose document frequency approaches the corpus
     size scores non-positive and is dropped, and one such term zeroes the whole
-    query. See docs/migration-runbook.md, "Verify by slug, not by search".
+    query. See docs/store-merge-findings.md, "Search looks broken on a
+    near-empty graph".
 
     Hence the filler rows below. Rarity is ``df/N``, not a property of the word
     itself: in a one-row corpus the search token would appear in *every*
@@ -1350,3 +1351,215 @@ def test_parse_ts_compares_naive_and_aware_without_raising():
     aware_same_instant = srv._parse_ts("2026-01-01T12:00:00+00:00")
 
     assert naive == aware_same_instant
+
+
+# ── `witan migrate merge --from/--to` ─────────────────────────────────────────
+#
+# The two named-target flags: `--from <name>`/`--to <name>` resolve a
+# `[targets.<name>]` block, where `--target` stays a literal store URI. Every
+# test here writes its own config.toml — the autouse `no_real_remote` fixture
+# points WITAN_CONFIG at a path that does not exist, and a later `setenv` wins.
+
+
+@pytest.fixture
+def targets_config(monkeypatch, tmp_path):
+    """Write a config.toml holding the given `[targets.*]` blocks, and select it."""
+
+    def _write(text):
+        path = tmp_path / "config.toml"
+        path.write_text(text)
+        monkeypatch.setenv("WITAN_CONFIG", str(path))
+        return path
+
+    return _write
+
+
+def test_merge_from_resolves_a_named_targets_server(targets_config, monkeypatch):
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('[targets.personal]\nserver = "~/stores/personal.omni"\n')
+    monkeypatch.setenv("HOME", "/home/someone")
+
+    assert (
+        cli_migrate._merge_source(None, "personal")
+        == "/home/someone/stores/personal.omni"
+    )
+
+
+def test_merge_from_a_remote_only_target_says_it_has_no_local_store(
+    targets_config, capsys
+):
+    """`--from production` cannot work — there is no remote-export tool — so
+    the only honest outcome is a loud failure rather than a silent no-op."""
+    from witan.cli import migrate as cli_migrate
+
+    targets_config(
+        "[targets.production]\n"
+        'remote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+    )
+
+    with pytest.raises(SystemExit):
+        cli_migrate._merge_source(None, "production")
+    assert "no local store" in capsys.readouterr().out.lower()
+
+
+def test_merge_from_an_undefined_target_lists_the_defined_ones(targets_config, capsys):
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('[targets.work]\nserver = "/tmp/work.omni"\n')
+
+    with pytest.raises(SystemExit):
+        cli_migrate._merge_source(None, "typo")
+    assert "work" in capsys.readouterr().out
+
+
+def test_merge_without_a_source_or_from_says_so(targets_config):
+    from witan.cli import migrate as cli_migrate
+
+    targets_config("")
+
+    with pytest.raises(SystemExit):
+        cli_migrate._merge_source(None, None)
+
+
+def test_merge_rejects_a_source_and_from_together(targets_config):
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('[targets.work]\nserver = "/tmp/work.omni"\n')
+
+    with pytest.raises(SystemExit):
+        cli_migrate._merge_source("/tmp/other.omni", "work")
+
+
+def test_merge_rejects_to_and_target_together(targets_config, capsys):
+    """Both name the destination. Picking one silently would make which store
+    gets written depend on a precedence rule nobody stated."""
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('[targets.work]\nserver = "/tmp/work.omni"\n')
+
+    with pytest.raises(SystemExit):
+        cli_migrate._merge_destination("work", "/tmp/elsewhere.omni")
+    assert "--target" in capsys.readouterr().out
+
+
+def test_merge_to_a_local_target_dispatches_in_process(targets_config, monkeypatch):
+    from witan import server as srv
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('[targets.work]\nserver = "~/stores/work.omni"\n')
+    monkeypatch.setenv("HOME", "/home/someone")
+
+    provider, target = cli_migrate._merge_destination("work", None)
+
+    assert provider is srv
+    assert target == "/home/someone/stores/work.omni"
+
+
+def test_merge_to_a_remote_target_builds_that_deployments_proxy(
+    targets_config, monkeypatch
+):
+    """`--to <name>` is the explicit spelling of `WITAN_TARGET=<name>`: it
+    builds the named deployment's proxy directly, so the destination does not
+    depend on what the environment happens to point at. The proxy refuses a
+    client-named `target`, so none is passed with it."""
+    from witan.cli import migrate as cli_migrate
+
+    targets_config(
+        "[targets.production]\n"
+        'remote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        "\n"
+        "[targets.other]\n"
+        'remote_url = "https://elsewhere.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+    )
+    monkeypatch.setenv("WITAN_TARGET", "other")
+    built = []
+    monkeypatch.setattr(
+        cli_migrate, "remote_proxy", lambda remote: built.append(remote) or "proxy"
+    )
+
+    provider, target = cli_migrate._merge_destination("production", None)
+
+    assert (provider, target) == ("proxy", None)
+    assert [r.url for r in built] == ["https://witan.example.org/mcp"]
+
+
+def test_merge_to_a_target_configuring_neither_end_is_refused(targets_config):
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('[targets.stub]\nmatch_orgs = ["mitodl"]\n')
+
+    with pytest.raises(SystemExit):
+        cli_migrate._merge_destination("stub", None)
+
+
+def test_merge_without_the_new_flags_is_unchanged(targets_config, monkeypatch):
+    """Neither flag given resolves exactly as before: the positional source and
+    the ambient `_srv()` destination."""
+    from witan.cli import migrate as cli_migrate
+
+    targets_config("")
+    sentinel = object()
+    monkeypatch.setattr(cli_migrate, "_srv", lambda: sentinel)
+
+    assert cli_migrate._merge_source("/tmp/a.omni", None) == "/tmp/a.omni"
+    assert cli_migrate._merge_destination(None, "/tmp/b.omni") == (
+        sentinel,
+        "/tmp/b.omni",
+    )
+
+
+@requires_omnigraph
+def test_merge_from_and_to_reconciles_two_named_local_stores(
+    server, tmp_path, targets_config, capsys
+):
+    """The reconciliation coverage above, driven entirely by target names —
+    neither end of the merge is a path anybody typed."""
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan.cli.migrate import merge
+
+    source_uri = _init_store(tmp_path / "personal.omni")
+    target_uri = _init_store(tmp_path / "work.omni")
+    queries = cfg_mod.load().queries_dir
+    source = graph_mod.OmnigraphClient(source_uri, queries)
+    target = graph_mod.OmnigraphClient(target_uri, queries)
+
+    _insert_memory(
+        source,
+        slug="mem-only-in-source-aaaaaa",
+        content="new",
+        updated_at="2026-06-01T00:00:00Z",
+    )
+    _insert_memory(
+        source,
+        slug="mem-collides-bbbbbb",
+        content="newer",
+        updated_at="2026-06-01T00:00:00Z",
+    )
+    _insert_memory(
+        target,
+        slug="mem-collides-bbbbbb",
+        content="older",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+
+    targets_config(
+        f'[targets.personal]\nserver = "{source_uri}"\n\n'
+        f'[targets.work]\nserver = "{target_uri}"\n'
+    )
+
+    merge(from_="personal", to="work")
+
+    out = capsys.readouterr().out
+    assert "1 added" in out and "1 updated" in out
+    rows = target.read("read.gq", "get_memory", {"slug": "mem-collides-bbbbbb"})
+    assert rows[0]["content"] == "newer"
+    assert target.read("read.gq", "get_memory", {"slug": "mem-only-in-source-aaaaaa"})
+
+    # Repeatable: a second run finds every row already applied.
+    merge(from_="personal", to="work")
+    assert "0 added" in capsys.readouterr().out

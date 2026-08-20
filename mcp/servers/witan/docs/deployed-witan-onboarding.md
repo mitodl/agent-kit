@@ -95,10 +95,11 @@ precedence order. To force a target regardless, `WITAN_TARGET=ol witan …`.
 
 Note the corollary: a target with **no** `match_*` selectors never selects
 itself, so it is only ever reached explicitly. **Export `WITAN_TARGET=ol` for
-that case** — `--target` is a flag on `login`/`logout`/`whoami` only, not on
-the read and write commands (`witan tasks`, `witan memory`, `witan migrate
-merge`, …), which resolve their target from the environment and the checkout.
-`WITAN_TARGET` covers every command; `--target` does not.
+that case** — the read and write commands (`witan tasks`, `witan memory`, …)
+resolve their target from the environment and the checkout, and take no
+by-name flag. `WITAN_TARGET` covers every command; the by-name flags cover
+`login`/`logout`/`whoami` (`--target <name>`) and `witan migrate merge`
+(`--from <name>`/`--to <name>`, which name the two ends of a merge).
 
 Selector precedence is by **specificity, not file order**: every target's
 `match_paths` is checked before any `match_repos`, then `match_hosts`, then
@@ -272,8 +273,9 @@ Reads are unaffected by all of this and stay fast under the same load.
   across. See the
   [migration runbook](migration-runbook.md#local--shared-the-cutover).
 - **`witan migrate merge --target …` is refused.** Against a deployment the
-  target is the deployment's own graph, resolved server-side. Unset
-  `remote_url` to merge between stores you address yourself.
+  target is the deployment's own graph, resolved server-side. Name the
+  deployment with `--to <name>` instead, or unset `remote_url` to merge
+  between stores you address yourself.
 - **witan-code went remote and you didn't want it to.** Expected — one endpoint
   serves both tool surfaces, so the four `remote_*`/`oidc_*` keys route both
   CLIs. Indexing stays local either way (it needs your checkout); only reads
