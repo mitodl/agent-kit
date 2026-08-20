@@ -23,7 +23,44 @@ witan target add ol --remote-url … --oidc-issuer …
 witan login --target ol
 ```
 
-**2. Preview the merge:**
+**2. Take stock of what is in the store.** The shared graph is org-wide, and a
+local store accumulates whatever you worked on — personal repos included. Merge
+is all-or-nothing, so decide what goes *before* the dry run:
+
+```bash
+omnigraph export --store ~/.local/share/witan/graph.omni > witan-export.jsonl
+jq -r 'select(.type) | .data.repo // (.data.repos // [] | join(", ")) // ""
+       | if . == "" then "(no repo)" else . end' witan-export.jsonl |
+  sort | uniq -c | sort -rn
+```
+
+That is every repo represented, by row count. `(no repo)` is mostly general
+engineering lessons that belong to no checkout — usually the ones most worth
+sharing, so don't drop them by reflex.
+
+If anything on that list should not go, merge a filtered export instead of the
+store. Both passes below are needed: `from`/`to` on an edge are slugs, so
+dropping a node without dropping its edges leaves the edges dangling.
+
+```bash
+# 1. the slugs to leave behind — adjust the predicate to your own list
+jq -r 'select(.type)
+       | select([.data.repo // empty, (.data.repos // [])[]]
+                | any(startswith("https://github.com/alice/")))
+       | .data.slug' witan-export.jsonl | sort -u > drop-slugs.txt
+
+# 2. drop those nodes and every edge that touches one
+jq -c --rawfile drop drop-slugs.txt '
+  ($drop | split("\n") | map(select(length > 0)) | INDEX(.)) as $d
+  | select(if .type then ($d[.data.slug] | not)
+           else ($d[.from] | not) and ($d[.to] | not) end)
+  ' witan-export.jsonl > witan-work-only.jsonl
+```
+
+Then use `witan-work-only.jsonl` as the source everywhere below, in place of
+the store path. Nothing is removed from your local store by any of this.
+
+**3. Preview the merge:**
 
 ```bash
 witan migrate merge ~/.local/share/witan/graph.omni --to ol --dry-run
@@ -34,7 +71,7 @@ rather than in your environment. Read the decisions: `added` should be roughly
 the row count of your store, and `updated` should be small. A large `updated`
 on a first migration means slugs are colliding that shouldn't — stop there.
 
-**3. Run it:**
+**4. Run it:**
 
 ```bash
 witan migrate merge ~/.local/share/witan/graph.omni --to ol
@@ -45,7 +82,7 @@ Your store is exported locally and the rows ship through the deployment's
 Batches commit independently, so a failure part-way leaves earlier batches
 applied — just re-run, the merge is idempotent.
 
-**4. Verify by slug, not by search:**
+**5. Verify by slug, not by search:**
 
 ```bash
 witan whoami
@@ -61,7 +98,7 @@ property of a small corpus, not a failed merge
 Listings and `witan task <slug>` read the graph directly and do not go through
 BM25, which is what makes them usable here.
 
-**5. Keep your local store until you have verified.** It is the backup.
+**6. Keep your local store until you have verified.** It is the backup.
 
 Once everyone has merged, an operator runs `witan migrate repo-keys` and
 `witan migrate topics` **once**, in-cluster (see the fallback below).
@@ -77,26 +114,40 @@ mcp/servers/witan/docs/migration-runbook.md's "Local → shared: the cutover".
 
 1. `witan whoami --target ol`. If it says I am not logged in, stop and tell me
    to run `witan login --target ol` — do not attempt the login yourself.
-2. `witan migrate merge ~/.local/share/witan/graph.omni --to ol --dry-run`.
-   Report the added/updated/kept counts. STOP AND ASK before going further if
-   `updated` is more than a handful — on a first migration that means slugs are
-   colliding that should not, and each one silently drops a record.
-3. Once I approve, run the same command without --dry-run.
-4. Verify with `witan memory --kind <kind> --all-repos` listings and
+2. Take stock before sending anything. The destination is an org-wide shared
+   graph and the merge is all-or-nothing, so inventory the local store first
+   with the export + `jq` repo-count command in step 2 of that section. Show me
+   the full list of repos and their row counts, and flag anything that looks
+   personal rather than work — a non-org repo, a side project, a personal
+   checkout path. Do NOT decide this yourself and do NOT assume `(no repo)`
+   rows are personal (they are mostly general engineering lessons). Ask me
+   which, if any, to leave behind.
+3. If I name anything to exclude, build the filtered export with the two-pass
+   `jq` recipe in that same step (nodes AND the edges touching them) and use
+   the filtered `.jsonl` as the source from here on. Tell me the before/after
+   row counts.
+4. `witan migrate merge <source> --to ol --dry-run`, where `<source>` is
+   `~/.local/share/witan/graph.omni` or the filtered export. Report the
+   added/updated/kept counts. STOP AND ASK before going further if `updated` is
+   more than a handful — on a first migration that means slugs are colliding
+   that should not, and each one silently drops a record.
+5. Once I approve, run the same command without --dry-run.
+6. Verify with `witan memory --kind <kind> --all-repos` listings and
    `witan task <slug>` on two or three slugs from the dry-run decision list.
    Do NOT verify with `witan memory "<words>"` — that is a BM25 search, and it
    returns nothing on a small corpus even when every row landed, so an empty
    result is not evidence of anything.
-5. Report what landed. Do not delete, move, or clean up my local store — it is
-   the backup until I say otherwise.
+7. Report what landed. Do not delete, move, or clean up my local store or any
+   export file — they are the backup until I say otherwise.
 
 If any step fails, stop and show me the error rather than retrying or working
 around it.
 ```
 
 The guardrails are the point: the merge is idempotent, so re-running is safe,
-but a large `updated` count and a "search finds nothing" reading are both
-things an agent will otherwise sail past.
+but what gets sent to a shared graph is not undoable by re-running, and a large
+`updated` count and a "search finds nothing" reading are both things an agent
+will otherwise sail past.
 
 ## Cross-machine merge and machine migration
 
