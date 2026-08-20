@@ -285,6 +285,137 @@ def test_writes_the_cli_dispatches_are_all_refused(
         "migrate_repo_keys",
     ]
 
+    writes += [f"client.{n}" for n in ("change", "change_many", "load")]
+
     for name in writes:
         with pytest.raises(SystemExit):
-            getattr(server, name)
+            obj = server
+            for part in name.split("."):
+                obj = getattr(obj, part)
+
+
+# ── the two defects Copilot found on #269 ────────────────────────────────────
+
+
+def test_read_commands_reaching_past_the_tool_surface_still_work(
+    config_file, unmatched_cwd, fresh_srv, monkeypatch, tmp_path
+):
+    """`session list`, `trace show` and `project show` call `s.client.read(...)`.
+
+    They go around the tool layer entirely, so an allowlist keyed on tool names
+    does not cover them. Refusing `client` wholesale broke three working read
+    commands with a message about writes.
+    """
+    from witan.cli._common import _srv
+
+    config_file.write_text(DEPLOYED.format(matched=tmp_path / "code"))
+    _stderr(monkeypatch)
+
+    server = _srv()
+
+    assert callable(server.client.read)
+    assert isinstance(server.client.graph_uri, str)
+
+
+def test_the_client_facade_does_not_hand_back_a_writable_client(
+    config_file, unmatched_cwd, fresh_srv, monkeypatch, tmp_path
+):
+    """The narrow surface is the point — a real client would side-step the guard.
+
+    `s.client` is the one path that already bypasses the tool layer, so handing
+    over the unrestricted object would make the refusal trivially avoidable by
+    exactly the code that needs it least.
+    """
+    from witan.cli._common import _srv
+
+    config_file.write_text(DEPLOYED.format(matched=tmp_path / "code"))
+    recorder = _stderr(monkeypatch)
+
+    with pytest.raises(SystemExit):
+        getattr(_srv().client, "change")  # noqa: B009
+
+    assert "client.change" in recorder.export_text()
+
+
+def test_a_refused_write_never_imports_the_server(config_file, unmatched_cwd, tmp_path):
+    """Importing `witan.server` IS a write: `_ensure_graph` runs at module scope.
+
+    It creates a missing local store and re-applies its schema, so a guard that
+    imported first and refused afterwards would have already done both to the
+    graph it is refusing to touch — and on a fresh machine could fail while
+    initialising a store the caller never wanted.
+    """
+    from witan import config as cfg
+    from witan.cli.local_dispatch import local_server
+
+    config_file.write_text(DEPLOYED.format(matched=tmp_path / "code"))
+
+    loads = []
+
+    def _loader():
+        loads.append(1)
+        raise AssertionError("the server module must not be imported here")
+
+    server = local_server(cfg.diagnose_local_dispatch(), load_inner=_loader)
+
+    with pytest.raises(SystemExit):
+        getattr(server, "task_close")  # noqa: B009
+
+    assert loads == []
+
+
+def test_srv_itself_does_not_import_the_server_for_a_refused_write(
+    config_file, unmatched_cwd, fresh_srv, monkeypatch, tmp_path
+):
+    """The guard's contract is worth nothing if `_srv` imports before handing over.
+
+    Written after the loader-injection test above passed against a deliberately
+    reintroduced `from .. import server as server_module` in `_srv` — it calls
+    `local_server` directly, so it checks the guard and not the wiring. This one
+    watches `sys.modules`, which is the actual observable.
+    """
+    import sys
+
+    import witan
+    from witan.cli._common import _srv
+
+    config_file.write_text(DEPLOYED.format(matched=tmp_path / "code"))
+    _stderr(monkeypatch)
+    # BOTH have to go, and finding that out is the reason this comment exists.
+    # Clearing only sys.modules leaves `witan.server` bound as an ATTRIBUTE of
+    # the already-imported parent package, and `from .. import server` is happy
+    # with the attribute — so the import never re-runs, sys.modules stays clean,
+    # and the test passes whenever some earlier test imported the server first.
+    # It caught the regression in isolation and missed it in the full file.
+    #
+    # delitem/delattr rather than `del`: monkeypatch restores the original
+    # module object on teardown without re-executing it, so this costs no
+    # second `_ensure_graph`.
+    monkeypatch.delitem(sys.modules, "witan.server", raising=False)
+    monkeypatch.delattr(witan, "server", raising=False)
+
+    with pytest.raises(SystemExit):
+        getattr(_srv(), "task_close")  # noqa: B009
+
+    assert "witan.server" not in sys.modules
+
+
+def test_an_allowed_read_does_import_the_server(config_file, unmatched_cwd, tmp_path):
+    """The deferral must not turn into never loading it at all."""
+    from witan import config as cfg
+    from witan.cli.local_dispatch import local_server
+
+    config_file.write_text(DEPLOYED.format(matched=tmp_path / "code"))
+
+    loads = []
+    sentinel = object()
+
+    def _loader():
+        loads.append(1)
+        return type("_S", (), {"task_get": sentinel, "task_list": sentinel})
+
+    server = local_server(cfg.diagnose_local_dispatch(), load_inner=_loader)
+
+    assert server.task_get is sentinel
+    assert server.task_list is sentinel
+    assert loads == [1], "the import should happen once, on first allowed use"

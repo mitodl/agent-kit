@@ -48,10 +48,17 @@ def _srv():
     proxy mirrors the server module's tool surface, so every call site is
     identical either way.
 
-    The in-process branch is wrapped by ``guard_local_store`` when a deployment
-    is configured but nothing routed this invocation to it — see
+    The in-process branch goes through ``local_server``, which guards it when a
+    deployment is configured but nothing routed this invocation to it — see
     ``witan.cli.local_dispatch``. Falling through to the local store there is
     how a task close reported success against a graph nobody was reading.
+
+    ★ THE DIAGNOSIS RUNS BEFORE ``witan.server`` IS IMPORTED, and the order is
+    load-bearing rather than tidy. That import calls ``_ensure_graph`` at module
+    scope, which creates a missing local store and re-applies its schema — so
+    importing first and refusing afterwards would have already written to the
+    graph the refusal exists to protect. ``local_server`` receives the import as
+    a callable and only runs it if a read is actually allowed.
     """
     global _server
     if _server is None:
@@ -68,12 +75,9 @@ def _srv():
         if remote is not None:
             _server = remote_proxy(remote)
         else:
-            from .. import server as server_module
-            from .local_dispatch import guard_local_store
+            from .local_dispatch import local_server
 
-            _server = guard_local_store(
-                server_module, cfg_module.diagnose_local_dispatch()
-            )
+            _server = local_server(cfg_module.diagnose_local_dispatch())
     return _server
 
 
