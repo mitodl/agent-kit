@@ -49,7 +49,8 @@ applied — just re-run, the merge is idempotent.
 
 ```bash
 witan whoami
-witan memory show <a-slug-you-recognise>
+witan memory --kind lesson --all-repos | head    # a listing, not a search
+witan task <a-task-slug-you-recognise>
 witan tasks --all-repos | head
 ```
 
@@ -57,11 +58,45 @@ witan tasks --all-repos | head
 freshly-populated graph even when every row is present — that is a BM25
 property of a small corpus, not a failed merge
 ([why](store-merge-findings.md#search-looks-broken-on-a-near-empty-graph--verify-by-slug)).
+Listings and `witan task <slug>` read the graph directly and do not go through
+BM25, which is what makes them usable here.
 
 **5. Keep your local store until you have verified.** It is the backup.
 
 Once everyone has merged, an operator runs `witan migrate repo-keys` and
 `witan migrate topics` **once**, in-cluster (see the fallback below).
+
+### Or hand the cutover to an agent
+
+Same steps, run by Claude/pi instead of by you. Paste this, replacing `ol`
+with your target name if it differs:
+
+```text
+Run my witan local-to-shared cutover, following
+mcp/servers/witan/docs/migration-runbook.md's "Local → shared: the cutover".
+
+1. `witan whoami --target ol`. If it says I am not logged in, stop and tell me
+   to run `witan login --target ol` — do not attempt the login yourself.
+2. `witan migrate merge ~/.local/share/witan/graph.omni --to ol --dry-run`.
+   Report the added/updated/kept counts. STOP AND ASK before going further if
+   `updated` is more than a handful — on a first migration that means slugs are
+   colliding that should not, and each one silently drops a record.
+3. Once I approve, run the same command without --dry-run.
+4. Verify with `witan memory --kind <kind> --all-repos` listings and
+   `witan task <slug>` on two or three slugs from the dry-run decision list.
+   Do NOT verify with `witan memory "<words>"` — that is a BM25 search, and it
+   returns nothing on a small corpus even when every row landed, so an empty
+   result is not evidence of anything.
+5. Report what landed. Do not delete, move, or clean up my local store — it is
+   the backup until I say otherwise.
+
+If any step fails, stop and show me the error rather than retrying or working
+around it.
+```
+
+The guardrails are the point: the merge is idempotent, so re-running is safe,
+but a large `updated` count and a "search finds nothing" reading are both
+things an agent will otherwise sail past.
 
 ## Cross-machine merge and machine migration
 

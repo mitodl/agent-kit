@@ -84,8 +84,9 @@ Two consequences:
 - **Merge everyone in one sitting.** A graph that reaches a few hundred rows
   immediately never spends time in the degenerate regime; staggered cutovers
   leave every early adopter with a search that appears dead.
-- **Confirm a merge with `witan memory show <slug>` or a `--kind` listing**,
-  never with a search. See `tests/test_migrate.py`,
+- **Confirm a merge with a `witan memory --kind <kind>` listing or
+  `witan task <slug>`**, never with a search — those read the graph directly,
+  where `witan memory "<words>"` goes through BM25. See `tests/test_migrate.py`,
   `test_store_merge_rows_are_findable_by_search_not_just_readable`.
 
 ## References

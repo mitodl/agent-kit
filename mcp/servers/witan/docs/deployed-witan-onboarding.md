@@ -151,7 +151,7 @@ ADR-0004 chain (JWT → actor → that actor's own omnigraph bearer token → Ce
 memory_store(kind="lesson", title="onboarding probe", content="delete me")
 ```
 
-…from an agent session, then `witan memory show <slug>` to confirm, and
+…from an agent session, then `witan memory --kind <kind>` to confirm, and
 `memory_delete` to clean up. A write that returns a Cedar denial rather than a
 slug means your actor has a token but no policy grant — quote the `act-…` from
 `witan whoami` when reporting it.
