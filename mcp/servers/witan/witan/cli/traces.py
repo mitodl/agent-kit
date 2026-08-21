@@ -76,11 +76,10 @@ def traces(
 def _trace_show(slug: str) -> None:
     """Show a trace's outcome, sessions, and mined lessons/patterns."""
     s = _srv()
-    rows = s.client.read("read.gq", "get_trace", {"slug": slug})
-    if not rows:
+    tr = _fn(s.workflow_trace_get)(slug=slug)
+    if not tr:
         console.print(f"[red]No trace {slug!r}.[/red]")
         return
-    tr = rows[0]
 
     console.print(f"[bold]{tr['slug']}[/bold]  {tr.get('title', '')}")
     console.print(
@@ -91,15 +90,7 @@ def _trace_show(slug: str) -> None:
     console.print(f"\n{tr.get('description') or '(no description)'}\n")
     console.print(f"[bold]Outcome[/bold]\n{tr.get('outcome') or '(none recorded)'}\n")
 
-    sessions = [
-        sess
-        for sess in s.client.read(
-            "read.gq",
-            "list_sessions_by_project",
-            {"project_slug": tr.get("project_slug")},
-        )
-        if not sess.get("superseded_by")
-    ]
+    sessions = _fn(s.workflow_session_list)(project_slug=tr.get("project_slug"))
     if sessions:
         console.print("[bold]Sessions[/bold]")
         for sess in sessions:

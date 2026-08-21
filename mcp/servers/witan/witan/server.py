@@ -4590,6 +4590,7 @@ def workflow_session_end(
 def workflow_session_list(
     project_slug: str | None = None,
     open_only: bool = False,
+    include_superseded: bool = False,
 ) -> list[dict]:
     """
     List workflow sessions, newest last.
@@ -4612,6 +4613,10 @@ def workflow_session_list(
         Only sessions with no ``ended_at``. Superseded sessions (deduped by
         ``witan migrate dedupe-sessions``) are always excluded — they are
         already skipped by every aggregate read and are not leaks.
+    include_superseded:
+        Keep superseded rows instead of dropping them. For ``witan session
+        list``, the one caller that wants to see what
+        ``migrate dedupe-sessions`` did rather than the leaked-session view.
     """
     if project_slug:
         rows = client.read(
@@ -4622,7 +4627,8 @@ def workflow_session_list(
         rows = [{**r, "project_slug": project_slug} for r in rows]
     else:
         rows = client.read("read.gq", "list_all_sessions", {})
-    rows = [r for r in rows if not r.get("superseded_by")]
+    if not include_superseded:
+        rows = [r for r in rows if not r.get("superseded_by")]
     if open_only:
         rows = [r for r in rows if not r.get("ended_at")]
     return rows
