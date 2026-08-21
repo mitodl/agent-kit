@@ -1422,7 +1422,9 @@ class OmnigraphClient:
         an unbounded number of steps (a repo reindex, a store-wide backfill)
         must cap it or eventually exceed ARG_MAX / a server payload limit. It is
         opt-in because it TRADES AWAY ATOMICITY: chunks commit independently and
-        a failure part-way leaves the earlier ones applied.
+        a failure part-way leaves the earlier ones applied. A chunk failure is
+        re-raised naming its position, the batch size and the elapsed time, so
+        the caller can tell how much landed without re-deriving it.
 
         A single step is passed straight through to ``change`` rather than
         wrapped: the composed form would be equivalent, but the direct path
@@ -1437,11 +1439,26 @@ class OmnigraphClient:
             # must not be zero" far from the caller that chose the value.
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
         if chunk_size is not None and len(steps) > chunk_size:
-            for start in range(0, len(steps), chunk_size):
-                self.change_many(
-                    steps[start : start + chunk_size],
-                    surface_conflict=surface_conflict,
-                )
+            chunks = math.ceil(len(steps) / chunk_size)
+            for index, start in enumerate(range(0, len(steps), chunk_size), start=1):
+                batch = steps[start : start + chunk_size]
+                started = time.monotonic()
+                try:
+                    self.change_many(batch, surface_conflict=surface_conflict)
+                except Exception as exc:
+                    # Chunks commit independently, so WHICH chunk failed is the
+                    # difference between "the write is slow" and "the write is
+                    # broken": everything before this one has landed and
+                    # everything after has not. The bare error names neither the
+                    # position nor the batch size that produced it, which is
+                    # exactly what a timeout needs you to know.
+                    elapsed = time.monotonic() - started
+                    raise RuntimeError(
+                        f"chunk {index}/{chunks} of a {len(steps)}-statement "
+                        f"batch failed after {elapsed:.1f}s "
+                        f"({len(batch)} statements, chunk_size={chunk_size}; "
+                        f"chunks 1-{index - 1} already committed): {exc}"
+                    ) from exc
             return
         if len(steps) == 1:
             query_file, name, params = steps[0]
