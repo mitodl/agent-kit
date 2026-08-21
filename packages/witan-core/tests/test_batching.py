@@ -320,3 +320,90 @@ def test_change_many_composes_against_the_real_witan_mutations():
     assert set(og._PARAM_REF_RE.findall(body)) <= set(og._PARAM_REF_RE.findall(decls))
     assert set(og._PARAM_REF_RE.findall(decls)) == set(params)
     assert source.count("insert ") == 3
+
+
+# ── a failed chunk says WHICH chunk ────────────────────────────────
+#
+# Chunks commit independently, so the position is the whole story: everything
+# before it landed, everything after did not. The bare error from the transport
+# names neither the position nor the batch size that produced it, which is
+# precisely what a timeout needs you to know.
+
+
+def _failing_at(monkeypatch, calls, fail_on_call):
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == fail_on_call:
+            raise RuntimeError("mutate failed: timed out after 181.0s")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
+def test_a_failed_chunk_names_its_position_size_and_elapsed(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    _failing_at(monkeypatch, calls, fail_on_call=2)
+    steps = [("m.gq", "link_to", {"from": str(i), "to": str(i)}) for i in range(10)]
+
+    with pytest.raises(RuntimeError) as raised:
+        client.change_many(steps, chunk_size=4)
+
+    message = str(raised.value)
+    assert "chunk 2/3" in message
+    assert "10-statement batch" in message
+    assert "4 statements, chunk_size=4" in message
+    assert "chunks 1-1 committed before it" in message
+    # The failing chunk's own fate is NOT claimed: a mid-flight timeout can
+    # land after the server committed, so a caller told only "1-1 committed"
+    # would resume at chunk 2 and silently re-apply it.
+    assert "this chunk may or may not have" in message
+    # the underlying failure is not replaced by the context, only prefixed
+    assert "timed out after 181.0s" in message
+
+
+def test_the_original_failure_stays_on_the_cause(monkeypatch, tmp_path):
+    """The wrapper adds position; it must not cost anyone the real exception."""
+    client = _client(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    _failing_at(monkeypatch, calls, fail_on_call=1)
+    steps = [("m.gq", "link_to", {"from": str(i), "to": str(i)}) for i in range(4)]
+
+    with pytest.raises(RuntimeError) as raised:
+        client.change_many(steps, chunk_size=2)
+
+    assert "chunk 1/2" in str(raised.value)
+    assert str(raised.value.__cause__) == "mutate failed: timed out after 181.0s"
+
+
+def test_a_first_chunk_failure_does_not_report_an_empty_range(monkeypatch, tmp_path):
+    """`chunks 1-0 committed` is not a sentence. Nothing landed, so say that."""
+    client = _client(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    _failing_at(monkeypatch, calls, fail_on_call=1)
+    steps = [("m.gq", "link_to", {"from": str(i), "to": str(i)}) for i in range(6)]
+
+    with pytest.raises(RuntimeError) as raised:
+        client.change_many(steps, chunk_size=2)
+
+    message = str(raised.value)
+    assert "chunk 1/3" in message
+    assert "no chunk committed before it" in message
+    assert "1-0" not in message
+
+
+def test_an_unchunked_batch_is_not_wrapped(monkeypatch, tmp_path):
+    """No chunking, no position to report — wrapping would only bury the error.
+
+    This is the single-call path every non-indexer caller takes, and it keeps
+    the named query in the message, which is the thing `change` was kept for.
+    """
+    client = _client(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    _failing_at(monkeypatch, calls, fail_on_call=1)
+    steps = [("m.gq", "link_to", {"from": str(i), "to": str(i)}) for i in range(3)]
+
+    with pytest.raises(RuntimeError) as raised:
+        client.change_many(steps, chunk_size=10)
+
+    assert "chunk" not in str(raised.value)

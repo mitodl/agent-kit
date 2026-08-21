@@ -15,6 +15,7 @@ unconditionally.
 
 import asyncio
 import inspect
+import sys
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -138,15 +139,30 @@ def _render_table(
 @app.command
 def index(path: Path = Path(".")) -> None:
     """Incrementally index PATH (file or directory). Unchanged files are skipped."""
-    stats = indexer.index_path(path, force=False)
-    _print_summary("index", path, stats)
+    _print_summary("index", path, _index(path, force=False))
 
 
 @app.command
 def reindex(path: Path = Path(".")) -> None:
     """Force re-index PATH, ignoring content hashes."""
-    stats = indexer.index_path(path, force=True)
-    _print_summary("reindex", path, stats)
+    _print_summary("reindex", path, _index(path, force=True))
+
+
+def _index(path: Path, *, force: bool) -> indexer.IndexStats:
+    """``index_path``, but a failure still prints what the run got through.
+
+    The parse phase's counts are the same numbers a success prints, and they are
+    what says whether a write failure is a big-repo problem or not — so losing
+    them to the traceback is losing the diagnosis. Printed here rather than
+    swallowed: the exception still propagates, so the exit code and the
+    traceback are unchanged.
+    """
+    try:
+        return indexer.index_path(path, force=force)
+    except indexer.IndexFailed as exc:
+        _print_summary("partial", path, exc.stats)
+        print(f"failed in {exc.phase}: {exc}", file=sys.stderr)
+        raise
 
 
 @app.command

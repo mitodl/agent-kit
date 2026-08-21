@@ -110,6 +110,13 @@ copy the matching snippet from `config/` into your agent's config — see
    errors=…`). Re-running `index` is incremental — unchanged files are
    skipped by content hash; use `reindex` to force a full rebuild.
 
+   A run that fails while writing prints the same counts under `partial …`,
+   followed by the phase that failed, how long it ran, and the batch sizes it
+   was working with. Those numbers are the diagnosis: they say whether the
+   write was large, how far it got, and which of the deletes or the two loads
+   died. The exit status is unchanged, so a sweep still counts the repo as
+   failed.
+
 3. **Ask "where is this defined"** — via the CLI or, more commonly, through
    an agent calling the MCP tool directly:
 

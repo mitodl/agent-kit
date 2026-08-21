@@ -1422,7 +1422,11 @@ class OmnigraphClient:
         an unbounded number of steps (a repo reindex, a store-wide backfill)
         must cap it or eventually exceed ARG_MAX / a server payload limit. It is
         opt-in because it TRADES AWAY ATOMICITY: chunks commit independently and
-        a failure part-way leaves the earlier ones applied.
+        a failure part-way leaves the earlier ones applied. A chunk failure is
+        re-raised naming its position, the batch size and the elapsed time, so
+        the caller can tell how much landed without re-deriving it — bounded by
+        the caveat that the FAILING chunk's own fate is unknown when the failure
+        is mid-flight, so the count is a lower bound and not a resume point.
 
         A single step is passed straight through to ``change`` rather than
         wrapped: the composed form would be equivalent, but the direct path
@@ -1437,11 +1441,40 @@ class OmnigraphClient:
             # must not be zero" far from the caller that chose the value.
             raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
         if chunk_size is not None and len(steps) > chunk_size:
-            for start in range(0, len(steps), chunk_size):
-                self.change_many(
-                    steps[start : start + chunk_size],
-                    surface_conflict=surface_conflict,
-                )
+            chunks = math.ceil(len(steps) / chunk_size)
+            for index, start in enumerate(range(0, len(steps), chunk_size), start=1):
+                batch = steps[start : start + chunk_size]
+                started = time.monotonic()
+                try:
+                    self.change_many(batch, surface_conflict=surface_conflict)
+                except Exception as exc:
+                    # Chunks commit independently, so WHICH chunk failed is the
+                    # difference between "the write is slow" and "the write is
+                    # broken". The bare error names neither the position nor the
+                    # batch size that produced it, which is exactly what a
+                    # timeout needs you to know.
+                    #
+                    # ★ THE PRIOR CHUNKS ARE A LOWER BOUND, NOT THE STATE. This
+                    # chunk's own fate is genuinely unknown when the failure is
+                    # a mid-flight timeout: `omnigraph_http._send` classifies
+                    # exactly that case as possibly-committed, which is why it
+                    # refuses to retry a non-idempotent write there. Reporting
+                    # "chunks 1-N committed" as if it were the resulting state
+                    # would invite a caller to resume at N+1 and silently
+                    # re-apply this one.
+                    elapsed = time.monotonic() - started
+                    landed = (
+                        f"chunks 1-{index - 1} committed"
+                        if index > 1
+                        else "no chunk committed"
+                    )
+                    raise RuntimeError(
+                        f"chunk {index}/{chunks} of a {len(steps)}-statement "
+                        f"batch failed after {elapsed:.1f}s "
+                        f"({len(batch)} statements, chunk_size={chunk_size}; "
+                        f"{landed} before it, and this chunk may or may not "
+                        f"have): {exc}"
+                    ) from exc
             return
         if len(steps) == 1:
             query_file, name, params = steps[0]

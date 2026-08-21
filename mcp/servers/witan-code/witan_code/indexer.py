@@ -9,11 +9,13 @@ then imported modules, then any repo-wide match. It is intentionally syntactic
 and will miss dynamic dispatch and produce occasional false links.
 """
 
+import contextlib
 import functools
 import hashlib
 import importlib
 import os
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -295,6 +297,62 @@ class IndexStats:
     rather than silent."""
 
 
+class IndexFailed(RuntimeError):
+    """A write phase of :func:`index_path` failed, carrying what it knows.
+
+    ★ THE FAILING RUN IS THE ONE THAT REPORTED LEAST. A successful index prints
+    ``scanned=… indexed=… skipped=… symbols=…``; a failing one printed only the
+    exception, because the exception replaced the summary — so the run you most
+    need data from was the only one that gave you none. That is why the CI
+    indexer's ``ol-infrastructure`` timeout sat unexplained for five days
+    (tk-the-ci-indexer-s-failure-says-only-timed-out-no--50f61c): attributing it
+    needed a traceback line number, a source read to find the constant, row
+    counts from three graphs and a live timing experiment, almost all of which
+    the numbers below would have answered directly.
+
+    ``stats`` is the partial :class:`IndexStats` as of the failure, ``phase``
+    names the write that failed, and ``detail`` carries the sizes that phase was
+    working with. ``elapsed`` is the seconds that phase ran before dying, which
+    is what says whether a timeout was hit or something failed early.
+    """
+
+    def __init__(
+        self,
+        phase: str,
+        cause: BaseException,
+        *,
+        stats: IndexStats,
+        elapsed: float,
+        detail: dict[str, object],
+    ) -> None:
+        self.phase = phase
+        self.stats = stats
+        self.elapsed = elapsed
+        self.detail = detail
+        described = " ".join(f"{k}={v}" for k, v in detail.items())
+        super().__init__(
+            f"{phase} failed after {elapsed:.1f}s"
+            + (f" ({described})" if described else "")
+            + f": {cause}"
+        )
+
+
+@contextlib.contextmanager
+def _write_phase(phase: str, stats: IndexStats, **detail: object) -> Iterator[None]:
+    """Re-raise anything from a write as :class:`IndexFailed` with its sizes."""
+    started = time.monotonic()
+    try:
+        yield
+    except Exception as exc:
+        raise IndexFailed(
+            phase,
+            exc,
+            stats=stats,
+            elapsed=time.monotonic() - started,
+            detail=detail,
+        ) from exc
+
+
 # ── Public entry points ───────────────────────────────────────────
 
 
@@ -432,14 +490,24 @@ def index_path(
                 delete_steps += _delete_file_steps(file_id)
                 stats.purged += 1
 
-    client.change_many(delete_steps, chunk_size=_DELETE_BATCH_SIZE)
+    with _write_phase(
+        "delete of stale rows",
+        stats,
+        statements=len(delete_steps),
+        chunk_size=_DELETE_BATCH_SIZE,
+        reindexed_files=len(reindexed_file_ids),
+        purged_files=stats.purged,
+    ):
+        client.change_many(delete_steps, chunk_size=_DELETE_BATCH_SIZE)
     # Two loads, not one: the second commits the content hashes the first held
     # back, so a load that dies part-way is re-done rather than skipped forever.
     # See `_defer_content_hashes`.
     deduped = _dedupe(records)
     real_hash_rows = _defer_content_hashes(deduped)
-    client.load(deduped, mode="merge")
-    client.load(real_hash_rows, mode="merge")
+    with _write_phase("load of nodes and edges", stats, records=len(deduped)):
+        client.load(deduped, mode="merge")
+    with _write_phase("load of content hashes", stats, records=len(real_hash_rows)):
+        client.load(real_hash_rows, mode="merge")
 
     # Cross-repo bridge — a SEPARATE phase after the per-repo store write, so the
     # two stores' write locks never nest. A full-repo index (target is the repo

@@ -141,6 +141,13 @@ fi
 
 indexed=0
 failed=0
+# The names, not just the count. `indexed 13, failed 1` is the LAST line of the
+# job log and the first thing an operator reads, and it does not say which of
+# fourteen repos is a run staler than it should be — so answering that meant
+# scrolling back through fourteen repos' output to find the one `index failed
+# for` line. Cheap to carry, and it is the difference between a summary that
+# ends the investigation and one that starts it.
+failed_repos=""
 
 for repo in ${WITAN_CODE_CI_REPOS}; do
     # One checkout at a time, reusing the same path: holding every repo at once
@@ -159,6 +166,7 @@ for repo in ${WITAN_CODE_CI_REPOS}; do
         if ! WITAN_CODE_GH_TOKEN="$(python -m witan_code.github_app)"; then
             echo "witan-ci-index: could not mint a token for ${repo}" >&2
             failed=$((failed + 1))
+            failed_repos="${failed_repos} ${repo}"
             continue
         fi
         export WITAN_CODE_GH_TOKEN
@@ -168,6 +176,7 @@ for repo in ${WITAN_CODE_CI_REPOS}; do
     if ! git clone --quiet --depth 1 --no-tags "${repo}" "${checkout}"; then
         echo "witan-ci-index: clone failed for ${repo}" >&2
         failed=$((failed + 1))
+        failed_repos="${failed_repos} ${repo}"
         continue
     fi
 
@@ -190,13 +199,21 @@ for repo in ${WITAN_CODE_CI_REPOS}; do
     else
         echo "witan-ci-index: index failed for ${repo}" >&2
         failed=$((failed + 1))
+        failed_repos="${failed_repos} ${repo}"
     fi
 done
 
 rm -rf "${workdir}"
 
-echo "witan-ci-index: indexed ${indexed}, failed ${failed}"
+echo "witan-ci-index: indexed ${indexed}, failed ${failed}${failed_repos:+ —${failed_repos}}"
 # A repo that did not index has a shared view one run staler, which is a real
 # failure — but it is not a reason to skip the rest of the fleet, so the exit
 # status is decided after the sweep rather than inside it.
+#
+# ★ AND IT STAYS NON-ZERO for a partial sweep. A Job that reports Complete when
+# one repo is stale is a Job nothing can alert on, and there is no other signal:
+# the three consecutive silent failures from 2026-08-07 went unnoticed for two
+# days precisely because a stale index has no symptom a reader would notice.
+# The cost is that a 13-of-14 run looks as broken as a 0-of-14 one, which is
+# what the repo names above are for.
 [ "${failed}" -eq 0 ]

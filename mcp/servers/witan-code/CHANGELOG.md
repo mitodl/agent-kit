@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.14.0] - 2026-08-21
+
+### Fixed
+
+- **A failed index now reports at least as much as a successful one.** On
+  success `witan code index` prints `scanned=… indexed=… skipped=… symbols=…`;
+  on failure the exception replaced that line entirely, so the run you most
+  need numbers from was the only one that produced none. Attributing the CI
+  indexer's `ol-infrastructure` timeout (0.13.3) therefore took five days and
+  needed a traceback line number, a source read to find the batch constant, row
+  counts from three graphs, an ECR check, and a live timing experiment —
+  nearly all of it answerable from numbers the process already had.
+
+  `index_path` now raises `IndexFailed`, carrying the partial `IndexStats`, the
+  write phase that died (the stale-row delete, or either of the two loads), how
+  long it ran, and the sizes it was working with — statements composed, chunk
+  size in use, records loaded. The CLI prints those stats under `partial …` and
+  re-raises, so the exit code and traceback are unchanged. The session hooks
+  and the store-missing fallbacks already catch broadly and are unaffected;
+  `code_reindex` still propagates, and its caller now gets a message carrying
+  the phase and the sizes rather than a bare transport error.
+
+  Requires `witan-core>=0.31` for the transport and batching halves of the same
+  change: a timeout that names its budget, and a chunk failure that names its
+  position. (0.31, not 0.30 — agent-kit#280 took 0.30.0 for unrelated work while
+  this was open, so the release carrying those halves is 0.31.0.)
+
+### Changed
+
+- **The CI sweep's last line names the failed repos, not just the count.**
+  `indexed 13, failed 1` is the first thing an operator reads and did not say
+  which of fourteen repos was a run staler than it should be, so answering that
+  meant scrolling back through fourteen repos' output.
+
+  The exit status stays non-zero for a partial sweep, and the reasoning is now
+  recorded next to it: a Job that reports Complete with one repo stale is a Job
+  nothing can alert on, and a stale index has no other symptom — which is why
+  three consecutive failures from 2026-08-07 went unnoticed for two days.
+
 ## [0.13.5] - 2026-08-21
 
 ### Changed

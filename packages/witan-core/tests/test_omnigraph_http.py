@@ -1235,3 +1235,96 @@ def test_live_server_answers_the_pooled_transport(monkeypatch):
         "A 404 here means the query endpoint moved and the transport is "
         "addressing a path the server no longer serves."
     )
+
+
+# ── A timeout has to name its own budget ──────────────────────────
+#
+# `socket.timeout` stringifies to bare "timed out". That was the ENTIRE
+# operator-facing text of the CI indexer's failure, and the reason attributing
+# it took five days: "timed out" is equally consistent with a TCP connect, a
+# server-side deadline and this client's own budget.
+
+
+def test_a_midflight_timeout_names_the_budget_it_exceeded(_fake_http, monkeypatch):
+    clock = {"t": 100.0}
+    monkeypatch.setattr(ogh.time, "monotonic", lambda: clock["t"])
+
+    def slow_request(self, method, path, body=None, headers=None):
+        clock["t"] += 121.4
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(FakeConnection, "request", slow_request)
+    transport = ogh.PooledTransport("http://host:8080")
+
+    error = transport.mutate("council", "q", {}, None).error
+
+    assert "timed out after 121.4s" in error
+    assert "client timeout budget 120s" in error
+    assert "DEFAULT_TIMEOUT_SECONDS" in error
+
+
+def test_a_connect_timeout_names_the_budget_too(_fake_http, monkeypatch):
+    """Same message from the other side of `connect()`.
+
+    The two failures classify differently (pre-send is retryable, mid-flight on
+    a write is not) but read identically to an operator, so neither may be the
+    one that stays bare.
+    """
+    clock = {"t": 0.0}
+    monkeypatch.setattr(ogh.time, "monotonic", lambda: clock["t"])
+
+    def slow_connect(self):
+        clock["t"] += 120.0
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(FakeConnection, "connect", slow_connect)
+
+    error = ogh.PooledTransport("http://host:8080").query("g", "q", {}, None).error
+
+    assert "timed out after 120.0s" in error
+    assert "client timeout budget 120s" in error
+
+
+def test_a_non_timeout_failure_still_reports_how_long_it_ran(_fake_http, monkeypatch):
+    """Elapsed separates "died immediately" from "ran to a deadline someone else
+    owns" — a server-side cutoff arrives as a reset, not as a timeout, and only
+    the elapsed time tells them apart."""
+    clock = {"t": 5.0}
+    monkeypatch.setattr(ogh.time, "monotonic", lambda: clock["t"])
+
+    def failing_request(self, method, path, body=None, headers=None):
+        clock["t"] += 30.0
+        raise ConnectionResetError("reset")
+
+    monkeypatch.setattr(FakeConnection, "request", failing_request)
+
+    error = ogh.PooledTransport("http://host:8080").mutate("g", "q", {}, None).error
+
+    assert "reset (after 30.0s)" in error
+
+
+def test_the_budget_reported_is_the_transports_own_not_the_default(
+    _fake_http, monkeypatch
+):
+    """A transport constructed with a narrower budget must say so.
+
+    Reporting the module default would be worse than saying nothing: it would
+    send the reader to a constant that is not the one that fired.
+    """
+
+    def timing_out(self, method, path, body=None, headers=None):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(FakeConnection, "request", timing_out)
+
+    error = (
+        ogh.PooledTransport("http://host:8080", timeout=7.5)
+        .query("g", "q", {}, None)
+        .error
+    )
+
+    assert "client timeout budget 7.5s" in error
+    # ...and does NOT name the module default, which is 120 and had nothing to
+    # do with this failure. Citing it alongside 7.5s would send the reader to
+    # the wrong setting — the same defect this message exists to fix.
+    assert "DEFAULT_TIMEOUT_SECONDS" not in error

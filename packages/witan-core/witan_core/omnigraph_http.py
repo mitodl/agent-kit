@@ -354,6 +354,37 @@ class PooledTransport:
                 pass
         self._local.conn = None
 
+    def _describe(self, exc: BaseException, started: float) -> str:
+        """``str(exc)``, plus the timeout budget when that is what expired.
+
+        A socket timeout stringifies to bare ``"timed out"`` — no budget, no
+        elapsed, no indication of which of the several deadlines in the stack
+        fired. That is the entire operator-facing text of a failed CI index,
+        and it is why one took five days to attribute: "timed out" is equally
+        consistent with a TCP connect, a server-side deadline, and this
+        client's own budget, and only the last one is true here.
+        """
+        elapsed = time.monotonic() - started
+        # `socket.timeout` has been an alias of `TimeoutError` since 3.10, so
+        # the builtin covers both spellings.
+        if isinstance(exc, TimeoutError):
+            # Name the constant ONLY when it is the one that supplied the
+            # budget. A transport built with an explicit timeout gets the bare
+            # number: pointing a reader at DEFAULT_TIMEOUT_SECONDS when that is
+            # 120 and the budget that fired was 7.5 sends them to the wrong
+            # setting, which is the same failure this whole message exists to
+            # fix, one level up.
+            source = (
+                " — witan_core.omnigraph_http.DEFAULT_TIMEOUT_SECONDS"
+                if self._timeout == DEFAULT_TIMEOUT_SECONDS
+                else ""
+            )
+            return (
+                f"timed out after {elapsed:.1f}s "
+                f"(client timeout budget {self._timeout:g}s{source})"
+            )
+        return f"{exc} (after {elapsed:.1f}s)"
+
     # ── the call ──────────────────────────────────────────────────
 
     def post(
@@ -426,6 +457,7 @@ class PooledTransport:
 
         for attempt in range(2):
             conn, reused = self._checkout()
+            started = time.monotonic()
             try:
                 if not reused:
                     # Connect explicitly so an unreachable server fails HERE,
@@ -438,7 +470,10 @@ class PooledTransport:
                 self._discard()
                 return Outcome(
                     kind=UNAVAILABLE,
-                    error=f"could not connect to {self.server_url}: {exc}",
+                    error=(
+                        f"could not connect to {self.server_url}: "
+                        f"{self._describe(exc, started)}"
+                    ),
                 )
 
             try:
@@ -467,7 +502,10 @@ class PooledTransport:
                 # to prevent, one layer lower where no caller can opt out.
                 return Outcome(
                     kind=UNAVAILABLE if idempotent else FATAL,
-                    error=f"request to {self.server_url}{path} failed: {exc}",
+                    error=(
+                        f"request to {self.server_url}{path} failed: "
+                        f"{self._describe(exc, started)}"
+                    ),
                 )
 
             self._local.last_used = time.monotonic()
