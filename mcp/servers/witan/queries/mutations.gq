@@ -583,3 +583,45 @@ query link_works_on($from: String, $to: String) {
 query link_for_project($from: String, $to: String) {
     insert ForProject { from: $from, to: $to }
 }
+
+// ── Authorship repair (`witan migrate claim-authorship`) ──────────────────
+// Set `author` alone, per node type. Deliberately NOT folded into
+// `update_memory` / `update_task`: those back the `memory_update` /
+// `task_update` tools, and adding `author` there would make attribution
+// editable through the ordinary repair surface — where nothing constrains who
+// you may claim a row for. These are reached only by the migration command,
+// which stamps the calling actor and no one else.
+
+query set_memory_author($slug: String, $author: String, $updated_at: DateTime) {
+    update Memory
+        set { author: $author, updated_at: $updated_at }
+        where slug = $slug
+}
+
+query set_workflow_project_author(
+    $slug: String,
+    $author: String,
+    $updated_at: DateTime
+) {
+    update WorkflowProject
+        set { author: $author, updated_at: $updated_at }
+        where slug = $slug
+}
+
+query set_workflow_session_author($slug: String, $author: String) {
+    update WorkflowSession
+        set { author: $author }
+        where slug = $slug
+}
+
+query set_workflow_trace_author($slug: String, $author: String) {
+    update WorkflowTrace
+        set { author: $author }
+        where slug = $slug
+}
+
+query set_task_author($slug: String, $author: String, $updated_at: DateTime) {
+    update Task
+        set { author: $author, updated_at: $updated_at }
+        where slug = $slug
+}

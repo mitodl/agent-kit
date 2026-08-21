@@ -1635,3 +1635,422 @@ def test_merge_from_and_to_reconciles_two_named_local_stores(
     # Repeatable: a second run finds every row already applied.
     merge(from_="personal", to="work")
     assert "0 added" in " ".join(capsys.readouterr().out.split())
+
+
+# ── Authorship on migration (#267) ────────────────────────────────────────
+
+
+def _export_rows(client) -> list[dict]:
+    """A store's rows in `omnigraph export` shape, for `store_merge`."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "export.jsonl"
+        client.export_to(out, label="test export")
+        return [json.loads(line) for line in out.read_text().splitlines() if line]
+
+
+@requires_omnigraph
+def test_store_merge_claims_rows_authored_by_the_caller(server, tmp_path, monkeypatch):
+    """The reported case: a store merged under a local identity stays yours.
+
+    Local stdio writes `cfg.author` (git user.name); a deployment resolves
+    `preferred_username`. The two never converge, so without this the row keeps
+    a name the deployed identity cannot match and `memory_delete` refuses its
+    own author forever.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-migrated-by-me-aaaaaa",
+        content="mine",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    result = srv.store_merge(_export_rows(source), claim_from_author="pytest")
+
+    assert result["authorship_claimed"] == 1
+    rows = srv.client.read(
+        "read.gq", "get_memory", {"slug": "mem-migrated-by-me-aaaaaa"}
+    )
+    assert rows[0]["author"] == "me@example.org"
+
+
+@requires_omnigraph
+def test_store_merge_leaves_someone_elses_rows_alone(server, tmp_path, monkeypatch):
+    """Merging a teammate's export through your credential must not reattribute
+    their work — the runbook supports that merge, and the original name is kept
+    nowhere else, so a silent rewrite would be unrecoverable."""
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-written-by-them-bbbbb",
+        content="theirs",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    # The caller's local identity is "someone-else"; the row says "pytest".
+    result = srv.store_merge(_export_rows(source), claim_from_author="someone-else")
+
+    assert result["authorship_claimed"] == 0
+    rows = srv.client.read(
+        "read.gq", "get_memory", {"slug": "mem-written-by-them-bbbbb"}
+    )
+    assert rows[0]["author"] == "pytest"
+
+
+@requires_omnigraph
+def test_store_merge_without_the_argument_is_unchanged(server, tmp_path, monkeypatch):
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-no-claim-ccccccc",
+        content="x",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    result = srv.store_merge(_export_rows(source))
+
+    assert result["authorship_claimed"] == 0
+    rows = srv.client.read("read.gq", "get_memory", {"slug": "mem-no-claim-ccccccc"})
+    assert rows[0]["author"] == "pytest"
+
+
+@requires_omnigraph
+def test_claim_authorship_repairs_an_already_migrated_row(server, monkeypatch):
+    """The whole point of the repair command: a re-merge cannot fix these.
+
+    Reconciliation is newest-record-wins, so a re-sent row loses to its own
+    already-applied copy — which is why `store_merge`'s claim does nothing for
+    a store merged before it existed.
+    """
+    from witan import server as srv
+
+    m = server.memory_store(kind="lesson", title="already here", content="x")
+    srv.client.change(
+        "mutations.gq",
+        "set_memory_author",
+        {"slug": m["slug"], "author": "Old Local Name", "updated_at": srv.now_iso()},
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    dry = srv.claim_authorship(was="Old Local Name")
+    assert dry["applied"] is False
+    assert dry["claimed"] == 1
+    assert dry["by_type"] == {"Memory": 1}
+    rows = srv.client.read("read.gq", "get_memory", {"slug": m["slug"]})
+    assert rows[0]["author"] == "Old Local Name", "dry run must write nothing"
+
+    applied = srv.claim_authorship(was="Old Local Name", apply=True)
+    assert applied["claimed"] == 1
+    rows = srv.client.read("read.gq", "get_memory", {"slug": m["slug"]})
+    assert rows[0]["author"] == "me@example.org"
+
+    # Idempotent: the rows now carry the new identity.
+    assert srv.claim_authorship(was="Old Local Name", apply=True)["claimed"] == 0
+
+
+@requires_omnigraph
+def test_claim_authorship_makes_a_migrated_memory_deletable(server, monkeypatch):
+    """End to end on the reported symptom: `memory_delete` no-ops before the
+    repair and succeeds after it."""
+    from witan import server as srv
+
+    m = server.memory_store(kind="lesson", title="prune me", content="x")
+    srv.client.change(
+        "mutations.gq",
+        "set_memory_author",
+        {"slug": m["slug"], "author": "Old Local Name", "updated_at": srv.now_iso()},
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    refused = server.memory_delete(m["slug"], confirm=True)
+    assert refused["deleted"] is False
+    assert "only the author can delete" in refused["reason"]
+
+    srv.claim_authorship(was="Old Local Name", apply=True)
+
+    assert server.memory_delete(m["slug"], confirm=True)["deleted"] is True
+
+
+@requires_omnigraph
+def test_claim_authorship_refuses_to_run_against_your_own_identity(server, monkeypatch):
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+    result = srv.claim_authorship(was="me@example.org", apply=True)
+
+    assert result["claimed"] == 0
+    assert "already carry this identity" in result["reason"]
+
+
+@requires_omnigraph
+def test_claim_authorship_covers_every_authored_node_type(server):
+    """A type left out of `_AUTHORSHIP_SOURCES` is a row nobody can ever repair,
+    and nothing else would fail — so pin the list against the schema."""
+    from witan import server as srv
+
+    schema = (Path(srv.__file__).parent.parent / "schema" / "schema.pg").read_text()
+    declared = set()
+    current = None
+    for line in schema.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("node "):
+            current = stripped.split()[1].rstrip("{").strip()
+        elif current and stripped.startswith("author:"):
+            declared.add(current)
+
+    assert declared == set(srv._AUTHORED_TYPES)
+    assert {t for t, *_ in srv._AUTHORSHIP_SOURCES} == declared
+
+
+@requires_omnigraph
+def test_claim_authorship_cli_defaults_was_to_the_local_author(server, monkeypatch):
+    """The CLI's one piece of logic beyond dispatch: `--was` defaults to
+    `config.load().author`, which is the whole point of the ergonomics — the
+    person repairing their own cutover should not have to remember what their
+    git `user.name` was on the day they merged."""
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setattr(cli_migrate, "_srv", lambda: _Recorder(), raising=False)
+
+    from witan import config as cfg_mod
+
+    monkeypatch.setattr(
+        cfg_mod, "load", lambda *a, **k: _StubCfg(author="Old Local Name")
+    )
+
+    cli_migrate.claim_authorship()
+
+    assert _Recorder.last == {"was": "Old Local Name", "apply": False}
+
+
+class _StubCfg:
+    def __init__(self, author):
+        self.author = author
+
+
+class _Recorder:
+    last: dict | None = None
+
+    def claim_authorship(self, *, was, apply):
+        _Recorder.last = {"was": was, "apply": apply}
+        return {
+            "applied": apply,
+            "was": was,
+            "now": "me@example.org",
+            "claimed": 0,
+            "by_type": {},
+        }
+
+
+@requires_omnigraph
+def test_authorship_claimed_counts_only_rows_actually_written(
+    server, tmp_path, monkeypatch
+):
+    """`authorship_claimed` must describe effects, not intentions.
+
+    The restamp happens before reconciliation, so a matching source row that
+    LOSES to a newer target copy is discarded carrying its new author. Counting
+    the rewrite would report a claim against a batch that left every stored
+    author exactly as it found it.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    # Target holds the newer copy, so the source row loses reconciliation.
+    _insert_memory(
+        srv.client,
+        slug="mem-loses-reconcile-ddddd",
+        content="target wins",
+        updated_at="2026-06-01T00:00:00Z",
+    )
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-loses-reconcile-ddddd",
+        content="source is older",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    result = srv.store_merge(_export_rows(source), claim_from_author="pytest")
+
+    assert result["kept_target"] == 1
+    assert result["authorship_claimed"] == 0, (
+        "the losing row was discarded; nothing was reattributed"
+    )
+    rows = srv.client.read(
+        "read.gq", "get_memory", {"slug": "mem-loses-reconcile-ddddd"}
+    )
+    assert rows[0]["author"] == "pytest"
+
+
+@requires_omnigraph
+def test_claim_authorship_bumps_updated_at_where_the_type_has_one(server, monkeypatch):
+    """`WorkflowProject` reconciles on `updated_at` (`_RECONCILE_TS_FIELDS`), so
+    a repair that left it stale would make the row lose a later merge against
+    its own pre-repair copy."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="stale ts", description="d")
+    srv.client.change(
+        "mutations.gq",
+        "set_workflow_project_author",
+        {
+            "slug": proj["slug"],
+            "author": "Old Local Name",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    srv.claim_authorship(was="Old Local Name", apply=True)
+
+    row = srv.client.read("read.gq", "get_workflow_project", {"slug": proj["slug"]})[0]
+    assert row["author"] == "me@example.org"
+    assert srv._parse_ts(row["updated_at"]) > srv._parse_ts("2026-01-01T00:00:00Z")
+
+
+@requires_omnigraph
+def test_claim_authorship_batches_its_writes(server, monkeypatch):
+    """A whole-store repair writing per row leaves one Lance version per slug —
+    the fragmentation `_backfill_topics` batches to avoid, against a data tier
+    where a deployed commit runs seconds."""
+    from witan import server as srv
+
+    slugs = []
+    for i in range(3):
+        m = server.memory_store(kind="lesson", title=f"row {i}", content="x")
+        slugs.append(m["slug"])
+        srv.client.change(
+            "mutations.gq",
+            "set_memory_author",
+            {
+                "slug": m["slug"],
+                "author": "Old Local Name",
+                "updated_at": srv.now_iso(),
+            },
+        )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    batched: list[int] = []
+    real_change_many = srv.client.change_many
+    per_row = []
+    real_change = srv.client.change
+
+    def spy_many(steps, **kw):
+        batched.append(len(steps))
+        return real_change_many(steps, **kw)
+
+    def spy_change(*a, **kw):
+        per_row.append(a[1] if len(a) > 1 else None)
+        return real_change(*a, **kw)
+
+    monkeypatch.setattr(srv.client, "change_many", spy_many)
+    monkeypatch.setattr(srv.client, "change", spy_change)
+
+    srv.claim_authorship(was="Old Local Name", apply=True)
+
+    assert batched == [3], f"expected one batched flush, got {batched}"
+    assert not [q for q in per_row if q and q.startswith("set_")], (
+        f"authorship writes must not go through per-row change(): {per_row}"
+    )
+
+
+def test_merge_source_author_prefers_the_from_target_over_ambient(monkeypatch):
+    """`--from <name>` merges a store the ambient config is not pointed at, and
+    that block can carry its own `author`. Sending the ambient one restamps
+    nothing and fails silently — #267 stays reproducible for exactly the caller
+    who used `--from`."""
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setattr(
+        cli_migrate,
+        "_named_target",
+        lambda name: _StubCfg(author="Personal Machine Name"),
+    )
+
+    from witan import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "load", lambda *a, **k: _StubCfg(author="Ambient"))
+
+    assert cli_migrate._merge_source_author("personal") == "Personal Machine Name"
+    # A bare source URI is this machine's own store, where ambient IS correct.
+    assert cli_migrate._merge_source_author(None) == "Ambient"
+
+
+def test_merge_source_author_falls_back_when_the_target_sets_none(monkeypatch):
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setattr(
+        cli_migrate, "_named_target", lambda name: _StubCfg(author=None)
+    )
+
+    from witan import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "load", lambda *a, **k: _StubCfg(author="Ambient"))
+
+    assert cli_migrate._merge_source_author("personal") == "Ambient"
+
+
+def test_claim_authorship_renders_a_bracketed_author_intact(monkeypatch, capsys):
+    """#271's boundary rule applies here too: `was`/`now` are stored content.
+
+    Both of Rich's failure modes are covered, because they fail differently and
+    an author string can carry either. A lowercase tag-like bracket is dropped
+    SILENTLY (`[targets.production]`), gutting the one message whose whole job
+    is to show which identity replaces which; a bracketed absolute path parses
+    as a closing tag with nothing open and takes the command down with
+    MarkupError.
+
+    Note `[MIT]` would NOT reproduce this — Rich's tag pattern does not match
+    it, so an uppercase bracket survives unescaped and would make this test
+    pass against unescaped code.
+    """
+    from witan.cli import migrate as cli_migrate
+
+    class _Srv:
+        def __init__(self, was_out):
+            self.was_out = was_out
+
+        def claim_authorship(self, *, was, apply):
+            return {
+                "applied": False,
+                "was": self.was_out,
+                "now": "dev-two",
+                "claimed": 2,
+                "by_type": {"Memory": 2},
+            }
+
+    for author in ("Dev [targets.production] One", "Dev [/var/lib] One"):
+        monkeypatch.setattr(
+            cli_migrate, "_srv", lambda a=author: _Srv(a), raising=False
+        )
+        cli_migrate.claim_authorship(author)
+        out = capsys.readouterr().out
+        assert author in out, f"{author!r} did not survive rendering: {out!r}"

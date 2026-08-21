@@ -120,6 +120,28 @@ def _target_store_uri(name: str, block) -> str:
     return f"{base}/graphs/{block.graph}" if block.graph else base
 
 
+def _merge_source_author(from_target: str | None) -> str | None:
+    """The author string the SOURCE store writes — not the ambient target's.
+
+    `--from <name>` merges a store the ambient configuration is not pointed at,
+    and a target block can carry its own `author`. Resolving this from ambient
+    config would send the wrong name, and since `store_merge` restamps only
+    rows matching it, the effect is silent: nothing is claimed and #267 stays
+    reproducible for exactly the caller who used `--from`.
+
+    Falls back to ambient for a bare source URI, which is the headline cutover
+    (`witan migrate merge ~/.local/share/witan/graph.omni --to ol`) — there the
+    source is this machine's own store and ambient IS its author.
+    """
+    from .. import config as cfg_module
+
+    if from_target:
+        block = _named_target(from_target)
+        if block.author:
+            return block.author
+    return cfg_module.load().author
+
+
 def _merge_source(source: str | None, from_target: str | None) -> str:
     """The store URI to merge from, resolving ``--from <name>`` to its ``server``."""
     if from_target and source:
@@ -190,7 +212,12 @@ def _merge(
     source = _merge_source(source, from_target)
     s, target = _merge_destination(to_target, target)
     try:
-        result = s.merge_store(source, target=target, dry_run=dry_run)
+        result = s.merge_store(
+            source,
+            target=target,
+            dry_run=dry_run,
+            source_author=_merge_source_author(from_target),
+        )
     except RuntimeError as exc:
         print_error(exc)
         raise SystemExit(1) from None
@@ -464,3 +491,71 @@ def all_() -> None:
     _apply_schema()
     _backfill_topics()
     _repo_keys()
+
+
+@migrate_app.command(name="claim-authorship")
+def claim_authorship(
+    was: str | None = None,
+    *,
+    apply: bool = False,
+) -> None:
+    """Take ownership of rows an earlier migration left under your local name.
+
+    A local store writes ``author`` from ``WITAN_AUTHOR`` / git ``user.name`` /
+    ``$USER``; a deployment resolves it from your token's
+    ``preferred_username``. The two never converge, so before this was fixed
+    every row you migrated kept a name your deployed identity cannot match —
+    and ``memory_delete`` refuses anyone but the author, permanently (#267).
+
+    ``witan migrate merge`` now claims rows as they arrive, so this is only
+    needed for a store merged before that landed. Re-merging will not fix
+    those: reconciliation is newest-record-wins, and a re-sent row loses to its
+    own already-applied copy.
+
+    Dry by default. Run ``witan whoami`` first if you are unsure which identity
+    you are claiming *to*.
+
+    Parameters
+    ----------
+    was:
+        The author string the rows currently carry. Defaults to this machine's
+        configured local author, which is the right answer when you are
+        repairing your own cutover from this same checkout.
+    apply:
+        Write the change instead of only reporting it.
+    """
+    from .. import config as cfg_module
+
+    was = was or cfg_module.load().author
+    try:
+        result = _srv().claim_authorship(was=was, apply=apply)
+    except RuntimeError as exc:
+        print_error(exc)
+        raise SystemExit(1) from None
+
+    # `was`/`now` are stored graph content (an author string), so they go
+    # through `esc` like every other renderer — an author carrying brackets
+    # would otherwise print with that substring silently dropped, in a message
+    # whose entire job is to show you which identity is which.
+    if result.get("reason"):
+        console.print(f"Nothing to do: {esc(result['reason'])}.")
+        return
+
+    if not result["claimed"]:
+        console.print(
+            f"No rows authored by {esc(repr(result['was']))}. "
+            f"You are {esc(repr(result['now']))} here — check `witan whoami` "
+            "and the author the source store actually wrote."
+        )
+        return
+
+    verb = "Claimed" if result["applied"] else "[yellow]Would claim[/yellow]"
+    console.print(
+        f"{verb} {result['claimed']} row(s): "
+        f"{esc(repr(result['was']))} -> {esc(repr(result['now']))}"
+    )
+    for node_type, count in result["by_type"].items():
+        console.print(f"  {node_type:16} {count}")
+
+    if not result["applied"]:
+        console.print("\n[dim]Dry run — re-run with --apply to write.[/dim]")

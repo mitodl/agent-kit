@@ -82,6 +82,30 @@ Your store is exported locally and the rows ship through the deployment's
 Batches commit independently, so a failure part-way leaves earlier batches
 applied — just re-run, the merge is idempotent.
 
+"As you" now covers attribution as well as authorization. A local store writes
+`author` from `WITAN_AUTHOR` / git `user.name` / `$USER`, while the deployment
+resolves it from your token's `preferred_username` — two namespaces that never
+converge. Rows carrying your local name are restamped to your deployed identity
+as they arrive, so the history you migrate is owned by the same identity that
+owns everything you write afterwards, and `memory_delete` (author-only) still
+works on it.
+
+Rows authored by anyone else are left exactly as they are. That matters for the
+two merges below: bringing in a teammate's export through your credential does
+not reattribute their work to you.
+
+> **Merged before witan-council 0.23.0?** Those rows kept your local name, and
+> `memory_delete` refuses them — permanently, since your deployed identity can
+> never match. Re-merging will not fix it: reconciliation is
+> newest-record-wins, so a re-sent row loses to its own already-applied copy.
+> Repair them in place instead:
+>
+> ```bash
+> witan migrate claim-authorship            # dry by default; --was defaults
+>                                           # to your local author
+> witan migrate claim-authorship --apply
+> ```
+
 **5. Verify by slug, not by search:**
 
 ```bash

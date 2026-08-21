@@ -1049,3 +1049,40 @@ query code_branch_projects($branch_slug: String) {
     }
     return { $p.slug }
 }
+
+// ── Authorship repair (`witan migrate claim-authorship`) ──────────────────
+// slug + author for every authored node type, so the repair can find the rows
+// a migration left under a local identity. Narrow projections deliberately:
+// the repair rewrites one field and needs no others, and the full reads either
+// carry projection costs it does not want or (for sessions and traces) do not
+// project `author` at all.
+//
+// Not filtered by author in the query. The engine's `where` on these types is
+// slug-keyed everywhere else in this file, and a scan of an internal team
+// graph is cheap next to the risk of a predicate that silently matches
+// nothing — the caller filters in Python, where a zero-match is visible.
+
+query list_all_memory_authors() {
+    match { $m: Memory }
+    return { $m.slug, $m.author }
+}
+
+query list_all_project_authors() {
+    match { $p: WorkflowProject }
+    return { $p.slug, $p.author }
+}
+
+query list_all_session_authors() {
+    match { $s: WorkflowSession }
+    return { $s.slug, $s.author }
+}
+
+query list_all_trace_authors() {
+    match { $t: WorkflowTrace }
+    return { $t.slug, $t.author }
+}
+
+query list_all_task_authors() {
+    match { $t: Task }
+    return { $t.slug, $t.author }
+}
