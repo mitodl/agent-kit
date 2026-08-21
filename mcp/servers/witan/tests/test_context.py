@@ -397,6 +397,31 @@ def test_inject_context_truncation_counts_are_honest(tmp_path, monkeypatch):
     assert text.count("(slug: `tk-") == 5
 
 
+def test_the_ready_task_list_says_to_claim_before_working(tmp_path, monkeypatch):
+    """The list is an invitation to start work, so it has to name the first step.
+
+    It used to end with "use task_update/task_close ... to claim and progress
+    them", which reads as bookkeeping to do at some point. An unclaimed task
+    being actively worked is indistinguishable from an idle one, and two
+    sessions took the same task off this list on the same day.
+    """
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    repo = "https://github.com/test/ctx-claim"
+    store, queries_dir = _setup(tmp_path, monkeypatch, repo)
+
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    _unwrap(srv.task_create)(title="something ready", description="x")
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+
+    assert "task_claim" in text
+    assert text.index("task_claim") < text.index("task_close")
+
+
 # ── PR #85 hardening: hook must never raise ──────────────────────────────────
 
 

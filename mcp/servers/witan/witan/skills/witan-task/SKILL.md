@@ -3,10 +3,13 @@ name: witan-task
 description: >
   Interactive task manager for the work-coordination graph. Use to triage and
   claim ready work, create tasks (including epics and sub-issues), link
-  dependencies, and close finished tasks. `/witan-task` shows ready work for
-  the current repo; `/witan-task new` creates a task; `/witan-task list` lists
-  tasks; `/witan-task close` closes one. Backed by the witan MCP server (task_*
-  tools).
+  dependencies, and close finished tasks. Also use it whenever you are about to
+  START work on an existing `tk-` task from anywhere — the ready-task list in
+  your session context, a `witan project run` prompt, or a slug someone named —
+  because that task must be claimed before the first edit. `/witan-task` shows
+  ready work for the current repo; `/witan-task new` creates a task;
+  `/witan-task list` lists tasks; `/witan-task close` closes one. Backed by the
+  witan MCP server (task_* tools).
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -21,6 +24,37 @@ and reference code-graph symbols (`symbol_refs`).
 
 The repo key is auto-detected from `.git/config` (the canonical HTTPS URI) — you
 rarely pass `repo` explicitly.
+
+## Claim before you work it
+
+**Any task you actually start gets claimed first — `task_claim(slug="tk-...")`
+before the first edit, every time.** This is not limited to tasks you reached
+through this skill. It applies just as much to one you picked off the ready
+list in your session's injected context, one named in a `witan project run`
+prompt, or one a human mentioned by slug.
+
+The claim is the only signal that anybody is on it. `in_progress` with a live
+lease is what makes `task_ready` hide it from the next session and what makes
+`task_claim` refuse a second holder — an unclaimed task being actively worked
+looks exactly like one nobody has touched. Two sessions have already written
+the same fix for the same task on the same day, each unaware of the other,
+because neither claimed it first.
+
+So:
+
+- **Claim it** when you decide to work it, not when you finish. A claim after
+  the fact records history; it prevents nothing.
+- **Take the refusal seriously.** `{"claimed": false, "held_by": ...}` means
+  someone is on it. Pick another task — do not `force` past a live lease
+  without a reason you can state.
+- **Release what you drop.** `task_release(slug=...)` if you claim something
+  and then move on, so it returns to ready work instead of ageing out.
+- **Claim as you go, not in bulk.** When handed a list, claim each task as you
+  reach it. Claiming all of them up front holds leases on work you may never
+  start, which is the same lie in the other direction.
+
+`witan task run` already claims before it launches the agent, so a session
+started that way arrives holding its task; its prompt says so.
 
 ## When to use this vs. your built-in todo list
 
@@ -50,7 +84,8 @@ MCP call fails, tell the user the witan server is not connected and stop.
   - Question: "Which task do you want to work on?"
   - Options: each ready task (label = title, description = "`[priority]` slug: `{slug}`"),
     plus "Create a task" and "None".
-- On a chosen task: ask whether to claim it. To claim, call
+- On a chosen task: claim it (that is what picking it means — see **Claim
+  before you work it**). Call
   `task_claim(slug="<slug>", assignee="<holder>")` where `<holder>` identifies
   this worker — use `$CLAUDE_SESSION_ID` (or another distinct id) so parallel
   agents under one user don't collide; it defaults to the configured author.
