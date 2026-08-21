@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.24.0] - 2026-08-21
+
+### Added
+
+- **`task_for_branch(branch, repo=None)`** — the tasks a git branch is already
+  linked to, via the `WorksOn` edge a successful `task_claim` writes.
+  `workflow_session_start` also touches the branch's `CodeBranch` but links it
+  `ForProject`, not `WorksOn`, so a session-only branch has no task to return.
+  The underlying `code_branch_tasks` query had no tool in front of it, so it
+  was reachable only by a direct store read.
+
+### Fixed
+
+- **The `## In-Flight Branch` block now renders on a deployed target.** It
+  warns a session that its current branch is already linked to an open task,
+  and prints who holds it. 0.21.0 routed the context hook through the
+  deployment but had no tool for this read, so it passed `open_branch_tasks=[]`
+  unconditionally — leaving the block live only for local single-user stores
+  and dead for every deployed user.
+
+  That is backwards for what the block is for. On a personal store the linked
+  task is almost always your own; on a shared graph it may be held by someone
+  else, and the block is the only thing that says so before a second person
+  starts the same work.
+
+  The remote read is isolated the way the local path's already is: a
+  deployment that predates `task_for_branch` answers with an unknown-tool
+  error, and that must cost this block alone rather than the projects and
+  ready-tasks block rendered above it. **The tool has to be deployed before
+  the block appears** — a client on 0.24.0 against an older server degrades
+  exactly as 0.23.0 did, and says so under `--debug`.
+
+  Stale-repo-case detection still has no remote equivalent and is still
+  reported unavailable; it only nags about running `witan migrate repo-keys`.
+
 ## [0.23.0] - 2026-08-21
 
 ### Fixed

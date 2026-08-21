@@ -836,23 +836,42 @@ class _FakeRemoteServer:
     matching method names is a faithful substitute without dialling out.
     """
 
-    def __init__(self, projects, ready, sessions_by_project):
+    def __init__(
+        self, projects, ready, sessions_by_project, branch_tasks=None, raises=()
+    ):
         self.calls: list[tuple[str, dict]] = []
         self._projects = projects
         self._ready = ready
         self._sessions_by_project = sessions_by_project
+        self._branch_tasks = branch_tasks or []
+        # Tool names this fake answers with an error, standing in for a
+        # deployment that predates the tool (its proxy raises on an unknown
+        # tool name rather than returning empty).
+        self._raises = set(raises)
+
+    def _guard(self, name):
+        if name in self._raises:
+            raise RuntimeError(f"Unknown tool: {name}")
 
     def workflow_project_list(self, **kwargs):
         self.calls.append(("workflow_project_list", kwargs))
+        self._guard("workflow_project_list")
         return self._projects
 
     def task_ready(self, **kwargs):
         self.calls.append(("task_ready", kwargs))
+        self._guard("task_ready")
         return self._ready
 
     def workflow_session_list(self, **kwargs):
         self.calls.append(("workflow_session_list", kwargs))
+        self._guard("workflow_session_list")
         return self._sessions_by_project.get(kwargs.get("project_slug"), [])
+
+    def task_for_branch(self, **kwargs):
+        self.calls.append(("task_for_branch", kwargs))
+        self._guard("task_for_branch")
+        return self._branch_tasks
 
 
 def test_inject_context_remote_reads_through_the_proxy(tmp_path, monkeypatch):
@@ -905,10 +924,107 @@ def test_inject_context_remote_reads_through_the_proxy(tmp_path, monkeypatch):
     assert "wp-remote" in text
     assert "## Ready Tasks" in text
     assert "Remote Task" in text
-    # No remote-tool equivalent exists yet for either — must be absent, not
-    # just incidentally empty (see inject_context_remote's docstring).
+    # This proxy reports no branch tasks, so the block must be absent — the
+    # rendered-block case is pinned separately below.
     assert "## In-Flight Branch" not in text
+    # Stale-repo-case detection still has no remote-tool equivalent, so it must
+    # be absent rather than incidentally empty (inject_context_remote's
+    # docstring).
     assert "Unmigrated Repo Keys" not in text
+
+
+def test_inject_context_remote_renders_the_in_flight_branch_block(
+    tmp_path, monkeypatch
+):
+    """The anti-duplicate-work signal, on the path every deployed user is on.
+
+    Until tk-the-in-flight-branch-anti-duplicate-work-signal--073f96 this block
+    was hard-coded empty for a remote target, so it fired only in the local
+    single-user setup where it mattered least. Closed tasks are filtered out
+    here, matching the local path — a branch whose task is done is not in
+    flight.
+    """
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    repo = "https://github.com/test/ctx-remote-branch"
+    monkeypatch.setenv("WITAN_REPO", repo)
+    monkeypatch.setattr(ctx_module, "_current_branch", lambda: "feature/in-flight")
+
+    server = _FakeRemoteServer(
+        projects=[],
+        ready=[],
+        sessions_by_project={},
+        branch_tasks=[
+            {
+                "slug": "tk-held",
+                "title": "Held Elsewhere",
+                "status": "in_progress",
+                "assignee": "someone-else@example.org",
+            },
+            {"slug": "tk-done", "title": "Already Finished", "status": "closed"},
+        ],
+    )
+
+    text = ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
+
+    assert (
+        "task_for_branch",
+        {"branch": "feature/in-flight", "repo": repo},
+    ) in server.calls
+    assert "## In-Flight Branch" in text
+    assert "Held Elsewhere" in text
+    # The holder is the whole point on a shared graph: it turns "this branch is
+    # taken" into "go talk to this person".
+    assert "someone-else@example.org" in text
+    assert "Already Finished" not in text
+
+
+def test_inject_context_remote_branch_read_failure_keeps_the_rest(
+    tmp_path, monkeypatch
+):
+    """A deployment that predates ``task_for_branch`` answers with an unknown-
+    tool error. That must cost the branch block only — losing the projects and
+    ready-tasks block over it would make the hook worse than before it existed,
+    which is exactly the isolation the local path already has."""
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/ctx-remote-oldsrv")
+    monkeypatch.setattr(ctx_module, "_current_branch", lambda: "feature/old-server")
+
+    server = _FakeRemoteServer(
+        projects=[
+            {"slug": "wp-still-here", "title": "Still Here", "phase": "delivery"}
+        ],
+        ready=[
+            {
+                "slug": "tk-still-here",
+                "title": "Still Ready",
+                "priority": "p1",
+                "status": "open",
+            }
+        ],
+        sessions_by_project={},
+        raises={"task_for_branch"},
+    )
+
+    text = ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
+
+    assert any(name == "task_for_branch" for name, _ in server.calls)
+    assert "## In-Flight Branch" not in text
+    assert "Still Here" in text
+    assert "Still Ready" in text
 
 
 def test_inject_context_remote_no_repo_skips_project_list(tmp_path, monkeypatch):

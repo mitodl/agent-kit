@@ -5563,6 +5563,44 @@ def task_ready(
 
 
 @_tool
+def task_for_branch(branch: str, repo: str | None = None) -> list[dict]:
+    """
+    Return the tasks linked to a git branch — "what is this branch already for".
+
+    A ``WorksOn`` link is written by a SUCCESSFUL ``task_claim`` and by nothing
+    else — losing a claim race does not link, and ``workflow_session_start``
+    touches the same ``CodeBranch`` but links it ``ForProject``. So a non-empty
+    result means somebody actually holds a task on this branch. Call it before
+    starting fresh work on a branch you did not just create: on a shared graph
+    the holder may be a different actor, in which case the answer is to
+    continue or coordinate, not to open a second task.
+
+    An empty result is therefore weaker than it looks: a branch someone is
+    working on without having claimed a task returns nothing.
+
+    Closed tasks are included — filter on ``status`` if you only want live
+    work. Returns ``[]`` for an unknown branch, an unlinked one, or when no
+    repo can be resolved; none of those are errors.
+
+    Parameters
+    ----------
+    branch:
+        Git branch name. Required: the server has no checkout to infer it from,
+        unlike ``repo``.
+    repo:
+        Repo scoping — see instructions.
+    """
+    detected = repo_module.detect(override=repo)
+    if not detected or not branch:
+        return []
+    return client.read(
+        "read.gq",
+        "code_branch_tasks",
+        {"branch_slug": _code_branch_slug(detected, branch)},
+    )
+
+
+@_tool
 def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
     """
     Link two tasks (or a task to a memory).
