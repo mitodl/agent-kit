@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.21.0"
+version = "0.22.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -122,7 +122,20 @@ dependencies = [
   # failure mode. No AttributeError, no test failure — a published
   # witan-council on 0.24 just quietly ships the bug this floor exists to
   # keep fixed.
-  "witan-core[cli,remote,observability,sentry]>=0.28,<1",
+  #
+  # ★ >=0.29 IS A BEHAVIOURAL FLOOR, the same quiet kind as >=0.22 and >=0.25.
+  # `RemoteServerProxy._repo_means_detect` overrides a base method that 0.28
+  # does not define, so on 0.28 the override is simply never called: nothing
+  # fails to import, no test fails, and the proxy goes back to injecting a
+  # detected `repo` into `memory_update` / `task_update` — issue #268, where a
+  # memory edited from another checkout silently re-scopes out of the repo it
+  # documents. A published witan-council on 0.28 ships the bug this floor
+  # exists to keep fixed, and the data loss is invisible at the call site.
+  #
+  # (This also carries 0.21.0's >=0.28 reason forward: the refreshed omnigraph
+  # `edge` digest, below which `witan setup` fails its checksum and leaves the
+  # CLI with no binary. Subsumed, not dropped.)
+  "witan-core[cli,remote,observability,sentry]>=0.29,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -167,7 +180,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.21.0"
+current_version = "0.22.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

@@ -604,6 +604,102 @@ def test_read_only_tools_all_exist_on_the_server(server):
     assert _READ_ONLY <= exposed, f"no longer registered: {_READ_ONLY - exposed}"
 
 
+# ── `repo=None`: detect, or leave alone? (#268) ────────────────────────────
+
+
+@requires_omnigraph
+def test_memory_update_does_not_rescope_repo_to_the_caller(proxy, monkeypatch):
+    """#268: editing a memory's confidence from another checkout moved it.
+
+    Reproduces only over the proxy. Under local stdio nothing injects a repo,
+    and the memory being edited usually belongs to the repo you are sitting in
+    anyway — which is why the local-stdio test above this one passed throughout.
+    """
+    # `repo_module` is one module object shared by proxy and server, so a patch
+    # that ignored `override` would hijack the server's own resolution too and
+    # fail this test for the wrong reason.
+    monkeypatch.setattr(
+        "witan.remote.proxy.repo_module.detect",
+        lambda override=None: override or REPO,
+    )
+    other = "https://github.com/mitodl/mit-learn"
+    m = proxy.memory_store(
+        kind="pattern", title="filed elsewhere", content="x", repo=other
+    )
+    assert m["repo"] == other
+
+    updated = proxy.memory_update(slug=m["slug"], confidence=0.9)
+
+    assert updated["repo"] == other
+    assert updated["confidence"] == pytest.approx(0.9)
+
+
+@requires_omnigraph
+def test_task_update_does_not_rescope_repo_to_the_caller(proxy, monkeypatch):
+    # Same shape as the memory case: `task_update` also documents "only
+    # non-null arguments are applied" and also merges repo server-side.
+    monkeypatch.setattr(
+        "witan.remote.proxy.repo_module.detect",
+        lambda override=None: override or REPO,
+    )
+    other = "https://github.com/mitodl/mit-learn"
+    t = proxy.task_create(title="filed elsewhere", description="d", repo=other)
+    assert t["repo"] == other
+
+    updated = proxy.task_update(slug=t["slug"], priority="p1")
+
+    assert updated["repo"] == other
+    assert updated["priority"] == "p1"
+
+
+@requires_omnigraph
+def test_repo_can_still_be_corrected_explicitly_on_an_update(proxy, monkeypatch):
+    # Opting `memory_update` out of *detection* must not make `repo` unwritable
+    # — correcting a misfiled memory is the reason the parameter exists (#145).
+    monkeypatch.setattr(
+        "witan.remote.proxy.repo_module.detect",
+        lambda override=None: override or REPO,
+    )
+    m = proxy.memory_store(kind="pattern", title="misfiled", content="x")
+    updated = proxy.memory_update(
+        slug=m["slug"], repo="https://github.com/MITODL/Other"
+    )
+
+    assert updated["repo"] == "https://github.com/mitodl/other"
+
+
+def test_every_repo_tool_is_classified(server):
+    """A new tool taking `repo` must not inherit a meaning by accident.
+
+    Neither set is consulted for membership at runtime — unlisted means
+    "detect", the pre-#268 behaviour — so this test is the whole guard. It
+    fails on any tool declaring `repo` that nobody has classified, which is the
+    moment to decide whether an omitted `repo` scopes the call or leaves a
+    stored field alone.
+    """
+    import witan.server as srv
+    from witan_core.remote.proxy import _tool_input_schema
+
+    from witan.remote.proxy import _REPO_TOOLS
+
+    async def _declaring_repo() -> set[str]:
+        async with Client(srv.mcp) as client:
+            return {
+                t.name
+                for t in await client.list_tools()
+                if "repo" in (_tool_input_schema(t).get("properties") or {})
+            }
+
+    declared = asyncio.run(_declaring_repo())
+
+    assert declared, "expected some tool to declare a `repo` parameter"
+    assert declared == _REPO_TOOLS, (
+        f"unclassified: {declared - _REPO_TOOLS} — decide whether `repo=None` "
+        f"means detect or leave-alone, then add each to _REPO_IS_SCOPE_OR_STAMP "
+        f"or _REPO_IS_UPDATE_FIELD. No longer registered: {_REPO_TOOLS - declared}"
+    )
+
+
 @pytest.mark.parametrize(
     ("tool", "writes"),
     [

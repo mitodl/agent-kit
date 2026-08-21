@@ -572,6 +572,21 @@ class RemoteMCPProxy:
         """Client-side value for ``repo=None`` (detect current repo). None: skip."""
         return None
 
+    def _repo_means_detect(self, name: str) -> bool:
+        """Does ``repo=None`` mean "detect" for this tool, or "leave unchanged"?
+
+        Two different meanings share one parameter name. For a tool that
+        *scopes* a read or *creates* a row, an omitted ``repo`` means "the repo
+        I am in", which only the client can resolve — so the value is injected
+        below. For a tool that *updates* one, an omitted ``repo`` means "do not
+        touch this field", and injecting turns the omission into an explicit
+        rewrite that silently re-scopes the row out of the repo it documents.
+
+        Defaults to detect, which is right for every scoping and creating tool;
+        a binding names its update tools by overriding this.
+        """
+        return True
+
     def _resolve_session_slug(self) -> str | None:
         """Client-side value for an omitted ``session_slug``. None: skip.
 
@@ -954,7 +969,13 @@ class RemoteMCPProxy:
         # The deployed server has no git checkout, so it cannot resolve
         # repo=None ("detect current repo") — do that on the client and send an
         # explicit value. repo="" (all repos) is a meaningful sentinel, kept.
-        if "repo" in names and arguments.get("repo") is None:
+        # Skipped where an omitted `repo` means "leave the stored value alone"
+        # rather than "detect": see `_repo_means_detect`.
+        if (
+            "repo" in names
+            and arguments.get("repo") is None
+            and self._repo_means_detect(name)
+        ):
             detected = self._resolve_repo()
             if detected is not None:
                 arguments["repo"] = detected
