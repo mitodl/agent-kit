@@ -77,25 +77,41 @@ CORE_REQUIREMENT = re.compile(
     r"^witan-core(?P<extras>\[[^\]]*\])?\s*(?P<specifier>[<>=!~,.\s0-9a-zA-Z*]+)$"
 )
 
-# Imports the package and every module under it, reporting all failures rather
+# Imports the package and every module under it, reporting ALL failures rather
 # than dying on the first — one stale floor usually breaks several modules, and
 # seeing them together is what says which witan_core symbol is missing.
+#
+# ★ NOT EVERY IMPORT FAILURE IS A FLOOR FAILURE, and conflating the two makes
+# this check untrustworthy in the direction that gets checks deleted. Some
+# modules legitimately raise at import in a bare environment: `witan.server`
+# resolves the omnigraph binary at module scope and raises `RuntimeError:
+# omnigraph binary not found` on a runner that has never run `witan setup`.
+# That says nothing about the floor. So each failure is classified by whether
+# witan_core is implicated — the exception's own module, a witan_core frame in
+# the traceback, or the message naming it — and only those decide the exit
+# status. The rest are printed, clearly labelled, so a real problem hiding
+# behind one is still visible.
 IMPORT_ALL = """
-import importlib, pkgutil, sys
+import importlib, pkgutil, sys, traceback
 pkg = importlib.import_module(sys.argv[1])
 names = [pkg.__name__] + [
     m.name for m in pkgutil.walk_packages(pkg.__path__, pkg.__name__ + ".")
 ]
-failures = []
+floor, other = [], []
 for name in names:
     try:
         importlib.import_module(name)
     except Exception as exc:
-        failures.append(f"{name}: {type(exc).__name__}: {exc}")
-print(f"imported {len(names) - len(failures)}/{len(names)} modules")
-for line in failures:
+        trace = "".join(traceback.format_exception(exc))
+        line = f"{name}: {type(exc).__name__}: {exc}"
+        (floor if "witan_core" in trace else other).append(line)
+ok = len(names) - len(floor) - len(other)
+print(f"imported {ok}/{len(names)} modules")
+for line in floor:
     print("FAIL " + line)
-sys.exit(1 if failures else 0)
+for line in other:
+    print("UNRELATED (not a witan_core import; does not fail this check) " + line)
+sys.exit(1 if floor else 0)
 """
 
 app = cyclopts.App(
@@ -250,10 +266,13 @@ def check(root: Path, floor: Floor, workdir: Path) -> str | None:
             f"{target} (from {source}):\n\n"
             f"{imported.stdout.strip()}\n{imported.stderr.strip()}"
         )
-    print(
-        f"  {floor.server}: witan-core{floor.specifier} -> {target} "
-        f"({source}) — {imported.stdout.strip().splitlines()[0]}"
-    )
+    for line in imported.stdout.strip().splitlines():
+        print(
+            f"  {floor.server}: witan-core{floor.specifier} -> {target} "
+            f"({source}) — {line}"
+            if line.startswith("imported ")
+            else f"    {line}"
+        )
     return None
 
 
