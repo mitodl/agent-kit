@@ -733,7 +733,10 @@ def setup(
     author = resolve_author(author)
 
     print("omnigraph binary")
-    install_omnigraph(dry_run)
+    # strict=False, same reasoning as `witan setup`: a refused binary must not
+    # cost the user the agent bundles this command also installs. The installer
+    # prints the refusal regardless.
+    install_omnigraph(dry_run, strict=False)
 
     bundle = witan_code_bundle(pkg_dir, author)
 

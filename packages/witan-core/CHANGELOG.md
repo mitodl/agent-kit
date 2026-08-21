@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.32.0] - 2026-08-21
+
+### Fixed
+
+- **The omnigraph installer's refusals now reach the exit code.** Every failure
+  path printed its reason and returned, so a workflow step running
+  `install_omnigraph(dry_run=False)` exited 0 with the refusal buried in its
+  log. It then resurfaced ten tests later as `RuntimeError: omnigraph binary
+  not found. Install via: witan-code setup` — which reads as a broken test
+  environment rather than as the digest check doing exactly its job, and cost
+  real time to trace on 2026-08-20. A moved `edge` tag is the common cause and
+  the one worth naming.
+
+  `install_omnigraph` raises `OmnigraphInstallFailed` on a checksum mismatch,
+  a missing pinned digest, a failed download, and an archive with no binary in
+  it. The exception carries the same facts as the printed message without the
+  Rich markup, since it is what a CI traceback shows.
+
+  **The strict behaviour is the default**, because the callers that most need
+  the failure are the seven workflow steps invoking this through `python -c`,
+  and they cannot pass an argument without being edited. `witan setup` and
+  `witan code setup` pass `strict=False`: they ask for several unrelated things
+  in one run, and a refused binary must not cost the user config.toml and their
+  agent bundles.
+
+  Two non-installs stay non-errors: an unsupported platform (witan works fine
+  with an omnigraph put on PATH by other means) and a binary already at the
+  pinned version (the converged state re-running is meant to reach).
+
 ## [0.31.0] - 2026-08-21
 
 ### Fixed

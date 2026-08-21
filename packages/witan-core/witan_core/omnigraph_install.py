@@ -259,14 +259,49 @@ def preserved_binaries(dest: Path | None = None) -> list[Path]:
     return [path for _, path in sorted(found, reverse=True)]
 
 
-def install_omnigraph(dry_run: bool = False) -> None:
+class OmnigraphInstallFailed(RuntimeError):
+    """The installer declined to put a binary in place, and said why.
+
+    ★ RAISED SO THE STEP THAT ASKED FOR THE INSTALL IS THE STEP THAT FAILS.
+    Every path below used to print its reason and return, so a workflow step
+    running `install_omnigraph(dry_run=False)` exited 0 with the refusal buried
+    in its log. The refusal then resurfaced ten tests later as `RuntimeError:
+    omnigraph binary not found. Install via: witan-code setup` — which reads as
+    a broken test environment rather than as a supply-chain check doing exactly
+    its job, and cost real time to trace on 2026-08-20.
+
+    A moved `edge` tag is the common cause and the one worth naming: the digest
+    check catching it is the system working, and it should look like it.
+    """
+
+
+def install_omnigraph(dry_run: bool = False, *, strict: bool = True) -> None:
     """Fetch the pinned omnigraph release into ``~/.local/bin/``.
 
     Skips the download when a binary is already present and reports the
     pinned version via ``--version``, so re-running always converges on the
     current pin without refetching an already-correct binary.
+
+    ``strict`` (the default) raises :class:`OmnigraphInstallFailed` when no
+    binary ends up installed. Pass ``strict=False`` to keep the old
+    print-and-return behaviour.
+
+    ★ THE DEFAULT IS THE STRICT ONE ON PURPOSE. The callers that most need the
+    failure are the seven workflow steps invoking this through `python -c`, and
+    they cannot pass an argument without being edited — so the default has to
+    be the loud one or they keep swallowing it. The two callers that legitimately
+    want to continue are `witan setup` and `witan code setup`, which are
+    interactive, ask for several unrelated things in one run, and would
+    otherwise abort before writing config.toml and the agent bundles over a
+    binary the user can install separately. Those two opt out explicitly.
+
+    NOT AN ERROR EITHER WAY: an unsupported platform, and a binary already at
+    the pinned version. Neither is a failure to install — the first is a
+    platform this installer does not build for (witan works fine with an
+    omnigraph put on PATH by other means), and the second is the converged
+    state re-running is supposed to reach.
     """
-    _download_omnigraph(default_install_path(), dry_run)
+    _download_omnigraph(default_install_path(), dry_run, strict=strict)
 
 
 def _preserve_outgoing(dest: Path, version: str | None, console) -> None:
@@ -311,7 +346,7 @@ def _preserve_outgoing(dest: Path, version: str | None, console) -> None:
     console.print(f"  [dim]omnigraph[/dim] — previous v{version} kept at {keep}")
 
 
-def _download_omnigraph(dest: Path, dry_run: bool) -> None:
+def _download_omnigraph(dest: Path, dry_run: bool, *, strict: bool = True) -> None:
     try:
         from rich.console import Console
     except ImportError as exc:  # pragma: no cover - depends on install extras
@@ -322,6 +357,18 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
         ) from exc
 
     console = Console()
+
+    def refuse(markup: str, plain: str) -> None:
+        """Print the reason as before, then raise it unless the caller opted out.
+
+        Two texts rather than one: the console gets Rich markup, and the
+        exception must not — a `[red]` in an exception message is noise in a
+        traceback and, worse, is swallowed whole by anything that renders it
+        through Rich (`witan setup`'s own console does).
+        """
+        console.print(markup)
+        if strict:
+            raise OmnigraphInstallFailed(plain)
 
     # Read once and carry it: this is both the skip check and, further down,
     # the name the outgoing binary is set aside under. Re-reading after the
@@ -368,8 +415,9 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
                 ):
                     fh.write(resp.read())
             except Exception as exc:  # noqa: BLE001
-                console.print(
-                    f"  [red]omnigraph download failed[/red] ({exc}); install manually"
+                refuse(
+                    f"  [red]omnigraph download failed[/red] ({exc}); install manually",
+                    f"omnigraph download failed: {exc}",
                 )
                 return
             # ★ VERIFY BEFORE EXTRACTING, and refuse rather than warn. Nothing
@@ -379,19 +427,28 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
             # against — see _OMNIGRAPH_ASSET_SHA256.
             expected = _OMNIGRAPH_ASSET_SHA256.get(asset)
             if expected is None:
-                console.print(
+                refuse(
                     f"  [red]omnigraph[/red] — no pinned checksum for {asset}; "
-                    "refusing to install an unverified binary"
+                    "refusing to install an unverified binary",
+                    f"no pinned checksum for {asset}; refusing to install an "
+                    "unverified binary. Add its digest to "
+                    "_OMNIGRAPH_ASSET_SHA256.",
                 )
                 return
             actual = hashlib.sha256(archive.read_bytes()).hexdigest()
             if actual != expected:
-                console.print(
+                refuse(
                     f"  [red]omnigraph checksum mismatch[/red] for {asset}\n"
                     f"    expected {expected}\n    got      {actual}\n"
                     f"  The '{_OMNIGRAPH_RELEASE_TAG}' tag has moved, or the "
                     "download was corrupted. Refresh the pinned digest "
-                    "deliberately — do not install this."
+                    "deliberately — do not install this.",
+                    f"omnigraph checksum mismatch for {asset}: expected "
+                    f"{expected}, got {actual}. The "
+                    f"'{_OMNIGRAPH_RELEASE_TAG}' tag has moved, or the download "
+                    "was corrupted. Refresh the pinned digest in "
+                    "witan_core/omnigraph_install.py deliberately — do not "
+                    "install this.",
                 )
                 return
             with tarfile.open(archive) as tf:
@@ -410,12 +467,20 @@ def _download_omnigraph(dest: Path, dry_run: bool) -> None:
             tmp_dest.replace(dest)
             console.print(f"  [green]omnigraph[/green] → {dest}")
         else:
-            console.print(
-                "  [red]omnigraph[/red] — binary not found in archive; install manually"
+            refuse(
+                "  [red]omnigraph[/red] — binary not found in archive; "
+                "install manually",
+                f"no omnigraph binary inside {asset}; the release asset layout "
+                "changed.",
             )
+    except OmnigraphInstallFailed:
+        # Already reported by `refuse`; re-wrapping it in the catch-all below
+        # would bury the specific reason under a generic "download failed".
+        raise
     except Exception as exc:  # noqa: BLE001
-        console.print(
-            f"  [red]omnigraph download failed[/red] ({exc}); install manually"
+        refuse(
+            f"  [red]omnigraph download failed[/red] ({exc}); install manually",
+            f"omnigraph install failed: {exc}",
         )
     finally:
         tmp_dest.unlink(missing_ok=True)

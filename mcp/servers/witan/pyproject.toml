@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.26.0"
+version = "0.27.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -155,7 +155,20 @@ dependencies = [
   # (This also carries 0.21.0's >=0.28 reason forward: the refreshed omnigraph
   # `edge` digest, below which `witan setup` fails its checksum and leaves the
   # CLI with no binary. Subsumed, not dropped.)
-  "witan-core[cli,remote,observability,sentry]>=0.30,<1",
+  #
+  # ★ >=0.32 IS A RUNTIME FLOOR, and a worked example of what
+  # `just check-core-floor` cannot see. `cli/setup_cmd.py` calls
+  # `install_omnigraph(dry_run, strict=False)`; anything below 0.32 has no
+  # `strict` parameter, so that is a TypeError raised WHEN SETUP RUNS — the
+  # module imports fine, every test passes, and the clean-install import check
+  # is green. Nothing catches this but the pin, which is why the pin says so.
+  #
+  # The number is 0.32 and not the 0.31 this branch was authored against:
+  # agent-kit#276 took 0.31.0 while this was open, so the release carrying
+  # `strict` is the next one up. Re-check this line by hand on every rebase —
+  # a floor left one release low here is a `witan setup` that dies with a
+  # TypeError, and nothing in CI would have told you.
+  "witan-core[cli,remote,observability,sentry]>=0.32,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -200,7 +213,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.26.0"
+current_version = "0.27.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
