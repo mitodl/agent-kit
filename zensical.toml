@@ -63,6 +63,7 @@ nav = [
     { "Architecture" = "explanation/architecture.md" },
     { "The memory model" = "explanation/memory-model.md" },
     { "Coordinating work" = "explanation/task-coordination.md" },
+    { "witan-core" = "explanation/witan-core.md" },
     { "Code graph" = [
       { "Symbol format" = "explanation/code-graph/symbol-format.md" },
       { "Symbol table" = "explanation/code-graph/symbol-table.md" },

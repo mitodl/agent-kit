@@ -25,6 +25,11 @@ to work against the grain of one.
     Symbol identity, edge precision tiers, and how the cross-repo bridge is
     stitched together.
 
+-   **[witan-core](witan-core.md)**
+
+    The shared floor under both servers: what belongs there, why it is
+    stdlib-only, and the version-floor trap the uv workspace hides.
+
 </div>
 
 ## Decisions

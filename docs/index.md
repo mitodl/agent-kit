@@ -93,7 +93,7 @@ witan-context covers three published packages, all developed in the
 | --- | --- |
 | [`witan-council`](https://pypi.org/project/witan-council/) | The memory, task, and workflow tools, plus the `witan` umbrella CLI |
 | [`witan-code`](https://pypi.org/project/witan-code/) | The tree-sitter code graph and cross-repo bridge; mounts as `witan code` |
-| [`witan-core`](https://pypi.org/project/witan-core/) | Shared internals: the graph client, OIDC/remote transport, observability |
+| [`witan-core`](https://pypi.org/project/witan-core/) | [Shared internals](explanation/witan-core.md): the graph client, OIDC/remote transport, observability |
 | [`ol-agent-kit`](https://pypi.org/project/ol-agent-kit/) | Meta-package that installs all of the above in one shot |
 
 Storage is [omnigraph](https://github.com/ModernRelay/omnigraph) — a local file, an
