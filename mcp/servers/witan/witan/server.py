@@ -5567,12 +5567,16 @@ def task_for_branch(branch: str, repo: str | None = None) -> list[dict]:
     """
     Return the tasks linked to a git branch — "what is this branch already for".
 
-    A ``CodeBranch`` is created and linked (``WorksOn``) whenever a task is
-    claimed or a session starts on that branch, so a non-empty result means
-    somebody has already committed this branch to that work. Call it before
+    A ``WorksOn`` link is written by a SUCCESSFUL ``task_claim`` and by nothing
+    else — losing a claim race does not link, and ``workflow_session_start``
+    touches the same ``CodeBranch`` but links it ``ForProject``. So a non-empty
+    result means somebody actually holds a task on this branch. Call it before
     starting fresh work on a branch you did not just create: on a shared graph
-    the linked task may be held by a different actor, in which case the answer
-    is to continue or coordinate, not to open a second task.
+    the holder may be a different actor, in which case the answer is to
+    continue or coordinate, not to open a second task.
+
+    An empty result is therefore weaker than it looks: a branch someone is
+    working on without having claimed a task returns nothing.
 
     Closed tasks are included — filter on ``status`` if you only want live
     work. Returns ``[]`` for an unknown branch, an unlinked one, or when no

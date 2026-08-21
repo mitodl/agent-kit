@@ -11,9 +11,11 @@ a MINOR bump may include breaking changes).
 ### Added
 
 - **`task_for_branch(branch, repo=None)`** — the tasks a git branch is already
-  linked to, via the `WorksOn` edge `task_claim` and `workflow_session_start`
-  write. The underlying `code_branch_tasks` query had no tool in front of it,
-  so it was reachable only by a direct store read.
+  linked to, via the `WorksOn` edge a successful `task_claim` writes.
+  `workflow_session_start` also touches the branch's `CodeBranch` but links it
+  `ForProject`, not `WorksOn`, so a session-only branch has no task to return.
+  The underlying `code_branch_tasks` query had no tool in front of it, so it
+  was reachable only by a direct store read.
 
 ### Fixed
 
