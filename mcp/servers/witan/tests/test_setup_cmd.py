@@ -16,12 +16,43 @@ import pytest
 from witan.cli import setup_cmd
 
 
+def _stub_installer(monkeypatch) -> list[dict]:
+    """Stub the omnigraph fetch and record how it was called."""
+    calls: list[dict] = []
+
+    def fake_install(dry_run, **kwargs):
+        calls.append({"dry_run": dry_run, **kwargs})
+
+    monkeypatch.setattr("witan.cli.setup_cmd.install_omnigraph", fake_install)
+    return calls
+
+
 @pytest.fixture
 def _no_network(monkeypatch):
     """Every setup() call fetches the omnigraph binary; keep it a no-op."""
-    monkeypatch.setattr("witan.cli.setup_cmd.install_omnigraph", lambda dry_run: None)
+    _stub_installer(monkeypatch)
     monkeypatch.setattr("witan.setup.install_default_config", lambda dry_run: None)
     monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+
+def test_setup_does_not_abort_on_a_refused_omnigraph_binary(tmp_path, monkeypatch):
+    """★ `witan setup` asks for several unrelated things in one run.
+
+    The installer raises by default as of witan-core 0.30.0, which is right for
+    the workflow steps calling it through `python -c` — they used to swallow a
+    checksum refusal and exit 0. It is wrong here: aborting would cost the user
+    config.toml and their agent bundles over a binary they can install
+    separately, and the refusal is printed either way. So this caller opts out,
+    and asserting it does is the point — a `**kwargs` stub would accept either.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr("witan.setup.install_default_config", lambda dry_run: None)
+    monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: f"/usr/bin/{name}")
+    calls = _stub_installer(monkeypatch)
+
+    setup_cmd.setup(dry_run=False)
+
+    assert calls == [{"dry_run": False, "strict": False}]
 
 
 def _install_fake_witan_code(monkeypatch, tmp_path) -> Path:
@@ -155,7 +186,7 @@ def test_no_subcommand_warning_when_witan_itself_is_missing(
     ("witan")` guard this fired both warnings side by side, each recommending
     a different (redundant) `uv tool install` command."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setattr("witan.cli.setup_cmd.install_omnigraph", lambda dry_run: None)
+    _stub_installer(monkeypatch)
     monkeypatch.setattr("witan.setup.install_default_config", lambda dry_run: None)
     monkeypatch.setattr(setup_cmd.shutil, "which", lambda name: None)
     _install_fake_witan_code(monkeypatch, tmp_path)

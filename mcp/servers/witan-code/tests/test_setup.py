@@ -101,3 +101,33 @@ def test_witan_code_bundle_includes_bundled_skills(tmp_path):
     bundle = setup.witan_code_bundle(pkg_dir, "tester")
 
     assert any(s.name == "witan-code" for s in bundle.skills)
+
+
+def test_setup_does_not_abort_on_a_refused_omnigraph_binary(tmp_path, monkeypatch):
+    """★ Same contract as `witan setup`, and worth asserting separately.
+
+    The installer raises by default as of witan-core 0.30.0, which is right for
+    the workflow steps calling it through `python -c` — they used to swallow a
+    checksum refusal and exit 0. It is wrong for an interactive command that
+    also installs the agent bundles: aborting would cost the user those over a
+    binary they can install separately, and the refusal is printed either way.
+
+    `cli.setup` imports `install_omnigraph` inside the function body, so the
+    patch target is witan_core's own attribute rather than a module-level name
+    in cli.
+    """
+    import witan_core
+
+    from witan_code import cli
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        witan_core,
+        "install_omnigraph",
+        lambda dry_run, **kwargs: calls.append({"dry_run": dry_run, **kwargs}),
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    cli.setup(agent="claude", author="tester")
+
+    assert calls == [{"dry_run": False, "strict": False}]

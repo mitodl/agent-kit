@@ -331,12 +331,20 @@ def test_a_tampered_download_is_refused(tmp_path, monkeypatch, capsys):
         oi._OMNIGRAPH_ASSET_SHA256, "omnigraph-linux-x86_64.tar.gz", "00" * 32
     )
 
-    oi.install_omnigraph(dry_run=False)
+    with pytest.raises(oi.OmnigraphInstallFailed) as raised:
+        oi.install_omnigraph(dry_run=False)
 
     assert not _dest(tmp_path).exists(), "a mismatched download must not install"
     out = capsys.readouterr().out
     assert "checksum mismatch" in out
     assert "has moved" in out  # names the likely cause on a moving tag
+    # The exception carries the same facts, unmarked-up: it is what a CI step's
+    # traceback shows, and Rich markup there would be swallowed by any console
+    # that rendered it.
+    message = str(raised.value)
+    assert "checksum mismatch" in message
+    assert "has moved" in message
+    assert "[red]" not in message
 
 
 def test_an_asset_with_no_pinned_digest_is_refused(tmp_path, monkeypatch, capsys):
@@ -350,7 +358,110 @@ def test_an_asset_with_no_pinned_digest_is_refused(tmp_path, monkeypatch, capsys
     monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResponse(blob))
     monkeypatch.delitem(oi._OMNIGRAPH_ASSET_SHA256, "omnigraph-linux-x86_64.tar.gz")
 
-    oi.install_omnigraph(dry_run=False)
+    with pytest.raises(oi.OmnigraphInstallFailed, match="no pinned checksum"):
+        oi.install_omnigraph(dry_run=False)
 
     assert not _dest(tmp_path).exists()
     assert "no pinned checksum" in capsys.readouterr().out
+
+
+# ── a refusal has to reach the exit code ───────────────────────────
+#
+# Every path above printed its reason and returned, so a workflow step running
+# `install_omnigraph(dry_run=False)` exited 0 with the refusal buried in its
+# log. It resurfaced ten tests later as `omnigraph binary not found`, which
+# reads as a broken test environment rather than as the digest check working.
+
+
+def _serve_mismatched(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
+    blob = _fake_release_tarball(b"#!/bin/sh\necho tampered")
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResponse(blob))
+    monkeypatch.setitem(
+        oi._OMNIGRAPH_ASSET_SHA256, "omnigraph-linux-x86_64.tar.gz", "00" * 32
+    )
+
+
+def test_the_interactive_path_can_opt_out_and_keep_going(tmp_path, monkeypatch, capsys):
+    """`witan setup` asks for several unrelated things in one run. A refused
+    binary must not cost the user config.toml and their agent bundles, which
+    are useful on their own — so that caller passes strict=False and still
+    gets the printed reason."""
+    _serve_mismatched(tmp_path, monkeypatch)
+
+    oi.install_omnigraph(dry_run=False, strict=False)
+
+    assert not _dest(tmp_path).exists()
+    assert "checksum mismatch" in capsys.readouterr().out
+
+
+def test_a_failed_download_is_an_error_too(tmp_path, monkeypatch):
+    """Not only the digest check. A transient fetch failure swallowed here
+    surfaces the same confusing way — as a missing binary, much later."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("connection reset")),
+    )
+
+    with pytest.raises(oi.OmnigraphInstallFailed, match="connection reset"):
+        oi.install_omnigraph(dry_run=False)
+
+
+def test_an_archive_without_the_binary_is_an_error(tmp_path, monkeypatch):
+    """The release asset layout changing is a real failure, not a skip."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "x86_64")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        payload = io.BytesIO(b"not the binary")
+        info = tarfile.TarInfo(name="omnigraph-linux-x86_64/README")
+        info.size = 14
+        tf.addfile(info, payload)
+    _serve(monkeypatch, buf.getvalue())
+
+    with pytest.raises(oi.OmnigraphInstallFailed, match="no omnigraph binary inside"):
+        oi.install_omnigraph(dry_run=False)
+
+
+def test_an_unsupported_platform_is_still_a_skip(tmp_path, monkeypatch):
+    """NOT every non-install is a failure. This installer builds for a fixed
+    set of platforms, and witan works fine with an omnigraph put on PATH by
+    other means — raising here would break those users for no gain."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(oi.platform, "system", lambda: "plan9")
+    monkeypatch.setattr(oi.platform, "machine", lambda: "mips")
+
+    oi.install_omnigraph(dry_run=False)
+
+    assert not _dest(tmp_path).exists()
+
+
+def test_an_already_current_binary_is_still_a_skip(tmp_path, monkeypatch):
+    """The converged state re-running is supposed to reach, not a failure."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _write_fake_binary(_dest(tmp_path), oi._OMNIGRAPH_VERSION)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("hit network")),
+    )
+
+    oi.install_omnigraph(dry_run=False)
+
+
+def test_the_specific_reason_survives_the_catch_all(tmp_path, monkeypatch):
+    """The outer `except Exception` wraps anything unexpected as a generic
+    install failure. A refusal must pass through it intact, or the message that
+    names the moved tag is replaced by one that names nothing."""
+    _serve_mismatched(tmp_path, monkeypatch)
+
+    with pytest.raises(oi.OmnigraphInstallFailed) as raised:
+        oi.install_omnigraph(dry_run=False)
+
+    assert "checksum mismatch" in str(raised.value)
+    assert "install failed" not in str(raised.value)

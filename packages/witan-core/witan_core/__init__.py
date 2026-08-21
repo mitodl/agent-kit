@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from ._detach import popen_detached
 from .config_file import load_toml
-from .omnigraph_install import install_omnigraph
+from .omnigraph_install import OmnigraphInstallFailed, install_omnigraph
 from .repo_key import find_git_config, normalise
 from .target_config import (
     local_project_path,
@@ -29,6 +29,7 @@ from .timeutil import now_iso
 
 __all__ = [
     "find_git_config",
+    "OmnigraphInstallFailed",
     "install_omnigraph",
     "load_toml",
     "local_project_path",

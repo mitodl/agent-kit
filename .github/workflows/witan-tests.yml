@@ -186,6 +186,33 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --group test
 
+      # ★ DELIBERATELY NOT CACHED, unlike test-witan / witan-policy /
+      # omnigraph-format above. This is the one job that actually FETCHES the
+      # pinned binary on every run, and that is a signal nothing else produces.
+      #
+      # `edge` is force-updated on every push to upstream main, so the pinned
+      # digest describes a build that stops being downloadable the moment
+      # upstream merges. The cached jobs are correctly insulated from that —
+      # they already hold the build the pin names, which is the build the tests
+      # are meant to run against, and their key is the installer module's
+      # content so a deliberate pin change still invalidates them. What they
+      # cannot tell you is that a FRESH runner, or a fresh developer running
+      # `witan setup`, can no longer get the binary at all. This job can, and
+      # one download per run is a fair price for it.
+      #
+      # ── WHY NOT THE ALTERNATIVES ──
+      # Adding the cache here (for speed and consistency) would remove the only
+      # place that signal exists. A separate "is the pin current" job comparing
+      # the pin to the published `.sha256` would be red almost always and
+      # correctly so: on a moving tag the pin is EXPECTED to lag, and the
+      # comment on _OMNIGRAPH_ASSET_SHA256 says to refresh it on a red job
+      # rather than on a schedule. A permanently-red check is not a check.
+      #
+      # This is legible rather than cryptic as of witan-core 0.30.0: the
+      # installer raises `OmnigraphInstallFailed` instead of printing and
+      # returning, so a moved tag fails THIS step naming the moved tag —
+      # not ten tests later as "omnigraph binary not found", which reads as a
+      # broken test environment rather than as the digest check doing its job.
       - name: Install omnigraph binary
         # requires_stack-marked indexer tests (test_indexer.py, test_languages.py,
         # …) are silently skipped without it — see tests/conftest.py.

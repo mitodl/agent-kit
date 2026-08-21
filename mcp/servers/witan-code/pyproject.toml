@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.14.0"
+version = "0.15.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -108,15 +108,20 @@ dependencies = [
     # self-describing failure and delivers half of one is the quiet wrongness
     # the two floors above were raised to avoid.
     #
-    # ★ THE NUMBER MOVED 0.30 -> 0.31 ON REBASE, and that is the whole hazard
-    # this note exists to flag. agent-kit#280 took 0.30.0 for unrelated work
-    # while this branch was open, so the release carrying the diagnostics is
-    # 0.31.0 — and a floor left at >=0.30 would resolve #280's release instead
-    # and quietly deliver the half-message described above. `just
-    # check-core-floor` cannot catch it: nothing new is imported, so the
-    # clean-install import check passes at either number. Re-check this line by
-    # hand whenever this branch is rebased.
-    "witan-core[cli,remote,observability,sentry]>=0.31,<1",
+    # ★ >=0.32 IS THE FOURTH NON-IMPORT FLOOR, and the first RUNTIME one — a
+    # worked example of what `just check-core-floor` cannot see. `cli.setup`
+    # calls `install_omnigraph(dry_run, strict=False)`; anything below 0.32 has
+    # no `strict` parameter, so that is a TypeError raised WHEN SETUP RUNS — the
+    # module imports fine, every test passes, and the clean-install import check
+    # is green. Nothing catches this but the pin, which is why the pin says so.
+    # It subsumes the diagnostics reason above, which needed only >=0.31.
+    #
+    # ★ THIS NUMBER HAS MOVED TWICE ON REBASE — 0.30 -> 0.31 -> 0.32 — because
+    # agent-kit#280 then #276 each took the next witan-core release while these
+    # branches were open. Both times the pyproject line auto-merged without a
+    # conflict, since both sides named the same number. Re-check it by hand on
+    # every rebase; a floor one release low here is silent.
+    "witan-core[cli,remote,observability,sentry]>=0.32,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled
@@ -200,7 +205,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 [tool.bumpversion]
-current_version = "0.14.0"
+current_version = "0.15.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

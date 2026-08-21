@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.27.0] - 2026-08-21
+
+### Changed
+
+- **Raised the `witan-core` floor to `>=0.32` — a RUNTIME floor.** `setup` now
+  calls `install_omnigraph(dry_run, strict=False)` to keep the old
+  keep-going-on-a-refusal behaviour, which witan-core 0.32.0 made opt-in when
+  it started raising `OmnigraphInstallFailed` by default (see witan-core's
+  CHANGELOG for why the CI callers needed that default). Anything below 0.32
+  has no `strict` parameter, so resolving below it is a `TypeError` **when
+  setup runs** — the module imports fine and every test passes, which is exactly the
+  case `just check-core-floor` documents itself as unable to catch.
+
+  No behaviour change for anyone: `setup` keeps going on a refused binary and
+  keeps printing the reason, as before.
+
+  0.32, not the 0.31 this branch was authored against: agent-kit#276 took
+  0.31.0 while this was open. The pyproject line auto-merged without a
+  conflict on rebase — both sides named the same number — so this floor has
+  to be re-checked by hand each time, and a value one release low is silent.
+
 ## [0.26.0] - 2026-08-21
 
 ### Fixed

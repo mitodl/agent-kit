@@ -93,7 +93,13 @@ def setup(
         )
 
     console.print("[bold]omnigraph binary[/bold]")
-    install_omnigraph(dry_run)
+    # strict=False: this command asks for several unrelated things in one run,
+    # and a refused binary must not cost the user config.toml and their agent
+    # bundles — those are useful on their own, and the binary can be installed
+    # separately. The refusal is printed by the installer either way. CI
+    # callers take the strict default, where a swallowed refusal is exactly the
+    # problem (witan_core.omnigraph_install.OmnigraphInstallFailed).
+    install_omnigraph(dry_run, strict=False)
 
     console.print("\n[bold]config.toml[/bold]")
     su.install_default_config(dry_run)
