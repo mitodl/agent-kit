@@ -44,7 +44,7 @@ class RemoteConfig:
     through the deployment over ``streamable-http``, authenticated with a
     per-user Keycloak JWT (device-code flow, :mod:`witan_core.remote.oidc`).
     Against a 2026-07-28 deployment that connection is stateless — no
-    handshake, no session id (witan ADR-0006).
+    handshake, no session id (witan ADR-0009).
 
     These name the *client's* view of the deployment and are deliberately
     separate from the server-side identity config (``WITAN_ACTOR_TOKENS_FILE``

@@ -1,4 +1,4 @@
-# 4. Optional task `phase` field + per-phase ready-work rollup
+# 8. Optional task `phase` field + per-phase ready-work rollup
 
 > "Phase tag" is used loosely in the tracking task title; the decision below is a
 > typed, optional `phase` **enum field** on `Task` (not a free-form tag) — see

@@ -1329,7 +1329,8 @@ unchanged; this is what has to be true before it can move.
 
 ### Added
 
-- **ADR-0006** (`docs/adr/0006-stateless-mcp-protocol-era.md`) records the move
+- **ADR-0009** (`docs/adr/0009-stateless-mcp-protocol-era.md`, numbered 0006 at
+  the time) records the move
   to the stateless 2026-07-28 era: what it unlocks (multi-replica behind a plain
   round-robin LB, no session affinity), the two pieces of state that are still
   per-replica, and why the fastmcp 3.4.x/4.x straddle stays until 4.0 GA.
