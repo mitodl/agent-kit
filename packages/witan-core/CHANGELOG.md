@@ -17,8 +17,9 @@ a MINOR bump may include breaking changes).
   last was true. `PooledTransport` failures now report the elapsed time and, for
   a timeout, the budget that fired, named as
   `omnigraph_http.DEFAULT_TIMEOUT_SECONDS`. It reports the transport's own
-  value, not the module default: sending a reader to a constant that is not the
-  one that expired would be worse than saying nothing.
+  value, not the module default, and it names `DEFAULT_TIMEOUT_SECONDS` only
+  when that constant is what supplied the budget: sending a reader to a setting
+  that is not the one that expired would be worse than saying nothing.
 
   Non-timeout failures carry the elapsed too. A server-side deadline arrives as
   a connection reset, not as a timeout, and the elapsed time is what separates
@@ -27,12 +28,18 @@ a MINOR bump may include breaking changes).
 ### Changed
 
 - **A `change_many` chunk failure names its position.** Chunks commit
-  independently, so which one failed IS the resulting state: every chunk before
-  it landed and every one after did not. The error now carries the chunk index,
-  the total, the statements in it, the configured `chunk_size` and the elapsed
-  time, with the original failure on `__cause__`. Unchunked batches are
+  independently, so which one failed is most of the resulting state: every chunk
+  before it landed and every one after did not. The error now carries the chunk
+  index, the total, the statements in it, the configured `chunk_size` and the
+  elapsed time, with the original failure on `__cause__`. Unchunked batches are
   unwrapped as before — no position to report, and wrapping would only bury the
   named query the single-step path exists to keep in the message.
+
+  It stops short of claiming the FAILING chunk's fate, because that is genuinely
+  unknown: a mid-flight timeout can land after the server committed, which is
+  why `omnigraph_http._send` refuses to retry a non-idempotent write there. So
+  the count is a lower bound, and the message says so rather than reading as a
+  resume point.
 
 ## [0.30.0] - 2026-08-21
 

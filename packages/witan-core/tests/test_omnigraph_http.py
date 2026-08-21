@@ -1324,3 +1324,7 @@ def test_the_budget_reported_is_the_transports_own_not_the_default(
     )
 
     assert "client timeout budget 7.5s" in error
+    # ...and does NOT name the module default, which is 120 and had nothing to
+    # do with this failure. Citing it alongside 7.5s would send the reader to
+    # the wrong setting — the same defect this message exists to fix.
+    assert "DEFAULT_TIMEOUT_SECONDS" not in error

@@ -368,10 +368,20 @@ class PooledTransport:
         # `socket.timeout` has been an alias of `TimeoutError` since 3.10, so
         # the builtin covers both spellings.
         if isinstance(exc, TimeoutError):
+            # Name the constant ONLY when it is the one that supplied the
+            # budget. A transport built with an explicit timeout gets the bare
+            # number: pointing a reader at DEFAULT_TIMEOUT_SECONDS when that is
+            # 120 and the budget that fired was 7.5 sends them to the wrong
+            # setting, which is the same failure this whole message exists to
+            # fix, one level up.
+            source = (
+                " — witan_core.omnigraph_http.DEFAULT_TIMEOUT_SECONDS"
+                if self._timeout == DEFAULT_TIMEOUT_SECONDS
+                else ""
+            )
             return (
                 f"timed out after {elapsed:.1f}s "
-                f"(client timeout budget {self._timeout:g}s — "
-                f"witan_core.omnigraph_http.DEFAULT_TIMEOUT_SECONDS)"
+                f"(client timeout budget {self._timeout:g}s{source})"
             )
         return f"{exc} (after {elapsed:.1f}s)"
 

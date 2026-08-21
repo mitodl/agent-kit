@@ -1424,7 +1424,9 @@ class OmnigraphClient:
         opt-in because it TRADES AWAY ATOMICITY: chunks commit independently and
         a failure part-way leaves the earlier ones applied. A chunk failure is
         re-raised naming its position, the batch size and the elapsed time, so
-        the caller can tell how much landed without re-deriving it.
+        the caller can tell how much landed without re-deriving it — bounded by
+        the caveat that the FAILING chunk's own fate is unknown when the failure
+        is mid-flight, so the count is a lower bound and not a resume point.
 
         A single step is passed straight through to ``change`` rather than
         wrapped: the composed form would be equivalent, but the direct path
@@ -1448,16 +1450,30 @@ class OmnigraphClient:
                 except Exception as exc:
                     # Chunks commit independently, so WHICH chunk failed is the
                     # difference between "the write is slow" and "the write is
-                    # broken": everything before this one has landed and
-                    # everything after has not. The bare error names neither the
-                    # position nor the batch size that produced it, which is
-                    # exactly what a timeout needs you to know.
+                    # broken". The bare error names neither the position nor the
+                    # batch size that produced it, which is exactly what a
+                    # timeout needs you to know.
+                    #
+                    # ★ THE PRIOR CHUNKS ARE A LOWER BOUND, NOT THE STATE. This
+                    # chunk's own fate is genuinely unknown when the failure is
+                    # a mid-flight timeout: `omnigraph_http._send` classifies
+                    # exactly that case as possibly-committed, which is why it
+                    # refuses to retry a non-idempotent write there. Reporting
+                    # "chunks 1-N committed" as if it were the resulting state
+                    # would invite a caller to resume at N+1 and silently
+                    # re-apply this one.
                     elapsed = time.monotonic() - started
+                    landed = (
+                        f"chunks 1-{index - 1} committed"
+                        if index > 1
+                        else "no chunk committed"
+                    )
                     raise RuntimeError(
                         f"chunk {index}/{chunks} of a {len(steps)}-statement "
                         f"batch failed after {elapsed:.1f}s "
                         f"({len(batch)} statements, chunk_size={chunk_size}; "
-                        f"chunks 1-{index - 1} already committed): {exc}"
+                        f"{landed} before it, and this chunk may or may not "
+                        f"have): {exc}"
                     ) from exc
             return
         if len(steps) == 1:
