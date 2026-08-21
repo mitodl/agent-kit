@@ -86,11 +86,21 @@ CORE_REQUIREMENT = re.compile(
 # modules legitimately raise at import in a bare environment: `witan.server`
 # resolves the omnigraph binary at module scope and raises `RuntimeError:
 # omnigraph binary not found` on a runner that has never run `witan setup`.
-# That says nothing about the floor. So each failure is classified by whether
-# witan_core is implicated — the exception's own module, a witan_core frame in
-# the traceback, or the message naming it — and only those decide the exit
-# status. The rest are printed, clearly labelled, so a real problem hiding
-# behind one is still visible.
+# That says nothing about the floor.
+#
+# The discriminator is the EXCEPTION TYPE, not the traceback. "witan_core is
+# somewhere in the frames" is too broad and produced exactly that false
+# positive: the RuntimeError above is *raised from* witan_core/omnigraph.py, so
+# witan_core is all over its traceback. The failure mode a stale floor actually
+# produces is a NAME THAT IS NOT THERE — ImportError (a missing module or a
+# missing `from ... import X`) or AttributeError on a witan_core object. A
+# RuntimeError from inside witan-core is that package working as designed
+# against an environment it does not like.
+#
+# Deliberately narrow. A stale floor could in principle surface some other way
+# (a signature change evaluated at module scope, say), and this would miss it —
+# but a check that cries wolf is worth less than one with a known blind spot,
+# and the three escapes it exists to catch were all plain ImportErrors.
 IMPORT_ALL = """
 import importlib, pkgutil, sys, traceback
 pkg = importlib.import_module(sys.argv[1])
@@ -104,7 +114,8 @@ for name in names:
     except Exception as exc:
         trace = "".join(traceback.format_exception(exc))
         line = f"{name}: {type(exc).__name__}: {exc}"
-        (floor if "witan_core" in trace else other).append(line)
+        missing_name = isinstance(exc, ImportError | AttributeError)
+        (floor if missing_name and "witan_core" in trace else other).append(line)
 ok = len(names) - len(floor) - len(other)
 print(f"imported {ok}/{len(names)} modules")
 for line in floor:
