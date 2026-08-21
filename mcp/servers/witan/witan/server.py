@@ -3350,7 +3350,10 @@ def _code_branch_steps(
     ``task_claim`` looked like it had tracked the branch. ``repo`` had already
     been lifted to a parameter for exactly this reason; ``branch`` had not.
     Callers reached from a tool that declares ``branch`` should pass it; the
-    proxy fills it in client-side (``_BRANCH_IS_CHECKOUT``).
+    proxy fills it in client-side (``_BRANCH_IS_CHECKOUT``). Three values, three
+    meanings: a branch name uses it, ``None`` means "work it out yourself" and
+    takes the fallback, and ``""`` means "no branch, do not track" and returns
+    ``[]`` — matching what ``repo=""`` means on every tool that takes it.
 
     ★ "ALREADY RECORDED" IS NOT ONE OF THEM. With a repo and a branch the list
     is never empty: `_upsert_code_branch_step` yields an insert for a new
@@ -3378,7 +3381,14 @@ def _code_branch_steps(
     """
     if not repo:
         return []
-    branch = branch or repo_module.current_branch()
+    # `is None`, not truthiness: an explicitly-passed `""` means "no branch —
+    # do not track", the same sentinel `repo=""` carries, and `_map_args` sends
+    # it through untouched (only an OMITTED branch is filled in client-side).
+    # Falling back on it would build a CodeBranch out of the server's own
+    # checkout for a caller who asked for none — which under local stdio is the
+    # caller's checkout, so it would silently succeed.
+    if branch is None:
+        branch = repo_module.current_branch()
     if not branch:
         return []
     try:

@@ -306,3 +306,28 @@ def test_an_explicit_branch_wins_over_the_servers_own_checkout(
         task["slug"]
     }
     assert server.task_for_branch(branch="server-side-branch") == []
+
+
+@requires_omnigraph
+def test_an_explicit_empty_branch_means_do_not_track(server, tmp_path, monkeypatch):
+    """`branch=""` is the "no branch" sentinel, matching `repo=""`, and must not
+    fall back to the server's own checkout.
+
+    `_map_args` passes an explicitly-empty branch through untouched — only an
+    *omitted* one is filled in client-side — so a truthiness fallback here would
+    build a CodeBranch out of whatever the server happens to be sitting in. On a
+    deployment that is nothing and the bug hides; under local stdio it is the
+    caller's own checkout, so it silently succeeds at the thing the caller asked
+    not to happen. Hence the server-side git repo below: without it this test
+    passes either way.
+    """
+    from witan import server as srv
+
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "server-side-only")
+    monkeypatch.chdir(base)
+
+    task = server.task_create(title="untracked on purpose", description="x")
+    assert server.task_claim(task["slug"], repo=REPO, branch="")["claimed"] is True
+
+    assert srv.client.read("read.gq", "code_branches_by_repo", {"repo": REPO}) == []
