@@ -22,6 +22,8 @@ from ._common import (
     TaskType,
     app,
     console,
+    esc,
+    print_error,
     render_table,
 )
 from .run_helpers import (
@@ -138,7 +140,7 @@ def _task_show(slug: str) -> None:
         console.print(f"[red]No task {slug!r}.[/red]")
         return
 
-    console.print(f"[bold]{t['slug']}[/bold]  {t.get('title', '')}")
+    console.print(f"[bold]{t['slug']}[/bold]  {esc(t.get('title'))}")
     console.print(
         f"  type={t.get('type')}  "
         f"priority={_styled(t.get('priority', ''), _PRIORITY_STYLE)}  "
@@ -156,14 +158,14 @@ def _task_show(slug: str) -> None:
         project = _fn(s.workflow_project_get)(slug=t["project_slug"])
         if project:
             console.print(
-                f"  project: {project['slug']} — {project.get('title', '')} "
-                f"[{project.get('phase', '')}]"
+                f"  project: {project['slug']} — {esc(project.get('title'))} "
+                f"({esc(project.get('phase'))})"
             )
         else:
             console.print(f"  project: {t['project_slug']}")
     if t.get("symbol_refs"):
         console.print(f"  code symbols: {', '.join(t['symbol_refs'])}")
-    console.print(f"\n{t.get('description') or '(no description)'}\n")
+    console.print(f"\n{esc(t.get('description') or '(no description)')}\n")
 
     for blocker in t.get("blocked_by") or []:
         b = _fn(s.task_get)(slug=blocker)
@@ -173,10 +175,11 @@ def _task_show(slug: str) -> None:
     children = _fn(s.task_list)(parent=slug)
     for c in children:
         console.print(
-            f"  ↳ {c['slug']} [{_styled(c.get('status', ''), _STATUS_STYLE)}] {c.get('title', '')}"
+            f"  ↳ {c['slug']} [{_styled(c.get('status', ''), _STATUS_STYLE)}] "
+            f"{esc(c.get('title'))}"
         )
     if t.get("resolution"):
-        console.print(f"\n  resolution: {t['resolution']}")
+        console.print(f"\n  resolution: {esc(t['resolution'])}")
 
 
 task_app = cyclopts.App(
@@ -259,7 +262,7 @@ def task_close_cmd(slug: str, *, resolution: str | None = None) -> None:
         raise SystemExit(1)
     console.print(f"[green]Closed[/green] [bold]{slug}[/bold]")
     if resolution:
-        console.print(f"  resolution: {resolution}")
+        console.print(f"  resolution: {esc(resolution)}")
 
 
 @task_app.command(name="claim")
@@ -293,9 +296,9 @@ def task_claim_cmd(
         )
         return
     reason = result.get("held_by") or result.get("reason") or "unavailable"
-    console.print(f"[yellow]Not claimed[/yellow] ({reason}).")
+    console.print(f"[yellow]Not claimed[/yellow] ({esc(reason)}).")
     if result.get("remedy"):
-        console.print(f"  {result['remedy']}")
+        console.print(f"  {esc(result['remedy'])}")
     raise SystemExit(1)
 
 
@@ -487,7 +490,7 @@ def task_run(
     try:
         cfg = cfg_module.load(target=target)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
 
     if slug:
@@ -514,7 +517,7 @@ def task_run(
     def _render_task(t: dict) -> str:
         pri = _styled(t.get("priority", ""), _PRIORITY_STYLE)
         repo_s = f"  [dim]{_short_repo(t.get('repo'))}[/dim]" if t.get("repo") else ""
-        return f"{t['slug']}  {pri}  {t.get('title', '')}{repo_s}"
+        return f"{t['slug']}  {pri}  {esc(t.get('title'))}{repo_s}"
 
     selected = _pick_items(ready, _render_task)
     if not selected:

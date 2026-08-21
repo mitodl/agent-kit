@@ -7,7 +7,7 @@ from typing import Annotated, NoReturn
 
 import cyclopts
 
-from ._common import _srv, console, remote_proxy
+from ._common import _srv, console, esc, print_error, remote_proxy
 
 migrate_app = cyclopts.App(
     name="migrate",
@@ -19,9 +19,9 @@ def _apply_schema() -> None:
     try:
         result = _srv().apply_schema()
     except RuntimeError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
-    console.print(result["output"] or f"schema applied to {result['store']}")
+    console.print(esc(result["output"] or f"schema applied to {result['store']}"))
 
 
 def _repo_keys() -> None:
@@ -29,7 +29,7 @@ def _repo_keys() -> None:
     try:
         result = s.migrate_repo_keys()
     except RuntimeError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
     console.print(
         f"Updated {result['tasks_updated']} task(s), {result['memories_updated']} "
@@ -45,7 +45,7 @@ def _repo_keys() -> None:
             "re-derivable cache, not covered by this migration):[/yellow]"
         )
         for old, new in changed.items():
-            console.print(f"  {old} -> {new}")
+            console.print(f"  {esc(old)} -> {esc(new)}")
 
 
 def _backfill_topics() -> None:
@@ -59,7 +59,7 @@ def _backfill_topics() -> None:
             raise SystemExit(1)
         result = s.migrate_topics()
     except RuntimeError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
     console.print(
         f"Scanned {result['memories_scanned']} memories; "
@@ -69,7 +69,7 @@ def _backfill_topics() -> None:
 
 
 def _fail(message: str) -> NoReturn:
-    console.print(f"[red]{message}[/red]")
+    print_error(message)
     raise SystemExit(1)
 
 
@@ -192,13 +192,13 @@ def _merge(
     try:
         result = s.merge_store(source, target=target, dry_run=dry_run)
     except RuntimeError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
 
     if dry_run:
         console.print(f"[yellow]Dry run[/yellow] against {result['target']}:")
         for d in result["decisions"]:
-            console.print(f"  {d['decision']:12} {d['type']:16} {d['slug']}")
+            console.print(f"  {d['decision']:12} {d['type']:16} {esc(d['slug'])}")
         console.print(
             f"{result['added']} to add, {result['updated']} to update, "
             f"{result['kept_target']} kept (target already newer-or-equal)."
@@ -235,16 +235,16 @@ def _migrate_storage(old_binary: str | None, yes: bool) -> None:
     try:
         result = s.migrate_storage_format(old_binary)
     except RuntimeError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
     if not result["migrated"]:
-        console.print(result["reason"])
+        console.print(esc(result["reason"]))
         return
     console.print(
         f"[green]Migrated[/green] {result['store']} "
         f"(old binary: {result['old_binary']}, backup: {result['backup']})."
     )
-    console.print(result["verify"])
+    console.print(esc(result["verify"]))
 
 
 @migrate_app.command
@@ -417,7 +417,7 @@ def dedupe_sessions(
     try:
         result = _srv().migrate_dedupe_sessions(apply=apply, extra_marks=extra or None)
     except RuntimeError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
 
     marked = result["marked"]
@@ -426,7 +426,7 @@ def dedupe_sessions(
         verb = "Marked" if result["applied"] else "[yellow]Would mark[/yellow]"
         console.print(f"{verb} {len(marked)} duplicate session(s):")
         for dup, survivor in marked.items():
-            console.print(f"  {dup} -> {survivor}")
+            console.print(f"  {esc(dup)} -> {esc(survivor)}")
     else:
         console.print("No duplicate sessions to mark.")
 
@@ -438,8 +438,8 @@ def dedupe_sessions(
             "in fact one session:"
         )
         for sess in run["sessions"]:
-            console.print(f"  {sess['slug']}  {sess['started_at']}")
-            console.print(f"    {sess['summary']}")
+            console.print(f"  {sess['slug']}  {esc(sess['started_at'])}")
+            console.print(f"    {esc(sess['summary'])}")
 
     if result["sealed_traces"]:
         console.print(

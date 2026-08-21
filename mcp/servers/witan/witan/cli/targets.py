@@ -26,7 +26,7 @@ import cyclopts
 import tomli_w
 
 from .. import config as cfg_module
-from ._common import _split_csv, app, console, render_table
+from ._common import _split_csv, app, console, print_error, render_table
 
 targets_app = cyclopts.App(
     name="target",
@@ -203,7 +203,7 @@ def _existing_names() -> list[str]:
     try:
         return [t.name for t in cfg_module._parse_targets(cfg_module._load_toml())]
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
 
 
@@ -405,7 +405,7 @@ def list_targets() -> None:
     try:
         targets = cfg_module._parse_targets(cfg_module._load_toml())
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
     if not targets:
         console.print(

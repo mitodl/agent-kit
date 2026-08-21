@@ -31,7 +31,7 @@ deferred until an allowed read actually asks for it.
 from __future__ import annotations
 
 from ..config import LocalDispatch
-from ._common import stderr_console
+from ._common import print_error, stderr_console
 
 __all__ = [
     "CLIENT_READ_ATTRS",
@@ -215,7 +215,7 @@ class _LocalStoreGuard:
         return self._inner
 
     def _refuse(self, what: str) -> None:
-        stderr_console.print(f"[red]{local_write_refused(what, self._diagnosis)}[/red]")
+        print_error(local_write_refused(what, self._diagnosis), stderr=True)
         raise SystemExit(1)
 
     def __getattr__(self, name: str):

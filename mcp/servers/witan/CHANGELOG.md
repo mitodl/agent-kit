@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.23.0] - 2026-08-21
+
+### Fixed
+
+- **CLI renderers no longer drop bracketed text from stored content.** Rich
+  reads `[...]` in `Console.print` as a style tag, so a task resolution saying
+  `code_transport is not set on [targets.production]` printed as
+  `code_transport is not set on ,` — the identifier naming *which* target was
+  misconfigured was the part removed, and nothing indicated anything was
+  missing. Reading the same task back through `task_get` showed the stored text
+  intact, so this was always display-only.
+
+  0.18.0 escaped the four `witan serve` startup sites it had just written, one
+  call site at a time; every other renderer kept printing stored text straight
+  into markup. The escaping now happens at the two shared boundaries —
+  `render_table` per cell, and `esc()`/`print_error()` for the line-oriented
+  renderers — rather than per call site, since per-site escaping is exactly how
+  the first fix left the rest broken. `witan task show`, `task close`,
+  `project show`, `project status`, `trace show`, `session list`, `migrate`,
+  `whoami` and the pickers all print stored text whole again.
+
+  Dry-run prompt output (`witan task run --dry-run`) turns off all three of
+  Rich's substitutions rather than escaping — it exists to show the exact text
+  the agent will receive, and `markup=False` alone still rendered a prompt
+  saying `:warning:` as ⚠ while the agent got the literal characters.
+
+  Most of these went silently: Rich drops a tag it cannot resolve to a style,
+  so `[rank]`, `[targets.production]` and a markdown `[link]` all just vanish.
+  One shape is worse — a bracketed absolute path (`[/var/lib/witan]`) parses as
+  a *closing* tag and raises `MarkupError`, taking the whole command down.
+
 ## [0.22.0] - 2026-08-21
 
 ### Fixed

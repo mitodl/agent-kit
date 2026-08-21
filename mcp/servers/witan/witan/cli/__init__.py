@@ -34,7 +34,7 @@ from . import (
     tasks,  # noqa: F401
     traces,  # noqa: F401
 )
-from ._common import app, console, stderr_console
+from ._common import app, console, print_error, stderr_console
 from .migrate import migrate_app
 from .output import OutputFormat, set_output_format
 from .run_helpers import _run_task_slug
@@ -156,7 +156,7 @@ def _serve_target(transport: str):
     try:
         remote = cfg_module.load_remote_config()
     except ValueError as exc:
-        stderr_console.print(f"[red]{escape(str(exc))}[/red]")
+        print_error(exc, stderr=True)
         raise SystemExit(1) from None
 
     if remote is None:
@@ -165,9 +165,7 @@ def _serve_target(transport: str):
         return witan_mcp
 
     if transport != "stdio":
-        stderr_console.print(
-            f"[red]{escape(remote_serving_needs_stdio(remote, transport))}[/red]"
-        )
+        print_error(remote_serving_needs_stdio(remote, transport), stderr=True)
         raise SystemExit(1) from None
 
     from ..remote.serve import build_remote_server
@@ -175,9 +173,7 @@ def _serve_target(transport: str):
     try:
         server = asyncio.run(build_remote_server(remote))
     except Exception as exc:  # noqa: BLE001 — every failure mode is the same answer
-        stderr_console.print(
-            f"[red]{escape(remote_startup_failure(remote, exc))}[/red]"
-        )
+        print_error(remote_startup_failure(remote, exc), stderr=True)
         raise SystemExit(1) from None
     _warn_if_code_graph_is_local()
     return server
@@ -300,7 +296,7 @@ def run(
     try:
         cfg = cfg_module.load(target=target)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
     _run_task_slug(
         slug, cfg=cfg, agent=agent, model=model, claim=claim, dry_run=dry_run

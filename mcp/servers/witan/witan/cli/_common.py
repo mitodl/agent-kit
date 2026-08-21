@@ -8,6 +8,7 @@ import re
 from typing import Literal
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from witan_core.cli import make_app
 
@@ -70,7 +71,7 @@ def _srv():
         try:
             remote = cfg_module.load_remote_config()
         except ValueError as exc:
-            console.print(f"[red]{exc}[/red]")
+            print_error(exc)
             raise SystemExit(1) from None
         if remote is not None:
             _server = remote_proxy(remote)
@@ -144,9 +145,36 @@ _STATUS_STYLE = {
 }
 
 
+def esc(value: object) -> str:
+    """Escape stored graph content for interpolation into a markup string.
+
+    Rich reads square brackets in ``Console.print`` as style tags, so text
+    holding a TOML section (``[targets.production]``), a Python repr, or a
+    markdown link renders with that substring silently dropped — a resolution
+    that named which target was misconfigured turns into one that names none.
+    Nothing indicates anything was removed.
+
+    Every renderer that prints stored content goes through this or
+    :func:`render_table`, which applies it per cell. Escape at the boundary
+    where graph text meets markup, not at each call site: agent-kit#261 fixed
+    two sites that way and every other one stayed broken.
+    """
+    return escape("" if value is None else str(value))
+
+
+def print_error(message: object, *, stderr: bool = False) -> None:
+    """Print ``message`` in red, escaped.
+
+    Error text is the worst place to drop a bracketed substring: witan's own
+    refusals name the config section to fix (``[targets.production]``), and an
+    omnigraph error quotes the query it choked on. Both are markup to Rich.
+    """
+    (stderr_console if stderr else console).print(f"[red]{esc(message)}[/red]")
+
+
 def _styled(value: str, table: dict) -> str:
     style = table.get(value)
-    return f"[{style}]{value}[/{style}]" if style else (value or "")
+    return f"[{style}]{esc(value)}[/{style}]" if style else esc(value)
 
 
 def _short_repo(uri: str | None) -> str:
@@ -206,12 +234,12 @@ def render_table(
         for col in columns:
             value = str(r.get(col, ""))
             if not value and col in placeholders:
-                cells.append(f"[dim]{placeholders[col]}[/dim]")
+                cells.append(f"[dim]{esc(placeholders[col])}[/dim]")
             elif col in styles:
                 cells.append(_styled(value, styles[col]))
             elif value and col in dim_if_present:
-                cells.append(f"[dim]{value}[/dim]")
+                cells.append(f"[dim]{esc(value)}[/dim]")
             else:
-                cells.append(value)
+                cells.append(esc(value))
         table.add_row(*cells)
     console.print(table)
