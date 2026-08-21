@@ -35,13 +35,22 @@ class _Proxy(RemoteMCPProxy):
     """A proxy whose policy hooks are set, with arg-map schema pre-seeded."""
 
     def __init__(
-        self, *, repo=None, admin=frozenset(), session=None, no_detect=frozenset()
+        self,
+        *,
+        repo=None,
+        admin=frozenset(),
+        session=None,
+        no_detect=frozenset(),
+        branch=None,
+        branch_tools=frozenset(),
     ):
         super().__init__("http://unused/mcp", lambda: "tok")
         self._repo = repo
         self._admin = admin
         self._session = session
         self._no_detect = no_detect
+        self._branch = branch
+        self._branch_tools = branch_tools
         # Pre-seed the tool schema so _map_args needs no network.
         #
         # ALPHABETICAL, not signature order — this mirrors what the DEPLOYED
@@ -56,6 +65,10 @@ class _Proxy(RemoteMCPProxy):
             "task_get": ["slug"],
             "task_ready": ["repo"],
             "task_create": ["description", "repo", "title"],
+            "task_claim": ["branch", "repo", "slug"],
+            # Declares `branch` with the OTHER meaning: a branch the caller is
+            # asking about, not the one they are standing on.
+            "code_indexed_branches": ["branch"],
             "memory_store": ["content", "kind", "repo", "session_slug", "title"],
             # A real zero-parameter tool — witan-code's `code_indexed_repos`
             # declares no properties at all.
@@ -79,6 +92,12 @@ class _Proxy(RemoteMCPProxy):
 
     def _resolve_session_slug(self):
         return self._session
+
+    def _resolve_branch(self):
+        return self._branch
+
+    def _branch_means_checkout(self, name):
+        return name in self._branch_tools
 
 
 # ── cross-version tool-schema access ──────────────────────────────────────
@@ -208,6 +227,41 @@ def test_explicit_repo_is_sent_even_where_detection_is_off():
     p = _Proxy(repo="https://github.com/test/repo", no_detect={"task_create"})
     args = p._map_args("task_create", (), {"title": "t", "repo": "https://x/y"})
     assert args["repo"] == "https://x/y"
+
+
+def test_branch_is_injected_only_where_the_hook_opts_in():
+    """`branch` cannot default the way `repo` does — the name carries two
+    meanings across the surface, and only one of them is "the branch I am on".
+
+    On a code-graph read it names a view inside the store, so injecting the
+    caller's checked-out branch would silently re-point the read. Hence opt-in,
+    and hence the default below is "not injected".
+    """
+    p = _Proxy(branch="feature/x", branch_tools={"task_claim"})
+    assert p._map_args("task_claim", (), {"slug": "tk-1"})["branch"] == "feature/x"
+    assert "branch" not in p._map_args("code_indexed_branches", (), {})
+
+
+def test_branch_not_injected_when_no_tool_opts_in():
+    # The base-class default: a binding that never classifies anything gets no
+    # injection at all, which is the safe direction for this parameter.
+    p = _Proxy(branch="feature/x")
+    assert "branch" not in p._map_args("task_claim", (), {"slug": "tk-1"})
+
+
+def test_branch_dropped_when_resolver_returns_none():
+    # Detached HEAD, or outside a repo. Dropping leaves the tool's own default
+    # rather than sending an explicit null.
+    p = _Proxy(branch=None, branch_tools={"task_claim"})
+    assert "branch" not in p._map_args("task_claim", (), {"slug": "tk-1"})
+
+
+def test_explicit_branch_is_never_overwritten_by_detection():
+    # The caller naming a branch outranks whatever they happen to have checked
+    # out — same rule as `repo`.
+    p = _Proxy(branch="feature/checked-out", branch_tools={"task_claim"})
+    args = p._map_args("task_claim", (), {"slug": "tk-1", "branch": "feature/asked"})
+    assert args["branch"] == "feature/asked"
 
 
 def test_session_slug_is_injected_when_omitted():

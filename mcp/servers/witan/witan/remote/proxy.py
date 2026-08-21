@@ -270,6 +270,7 @@ _REPO_IS_SCOPE_OR_STAMP = frozenset(
         "memory_search",
         "memory_store",
         "recall",
+        "task_claim",
         "task_create",
         "task_for_branch",
         "task_list",
@@ -286,6 +287,28 @@ _REPO_IS_SCOPE_OR_STAMP = frozenset(
 # membership at runtime: `_repo_means_detect` treats "not an update field" as
 # detect, so a tool missed here still behaves as it does today.
 _REPO_TOOLS = _REPO_IS_UPDATE_FIELD | _REPO_IS_SCOPE_OR_STAMP
+
+
+# Tools whose `branch` parameter means "the git branch the caller is on", and so
+# has to be filled in client-side. OPT-IN, unlike `repo` — `_branch_means_checkout`
+# explains why the default has to be the other way round for this name.
+#
+# Both of these write a `CodeBranch` keyed on (repo, branch) as metadata riding
+# alongside their real work. Before they took the value as a parameter they read
+# it from `repo_module.current_branch()` on the SERVER, which under a deployment
+# runs in a container with no checkout: it returned None, `_code_branch_steps`
+# took its `if not branch: return []` early exit, and the edge was never written
+# — with no error, because that exit is not the failure path. Every branch→task
+# link was therefore local-only, which is what made `task_for_branch` answer zero
+# for a branch that had just been claimed on.
+_BRANCH_IS_CHECKOUT = frozenset({"task_claim", "workflow_session_start"})
+
+# Tools whose `branch` the caller states outright — it names a branch they are
+# asking ABOUT, which is not necessarily the one they are on. Listed only so
+# `test_every_branch_tool_is_classified` fails on a tool nobody has considered;
+# nothing reads this set at runtime, and being absent from both sets behaves
+# exactly like being in this one.
+_BRANCH_IS_EXPLICIT = frozenset({"task_for_branch"})
 
 
 class RemoteServerProxy(RemoteMCPProxy):
@@ -308,6 +331,9 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def _repo_means_detect(self, name: str) -> bool:
         return name not in _REPO_IS_UPDATE_FIELD
+
+    def _branch_means_checkout(self, name: str) -> bool:
+        return name in _BRANCH_IS_CHECKOUT
 
     def _unreachable_hint(self) -> str:
         # Name the setting that is actually in play, read off the resolver's
@@ -443,6 +469,14 @@ class RemoteServerProxy(RemoteMCPProxy):
         from .. import config as cfg_module
 
         return cfg_module.load().author
+
+    def _resolve_branch(self) -> str | None:
+        # Only meaningful for the tools in `_BRANCH_IS_CHECKOUT`; the base class
+        # will not call this for anything else. Returns None outside a repo or on
+        # a detached HEAD, which drops the argument and leaves the tool's own
+        # default — the same "no checkout to describe" answer the server used to
+        # reach on its own, now reached for the right reason.
+        return repo_module.current_branch()
 
     def _resolve_session_slug(self) -> str | None:
         # The handle `witan session start` (or the local stdio server) parked

@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.30.0] - 2026-08-21
+
+### Added
+
+- **`RemoteMCPProxy` can fill in the caller's git branch.** New
+  `_resolve_branch()` hook, injected by `_map_args` into any tool the binding
+  opts in via `_branch_means_checkout(name)` — the same shape as `_resolve_repo`
+  and for the same reason: a deployed server has no checkout, so anything it
+  reads from the filesystem comes back empty.
+
+  **`_branch_means_checkout` defaults to `False`, the opposite of
+  `_repo_means_detect`.** `repo` means one thing across the tool surface, so
+  injecting by default is right and the exceptions are few. `branch` does not:
+  on the code-graph tools it names a *view inside the store*
+  (`code_indexed_branches`, `code_search_symbol(branch=...)`), whose `None`
+  means "the default view" and has nothing to do with what the caller has
+  checked out. Injecting there would silently re-point a read at the user's
+  current branch. Opting checkout-tracking tools **in** makes the cost of
+  forgetting a tool that does not track its branch, rather than a read that
+  quietly answers about the wrong one.
+
 ## [0.29.0] - 2026-08-21
 
 ### Fixed

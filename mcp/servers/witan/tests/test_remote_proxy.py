@@ -914,3 +914,97 @@ def test_session_list_works_against_a_remote_target(proxy, _cli_against_proxy):
     session_list(proj["slug"])
 
     assert any(sess["session_slug"] in line for line in printed)
+
+
+# ── Client-side branch injection ──────────────────────────────────────────────
+
+
+@requires_omnigraph
+def test_branch_is_injected_for_the_checkout_tracking_tools(
+    proxy, tmp_path, monkeypatch
+):
+    """The deployed server has no checkout, so `branch` has to travel from the
+    client exactly as `repo` does. Asserted end to end (the edge lands) rather
+    than on the mapped arguments, because the argument arriving and the edge
+    being written are two different claims and only the second one matters.
+
+    ★ THE RESOLVERS ARE PATCHED ON THE PROXY INSTANCE, NOT ON THE MODULE, and
+    the working directory has no git repo. Both halves are load-bearing and the
+    first draft of this test had neither, so it passed against the unfixed
+    source. `witan.remote.proxy.repo_module` and `witan.server`'s are the SAME
+    module object, so patching an attribute there also changes what the server
+    reads — the client and server stop being distinguishable and the test can no
+    longer tell injection from the server-side fallback it exists to replace.
+    Patching the instance keeps the substitution client-side; the empty
+    directory makes the server's own fallback answer nothing, exactly as a
+    container does.
+    """
+    import witan.server as srv
+
+    empty = tmp_path / "container-with-no-checkout"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    monkeypatch.setattr(type(proxy), "_resolve_repo", lambda self: REPO)
+    monkeypatch.setattr(type(proxy), "_resolve_branch", lambda self: "feature/injected")
+
+    task = proxy.task_create(title="injected branch", description="x")
+    assert proxy.task_claim(slug=task["slug"])["claimed"] is True
+
+    linked = srv.client.read(
+        "read.gq",
+        "code_branch_tasks",
+        {"branch_slug": srv._code_branch_slug(REPO, "feature/injected")},
+    )
+    assert {t["slug"] for t in linked} == {task["slug"]}
+
+
+@requires_omnigraph
+def test_branch_is_not_injected_for_a_tool_that_did_not_opt_in(proxy, monkeypatch):
+    """`branch` means different things on different tools — on the code-graph
+    reads it names a view inside the store, not the caller's checkout. Injecting
+    by default would silently re-point such a read at whatever the user happened
+    to have checked out, so the base class must only fill it for the opted-in
+    set. `task_for_branch` is the local witness: it declares `branch` and is not
+    in `_BRANCH_IS_CHECKOUT`."""
+    from witan.remote.proxy import _BRANCH_IS_CHECKOUT
+
+    assert "task_for_branch" not in _BRANCH_IS_CHECKOUT
+    assert not proxy._branch_means_checkout("task_for_branch")
+    assert not proxy._branch_means_checkout("code_indexed_branches")
+    assert proxy._branch_means_checkout("task_claim")
+    assert proxy._branch_means_checkout("workflow_session_start")
+
+
+def test_every_branch_tool_is_classified(server):
+    """A new tool taking `branch` must not inherit a meaning by accident.
+
+    The mirror of `test_every_repo_tool_is_classified`, with the default the
+    other way round: unlisted means "do not inject", so forgetting a code-graph
+    tool is harmless while forgetting a checkout-tracking one produces a tool
+    that silently never records its branch. That is precisely the bug
+    tk-task-claim-never-writes-the-codebranch-workson-e-9496c4 was, and it left
+    no error behind, so this test is the guard against a second one.
+    """
+    import witan.server as srv
+    from witan_core.remote.proxy import _tool_input_schema
+
+    from witan.remote.proxy import _BRANCH_IS_CHECKOUT, _BRANCH_IS_EXPLICIT
+
+    async def _declaring_branch() -> set[str]:
+        async with Client(srv.mcp) as client:
+            return {
+                t.name
+                for t in await client.list_tools()
+                if "branch" in (_tool_input_schema(t).get("properties") or {})
+            }
+
+    declared = asyncio.run(_declaring_branch())
+    classified = _BRANCH_IS_CHECKOUT | _BRANCH_IS_EXPLICIT
+
+    assert declared, "expected some tool to declare a `branch` parameter"
+    assert declared == classified, (
+        f"unclassified: {declared - classified} — decide whether `branch=None` "
+        f"means 'the branch I am on' (add to _BRANCH_IS_CHECKOUT, and it will be "
+        f"filled in client-side) or something the caller states outright (add to "
+        f"_BRANCH_IS_EXPLICIT). No longer registered: {classified - declared}"
+    )

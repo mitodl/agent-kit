@@ -215,3 +215,119 @@ def test_task_for_branch_unknown_branch_is_empty_not_an_error(
 
     assert server.task_for_branch(branch=f"never-checked-out-{uuid.uuid4()}") == []
     assert server.task_for_branch(branch="") == []
+
+
+# ── The deployed shape: a server with no checkout of its own ──────────────────
+#
+# Every other test in this file runs the server INSIDE a git repo, because under
+# local stdio it really is a child of the agent and shares its working directory.
+# A deployed server is not: it runs in a container with no checkout, so anything
+# it tries to read from the filesystem comes back empty. These two pin the case
+# the rest of the file structurally cannot reach — and both fail before
+# tk-task-claim-never-writes-the-codebranch-workson-e-9496c4, where `branch` was
+# read server-side and the edge was silently never written.
+
+
+def _no_checkout(tmp_path, monkeypatch):
+    """Put the server somewhere with no git repo above it, like a container."""
+    empty = tmp_path / "container-with-no-checkout"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    return empty
+
+
+@requires_omnigraph
+def test_task_claim_tracks_the_branch_the_caller_names_with_no_checkout(
+    server, tmp_path, monkeypatch
+):
+    """The regression. With no checkout to detect from, the caller's repo and
+    branch have to arrive as arguments or the WorksOn edge is never written —
+    which is what made `task_for_branch` answer zero for a branch that had just
+    been claimed on, against a real deployment."""
+    _no_checkout(tmp_path, monkeypatch)
+
+    task = server.task_create(title="claimed from a laptop", description="x")
+    claimed = server.task_claim(
+        task["slug"], repo=REPO, branch="feature/from-the-client"
+    )
+    assert claimed["claimed"] is True
+
+    linked = server.task_for_branch(branch="feature/from-the-client", repo=REPO)
+    assert {t["slug"] for t in linked} == {task["slug"]}
+
+
+@requires_omnigraph
+def test_workflow_session_start_tracks_the_branch_the_caller_names(
+    server, tmp_path, monkeypatch
+):
+    """Same defect on the ForProject half. `workflow_session_start` already took
+    `repo` as a parameter, so only `branch` was being read off the server's own
+    filesystem — enough on its own to skip the whole CodeBranch."""
+    from witan import server as srv
+
+    _no_checkout(tmp_path, monkeypatch)
+
+    project = server.workflow_project_create(
+        title="deployed session", description="x", repos=[REPO]
+    )
+    server.workflow_session_start(
+        project_slug=project["slug"],
+        session_id=f"sess-{uuid.uuid4()}",
+        phase="implementation",
+        repo=REPO,
+        branch="feature/session-from-the-client",
+    )
+
+    slug = srv._code_branch_slug(REPO, "feature/session-from-the-client")
+    assert srv.client.read("read.gq", "get_code_branch", {"slug": slug})
+    assert srv.client.read(
+        "read.gq",
+        "code_branch_for_project_edge",
+        {"branch_slug": slug, "project_slug": project["slug"]},
+    )
+
+
+@requires_omnigraph
+def test_an_explicit_branch_wins_over_the_servers_own_checkout(
+    server, tmp_path, monkeypatch
+):
+    """The fallback must not override what the caller said. Under local stdio the
+    two agree; the case that matters is a client on branch A talking to a server
+    that happens to sit in a checkout on branch B — only the client's answer is
+    about the work being claimed."""
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "server-side-branch")
+    monkeypatch.chdir(base)
+
+    task = server.task_create(title="two branches in play", description="x")
+    server.task_claim(task["slug"], repo=REPO, branch="callers-branch")
+
+    assert {t["slug"] for t in server.task_for_branch(branch="callers-branch")} == {
+        task["slug"]
+    }
+    assert server.task_for_branch(branch="server-side-branch") == []
+
+
+@requires_omnigraph
+def test_an_explicit_empty_branch_means_do_not_track(server, tmp_path, monkeypatch):
+    """`branch=""` is the "no branch" sentinel, matching `repo=""`, and must not
+    fall back to the server's own checkout.
+
+    `_map_args` passes an explicitly-empty branch through untouched — only an
+    *omitted* one is filled in client-side — so a truthiness fallback here would
+    build a CodeBranch out of whatever the server happens to be sitting in. On a
+    deployment that is nothing and the bug hides; under local stdio it is the
+    caller's own checkout, so it silently succeeds at the thing the caller asked
+    not to happen. Hence the server-side git repo below: without it this test
+    passes either way.
+    """
+    from witan import server as srv
+
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "server-side-only")
+    monkeypatch.chdir(base)
+
+    task = server.task_create(title="untracked on purpose", description="x")
+    assert server.task_claim(task["slug"], repo=REPO, branch="")["claimed"] is True
+
+    assert srv.client.read("read.gq", "code_branches_by_repo", {"repo": REPO}) == []

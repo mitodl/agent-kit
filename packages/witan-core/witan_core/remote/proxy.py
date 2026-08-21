@@ -42,7 +42,9 @@ Server-specific policy is supplied by subclasses via the hooks below:
 doesn't expose), :meth:`~RemoteMCPProxy._unreachable_hint` (what to check, and
 how to opt into working locally, when the deployment cannot be reached),
 :meth:`~RemoteMCPProxy._resolve_repo` (client-side repo
-resolution, since the deployed server has no git checkout), and
+resolution, since the deployed server has no git checkout),
+:meth:`~RemoteMCPProxy._resolve_branch` / :meth:`_branch_means_checkout`
+(client-side git branch, for the same reason, opted into per tool), and
 :meth:`~RemoteMCPProxy._resolve_session_slug` (client-side workflow-session
 handle, since a deployed replica shares no filesystem with the agent),
 :meth:`~RemoteMCPProxy._resolve_session_id` (client-side agent-session id, for
@@ -587,6 +589,36 @@ class RemoteMCPProxy:
         """
         return True
 
+    def _resolve_branch(self) -> str | None:
+        """Client-side value for an omitted ``branch``. None: skip.
+
+        The caller's current git branch. Same reason as :meth:`_resolve_repo`:
+        the deployed server has no checkout, so a server-side
+        ``current_branch()`` returns nothing and any branch-keyed row it tries
+        to write is silently skipped.
+        """
+        return None
+
+    def _branch_means_checkout(self, name: str) -> bool:
+        """Does ``branch=None`` mean "the branch I am on" for this tool?
+
+        **Defaults to False**, which is the opposite of :meth:`_repo_means_detect`,
+        and deliberately so. ``repo`` means one thing across the surface — the
+        repo the caller is in — so injecting by default is right and the
+        exceptions are few. ``branch`` does not: on the code-graph tools it
+        names a *view inside the store* (``code_indexed_branches``,
+        ``code_search_symbol(branch=...)``), which has nothing to do with the
+        caller's checkout and whose ``None`` means "the default view". Injecting
+        there would silently re-point a read at whatever branch the user
+        happened to have checked out.
+
+        So a binding opts its checkout-tracking tools IN by name rather than
+        opting the code-graph tools out — the failure mode of forgetting is
+        then a tool that does not track a branch, not a read that quietly
+        answers about the wrong one.
+        """
+        return False
+
     def _resolve_session_slug(self) -> str | None:
         """Client-side value for an omitted ``session_slug``. None: skip.
 
@@ -981,6 +1013,19 @@ class RemoteMCPProxy:
                 arguments["repo"] = detected
             else:
                 arguments.pop("repo", None)
+        # Same injection for the caller's git branch, but opt-in per tool rather
+        # than blanket — see `_branch_means_checkout` for why `branch` cannot
+        # default the way `repo` does.
+        if (
+            "branch" in names
+            and arguments.get("branch") is None
+            and self._branch_means_checkout(name)
+        ):
+            branch = self._resolve_branch()
+            if branch is not None:
+                arguments["branch"] = branch
+            else:
+                arguments.pop("branch", None)
         # Same injection for the workflow-session handle. Under MCP 2026-07-28
         # the protocol carries no session state, so a deployed replica has no way
         # to tell which agent session is calling — the client supplies the handle
