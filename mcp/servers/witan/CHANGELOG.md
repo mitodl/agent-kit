@@ -41,6 +41,12 @@ a MINOR bump may include breaking changes).
   authored node types (`Memory`, `WorkflowProject`, `WorkflowSession`,
   `WorkflowTrace`, `Task`).
 
+  Output goes through `esc()` at the render boundary (0.23.0's rule): an
+  author string is stored content, and a lowercase bracketed substring in one
+  would otherwise be dropped silently from the very message meant to show
+  which identity replaces which, while a bracketed absolute path would take
+  the command down with `MarkupError`.
+
   Dry by default; `--was` defaults to this machine's configured local author,
   which is the right answer when repairing your own cutover from the same
   checkout. Idempotent — a second run finds nothing. Writes are flushed in

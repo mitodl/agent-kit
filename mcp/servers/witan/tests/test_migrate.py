@@ -2016,3 +2016,41 @@ def test_merge_source_author_falls_back_when_the_target_sets_none(monkeypatch):
     monkeypatch.setattr(cfg_mod, "load", lambda *a, **k: _StubCfg(author="Ambient"))
 
     assert cli_migrate._merge_source_author("personal") == "Ambient"
+
+
+def test_claim_authorship_renders_a_bracketed_author_intact(monkeypatch, capsys):
+    """#271's boundary rule applies here too: `was`/`now` are stored content.
+
+    Both of Rich's failure modes are covered, because they fail differently and
+    an author string can carry either. A lowercase tag-like bracket is dropped
+    SILENTLY (`[targets.production]`), gutting the one message whose whole job
+    is to show which identity replaces which; a bracketed absolute path parses
+    as a closing tag with nothing open and takes the command down with
+    MarkupError.
+
+    Note `[MIT]` would NOT reproduce this — Rich's tag pattern does not match
+    it, so an uppercase bracket survives unescaped and would make this test
+    pass against unescaped code.
+    """
+    from witan.cli import migrate as cli_migrate
+
+    class _Srv:
+        def __init__(self, was_out):
+            self.was_out = was_out
+
+        def claim_authorship(self, *, was, apply):
+            return {
+                "applied": False,
+                "was": self.was_out,
+                "now": "dev-two",
+                "claimed": 2,
+                "by_type": {"Memory": 2},
+            }
+
+    for author in ("Dev [targets.production] One", "Dev [/var/lib] One"):
+        monkeypatch.setattr(
+            cli_migrate, "_srv", lambda a=author: _Srv(a), raising=False
+        )
+        cli_migrate.claim_authorship(author)
+        out = capsys.readouterr().out
+        assert author in out, f"{author!r} did not survive rendering: {out!r}"

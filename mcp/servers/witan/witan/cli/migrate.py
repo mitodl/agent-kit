@@ -530,24 +530,29 @@ def claim_authorship(
     try:
         result = _srv().claim_authorship(was=was, apply=apply)
     except RuntimeError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
 
+    # `was`/`now` are stored graph content (an author string), so they go
+    # through `esc` like every other renderer — an author carrying brackets
+    # would otherwise print with that substring silently dropped, in a message
+    # whose entire job is to show you which identity is which.
     if result.get("reason"):
-        console.print(f"Nothing to do: {result['reason']}.")
+        console.print(f"Nothing to do: {esc(result['reason'])}.")
         return
 
     if not result["claimed"]:
         console.print(
-            f"No rows authored by {result['was']!r}. "
-            f"You are {result['now']!r} here — check `witan whoami` and the "
-            "author the source store actually wrote."
+            f"No rows authored by {esc(repr(result['was']))}. "
+            f"You are {esc(repr(result['now']))} here — check `witan whoami` "
+            "and the author the source store actually wrote."
         )
         return
 
     verb = "Claimed" if result["applied"] else "[yellow]Would claim[/yellow]"
     console.print(
-        f"{verb} {result['claimed']} row(s): {result['was']!r} -> {result['now']!r}"
+        f"{verb} {result['claimed']} row(s): "
+        f"{esc(repr(result['was']))} -> {esc(repr(result['now']))}"
     )
     for node_type, count in result["by_type"].items():
         console.print(f"  {node_type:16} {count}")
