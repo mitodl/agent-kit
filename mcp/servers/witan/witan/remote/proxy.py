@@ -251,6 +251,41 @@ _READ_ONLY = frozenset(
 )
 
 
+# The two meanings of `repo=None`, split by what the tool does with the value.
+#
+# `RemoteMCPProxy._map_args` resolves an omitted `repo` client-side, because the
+# deployed server has no checkout to detect one from. That is right for a tool
+# that scopes a read or stamps a new row — and wrong for one that updates an
+# existing row, where every parameter is "only applied if non-null" and an
+# omitted `repo` means "leave it". Injecting there rewrote the stored value to
+# whichever repo the caller happened to be sitting in, silently re-scoping the
+# memory out of the repo it documents (#268). It reproduces only over the
+# proxy: under local stdio nothing injects, and detection usually agrees anyway.
+_REPO_IS_UPDATE_FIELD = frozenset({"memory_update", "task_update"})
+
+_REPO_IS_SCOPE_OR_STAMP = frozenset(
+    {
+        "memory_list",
+        "memory_search",
+        "memory_store",
+        "recall",
+        "task_create",
+        "task_list",
+        "task_ready",
+        "workflow_project_list",
+        "workflow_session_start",
+        "workflow_trace_list",
+    }
+)
+
+# Listed only so a tool declaring `repo` cannot be added without someone
+# deciding which meaning it carries — `test_every_repo_tool_is_classified`
+# fails until it appears in one of the two. Neither set is consulted for
+# membership at runtime: `_repo_means_detect` treats "not an update field" as
+# detect, so a tool missed here still behaves as it does today.
+_REPO_TOOLS = _REPO_IS_UPDATE_FIELD | _REPO_IS_SCOPE_OR_STAMP
+
+
 class RemoteServerProxy(RemoteMCPProxy):
     """Mirrors the ``witan.server`` tool surface, dispatching over MCP."""
 
@@ -268,6 +303,9 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def _writes(self, name: str) -> bool:
         return name not in _READ_ONLY
+
+    def _repo_means_detect(self, name: str) -> bool:
+        return name not in _REPO_IS_UPDATE_FIELD
 
     def _unreachable_hint(self) -> str:
         # Name the setting that is actually in play, read off the resolver's

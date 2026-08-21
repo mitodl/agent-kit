@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.22.0] - 2026-08-21
+
+### Fixed
+
+- **`memory_update` and `task_update` no longer re-scope a row to whichever
+  repo the caller happens to be sitting in.** Against a deployment, any
+  `memory_update` that omitted `repo` — updating only `tags`, or only
+  `confidence` — silently rewrote `repo` to the caller's detected repo. Because
+  `memory_search` and `memory_list` are repo-scoped by default, the memory then
+  vanished from reads in the repo it actually documents, with no error and no
+  warning ([#268](https://github.com/mitodl/agent-kit/issues/268)).
+
+  The rewrite came from the client, not the server. `_update_memory` merges
+  `changes.get("repo", current.get("repo"))` and has preserved the stored value
+  correctly since #170 — but the remote proxy injected a detected `repo` into
+  every tool declaring the parameter, so by the time the server saw the call,
+  `repo` was no longer omitted. The mechanism now lives behind witan-core
+  0.29.0's `_repo_means_detect` hook, and `_REPO_IS_UPDATE_FIELD` names the two
+  tools where an omitted `repo` means "leave it": `memory_update` and
+  `task_update`. Correcting a repo by passing one explicitly is unaffected —
+  that is what the parameter is for (#145).
+
+  `task_update` was not in the report and fails identically; it has the same
+  "only non-null arguments are applied" contract over the same server-side
+  merge.
+
+  Reproduces only over the proxy, which is why it survived: under local stdio
+  nothing injects a repo, and the memory being edited usually belongs to the
+  repo you are sitting in anyway. The regression tests therefore run through
+  the in-memory proxy harness rather than the direct tool surface. A third test
+  fails on any tool that declares `repo` and has not been classified as scoping
+  or updating, so the next such tool cannot inherit a meaning by accident.
+
+  **No deployment roll is involved.** The issue reasoned that `main` looked
+  correct and inferred deployed-version drift; the defect ships in the client,
+  and rolling the service would not have changed the behaviour.
+
+### Changed
+
+- Raised the `witan-core` floor to `>=0.29` for the `_repo_means_detect` hook
+  above. This is a behavioural floor, not a bookkeeping one: on 0.28 the
+  override targets a base method that does not exist, so it is never called,
+  nothing fails to import, no test fails, and the re-scoping returns. It
+  subsumes 0.21.0's `>=0.28`, which stays satisfied.
+
 ## [0.21.0] - 2026-08-21
 
 ### Fixed

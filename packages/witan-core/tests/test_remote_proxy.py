@@ -34,11 +34,14 @@ from witan_core.remote.proxy import (
 class _Proxy(RemoteMCPProxy):
     """A proxy whose policy hooks are set, with arg-map schema pre-seeded."""
 
-    def __init__(self, *, repo=None, admin=frozenset(), session=None):
+    def __init__(
+        self, *, repo=None, admin=frozenset(), session=None, no_detect=frozenset()
+    ):
         super().__init__("http://unused/mcp", lambda: "tok")
         self._repo = repo
         self._admin = admin
         self._session = session
+        self._no_detect = no_detect
         # Pre-seed the tool schema so _map_args needs no network.
         #
         # ALPHABETICAL, not signature order — this mirrors what the DEPLOYED
@@ -70,6 +73,9 @@ class _Proxy(RemoteMCPProxy):
 
     def _resolve_repo(self):
         return self._repo
+
+    def _repo_means_detect(self, name):
+        return name not in self._no_detect
 
     def _resolve_session_slug(self):
         return self._session
@@ -181,6 +187,27 @@ def test_repo_empty_string_sentinel_is_preserved():
     p = _Proxy(repo="https://other/repo")
     # "" (all repos) must NOT be replaced by detection.
     assert p._map_args("task_ready", (), {"repo": ""})["repo"] == ""
+
+
+def test_repo_not_injected_where_the_hook_says_it_is_an_update_field():
+    """`repo=None` means "leave it" on an update tool, not "detect".
+
+    Injecting there sends an explicit repo the caller never asked for, and the
+    server applies it — rewriting the stored value to wherever the caller
+    happened to be. The binding names those tools; the mechanism is here.
+    """
+    p = _Proxy(repo="https://github.com/test/repo", no_detect={"task_create"})
+    assert "repo" not in p._map_args("task_create", (), {"title": "t"})
+    # Same proxy, unlisted tool: detection still applies.
+    assert p._map_args("task_ready", (), {})["repo"] == "https://github.com/test/repo"
+
+
+def test_explicit_repo_is_sent_even_where_detection_is_off():
+    # Opting out of *detection* must not drop a repo the caller passed on
+    # purpose — that is how an update tool corrects a wrong repo.
+    p = _Proxy(repo="https://github.com/test/repo", no_detect={"task_create"})
+    args = p._map_args("task_create", (), {"title": "t", "repo": "https://x/y"})
+    assert args["repo"] == "https://x/y"
 
 
 def test_session_slug_is_injected_when_omitted():

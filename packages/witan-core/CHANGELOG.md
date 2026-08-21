@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.29.0] - 2026-08-21
+
+### Fixed
+
+- **`RemoteMCPProxy` no longer injects a detected `repo` into tools that only
+  meant to leave the field alone.** `_map_args` resolves an omitted `repo`
+  client-side, because a deployed server has no checkout to detect one from.
+  That is right for a tool that scopes a read or stamps a new row, and wrong
+  for one that updates an existing row, where every parameter is "applied only
+  if non-null" — there an omitted `repo` means "do not touch this field", and
+  injecting turned the omission into an explicit rewrite.
+
+  A new `_repo_means_detect(name)` hook decides which meaning is in play,
+  alongside the existing `_is_admin_tool` / `_writes` policy hooks. It defaults
+  to detect, so every scoping and creating tool behaves exactly as before and a
+  binding names only its exceptions. Passing `repo` explicitly still sends it
+  either way: this suppresses detection, not the parameter.
+
+  See witan-council 0.22.0 for the defect this fixes
+  ([#268](https://github.com/mitodl/agent-kit/issues/268)) and which of its
+  tools are classified as update fields.
+
 ## [0.28.0] - 2026-08-21
 
 ### Changed
