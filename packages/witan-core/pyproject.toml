@@ -1,6 +1,6 @@
 [project]
 name = "witan-core"
-version = "0.27.0"
+version = "0.28.0"
 description = "Shared core for the witan MCP servers (witan-council + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -66,7 +66,7 @@ build-backend = "hatchling.build"
 packages = ["witan_core"]
 
 [tool.bumpversion]
-current_version = "0.27.0"
+current_version = "0.28.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

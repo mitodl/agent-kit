@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.21.0] - 2026-08-21
+
+### Fixed
+
+- **`witan project show`, `witan trace show`, and `witan session list` no
+  longer crash against a deployed target.** All three bypassed the MCP tool
+  layer with `s.client.read(...)` to reach queries with no dedicated tool —
+  correct for the in-process local server, where `s.client` is a real
+  omnigraph client, but `RemoteServerProxy` has no `client`: `__getattr__`
+  handed back a plain dispatch closure for that name, and `.read(...)` on it
+  raised `AttributeError: 'function' object has no attribute 'read'`.
+
+  Routed through existing tools instead — `workflow_project_get_blockers`,
+  `workflow_trace_get`, and a new `include_superseded` flag on
+  `workflow_session_list` (for `session list`'s dedupe view, the one caller
+  that wants superseded rows back) — which dispatch correctly against either
+  target. Regression-tested end to end against a real `RemoteServerProxy`.
+
+### Changed
+
+- Raised the `witan-core` floor to `>=0.28` for the refreshed omnigraph
+  `edge` digest (see witan-core's CHANGELOG) — a version below it fails
+  `witan setup`'s checksum and leaves the CLI with no binary at all.
+
 ## [0.20.0] - 2026-08-20
 
 ### Fixed

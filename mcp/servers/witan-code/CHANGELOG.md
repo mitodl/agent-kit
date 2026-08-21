@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.13.5] - 2026-08-21
+
+### Changed
+
+- Raised the `witan-core` floor to `>=0.28` for the refreshed omnigraph
+  `edge` digest (see witan-core's CHANGELOG) — a version below it fails
+  `witan-code setup`'s checksum and leaves the indexer with no binary to
+  shell out to.
+
 ## [0.13.4] - 2026-08-19
 
 ### Changed

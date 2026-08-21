@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.28.0] - 2026-08-21
+
+### Changed
+
+- **Refreshed the pinned omnigraph `edge` asset digests** to the
+  2026-08-21T00:11Z build (through upstream `62a9c3fe6b`). The tag had moved
+  again the day after 0.27.0's refresh, so `install_omnigraph` refused the
+  download — correctly — and `witan-code` CI failed with no binary at all
+  (agent-kit#272). All three tiers move together, verified by hashing each
+  tarball locally and cross-checking the release's published `.sha256` in the
+  same sitting. Version still reports 0.10.0 and internal-schema still 6, so
+  no store rebuild.
+
+  The six commits in between are all storage-layer typed-failure work
+  (`OmniError::Lance(String)` became `OmniError::Storage(StorageFailure)`,
+  behind RFC-0038). Checked for the two things that would matter here — the
+  `_RETRYABLE`/`_NEEDS_REPAIR`/`_PRECONDITION_FAILED` substrings and the
+  `"storage: "` prose prefix `_classify_cli_error` keys on — and neither
+  renamed; upstream's own new tests assert the same `storage: <message>`
+  rendering the old `Lance` variant produced.
+
 ## [0.27.0] - 2026-08-20
 
 ### Changed
