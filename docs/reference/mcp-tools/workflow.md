@@ -257,10 +257,12 @@ this once per repo remains a valid way to widen a project's repo set — but
 ``workflow_project_update(add_repos=[...])`` does it directly, without
 needing a session at all.
 
-When a repo is detected and the checkout is on a git branch, also
-upserts a ``CodeBranch`` (repo, branch) and links it ``ForProject`` to
-this project — schema.pg § Code Branches. Best-effort: silently skipped
-with no repo/branch context, never fails the session start.
+When a repo is detected and the caller is on a git branch, also upserts a
+``CodeBranch`` (repo, branch) and links it ``ForProject`` to this project —
+schema.pg § Code Branches. Best-effort: silently skipped with no
+repo/branch context, never fails the session start. Both values come from
+the caller (see ``branch`` below); a deployed server has no checkout to
+read them from.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -268,6 +270,7 @@ with no repo/branch context, never fails the session start.
 | `session_id` | str | **required** | Unique identifier for this agent session. |
 | `phase` | `discovery` \| `spec` \| `implementation` \| `delivery` | **required** | The phase this session is working in. |
 | `repo` | str? | `null` | Repo scoping — see instructions. |
+| `branch` | str? | `null` | The git branch the caller is on, for the ``CodeBranch`` above. Filled<br>in client-side by the remote proxy; omitted, the server falls back to<br>its own working directory, which is right under local stdio and empty<br>under a deployment. |
 | `tags` | list[str]? | `null` | Optional tags. |
 
 ## `workflow_session_end`

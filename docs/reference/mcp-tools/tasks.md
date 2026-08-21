@@ -132,6 +132,8 @@ conditional-write feature — see docs/adr/0003.
 | `assignee` | str? | `null` | Holder identity. Defaults to the calling user (the JWT's<br>``preferred_username`` when deployed, the configured author locally)<br>qualified by ``session_id`` — see ``_claim_holder``. Two of one<br>person's parallel sessions must not share a holder string, or the<br>contention check passes and the second silently renews the first's<br>lease. Pass an explicit id to override (a worker name, a CI job). |
 | `session_id` | str? | `null` | The calling agent session's id, which qualifies the default holder.<br>**Pass this when calling a deployed witan** — the server cannot infer<br>it (no shared environment, and MCP 2026-07-28 carries no session<br>state), and without it every one of your concurrent sessions claims<br>under the same name. The CLI's remote proxy fills it in automatically;<br>under local stdio the server falls back to its own<br>``$CLAUDE_SESSION_ID``, which it inherits from the agent. |
 | `force` | bool | `False` | Steal the task even if another holder's lease is still valid. |
+| `repo` | str? | `null` | Repo scoping — see instructions. Used only for the branch tracking<br>below, not to scope the claim itself. |
+| `branch` | str? | `null` | The git branch the caller is on. Together with ``repo`` this is what<br>the ``WorksOn`` link is keyed on, and both have to come from the caller<br>because a deployed server has no checkout to read them from — see<br>``_code_branch_steps``. The CLI's remote proxy fills both in<br>automatically; under local stdio they default to the server's own<br>working directory, which is the agent's. |
 
 ## `task_release`
 
