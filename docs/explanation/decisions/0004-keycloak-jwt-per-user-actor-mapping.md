@@ -344,3 +344,59 @@ mints, fail closed on a missing actor id — is unchanged, as is the Consequence
 section's cross-repo contract: a drift between who Keycloak says is a witan
 user and who has a token in the file still surfaces as a hard lookup failure
 for that user, not a silent downgrade.
+
+### Addendum (2026-08-21) — D5's "no backfill" assumption did not survive store migration, and `author` turns out to be doing authorization work
+
+D5 above closes with:
+
+> No backfill: this lands before the service carries production traffic, so
+> there are no nodes written under the old uniform-author behaviour.
+
+True of the *deployment's own* history, and false of everything merged into it.
+`store_merge` (ADR-0007 D5) preserves each row's `author`, so a user migrating
+a local store imports rows named by `cfg.author` — `WITAN_AUTHOR` / git
+`user.name` / `$USER` — into a graph whose live identities are Keycloak
+`preferred_username`. The two namespaces cannot converge, and there is no
+client-side escape: once `remote_url` is set, `_is_local_stdio()` is false and
+`cfg.author` is ignored for any comparison.
+
+That surfaced as agent-kit#267: `memory_delete` refuses everyone but the
+author, so **every memory a user migrated became permanently undeletable by the
+person who wrote it** — and migrated history is exactly the history most likely
+to contain something that should be pruned, having been written before the
+graph was shared.
+
+**The deeper point this exposes.** D5 frames `author` as descriptive, and
+rejects a separate `actor_id` on that basis ("Revisit if attribution ever needs
+to be authoritative rather than descriptive"). But `memory_delete` uses it as
+an authorization control, and it is the *only* row-level ownership control
+there is: ADR-0002 records that Cedar cannot scope a delete to a row's owner,
+so ownership has to be enforced in Python or not at all. A field the ADR calls
+descriptive is load-bearing for authorization.
+
+**Decision.** Fix the mismatch, not the check.
+
+- **`store_merge` gains `claim_from_author`.** The client sends the identity
+  its local store wrote; rows matching it are restamped to the calling actor
+  before the write, and everything else is untouched. Matching rather than
+  stamping unconditionally is what makes it safe as a default: on your own
+  store every row matches, so the repair needs no flag anyone has to discover;
+  on a teammate's export nothing matches, so merging their store through your
+  credential cannot quietly reattribute their work.
+- **`claim_authorship` repairs stores already merged.** A re-merge cannot:
+  reconciliation is newest-record-wins and a re-sent row loses to its own
+  applied copy. It rewrites in place across all five authored types.
+
+**Not decided here: whether attribution should become authoritative.**
+`claim_authorship` does not verify that the name you are claiming was ever
+yours. That capability already existed — `store_merge` accepts whatever
+`author` a row carries, which is what makes the hand-edited-export workaround
+in #267 work — so this makes an existing capability usable rather than creating
+one. Constraining it means constraining `store_merge` too, and that is the
+revisit D5 anticipated, to be taken as its own decision rather than smuggled in
+with a bug fix.
+
+The read side is unfixed and tracked separately:
+`workflow_trace_list(author=…)` exact-matches, so migrated traces stay
+invisible to their own author's filter, and the ranking layer's author-trust
+signal keys on the same string.

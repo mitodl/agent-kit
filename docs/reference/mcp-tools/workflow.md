@@ -308,6 +308,7 @@ Use ``witan session sweep`` to close them in bulk.
 | --- | --- | --- | --- |
 | `project_slug` | str? | `null` | Restrict to one project's sessions. Omit for every project. |
 | `open_only` | bool | `False` | Only sessions with no ``ended_at``. Superseded sessions (deduped by<br>``witan migrate dedupe-sessions``) are always excluded — they are<br>already skipped by every aggregate read and are not leaks. |
+| `include_superseded` | bool | `False` | Keep superseded rows instead of dropping them. For ``witan session<br>list``, the one caller that wants to see what<br>``migrate dedupe-sessions`` did rather than the leaked-session view. |
 
 ## `workflow_trace_list`
 

@@ -550,7 +550,7 @@ witan migrate merge ~/.local/share/witan/graph.omni --to ol   # onto the deploym
 
 `--to <name>` is how a local store moves onto the deployed service: the export
 happens client-side and the rows ship through that deployment's `store_merge`
-tool as you. See [the migration runbook](migration-runbook.md#local-shared-the-cutover)
+tool as you. See [the migration runbook](migration-runbook.md#local--shared-the-cutover)
 and [ADR-0007](adr/0007-local-to-shared-store-migration-transport.md).
 
 ### `migrate topics`

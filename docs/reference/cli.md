@@ -67,6 +67,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`repo-keys`](#witan-migrate-repo-keys)
     - [`dedupe-sessions`](#witan-migrate-dedupe-sessions)
     - [`all`](#witan-migrate-all)
+    - [`claim-authorship`](#witan-migrate-claim-authorship)
 - [`code`](#witan-code)
     - [`index`](#witan-code-index)
     - [`reindex`](#witan-code-reindex)
@@ -119,7 +120,7 @@ witan — agent memory, planning, and collaboration graph.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 
 ## witan login
 
@@ -136,7 +137,7 @@ subsequent ``witan …`` commands.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: a target with no ``match_*`` criteria, which never selects itself. Also
     settable via ``WITAN_TARGET``.
 
@@ -151,7 +152,7 @@ Forget the cached token for the configured deployment.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`:
 
 ## witan whoami
@@ -165,7 +166,7 @@ Show the identity the CLI presents to the deployed witan service.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`:
 
 ## witan graph
@@ -182,16 +183,16 @@ interactive HTML graph (vis-network) or a Graphviz DOT file.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--repo`: Scope to a specific repo URI (default: current git repo).
-* `--all-repos, --no-all-repos`: Include projects and tasks from every repo.  *[default: False]*
+* `--all-repos, --no-all-repos`: Include projects and tasks from every repo. *[default: False]*
 * `--status`: Project status filter: active | completed | abandoned.
-    Defaults to ``active``. Pass an empty string to include all.  *[default: active]*
-* `--all-tasks, --no-all-tasks`: Include closed tasks (default: open + in_progress + blocked only).  *[default: False]*
-* `--no-belongs-to, --no-no-belongs-to`: Omit dashed task→project edges to reduce clutter.  *[default: False]*
+    Defaults to ``active``. Pass an empty string to include all. *[default: active]*
+* `--all-tasks, --no-all-tasks`: Include closed tasks (default: open + in_progress + blocked only). *[default: False]*
+* `--no-belongs-to, --no-no-belongs-to`: Omit dashed task→project edges to reduce clutter. *[default: False]*
 * `--html`: Write a self-contained interactive HTML graph to this path.
 * `--dot`: Write a Graphviz DOT file to this path.
-* `--open-browser, --no-open-browser`: Open the generated HTML in the default browser (requires --html).  *[default: False]*
+* `--open-browser, --no-open-browser`: Open the generated HTML in the default browser (requires --html). *[default: False]*
 
 ## witan inject-context
 
@@ -209,10 +210,10 @@ is not in git.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--debug, --no-debug`: and the reason for any swallowed failure) to stderr. stdout still carries
     only the injected block, so ``witan inject-context --debug`` is safe to
-    run by hand to see why the block is blank.  *[default: False]*
+    run by hand to see why the block is blank. *[default: False]*
 
 ## witan session-checkpoint
 
@@ -236,7 +237,7 @@ sessions open forever.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 
 ## witan optimize
 
@@ -252,7 +253,7 @@ the store stays cheap. Safe to run repeatedly; takes the store write lock.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--store`:
 
 ## witan cleanup
@@ -270,11 +271,11 @@ newer than ``older_than``). Irreversible, so it requires ``--yes``.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--store`:
-* `--keep`:   *[default: 10]*
+* `--keep`: *[default: 10]*
 * `--older-than`:
-* `--yes, --no-yes`:   *[default: False]*
+* `--yes, --no-yes`: *[default: False]*
 
 ## witan memory
 
@@ -287,12 +288,12 @@ Search memory (BM25), or with no query list memories (filtered by --kind).
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `QUERY, --query`:
-* `--kind`:   *[choices: pattern, project_fact, lesson, agent_context]*
+* `--kind`: *[choices: pattern, project_fact, lesson, agent_context]*
 * `--repo`:
-* `--all-repos, --no-all-repos`:   *[default: False]*
-* `--limit`:   *[default: 20]*
+* `--all-repos, --no-all-repos`: *[default: False]*
+* `--limit`: *[default: 20]*
 
 ## witan projects
 
@@ -305,11 +306,11 @@ List workflow projects (default: active in the current repo).
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--repo`:
-* `--status`:   *[default: active]*
-* `--all-repos, --no-all-repos`:   *[default: False]*
-* `--limit`:   *[default: 50]*
+* `--status`: *[default: active]*
+* `--all-repos, --no-all-repos`: *[default: False]*
+* `--limit`: *[default: 50]*
 
 ## witan project
 
@@ -334,8 +335,8 @@ Manage workflow projects.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
-* `SLUG, --slug`:   **[required]**
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `SLUG, --slug`: **[required]**
 
 ### witan project status
 
@@ -350,8 +351,8 @@ The single-call resume view for a project. Pass ``--json`` for the raw
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
-* `--json, --no-json`:   *[default: False]*
+* `SLUG, --slug`: **[required]**
+* `--json, --no-json`: *[default: False]*
 
 ### witan project tasks
 
@@ -368,9 +369,9 @@ set so the dependency chain is visible without hopping between commands.
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
+* `SLUG, --slug`: **[required]**
 * `--status`:
-* `--detail, --no-detail`:   *[default: False]*
+* `--detail, --no-detail`: *[default: False]*
 
 ### witan project create
 
@@ -382,9 +383,9 @@ Create a new workflow project.
 
 **Parameters**:
 
-* `TITLE, --title`:   **[required]**
-* `--description`:   *[default: ""]*
-* `--phase`:   *[choices: discovery, spec, implementation, delivery]*  *[default: discovery]*
+* `TITLE, --title`: **[required]**
+* `--description`: *[default: ""]*
+* `--phase`: *[choices: discovery, spec, implementation, delivery]* *[default: discovery]*
 * `--repo`:
 * `--github-issue`:
 * `--tags, --empty-tags`:
@@ -413,7 +414,7 @@ trace without a narrative.
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
+* `SLUG, --slug`: **[required]**
 * `--title`:
 * `--description`:
 * `--repos, --empty-repos`:
@@ -437,8 +438,8 @@ surfaced so an unusual transition is still visible.
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
-* `--phase`:   **[required]**  *[choices: discovery, spec, implementation, delivery]*
+* `SLUG, --slug`: **[required]**
+* `--phase`: **[required]** *[choices: discovery, spec, implementation, delivery]*
 * `--github-pr`:
 
 ### witan project complete
@@ -451,8 +452,8 @@ Complete a project and seal its immutable corpus trace.
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
-* `--outcome`:   **[required]**
+* `SLUG, --slug`: **[required]**
+* `--outcome`: **[required]**
 * `--github-pr`:
 
 ### witan project block
@@ -465,8 +466,8 @@ Declare that ``slug`` must complete before ``blocks`` can begin.
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
-* `BLOCKS, --blocks`:   **[required]**
+* `SLUG, --slug`: **[required]**
+* `BLOCKS, --blocks`: **[required]**
 
 ### witan project unblock
 
@@ -478,8 +479,8 @@ Remove a project dependency declared with ``project block``.
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
-* `BLOCKS, --blocks`:   **[required]**
+* `SLUG, --slug`: **[required]**
+* `BLOCKS, --blocks`: **[required]**
 
 ### witan project run
 
@@ -499,9 +500,9 @@ running each project sequentially in separate agent invocations.
 * `--target`:
 * `--agent`:
 * `--model`:
-* `--dry-run, --no-dry-run`:   *[default: False]*
+* `--dry-run, --no-dry-run`: *[default: False]*
 * `--repo`:
-* `--all-repos, --no-all-repos`:   *[default: False]*
+* `--all-repos, --no-all-repos`: *[default: False]*
 
 ## witan scan
 
@@ -510,7 +511,7 @@ Introspect and dry-run write-path content scanning (ADR 0001).
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 
 ### witan scan test
 
@@ -527,9 +528,9 @@ the matched text is never printed.
 
 **Parameters**:
 
-* `TEXT, --text`:   **[required]**
-* `--field`: e.g. skipping ``author``).  *[default: content]*
-* `--node-type`:   *[default: Memory]*
+* `TEXT, --text`: **[required]**
+* `--field`: e.g. skipping ``author``). *[default: content]*
+* `--node-type`: *[default: Memory]*
 
 ### witan scan rules
 
@@ -546,7 +547,7 @@ Manage workflow sessions.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 
 ### witan session start
 
@@ -558,8 +559,8 @@ Link a session to a workflow project.
 
 **Parameters**:
 
-* `PROJECT-SLUG, --project-slug`:   **[required]**
-* `--phase`:   **[required]**  *[choices: discovery, spec, implementation, delivery]*
+* `PROJECT-SLUG, --project-slug`: **[required]**
+* `--phase`: **[required]** *[choices: discovery, spec, implementation, delivery]*
 * `--session-id`: generated uuid). The Stop hook keys its state file on this.
 * `--repo`:
 * `--tags, --empty-tags`:
@@ -574,8 +575,8 @@ Close a session with a handoff summary.
 
 **Parameters**:
 
-* `SESSION-SLUG, --session-slug`:   **[required]**
-* `--summary`:   **[required]**
+* `SESSION-SLUG, --session-slug`: **[required]**
+* `--summary`: **[required]**
 * `--tools-used, --empty-tools-used`:
 * `--files-changed, --empty-files-changed`:
 
@@ -603,9 +604,9 @@ user, so a sweep cannot reach a teammate's sessions.
 
 **Parameters**:
 
-* `--older-than`: Guards against closing a session that is legitimately running right now.  *[default: 6h]*
+* `--older-than`: Guards against closing a session that is legitimately running right now. *[default: 6h]*
 * `--project`:
-* `--yes, --no-yes`:   *[default: False]*
+* `--yes, --no-yes`: *[default: False]*
 
 ### witan session list
 
@@ -617,7 +618,7 @@ List a project's sessions, newest last.
 
 **Parameters**:
 
-* `PROJECT-SLUG, --project-slug`:   **[required]**
+* `PROJECT-SLUG, --project-slug`: **[required]**
 
 ## witan setup
 
@@ -644,10 +645,10 @@ Re-run after every upgrade to refresh installed files.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
-* `--agent`: pending a config-path verification fix — tracked separately.)  *[choices: claude, pi, copilot, opencode, all]*  *[default: claude]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--agent`: pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
 * `--author`:
-* `--dry-run, --no-dry-run`:   *[default: False]*
+* `--dry-run, --no-dry-run`: *[default: False]*
 
 ## witan target
 
@@ -656,7 +657,7 @@ Register and inspect named [targets.*] blocks (deployed witan endpoints).
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 
 ### witan target add
 
@@ -687,7 +688,7 @@ reached explicitly (``--target``/``WITAN_TARGET``).
 
 **Parameters**:
 
-* `NAME, --name`:   **[required]**
+* `NAME, --name`: **[required]**
 * `--remote-url`:
 * `--oidc-issuer`:
 * `--oidc-client-id`:
@@ -700,10 +701,10 @@ reached explicitly (``--target``/``WITAN_TARGET``).
 * `--match-repos, --empty-match-repos`:
 * `--match-hosts, --empty-match-hosts`:
 * `--match-paths, --empty-match-paths`:
-* `--force, --no-force`:   *[default: False]*
-* `--verify, --no-verify`:   *[default: True]*
-* `--login, --no-login`:   *[default: False]*
-* `--dry-run, --no-dry-run`:   *[default: False]*
+* `--force, --no-force`: *[default: False]*
+* `--verify, --no-verify`: *[default: True]*
+* `--login, --no-login`: *[default: False]*
+* `--dry-run, --no-dry-run`: *[default: False]*
 
 ### witan target list
 
@@ -723,8 +724,8 @@ Delete a ``[targets.<name>]`` block from the config file.
 
 **Parameters**:
 
-* `NAME, --name`:   **[required]**
-* `--dry-run, --no-dry-run`:   *[default: False]*
+* `NAME, --name`: **[required]**
+* `--dry-run, --no-dry-run`: *[default: False]*
 
 ## witan tasks
 
@@ -740,14 +741,14 @@ Pass ``--status closed`` to see them (or any other status to filter to it).
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--repo`:
 * `--status`: non-closed statuses.
 * `--project`:
 * `--assignee`:
-* `--ready, --no-ready`:   *[default: False]*
-* `--all-repos, --no-all-repos`:   *[default: False]*
-* `--limit`:   *[default: 50]*
+* `--ready, --no-ready`: *[default: False]*
+* `--all-repos, --no-all-repos`: *[default: False]*
+* `--limit`: *[default: 50]*
 
 ## witan task
 
@@ -771,8 +772,8 @@ Manage tasks.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
-* `SLUG, --slug`:   **[required]**
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `SLUG, --slug`: **[required]**
 
 ### witan task create
 
@@ -784,10 +785,10 @@ Create a task in the work-coordination graph.
 
 **Parameters**:
 
-* `TITLE, --title`:   **[required]**
-* `--description`:   *[default: ""]*
-* `--type`:   *[choices: bug, feature, task, chore, epic]*  *[default: task]*
-* `--priority`:   *[choices: p0, p1, p2, p3]*  *[default: p2]*
+* `TITLE, --title`: **[required]**
+* `--description`: *[default: ""]*
+* `--type`: *[choices: bug, feature, task, chore, epic]* *[default: task]*
+* `--priority`: *[choices: p0, p1, p2, p3]* *[default: p2]*
 * `--repo`:
 * `--project`:
 * `--parent`:
@@ -809,7 +810,7 @@ Closing a blocker unblocks its dependents.
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
+* `SLUG, --slug`: **[required]**
 * `--resolution`:
 
 ### witan task claim
@@ -825,9 +826,9 @@ A live claim held by someone else is refused unless ``--force`` is passed
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
+* `SLUG, --slug`: **[required]**
 * `--assignee`: session so parallel sessions don't share one claim).
-* `--force, --no-force`:   *[default: False]*
+* `--force, --no-force`: *[default: False]*
 
 ### witan task release
 
@@ -839,11 +840,11 @@ Release a claim, returning the task to ``open`` (or another status).
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
+* `SLUG, --slug`: **[required]**
 * `--assignee`: by this agent session — a claim taken by another of your own sessions
     still matches, since the check is on identity, not session).
-* `--status`:   *[choices: open, in_progress, blocked, closed]*  *[default: open]*
-* `--force, --no-force`:   *[default: False]*
+* `--status`: *[choices: open, in_progress, blocked, closed]* *[default: open]*
+* `--force, --no-force`: *[default: False]*
 
 ### witan task update
 
@@ -858,12 +859,12 @@ to add dependencies use ``task link``.
 
 **Parameters**:
 
-* `SLUG, --slug`:   **[required]**
+* `SLUG, --slug`: **[required]**
 * `--title`:
 * `--description`:
-* `--type`:   *[choices: bug, feature, task, chore, epic]*
-* `--priority`:   *[choices: p0, p1, p2, p3]*
-* `--status`:   *[choices: open, in_progress, blocked, closed]*
+* `--type`: *[choices: bug, feature, task, chore, epic]*
+* `--priority`: *[choices: p0, p1, p2, p3]*
+* `--status`: *[choices: open, in_progress, blocked, closed]*
 * `--repo`:
 * `--project`:
 * `--parent`:
@@ -886,9 +887,9 @@ memory to.
 
 **Parameters**:
 
-* `FROM-SLUG, --from-slug`:   **[required]**
-* `TO-SLUG, --to-slug`:   **[required]**
-* `KIND, --kind`:   **[required]**  *[choices: blocks, parent, discovered_from, addresses]*
+* `FROM-SLUG, --from-slug`: **[required]**
+* `TO-SLUG, --to-slug`: **[required]**
+* `KIND, --kind`: **[required]** *[choices: blocks, parent, discovered_from, addresses]*
 
 ### witan task unlink
 
@@ -907,9 +908,9 @@ error, so re-running is safe.
 
 **Parameters**:
 
-* `FROM-SLUG, --from-slug`:   **[required]**
-* `TO-SLUG, --to-slug`:   **[required]**
-* `KIND, --kind`:   **[required]**  *[choices: blocks, parent, discovered_from, addresses]*
+* `FROM-SLUG, --from-slug`: **[required]**
+* `TO-SLUG, --to-slug`: **[required]**
+* `KIND, --kind`: **[required]** *[choices: blocks, parent, discovered_from, addresses]*
 
 ### witan task run
 
@@ -929,13 +930,13 @@ running each task sequentially in separate agent invocations.
 * `--target`:
 * `--agent`:
 * `--model`:
-* `--claim, --no-claim`:   *[default: True]*
+* `--claim, --no-claim`: *[default: True]*
 * `--force, --no-force`: this the command could report a task as held and offer no way past it
     from the CLI it was reported in — the interactive steal prompt is
-    server-side and unreachable through ``_fn``, which passes no ``ctx``.  *[default: False]*
-* `--dry-run, --no-dry-run`:   *[default: False]*
+    server-side and unreachable through ``_fn``, which passes no ``ctx``. *[default: False]*
+* `--dry-run, --no-dry-run`: *[default: False]*
 * `--repo`:
-* `--all-repos, --no-all-repos`:   *[default: False]*
+* `--all-repos, --no-all-repos`: *[default: False]*
 * `--project`:
 
 ## witan traces
@@ -949,12 +950,12 @@ List corpus workflow traces (default: current repo).
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--repo`:
 * `--tags, --empty-tags`:
 * `--author`:
-* `--all-repos, --no-all-repos`:   *[default: False]*
-* `--limit`:   *[default: 50]*
+* `--all-repos, --no-all-repos`: *[default: False]*
+* `--limit`: *[default: 50]*
 
 ## witan trace
 
@@ -971,8 +972,8 @@ Inspect corpus trace records.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
-* `SLUG, --slug`:   **[required]**
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `SLUG, --slug`: **[required]**
 
 ### witan trace list
 
@@ -987,8 +988,8 @@ List corpus workflow traces (alias of ``witan traces``).
 * `--repo`:
 * `--tags, --empty-tags`:
 * `--author`:
-* `--all-repos, --no-all-repos`:   *[default: False]*
-* `--limit`:   *[default: 50]*
+* `--all-repos, --no-all-repos`: *[default: False]*
+* `--limit`: *[default: 50]*
 
 ## witan migrate
 
@@ -997,7 +998,7 @@ One-shot, idempotent schema and data migrations.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 
 ### witan migrate schema
 
@@ -1037,12 +1038,12 @@ externally and must be rebuilt by hand per omnigraph's upgrade docs.
 * `OLD-BINARY, --old-binary`: Path to the omnigraph binary that last wrote this store. Auto-detected
     as the first ``omnigraph`` on PATH that isn't the one witan is
     currently using, if omitted.
-* `--yes, --no-yes`: Skip the confirmation prompt.  *[default: False]*
+* `--yes, --no-yes`: Skip the confirmation prompt. *[default: False]*
 
 ### witan migrate merge
 
 ```console
-witan migrate merge [OPTIONS] SOURCE
+witan migrate merge [OPTIONS] [ARGS]
 ```
 
 Merge another store's data into this store, newest-record-wins on collisions.
@@ -1063,7 +1064,17 @@ already-merged target loads nothing new.
     export rather than re-exported, and is never fetched remotely. Use the
     export form to merge a store from another machine: Lance embeds
     absolute paths, so a ``.omni`` directory cannot be copied, but its
-    export can.  **[required]**
+    export can.
+* `--from`: Named ``[targets.<name>]`` block to merge *from*, in place of
+    ``source`` — its ``server`` is the store URI. A target carrying only a
+    ``remote_url`` is refused: there is no remote-export path, so it has
+    nothing to merge from.
+* `--to`: Named ``[targets.<name>]`` block to merge *into*, in place of the
+    ambient destination. Spells out on the command line what setting
+    ``WITAN_TARGET`` does out of the environment: a target with a
+    ``remote_url`` is merged into through that deployment (as you, over
+    MCP), one with only a ``server`` into that store URI. Mutually
+    exclusive with ``target``, which names a store rather than a target.
 * `--target`: Store URI to merge into. Defaults to the configured store. Created
     automatically if it's a local path that doesn't exist yet. A deployed
     graph is ``http(s)://<host>:<port>/graphs/<graph-id>`` (or just the
@@ -1071,7 +1082,7 @@ already-merged target loads nothing new.
     ``.jsonl`` target is refused rather than treated as a store: merging
     appends to a graph, and an export is a snapshot of one.
 * `--dry-run, --no-dry-run`: Preview the reconciliation decision for every colliding slug without
-    writing anything.  *[default: False]*
+    writing anything. *[default: False]*
 
 ### witan migrate topics
 
@@ -1127,7 +1138,7 @@ it's applied.
 
 **Parameters**:
 
-* `--apply, --no-apply`: Write the marks instead of only reporting them.  *[default: False]*
+* `--apply, --no-apply`: Write the marks instead of only reporting them. *[default: False]*
 * `--supersede, --empty-supersede`: ``<duplicate-slug>=<survivor-slug>`` pairs to mark regardless of the
     automatic rule. Repeatable.
 
@@ -1142,6 +1153,35 @@ Run the full bring-up: apply schema, backfill topics, fold repo keys.
 All three steps are idempotent, so this is safe to re-run — including as
 part of every deploy, to keep a live store self-healing.
 
+### witan migrate claim-authorship
+
+```console
+witan migrate claim-authorship [OPTIONS] [ARGS]
+```
+
+Take ownership of rows an earlier migration left under your local name.
+
+A local store writes ``author`` from ``WITAN_AUTHOR`` / git ``user.name`` /
+``$USER``; a deployment resolves it from your token's
+``preferred_username``. The two never converge, so before this was fixed
+every row you migrated kept a name your deployed identity cannot match —
+and ``memory_delete`` refuses anyone but the author, permanently (#267).
+
+``witan migrate merge`` now claims rows as they arrive, so this is only
+needed for a store merged before that landed. Re-merging will not fix
+those: reconciliation is newest-record-wins, and a re-sent row loses to its
+own already-applied copy.
+
+Dry by default. Run ``witan whoami`` first if you are unsure which identity
+you are claiming *to*.
+
+**Parameters**:
+
+* `WAS, --was`: The author string the rows currently carry. Defaults to this machine's
+    configured local author, which is the right answer when you are
+    repairing your own cutover from this same checkout.
+* `--apply, --no-apply`: Write the change instead of only reporting it. *[default: False]*
+
 ## witan code
 
 witan-code — tree-sitter code graph + cross-repo bridge.
@@ -1149,7 +1189,7 @@ witan-code — tree-sitter code graph + cross-repo bridge.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 
 ### witan code index
 
@@ -1161,7 +1201,7 @@ Incrementally index PATH (file or directory). Unchanged files are skipped.
 
 **Parameters**:
 
-* `PATH, --path`:   *[default: .]*
+* `PATH, --path`: *[default: .]*
 
 ### witan code reindex
 
@@ -1173,7 +1213,7 @@ Force re-index PATH, ignoring content hashes.
 
 **Parameters**:
 
-* `PATH, --path`:   *[default: .]*
+* `PATH, --path`: *[default: .]*
 
 ### witan code deps
 
@@ -1188,14 +1228,14 @@ contract B provides). Pass --html PATH to also emit an interactive graph.
 
 **Parameters**:
 
-* `KIND, --kind`: Filter to one contract kind (env_var/package/service/endpoint).  *[choices: env_var, endpoint, package, service]*
+* `KIND, --kind`: Filter to one contract kind (env_var/package/service/endpoint). *[choices: env_var, endpoint, package, service]*
 * `REPO, --repo`: Keep only links touching a repo whose slug contains this substring.
 * `HTML, --html`: Write a self-contained interactive HTML graph to this path.
-* `OPEN-BROWSER, --open-browser, --no-open-browser`: Open the generated HTML in the default browser.  *[default: False]*
+* `OPEN-BROWSER, --open-browser, --no-open-browser`: Open the generated HTML in the default browser. *[default: False]*
 * `MIN-PRECISION, --min-precision`: Minimum edge precision tier (docs/EDGE_PRECISION_TIERS.md). Default
     `heuristic` preserves prior behavior (every consumer/provider link
     this command has always shown). `precise` keeps only edges also
-    covered by a Stage-2 canonical-symbol join — see `witan code stitch`.  *[choices: precise, heuristic, fuzzy]*  *[default: heuristic]*
+    covered by a Stage-2 canonical-symbol join — see `witan code stitch`. *[choices: precise, heuristic, fuzzy]* *[default: heuristic]*
 
 ### witan code symbols
 
@@ -1212,7 +1252,7 @@ other repos' exports.
 **Parameters**:
 
 * `REPO, --repo`: Canonical repo URI. Defaults to the repo detected from the CWD.
-* `ROLE, --role`: Filter to exported or external rows.  *[choices: exported, external]*
+* `ROLE, --role`: Filter to exported or external rows. *[choices: exported, external]*
 * `SCHEME, --scheme`: Filter to one symbol scheme (http/env/pkg/svc).
 
 ### witan code stitch
@@ -1232,7 +1272,7 @@ exported symbols by canonical symbol string — distinct from the coarser
 * `REPO, --repo`: Keep only edges/gaps touching this repo. Omit to see the whole store.
 * `--unresolved, --no-unresolved`: Print external references with no precise match instead of edges —
     gaps in indexing coverage (a provider isn't indexed yet, or none
-    exists in this SOA).  *[default: False]*
+    exists in this SOA). *[default: False]*
 
 ### witan code inject-context
 
@@ -1273,7 +1313,7 @@ write lock.
 **Parameters**:
 
 * `--store`:
-* `--bridge, --no-bridge`:   *[default: False]*
+* `--bridge, --no-bridge`: *[default: False]*
 
 ### witan code cleanup
 
@@ -1290,10 +1330,10 @@ newer than ``older_than``). Irreversible, so it requires ``--yes``.
 **Parameters**:
 
 * `--store`:
-* `--bridge, --no-bridge`:   *[default: False]*
-* `--keep`:   *[default: 10]*
+* `--bridge, --no-bridge`: *[default: False]*
+* `--keep`: *[default: 10]*
 * `--older-than`:
-* `--yes, --no-yes`:   *[default: False]*
+* `--yes, --no-yes`: *[default: False]*
 
 ### witan code reap-views
 
@@ -1325,7 +1365,7 @@ rather than a server denial.
     included.
 * `--graph`: encode one as ``.../graphs/<id>``.
 * `--max-idle-days`: ``WITAN_CODE_VIEW_MAX_IDLE_DAYS``). ``0`` disables reaping.
-* `--apply, --no-apply`:   *[default: False]*
+* `--apply, --no-apply`: *[default: False]*
 
 ### witan code checkpoint
 
@@ -1394,9 +1434,9 @@ Re-run after every upgrade to refresh installed files.
 
 **Parameters**:
 
-* `--agent`:   *[choices: claude, pi, copilot, opencode, all]*  *[default: claude]*
+* `--agent`: *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
 * `--author`:
-* `--dry-run, --no-dry-run`:   *[default: False]*
+* `--dry-run, --no-dry-run`: *[default: False]*
 
 ### witan code branches
 
@@ -1421,7 +1461,7 @@ caches, so lifecycle is deletion, not merge.
     only listed (their git refs aren't visible from here). Local stores
     only, on both counts below: pruning reads this machine's git refs as
     the authority, which is true of a store only this machine writes and
-    false of a shared cluster graph.  *[default: False]*
+    false of a shared cluster graph. *[default: False]*
 
 ### witan code repos
 
@@ -1487,16 +1527,16 @@ with a 12-month offramp, and witan has no deployment on it to carry over.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
-* `--transport`: ``http`` alias) binds a network listener. Env: ``WITAN_MCP_TRANSPORT``.  *[choices: stdio, http, streamable-http]*  *[env: WITAN_MCP_TRANSPORT]*  *[default: stdio]*
-* `--host`: Env: ``WITAN_MCP_HOST``.  *[env: WITAN_MCP_HOST]*  *[default: 127.0.0.1]*
-* `--port`:   *[env: WITAN_MCP_PORT]*  *[default: 8000]*
-* `--path`: Env: ``WITAN_MCP_PATH``.  *[env: WITAN_MCP_PATH]*  *[default: /mcp]*
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--transport`: ``http`` alias) binds a network listener. Env: ``WITAN_MCP_TRANSPORT``. *[choices: stdio, http, streamable-http]* *[env: WITAN_MCP_TRANSPORT]* *[default: stdio]*
+* `--host`: Env: ``WITAN_MCP_HOST``. *[env: WITAN_MCP_HOST]* *[default: 127.0.0.1]*
+* `--port`: *[env: WITAN_MCP_PORT]* *[default: 8000]*
+* `--path`: Env: ``WITAN_MCP_PATH``. *[env: WITAN_MCP_PATH]* *[default: /mcp]*
 * `--shutdown-grace-seconds`: SIGTERM before dropping them. FastMCP's own default is **2 seconds**,
     which silently truncates any deployment that expects a rollout to drain
     — a witan write has been measured at 27s. Set this to the deployment's
     termination grace period. Env:
-    ``WITAN_MCP_SHUTDOWN_GRACE_SECONDS``.  *[env: WITAN_MCP_SHUTDOWN_GRACE_SECONDS]*  *[default: 120.0]*
+    ``WITAN_MCP_SHUTDOWN_GRACE_SECONDS``. *[env: WITAN_MCP_SHUTDOWN_GRACE_SECONDS]* *[default: 120.0]*
 
 ## witan run
 
@@ -1513,10 +1553,10 @@ the task's repo checkout so the agent has the right working directory.
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.  *[choices: txt, json, toml, yaml]*  *[env: WITAN_OUTPUT_FORMAT]*  *[default: txt]*
-* `SLUG, --slug`:   **[required]**
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `SLUG, --slug`: **[required]**
 * `--target`: Also overridable via WITAN_TARGET env var.
 * `--agent`: WITAN_AGENT env var and target/config-file default.
 * `--model`: var and target/config-file default.
-* `--claim, --no-claim`:   *[default: True]*
-* `--dry-run, --no-dry-run`:   *[default: False]*
+* `--claim, --no-claim`: *[default: True]*
+* `--dry-run, --no-dry-run`: *[default: False]*

@@ -261,6 +261,10 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "symbol_context",
             "topic_get",
             "store_merge",
+            # The repair half of `store_merge`: it restamps rows a migration
+            # already landed under a local identity, which `store_merge`'s own
+            # `claim_from_author` can only do on arrival.
+            "claim_authorship",
         ],
     ),
     (
@@ -285,6 +289,7 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "task_close",
             "task_link",
             "task_unlink",
+            "task_for_branch",
         ],
     ),
     (

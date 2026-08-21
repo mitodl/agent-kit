@@ -209,3 +209,27 @@ on a link that never existed, is a safe no-op.
 | `from_slug` | str | **required** | The ``tk-`` slug the edge points **from** — the same direction it was<br>written with. Pass the endpoints as ``task_link`` received them, not<br>reversed. |
 | `to_slug` | str | **required** | The slug the edge points **to**, or a ``Memory`` slug for<br>``kind="addresses"``. |
 | `kind` | `blocks` \| `parent` \| `discovered_from` \| `addresses` | **required** | Which edge to remove: ``blocks`` \| ``parent`` \| ``discovered_from`` \|<br>``addresses``. |
+
+## `task_for_branch`
+
+Return the tasks linked to a git branch — "what is this branch already for".
+
+A ``WorksOn`` link is written by a SUCCESSFUL ``task_claim`` and by nothing
+else — losing a claim race does not link, and ``workflow_session_start``
+touches the same ``CodeBranch`` but links it ``ForProject``. So a non-empty
+result means somebody actually holds a task on this branch. Call it before
+starting fresh work on a branch you did not just create: on a shared graph
+the holder may be a different actor, in which case the answer is to
+continue or coordinate, not to open a second task.
+
+An empty result is therefore weaker than it looks: a branch someone is
+working on without having claimed a task returns nothing.
+
+Closed tasks are included — filter on ``status`` if you only want live
+work. Returns ``[]`` for an unknown branch, an unlinked one, or when no
+repo can be resolved; none of those are errors.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `branch` | str | **required** | Git branch name. Required: the server has no checkout to infer it from,<br>unlike ``repo``. |
+| `repo` | str? | `null` | Repo scoping — see instructions. |

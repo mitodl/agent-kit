@@ -300,3 +300,38 @@ carry no slug and pass through additively, exactly as they do there.
 | --- | --- | --- | --- |
 | `rows` | list[object] | **required** | One batch of ``omnigraph export`` records — ``{"type": Node, "data":<br>{…}}`` for a node, ``{"edge": Edge, "from": …, "to": …}`` for an edge. |
 | `dry_run` | bool | `False` | Reconcile and return the per-row ``decisions`` **without writing<br>anything**. Run the whole migration this way first: it is the only way<br>to see which side wins each ``(type, slug)`` before the graph changes. |
+| `claim_from_author` | str? | `null` | The identity the *source* store wrote, when that store is your own.<br>Rows authored by exactly this name are restamped to the calling actor<br>before they are written; every other row keeps its author untouched.<br>Pass your local ``cfg.author`` here — the server cannot derive it,<br>having neither the caller's config nor their git checkout.<br>Without it, a migrated row keeps a name that no deployed identity can<br>ever match, and ``memory_delete`` refuses its own author forever<br>(#267). With it, the rows you migrate end up owned by the same identity<br>that owns everything you write afterwards. See ``_claim_authorship``<br>for why this matches rather than stamping unconditionally. |
+
+## `claim_authorship`
+
+Take ownership of rows a migration left under a local identity.
+
+The repair half of #267. ``store_merge``'s ``claim_from_author`` fixes rows
+as they arrive, but does nothing for a store already merged — a re-sent row
+loses reconciliation to its own applied copy, so re-running the migration
+cannot rescue it. This rewrites in place instead.
+
+``was`` is the identity the rows currently carry: your local ``cfg.author``
+(``WITAN_AUTHOR`` / git ``user.name`` / ``$USER``) at the time you merged,
+which is what ``witan whoami`` contrasts against your deployed identity.
+Every matching row across all five authored node types is restamped to the
+calling actor.
+
+Dry by default — pass ``apply=True`` to write. Idempotent: a second run
+finds nothing, because the rows now carry the new identity.
+
+**This does not widen the trust boundary, and it is worth being explicit
+about why, because it looks like it should.** Nothing here verifies that
+``was`` was ever *you*, so this will hand you rows written by a colleague
+if you name them. That capability already exists: ``store_merge`` accepts
+whatever ``author`` a row carries, which is exactly what makes the
+hand-edited-JSONL workaround in #267 work. This makes the existing
+capability usable without hand-editing a JSONL against a live shared graph;
+it does not create one. Constraining it means constraining ``store_merge``
+too, which is the ADR-0004 D5 revisit ("if attribution ever needs to be
+authoritative rather than descriptive"), not a change to make here alone.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `was` | str | **required** | The author string the rows currently carry. |
+| `apply` | bool | `False` | Write the change. Without it, only report what would change. |
