@@ -155,3 +155,63 @@ def test_upsert_code_branch_touches_existing_branch(server, tmp_path, monkeypatc
 
     assert len(second) == 1, "touching an existing branch must not insert a duplicate"
     assert second[0]["updated_at"] >= first["updated_at"]
+
+
+@requires_omnigraph
+def test_task_for_branch_returns_the_linked_task(server, tmp_path, monkeypatch):
+    """The tool behind the ``## In-Flight Branch`` block on a deployed target.
+
+    ``inject_context_remote`` cannot issue the ``code_branch_tasks`` read the
+    local path uses — a deployment exposes tools, not queries — so this is the
+    only route by which a shared graph can tell a session its branch is already
+    spoken for (tk-the-in-flight-branch-anti-duplicate-work-signal--073f96).
+    """
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "feature/for-branch")
+    monkeypatch.chdir(base)
+
+    task = server.task_create(title="branch work", description="x")
+    server.task_claim(task["slug"])
+
+    linked = server.task_for_branch(branch="feature/for-branch")
+    assert {t["slug"] for t in linked} == {task["slug"]}
+    assert linked[0]["title"] == "branch work"
+    # The render block prints "(claimed by ...)" off this field, which is what
+    # makes the warning actionable rather than just noisy on a shared graph.
+    assert linked[0]["assignee"]
+
+
+@requires_omnigraph
+def test_task_for_branch_is_scoped_to_the_repo(server, tmp_path, monkeypatch):
+    """A branch name says nothing on its own — ``main`` and ``develop`` exist
+    in every repo. The CodeBranch slug is ``repo|branch``, so an ignored
+    ``repo`` would silently merge two repos' branches into one warning."""
+    base = _git_repo(tmp_path / "r")
+    _git(base, "checkout", "-q", "-b", "shared/name")
+    monkeypatch.chdir(base)
+
+    task = server.task_create(title="repo A work", description="x")
+    server.task_claim(task["slug"])
+
+    assert {t["slug"] for t in server.task_for_branch(branch="shared/name")} == {
+        task["slug"]
+    }
+    assert (
+        server.task_for_branch(
+            branch="shared/name", repo="https://github.com/test/other"
+        )
+        == []
+    )
+
+
+@requires_omnigraph
+def test_task_for_branch_unknown_branch_is_empty_not_an_error(
+    server, tmp_path, monkeypatch
+):
+    """Every session on an unlinked branch takes this path, so it has to be a
+    quiet empty rather than something the hook has to catch."""
+    base = _git_repo(tmp_path / "r")
+    monkeypatch.chdir(base)
+
+    assert server.task_for_branch(branch=f"never-checked-out-{uuid.uuid4()}") == []
+    assert server.task_for_branch(branch="") == []

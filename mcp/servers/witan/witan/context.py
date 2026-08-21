@@ -457,10 +457,14 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
     target (``witan.cli._common.remote_proxy``), so this makes exactly the
     tool calls an agent's own session would make.
 
-    Degrades relative to :func:`inject_context`: branch-linked task
-    association (the ``## In-Flight Branch`` section) and stale-repo-case
-    detection have no remote-tool equivalent yet and are always empty/False
-    here — recorded via ``--debug``, never silently.
+    Degrades relative to :func:`inject_context` in one remaining place:
+    stale-repo-case detection has no remote-tool equivalent and is always
+    False here — recorded via ``--debug``, never silently. Branch-linked task
+    association (the ``## In-Flight Branch`` section) no longer degrades; it
+    goes through ``task_for_branch``
+    (tk-the-in-flight-branch-anti-duplicate-work-signal--073f96), because on a
+    shared graph that block is the signal keeping two actors off the same
+    branch — the case where dropping it costs the most, not the least.
     """
     try:
         repo, branch = _cached_repo_and_branch()
@@ -502,10 +506,30 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
                 debug, f"sessions read failed for {p['slug']!r} (skipping resume lines)"
             )
 
+    # Isolated exactly as the local path isolates its own CodeBranch read
+    # (see :func:`inject_context`): a deployment that predates
+    # ``task_for_branch`` answers with an unknown-tool error, and that must
+    # cost the branch block only — never the projects/ready-tasks block that
+    # already rendered above it.
+    open_branch_tasks: list[dict] = []
+    if repo and branch:
+        try:
+            open_branch_tasks = [
+                t
+                for t in server.task_for_branch(branch=branch, repo=repo)
+                if t.get("status") != "closed"
+            ]
+        except Exception:  # noqa: BLE001
+            _dbg_exc(
+                debug,
+                "task_for_branch failed (deployment may predate it) — "
+                "no In-Flight Branch block",
+            )
+
     _dbg(
         debug,
-        "remote mode: branch-task linkage and stale-repo-case detection "
-        "unavailable (no remote tool equivalent yet)",
+        f"remote branch tasks: open={len(open_branch_tasks)}; "
+        "stale-repo-case detection unavailable (no remote tool equivalent yet)",
     )
 
     return _render_context_block(
@@ -515,7 +539,7 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
         projects=projects,
         sessions_by_project=sessions_by_project,
         ready=ready,
-        open_branch_tasks=[],
+        open_branch_tasks=open_branch_tasks,
         stale_repo_case=False,
         debug=debug,
     )
