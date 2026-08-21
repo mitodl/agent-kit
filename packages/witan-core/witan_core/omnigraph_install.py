@@ -122,38 +122,28 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: and confirm it against the tarball you actually downloaded (`sha256sum`) in
 #: the same sitting — on a moving tag the two assets can be republished a
 #: minute apart, and a digest read across that gap describes neither build.
-#: ★ THESE ARE THE `edge` BUILD OF 2026-08-20T17:18Z (through bee47cd465),
-#: NOT v0.9.0's. Refreshed from the 2026-08-19T00:53Z triple (da466ba75b)
-#: after CI failed the checksum check on 2026-08-20. Eight commits landed in
-#: between. Five are RFC/docs (c03deee47f, 5cc8151f0b, 71dbe05250, 16aa8889e1,
-#: bee47cd465) and one is upstream's own test inventory (0066d775d1). Two
-#: needed reading, and both are the same vocabulary sweep:
+#: ★ THESE ARE THE `edge` BUILD OF 2026-08-21T00:11Z (through 62a9c3fe6b),
+#: NOT v0.9.0's. Refreshed from the 2026-08-20T17:18Z triple (bee47cd465)
+#: after CI failed the checksum check on 2026-08-21 (agent-kit#272). Six
+#: commits landed in between, all storage-layer typed-failure work
+#: (docs/rfcs/0038-typed-storage-failures.md): `OmniError::Lance(String)`
+#: became `OmniError::Storage(StorageFailure)`, closed over a shared
+#: `omnigraph-storage` crate. Checked the diff for the two things that would
+#: matter to witan — the `_RETRYABLE`/`_NEEDS_REPAIR`/`_PRECONDITION_FAILED`
+#: substrings in omnigraph.py, and the `"storage: "` prose prefix witan's
+#: classifier keys on — and found neither renamed: the refactor keeps
+#: `STORAGE_MESSAGE_PREFIX = "storage: "` and its own new tests assert the
+#: same `storage: <message>` rendering the old `Lance` variant produced. No
+#: vocabulary or JSON-output change here, unlike the 69d292ce80/ecf1d6aedd
+#: rename two refreshes back.
 #:
-#:   69d292ce80 (#534) renames omnigraph's ERROR PROSE — "table" →
-#:   "dataset"/"entity"/"node type". No serde field renamed, no CLI flag
-#:   renamed (help text only). But two substrings witan matched on DID
-#:   vanish: "manifest table version" and "ahead of manifest". See
-#:   `_RETRYABLE`/`_NEEDS_REPAIR` in omnigraph.py, updated alongside this
-#:   digest, and the vocabulary tests in tests/test_omnigraph.py.
-#:
-#:   ecf1d6aedd (#538) renames the JSON OUTPUT surface, which is breaking for
-#:   anyone who parses it: `rows_loaded` → `entities_loaded`, `total_rows` →
-#:   `total_entities`, `tables` → `nodes`/`edges`, `table_key` →
-#:   `entity_kind` + `type_name`. witan is not such a caller — it runs the CLI
-#:   WITHOUT `--json` (deliberately; see the "DO NOT ADD --json" note in
-#:   `OmnigraphClient.change`) and classifies on stderr prose, and its own
-#:   `rows_loaded` key is computed in `witan.server.merge_store`, not read
-#:   back from omnigraph. Anything that starts passing `--json` inherits this
-#:   rename.
-#:
-#: ★ AND `edge` MOVED THREE TIMES WHILE THIS WAS BEING WRITTEN — fe5ef3c904…
-#: (what CI fetched at 15:36Z, mid-republish), 1fe062b436…, then the triple
-#: below, inside 75 minutes. That is the cost of the moving tag, not a mishap:
-#: upstream merges several times a day and each push republishes `edge`, so a
-#: digest here can be stale before CI runs. Expect to refresh this on a red
-#: witan-code job rather than on a schedule, and prefer a real `v<version>`
-#: tag the moment 0.10.x has one (there is no v0.10.0 release yet, which is
-#: the only reason this is still on `edge`).
+#: ★ AND `edge` MOVED THREE TIMES WHILE THE PRIOR TRIPLE WAS BEING WRITTEN —
+#: see the git history of this comment for that episode. That is the cost of
+#: the moving tag, not a mishap: upstream merges several times a day and each
+#: push republishes `edge`, so a digest here can be stale before CI runs.
+#: Expect to refresh this on a red witan-code job rather than on a schedule,
+#: and prefer a real `v<version>` tag the moment 0.10.x has one (there is no
+#: v0.10.0 release yet, which is the only reason this is still on `edge`).
 #:
 #: The digests below were taken by downloading all three tarballs and hashing
 #: them locally, then cross-checking each against the release's published
@@ -166,13 +156,13 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:     macos-arm64   69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "8ecabdbc3a11d60716f569b32de6710834ddcbba328c2342b77f5c529bb7bc4f"
+        "68099e33941cc5c252f36d4c2a26f1dfff6b28e4eb627ba1f7bf098856d34349"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "aef871eeb070532947beee0f7644848552f59bbc8d4100a4bdad6d760acef647"
+        "d0e42176625584370a26c8a6ca43bc24447ea822483c46d971807475a5a5782a"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "75b3bd0ab4ccfd46af9e70536e8779cbb3af322ab008aa88a2712f14ce9d069e"
+        "f30f37f0ad8084ed5b26ce5163ebac04554c89bec4259aa1763826bc1efe215f"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")

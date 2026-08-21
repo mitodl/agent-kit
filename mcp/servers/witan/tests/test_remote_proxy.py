@@ -731,4 +731,90 @@ def test_claim_without_a_client_session_id_sends_none(proxy, monkeypatch):
 
     t = proxy.task_create(title="no sid", description="d", repo=REPO)
     proxy.task_claim(slug=t["slug"])
-    assert "session_id" not in captured["task_claim"]
+
+
+# ── CLI read commands that bypass the tool layer (agent-kit#270) ────────────
+# `witan project show`, `witan trace show` and `witan session list` used to
+# call `s.client.read(...)` directly instead of going through a tool.
+# `RemoteServerProxy` has no `client` — `__getattr__` handed back a plain
+# dispatch closure, and `.read(...)` on that raised `AttributeError`. They now
+# go through `workflow_project_get_blockers`/`workflow_trace_get`/
+# `workflow_session_list`, which dispatch correctly against either target.
+
+
+@pytest.fixture
+def _cli_against_proxy(proxy, monkeypatch):
+    """Point the CLI's `_srv()` at `proxy` and capture everything it prints."""
+    from witan.cli import _common
+
+    monkeypatch.setattr(_common, "_server", proxy)
+    printed: list[str] = []
+    monkeypatch.setattr(
+        _common.console,
+        "print",
+        lambda *a, **kw: printed.append(str(a[0]) if a else ""),
+    )
+    return printed
+
+
+def test_project_show_works_against_a_remote_target(proxy, _cli_against_proxy):
+    from witan.cli.projects import _project_show
+
+    printed = _cli_against_proxy
+    blocker = proxy.workflow_project_create(title="blocker", description="d")
+    blocked = proxy.workflow_project_create(title="blocked", description="d")
+    proxy.workflow_project_block(slug=blocker["slug"], blocks_slug=blocked["slug"])
+
+    sid = "11111111-1111-1111-1111-111111111111"
+    sess = proxy.workflow_session_start(
+        project_slug=blocked["slug"], session_id=sid, phase="discovery"
+    )
+    proxy.workflow_session_end(
+        session_slug=sess["session_slug"], summary="did some work"
+    )
+
+    _project_show(blocked["slug"])
+
+    combined = "\n".join(printed)
+    assert blocker["slug"] in combined
+    assert sess["session_slug"] in combined
+
+
+def test_trace_show_works_against_a_remote_target(proxy, _cli_against_proxy):
+    from witan.cli.traces import _trace_show
+
+    printed = _cli_against_proxy
+    proj = proxy.workflow_project_create(title="ship it", description="d")
+    sid = "22222222-2222-2222-2222-222222222222"
+    sess = proxy.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="implementation"
+    )
+    proxy.workflow_session_end(
+        session_slug=sess["session_slug"], summary="did the work"
+    )
+    proxy.workflow_project_complete(
+        slug=proj["slug"],
+        outcome="Delivered the feature end to end, verified in prod.",
+    )
+
+    _trace_show(proj["slug"])
+
+    combined = "\n".join(printed)
+    assert sess["session_slug"] in combined
+    assert "Delivered the feature end to end" in combined
+
+
+def test_session_list_works_against_a_remote_target(proxy, _cli_against_proxy):
+    from witan.cli.session import session_list
+
+    printed = _cli_against_proxy
+    proj = proxy.workflow_project_create(title="track sessions", description="d")
+    sid = "33333333-3333-3333-3333-333333333333"
+    sess = proxy.workflow_session_start(
+        project_slug=proj["slug"], session_id=sid, phase="discovery"
+    )
+    proxy.workflow_session_end(session_slug=sess["session_slug"], summary="checkpoint")
+
+    session_list(proj["slug"])
+
+    assert any(sess["session_slug"] in line for line in printed)

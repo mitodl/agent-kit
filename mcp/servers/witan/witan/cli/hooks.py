@@ -37,12 +37,35 @@ def inject_context(*, debug: bool = False) -> None:
     # document by design, so one stray character in a `[targets.*]` table takes
     # out context injection entirely — and also for a `WITAN_TARGET` naming a
     # target that isn't defined, which breaks the hook with a perfectly valid
-    # config file. SystemExit is not an Exception and `_srv()` raises it for a
-    # half-configured remote; letting either escape breaks the "never blocks"
-    # contract this command documents. Same guard as `session-checkpoint`.
+    # config file. SystemExit is not an Exception and `load_remote_config()`
+    # raises it for a half-configured remote; letting either escape breaks the
+    # "never blocks" contract this command documents. Same guard as
+    # `session-checkpoint`.
+    try:
+        remote = cfg_module.load_remote_config()
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — never fail the hook
+        if debug:
+            logger.debug("witan.hook.config_load_failed", error=str(exc), exc_info=True)
+        return
+
+    if remote is not None:
+        # A `remote_url`-only target has no direct graph endpoint to hand
+        # OmnigraphClient — that fallback is exactly #261's mechanism
+        # (tk-witan-hook-context-reads-the-local-store-on-a-de-dfb2c9), so a
+        # deployed target reads through the same tool-calling proxy `_srv()`
+        # would build, not `cfg_module.load()`'s local-store `graph_uri`.
+        from ._common import remote_proxy
+
+        text = ctx_module.inject_context_remote(
+            remote_proxy(remote), remote.url, debug=debug
+        )
+        if text:
+            print(text)
+        return
+
     try:
         cfg = cfg_module.load()
-    except (Exception, SystemExit) as exc:  # noqa: BLE001 — never fail the hook
+    except (Exception, SystemExit) as exc:  # never fail the hook
         if debug:
             logger.debug("witan.hook.config_load_failed", error=str(exc), exc_info=True)
         return

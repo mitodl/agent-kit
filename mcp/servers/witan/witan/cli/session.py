@@ -238,8 +238,8 @@ def session_list(project_slug: str) -> None:
     project_slug: The ``wp-`` slug whose sessions to list.
     """
     s = _srv()
-    sessions = s.client.read(
-        "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
+    sessions = _fn(s.workflow_session_list)(
+        project_slug=project_slug, include_superseded=True
     )
     if not sessions:
         console.print(f"[dim]No sessions for {project_slug}.[/dim]")

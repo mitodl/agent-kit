@@ -794,16 +794,16 @@ def test_inject_context_cli_survives_an_unreachable_deployment(
 ):
     """A configured-but-down deployment must not reach an agent's prompt.
 
-    Worth pinning rather than assuming, because the shape here is not the one
-    the rest of the CLI has: this command never calls ``_srv()``, so it does not
-    go through ``RemoteMCPProxy`` at all — a remote-configured hook still reads
-    ``graph_uri`` directly. That means the unreachable-remote classification
-    added for every other command is not what protects this path; the blanket
-    guard inside ``ctx_module.inject_context`` is. Both a dead deployment and a
-    dead graph URI are set, so whichever one it does reach, stdout stays empty.
+    A `remote_url`-only target has no direct graph endpoint the CLI is
+    allowed to open, so this command routes through the same tool-calling
+    proxy `_srv()` builds for every other command (agent-kit#261's mechanism,
+    fixed here for this path too — see
+    tk-witan-hook-context-reads-the-local-store-on-a-de-dfb2c9). It must
+    degrade to an empty block rather than raise when the deployment cannot be
+    reached, exactly like `session-checkpoint` already does.
     """
     from witan.cli import hooks
-    from witan.graph import OmnigraphClient
+    from witan_core.remote.proxy import RemoteMCPProxy
 
     cfg_file = tmp_path / "config.toml"
     cfg_file.write_text("")
@@ -811,22 +811,148 @@ def test_inject_context_cli_survives_an_unreachable_deployment(
     monkeypatch.delenv("WITAN_TARGET", raising=False)
     monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.invalid/mcp")
     monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.invalid/realms/ol")
-    # An http(s) URI so the "local store missing" early return is skipped and
-    # the read is genuinely attempted. Raised rather than actually dialled: the
-    # real client rides out a restart with a connect-retry budget, which is
-    # right in production and minutes of nothing in a test.
-    monkeypatch.setenv("WITAN_MEMORY_URI", "https://omnigraph.invalid")
     attempted: list[str] = []
 
-    def _refused(_self, _query_file, query_name, _params):
-        attempted.append(query_name)
-        raise RuntimeError("omnigraph: connection refused")
+    async def _refused(_self, name, _args, _kwargs):
+        attempted.append(name)
+        raise RuntimeError("witan.invalid: connection refused")
 
-    monkeypatch.setattr(OmnigraphClient, "read", _refused)
+    monkeypatch.setattr(RemoteMCPProxy, "_invoke", _refused)
 
     hooks.inject_context()  # must not raise
 
     assert capsys.readouterr().out == ""
-    # Not vacuous: the hook got as far as a read before degrading. A cached
-    # block, or an early return, would leave this empty.
+    # Not vacuous: the hook got as far as a tool call before degrading. A
+    # cached block, or an early return, would leave this empty.
     assert attempted
+
+
+class _FakeRemoteServer:
+    """Records every call it receives and answers with fixed, known data.
+
+    Stands in for the tool-calling proxy ``_srv()``/``remote_proxy()`` build —
+    ``inject_context_remote`` only ever calls attribute-style methods on it, the
+    same shape ``RemoteServerProxy.__getattr__`` returns, so a plain class with
+    matching method names is a faithful substitute without dialling out.
+    """
+
+    def __init__(self, projects, ready, sessions_by_project):
+        self.calls: list[tuple[str, dict]] = []
+        self._projects = projects
+        self._ready = ready
+        self._sessions_by_project = sessions_by_project
+
+    def workflow_project_list(self, **kwargs):
+        self.calls.append(("workflow_project_list", kwargs))
+        return self._projects
+
+    def task_ready(self, **kwargs):
+        self.calls.append(("task_ready", kwargs))
+        return self._ready
+
+    def workflow_session_list(self, **kwargs):
+        self.calls.append(("workflow_session_list", kwargs))
+        return self._sessions_by_project.get(kwargs.get("project_slug"), [])
+
+
+def test_inject_context_remote_reads_through_the_proxy(tmp_path, monkeypatch):
+    """The successful remote path, not just its failure mode.
+
+    ``test_inject_context_cli_survives_an_unreachable_deployment`` above only
+    proves a dead proxy degrades to empty output — it never exercises a
+    proxy that actually answers, so a regression in the tool names/arguments,
+    session aggregation, or rendering could ship with that test still green
+    (Copilot review on agent-kit#272). This pins the exact calls made and the
+    resulting text.
+    """
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    repo = "https://github.com/test/ctx-remote"
+    monkeypatch.setenv("WITAN_REPO", repo)
+
+    server = _FakeRemoteServer(
+        projects=[
+            {"slug": "wp-remote", "title": "Remote Project", "phase": "implementation"}
+        ],
+        ready=[
+            {
+                "slug": "tk-remote",
+                "title": "Remote Task",
+                "priority": "p1",
+                "status": "open",
+            }
+        ],
+        sessions_by_project={},
+    )
+
+    text = ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
+
+    assert ("workflow_project_list", {"repo": repo, "status": "active"}) in server.calls
+    assert ("task_ready", {"repo": repo, "limit": 10000}) in server.calls
+    assert (
+        "workflow_session_list",
+        {"project_slug": "wp-remote"},
+    ) in server.calls
+
+    assert "## Active Workflow Projects" in text
+    assert "Remote Project" in text
+    assert "wp-remote" in text
+    assert "## Ready Tasks" in text
+    assert "Remote Task" in text
+    # No remote-tool equivalent exists yet for either — must be absent, not
+    # just incidentally empty (see inject_context_remote's docstring).
+    assert "## In-Flight Branch" not in text
+    assert "Unmigrated Repo Keys" not in text
+
+
+def test_inject_context_remote_no_repo_skips_project_list(tmp_path, monkeypatch):
+    """Mirrors the local path's own gating: outside a detected repo, no
+    project list is fetched at all (calling ``workflow_project_list(repo="")``
+    would return every repo's active projects, not "none" — see its
+    docstring), but ready tasks still resolve to the unscoped set."""
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setenv("WITAN_REPO", "")  # explicitly disables repo detection
+
+    server = _FakeRemoteServer(projects=[], ready=[], sessions_by_project={})
+
+    ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
+
+    assert not any(name == "workflow_project_list" for name, _ in server.calls)
+    assert ("task_ready", {"repo": "", "limit": 10000}) in server.calls
+
+
+def test_inject_context_remote_cache_key_is_the_deployment_url(tmp_path, monkeypatch):
+    """The cache key is the deployment URL, not a store path — two different
+    deployments must not collide on one cache entry, and a repeat call within
+    the TTL must not re-hit the proxy at all."""
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/ctx-remote-cache")
+
+    server = _FakeRemoteServer(projects=[], ready=[], sessions_by_project={})
+
+    ctx_module.inject_context_remote(server, "https://witan-a.example.org/mcp")
+    calls_after_first = len(server.calls)
+    ctx_module.inject_context_remote(server, "https://witan-a.example.org/mcp")
+    # Same deployment, second call: served from cache, no fresh proxy read.
+    assert len(server.calls) == calls_after_first
+
+    ctx_module.inject_context_remote(server, "https://witan-b.example.org/mcp")
+    # A different deployment's URL must not read the first one's cache.
+    assert len(server.calls) > calls_after_first

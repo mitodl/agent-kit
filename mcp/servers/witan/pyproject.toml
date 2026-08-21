@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.20.0"
+version = "0.21.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -38,12 +38,14 @@ dependencies = [
   # Hence >=0.21 below. Nothing in CI catches this — read the sentence above
   # before adding a witan_core symbol, because the tests will not tell you.
   #
-  # ★ >=0.27 IS THE ONE ENTRY HERE THAT IS NOT ABOUT AN IMPORT. witan-core
-  # 0.27.0 refreshed the pinned omnigraph asset digests after upstream moved
-  # the `edge` tag; 0.26.0 carries the stale ones, so `witan setup` against it
-  # fails the checksum and installs no binary at all — and witan/server.py
-  # bootstraps a graph at import time, so the CLI is unusable rather than
-  # degraded. Same consequence as a missing symbol, different cause.
+  # ★ >=0.28 CONTINUES THE ONE ENTRY HERE THAT IS NOT ABOUT AN IMPORT. `edge`
+  # moved again the day after 0.27.0's refresh; witan-core 0.28.0 carries the
+  # new digest, and every version below it fails `witan setup`'s checksum and
+  # installs no binary at all — witan/server.py bootstraps a graph at import
+  # time, so the CLI is unusable rather than degraded. Same consequence as a
+  # missing symbol, different cause. Expect this floor to keep moving while
+  # omnigraph 0.10.0 stays on the moving `edge` tag; see
+  # packages/witan-core/witan_core/omnigraph_install.py.
   #
   # (>=0.21 for remote.oidc.SessionLife, imported at module scope by
   # witan/remote/oidc.py and re-exported in its __all__;
@@ -120,7 +122,7 @@ dependencies = [
   # failure mode. No AttributeError, no test failure — a published
   # witan-council on 0.24 just quietly ships the bug this floor exists to
   # keep fixed.
-  "witan-core[cli,remote,observability,sentry]>=0.27,<1",
+  "witan-core[cli,remote,observability,sentry]>=0.28,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -165,7 +167,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.20.0"
+current_version = "0.21.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

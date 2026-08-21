@@ -78,18 +78,23 @@ the set cannot drift into naming something that no longer exists.
 CLIENT_READ_ATTRS = frozenset({"read", "graph_uri"})
 """What ``s.client.<attr>`` may reach on a fallback store.
 
-Several read-only commands go around the tool surface and query the client
-directly — ``witan session list`` (``session.py``), ``witan trace show``
-(``traces.py``) and ``witan project show`` (``projects.py``) all call
-``s.client.read(...)``. Refusing the whole ``client`` attribute would break
-three working read commands with a message about writes.
+Some commands go around the tool surface and query the client directly rather
+than calling a tool — ``witan migrate storage`` (``migrate.py``) prints the
+store path via ``s.client.graph_uri``. ``witan session list``, ``witan trace
+show`` and ``witan project show`` used to reach ``s.client.read(...)`` too,
+which only works in-process (a deployed target has no client to reach past —
+see agent-kit#270); they now go through
+``workflow_session_list``/``workflow_trace_get``/``workflow_project_get_blockers``
+instead, which dispatch correctly either way. ``read`` stays in this allowlist
+as a narrow escape hatch for the next command that needs it, not because
+anything still calls it.
 
 Handing back the real client instead would be worse: it also carries
 ``change``/``change_many``/``load``, so the guard would be trivially
 side-steppable by the one code path that already bypasses the tool layer.
-Hence a facade over exactly the two members those commands use — the query
-call, and the store path ``witan migrate storage`` prints. Anything else on
-the client refuses like any other write.
+Hence a facade over exactly the two members a caller might reach for — the
+query call, and the store path. Anything else on the client refuses like any
+other write.
 """
 
 
@@ -184,11 +189,11 @@ class _LocalStoreGuard:
 
     A proxy rather than a check at each call site. There are ~50 dispatch
     points across the CLI package and they are not uniform — most go through
-    ``_fn(s.tool)``, ``witan migrate`` calls ``s.tool()`` directly, and three
-    read commands reach past both into ``s.client.read(...)`` — so a per-site
-    guard would be a list to keep in sync, and the one site somebody forgets is
-    indistinguishable from the bug. Attribute access is the single place every
-    one of them passes through.
+    ``_fn(s.tool)``, ``witan migrate`` calls ``s.tool()`` directly, and
+    ``witan migrate storage`` reaches past both into ``s.client.graph_uri`` —
+    so a per-site guard would be a list to keep in sync, and the one site
+    somebody forgets is indistinguishable from the bug. Attribute access is
+    the single place every one of them passes through.
 
     Holds the server module UNIMPORTED until an allowed read asks for it,
     because importing it is itself a write to the store this refuses to use.

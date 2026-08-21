@@ -94,24 +94,18 @@ def _project_show(slug: str) -> None:
     if p.get("github_pr"):
         console.print(f"  pr: {p['github_pr']}")
     if p.get("blocked_by"):
+        blockers = {
+            b["slug"]: b for b in _fn(s.workflow_project_get_blockers)(slug=slug)
+        }
         for blocker in p["blocked_by"]:
-            rows = s.client.read(
-                "read.gq", "get_workflow_project_by_slug", {"slug": blocker}
-            )
-            b = rows[0] if rows else None
+            b = blockers.get(blocker)
             st = b.get("status") if b else "missing"
             console.print(f"  blocked by {blocker} [{_styled(st, _STATUS_STYLE)}]")
     if p.get("blocks"):
         console.print(f"  blocks: {', '.join(p['blocks'])}")
     console.print(f"\n{p.get('description') or '(no description)'}\n")
 
-    sessions = [
-        sess
-        for sess in s.client.read(
-            "read.gq", "list_sessions_by_project", {"project_slug": slug}
-        )
-        if not sess.get("superseded_by")
-    ]
+    sessions = _fn(s.workflow_session_list)(project_slug=slug)
     console.print(f"  sessions: {len(sessions)}")
     for sess in sessions:
         console.print(
@@ -128,9 +122,8 @@ def _project_show(slug: str) -> None:
             )
 
     if p.get("status") == "completed":
-        trace = s.client.read("read.gq", "get_trace", {"slug": f"wt-{slug}"})
-        if trace:
-            tr = trace[0]
+        tr = _fn(s.workflow_trace_get)(slug=slug)
+        if tr:
             console.print(
                 f"\n  [blue]trace[/blue]: {tr.get('session_count')} sessions, "
                 f"phases={tr.get('phases')}, duration={tr.get('duration')}h"
