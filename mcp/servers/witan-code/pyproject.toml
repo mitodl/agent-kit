@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.13.5"
+version = "0.14.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -95,7 +95,28 @@ dependencies = [
     # Expect this floor to keep moving while omnigraph 0.10.0 stays on the
     # moving `edge` tag; see
     # packages/witan-core/witan_core/omnigraph_install.py.
-    "witan-core[cli,remote,observability,sentry]>=0.28,<1",
+    #
+    # ★ >=0.31 IS THE THIRD NON-IMPORT FLOOR, and the narrowest: it buys
+    # message content, not correctness. Nothing new is imported and an older
+    # witan-core runs fine. But witan-code 0.14.0 is ENTIRELY a diagnostics
+    # release, and two of the four questions a failed index has to answer are
+    # answered on the witan-core side — which chunk of how many failed
+    # (`change_many`), and which timeout budget expired (`omnigraph_http`).
+    # Resolved below 0.31 the run still prints its partial summary and names
+    # the phase, and the inner error is still the bare "timed out" this
+    # release exists to replace. A package whose changelog promises a
+    # self-describing failure and delivers half of one is the quiet wrongness
+    # the two floors above were raised to avoid.
+    #
+    # ★ THE NUMBER MOVED 0.30 -> 0.31 ON REBASE, and that is the whole hazard
+    # this note exists to flag. agent-kit#280 took 0.30.0 for unrelated work
+    # while this branch was open, so the release carrying the diagnostics is
+    # 0.31.0 — and a floor left at >=0.30 would resolve #280's release instead
+    # and quietly deliver the half-message described above. `just
+    # check-core-floor` cannot catch it: nothing new is imported, so the
+    # clean-install import check passes at either number. Re-check this line by
+    # hand whenever this branch is rebased.
+    "witan-core[cli,remote,observability,sentry]>=0.31,<1",
     "fastmcp>=3.4.2,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled
@@ -179,7 +200,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 [tool.bumpversion]
-current_version = "0.13.5"
+current_version = "0.14.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

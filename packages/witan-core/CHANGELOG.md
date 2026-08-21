@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.31.0] - 2026-08-21
+
+### Fixed
+
+- **A timed-out request now names the budget it exceeded.** `socket.timeout`
+  stringifies to bare `"timed out"`, which was the entire operator-facing text
+  of the CI indexer's four-hourly failure — and it is equally consistent with a
+  TCP connect, a server-side cutoff, and this client's own deadline. Only the
+  last was true. `PooledTransport` failures now report the elapsed time and, for
+  a timeout, the budget that fired, named as
+  `omnigraph_http.DEFAULT_TIMEOUT_SECONDS`. It reports the transport's own
+  value, not the module default: sending a reader to a constant that is not the
+  one that expired would be worse than saying nothing.
+
+  Non-timeout failures carry the elapsed too. A server-side deadline arrives as
+  a connection reset, not as a timeout, and the elapsed time is what separates
+  it from a socket that died immediately.
+
+### Changed
+
+- **A `change_many` chunk failure names its position.** Chunks commit
+  independently, so which one failed IS the resulting state: every chunk before
+  it landed and every one after did not. The error now carries the chunk index,
+  the total, the statements in it, the configured `chunk_size` and the elapsed
+  time, with the original failure on `__cause__`. Unchunked batches are
+  unwrapped as before — no position to report, and wrapping would only bury the
+  named query the single-step path exists to keep in the message.
+
 ## [0.30.0] - 2026-08-21
 
 ### Added
