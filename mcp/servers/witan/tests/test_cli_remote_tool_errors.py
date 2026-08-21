@@ -27,7 +27,7 @@ def _refusing_proxy(message: str):
     proxy = RemoteServerProxy(cfg, lambda: "tok")
     # Seeded so the call reaches call_tool without a tools/list round trip.
     proxy._param_names = {
-        "store_merge": ["rows", "dry_run"],
+        "store_merge": ["rows", "dry_run", "claim_from_author"],
         "task_ready": ["repo", "limit"],
     }
 

@@ -372,9 +372,17 @@ class RemoteServerProxy(RemoteMCPProxy):
             # tool parameter, so the binding ceiling is the MCP session's 4 MiB
             # body cap, not omnigraph's much larger buffered-body one.
             batches = chunk_records(_read_export(export), MCP_LOAD_MAX_BYTES)
+            # The identity the source store wrote under. Resolved here for the
+            # same reason `repo=None` is: the deployment has neither this
+            # machine's config nor its git checkout, so it cannot derive the
+            # name its incoming rows carry. Rows matching it become the calling
+            # actor's; everything else keeps its author (#267).
+            claim_from = self._resolve_local_author()
             for index, batch in enumerate(batches):
                 try:
-                    result = self.store_merge(rows=batch, dry_run=dry_run)
+                    result = self.store_merge(
+                        rows=batch, dry_run=dry_run, claim_from_author=claim_from
+                    )
                 except RemotePayloadTooLarge as exc:
                     # Only here is the caller known to be mid-batch, so only
                     # here can the budget and the partial-write state be stated
@@ -409,6 +417,22 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def _resolve_repo(self) -> str | None:
         return repo_module.detect()
+
+    def _resolve_local_author(self) -> str | None:
+        """The author string this machine's *local* store writes.
+
+        `WITAN_AUTHOR` / git `user.name` / `$USER`, via the ordinary config
+        load. Only `merge_store` uses it, to tell the deployment which incoming
+        rows are the caller's own — see `store_merge(claim_from_author=…)`.
+
+        Read at call time rather than in `__init__` so it tracks a target
+        switch, and imported here rather than at module scope because
+        `witan.config` pulls in the server-side config surface that the CLI's
+        local-dispatch guard defers on purpose.
+        """
+        from .. import config as cfg_module
+
+        return cfg_module.load().author
 
     def _resolve_session_slug(self) -> str | None:
         # The handle `witan session start` (or the local stdio server) parked

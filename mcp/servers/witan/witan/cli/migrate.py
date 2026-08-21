@@ -464,3 +464,66 @@ def all_() -> None:
     _apply_schema()
     _backfill_topics()
     _repo_keys()
+
+
+@migrate_app.command(name="claim-authorship")
+def claim_authorship(
+    was: str | None = None,
+    *,
+    apply: bool = False,
+) -> None:
+    """Take ownership of rows an earlier migration left under your local name.
+
+    A local store writes ``author`` from ``WITAN_AUTHOR`` / git ``user.name`` /
+    ``$USER``; a deployment resolves it from your token's
+    ``preferred_username``. The two never converge, so before this was fixed
+    every row you migrated kept a name your deployed identity cannot match —
+    and ``memory_delete`` refuses anyone but the author, permanently (#267).
+
+    ``witan migrate merge`` now claims rows as they arrive, so this is only
+    needed for a store merged before that landed. Re-merging will not fix
+    those: reconciliation is newest-record-wins, and a re-sent row loses to its
+    own already-applied copy.
+
+    Dry by default. Run ``witan whoami`` first if you are unsure which identity
+    you are claiming *to*.
+
+    Parameters
+    ----------
+    was:
+        The author string the rows currently carry. Defaults to this machine's
+        configured local author, which is the right answer when you are
+        repairing your own cutover from this same checkout.
+    apply:
+        Write the change instead of only reporting it.
+    """
+    from .. import config as cfg_module
+
+    was = was or cfg_module.load().author
+    try:
+        result = _srv().claim_authorship(was=was, apply=apply)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1) from None
+
+    if result.get("reason"):
+        console.print(f"Nothing to do: {result['reason']}.")
+        return
+
+    if not result["claimed"]:
+        console.print(
+            f"No rows authored by {result['was']!r}. "
+            f"You are {result['now']!r} here — check `witan whoami` and the "
+            "author the source store actually wrote."
+        )
+        return
+
+    verb = "Claimed" if result["applied"] else "[yellow]Would claim[/yellow]"
+    console.print(
+        f"{verb} {result['claimed']} row(s): {result['was']!r} -> {result['now']!r}"
+    )
+    for node_type, count in result["by_type"].items():
+        console.print(f"  {node_type:16} {count}")
+
+    if not result["applied"]:
+        console.print("\n[dim]Dry run — re-run with --apply to write.[/dim]")

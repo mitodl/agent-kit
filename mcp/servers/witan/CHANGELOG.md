@@ -6,6 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.25.0] - 2026-08-21
+
+### Fixed
+
+- **Memories you migrated are yours again, and deletable.** A local store
+  writes `author` from `WITAN_AUTHOR` / git `user.name` / `$USER`; a deployment
+  resolves it from the token's `preferred_username`. `store_merge` preserved
+  each row's original value, so every row a user migrated arrived carrying a
+  name their deployed identity can never match — and `memory_delete` refuses
+  everyone but the author. The result was that **every memory in a migrated
+  store became permanently undeletable by the person who wrote it**
+  ([#267](https://github.com/mitodl/agent-kit/issues/267)), with no
+  client-side workaround: once `remote_url` is set, `cfg.author` is ignored for
+  that comparison.
+
+  `witan migrate merge` now tells the deployment which identity the incoming
+  rows carry, and rows matching it are restamped to the calling actor. Rows
+  authored by anyone else are untouched, which is what makes this safe to do by
+  default: on your own store every row matches, so nobody has to discover a
+  flag; on a teammate's export nothing matches, so merging their store through
+  your credential cannot quietly reattribute their work to you.
+
+  The migration runbook already promised this ("written **as you**, under your
+  own credential") — it was true of authorization and not of attribution.
+
+### Added
+
+- **`witan migrate claim-authorship`** — take ownership of rows an earlier
+  migration left under your local name. Needed because the fix above only helps
+  rows arriving from now on: re-running the merge cannot repair a store already
+  merged, since reconciliation is newest-record-wins and a re-sent row loses to
+  its own already-applied copy. This rewrites in place instead, across all five
+  authored node types (`Memory`, `WorkflowProject`, `WorkflowSession`,
+  `WorkflowTrace`, `Task`).
+
+  Dry by default; `--was` defaults to this machine's configured local author,
+  which is the right answer when repairing your own cutover from the same
+  checkout. Idempotent — a second run finds nothing.
+
+  It does **not** verify that the name you claim was ever yours, and that is
+  deliberate rather than an oversight: `store_merge` already accepts whatever
+  `author` a row carries (the basis of the hand-edited-export workaround in
+  #267), so this makes an existing capability usable without hand-editing a
+  JSONL against a live shared graph rather than creating a new one.
+  Constraining it means constraining `store_merge` too — the ADR-0004 D5
+  revisit, recorded there as its own decision to take rather than folded into
+  this fix.
+
+- `store_merge(claim_from_author=…)` and a `claim_authorship` tool, the MCP-tier
+  halves of the two above. `set_*_author` mutations are deliberately separate
+  from `update_memory` / `update_task`: folding `author` into those would make
+  attribution editable through `memory_update`, where nothing constrains who
+  you may claim a row for.
+
+### Changed
+
+- ADR-0004 gains an addendum recording that D5's "no backfill" assumption did
+  not survive store migration, and that `author` — which D5 calls descriptive —
+  is in fact the only row-level ownership control witan has, because ADR-0002
+  records that Cedar cannot scope a delete to a row's owner.
+
 ## [0.24.0] - 2026-08-21
 
 ### Added

@@ -1640,6 +1640,49 @@ def _parse_ts(value: str | int | float | None) -> datetime | None:
     return parsed
 
 
+#: The node types carrying an ``author`` (schema.pg). Authorship repair walks
+#: exactly these: a type with no such field must not acquire one, and the read
+#: queries below are per-type, so the list has to be explicit rather than
+#: inferred from whatever a row happens to hold.
+_AUTHORED_TYPES = (
+    "Memory",
+    "WorkflowProject",
+    "WorkflowSession",
+    "WorkflowTrace",
+    "Task",
+)
+
+
+def _claim_authorship(nodes: dict[tuple[str, str], dict], was: str, now: str) -> int:
+    """Rewrite ``author`` from ``was`` to ``now``, in place. Returns rows touched.
+
+    The identity a local store writes (``cfg.author`` — ``WITAN_AUTHOR`` / git
+    ``user.name`` / ``$USER``) and the one a deployment resolves from the JWT
+    (``preferred_username``) come from different namespaces and never converge.
+    So every row a user migrates keeps a name their deployed identity does not
+    match, and `memory_delete`'s author check refuses them forever — the rows
+    most in need of pruning being exactly the ones written before the graph was
+    shared (#267).
+
+    Matching on ``was`` rather than stamping unconditionally is what makes this
+    safe to run by default. On your own store every row matches, so the repair
+    is total and needs no flag anyone has to discover. On a teammate's export
+    nothing matches, so merging their store through your credential cannot
+    quietly reattribute their work to you — a mistake that would be invisible
+    at the call site and unrecoverable afterwards, since the original name is
+    not kept anywhere else.
+    """
+    claimed = 0
+    for row in nodes.values():
+        if row.get("type") not in _AUTHORED_TYPES:
+            continue
+        data = row.get("data")
+        if isinstance(data, dict) and data.get("author") == was:
+            data["author"] = now
+            claimed += 1
+    return claimed
+
+
 def _classify_rows(
     rows: Iterable[dict], source: str
 ) -> tuple[dict[tuple[str, str], dict], list[dict]]:
@@ -2027,7 +2070,9 @@ def _data_tier_outage_reads_as_retryable():
 
 
 @_tool
-def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
+def store_merge(
+    rows: list[dict], dry_run: bool = False, claim_from_author: str | None = None
+) -> dict:
     """Merge a batch of exported rows into this deployment's graph, as you.
 
     The MCP-tier half of ``witan migrate merge`` (ADR-0007 D5). A client
@@ -2060,6 +2105,18 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
         Reconcile and return the per-row ``decisions`` **without writing
         anything**. Run the whole migration this way first: it is the only way
         to see which side wins each ``(type, slug)`` before the graph changes.
+    claim_from_author:
+        The identity the *source* store wrote, when that store is your own.
+        Rows authored by exactly this name are restamped to the calling actor
+        before they are written; every other row keeps its author untouched.
+        Pass your local ``cfg.author`` here — the server cannot derive it,
+        having neither the caller's config nor their git checkout.
+
+        Without it, a migrated row keeps a name that no deployed identity can
+        ever match, and ``memory_delete`` refuses its own author forever
+        (#267). With it, the rows you migrate end up owned by the same identity
+        that owns everything you write afterwards. See ``_claim_authorship``
+        for why this matches rather than stamping unconditionally.
 
     **Batching is the caller's job, and the caller must send every node before
     any edge** (``witan_core.chunking.chunk_records`` does both). Batches commit
@@ -2082,6 +2139,19 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
 
     source_nodes, source_edges = _classify_rows(rows, "merge batch")
 
+    # Before reconciliation, not after: reconciliation compares timestamps, so
+    # the restamp cannot change who wins, and applying it here means the winner
+    # rows carry the new author without a second pass over them.
+    #
+    # A source row that LOSES reconciliation keeps the target's copy, author
+    # and all — so this does not repair rows from an earlier migration, which
+    # is what `witan migrate claim-authorship` is for.
+    claimed = (
+        _claim_authorship(source_nodes, claim_from_author, _current_author())
+        if claim_from_author
+        else 0
+    )
+
     with tempfile.TemporaryDirectory(prefix="witan-store-merge-") as tmp:
         target_file = Path(tmp) / "target.jsonl"
         with _data_tier_outage_reads_as_retryable():
@@ -2092,7 +2162,13 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
     counts = _decision_counts(decisions)
 
     if dry_run:
-        return {"dry_run": True, "decisions": decisions, "rows_loaded": 0, **counts}
+        return {
+            "dry_run": True,
+            "decisions": decisions,
+            "rows_loaded": 0,
+            "authorship_claimed": claimed,
+            **counts,
+        }
 
     to_load = winners + source_edges
     with _data_tier_outage_reads_as_retryable():
@@ -2101,7 +2177,109 @@ def store_merge(rows: list[dict], dry_run: bool = False) -> dict:
         "dry_run": False,
         "decisions": decisions,
         "rows_loaded": len(to_load),
+        "authorship_claimed": claimed,
         **counts,
+    }
+
+
+#: ``(node type, read query, write mutation, whether the row has updated_at)``
+#: for authorship repair. Ordered as reported.
+_AUTHORSHIP_SOURCES = (
+    ("Memory", "list_all_memory_authors", "set_memory_author", True),
+    (
+        "WorkflowProject",
+        "list_all_project_authors",
+        "set_workflow_project_author",
+        False,
+    ),
+    (
+        "WorkflowSession",
+        "list_all_session_authors",
+        "set_workflow_session_author",
+        False,
+    ),
+    ("WorkflowTrace", "list_all_trace_authors", "set_workflow_trace_author", False),
+    ("Task", "list_all_task_authors", "set_task_author", True),
+)
+
+
+@_tool
+def claim_authorship(was: str, apply: bool = False) -> dict:
+    """Take ownership of rows a migration left under a local identity.
+
+    The repair half of #267. ``store_merge``'s ``claim_from_author`` fixes rows
+    as they arrive, but does nothing for a store already merged — a re-sent row
+    loses reconciliation to its own applied copy, so re-running the migration
+    cannot rescue it. This rewrites in place instead.
+
+    ``was`` is the identity the rows currently carry: your local ``cfg.author``
+    (``WITAN_AUTHOR`` / git ``user.name`` / ``$USER``) at the time you merged,
+    which is what ``witan whoami`` contrasts against your deployed identity.
+    Every matching row across all five authored node types is restamped to the
+    calling actor.
+
+    Dry by default — pass ``apply=True`` to write. Idempotent: a second run
+    finds nothing, because the rows now carry the new identity.
+
+    **This does not widen the trust boundary, and it is worth being explicit
+    about why, because it looks like it should.** Nothing here verifies that
+    ``was`` was ever *you*, so this will hand you rows written by a colleague
+    if you name them. That capability already exists: ``store_merge`` accepts
+    whatever ``author`` a row carries, which is exactly what makes the
+    hand-edited-JSONL workaround in #267 work. This makes the existing
+    capability usable without hand-editing a JSONL against a live shared graph;
+    it does not create one. Constraining it means constraining ``store_merge``
+    too, which is the ADR-0004 D5 revisit ("if attribution ever needs to be
+    authoritative rather than descriptive"), not a change to make here alone.
+
+    Parameters
+    ----------
+    was:
+        The author string the rows currently carry.
+    apply:
+        Write the change. Without it, only report what would change.
+
+    Returns per-type counts, the identity rows would move to, and the slugs.
+    """
+    now = _current_author()
+    if was == now:
+        return {
+            "applied": False,
+            "was": was,
+            "now": now,
+            "claimed": 0,
+            "by_type": {},
+            "reason": "rows already carry this identity; nothing to claim",
+        }
+
+    stamped = now_iso()
+    by_type: dict[str, list[str]] = {}
+    total = 0
+    for node_type, read_query, write_query, has_updated_at in _AUTHORSHIP_SOURCES:
+        slugs = [
+            row["slug"]
+            for row in client.read("read.gq", read_query, {})
+            if row.get("author") == was
+        ]
+        if not slugs:
+            continue
+        by_type[node_type] = slugs
+        total += len(slugs)
+        if not apply:
+            continue
+        for slug in slugs:
+            params = {"slug": slug, "author": now}
+            if has_updated_at:
+                params["updated_at"] = stamped
+            client.change("mutations.gq", write_query, params)
+
+    return {
+        "applied": apply,
+        "was": was,
+        "now": now,
+        "claimed": total,
+        "by_type": {k: len(v) for k, v in by_type.items()},
+        "slugs": by_type,
     }
 
 
