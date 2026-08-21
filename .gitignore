@@ -36,3 +36,6 @@ mcp-server.log
 
 # agent-config-kit remote skill/hook fetch cache
 .agent-config-kit-cache/
+
+# Zensical build output for the witan-context docs site.
+site/

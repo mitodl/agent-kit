@@ -2,7 +2,7 @@
 
 A leaf package that ``witan`` (witan-council) and ``witan_code`` both depend on,
 extracted from the surface they were previously carrying as copy-paste-and-diverge
-duplicates. See ``docs/design/witan-core-extraction-spec.md``.
+duplicates. See ``docs/internals/design/witan-core-extraction-spec.md``.
 
 ``witan_core`` imports neither ``witan`` nor ``witan_code``: it sits below both,
 preserving the one-directional ``witan`` → ``witan_code`` optional-mount DAG.

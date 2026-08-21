@@ -1,3 +1,13 @@
+<!--
+  MIRRORED FILE — DO NOT EDIT HERE.
+  Edit mcp/servers/witan/docs/adr/0008-optional-task-phase-tag.md instead; `just docs-gen` copies it into the site.
+-->
+
+!!! info "This page lives with the code"
+
+    The authoritative copy is
+    [`mcp/servers/witan/docs/adr/0008-optional-task-phase-tag.md`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/adr/0008-optional-task-phase-tag.md).
+
 # 8. Optional task `phase` field + per-phase ready-work rollup
 
 > "Phase tag" is used loosely in the tracking task title; the decision below is a

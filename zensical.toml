@@ -1,0 +1,175 @@
+# Zensical configuration for the witan-context documentation site.
+#
+# Zensical is the Material for MkDocs team's successor generator; Material
+# itself entered maintenance mode in early 2026. The config is MkDocs-shaped
+# (same nav structure, same markdown extensions) so a fall back to
+# mkdocs-material stays cheap if a plugin gap bites — which is also why this
+# site deliberately uses no plugins.
+#
+# Build:  zensical build     (output in site/)
+# Serve:  zensical serve     (incremental; rebuilds only changed files)
+
+[project]
+site_name = "witan-context"
+site_description = "Shared memory, work coordination, and a code graph for coding agents."
+site_author = "MIT Open Learning"
+
+# Read the Docs does not yet support variable interpolation in Zensical config,
+# so this is the literal published URL rather than $READTHEDOCS_CANONICAL_URL.
+# It sets the canonical link tag; getting it wrong costs search ranking, not a
+# broken build, so it fails quietly — check it after the first deploy.
+site_url = "https://witan-context.readthedocs.io/"
+
+repo_url = "https://github.com/mitodl/agent-kit"
+repo_name = "mitodl/agent-kit"
+edit_uri = "edit/main/docs/"
+
+copyright = "Copyright &copy; 2026 MIT Open Learning"
+
+nav = [
+  { "Home" = "index.md" },
+  { "Get started" = [
+    { "Overview" = "getting-started/index.md" },
+    { "Installation" = "getting-started/installation.md" },
+    { "Your first memory" = "getting-started/first-memory.md" },
+    { "Tasks and projects" = "getting-started/tasks-and-projects.md" },
+    { "Indexing a repository" = "getting-started/code-graph.md" },
+  ] },
+  { "Guides" = [
+    { "Overview" = "guides/index.md" },
+    { "witan user guide" = "guides/witan-user-guide.md" },
+    { "witan-code user guide" = "guides/witan-code-user-guide.md" },
+    { "Branch indexing" = "guides/branch-indexing.md" },
+    { "Write-path scanning" = "guides/write-path-scanning.md" },
+    { "Using a deployed witan" = "guides/deployed-witan.md" },
+    { "Migration runbook" = "guides/migration-runbook.md" },
+  ] },
+  { "Reference" = [
+    { "Overview" = "reference/index.md" },
+    { "MCP tools" = [
+      { "Overview" = "reference/mcp-tools/index.md" },
+      { "Memory & recall" = "reference/mcp-tools/memory.md" },
+      { "Tasks" = "reference/mcp-tools/tasks.md" },
+      { "Workflow" = "reference/mcp-tools/workflow.md" },
+      { "Code graph" = "reference/mcp-tools/code.md" },
+    ] },
+    { "CLI" = "reference/cli.md" },
+    { "Environment variables" = "reference/environment.md" },
+    { "Graph schema" = "reference/graph-schema.md" },
+    { "Bridge schema" = "reference/bridge-schema.md" },
+  ] },
+  { "Explanation" = [
+    { "Overview" = "explanation/index.md" },
+    { "Architecture" = "explanation/architecture.md" },
+    { "The memory model" = "explanation/memory-model.md" },
+    { "Coordinating work" = "explanation/task-coordination.md" },
+    { "Code graph" = [
+      { "Symbol format" = "explanation/code-graph/symbol-format.md" },
+      { "Symbol table" = "explanation/code-graph/symbol-table.md" },
+      { "Package map" = "explanation/code-graph/package-map.md" },
+      { "Edge precision tiers" = "explanation/code-graph/edge-precision-tiers.md" },
+      { "Stage-2 stitching" = "explanation/code-graph/stage2-stitching.md" },
+    ] },
+    { "Decisions (ADRs)" = [
+      { "0001 Write-path content scanning" = "explanation/decisions/0001-write-path-content-scanning.md" },
+      { "0002 Cedar authorization bundle" = "explanation/decisions/0002-witan-cedar-authorization-bundle.md" },
+      { "0003 Atomic task claims (CAS)" = "explanation/decisions/0003-atomic-task-claims-cas.md" },
+      { "0004 Keycloak JWT actor mapping" = "explanation/decisions/0004-keycloak-jwt-per-user-actor-mapping.md" },
+      { "0008 Optional task phase tag" = "explanation/decisions/0008-optional-task-phase-tag.md" },
+      { "0005 Secure CLI path into a deployed witan" = "explanation/decisions/0005-secure-cli-path-into-deployed-witan.md" },
+      { "0006 Code-graph branch ownership" = "explanation/decisions/0006-code-graph-branch-ownership-and-reaping.md" },
+      { "0009 Stateless MCP protocol era" = "explanation/decisions/0009-stateless-mcp-protocol-era.md" },
+      { "0007 Local-to-shared store migration" = "explanation/decisions/0007-local-to-shared-store-migration-transport.md" },
+    ] },
+  ] },
+  { "Internals" = [
+    { "Overview" = "internals/index.md" },
+    { "Agent memory implementation guide" = "internals/agent-memory.md" },
+    { "Design notes" = [
+      { "Graph-structured memory" = "internals/design/graph-structured-memory.md" },
+      { "Graph-structured memory (spec)" = "internals/design/graph-structured-memory-spec.md" },
+      { "witan-core extraction" = "internals/design/witan-core-extraction-spec.md" },
+      { "witan surface refinement" = "internals/design/witan-surface-refinement-spec.md" },
+      { "Workflow UX (P1)" = "internals/design/witan-workflow-ux-p1-spec.md" },
+      { "Workflow hooks & elicitation" = "internals/design/witan-workflow-hooks-elicitation-evaluation.md" },
+      { "Remote call overhead spike" = "internals/design/omnigraph-remote-call-overhead-spike.md" },
+      { "agent-config-kit" = "internals/design/agent-config-kit-spec.md" },
+      { "agent-config-kit CLI" = "internals/design/agent-config-kit-cli-spec.md" },
+      { "agent-config-kit profiles" = "internals/design/agent-config-kit-profiles-composition-spec.md" },
+    ] },
+  ] },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "announce.dismiss",
+  "content.action.edit",
+  "content.code.annotate",
+  "content.code.copy",
+  "content.code.select",
+  "content.footnote.tooltips",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  # The reference pages are long (the CLI page is ~1,500 lines); a followed ToC
+  # and a top button are what make them navigable rather than a scroll.
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "search.suggest",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "indigo"
+accent = "indigo"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "indigo"
+accent = "indigo"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/mitodl/agent-kit"
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+pymdownx.betterem = {}
+pymdownx.caret = {}
+pymdownx.details = {}
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.mark = {}
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tabbed.alternate_style = true
+pymdownx.tasklist.custom_checkbox = true
+pymdownx.tilde = {}

@@ -1,0 +1,122 @@
+name: docs
+
+# The witan-context documentation site. Two independent questions:
+#
+#   freshness — do the committed generated/mirrored pages still match the code?
+#   build     — does the site actually render, with no broken links?
+#
+# Path-filter rule (same as witan-tests.yml): trigger on every input the
+# generator reads, not just docs/. The reference pages are derived from the tool
+# objects, the cyclopts command tree, and the .pg schemas, so a change to any of
+# those can make a committed page stale without touching docs/ at all.
+#
+# The two path lists below are duplicated rather than shared via a YAML anchor:
+# GitHub Actions does not support anchors or aliases in workflow files. Keep
+# them in sync by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mcp/servers/witan/**"
+      - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "docker/**"
+      - "bin/gen_docs.py"
+      - "zensical.toml"
+      - ".readthedocs.yaml"
+      - "uv.lock"
+      - "pyproject.toml"
+      - "justfile"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mcp/servers/witan/**"
+      - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "docker/**"
+      - "bin/gen_docs.py"
+      - "zensical.toml"
+      - ".readthedocs.yaml"
+      - "uv.lock"
+      - "pyproject.toml"
+      - "justfile"
+      - ".github/workflows/docs.yml"
+  # Manual trigger. Useful on its own (rebuild the site after an upstream
+  # Zensical release without touching the repo), and an escape hatch for the
+  # case that prompted adding it: a force-push GitHub did not turn into a
+  # `synchronize` event, leaving a PR with no docs checks attached at all.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    name: docs (generated pages match the code)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Install dependencies
+        # --all-packages: the generator imports BOTH servers to read their
+        # registered tool objects, so a single-package sync cannot run it.
+        #
+        # --python 3.12 matches the pin in bin/gen_docs.py's shebang. FastMCP's
+        # schema derivation orders a Literal's `enum` differently on different
+        # Pythons, so an unpinned sync here would let CI disagree with a
+        # contributor's machine about pages neither of them edited.
+        run: uv sync --frozen --all-packages --python 3.12
+
+      - name: Check generated documentation is up to date
+        # Fails with a diff naming every stale page. The fix is always the same
+        # — run `just docs-gen` and commit the result.
+        run: just docs-check
+
+  build:
+    name: docs (site builds, no broken links)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Build the site and fail on unresolved links
+        # Version-pinned to match .readthedocs.yaml. Zensical is pre-1.0 and
+        # ships behaviour changes between patch releases, so an unpinned install
+        # would let CI and Read the Docs disagree silently — CI green, published
+        # site broken. Renovate bumps both together.
+        #
+        # `zensical build` reports missing pages and anchors as warnings and
+        # still exits 0, so the summary line is what decides this job. A
+        # silently-broken link is precisely what a docs CI job exists to catch.
+        #
+        # ★ MATCH THE COUNT, NOT THE WORDS. Zensical prints "N issues found" on
+        # failure and "No issues found" on success — and the success message
+        # CONTAINS the failure substring, so a bare `grep "issues found"` fails
+        # every green build. It did exactly that on this job's first run.
+        # Requiring a leading digit is what separates the two.
+        #
+        # The build is also required to have finished: `zensical build` exiting
+        # non-zero is caught by `set -e`, but a build that dies without printing
+        # its summary would otherwise pass the digit test by saying nothing.
+        run: |
+          set -o pipefail
+          uvx zensical@0.0.56 build 2>&1 | tee build.log
+          if grep -qE '[0-9]+ issues? found' build.log; then
+            echo "::error::Zensical reported unresolved links or anchors."
+            grep -B2 -A4 'Warning:' build.log | head -60
+            exit 1
+          fi
+          if ! grep -q 'Build finished' build.log; then
+            echo "::error::Zensical did not report a completed build."
+            exit 1
+          fi

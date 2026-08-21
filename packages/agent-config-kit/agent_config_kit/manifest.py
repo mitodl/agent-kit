@@ -4,7 +4,7 @@
 Part of the base package (only ``tomllib`` + existing ``models``/``plan``/
 ``registry`` — no ``cli``-extra dependency) so a programmatic caller can load
 a manifest without pulling in ``cyclopts``/``rich``. See
-``docs/design/agent-config-kit-cli-spec.md`` §3 for the full format spec.
+``docs/internals/design/agent-config-kit-cli-spec.md`` §3 for the full format spec.
 """
 
 from __future__ import annotations

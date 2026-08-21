@@ -1,3 +1,13 @@
+<!--
+  MIRRORED FILE — DO NOT EDIT HERE.
+  Edit mcp/servers/witan/docs/deployed-witan-onboarding.md instead; `just docs-gen` copies it into the site.
+-->
+
+!!! info "This page lives with the code"
+
+    The authoritative copy is
+    [`mcp/servers/witan/docs/deployed-witan-onboarding.md`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/deployed-witan-onboarding.md).
+
 # Pointing your CLI and agent at the deployed witan
 
 How to stop using your local `~/.local/share/witan/graph.omni` and start using
@@ -21,7 +31,7 @@ its export was taken is a store whose tail nobody will merge.
 
 The switch is opt-in and per-config: with `remote_url` unset the CLI runs
 exactly as it does today. See
-[ADR-0005](adr/0005-secure-cli-path-into-deployed-witan.md) for the design.
+[ADR-0005](../explanation/decisions/0005-secure-cli-path-into-deployed-witan.md) for the design.
 
 ## Prerequisites
 
@@ -283,10 +293,10 @@ Reads are unaffected by all of this and stay fast under the same load.
 
 ## References
 
-- [ADR-0005](adr/0005-secure-cli-path-into-deployed-witan.md) — the CLI's
+- [ADR-0005](../explanation/decisions/0005-secure-cli-path-into-deployed-witan.md) — the CLI's
   remote MCP-client mode (path a) and the in-cluster admin path (path b).
-- [ADR-0004](adr/0004-keycloak-jwt-per-user-actor-mapping.md) — JWT → actor →
+- [ADR-0004](../explanation/decisions/0004-keycloak-jwt-per-user-actor-mapping.md) — JWT → actor →
   token mapping, i.e. what `witan whoami`'s `actor` line is showing you.
-- [ADR-0007](adr/0007-local-to-shared-store-migration-transport.md) /
+- [ADR-0007](../explanation/decisions/0007-local-to-shared-store-migration-transport.md) /
   [migration runbook](migration-runbook.md) — the data half of the cutover.
 - ol-infrastructure `docs/adr/0009-…` — the deployment this connects to.

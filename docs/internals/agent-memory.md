@@ -107,12 +107,12 @@ reindex-hook, `UserPromptSubmit` → inject-context, `Stop` → checkpoint) are
 bare `witan-code` CLI commands — no scripts to symlink. `witan-code setup`
 (standalone) or `witan setup` (when witan-code is also importable) registers
 them for you; to register manually instead, see
-[`configs/hooks/README.md`](../configs/hooks/README.md) for the exact JSON.
+[`configs/hooks/README.md`](https://github.com/mitodl/agent-kit/blob/main/configs/hooks/README.md) for the exact JSON.
 
 **Pi** has no Claude-style hooks but provides the equivalent via extension
 events. Symlink the mirror extensions into `~/.pi/agent/extensions/`
 (codegraph — all four hooks in one extension — and workflow context
-injection) — see [`configs/pi/README.md`](../configs/pi/README.md):
+injection) — see [`configs/pi/README.md`](https://github.com/mitodl/agent-kit/blob/main/configs/pi/README.md):
 
 ```bash
 ln -sf "$REPO/configs/pi/extensions/codegraph.ts"        ~/.pi/agent/extensions/
@@ -1212,7 +1212,7 @@ export WITAN_AUTHOR="Alice Smith"
 > The multi-user shape puts an MCP tier in front, so each person authenticates
 > as themselves (Keycloak JWT → `act-<sub>` → that actor's own omnigraph
 > token). That is what mitodl runs, and joining it is
-> [`deployed-witan-onboarding.md`](../mcp/servers/witan/docs/deployed-witan-onboarding.md)
+> [`deployed-witan-onboarding.md`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/deployed-witan-onboarding.md)
 > — a `[targets.*]` block and `witan login`, not these env vars.
 
 **Deploying the server:**
@@ -1270,11 +1270,11 @@ witan migrate merge ~/.local/share/witan/graph.omni --target <target>
 For the **deployed** multi-tenant service the target is not reachable from a
 laptop at all — the data tier is ClusterIP-only, so the merge runs in-cluster
 from a handed-over export. That procedure is
-[`mcp/servers/witan/docs/migration-runbook.md` § Local → shared](../mcp/servers/witan/docs/migration-runbook.md#local--shared-the-cutover),
+[`mcp/servers/witan/docs/migration-runbook.md` § Local → shared](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/migration-runbook.md#local-shared-the-cutover),
 with the reasoning in
-[witan ADR-0007](../mcp/servers/witan/docs/adr/0007-local-to-shared-store-migration-transport.md).
+[witan ADR-0007](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/adr/0007-local-to-shared-store-migration-transport.md).
 Pointing your own CLI at that service is
-[`deployed-witan-onboarding.md`](../mcp/servers/witan/docs/deployed-witan-onboarding.md).
+[`deployed-witan-onboarding.md`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/deployed-witan-onboarding.md).
 
 ---
 
@@ -1546,7 +1546,7 @@ independently.
 
 See [MCP Tools](#mcp-tools) in the server README for signatures. Full usage
 documentation is in
-[`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](../mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md).
+[`mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/witan/skills/witan-project-tracker/SKILL.md).
 
 ### Session State File
 

@@ -81,7 +81,7 @@ export WITAN_AUTHOR="Your Name"
 
 > **Local development setup** (both servers, hooks, and skills wired from your
 > checkout): see
-> [Local Development Setup](../../../docs/agent-memory.md#local-development-setup).
+> [Local Development Setup](../../../docs/internals/agent-memory.md#local-development-setup).
 
 ## Environment Variables
 
@@ -303,7 +303,7 @@ export WITAN_MEMORY_TOKEN=<bearer-token>
 export WITAN_AUTHOR="Alice Smith"
 ```
 
-See [`docs/agent-memory.md`](../../../docs/agent-memory.md) for full
+See [`docs/internals/agent-memory.md`](../../../docs/internals/agent-memory.md) for full
 deployment instructions, the graph schema, and the v2 roadmap.
 
 ## Project Structure
