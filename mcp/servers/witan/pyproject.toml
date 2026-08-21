@@ -100,7 +100,14 @@ dependencies = [
   # `client.read_with_commit(...)`, a method ADDED to witan-core in the same
   # change as its caller. On 0.22 that is an AttributeError on every task
   # update, not a soft degradation. The workspace resolves witan-core by path
-  # so nothing in CI catches it; only a published install does.
+  # so no test run in it catches this; only a published install does.
+  #
+  # ★ `just check-core-floor` NOW CATCHES THE IMPORT-TIME HALF, on ordinary PR
+  # CI (.github/workflows/core-floor.yml): it installs this package's wheel into
+  # a clean venv with witan-core pinned to exactly the floor below and imports
+  # every module. It does NOT catch the BEHAVIOURAL floors below — an override
+  # that is never called still imports fine — so those stay a judgement call and
+  # keep their reasons written out.
   #
   # (0.23 also makes `recovery_required` on a write terminal instead of retried
   # and a 412 terminal — behaviour `task_claim` now depends on — but the

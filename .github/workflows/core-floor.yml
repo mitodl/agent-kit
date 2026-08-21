@@ -1,0 +1,70 @@
+name: core-floor
+
+# The uv workspace resolves witan-core BY PATH, so a new `witan_core` symbol is
+# importable in-workspace, in CI, and in every test run the moment it is
+# written. Only an external `pip install` resolves the PUBLISHED witan-core that
+# lacks it — and then the server fails at IMPORT. That gap has been crossed
+# three times (#198, #200, #201), each time with a green CI, and each time found
+# by review or by the next change rather than by a check.
+#
+# ★ IT RUNS ON PULL REQUESTS, not only post-publish. The requirement is that the
+# check fail on the CHANGE that outruns the floor, not on the one after it, and
+# a post-publish job cannot do that: by then the broken artifact is on PyPI.
+# bin/check_core_floor.py handles the sequencing problem a PR creates — a floor
+# raised to a version that will not exist until this branch merges — by testing
+# against witan-core's locally built wheel in that one case.
+#
+# Its own workflow rather than a job in versions.yml: this one has to trigger on
+# server SOURCE changes (a new import is the thing being caught, and it need not
+# touch any pyproject), and it is slow enough — two wheel builds, two clean
+# venvs, two installs from PyPI — not to belong inside a check that takes eight
+# seconds.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mcp/servers/witan/**"
+      - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "bin/check_core_floor.py"
+      - "justfile"
+      - ".github/workflows/core-floor.yml"
+  pull_request:
+    paths:
+      - "mcp/servers/witan/**"
+      - "mcp/servers/witan-code/**"
+      - "packages/witan-core/**"
+      - "bin/check_core_floor.py"
+      - "justfile"
+      - ".github/workflows/core-floor.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check-core-floor:
+    name: witan-core floor (clean install imports)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      # --extra cli for cyclopts; --with packaging for the version comparison,
+      # which is not a witan-core dependency and should not become one for the
+      # sake of one script.
+      - name: Install dependencies
+        run: uv sync --frozen --package witan-core --extra cli
+
+      # DELIBERATELY NOT CACHED (`--no-cache` inside the script). The whole
+      # assertion is about what a fresh external install resolves, and a warm
+      # uv cache holding a workspace-built witan-core is exactly the confusion
+      # this exists to rule out.
+      - name: Check the declared witan-core floor
+        run: just check-core-floor
