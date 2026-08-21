@@ -8,6 +8,7 @@ from ._common import (
     _fn,
     _srv,
     console,
+    esc,
 )
 
 
@@ -54,7 +55,12 @@ def _launch_agent(
     cfg, resolved_agent: str, resolved_model: str | None, prompt: str, dry_run: bool
 ) -> None:
     if dry_run:
-        console.print(prompt)
+        # Not esc(): a dry run exists to show the exact text the agent will
+        # receive, so it must not be shown with escapes in it. All three of
+        # Rich's substitutions are off — `emoji=False` because a prompt saying
+        # `:warning:` renders as ⚠ while the agent receives the literal
+        # characters, which is the same class of lie the escaping fixes.
+        console.print(prompt, markup=False, emoji=False, highlight=False)
         return
     cmd = [resolved_agent]
     if resolved_model:
@@ -131,7 +137,7 @@ def _run_task_slug(
 
     prompt = _run_prompt(t)
     if dry_run:
-        console.print(prompt)
+        console.print(prompt, markup=False, emoji=False, highlight=False)
         return
 
     if claim:
@@ -142,9 +148,9 @@ def _run_task_slug(
         res = _fn(s.task_claim)(slug=slug, force=force) or {}
         if not res.get("claimed"):
             reason = res.get("held_by") or res.get("reason") or "unavailable"
-            console.print(f"[red]Could not claim {slug} ({reason}).[/red]")
+            console.print(f"[red]Could not claim {slug} ({esc(reason)}).[/red]")
             if res.get("remedy"):
-                console.print(f"  [yellow]{res['remedy']}[/yellow]")
+                console.print(f"  [yellow]{esc(res['remedy'])}[/yellow]")
             raise SystemExit(1)
         console.print(f"[cyan]Claimed {slug} (assignee={res.get('assignee')}).[/cyan]")
 

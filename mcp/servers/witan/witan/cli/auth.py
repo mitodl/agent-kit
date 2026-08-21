@@ -12,14 +12,14 @@ from datetime import datetime, timezone
 from .. import config as cfg_module
 from ..identity import derive_actor_id
 from ..remote import oidc
-from ._common import app, console
+from ._common import app, console, esc, print_error
 
 
 def _remote_or_exit(target: str | None = None) -> cfg_module.RemoteConfig:
     try:
         remote = cfg_module.load_remote_config(target=target)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
     if remote is None:
         console.print(
@@ -53,19 +53,21 @@ def login(*, target: str | None = None) -> None:
         code = device.get("user_code", "")
         console.print("\n[bold]Authenticate witan CLI[/bold]")
         if complete:
-            console.print(f"  Open: [cyan underline]{complete}[/cyan underline]")
+            console.print(f"  Open: [cyan underline]{esc(complete)}[/cyan underline]")
         console.print(
-            f"  Or go to [cyan underline]{uri}[/cyan underline] and enter "
-            f"code [bold]{code}[/bold]\n  Waiting for approval…"
+            f"  Or go to [cyan underline]{esc(uri)}[/cyan underline] and enter "
+            f"code [bold]{esc(code)}[/bold]\n  Waiting for approval…"
         )
 
     try:
         claims = oidc.login(remote, on_prompt=_prompt)
     except oidc.RemoteAuthError as exc:
-        console.print(f"[red]Login failed:[/red] {exc}")
+        console.print(f"[red]Login failed:[/red] {esc(exc)}")
         raise SystemExit(1) from None
     who = claims.get("preferred_username") or claims.get("sub", "?")
-    console.print(f"[green]Logged in[/green] as [bold]{who}[/bold] → {remote.url}")
+    console.print(
+        f"[green]Logged in[/green] as [bold]{esc(who)}[/bold] → {esc(remote.url)}"
+    )
 
 
 @app.command
@@ -78,7 +80,7 @@ def logout(*, target: str | None = None) -> None:
     """
     remote = _remote_or_exit(target)
     if oidc.logout(remote):
-        console.print(f"[green]Logged out[/green] of {remote.url}")
+        console.print(f"[green]Logged out[/green] of {esc(remote.url)}")
     else:
         console.print("[yellow]No cached session to clear.[/yellow]")
 
@@ -126,22 +128,24 @@ def whoami(*, target: str | None = None) -> None:
     try:
         token = oidc.get_valid_token(remote)
     except oidc.NeedsLogin as exc:
-        console.print(f"[yellow]{exc}[/yellow]")
+        console.print(f"[yellow]{esc(exc)}[/yellow]")
         raise SystemExit(1) from None
     except oidc.RemoteAuthError as exc:
         # Caught separately from NeedsLogin above so a token endpoint that is
         # merely unreachable does not read as "log in again" — the whole point
         # of classifying the two.
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
     claims = oidc.decode_claims(token)
     sub = claims.get("sub", "")
     if remote.target_name:
         console.print(f"[bold]Target[/bold]    {remote.target_name}")
-    console.print(f"[bold]Endpoint[/bold]  {remote.url}")
-    console.print(f"[bold]User[/bold]      {claims.get('preferred_username', '?')}")
+    console.print(f"[bold]Endpoint[/bold]  {esc(remote.url)}")
+    console.print(
+        f"[bold]User[/bold]      {esc(claims.get('preferred_username', '?'))}"
+    )
     if claims.get("email"):
-        console.print(f"[bold]Email[/bold]     {claims['email']}")
+        console.print(f"[bold]Email[/bold]     {esc(claims['email'])}")
     console.print(f"[bold]sub[/bold]       {sub}")
     if sub:
         console.print(f"[bold]actor[/bold]     {derive_actor_id(sub)}")

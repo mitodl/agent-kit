@@ -19,10 +19,12 @@ from ._common import (
     _split_csv,
     _srv,
     _styled,
-    WorkflowPhase,
     app,
     console,
+    esc,
+    print_error,
     render_table,
+    WorkflowPhase,
 )
 from .run_helpers import (
     _launch_agent,
@@ -84,7 +86,7 @@ def _project_show(slug: str) -> None:
     if not p:
         console.print(f"[red]No project {slug!r}.[/red]")
         return
-    console.print(f"[bold]{p['slug']}[/bold]  {p.get('title', '')}")
+    console.print(f"[bold]{p['slug']}[/bold]  {esc(p.get('title'))}")
     console.print(
         f"  status={_styled(p.get('status', ''), _STATUS_STYLE)}  "
         f"phase={p.get('phase')}  repos={', '.join(p.get('repos') or []) or '—'}"
@@ -103,22 +105,21 @@ def _project_show(slug: str) -> None:
             console.print(f"  blocked by {blocker} [{_styled(st, _STATUS_STYLE)}]")
     if p.get("blocks"):
         console.print(f"  blocks: {', '.join(p['blocks'])}")
-    console.print(f"\n{p.get('description') or '(no description)'}\n")
+    console.print(f"\n{esc(p.get('description') or '(no description)')}\n")
 
     sessions = _fn(s.workflow_session_list)(project_slug=slug)
     console.print(f"  sessions: {len(sessions)}")
     for sess in sessions:
-        console.print(
-            f"    {sess['slug']}  [{sess.get('phase')}]  "
-            f"{sess.get('summary') or '(in progress)'}"[:120]
-        )
+        summary = (sess.get("summary") or "(in progress)")[:80]
+        console.print(f"    {sess['slug']}  ({esc(sess.get('phase'))})  {esc(summary)}")
 
     project_tasks = _fn(s.task_list)(project_slug=slug)
     if project_tasks:
         console.print(f"  tasks: {len(project_tasks)}")
         for t in project_tasks:
             console.print(
-                f"    {t['slug']} [{_styled(t.get('status', ''), _STATUS_STYLE)}] {t.get('title', '')}"
+                f"    {t['slug']} [{_styled(t.get('status', ''), _STATUS_STYLE)}] "
+                f"{esc(t.get('title'))}"
             )
 
     if p.get("status") == "completed":
@@ -126,10 +127,11 @@ def _project_show(slug: str) -> None:
         if tr:
             console.print(
                 f"\n  [blue]trace[/blue]: {tr.get('session_count')} sessions, "
-                f"phases={tr.get('phases')}, duration={tr.get('duration')}h"
+                f"phases={esc(', '.join(tr.get('phases') or []))}, "
+                f"duration={tr.get('duration')}h"
             )
             if tr.get("outcome"):
-                console.print(f"    outcome: {tr['outcome']}"[:200])
+                console.print(f"    outcome: {esc(tr['outcome'][:187])}")
             console.print(
                 f"    lessons: {', '.join(tr.get('lessons_slug') or []) or '(none mined yet)'}"
             )
@@ -174,7 +176,7 @@ def project_status(
 
     p = st["project"]
     repos_s = ", ".join(_short_repo(r) for r in (p.get("repos") or [])) or "—"
-    console.print(f"[bold]{p['slug']}[/bold]  {escape(p.get('title', ''))}")
+    console.print(f"[bold]{p['slug']}[/bold]  {esc(p.get('title'))}")
     console.print(
         f"  phase={p.get('phase')}  "
         f"status={_styled(p.get('status', ''), _STATUS_STYLE)}  repos={repos_s}"
@@ -282,7 +284,7 @@ def project_tasks(
         if not blockers and not deps:
             continue
         any_edges = True
-        console.print(f"  [bold]{r['slug']}[/bold] {escape(r.get('title', ''))}")
+        console.print(f"  [bold]{r['slug']}[/bold] {esc(r.get('title'))}")
         for b in blockers:
             console.print(
                 f"    ↑ blocked by {b} [{_styled(_status_of(b), _STATUS_STYLE)}]"
@@ -401,7 +403,7 @@ def project_update(
         raise SystemExit(1)
 
     console.print(f"[green]Updated[/green] [bold]{slug}[/bold]")
-    console.print(f"  title: {escape(result.get('title') or '')}")
+    console.print(f"  title: {esc(result.get('title'))}")
     if result.get("repos"):
         console.print(f"  repos: {', '.join(_short_repo(r) for r in result['repos'])}")
     console.print(f"  phase: {result.get('phase')}  status: {result.get('status')}")
@@ -538,7 +540,7 @@ def project_run(
     try:
         cfg = cfg_module.load(target=target)
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
 
     resolved_agent = agent or cfg.agent
@@ -563,7 +565,7 @@ def project_run(
         repos_s = (
             f"  [dim]{', '.join(_short_repo(r) for r in (p.get('repos') or []))}[/dim]"
         )
-        return f"{p['slug']}  {phase}  {p.get('title', '')}{repos_s}"
+        return f"{p['slug']}  {phase}  {esc(p.get('title'))}{repos_s}"
 
     selected = _pick_items(active, _render_project)
     if not selected:

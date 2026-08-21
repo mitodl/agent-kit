@@ -19,6 +19,7 @@ from ._common import (
     _srv,
     app,
     console,
+    esc,
     render_table,
 )
 
@@ -81,22 +82,25 @@ def _trace_show(slug: str) -> None:
         console.print(f"[red]No trace {slug!r}.[/red]")
         return
 
-    console.print(f"[bold]{tr['slug']}[/bold]  {tr.get('title', '')}")
+    console.print(f"[bold]{tr['slug']}[/bold]  {esc(tr.get('title'))}")
     console.print(
         f"  project={tr.get('project_slug')}  sessions={tr.get('session_count')}  "
-        f"phases={', '.join(tr.get('phases') or [])}  duration={tr.get('duration')}h  "
+        f"phases={esc(', '.join(tr.get('phases') or []))}  "
+        f"duration={tr.get('duration')}h  "
         f"repos={', '.join(_short_repo(u) for u in (tr.get('repos') or [])) or '—'}"
     )
-    console.print(f"\n{tr.get('description') or '(no description)'}\n")
-    console.print(f"[bold]Outcome[/bold]\n{tr.get('outcome') or '(none recorded)'}\n")
+    console.print(f"\n{esc(tr.get('description') or '(no description)')}\n")
+    console.print(
+        f"[bold]Outcome[/bold]\n{esc(tr.get('outcome') or '(none recorded)')}\n"
+    )
 
     sessions = _fn(s.workflow_session_list)(project_slug=tr.get("project_slug"))
     if sessions:
         console.print("[bold]Sessions[/bold]")
         for sess in sessions:
+            summary = (sess.get("summary") or "(in progress)")[:80]
             console.print(
-                f"  {sess['slug']}  [{sess.get('phase')}]  "
-                f"{sess.get('summary') or '(in progress)'}"[:120]
+                f"  {sess['slug']}  ({esc(sess.get('phase'))})  {esc(summary)}"
             )
         console.print()
 
@@ -111,8 +115,8 @@ def _trace_show(slug: str) -> None:
         for mslug in slugs:
             m = _fn(s.memory_get)(slug=mslug)
             if m:
-                console.print(f"  [cyan]{mslug}[/cyan]  {m.get('title', '')}")
-                console.print(f"    {m.get('content', '')}"[:240])
+                console.print(f"  [cyan]{mslug}[/cyan]  {esc(m.get('title'))}")
+                console.print(f"    {esc((m.get('content') or '')[:236])}")
             else:
                 console.print(f"  [dim]{mslug} (missing)[/dim]")
         console.print()

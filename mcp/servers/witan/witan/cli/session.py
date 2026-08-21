@@ -15,16 +15,17 @@ import os
 import uuid
 
 import cyclopts
-from rich.markup import escape
 
 from .. import session_state
 from ._common import (
     _fn,
     _split_csv,
     _srv,
-    WorkflowPhase,
     app,
     console,
+    esc,
+    print_error,
+    WorkflowPhase,
 )
 
 session_app = cyclopts.App(
@@ -165,7 +166,7 @@ def session_sweep(
     try:
         max_age = timedelta(seconds=_parse_duration(older_than))
     except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
+        print_error(exc)
         raise SystemExit(1) from None
 
     s = _srv()
@@ -258,6 +259,7 @@ def session_list(project_slug: str) -> None:
         summary = (sess.get("summary") or "(in progress)").splitlines()
         # Escape the free-text first line and use parentheses (not brackets) for
         # phase/state — Rich would parse "[implementation/open]" as a malformed
-        # markup tag and could error out on it.
-        first = escape(summary[0] if summary else "(in progress)")
-        console.print(f"  {sess['slug']}  ({sess.get('phase')}/{state})  {first}"[:140])
+        # markup tag and could error out on it. Truncate before escaping, so a
+        # cut never lands inside an escape sequence.
+        first = esc((summary[0] if summary else "(in progress)")[:80])
+        console.print(f"  {sess['slug']}  ({esc(sess.get('phase'))}/{state})  {first}")
