@@ -262,5 +262,5 @@ The mapping the renderer applies:
 its rules grant nobody — deliberate, and logged as a warning on every boot so it
 stays visible. Adding a group to a bundle without adding it to the renderer's
 `KNOWN_GROUPS` fails the boot rather than rendering an empty group that silently
-denies its members; `tests/../test_render_groups.py` pins that against the real
+denies its members; `../tests/test_render_groups.py` pins that against the real
 committed bundles.

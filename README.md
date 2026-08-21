@@ -1,18 +1,37 @@
 # agent-kit
 
-A shared toolkit of AI agent utilities for the team, including reusable skills,
-custom agent definitions, MCP server install helpers, and sample configurations.
+A shared toolkit of AI agent utilities for the team. At its centre are the
+three witan packages — [`witan-council`](./mcp/servers/witan/README.md),
+[`witan-code`](./mcp/servers/witan-code/README.md), and
+[`witan-core`](./packages/witan-core/README.md), the shared memory,
+work-coordination, and code-graph layer for coding agents — published to PyPI
+alongside [`agent-config-kit`](./packages/agent-config-kit/README.md) and the
+[`ol-agent-kit`](./packages/agent-kit/README.md) meta-package, for five in
+all. The repo also holds reusable skills, custom agent definitions, MCP server
+install helpers, and sample configurations.
+
+Documentation for the witan packages lives in [`docs/`](./docs/) — tutorials,
+guides, a generated reference for every MCP tool, CLI command and environment
+variable, and the architecture notes. Build it locally with `just docs-serve`.
+It is set up to publish on Read the Docs as **witan-context** once that project
+is registered.
 
 ## Repository Structure
 
 ```
 .
-├── skills/                    # Reusable skills, installed via agent-config-kit
-├── custom-agents/             # Custom agent definitions for GitHub Copilot and Claude Code
-├── mcp/                       # Install helpers and configuration for common MCP servers
-├── configs/                   # Sample / reference agent configurations
+├── mcp/servers/witan/         # witan-council — memory, tasks, workflow; the `witan` umbrella CLI
+├── mcp/servers/witan-code/    # witan-code — tree-sitter code graph + cross-repo bridge
+├── packages/witan-core/       # witan-core — shared internals for the two servers above
 ├── packages/agent-config-kit/ # agent-kit — the CLI that installs the skills/MCP servers declared below
 ├── packages/agent-kit/        # PyPI meta-package (ol-agent-kit): agent-config-kit[cli] + witan + witan-code
+├── skills/                    # Reusable skills, installed via agent-config-kit
+├── custom-agents/             # Custom agent definitions for GitHub Copilot and Claude Code
+├── mcp/                       # Install helpers and configuration for other MCP servers
+├── configs/                   # Sample / reference agent configurations
+├── docker/                    # Deployment images: the witan MCP tier and the omnigraph data tier
+├── docs/                      # The witan-context documentation site (Zensical → Read the Docs)
+├── bin/                       # Repo maintenance scripts (version/pin checks, docs generation)
 └── agent-config.toml          # This repo's own manifest for agent-kit
 ```
 

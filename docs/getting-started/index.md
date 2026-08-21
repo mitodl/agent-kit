@@ -44,9 +44,18 @@ You will need:
 
 You do **not** need a server, a database, or any credentials. The default store
 is a single file at `~/.local/share/witan/graph.omni`, and everything in this
-tutorial runs against it locally. Pointing witan at a shared, deployed service
-is a later, separate step — see [Using a deployed
-witan](../guides/deployed-witan.md).
+tutorial runs against it locally.
+
+Moving to a shared, deployed witan later is two separate jobs, and it is worth
+knowing both exist before you accumulate a graph worth keeping:
+
+- **Point your client at it** — [Using a deployed
+  witan](../guides/deployed-witan.md). Register the target, log in, switch your
+  agent over.
+- **Bring your data with you** — [Migration
+  runbook](../guides/migration-runbook.md). A store cannot be moved by copying
+  it, so this is a real procedure rather than a file copy; the runbook's
+  "Local → shared: the cutover" section is the one you want.
 
 ## A note on where things run
 

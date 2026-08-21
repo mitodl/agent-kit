@@ -105,4 +105,4 @@ See [`skills/workflow/creating-skills/SKILL.md`](./skills/workflow/creating-skil
 - [`mcp/README.md`](./mcp/README.md) — MCP server structure and available servers
 - [`mcp/servers/witan/README.md`](./mcp/servers/witan/README.md) — witan graph-memory server
 - [`custom-agents/README.md`](./custom-agents/README.md) — agent definitions for Claude/Copilot
-- [`docs/`](./docs/) — the **witan-context** documentation site (https://witan-context.readthedocs.io). `docs/reference/` is GENERATED and `docs/guides/` is mostly MIRRORED from the packages — do not hand-edit either; run `just docs-gen` and commit. `just docs-check` gates this in CI, and `just docs-serve` previews locally. Historical specs live in `docs/internals/`.
+- [`docs/`](./docs/) — the **witan-context** documentation site (set up to publish on Read the Docs once that project is registered). `docs/reference/` is GENERATED and `docs/guides/` is mostly MIRRORED from the packages — do not hand-edit either; run `just docs-gen` and commit. `just docs-check` gates this in CI, and `just docs-serve` previews locally. Historical specs live in `docs/internals/`.

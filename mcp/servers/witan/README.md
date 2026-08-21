@@ -170,8 +170,12 @@ Links a git branch (repo + raw branch name, e.g. `feature/new-api` — never
 witan-code's sanitized omnigraph branch name) to the task/project it's
 carrying, so "which branch carries task X" and "which tasks are in flight on
 branch B" are one-hop graph queries. Coordination state that lives in witan
-(shared, durable), not witan-code's per-repo/bridge omnigraph stores (local,
-re-derivable caches `branches --prune` may destroy at any time).
+(shared, durable), not witan-code's per-repo/bridge omnigraph stores — those
+are shareable now, but they stay re-derivable caches, rebuildable from the
+source tree by reindexing, and that is the distinction that matters here.
+(`branches --prune` is the narrow case: it deletes this checkout's own local
+branch views, refuses a shared graph outright, and never touches the bridge
+store.)
 
 Wired in automatically, best-effort — no dedicated tool call needed:
 
