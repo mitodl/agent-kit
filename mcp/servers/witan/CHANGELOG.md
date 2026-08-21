@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.28.0] - 2026-08-21
+
+### Fixed
+
+- **The launch surfaces that hand an agent a list of ready tasks now tell it to
+  claim one before working it.** `witan task run` has always claimed before
+  launching, so its agent arrives holding the task. `witan project run` does
+  not — it passes up to 20 ready tasks and cannot know which the agent will
+  pick, so claiming them all would hold leases on work nobody starts. Its
+  prompt named only `task_close` and `workflow_project_advance`, so the whole
+  list stayed unclaimed while being worked.
+
+  That is not a bookkeeping gap. `in_progress` with a live lease is what makes
+  `task_ready` hide a task from the next session and what makes `task_claim`
+  refuse a second holder; an unclaimed task being actively worked is
+  indistinguishable from one nobody has touched. On 2026-08-21 two sessions
+  took the same task off that list and wrote the same fix for it in parallel
+  (#271 and #272), each unaware of the other, and it only surfaced when the
+  second one hit a merge conflict.
+
+  The project-run prompt now says to claim each task as it is reached, that a
+  refusal means someone else is on it, and to `task_release` anything claimed
+  and then dropped. The session-context hook's ready-task list says the same
+  in place of its old "use `task_update`/`task_close` … to claim and progress
+  them", which read as something to do at some point. The single-task prompt
+  states which case it is in — claimed for you, or claim it first under
+  `--no-claim` — rather than telling an agent that already holds the lease to
+  take it again.
+
+- **The `witan-task` skill states the rule once, up front, and not only for its
+  own interactive path.** Claiming was described inside "Triage ready work",
+  where it applied to a human picking from a menu and said to *ask* whether to
+  claim. The rule is now that any `tk-` task you start gets claimed first —
+  whatever surfaced it: this skill, the session context's ready list, a
+  `witan project run` prompt, or a slug someone named — and the skill
+  description says so, so it is discoverable from those other entry points.
+
 ## [0.27.0] - 2026-08-21
 
 ### Changed

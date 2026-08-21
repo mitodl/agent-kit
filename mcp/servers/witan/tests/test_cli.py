@@ -693,3 +693,45 @@ def test_task_run_force_gets_past_a_held_task(server, monkeypatch):
     )
     assert launched
     assert server.task_get(t["slug"])["status"] == "in_progress"
+
+
+# ── the launch prompts have to say who claims what ───────────────────────────
+# `witan task run` claims before it launches, so its agent arrives holding the
+# task. `witan project run` cannot: it hands over up to 20 ready tasks and does
+# not know which the agent will work, so the instruction has to travel in the
+# prompt. It did not, and two sessions picked the same task off that list on the
+# same day and wrote the same fix twice.
+
+
+def test_the_project_prompt_tells_the_agent_to_claim_before_starting():
+    from witan.cli.run_helpers import _project_run_prompt
+
+    prompt = _project_run_prompt(
+        {"slug": "wp-x", "title": "T", "phase": "implementation", "status": "active"},
+        [{"slug": "tk-a", "priority": "p1", "title": "do the thing"}],
+    )
+
+    assert "task_claim" in prompt
+    # Ordering is the whole point: a claim recorded after the work prevents
+    # nothing, so the prompt must not read as "close it, and claim some time".
+    assert prompt.index("task_claim") < prompt.index("task_close")
+    assert "task_release" in prompt
+
+
+def test_the_task_prompt_says_the_task_is_already_claimed():
+    from witan.cli.run_helpers import _run_prompt
+
+    prompt = _run_prompt({"slug": "tk-a", "title": "T", "type": "bug"})
+
+    assert "claimed for you" in prompt
+    # Telling an agent that already holds the lease to claim it again would have
+    # it re-take its own claim, which is noise, not safety.
+    assert "task_claim" not in prompt
+
+
+def test_the_task_prompt_says_to_claim_when_run_did_not():
+    from witan.cli.run_helpers import _run_prompt
+
+    prompt = _run_prompt({"slug": "tk-a", "title": "T", "type": "bug"}, claimed=False)
+
+    assert 'task_claim(slug="tk-a")' in prompt

@@ -76,7 +76,7 @@ def _launch_agent(
         raise SystemExit(1) from None
 
 
-def _run_prompt(t: dict) -> str:
+def _run_prompt(t: dict, claimed: bool = True) -> str:
     lines = [
         "Work on this task from the witan task graph and see it through to completion.",
         "",
@@ -95,11 +95,21 @@ def _run_prompt(t: dict) -> str:
         lines.append(
             f"Symbols:  {', '.join(t['symbol_refs'])}  (use the code_* tools to inspect)"
         )
+    # Say which it is rather than instructing unconditionally: `witan task run`
+    # claims before launching, so telling that agent to claim again would have
+    # it re-take a lease it already holds, and telling it nothing would leave a
+    # `--no-claim` agent working a task that still reads as unclaimed.
+    held = (
+        "This task is claimed for you — nobody else will pick it up while you work."
+        if claimed
+        else f'This task is NOT claimed. Claim it before you start: task_claim(slug="{t["slug"]}").'
+    )
     lines += [
         "",
         "Description:",
         t.get("description") or "(none)",
         "",
+        held,
         f'When complete, close it: task_close(slug="{t["slug"]}", resolution="<what you did>"). '
         f'File any follow-up work with task_create(discovered_from=["{t["slug"]}"], ...).',
     ]
@@ -135,7 +145,7 @@ def _run_task_slug(
             f"[yellow]Warning: open blockers: {', '.join(open_blockers)}[/yellow]"
         )
 
-    prompt = _run_prompt(t)
+    prompt = _run_prompt(t, claimed=claim)
     if dry_run:
         console.print(prompt, markup=False, emoji=False, highlight=False)
         return
@@ -189,7 +199,21 @@ def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
             )
     lines += [
         "",
+        # ★ THE CLAIM LINE IS WHY THIS BLOCK EXISTS.
+        # `witan task run` claims before it launches, because it knows which
+        # single task the agent is getting. This path cannot: it hands over up
+        # to 20 ready tasks and the agent may work one of them or four, so
+        # claiming them all here would hold leases on work nobody starts. That
+        # left the whole list unclaimed — two sessions picked the same task off
+        # it on the same day and wrote the same fix twice, each unaware of the
+        # other, because an unclaimed task looks identical to nobody-is-on-it.
+        "Claim each task BEFORE you start it, not after: "
+        'task_claim(slug="tk-..."). It refuses if another session already '
+        "holds it, which is the signal to pick a different one — that refusal "
+        "is the only thing standing between you and duplicating someone "
+        "else's work.",
         'When a task is done: task_close(slug="tk-...", resolution="<what you did>").',
+        'If you claim a task and then decide not to work it: task_release(slug="tk-...").',
         f'When the project phase is complete: workflow_project_advance(slug="{p["slug"]}", summary="<what was accomplished>").',
     ]
     return "\n".join(lines)

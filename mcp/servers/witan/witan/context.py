@@ -409,7 +409,10 @@ def _render_context_block(
             )
         lines += [
             "",
-            "Use `task_update`/`task_close` (or the `/witan-task` skill) to claim and progress them.",
+            "Claim one with `task_claim(slug=...)` BEFORE working it — an "
+            "unclaimed task in progress is indistinguishable from an idle one, "
+            "and a second session will start the same work. Then `task_close` "
+            "it when done (or `/witan-task`).",
             "",
         ]
 
