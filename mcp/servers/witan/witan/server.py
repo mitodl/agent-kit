@@ -3327,13 +3327,30 @@ def _for_project_step(branch_slug: str, project_slug: str) -> _Step | None:
 
 
 def _code_branch_steps(
-    repo: str | None, *, task_slug: str | None = None, project_slug: str | None = None
+    repo: str | None,
+    *,
+    branch: str | None = None,
+    task_slug: str | None = None,
+    project_slug: str | None = None,
 ) -> list[_Step]:
-    """Mutations tracking the current checkout's CodeBranch, for a caller's batch.
+    """Mutations tracking the caller's checkout's CodeBranch, for a caller's batch.
 
     Returns ``[]`` in exactly one situation: there is no checkout to describe —
     no repo context, no current git branch (detached HEAD, outside a repo), or
     construction failed (see best-effort below).
+
+    ★ ``branch`` IS A PARAMETER BECAUSE THE CALLER'S CHECKOUT IS NOT HERE, and
+    the fallback below is for the in-process case only. Reading it from
+    ``repo_module.current_branch()`` unconditionally is correct under local
+    stdio, where the server is a child of the agent and shares its working
+    directory — and silently wrong under a deployment, where this runs in a
+    container with no checkout. There it returned None, the ``if not branch``
+    exit fired, and no CodeBranch and no edge were ever written. That exit is
+    not the failure path, so nothing was logged and every deployed
+    ``task_claim`` looked like it had tracked the branch. ``repo`` had already
+    been lifted to a parameter for exactly this reason; ``branch`` had not.
+    Callers reached from a tool that declares ``branch`` should pass it; the
+    proxy fills it in client-side (``_BRANCH_IS_CHECKOUT``).
 
     ★ "ALREADY RECORDED" IS NOT ONE OF THEM. With a repo and a branch the list
     is never empty: `_upsert_code_branch_step` yields an insert for a new
@@ -3361,7 +3378,7 @@ def _code_branch_steps(
     """
     if not repo:
         return []
-    branch = repo_module.current_branch()
+    branch = branch or repo_module.current_branch()
     if not branch:
         return []
     try:
@@ -3389,7 +3406,11 @@ def _code_branch_steps(
 
 
 def _track_code_branch(
-    repo: str | None, *, task_slug: str | None = None, project_slug: str | None = None
+    repo: str | None,
+    *,
+    branch: str | None = None,
+    task_slug: str | None = None,
+    project_slug: str | None = None,
 ) -> None:
     """Issue :func:`_code_branch_steps` as one standalone commit.
 
@@ -3401,7 +3422,9 @@ def _track_code_branch(
     Still never raises, for the same reason the step builder doesn't: this is
     metadata beside the tool's purpose. One commit now instead of up to three.
     """
-    steps = _code_branch_steps(repo, task_slug=task_slug, project_slug=project_slug)
+    steps = _code_branch_steps(
+        repo, branch=branch, task_slug=task_slug, project_slug=project_slug
+    )
     if not steps:
         return
     try:
@@ -4588,6 +4611,7 @@ def workflow_session_start(
     session_id: str,
     phase: WorkflowPhase,
     repo: str | None = None,
+    branch: str | None = None,
     tags: list[str] | None = None,
 ) -> dict:
     """
@@ -4626,10 +4650,12 @@ def workflow_session_start(
     ``workflow_project_update(add_repos=[...])`` does it directly, without
     needing a session at all.
 
-    When a repo is detected and the checkout is on a git branch, also
-    upserts a ``CodeBranch`` (repo, branch) and links it ``ForProject`` to
-    this project — schema.pg § Code Branches. Best-effort: silently skipped
-    with no repo/branch context, never fails the session start.
+    When a repo is detected and the caller is on a git branch, also upserts a
+    ``CodeBranch`` (repo, branch) and links it ``ForProject`` to this project —
+    schema.pg § Code Branches. Best-effort: silently skipped with no
+    repo/branch context, never fails the session start. Both values come from
+    the caller (see ``branch`` below); a deployed server has no checkout to
+    read them from.
 
     Parameters
     ----------
@@ -4641,6 +4667,11 @@ def workflow_session_start(
         The phase this session is working in.
     repo:
         Repo scoping — see instructions.
+    branch:
+        The git branch the caller is on, for the ``CodeBranch`` above. Filled
+        in client-side by the remote proxy; omitted, the server falls back to
+        its own working directory, which is right under local stdio and empty
+        under a deployment.
     tags:
         Optional tags.
     """
@@ -4724,7 +4755,7 @@ def workflow_session_start(
                     )
                 )
 
-    steps += _code_branch_steps(detected_repo, project_slug=project_slug)
+    steps += _code_branch_steps(detected_repo, branch=branch, project_slug=project_slug)
 
     # Empty only when there is nothing to say: a re-entrant call with no meta
     # change, no new repo for the project, and no checkout to track. A
@@ -5379,6 +5410,8 @@ async def task_claim(
     assignee: str | None = None,
     session_id: str | None = None,
     force: bool = False,
+    repo: str | None = None,
+    branch: str | None = None,
     ctx: Context | None = None,
 ) -> dict | None:
     """
@@ -5424,11 +5457,21 @@ async def task_claim(
         ``$CLAUDE_SESSION_ID``, which it inherits from the agent.
     force:
         Steal the task even if another holder's lease is still valid.
+    repo:
+        Repo scoping — see instructions. Used only for the branch tracking
+        below, not to scope the claim itself.
+    branch:
+        The git branch the caller is on. Together with ``repo`` this is what
+        the ``WorksOn`` link is keyed on, and both have to come from the caller
+        because a deployed server has no checkout to read them from — see
+        ``_code_branch_steps``. The CLI's remote proxy fills both in
+        automatically; under local stdio they default to the server's own
+        working directory, which is the agent's.
     """
     # Best-effort CAS, not a hard lock: omnigraph has no conditional-write, so we
     # surface OCC conflicts and post-write-verify ownership rather than trusting
     # last-write-wins (see docs/adr/0003 and the claim loop below). On success
-    # also upserts a CodeBranch for the checkout's repo+branch and links it
+    # also upserts a CodeBranch for the caller's repo+branch and links it
     # WorksOn this task (best-effort).
     holder = _claim_holder(assignee, session_id)
     rows = await _offload(client.read, "read.gq", "get_task", {"slug": slug})
@@ -5653,7 +5696,12 @@ async def task_claim(
             "claimed_at": winner_claimed_at,
             "remedy": _claim_remedy(slug, winner or _UNKNOWN_HOLDER, winner_claimed_at),
         }
-    await _offload(_track_code_branch, repo_module.detect(), task_slug=slug)
+    await _offload(
+        _track_code_branch,
+        repo_module.detect(override=repo),
+        branch=branch,
+        task_slug=slug,
+    )
     return {
         "slug": slug,
         "claimed": True,

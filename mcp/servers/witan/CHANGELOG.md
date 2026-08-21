@@ -6,6 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.26.0] - 2026-08-21
+
+### Fixed
+
+- **A deployed `task_claim` never recorded the branch it was claimed on.** It
+  called `repo_module.detect()` and `repo_module.current_branch()` on the
+  *server*. Under local stdio that is correct — the server is a child of the
+  agent and shares its working directory — and under a deployment it runs in a
+  container with no checkout, so both answered nothing,
+  `_code_branch_steps` took its `if not repo` / `if not branch` early exit, and
+  no `CodeBranch` and no `WorksOn` edge were written.
+
+  Nothing surfaced: that exit is not the failure path, so not even the
+  `witan.code_branch.tracking_failed` warning fired, and the claim returned
+  `{"claimed": true}` as usual. Every branch→task link was therefore local-only,
+  which is why 0.24.0's `task_for_branch` answered zero for a branch that had
+  just been claimed on, and why the `## In-Flight Branch` block still could not
+  render for a deployed user.
+
+  `task_claim` now takes `repo` and `branch`, `workflow_session_start` takes
+  `branch` (it already had `repo`, so only half of its `ForProject` edge was
+  affected — enough to skip the whole `CodeBranch`), and the remote proxy fills
+  both in client-side. The server-side read remains as a fallback for the
+  in-process case, where it is the right answer; an explicit value from the
+  caller always wins over it.
+
+  Measured against a real deployment rather than inferred: claiming a task from
+  a checkout against CI 0.24.0 succeeded (`status=in_progress`) while
+  `task_for_branch` for that same branch returned zero.
+
+### Added
+
+- `_BRANCH_IS_CHECKOUT` / `_BRANCH_IS_EXPLICIT` classify every tool declaring a
+  `branch` parameter by whether that branch is the caller's checkout or one they
+  are asking about. `test_every_branch_tool_is_classified` fails on an
+  unclassified tool — the mirror of #268's `repo` guard, added because this bug
+  left no error behind and a second one would not either.
+
+### Changed
+
+- Raised the `witan-core` floor to `>=0.30` for the `_resolve_branch` /
+  `_branch_means_checkout` hooks. Behavioural, not bookkeeping: on 0.29 the
+  overrides target base methods that do not exist, so they are never called,
+  nothing fails to import, no test fails, and the branch stops being sent —
+  restoring the bug above in full.
+
 ## [0.25.0] - 2026-08-21
 
 ### Fixed

@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.25.0"
+version = "0.26.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -139,10 +139,23 @@ dependencies = [
   # documents. A published witan-council on 0.28 ships the bug this floor
   # exists to keep fixed, and the data loss is invisible at the call site.
   #
+  # ★ >=0.30 IS A BEHAVIOURAL FLOOR, the same quiet kind as >=0.22, >=0.25 and
+  # >=0.29 — and the third time this exact override-a-method-that-does-not-exist
+  # shape has appeared, so read the >=0.29 note above before assuming this one
+  # is bookkeeping. `RemoteServerProxy._branch_means_checkout` and
+  # `_resolve_branch` override base methods that 0.29 does not define, so on
+  # 0.29 they are simply never called: nothing fails to import, no test fails,
+  # and the proxy stops sending the caller's git branch. `task_claim` then falls
+  # back to reading `current_branch()` server-side, which in a container answers
+  # nothing, and the CodeBranch/WorksOn edge is silently not written — the whole
+  # of tk-task-claim-never-writes-the-codebranch-workson-e-9496c4, returned. It
+  # leaves no error behind either time, because the skip is an early return and
+  # not the failure path.
+  #
   # (This also carries 0.21.0's >=0.28 reason forward: the refreshed omnigraph
   # `edge` digest, below which `witan setup` fails its checksum and leaves the
   # CLI with no binary. Subsumed, not dropped.)
-  "witan-core[cli,remote,observability,sentry]>=0.29,<1",
+  "witan-core[cli,remote,observability,sentry]>=0.30,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -187,7 +200,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.25.0"
+current_version = "0.26.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
