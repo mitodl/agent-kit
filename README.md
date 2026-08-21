@@ -1,12 +1,14 @@
 # agent-kit
 
-A shared toolkit of AI agent utilities for the team. It holds three published
-Python packages — [`witan-council`](./mcp/servers/witan/README.md),
+A shared toolkit of AI agent utilities for the team. At its centre are the
+three witan packages — [`witan-council`](./mcp/servers/witan/README.md),
 [`witan-code`](./mcp/servers/witan-code/README.md), and
 [`witan-core`](./packages/witan-core/README.md), the shared memory,
-work-coordination, and code-graph layer for coding agents — alongside reusable
-skills, custom agent definitions, MCP server install helpers, and sample
-configurations.
+work-coordination, and code-graph layer for coding agents — published to PyPI
+alongside [`agent-config-kit`](./packages/agent-config-kit/README.md) and the
+[`ol-agent-kit`](./packages/agent-kit/README.md) meta-package, for five in
+all. The repo also holds reusable skills, custom agent definitions, MCP server
+install helpers, and sample configurations.
 
 Documentation for the witan packages lives in [`docs/`](./docs/) — tutorials,
 guides, a generated reference for every MCP tool, CLI command and environment

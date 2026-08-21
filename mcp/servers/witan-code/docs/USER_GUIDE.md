@@ -171,10 +171,12 @@ not indexed yet (HCL/Terraform is the leading candidate).
 ## Cross-repo bridge in brief
 
 Per-repo indexing stops at the repo boundary; the bridge is a separate,
-shared, local-only store (`_bridge.omni`) that links repos through contracts
-they share — an env var one repo's infra sets and another reads, an HTTP
-endpoint one serves and another calls, a package one publishes and others
-import, a service one repo deploys. It is **zero-config**: every `index` /
+shared store that links repos through contracts they share — an env var one
+repo's infra sets and another reads, an HTTP endpoint one serves and another
+calls, a package one publishes and others import, a service one repo deploys.
+It follows the same store resolution as the per-repo graphs: `_bridge.omni`
+beside them locally, and the deployment's bridge graph when one is configured
+(`witan_code.store.bridge_store`). It is **zero-config**: every `index` /
 `reindex` of any repo also extracts that repo's bindings into the bridge
 store automatically — there's no registry of repos to maintain.
 
