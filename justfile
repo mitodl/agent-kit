@@ -142,6 +142,19 @@ check-omnigraph-format *args:
 check-versions *args:
     uv run --package witan-core --extra cli python bin/check_versions.py {{ args }}
 
+# Fail if a server imports a witan_core symbol its declared floor predates.
+#
+# NEEDS NETWORK: it asks PyPI which witan-core versions exist, then installs the
+# lowest one the floor admits into a throwaway venv. That is the point — the
+# workspace resolves witan-core BY PATH, so any check that stays inside it
+# proves nothing. See bin/check_core_floor.py for why the pin has to be `==`
+# and why an unpublished floor is a pass, not a failure.
+#
+# Slower than the other checks (two wheel builds, two venvs, two installs), so
+# it is its own CI job rather than a step inside another.
+check-core-floor *args:
+    uv run --package witan-core --extra cli --with packaging python bin/check_core_floor.py {{ args }}
+
 # CHANGELOG FIRST, THEN THE VERSION — and the order is the whole point. The
 # recipe computes the version this bump would produce and refuses unless
 # CHANGELOG.md already has a `## [<that version>]` heading. So the only way to

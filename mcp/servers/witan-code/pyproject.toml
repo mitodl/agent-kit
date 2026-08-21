@@ -18,10 +18,18 @@ dependencies = [
     # >=0.12: remote/store.py imports RemotePayloadTooLarge and
     # payload_too_large from witan_core.remote.proxy at module scope, and 0.11
     # exports neither. A looser floor lets an external install resolve a
-    # witan-core the server cannot even import; that is what this pin is for,
-    # and it has now been tripped THREE times. If you add a witan_core symbol in
-    # the same change as its caller, bump this line in that change: the
-    # workspace resolves witan-core by path, so nothing here can catch it.
+    # witan-core the server cannot even import; that is what this pin is for.
+    # If you add a witan_core symbol in the same change as its caller, bump this
+    # line in that change: the workspace resolves witan-core by path, so no test
+    # run in it can catch you.
+    #
+    # ★ `just check-core-floor` NOW CATCHES THAT, on ordinary PR CI
+    # (.github/workflows/core-floor.yml). It installs this package's wheel into
+    # a clean venv with witan-core pinned to exactly the floor below and imports
+    # every module — the failure mode itself, not a model of it. It escaped
+    # three times before that check existed (#198, #200, #201), each time with a
+    # green CI; the tally used to live in this comment, which was a comment
+    # doing a test's job.
     # (NOT raised for witan-core 0.19/0.20's trace-context work, deliberately.
     # Nothing here imports `trace_context_middleware`, and standalone
     # `witan-code serve` is stdio-only — the ASGI middleware is installed by
