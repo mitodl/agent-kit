@@ -571,7 +571,9 @@ def task_run(
         if not claimable:
             console.print("[red]No tasks could be claimed.[/red]")
             raise SystemExit(1)
-        merged = _merge_prompts([_run_prompt(t) for t in claimable], "task")
+        merged = _merge_prompts(
+            [_run_prompt(t, claimed=claim) for t in claimable], "task"
+        )
         _launch_agent(cfg, resolved_agent, resolved_model, merged, dry_run)
     else:
         for t in selected:

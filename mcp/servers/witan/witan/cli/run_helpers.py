@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 
+from ..readiness import CLAIM_LEASE_SECONDS
 from ._common import (
     _fn,
     _srv,
@@ -76,7 +77,7 @@ def _launch_agent(
         raise SystemExit(1) from None
 
 
-def _run_prompt(t: dict, claimed: bool = True) -> str:
+def _run_prompt(t: dict, *, claimed: bool) -> str:
     lines = [
         "Work on this task from the witan task graph and see it through to completion.",
         "",
@@ -99,8 +100,19 @@ def _run_prompt(t: dict, claimed: bool = True) -> str:
     # claims before launching, so telling that agent to claim again would have
     # it re-take a lease it already holds, and telling it nothing would leave a
     # `--no-claim` agent working a task that still reads as unclaimed.
+    #
+    # The claimed branch names the lease window rather than promising exclusion
+    # outright: the claim is advisory and lapses after CLAIM_LEASE_SECONDS with
+    # nothing on the launch path renewing it, so a task worked for longer than
+    # that reappears in `task_ready` under the agent's feet. Re-calling
+    # `task_claim` renews it, which the agent can only do if it is told to.
+    lease_minutes = CLAIM_LEASE_SECONDS // 60
     held = (
-        "This task is claimed for you — nobody else will pick it up while you work."
+        f"This task is claimed for you. The claim is a lease, not a lock: it "
+        f"lapses after {lease_minutes} minutes and nothing renews it for you, "
+        f"so if the work runs longer, call "
+        f'task_claim(slug="{t["slug"]}") again to renew — otherwise the task '
+        f"returns to ready work while you are still on it."
         if claimed
         else f'This task is NOT claimed. Claim it before you start: task_claim(slug="{t["slug"]}").'
     )
@@ -212,6 +224,10 @@ def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
         "holds it, which is the signal to pick a different one — that refusal "
         "is the only thing standing between you and duplicating someone "
         "else's work.",
+        f"A claim is a lease, not a lock: it lapses after "
+        f"{CLAIM_LEASE_SECONDS // 60} minutes and nothing renews it for you, "
+        f"so call task_claim again on anything you are still working past "
+        f"that.",
         'When a task is done: task_close(slug="tk-...", resolution="<what you did>").',
         'If you claim a task and then decide not to work it: task_release(slug="tk-...").',
         f'When the project phase is complete: workflow_project_advance(slug="{p["slug"]}", summary="<what was accomplished>").',

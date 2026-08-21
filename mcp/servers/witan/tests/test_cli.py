@@ -721,12 +721,15 @@ def test_the_project_prompt_tells_the_agent_to_claim_before_starting():
 def test_the_task_prompt_says_the_task_is_already_claimed():
     from witan.cli.run_helpers import _run_prompt
 
-    prompt = _run_prompt({"slug": "tk-a", "title": "T", "type": "bug"})
+    prompt = _run_prompt({"slug": "tk-a", "title": "T", "type": "bug"}, claimed=True)
 
     assert "claimed for you" in prompt
-    # Telling an agent that already holds the lease to claim it again would have
-    # it re-take its own claim, which is noise, not safety.
-    assert "task_claim" not in prompt
+    # The claim is a LEASE. It lapses after CLAIM_LEASE_SECONDS and nothing on
+    # the launch path renews it, so "nobody else will pick it up while you
+    # work" was false for any task worked longer than that — the prompt has to
+    # say how to renew instead of promising exclusion.
+    assert "60 minutes" in prompt
+    assert 'task_claim(slug="tk-a") again' in prompt
 
 
 def test_the_task_prompt_says_to_claim_when_run_did_not():
@@ -735,3 +738,54 @@ def test_the_task_prompt_says_to_claim_when_run_did_not():
     prompt = _run_prompt({"slug": "tk-a", "title": "T", "type": "bug"}, claimed=False)
 
     assert 'task_claim(slug="tk-a")' in prompt
+    assert "claimed for you" not in prompt
+
+
+def test_claimed_is_required_so_a_caller_cannot_default_into_lying():
+    """`claimed` defaulting to True is what broke the multi-task --no-claim path.
+
+    `task_run`'s consolidated branch kept `claimable = list(selected)` when the
+    claim loop was skipped, so it reached the prompt builder with nothing
+    claimed and the default told the agent otherwise. A keyword with no default
+    fails at the call site instead.
+    """
+    import inspect
+
+    from witan.cli.run_helpers import _run_prompt
+
+    claimed = inspect.signature(_run_prompt).parameters["claimed"]
+
+    assert claimed.kind is inspect.Parameter.KEYWORD_ONLY
+    assert claimed.default is inspect.Parameter.empty
+
+
+@requires_omnigraph
+def test_consolidated_no_claim_run_does_not_claim_to_have_claimed(server, monkeypatch):
+    """--no-claim over a multi-task selection: nothing is claimed, and it says so."""
+    from witan import config as cfg_module
+    from witan.cli import run_helpers, tasks
+
+    _patch_server(monkeypatch, server)
+    launched = []
+    monkeypatch.setattr(
+        run_helpers, "_launch_agent", lambda *a, **kw: launched.append(a)
+    )
+    monkeypatch.setattr(tasks, "_launch_agent", lambda *a, **kw: launched.append(a))
+    cfg = cfg_module.load()
+    monkeypatch.setattr(cfg_module, "load", lambda **kw: cfg)
+
+    picked = [
+        server.task_create(title="first", description="x"),
+        server.task_create(title="second", description="x"),
+    ]
+    monkeypatch.setattr(tasks, "_pick_items", lambda items, render: picked)
+    # "1" = consolidate into a single agent session.
+    monkeypatch.setattr(tasks.Prompt, "ask", lambda *a, **kw: "1")
+
+    tasks.task_run(claim=False)
+
+    prompt = launched[0][3]
+    for t in picked:
+        assert f'task_claim(slug="{t["slug"]}")' in prompt
+        assert server.task_get(t["slug"])["status"] == "open"
+    assert "claimed for you" not in prompt

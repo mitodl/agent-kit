@@ -28,7 +28,11 @@ a MINOR bump may include breaking changes).
 
   The project-run prompt now says to claim each task as it is reached, that a
   refusal means someone else is on it, and to `task_release` anything claimed
-  and then dropped. The session-context hook's ready-task list says the same
+  and then dropped. Both prompts also state what a claim actually buys: it is
+  a lease, not a lock — it lapses after `CLAIM_LEASE_SECONDS` (60 minutes) and
+  nothing on the launch path renews it, so an agent still working past that
+  has to call `task_claim` again or the task returns to ready work underneath
+  it. The session-context hook's ready-task list says the same
   in place of its old "use `task_update`/`task_close` … to claim and progress
   them", which read as something to do at some point. The single-task prompt
   states which case it is in — claimed for you, or claim it first under
