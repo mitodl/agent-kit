@@ -341,7 +341,12 @@ class RemoteServerProxy(RemoteMCPProxy):
         )
 
     def merge_store(
-        self, source: str, *, target: str | None = None, dry_run: bool = False
+        self,
+        source: str,
+        *,
+        target: str | None = None,
+        dry_run: bool = False,
+        source_author: str | None = None,
     ) -> dict:
         """Merge a local store into the deployment, as the logged-in user.
 
@@ -372,12 +377,17 @@ class RemoteServerProxy(RemoteMCPProxy):
             # tool parameter, so the binding ceiling is the MCP session's 4 MiB
             # body cap, not omnigraph's much larger buffered-body one.
             batches = chunk_records(_read_export(export), MCP_LOAD_MAX_BYTES)
-            # The identity the source store wrote under. Resolved here for the
-            # same reason `repo=None` is: the deployment has neither this
-            # machine's config nor its git checkout, so it cannot derive the
-            # name its incoming rows carry. Rows matching it become the calling
-            # actor's; everything else keeps its author (#267).
-            claim_from = self._resolve_local_author()
+            # The identity the SOURCE store wrote under, supplied by the
+            # caller because only it knows which store this is: `--from <name>`
+            # merges a target the ambient configuration is not pointed at, and
+            # that block can carry its own `author`. Re-resolving ambient
+            # config here would send the wrong name, and since the server
+            # restamps only rows matching it, the failure is silent — nothing
+            # claimed, #267 still reproducible.
+            #
+            # The deployment cannot derive this itself, for the same reason it
+            # cannot derive `repo`: no access to this machine's config.
+            claim_from = source_author or self._resolve_local_author()
             for index, batch in enumerate(batches):
                 try:
                     result = self.store_merge(

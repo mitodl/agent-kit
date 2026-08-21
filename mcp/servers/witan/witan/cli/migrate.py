@@ -120,6 +120,28 @@ def _target_store_uri(name: str, block) -> str:
     return f"{base}/graphs/{block.graph}" if block.graph else base
 
 
+def _merge_source_author(from_target: str | None) -> str | None:
+    """The author string the SOURCE store writes — not the ambient target's.
+
+    `--from <name>` merges a store the ambient configuration is not pointed at,
+    and a target block can carry its own `author`. Resolving this from ambient
+    config would send the wrong name, and since `store_merge` restamps only
+    rows matching it, the effect is silent: nothing is claimed and #267 stays
+    reproducible for exactly the caller who used `--from`.
+
+    Falls back to ambient for a bare source URI, which is the headline cutover
+    (`witan migrate merge ~/.local/share/witan/graph.omni --to ol`) — there the
+    source is this machine's own store and ambient IS its author.
+    """
+    from .. import config as cfg_module
+
+    if from_target:
+        block = _named_target(from_target)
+        if block.author:
+            return block.author
+    return cfg_module.load().author
+
+
 def _merge_source(source: str | None, from_target: str | None) -> str:
     """The store URI to merge from, resolving ``--from <name>`` to its ``server``."""
     if from_target and source:
@@ -190,7 +212,12 @@ def _merge(
     source = _merge_source(source, from_target)
     s, target = _merge_destination(to_target, target)
     try:
-        result = s.merge_store(source, target=target, dry_run=dry_run)
+        result = s.merge_store(
+            source,
+            target=target,
+            dry_run=dry_run,
+            source_author=_merge_source_author(from_target),
+        )
     except RuntimeError as exc:
         print_error(exc)
         raise SystemExit(1) from None

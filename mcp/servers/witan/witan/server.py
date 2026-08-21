@@ -1653,8 +1653,16 @@ _AUTHORED_TYPES = (
 )
 
 
-def _claim_authorship(nodes: dict[tuple[str, str], dict], was: str, now: str) -> int:
-    """Rewrite ``author`` from ``was`` to ``now``, in place. Returns rows touched.
+def _claim_authorship(
+    nodes: dict[tuple[str, str], dict], was: str, now: str
+) -> set[tuple[str, str]]:
+    """Rewrite ``author`` from ``was`` to ``now``, in place. Returns the keys hit.
+
+    Counts what this call rewrote, which is not the same as what the merge goes
+    on to WRITE — a stamped row that loses reconciliation is discarded with its
+    new author. ``store_merge`` intersects the result with the winners before
+    reporting, so ``authorship_claimed`` describes effects rather than
+    intentions; see the call there.
 
     The identity a local store writes (``cfg.author`` — ``WITAN_AUTHOR`` / git
     ``user.name`` / ``$USER``) and the one a deployment resolves from the JWT
@@ -1672,15 +1680,15 @@ def _claim_authorship(nodes: dict[tuple[str, str], dict], was: str, now: str) ->
     at the call site and unrecoverable afterwards, since the original name is
     not kept anywhere else.
     """
-    claimed = 0
-    for row in nodes.values():
+    stamped: set[tuple[str, str]] = set()
+    for key, row in nodes.items():
         if row.get("type") not in _AUTHORED_TYPES:
             continue
         data = row.get("data")
         if isinstance(data, dict) and data.get("author") == was:
             data["author"] = now
-            claimed += 1
-    return claimed
+            stamped.add(key)
+    return stamped
 
 
 def _classify_rows(
@@ -1887,7 +1895,11 @@ def _check_export_source(source: str) -> None:
 
 
 def merge_store(
-    source: str, *, target: str | None = None, dry_run: bool = False
+    source: str,
+    *,
+    target: str | None = None,
+    dry_run: bool = False,
+    source_author: str | None = None,
 ) -> dict:
     """Merge another store's data into this store, newest-record-wins on slug
     collisions.
@@ -1932,6 +1944,14 @@ def merge_store(
     dry_run:
         Compute and return the reconciliation decisions without loading
         anything.
+    source_author:
+        Accepted and ignored on this path, so the CLI can pass it uniformly to
+        whichever provider ``_merge_destination`` returns. It exists for the
+        deployed path (``RemoteServerProxy.merge_store`` →
+        ``store_merge(claim_from_author=…)``), where the identity the rows
+        carry and the identity the writer has come from different namespaces.
+        Merging between two local stores has no such split: both ends write
+        ``cfg.author``, so there is nothing to reconcile.
 
     Returns counts (``added``/``updated``/``kept_target``) and the full
     per-``(type, slug)`` decision list, plus (when not a dry run)
@@ -2146,10 +2166,10 @@ def store_merge(
     # A source row that LOSES reconciliation keeps the target's copy, author
     # and all — so this does not repair rows from an earlier migration, which
     # is what `witan migrate claim-authorship` is for.
-    claimed = (
+    stamped_keys = (
         _claim_authorship(source_nodes, claim_from_author, _current_author())
         if claim_from_author
-        else 0
+        else set()
     )
 
     with tempfile.TemporaryDirectory(prefix="witan-store-merge-") as tmp:
@@ -2160,6 +2180,16 @@ def store_merge(
 
     decisions, winners = _reconcile_nodes(source_nodes, target_nodes)
     counts = _decision_counts(decisions)
+
+    # Intersected with the WINNERS, not reported straight off the rewrite. A
+    # stamped row that loses reconciliation is discarded with its new author,
+    # so the rewrite count would report `authorship_claimed > 0` for a batch
+    # that left every stored author exactly as it found it.
+    claimed = sum(
+        1
+        for row in winners
+        if (row.get("type"), (row.get("data") or {}).get("slug")) in stamped_keys
+    )
 
     if dry_run:
         return {
@@ -2190,7 +2220,7 @@ _AUTHORSHIP_SOURCES = (
         "WorkflowProject",
         "list_all_project_authors",
         "set_workflow_project_author",
-        False,
+        True,
     ),
     (
         "WorkflowSession",
@@ -2255,6 +2285,21 @@ def claim_authorship(was: str, apply: bool = False) -> dict:
     stamped = now_iso()
     by_type: dict[str, list[str]] = {}
     total = 0
+
+    # This sweeps the WHOLE store, so writing per row leaves behind exactly the
+    # fragmented store `_backfill_topics` batches to avoid — one Lance version
+    # per matching slug, against a data tier where a deployed commit runs
+    # seconds. A migrated store is hundreds of rows, which is the difference
+    # between one flush and an afternoon. Bounded chunks rather than one batch:
+    # the composed query is inline argv, so an unbounded body eventually
+    # exceeds the payload limit.
+    steps: list[tuple[str, str, dict]] = []
+
+    def flush() -> None:
+        if steps:
+            client.change_many(list(steps))
+            steps.clear()
+
     for node_type, read_query, write_query, has_updated_at in _AUTHORSHIP_SOURCES:
         slugs = [
             row["slug"]
@@ -2271,7 +2316,10 @@ def claim_authorship(was: str, apply: bool = False) -> dict:
             params = {"slug": slug, "author": now}
             if has_updated_at:
                 params["updated_at"] = stamped
-            client.change("mutations.gq", write_query, params)
+            steps.append(("mutations.gq", write_query, params))
+            if len(steps) >= _MIGRATE_BATCH_SIZE:
+                flush()
+    flush()
 
     return {
         "applied": apply,

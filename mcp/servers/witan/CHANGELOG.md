@@ -43,7 +43,11 @@ a MINOR bump may include breaking changes).
 
   Dry by default; `--was` defaults to this machine's configured local author,
   which is the right answer when repairing your own cutover from the same
-  checkout. Idempotent — a second run finds nothing.
+  checkout. Idempotent — a second run finds nothing. Writes are flushed in
+  `_MIGRATE_BATCH_SIZE` chunks through `change_many`: a whole-store repair
+  writing per row would leave one Lance version per matching slug, which is
+  the fragmentation `_backfill_topics` already batches to avoid and is the
+  difference between one flush and an afternoon against a deployed data tier.
 
   It does **not** verify that the name you claim was ever yours, and that is
   deliberate rather than an oversight: `store_merge` already accepts whatever

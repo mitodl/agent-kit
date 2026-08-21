@@ -1863,3 +1863,156 @@ class _Recorder:
             "claimed": 0,
             "by_type": {},
         }
+
+
+@requires_omnigraph
+def test_authorship_claimed_counts_only_rows_actually_written(
+    server, tmp_path, monkeypatch
+):
+    """`authorship_claimed` must describe effects, not intentions.
+
+    The restamp happens before reconciliation, so a matching source row that
+    LOSES to a newer target copy is discarded carrying its new author. Counting
+    the rewrite would report a claim against a batch that left every stored
+    author exactly as it found it.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    # Target holds the newer copy, so the source row loses reconciliation.
+    _insert_memory(
+        srv.client,
+        slug="mem-loses-reconcile-ddddd",
+        content="target wins",
+        updated_at="2026-06-01T00:00:00Z",
+    )
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source,
+        slug="mem-loses-reconcile-ddddd",
+        content="source is older",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    result = srv.store_merge(_export_rows(source), claim_from_author="pytest")
+
+    assert result["kept_target"] == 1
+    assert result["authorship_claimed"] == 0, (
+        "the losing row was discarded; nothing was reattributed"
+    )
+    rows = srv.client.read(
+        "read.gq", "get_memory", {"slug": "mem-loses-reconcile-ddddd"}
+    )
+    assert rows[0]["author"] == "pytest"
+
+
+@requires_omnigraph
+def test_claim_authorship_bumps_updated_at_where_the_type_has_one(server, monkeypatch):
+    """`WorkflowProject` reconciles on `updated_at` (`_RECONCILE_TS_FIELDS`), so
+    a repair that left it stale would make the row lose a later merge against
+    its own pre-repair copy."""
+    from witan import server as srv
+
+    proj = server.workflow_project_create(title="stale ts", description="d")
+    srv.client.change(
+        "mutations.gq",
+        "set_workflow_project_author",
+        {
+            "slug": proj["slug"],
+            "author": "Old Local Name",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    srv.claim_authorship(was="Old Local Name", apply=True)
+
+    row = srv.client.read("read.gq", "get_workflow_project", {"slug": proj["slug"]})[0]
+    assert row["author"] == "me@example.org"
+    assert srv._parse_ts(row["updated_at"]) > srv._parse_ts("2026-01-01T00:00:00Z")
+
+
+@requires_omnigraph
+def test_claim_authorship_batches_its_writes(server, monkeypatch):
+    """A whole-store repair writing per row leaves one Lance version per slug —
+    the fragmentation `_backfill_topics` batches to avoid, against a data tier
+    where a deployed commit runs seconds."""
+    from witan import server as srv
+
+    slugs = []
+    for i in range(3):
+        m = server.memory_store(kind="lesson", title=f"row {i}", content="x")
+        slugs.append(m["slug"])
+        srv.client.change(
+            "mutations.gq",
+            "set_memory_author",
+            {
+                "slug": m["slug"],
+                "author": "Old Local Name",
+                "updated_at": srv.now_iso(),
+            },
+        )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    batched: list[int] = []
+    real_change_many = srv.client.change_many
+    per_row = []
+    real_change = srv.client.change
+
+    def spy_many(steps, **kw):
+        batched.append(len(steps))
+        return real_change_many(steps, **kw)
+
+    def spy_change(*a, **kw):
+        per_row.append(a[1] if len(a) > 1 else None)
+        return real_change(*a, **kw)
+
+    monkeypatch.setattr(srv.client, "change_many", spy_many)
+    monkeypatch.setattr(srv.client, "change", spy_change)
+
+    srv.claim_authorship(was="Old Local Name", apply=True)
+
+    assert batched == [3], f"expected one batched flush, got {batched}"
+    assert not [q for q in per_row if q and q.startswith("set_")], (
+        f"authorship writes must not go through per-row change(): {per_row}"
+    )
+
+
+def test_merge_source_author_prefers_the_from_target_over_ambient(monkeypatch):
+    """`--from <name>` merges a store the ambient config is not pointed at, and
+    that block can carry its own `author`. Sending the ambient one restamps
+    nothing and fails silently — #267 stays reproducible for exactly the caller
+    who used `--from`."""
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setattr(
+        cli_migrate,
+        "_named_target",
+        lambda name: _StubCfg(author="Personal Machine Name"),
+    )
+
+    from witan import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "load", lambda *a, **k: _StubCfg(author="Ambient"))
+
+    assert cli_migrate._merge_source_author("personal") == "Personal Machine Name"
+    # A bare source URI is this machine's own store, where ambient IS correct.
+    assert cli_migrate._merge_source_author(None) == "Ambient"
+
+
+def test_merge_source_author_falls_back_when_the_target_sets_none(monkeypatch):
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setattr(
+        cli_migrate, "_named_target", lambda name: _StubCfg(author=None)
+    )
+
+    from witan import config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "load", lambda *a, **k: _StubCfg(author="Ambient"))
+
+    assert cli_migrate._merge_source_author("personal") == "Ambient"

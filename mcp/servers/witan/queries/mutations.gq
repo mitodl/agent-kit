@@ -598,9 +598,13 @@ query set_memory_author($slug: String, $author: String, $updated_at: DateTime) {
         where slug = $slug
 }
 
-query set_workflow_project_author($slug: String, $author: String) {
+query set_workflow_project_author(
+    $slug: String,
+    $author: String,
+    $updated_at: DateTime
+) {
     update WorkflowProject
-        set { author: $author }
+        set { author: $author, updated_at: $updated_at }
         where slug = $slug
 }
 
