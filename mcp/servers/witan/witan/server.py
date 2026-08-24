@@ -5415,6 +5415,7 @@ def task_update(
     priority: TaskPriority | None = None,
     repo: str | None = None,
     assignee: str | None = None,
+    session_id: str | None = None,
     project_slug: str | None = None,
     parent: str | None = None,
     external_uri: str | None = None,
@@ -5447,6 +5448,15 @@ def task_update(
         exactly as ``task_close`` does. Prefer ``task_claim`` / ``task_close``
         for those two transitions — they carry the ownership checks this does
         not.
+
+        Setting ``in_progress`` with no ``assignee`` on a task that has none
+        recorded defaults it via ``_claim_holder`` — the same identity
+        ``task_claim`` would use — rather than leaving
+        ``(in_progress, claimed_at set, assignee null)`` reachable: that
+        combination is a live lease with nobody named on it, which
+        ``task_claim`` correctly refuses and correctly cannot say who holds.
+        A task that already has an assignee keeps it; this only fills a gap,
+        never reassigns.
     priority:
         ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering.
     repo:
@@ -5455,6 +5465,13 @@ def task_update(
     assignee:
         Holder identity to reassign the task to. Prefer ``task_claim`` to take a
         task for yourself — it checks nobody else holds it, which this does not.
+    session_id:
+        The calling agent session's id, used only to qualify the ``assignee``
+        this defaults when ``status="in_progress"`` leaves one to fill in —
+        see ``task_claim``'s ``session_id`` for why a deployed caller needs to
+        pass this explicitly (no shared environment to infer it from). Has no
+        effect when an explicit ``assignee`` is given, or when one already
+        exists on the task.
     project_slug:
         ``wp-`` slug of the WorkflowProject this task rolls up to.
     parent:
@@ -5504,6 +5521,19 @@ def task_update(
             # representation (see readiness.status_pickable's updated_at fallback
             # for stores/rows written before this existed).
             changes["claimed_at"] = now_iso()
+            # tk-task-update-can-still-manufacture-an-unnameable--9ba86a: a
+            # lease with no named holder is unrepresentable through this
+            # surface, not just discouraged. Only fills a GAP — a task that
+            # already has an assignee keeps it unless `assignee` was passed
+            # explicitly above, so a colleague marking a task in_progress to
+            # log status does not silently reassign it to themselves.
+            if assignee is None:
+                current_rows = client.read("read.gq", "get_task", {"slug": slug})
+                current_assignee = (
+                    current_rows[0].get("assignee") if current_rows else None
+                )
+                if not current_assignee:
+                    changes["assignee"] = _claim_holder(None, session_id)
 
     # The parent is one edit in two encodings — the `parent_slug` field and the
     # ParentOf edge — so it is one commit, not three. It used to update the

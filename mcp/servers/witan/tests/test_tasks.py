@@ -412,6 +412,58 @@ def test_task_update_to_in_progress_stamps_claimed_at(server):
 
 
 @requires_omnigraph
+def test_task_update_to_in_progress_defaults_a_missing_assignee(server):
+    # tk-task-update-can-still-manufacture-an-unnameable--9ba86a: this used to
+    # stamp claimed_at without ever setting assignee, reaching exactly the
+    # state task_claim correctly refuses and correctly cannot name a holder
+    # for — a live lease with nobody on record.
+    from witan import server as srv
+
+    t = server.task_create(title="marked started, no assignee given", description="x")
+    server.task_update(t["slug"], status="in_progress")
+    node = server.task_get(t["slug"])
+    assert node["assignee"] == srv._current_author()
+
+
+@requires_omnigraph
+def test_task_update_to_in_progress_does_not_clobber_an_existing_assignee(server):
+    # Only fills a GAP. A colleague marking someone else's task in_progress to
+    # log status must not silently reassign it to themselves.
+    t = server.task_create(title="already held", description="x")
+    server.task_claim(t["slug"], assignee="original-holder")
+
+    server.task_update(t["slug"], status="in_progress")
+
+    assert server.task_get(t["slug"])["assignee"] == "original-holder"
+
+
+@requires_omnigraph
+def test_task_update_to_in_progress_respects_an_explicit_assignee(server):
+    t = server.task_create(title="explicit assignee", description="x")
+    server.task_update(t["slug"], status="in_progress", assignee="explicit-holder")
+    assert server.task_get(t["slug"])["assignee"] == "explicit-holder"
+
+
+@requires_omnigraph
+def test_task_update_defaulted_assignee_is_qualified_by_session_id(server):
+    # Same qualification task_claim applies — see
+    # test_caller_supplied_session_id_beats_the_server_environment — so a
+    # deployed caller marking its own work in_progress via task_update,
+    # without a session in the server's own environment to fall back to,
+    # still gets a holder two of its own parallel sessions cannot collide on.
+    from witan import server as srv
+
+    t = server.task_create(title="deployed caller", description="x")
+    server.task_update(
+        t["slug"],
+        status="in_progress",
+        session_id="cccccccc-9999-0000-1111-222222222222",
+    )
+    node = server.task_get(t["slug"])
+    assert node["assignee"] == f"{srv._current_author()}#cccccccc"
+
+
+@requires_omnigraph
 def test_unleased_recent_in_progress_is_not_ready_or_claimable(server):
     """A task moved to in_progress with no assignee on record (e.g. a legacy row
     written before task_update stamped claimed_at) must still read as held while
