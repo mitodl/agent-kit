@@ -46,6 +46,12 @@ class LargePagination(DefaultPagination):
 `max_limit` is not optional. Without it, `?limit=100000` defeats the pagination
 you just configured.
 
+That `get_count()` assumes the view hands pagination a model queryset. `.only()`
+raises `TypeError: Cannot call only() after .values() or .values_list()`, so a
+view whose `get_queryset()` returns a values queryset needs
+[a `get_count()` override](#only-vs-values-when-the-queryset-has-annotations)
+instead - it is a hard failure on every list request, not a slow path.
+
 Register that class as the framework default in `settings.py`, so a new viewset
 arrives paginated without opting in:
 
@@ -178,8 +184,14 @@ needed and can often be served from indexes alone.
 annotations out of the count subquery, and an annotation left in there is
 evaluated once per row counted. `.values()` does strip them.
 
-If the queryset a view builds carries annotations, subclass and swap `.only()`
-for `.values()` - that is why mit-learn's real `SummaryPagination` exists:
+`.only()` also can't be called at all on a queryset that has already been through
+`.values()` or `.values_list()` - Django raises
+`TypeError: Cannot call only() after .values() or .values_list()`. `.values()`
+chains onto a values queryset fine, so the same override covers both cases.
+
+Subclass and swap `.only()` for `.values()` when the queryset a view builds
+carries annotations, **or** when it is already a values queryset - that is why
+mit-learn's real `SummaryPagination` exists:
 
 ```python
 class SummaryPagination(LargePagination):
@@ -189,6 +201,13 @@ class SummaryPagination(LargePagination):
         """Count distinct pks; .values() drops the annotation, .only() would not"""
         return queryset.values(*self.count_fields).distinct().count()
 ```
+
+Note the `.distinct()`. `.values()` does carry over a `.distinct()` the view
+already applied, but restating it keeps the override correct for querysets that
+didn't - and narrowing the selected columns changes what counts as a duplicate
+either way, so see
+[widening `count_fields`](#widen-count_fields-when-distinct-is-doing-real-work)
+for when narrowing to `pk` changes the answer.
 
 ## Widen `count_fields` when DISTINCT is doing real work
 

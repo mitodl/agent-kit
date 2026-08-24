@@ -6,8 +6,11 @@ and the plan out of Django.
 ## How many joins is too many?
 
 - Three or four to-one joins are ok (`ForeignKey` or `OneToOneField`).
-- **Eight is the absolute limit** where you split the query instead of widening it.
-- Performance above 8 joins will both degrade rapidly and be unpredictable.
+- **Eight is a review threshold, not a hard ceiling.** It is where Postgres's
+  default planner settings change behavior, so it is where you stop reasoning by
+  join count and start reading `EXPLAIN` on production-scale data.
+- Past it, cost tends to grow less predictably rather than smoothly, which is the
+  real argument for splitting the query instead of widening it.
 
 ## Two ways an extra join hurts
 
@@ -33,11 +36,21 @@ That last row is the shape of the
 [MIT Learn outage](https://engineering.ol.mit.edu/runbooks_post_mortems/20260324_mitlearn_outage/) -
 in memory at RC scale, on disk at production cardinality.
 
-Postgres also shifts behavior at fixed relation counts: past 8
-(`join_collapse_limit`) the planner stops reordering joins and runs them roughly
-as written, so nine joins can plan worse than eight for reasons unrelated to your
-data; past 12 (`geqo_threshold`) planning becomes a genetic search and the plan
-can vary between runs.
+Postgres also shifts planning behavior as the relation count grows. Both
+thresholds below are `postgresql.conf` settings - check the effective values on
+the database you actually run against (`SHOW join_collapse_limit;`) rather than
+assuming the defaults:
+
+| Setting | Default | What changes |
+| ------- | ------- | ------------ |
+| `join_collapse_limit` | 8 | The planner flattens explicit `JOIN` constructs into the FROM list only while that list would stay within the limit. Once it stops flattening, those joins are planned in the order written instead of being considered for reordering - so nine joins can plan worse than eight for reasons unrelated to your data. It does not stop reordering *within* what was already collapsed. |
+| `from_collapse_limit` | 8 | The same, for pulling subqueries up into the parent FROM list. |
+| `geqo_threshold` | 12 | At this many FROM items **or more**, planning switches from exhaustive search to a genetic algorithm, which is heuristic - the chosen plan can differ between runs of the same query. |
+
+These count the relations in the planner's FROM list, which is not the same as
+the number of `JOIN` keywords in the SQL Django emits: views and subqueries
+contribute their own relations. `EXPLAIN` is the only reliable way to see which
+side of a threshold you landed on.
 
 ## Evaluating more joins
 

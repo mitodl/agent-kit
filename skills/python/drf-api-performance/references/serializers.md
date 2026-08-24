@@ -76,10 +76,30 @@ class EnrollmentSerializer(BaseSerializer):
     ]
 ```
 
-This ensures the serializer can't be used without that prefetch having been done -
-otherwise it raises a `RequiredPrefetchMissingError` naming the prefetch that
-wasn't requested. A "prefetch" in this situation is anything that should be
-`prefetch()`, `prefetch_related()`, or `select_related()`.
+A "prefetch" in this situation is anything that should be `prefetch()`,
+`prefetch_related()`, or `select_related()`.
+
+### It is a development guardrail, not a production guarantee
+
+`required_prefetches` is checked in `to_representation()`, but what happens on a
+miss depends on where the code is running:
+
+| Environment | Behavior on a missing prefetch |
+| ----------- | ------------------------------ |
+| `DEBUG=True`, or running under pytest (`PYTEST_CURRENT_TEST` is set) | Raises `RequiredPrefetchMissingError` naming the prefetch |
+| Production (`DEBUG=False`, not under pytest) | Logs `RequiredPrefetchMissing: serializer=... prefetch=... model=...` at ERROR, then serializes anyway |
+
+That fallback is deliberate - a missing prefetch shouldn't turn a slow-but-correct
+response into a 500 - but it means **the lazy N+1 still happens in production**.
+So:
+
+- Don't reason about a serializer as if the exception will stop a bad deploy. It
+  fires in development and CI, where you are the one who sees it.
+- Keep the queryset assembly correct on its own terms, and pin it with
+  [`django_assert_num_queries`](testing-and-lint.md). The declaration documents
+  and tests the contract; the test is what enforces it.
+- Grep production logs for `RequiredPrefetchMissing` when an endpoint is
+  mysteriously slow. A miss that never hits a test path shows up only there.
 
 > **The escape hatch is not for API code.** Tests and async code such as celery
 > tasks can opt out by passing `{"skip_prefetch_checks": THIS_IS_NOT_AN_API}`. As

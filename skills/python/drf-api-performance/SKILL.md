@@ -30,12 +30,13 @@ queryset.
   model has no direct relationship to.
 - Use `select_related()`, not `prefetch_related()`, when the queryset **already
   filters or orders on that table** - the join is happening either way.
-- Three or four to-one joins are fine; **eight is the limit** where you split the
-  query instead of widening it.
+- Three or four to-one joins are fine; **treat eight as the review threshold**
+  where you check `EXPLAIN` and split the query instead of widening it further.
 - **Never query inside a serializer** - the body runs once per object, so a query
   there is multiplied by the page size. The view's queryset assembles the data.
-- Declare `required_prefetches` on every serializer so a missing prefetch fails
-  loudly instead of silently issuing one query per row.
+- Declare `required_prefetches` on every serializer. It fails loudly under
+  `DEBUG` and pytest; **in production it only logs**, so treat it as a
+  development guardrail and not a reason to skip the prefetch.
 - Back a prefetch with a **same-named `cached_property`** so non-API callers get
   the same answer without a second implementation.
 - Test list APIs with **5-10 records at each level**, or the N+1 checks won't fire.
@@ -47,10 +48,10 @@ queryset.
 | Read this | For |
 | --------- | --- |
 | [response-shape.md](references/response-shape.md) | The two-level nesting rule, worked normalization example, the extra-round-trip trade-off |
-| [pagination.md](references/pagination.md) | `DefaultPagination` in a shared module, `DEFAULT_PAGINATION_CLASS`, the three legitimate per-view overrides, class comparison, why the count query gets expensive, `.only()` vs `.values()`, widening `count_fields` |
+| [pagination.md](references/pagination.md) | `DefaultPagination` in a shared module, `DEFAULT_PAGINATION_CLASS`, the three legitimate per-view overrides, class comparison, why the count query gets expensive, `.only()` vs `.values()` (and when `.only()` raises), widening `count_fields` |
 | [prefetching.md](references/prefetching.md) | Tool comparison, the already-joined exception, writing a `prefetch()` prefetcher and its footguns, composite keys, the `cached_property` shadowing pattern and the `hasattr` antipattern |
 | [joins-and-query-plans.md](references/joins-and-query-plans.md) | Width vs multiplication, when table size enters the plan, Postgres planner thresholds, reading `EXPLAIN (ANALYZE, BUFFERS)`, getting the SQL out of Django |
-| [serializers.md](references/serializers.md) | The `SerializerMethodField` N+1, the full "move it to the queryset" table, `BaseSerializer` and `required_prefetches` |
+| [serializers.md](references/serializers.md) | The `SerializerMethodField` N+1, the full "move it to the queryset" table, `BaseSerializer` and `required_prefetches`, and why it only raises outside production |
 | [testing-and-lint.md](references/testing-and-lint.md) | django-zeal setup and scoped exemptions, `django_assert_num_queries` vs `django_assert_max_num_queries`, drf-lint's ORM001/ORM002 and its baseline |
 
 ## Resources
