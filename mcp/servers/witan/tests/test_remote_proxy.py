@@ -1008,3 +1008,135 @@ def test_every_branch_tool_is_classified(server):
         f"filled in client-side) or something the caller states outright (add to "
         f"_BRANCH_IS_EXPLICIT). No longer registered: {classified - declared}"
     )
+
+
+@requires_omnigraph
+def test_remote_merge_reports_divergence_across_the_mcp_tier(proxy, server, tmp_path):
+    """Divergence has to survive the transport, not just the in-process path.
+
+    The watermark crosses as a tool parameter and the mark comes back the same
+    way, so this also pins that a dict parameter round-trips through the MCP
+    binding — a merge that silently dropped it would report nothing and look
+    exactly like a clean merge.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    from .test_migrate import _init_store, _insert_memory
+
+    slug = "mem-remote-diverged-7c7c7c"
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "diverge.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source, slug=slug, content="agreed", updated_at="2026-06-01T00:00:00Z"
+    )
+
+    first = proxy.merge_store(source.graph_uri)
+    assert first["diverged"] == 0
+    watermark = first["watermark"]
+    assert watermark["source_ts"] and watermark["target_ts"]
+
+    _insert_memory(
+        source, slug=slug, content="edited locally", updated_at="2026-06-02T00:00:00Z"
+    )
+    _insert_memory(
+        srv.client,
+        slug=slug,
+        content="edited in the deployment",
+        updated_at="2026-06-03T00:00:00Z",
+    )
+
+    told = proxy.merge_store(source.graph_uri, dry_run=True, since=watermark)
+
+    assert told["diverged"] == 1
+    assert [d["slug"] for d in told["decisions"] if d.get("diverged")] == [slug]
+
+
+def test_the_watermark_is_carried_between_batches_and_since_is_not(
+    proxy, tmp_path, monkeypatch
+):
+    """Two marks that look alike and must not be confused.
+
+    `since` is the LAST merge's mark and is the same on every batch of this one.
+    `watermark` is THIS merge's running mark and has to be threaded call to
+    call — the source is split across batches, so the value the caller finally
+    records comes from the last one and must have accumulated the rest.
+    """
+    from witan.remote import proxy as proxy_mod
+
+    export = tmp_path / "handover.jsonl"
+    export.write_text(
+        '{"type": "Memory", "data": {"slug": "mem-one", "updated_at": 1}}\n'
+        '{"type": "Memory", "data": {"slug": "mem-two", "updated_at": 2}}\n'
+    )
+
+    seen: list[tuple] = []
+
+    def _one_row_per_batch(records, max_bytes=None, *args, **kwargs):
+        return [[row] for row in records]
+
+    def _fake_store_merge(*, rows, dry_run, claim_from_author, since, watermark):
+        seen.append((since, watermark))
+        return {
+            "decisions": [],
+            "added": len(rows),
+            "updated": 0,
+            "kept_target": 0,
+            "diverged": 0,
+            "rows_loaded": len(rows),
+            "watermark": {"source_ts": len(seen), "target_ts": len(seen)},
+        }
+
+    monkeypatch.setattr(proxy_mod, "chunk_records", _one_row_per_batch)
+    monkeypatch.setattr(proxy, "store_merge", _fake_store_merge)
+    result = proxy.merge_store(
+        str(export), since={"source_ts": "mark", "target_ts": "mark"}
+    )
+
+    assert len(seen) == 2
+    assert [s for s, _ in seen] == [{"source_ts": "mark", "target_ts": "mark"}] * 2
+    assert [w for _, w in seen] == [None, {"source_ts": 1, "target_ts": 1}]
+    assert result["watermark"] == {"source_ts": 2, "target_ts": 2}
+
+
+def test_a_deployment_that_reports_no_watermark_yields_none(
+    proxy, tmp_path, monkeypatch
+):
+    """Keeping the last batch's mark would describe a fraction of the merge as
+    the whole of it, and the next run would compare against it and see nothing.
+    None is the honest answer — the CLI says so and asks for a hand diff."""
+    from witan.remote import proxy as proxy_mod
+
+    export = tmp_path / "handover.jsonl"
+    export.write_text(
+        '{"type": "Memory", "data": {"slug": "mem-one", "updated_at": 1}}\n'
+        '{"type": "Memory", "data": {"slug": "mem-two", "updated_at": 2}}\n'
+    )
+
+    calls: list[int] = []
+
+    def _one_row_per_batch(records, max_bytes=None, *args, **kwargs):
+        return [[row] for row in records]
+
+    def _fake_store_merge(*, rows, dry_run, claim_from_author, since, watermark):
+        calls.append(1)
+        result = {
+            "decisions": [],
+            "added": 1,
+            "updated": 0,
+            "kept_target": 0,
+            "diverged": 0,
+            "rows_loaded": 1,
+        }
+        # Only the first batch answers; an older server answers on neither.
+        if len(calls) == 1:
+            result["watermark"] = {"source_ts": 1, "target_ts": 1}
+        return result
+
+    monkeypatch.setattr(proxy_mod, "chunk_records", _one_row_per_batch)
+    monkeypatch.setattr(proxy, "store_merge", _fake_store_merge)
+    result = proxy.merge_store(str(export))
+
+    assert result["watermark"] is None

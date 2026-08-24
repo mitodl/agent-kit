@@ -1766,6 +1766,7 @@ def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
 def _reconcile_nodes(
     source_nodes: dict[tuple[str, str], dict],
     target_nodes: dict[tuple[str, str], dict],
+    since: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Newest-record-wins reconciliation: ``(decisions, rows to write)``.
 
@@ -1774,7 +1775,18 @@ def _reconcile_nodes(
     (``store_merge``, where the source rows arrive over the wire and the target
     is the deployed graph). They must not drift: a row's fate should not depend
     on which transport carried it.
+
+    ``since`` is the previous merge's watermark for this pair of stores
+    (``{"source_ts", "target_ts"}``, see :mod:`witan.merge_watermark`). Given
+    one, a decision that resolved a node BOTH sides have written since then is
+    additionally marked ``diverged``. That does not change who wins — the rule is
+    still newest-record-wins — it changes whether the loser's edit disappears
+    quietly. Without a watermark nothing is marked: record-level timestamps alone
+    cannot tell a divergence from a target that is merely ahead, and guessing
+    would put every ordinary node in the report.
     """
+    since_src = _parse_ts((since or {}).get("source_ts"))
+    since_dst = _parse_ts((since or {}).get("target_ts"))
     decisions: list[dict] = []
     winners: list[dict] = []
     for (row_type, slug), row in source_nodes.items():
@@ -1788,18 +1800,105 @@ def _reconcile_nodes(
         src_dt = _parse_ts(src_ts)
         dst_dt = _parse_ts(dst_ts)
         won = src_dt is not None and (dst_dt is None or src_dt > dst_dt)
-        decisions.append(
-            {
-                "type": row_type,
-                "slug": slug,
-                "decision": "updated" if won else "kept-target",
-                "source_ts": src_ts,
-                "target_ts": dst_ts,
-            }
-        )
+        decision = {
+            "type": row_type,
+            "slug": slug,
+            "decision": "updated" if won else "kept-target",
+            "source_ts": src_ts,
+            "target_ts": dst_ts,
+        }
+        # Each side against its OWN mark. Comparing `src_dt > since_dst` would
+        # be comparing the source machine's clock to the target's, and any skew
+        # between them would read as a divergence.
+        if (
+            since_src is not None
+            and since_dst is not None
+            and src_dt is not None
+            and dst_dt is not None
+            and src_dt > since_src
+            and dst_dt > since_dst
+        ):
+            decision["diverged"] = True
+            # Rendered here, where the parser already lives, because these are
+            # the only timestamps in the merge report a human is asked to
+            # COMPARE — and omnigraph >= 0.9 exports them as epoch millis, so
+            # `source_ts`/`target_ts` reach the CLI as two 13-digit integers.
+            # Re-parsing them there to print would mean a second `_parse_ts`.
+            decision["source_at"] = src_dt.isoformat() + "Z"
+            decision["target_at"] = dst_dt.isoformat() + "Z"
+        decisions.append(decision)
         if won:
             winners.append(row)
     return decisions, winners
+
+
+def _newest(values: Iterable[str | int | float | None]) -> str | int | float | None:
+    """The latest of some exported timestamps, returned as exported.
+
+    Parsed to compare — an export may be either representation, see
+    :func:`_parse_ts` — but returned raw, so a watermark round-trips through JSON
+    as the same value the store reported it as."""
+    best_raw: str | int | float | None = None
+    best_dt: datetime | None = None
+    for raw in values:
+        parsed = _parse_ts(raw)
+        if parsed is not None and (best_dt is None or parsed > best_dt):
+            best_dt, best_raw = parsed, raw
+    return best_raw
+
+
+def _row_timestamps(rows: Iterable[dict]) -> Iterator[str | int | float | None]:
+    """Each export node record's comparison timestamp, the same field
+    reconciliation compares on."""
+    for row in rows:
+        yield _reconcile_timestamp(row.get("type", ""), row.get("data") or {})
+
+
+def _next_watermark(
+    carry: dict | None,
+    source_nodes: dict[tuple[str, str], dict],
+    target_nodes: dict[tuple[str, str], dict],
+    winners: list[dict],
+) -> dict:
+    """The watermark to record once this merge's winners have landed.
+
+    ``source_ts`` is simply the newest row in the source. ``target_ts`` has to
+    account for the load as well as the export: the winners are about to be
+    written into the target carrying their own (source) timestamps, so a mark
+    taken from the pre-merge target alone would sit *below* rows this very merge
+    put there — and on the next run every one of them would read as "the target
+    changed since we last agreed".
+
+    ★ THAT IS THE ONE PLACE THE PER-SIDE CLOCK RULE IS BENT, AND IT COSTS
+    SOMETHING. Folding winner timestamps in mixes the SOURCE's clock into the
+    TARGET's threshold. With a source clock running ahead, ``target_ts`` lands
+    in the target's future, and a genuine target edit made inside that window
+    stays below the mark — so a real divergence goes unreported (measured: a
+    1h-ahead source hides a target edit made 30 minutes after the merge, where
+    the same case with synchronised clocks reports correctly). The blind window
+    is exactly the skew, and both ends are normally NTP-synced.
+    The alternative is worse, not better: a pure ``target_ts`` reports a
+    divergence on every row the merge itself loaded as soon as the source
+    touches it again, which is the ordinary repeat-merge path rather than a
+    skew corner. Removing the trade entirely needs per-record state — a
+    fingerprint or a target-generated revision — not a different maximum.
+
+    ``carry`` folds in the running watermark from an earlier batch of the same
+    merge. That is how the batched MCP path accumulates one across calls without
+    the client having to compare timestamps itself.
+    """
+    return {
+        "source_ts": _newest(
+            [*_row_timestamps(source_nodes.values()), (carry or {}).get("source_ts")]
+        ),
+        "target_ts": _newest(
+            [
+                *_row_timestamps(target_nodes.values()),
+                *_row_timestamps(winners),
+                (carry or {}).get("target_ts"),
+            ]
+        ),
+    }
 
 
 def _decision_counts(decisions: list[dict]) -> dict:
@@ -1807,6 +1906,10 @@ def _decision_counts(decisions: list[dict]) -> dict:
         "added": sum(1 for d in decisions if d["decision"] == "added"),
         "updated": sum(1 for d in decisions if d["decision"] == "updated"),
         "kept_target": sum(1 for d in decisions if d["decision"] == "kept-target"),
+        # Cuts ACROSS the three above rather than partitioning with them: a
+        # divergence is resolved as an update or a kept-target like any other
+        # collision, and what the count adds is that somebody's edit lost.
+        "diverged": sum(1 for d in decisions if d.get("diverged")),
     }
 
 
@@ -1900,6 +2003,7 @@ def merge_store(
     target: str | None = None,
     dry_run: bool = False,
     source_author: str | None = None,
+    since: dict | None = None,
 ) -> dict:
     """Merge another store's data into this store, newest-record-wins on slug
     collisions.
@@ -1952,10 +2056,18 @@ def merge_store(
         carry and the identity the writer has come from different namespaces.
         Merging between two local stores has no such split: both ends write
         ``cfg.author``, so there is nothing to reconcile.
+    since:
+        The previous merge's watermark for this pair of stores
+        (``{"source_ts", "target_ts"}``), from :mod:`witan.merge_watermark`.
+        Supplied, every collision both sides have written since then is marked
+        ``diverged`` — the losing edit is still discarded, but no longer
+        silently. Omitted, nothing is marked; see ``_reconcile_nodes``.
 
-    Returns counts (``added``/``updated``/``kept_target``) and the full
-    per-``(type, slug)`` decision list, plus (when not a dry run)
-    ``rows_loaded`` and the raw ``load`` output.
+    Returns counts (``added``/``updated``/``kept_target``/``diverged``) and the
+    full per-``(type, slug)`` decision list, plus (when not a dry run)
+    ``rows_loaded`` and the raw ``load`` output. ``watermark`` is the mark to
+    record for the next merge — the caller persists it, since only the caller
+    knows which two stores these were.
     """
     # `_acquire_store_lock`/`_ensure_graph` build filesystem `Path`s directly
     # from the URI and don't strip a URI scheme — same convention as the rest
@@ -2005,14 +2117,16 @@ def merge_store(
             source_nodes, source_edges = _parse_export(source_file)
             target_nodes, _ = _parse_export(target_file)
 
-            decisions, winners = _reconcile_nodes(source_nodes, target_nodes)
+            decisions, winners = _reconcile_nodes(source_nodes, target_nodes, since)
             counts = _decision_counts(decisions)
+            watermark = _next_watermark(None, source_nodes, target_nodes, winners)
 
             if dry_run:
                 return {
                     "dry_run": True,
                     "target": target,
                     "decisions": decisions,
+                    "watermark": watermark,
                     **counts,
                 }
 
@@ -2023,6 +2137,7 @@ def merge_store(
                     "target": target,
                     "decisions": decisions,
                     "rows_loaded": 0,
+                    "watermark": watermark,
                     **counts,
                 }
 
@@ -2057,6 +2172,7 @@ def merge_store(
         "decisions": decisions,
         "rows_loaded": len(to_load),
         "output": load_out.strip(),
+        "watermark": watermark,
         **counts,
     }
 
@@ -2091,7 +2207,11 @@ def _data_tier_outage_reads_as_retryable():
 
 @_tool
 def store_merge(
-    rows: list[dict], dry_run: bool = False, claim_from_author: str | None = None
+    rows: list[dict],
+    dry_run: bool = False,
+    claim_from_author: str | None = None,
+    since: dict | None = None,
+    watermark: dict | None = None,
 ) -> dict:
     """Merge a batch of exported rows into this deployment's graph, as you.
 
@@ -2137,6 +2257,19 @@ def store_merge(
         (#267). With it, the rows you migrate end up owned by the same identity
         that owns everything you write afterwards. See ``_claim_authorship``
         for why this matches rather than stamping unconditionally.
+    since:
+        The watermark recorded by the caller's *previous* merge into this graph
+        (``{"source_ts", "target_ts"}``). Supplied, a collision both sides have
+        written since then is marked ``diverged`` in the decisions — the merge
+        rule is unchanged, the losing edit is simply no longer discarded in
+        silence. Same value on every batch of one merge.
+    watermark:
+        The running watermark returned by the *previous batch of this same
+        merge*, folded into this batch's. The source is split across batches, so
+        no single batch sees its newest row; carrying the running value is what
+        lets the client end up with a mark covering the whole merge without
+        having to compare exported timestamps itself. ``None`` on the first
+        batch.
 
     **Batching is the caller's job, and the caller must send every node before
     any edge** (``witan_core.chunking.chunk_records`` does both). Batches commit
@@ -2146,14 +2279,16 @@ def store_merge(
     atomic, and a caller needing all-or-nothing has to arrange that itself.
 
     Returns this batch's per-row ``decisions`` plus ``added``/``updated``/
-    ``kept_target`` counts, and ``rows_loaded``. With ``dry_run`` the decisions
-    are computed and nothing is written.
+    ``kept_target``/``diverged`` counts, ``rows_loaded``, and the running
+    ``watermark`` to hand to the next batch. With ``dry_run`` the decisions are
+    computed and nothing is written.
     """
     if not rows:
         return {
             "decisions": [],
             "rows_loaded": 0,
             "dry_run": dry_run,
+            "watermark": watermark or {"source_ts": None, "target_ts": None},
             **_decision_counts([]),
         }
 
@@ -2178,8 +2313,9 @@ def store_merge(
             client.export_to(target_file, label="export (deployed graph)")
         target_nodes, _ = _parse_export(target_file)
 
-    decisions, winners = _reconcile_nodes(source_nodes, target_nodes)
+    decisions, winners = _reconcile_nodes(source_nodes, target_nodes, since)
     counts = _decision_counts(decisions)
+    next_watermark = _next_watermark(watermark, source_nodes, target_nodes, winners)
 
     # Intersected with the WINNERS, not reported straight off the rewrite. A
     # stamped row that loses reconciliation is discarded with its new author,
@@ -2197,6 +2333,7 @@ def store_merge(
             "decisions": decisions,
             "rows_loaded": 0,
             "authorship_claimed": claimed,
+            "watermark": next_watermark,
             **counts,
         }
 
@@ -2208,6 +2345,7 @@ def store_merge(
         "decisions": decisions,
         "rows_loaded": len(to_load),
         "authorship_claimed": claimed,
+        "watermark": next_watermark,
         **counts,
     }
 

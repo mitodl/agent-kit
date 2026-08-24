@@ -81,6 +81,11 @@ rather than in your environment. Read the decisions: `added` should be roughly
 the row count of your store, and `updated` should be small. A large `updated`
 on a first migration means slugs are colliding that shouldn't — stop there.
 
+This run has no watermark to compare against, so it cannot tell you whether any
+collision is a divergence — and being a dry run it records none either, so
+step 4 is equally blind. The first run that can report divergence is a merge
+*after* step 4 has succeeded. See [Divergence](#divergence).
+
 **4. Run it:**
 
 ```bash
@@ -224,7 +229,7 @@ witan migrate merge [SOURCE] [--from <name>] [--to <name>] [--target <uri>] [--d
 | `--from <name>` | A `[targets.<name>]` block's `server`, in place of `SOURCE`. A target with only a `remote_url` is refused — nothing local to export. |
 | `--to <name>` | A `[targets.<name>]` block as the destination: through its deployment if it has a `remote_url`, into its `server` store if not. |
 | `--target <uri>` | A destination store URI. Defaults to your configured store. Mutually exclusive with `--to`; `.jsonl` is refused (a target is a graph, not a snapshot). |
-| `--dry-run` | Print the per-slug decisions, write nothing. |
+| `--dry-run` | Print the per-slug decisions, write nothing. Reports divergence; records no watermark. |
 
 Notes:
 
@@ -242,6 +247,55 @@ Notes:
   copy. Safe on a schedule.
 - Reconciliation covers nodes only. Edge rows (`Tagged`, `ParentOf`, …) have no
   slug and pass through unreconciled, same as raw `--mode merge`.
+
+## Divergence
+
+Newest-record-wins is a whole-**record** decision, and several witan fields are
+append-only logs rather than values — `WorkflowProject.description`, which
+accretes status blocks, most of all. When both stores have written the same node
+since they last agreed, keeping the newer record does not resolve a stale value;
+it deletes the other side's text.
+
+Every merge therefore records a **watermark** for the pair of stores: the newest
+timestamp in the source, and the newest that will be in the target once this
+merge's winners land. The next merge uses it to name the nodes both sides have
+written since:
+
+```
+2 node(s) changed on BOTH sides since the last merge (2026-08-19T19:46:00Z).
+Newest-record-wins keeps one side and drops the other's edit …
+  WorkflowProject   wp-witan-multi-user-service-deployment-dcf6ee
+    source 2026-08-19T19:49:00Z  target 2026-08-19T22:06:00Z  -> kept target
+```
+
+Nothing is merged for you. Reconcile the named slugs by hand — read both sides,
+write the combined value to whichever store you want to win, and re-run — then
+the merge resolves them on its own rule.
+
+- **The first merge of a pair has no watermark and says so.** That is "cannot
+  tell", not "nothing diverged"; until one is recorded, diff the projects you
+  care about yourself.
+- `--dry-run` reports divergence but records no watermark: the mark describes a
+  target with this merge's winners in it, and a dry run wrote none of them.
+- Marks live in `~/.config/witan/merge-watermarks.json`
+  (`$WITAN_MERGE_WATERMARKS`), beside the token cache, keyed by source store and
+  destination. Per-machine, and losing the file costs one merge's reporting.
+  Local paths are keyed by their resolved absolute path, so `graph.omni`,
+  `../graph.omni` and `file:///…/graph.omni` share one mark rather than three.
+- **A merge that fails part-way leaves no mark.** The standing one is retired
+  before the first batch commits and a fresh one installed only on success,
+  because batches commit independently: rows from a half-finished merge are
+  already in the target, and a mark that predates them would read those rows as
+  an independent target edit. The next run says it cannot tell, which is true.
+  Re-run the merge to get back to a marked state.
+- Each side is compared against its own mark, which keeps the source's clock
+  out of the target's threshold and vice versa — a laptop and a cluster do not
+  agree closely enough for a cross-clock comparison. One documented exception:
+  the rows a merge loads carry their source timestamps into the target, so the
+  target mark is raised to cover them (otherwise every row a merge added would
+  come back as a target edit). Under a source clock running ahead, that leaves
+  a blind window the width of the skew in which a genuine target edit is not
+  reported.
 
 ## Fallback: in-cluster merge (operator)
 

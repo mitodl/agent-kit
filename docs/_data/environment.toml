@@ -105,6 +105,10 @@ desc = "How long before nominal expiry a cached token is treated as already expi
 default = "~/.config/witan/tokens.json"
 desc = "Where both CLIs cache OIDC tokens. Shared on purpose, next to the shared config file."
 
+[section.vars.WITAN_MERGE_WATERMARKS]
+default = "~/.config/witan/merge-watermarks.json"
+desc = "Where `witan migrate merge` records what each pair of stores looked like when they last agreed, so the next merge can name the nodes both sides have written since. Beside the token cache, and per-machine — losing it costs one merge's divergence report."
+
 [section.vars.WITAN_REMOTE_CALL_BUDGET_SECONDS]
 default = "0"
 desc = "Deadline for a single remote graph call, used to decide whether to honour a server's retry hint or give up. `0` means no client-side deadline — obey the server's hints."

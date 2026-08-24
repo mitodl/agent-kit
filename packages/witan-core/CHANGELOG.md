@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.32.1] - 2026-08-24
+
+### Changed
+
+- **Refreshed the pinned omnigraph `edge` digests** to the 2026-08-24T12:50Z
+  build (upstream `972f1666c5`), from the 2026-08-21T00:11Z one
+  (`62a9c3fe6b`). `edge` is force-updated on every push to upstream main, so a
+  digest here goes stale on upstream's schedule rather than ours; this one had,
+  and the checksum check was refusing the download. That is the check working,
+  but it fails every fresh `witan setup` and every CI run until refreshed. All
+  three tiers move together (installer, `docker/omnigraph-server.Dockerfile`,
+  `docker/witan.Dockerfile`).
+
+  Still 0.10.0, still internal-schema 6 — read off the new binary, so this is
+  not a rebuild-every-graph event. Three upstream commits are in scope and only
+  one carries Rust (#522, change-feed candidate scans); the change feed is not
+  a surface witan uses. The one part of it that does touch witan's write path
+  is an extra `omnigraph.no_by_source_delete=v1` transaction property stamped
+  on every keyed write, which upstream documents as read-advisory and only its
+  own pruning path reads. No error-prose or vocabulary rename, checked against
+  the artifact as well as against the diff.
+
 ## [0.32.0] - 2026-08-21
 
 ### Fixed
