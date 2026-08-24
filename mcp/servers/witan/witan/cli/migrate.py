@@ -241,10 +241,19 @@ def _report_divergence(result: dict, since: dict | None, dry_run: bool) -> None:
         # adds has nothing a watermark could have told us about, and the note
         # would just be noise on the run that needs it least.
         if result["updated"] or result["kept_target"]:
+            # A dry run records nothing, so the NEXT run is blind too — the
+            # earliest run that can report is the one after the next real
+            # merge. Promising otherwise here would have someone read the
+            # following merge's silence as "nothing diverged".
+            next_step = (
+                "A dry run records none, so the real merge after this one is "
+                "blind as well; the one after that can report."
+                if dry_run
+                else "Recorded after this merge; the next one will report divergence."
+            )
             console.print(
                 "[dim]No merge watermark for this pair yet, so nothing can be "
-                "said about the collisions above. Recorded after this merge; "
-                "the next one will report divergence.[/dim]"
+                f"said about the collisions above. {next_step}[/dim]"
             )
         return
     diverged = [d for d in result["decisions"] if d.get("diverged")]
@@ -292,6 +301,10 @@ def _merge(
     s, target = _merge_destination(to_target, target)
     key = _destination_key(s, target)
     since = merge_watermark.read(source, key)
+    # Held in memory for THIS run's report, then retired from the file before
+    # the first batch commits — see `_invalidate_watermark`.
+    if not dry_run:
+        _invalidate_watermark(source, key)
     try:
         result = s.merge_store(
             source,
@@ -333,20 +346,47 @@ def _merge(
     _record_watermark(source, key, result)
 
 
+def _invalidate_watermark(source: str, key: str) -> None:
+    """Drop the standing mark before a real merge writes anything.
+
+    A merge is not atomic — its batches commit independently — so a run that
+    dies part-way leaves rows in the target that the standing mark predates.
+    Left in place, the next run reads exactly those rows as an independent
+    target edit and reports divergence on rows nothing but the failed merge
+    ever wrote (reproduced against `_reconcile_nodes` before this was added).
+
+    So the old mark is retired first and the new one installed only on success.
+    A crashed merge then leaves no mark, and the next run says it cannot tell —
+    which is true of a graph whose last write was half a merge.
+    """
+    merge_watermark.forget(source, key)
+
+
 def _record_watermark(source: str, key: str, result: dict) -> None:
-    """Store the mark this merge just established, or say why the next merge
-    will be blind without it."""
+    """Store the mark this merge just established, and report honestly when it
+    could not.
+
+    The old mark is already gone by now (`_invalidate_watermark`), so every path
+    out of here that does not write one leaves the pair unmarked. That is the
+    safe direction — the next run says it cannot tell rather than measuring
+    against a mark that predates rows already in the target — but it is never
+    silent unless there was genuinely nothing to mark.
+    """
     watermark = result.get("watermark")
-    if not watermark:
-        # A merge that carried no rows at all reports no mark either, and there
-        # is nothing wrong with that — warning about it would send someone
-        # looking for a deployment problem that isn't there.
-        if not result["decisions"] and not result["rows_loaded"]:
-            return
+    # A merge that carried no rows at all reports no mark either, and there is
+    # nothing wrong with that — warning would send someone looking for a
+    # deployment problem that is not there.
+    if not result["decisions"] and not result["rows_loaded"]:
+        return
+    if not merge_watermark.is_usable(watermark):
+        # Either an older deployment that returns no mark, or one missing a
+        # side. Both are unusable, and both leave the next merge blind, so they
+        # get one message rather than a distinction the reader cannot act on.
         console.print(
-            "[yellow]This deployment reported no merge watermark, so the next "
-            "merge cannot report divergence. Upgrade it, or diff the projects "
-            "you care about by hand before merging again.[/yellow]"
+            "[yellow]No usable merge watermark came back, so the next merge "
+            "cannot report divergence. Check the deployment is on witan-council "
+            "0.29.0 or later; until then, diff the projects you care about by "
+            "hand before merging again.[/yellow]"
         )
         return
     if not merge_watermark.write(source, key, watermark):

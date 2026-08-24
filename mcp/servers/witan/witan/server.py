@@ -1869,6 +1869,20 @@ def _next_watermark(
     put there — and on the next run every one of them would read as "the target
     changed since we last agreed".
 
+    ★ THAT IS THE ONE PLACE THE PER-SIDE CLOCK RULE IS BENT, AND IT COSTS
+    SOMETHING. Folding winner timestamps in mixes the SOURCE's clock into the
+    TARGET's threshold. With a source clock running ahead, ``target_ts`` lands
+    in the target's future, and a genuine target edit made inside that window
+    stays below the mark — so a real divergence goes unreported (measured: a
+    1h-ahead source hides a target edit made 30 minutes after the merge, where
+    the same case with synchronised clocks reports correctly). The blind window
+    is exactly the skew, and both ends are normally NTP-synced.
+    The alternative is worse, not better: a pure ``target_ts`` reports a
+    divergence on every row the merge itself loaded as soon as the source
+    touches it again, which is the ordinary repeat-merge path rather than a
+    skew corner. Removing the trade entirely needs per-record state — a
+    fingerprint or a target-generated revision — not a different maximum.
+
     ``carry`` folds in the running watermark from an earlier batch of the same
     merge. That is how the batched MCP path accumulates one across calls without
     the client having to compare timestamps itself.

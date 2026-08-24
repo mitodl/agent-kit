@@ -2228,6 +2228,48 @@ def test_the_watermark_covers_the_rows_the_merge_itself_loads():
     assert "diverged" not in after[0]
 
 
+def test_a_source_clock_ahead_opens_a_blind_window_on_the_target():
+    """The one place the per-side clock rule is bent, pinned with its cost.
+
+    Winner timestamps are folded into the target mark so a merge's own rows do
+    not read as target edits next run. That mixes the source's clock into the
+    target's threshold, so a source running ahead pushes the mark into the
+    target's future and hides a genuine target edit made inside the skew.
+
+    Asserting the CURRENT behaviour, not the desired one. If this starts
+    reporting True, the trade has been removed (per-record baselines) and the
+    docstring in `_next_watermark` should go with it.
+    """
+    from witan import server as srv
+
+    # Source machine is an hour ahead of the target's clock.
+    source = _nodes(_node("Memory", "mem-a", "2026-06-01T12:00:00Z"))
+    target = _nodes(_node("Memory", "mem-a", "2026-06-01T10:00:00Z"))
+    _, winners = srv._reconcile_nodes(source, target)
+    watermark = srv._next_watermark(None, source, target, winners)
+    assert watermark["target_ts"] == "2026-06-01T12:00:00Z"  # source's clock
+
+    # A real, independent target edit at 11:30 target-time — after the merge.
+    skewed, _ = srv._reconcile_nodes(
+        _nodes(_node("Memory", "mem-a", "2026-06-01T12:30:00Z")),
+        _nodes(_node("Memory", "mem-a", "2026-06-01T11:30:00Z")),
+        watermark,
+    )
+    assert "diverged" not in skewed[0], "the blind window closed — update the docs"
+
+    # Same shape with the clocks agreeing reports correctly, which is what
+    # makes the miss above attributable to skew rather than to the rule.
+    source = _nodes(_node("Memory", "mem-b", "2026-06-01T10:00:00Z"))
+    target = _nodes(_node("Memory", "mem-b", "2026-06-01T09:00:00Z"))
+    _, winners = srv._reconcile_nodes(source, target)
+    synced, _ = srv._reconcile_nodes(
+        _nodes(_node("Memory", "mem-b", "2026-06-01T12:30:00Z")),
+        _nodes(_node("Memory", "mem-b", "2026-06-01T11:30:00Z")),
+        srv._next_watermark(None, source, target, winners),
+    )
+    assert synced[0]["diverged"] is True
+
+
 def test_the_watermark_accumulates_across_batches():
     """The MCP path splits the source, so no single batch sees its newest row.
 
@@ -2316,7 +2358,18 @@ class _FakeMergeProvider:
         self.since_seen.append(since)
         return {
             "target": self.remote_url,
-            "decisions": [],
+            # `kept_target: 1` with an empty decision list is a shape a real
+            # result cannot have — the counts are derived FROM the decisions —
+            # and faking it hid the "this merge carried nothing" early return.
+            "decisions": [
+                {
+                    "type": "Memory",
+                    "slug": "mem-collided",
+                    "decision": "kept-target",
+                    "source_ts": "2026-05-01T00:00:00Z",
+                    "target_ts": "2026-06-02T00:00:00Z",
+                }
+            ],
             "added": 0,
             "updated": 0,
             "kept_target": 1,
@@ -2390,6 +2443,151 @@ def test_the_watermark_key_matches_between_the_read_and_the_write():
     )
     assert cli_migrate._destination_key(_Module(), None) == "/configured/graph.omni"
     assert cli_migrate._destination_key(_Module(), "/explicit.omni") == "/explicit.omni"
+
+
+def test_one_store_spelled_several_ways_shares_one_mark(tmp_path, monkeypatch):
+    """A pair keyed by what the caller typed is keyed by the wrong thing.
+
+    `/tmp/g.omni`, `../tmp/g.omni` and `file:///tmp/g.omni` are one store; a
+    mark that misses across them measures the next merge against a graph that is
+    not the one being merged.
+    """
+    from witan import merge_watermark as mw
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+    store = tmp_path / "g.omni"
+    store.mkdir()
+
+    mw.write(str(store), "/target.omni", {"source_ts": 1, "target_ts": 2})
+
+    monkeypatch.chdir(tmp_path)
+    for spelling in (str(store), f"file://{store}", "g.omni", "./g.omni"):
+        entry = mw.read(spelling, "/target.omni")
+        assert entry is not None, f"{spelling!r} missed its own mark"
+        assert entry["source_ts"] == 1
+
+
+def test_a_relative_path_from_two_directories_is_two_stores(tmp_path, monkeypatch):
+    """The other half of the same bug: one key must not cover two stores.
+
+    `graph.omni` run from two different working directories names two different
+    graphs, and sharing a mark between them reports divergence against somebody
+    else's history."""
+    from witan import merge_watermark as mw
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "graph.omni").mkdir()
+
+    monkeypatch.chdir(tmp_path / "a")
+    mw.write("graph.omni", "/target.omni", {"source_ts": 1, "target_ts": 1})
+
+    monkeypatch.chdir(tmp_path / "b")
+    assert mw.read("graph.omni", "/target.omni") is None
+
+
+def test_a_watermark_missing_a_side_is_refused_and_reads_as_absent(
+    tmp_path, monkeypatch
+):
+    """The worst possible stored value: truthy, so it suppresses the "cannot
+    tell" notice, but unparseable on both sides, so it detects nothing. Silence
+    that reads as "nothing diverged" is the one outcome this feature exists to
+    prevent."""
+    from witan import merge_watermark as mw
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+
+    assert mw.is_usable({"source_ts": 1, "target_ts": 2})
+    assert not mw.is_usable({"source_ts": None, "target_ts": None})
+    assert not mw.is_usable({"source_ts": 1, "target_ts": None})
+    assert not mw.is_usable(None)
+
+    assert (
+        mw.write("/s.omni", "/t.omni", {"source_ts": None, "target_ts": None}) is False
+    )
+    assert mw.read("/s.omni", "/t.omni") is None
+
+
+def test_a_non_utf8_watermark_file_still_fails_soft(tmp_path, monkeypatch):
+    """`read_text` raises UnicodeDecodeError before `json.loads` is reached, and
+    that is a ValueError but not an OSError — so it escaped the narrower catch
+    and took down a merge from a module whose docstring promises to fail soft."""
+    from witan import merge_watermark as mw
+
+    marks = tmp_path / "marks.json"
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(marks))
+    marks.write_bytes(b'{"version": 1, "pairs": [\xff\xfe invalid utf-8 ]}')
+
+    assert mw.read("/s.omni", "/t.omni") is None
+    assert mw.write("/s.omni", "/t.omni", {"source_ts": 1, "target_ts": 1})
+    assert mw.read("/s.omni", "/t.omni") is not None
+
+
+def test_a_partial_merge_leaves_no_mark_rather_than_a_stale_one(tmp_path, monkeypatch):
+    """Batches commit independently, so a merge that dies part-way has already
+    put rows in the target. A mark predating those rows reads them as an
+    independent target edit and reports divergence on rows nothing but the
+    failed merge ever wrote."""
+    from witan import merge_watermark as mw
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+    mw.write("/s.omni", "/t.omni", {"source_ts": 1, "target_ts": 1})
+
+    class _Exploding:
+        remote_url = "/t.omni"
+
+        def merge_store(self, source, *, target, dry_run, source_author, since):
+            # Stands in for a merge that commits some batches and then dies.
+            raise RuntimeError("data tier went away mid-merge")
+
+    monkeypatch.setattr(
+        cli_migrate, "_merge_destination", lambda to, t: (_Exploding(), None)
+    )
+    monkeypatch.setattr(cli_migrate, "_merge_source_author", lambda f: "pytest")
+
+    with pytest.raises(SystemExit):
+        cli_migrate._merge("/s.omni", None, False)
+
+    assert mw.read("/s.omni", "/t.omni") is None
+
+
+def test_a_dry_run_keeps_the_standing_mark(tmp_path, monkeypatch):
+    """Retiring the mark is for runs that WRITE. A dry run commits nothing, so
+    the standing mark still describes the target accurately and throwing it away
+    would blind the next real merge for no reason."""
+    from witan import merge_watermark as mw
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+    mw.write("/s.omni", _FakeMergeProvider.remote_url, {"source_ts": 1, "target_ts": 1})
+
+    provider = _FakeMergeProvider()
+    monkeypatch.setattr(
+        cli_migrate, "_merge_destination", lambda to, t: (provider, None)
+    )
+    monkeypatch.setattr(cli_migrate, "_merge_source_author", lambda f: "pytest")
+
+    cli_migrate._merge("/s.omni", None, True)
+
+    assert mw.read("/s.omni", _FakeMergeProvider.remote_url) is not None
+
+
+def test_a_first_dry_run_does_not_promise_the_next_merge_can_report(capsys):
+    """A dry run records no mark, so the real merge after it is blind too. The
+    earliest run that can report is the one after that."""
+    from witan.cli import migrate as cli_migrate
+
+    result = {"decisions": [], "updated": 0, "kept_target": 3}
+
+    cli_migrate._report_divergence(result, None, dry_run=True)
+    dry = capsys.readouterr().out
+    assert "blind" in dry
+
+    cli_migrate._report_divergence(result, None, dry_run=False)
+    real = capsys.readouterr().out
+    assert "the next one will report" in real
 
 
 def test_divergence_report_names_the_slugs_and_which_side_was_kept(capsys):
@@ -2482,7 +2680,7 @@ def test_a_merge_that_moved_rows_but_got_no_mark_warns(tmp_path, monkeypatch, ca
 
     # A short fragment: the console hard-wraps to the terminal width, so a
     # longer phrase can arrive with a newline through the middle of it.
-    assert "reported no merge watermark" in capsys.readouterr().out
+    assert "No usable merge watermark" in capsys.readouterr().out
 
 
 @requires_omnigraph

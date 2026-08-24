@@ -71,9 +71,10 @@ rather than in your environment. Read the decisions: `added` should be roughly
 the row count of your store, and `updated` should be small. A large `updated`
 on a first migration means slugs are colliding that shouldn't — stop there.
 
-This first run has no watermark to compare against, so it cannot tell you
-whether any collision is a divergence; every run after it can. See
-[Divergence](#divergence).
+This run has no watermark to compare against, so it cannot tell you whether any
+collision is a divergence — and being a dry run it records none either, so
+step 4 is equally blind. The first run that can report divergence is a merge
+*after* step 4 has succeeded. See [Divergence](#divergence).
 
 **4. Run it:**
 
@@ -269,9 +270,22 @@ the merge resolves them on its own rule.
 - Marks live in `~/.config/witan/merge-watermarks.json`
   (`$WITAN_MERGE_WATERMARKS`), beside the token cache, keyed by source store and
   destination. Per-machine, and losing the file costs one merge's reporting.
-- The two sides are only ever compared against their own mark. A source is a
-  laptop's clock and a deployed target is a cluster's; comparing across them
-  would turn skew into invented divergences.
+  Local paths are keyed by their resolved absolute path, so `graph.omni`,
+  `../graph.omni` and `file:///…/graph.omni` share one mark rather than three.
+- **A merge that fails part-way leaves no mark.** The standing one is retired
+  before the first batch commits and a fresh one installed only on success,
+  because batches commit independently: rows from a half-finished merge are
+  already in the target, and a mark that predates them would read those rows as
+  an independent target edit. The next run says it cannot tell, which is true.
+  Re-run the merge to get back to a marked state.
+- Each side is compared against its own mark, which keeps the source's clock
+  out of the target's threshold and vice versa — a laptop and a cluster do not
+  agree closely enough for a cross-clock comparison. One documented exception:
+  the rows a merge loads carry their source timestamps into the target, so the
+  target mark is raised to cover them (otherwise every row a merge added would
+  come back as a target edit). Under a source clock running ahead, that leaves
+  a blind window the width of the skew in which a genuine target edit is not
+  reported.
 
 ## Fallback: in-cluster merge (operator)
 
