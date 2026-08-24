@@ -60,6 +60,7 @@ dependency-pruning              = "skills/process/dependency-pruning/SKILL.md"
 dependency-updates              = "skills/process/dependency-updates/SKILL.md"
 deploy-verification             = "skills/process/deploy-verification/SKILL.md"
 docker-uv-image-builds          = "skills/containers/docker-uv-image-builds/SKILL.md"
+drf-api-performance             = "skills/python/drf-api-performance/SKILL.md"
 generate-standup                = "skills/process/generate-standup/SKILL.md"
 github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
 github-pr-triage                = "skills/process/github-pr-triage/SKILL.md"
@@ -82,7 +83,7 @@ skills = [
 
 [profiles.python]
 inherits = ["universal"]
-skills = ["cyclopts-cli-scripts", "uv-python-workflow"]
+skills = ["cyclopts-cli-scripts", "drf-api-performance", "uv-python-workflow"]
 
 [profiles.infrastructure]
 inherits = ["universal"]
