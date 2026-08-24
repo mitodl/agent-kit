@@ -122,74 +122,114 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: and confirm it against the tarball you actually downloaded (`sha256sum`) in
 #: the same sitting — on a moving tag the two assets can be republished a
 #: minute apart, and a digest read across that gap describes neither build.
-#: ★ THESE ARE THE `edge` BUILD OF 2026-08-24T12:50Z (through 972f1666c5),
-#: NOT v0.9.0's. Refreshed from the 2026-08-21T00:11Z triple (62a9c3fe6b)
-#: after CI failed the checksum check on 2026-08-24 (agent-kit#281). Three
-#: commits landed in between, and only one carries any Rust: #522
-#: (`perf(changes): bound candidate scans to transaction footprints`); the
-#: other two are docs and CI hygiene (#543, #549). That source diff is
-#: confined to `crates/omnigraph/src/changes/*` and its instrumentation and
-#: failpoints — the CHANGE FEED, which witan does not use at all: the
-#: subcommands it shells out to are query/mutate/load/export/schema/commit/
-#: graphs.
+#: ★ THESE ARE THE `edge` BUILD OF 2026-08-24T19:47-19:58Z (through
+#: bb0e3dc8bf), NOT v0.9.0's. Refreshed from the 2026-08-24T12:50Z triple
+#: (972f1666c5) after CI failed the checksum check on agent-kit#283 — the
+#: SECOND refresh in one day, which is the moving tag behaving as documented
+#: below rather than anything going wrong.
 #:
-#: ★ ONE PART OF #522 IS NOT CHANGE-FEED-INTERNAL, AND IT IS ON WITAN'S WRITE
-#: PATH. `table_store.rs` now stamps `omnigraph.no_by_source_delete=v1` on
-#: EVERY keyed `merge_insert` transaction, which is every write witan makes.
-#: It is an extra transaction property and nothing else: upstream documents it
-#: as read-advisory ("a missing marker only forces a fall-back, never a
-#: correctness change") and only the new pruning path reads it. No behaviour
-#: change for us — but it is why this refresh is not simply "docs and a perf
-#: fix", and why the diff was read rather than the commit subjects.
+#: Two commits landed in between and only ONE carries behaviour:
+#:   #545 `feat(azure): implement RFC-0029 Blob storage preview` — 82 files,
+#:        +8904/-465. A new `omnigraph-azure-admission` crate and Container
+#:        Apps reference, plus the scheme-dispatch refactor it needed.
+#:   #547 `docs: rebuild guides and normalize RFC corpus` — 111 markdown
+#:        files and 8 `.rs`, but every one of those Rust hunks is a doc
+#:        comment: RFC renumbering (`RFC-010` -> `RFC 0010`) and doc-path
+#:        fixes in identity.rs/planes.rs/table_store.rs/exec/query.rs. Read
+#:        line by line, not inferred from the subject.
+#:
+#: ★ #545 IS A MUCH LARGER SURFACE THAN THE LAST REFRESH AND IT DOES TOUCH
+#: WITAN'S PATHS — cluster config/serve/store/sweep, the CLI, server settings,
+#: manifest, table_store. It is NOT confined to a feature witan ignores the
+#: way #522's change feed was. The three things that make it safe anyway were
+#: each checked rather than assumed:
+#:   1. s3 root parsing was refactored out of an inline `strip_prefix("s3://")`
+#:      into `omnigraph_storage::normalize_root_uri`, but for `StorageKind::S3`
+#:      that function returns `trim_trailing_slashes(uri)` — literally the old
+#:      `trim_end_matches('/')`, plus an empty-guard. `s3://` still classifies
+#:      as S3 in `storage_kind_for_uri`. A deployed root like
+#:      `s3://ol-data-witan-production/fmt6/...` normalises identically.
+#:   2. The container entrypoint gained an Azure admission wrapper, but it is
+#:      gated on the scheme: `case "$cluster_root" in az://*) ...wrapper... ;;
+#:      *) exec "$SERVER_BIN" "$@" ;;`. An s3 root takes the unchanged branch.
+#:   3. Azure is explicitly NOT production-supported in this release (the
+#:      v0.10.0 notes say so), so nothing here is a path we can reach.
+#:
+#: The tarball now ships THREE binaries — `omnigraph`, `omnigraph-server` and
+#: the new `omnigraph-azure-admission` — where it shipped two. Inert for us,
+#: but it is why the assets grew.
 #:
 #: Checked the two things every refresh here checks — the `_RETRYABLE` /
 #: `_NEEDS_REPAIR` / `_PRECONDITION_FAILED` substrings in omnigraph.py and the
 #: `"storage: "` prose prefix witan's classifier keys on — and found no
-#: rename: no error or vocabulary source changed at all, and #549's
-#: "vocabulary guard" is a CI-config tweak excluding user docs, not the kind
-#: of rename 69d292ce80/ecf1d6aedd were. Confirmed against the artifact with
-#: `strings`, not only against the diff.
+#: rename. Counted tree-wide at BOTH refs rather than only reading the diff:
+#: 9 of the 11 substrings are non-zero and identical, and `precondition
+#: failed` grew by 2, both of those being HTTP 412 fixtures in the new Azure
+#: crate's tests. The `"storage: "` hits in the diff are cluster.yaml CONFIG
+#: keys (`storage: "az://..."`), not the prose error prefix — same literal,
+#: different thing. Confirmed against the artifact with `strings` too.
 #:
-#: ★ AND A TRAP IN THAT CONFIRMATION, WORTH KNOWING BEFORE RE-RUNNING IT.
-#: `manifest table version` and `ahead of manifest` do NOT appear in the
+#: ★ A TRAP IN SCANNING THAT DIFF, AND IT COST A WRONG ANSWER ONCE. GitHub's
+#: commit API omits `patch` for a file too large to inline, and #545's
+#: `crates/omnigraph-storage/src/lib.rs` (+2476/-45) is exactly that file —
+#: the single likeliest home for the error vocabulary. A diff scan therefore
+#: reported "no vocabulary change" while being structurally blind to the one
+#: file that mattered. Fetching both versions of that file and grepping THEM
+#: then returned all-zeros for 10 of 11 substrings, which reads like a clean
+#: result and is worse: those strings do not live in that file at all. Only a
+#: tree-wide `git grep` at both refs is an instrument that can see the data.
+#: Check that a scan returns a NON-zero count somewhere before believing a
+#: zero anywhere.
+#:
+#: ★ AND A TRAP IN THE `strings` CONFIRMATION, WORTH KNOWING BEFORE RE-RUNNING
+#: IT. `manifest table version` and `ahead of manifest` do NOT appear in the
 #: binary — and did not in the previous build either. They are assembled at
 #: runtime from fragments, so their absence from `strings` says nothing about
-#: this refresh. Check a suspicious absence against the OLD binary before
-#: reading it as a regression; two of the eleven substrings look alarming and
-#: always have.
+#: this refresh. Re-confirmed on THIS build: the same 9 present, the same 2
+#: absent. Check a suspicious absence against the OLD binary before reading it
+#: as a regression; two of the eleven substrings look alarming and always have.
 #:
-#: ★ AND `edge` MOVED THREE TIMES WHILE THE PRIOR TRIPLE WAS BEING WRITTEN —
-#: see the git history of this comment for that episode. That is the cost of
-#: the moving tag, not a mishap: upstream merges several times a day and each
-#: push republishes `edge`, so a digest here can be stale before CI runs.
-#: Expect to refresh this on a red witan-code job rather than on a schedule,
-#: and prefer a real `v<version>` tag the moment 0.10.x has one (there is no
-#: v0.10.0 release yet, which is the only reason this is still on `edge`).
+#: ★ AND `edge` MOVED AGAIN WHILE THIS REFRESH WAS BEING PREPARED. The first
+#: attempt captured the digests of the 17:24-17:35Z build (0f1a50d0be) — but
+#: the `edge` TAG had already advanced to bb0e3dc8bf and its Release Edge run
+#: was still building, so those digests would have been stale within the hour.
+#: Read `refs/tags/edge` directly (`git ls-remote`, or the git-ref API) rather
+#: than inferring the build from asset timestamps, and check whether a Release
+#: Edge run is in flight before capturing anything. Note also that
+#: `release-edge.yml` has `paths-ignore` for `**/*.md` — but a "docs" commit
+#: that also touches one `.rs` file, as #547 did, still rebuilds.
+#: That is the cost of the moving tag, not a mishap: upstream merges several
+#: times a day and each push republishes `edge`, so a digest here can be stale
+#: before CI runs. Expect to refresh this on a red witan-code job rather than
+#: on a schedule, and prefer a real `v<version>` tag the moment 0.10.x has one
+#: (there is no v0.10.0 release yet, which is the only reason this is still on
+#: `edge` — `docs/releases/v0.10.0.md` exists upstream but is marked
+#: unreleased).
 #:
 #: The digests below were taken by downloading all three tarballs and hashing
 #: them locally, then cross-checking each against the release's published
-#: `.sha256` in the same sitting. Upstream head and all three asset timestamps
-#: were read before AND after the downloads and were identical (head
-#: 972f1666c5, assets 12:50-13:01Z), so this triple describes one build rather
-#: than a window. The linux/x86_64 value is also exactly the `got` digest CI
-#: reported when it refused the stale pin, which corroborates it independently
-#: of this machine. Still the 0.10.0 re-test
-#: (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2); version
-#: reports 0.10.0 and internal-schema 6, both read off THIS binary via
-#: `bin/check_omnigraph_format.py`, so this is not a rebuild-every-graph event.
+#: `.sha256` in the same sitting — all three matched. Upstream head, the `edge`
+#: ref, and all three asset timestamps+sizes were read before AND after the
+#: downloads and were identical (head/edge bb0e3dc8bf, assets 19:47-19:58Z),
+#: so this triple describes one build rather than a window. Still the 0.10.0
+#: re-test (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2);
+#: version reports 0.10.0 and internal-schema 6, both read off THIS binary via
+#: `bin/check_omnigraph_format.py` ("omnigraph 0.10.0 reads storage format 6,
+#: as declared."), so this is not a rebuild-every-graph event — the v0.10.0
+#: notes independently confirm the manifest schema stays at v6.
 #: Reverting the experiment means restoring the v0.9.0 triple, which was:
 #:     linux-x86_64  507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197
 #:     linux-arm64   6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881
 #:     macos-arm64   69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "6b53f3eff3793d4012fd6b5c151c5589390699ce42661e3ce2ff1ed18b995f4c"
+        "37b1333d83eeb18a30bff841e4801dd269a90f1b720d8ce9e69fc6c2c6c4add5"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "11c06689fcffa6e5fc9fbe9f632ba8e493f1f42997bbd10f09440f5e1d582aab"
+        "8c02e1c0426debd809a355129adf315dd284f0afb87a5e5ee89af6a0188a475a"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "d5cda3d16533154cfc66975af3bb3593cde43513e9af4047c525f41e4555d5c6"
+        "a272a7830f4d2ddfd6c4295b9b4626aad9cd2caaa6fe30c6162b82d84b732adb"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
