@@ -36,8 +36,8 @@ ARG OMNIGRAPH_VERSION=0.10.0
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG.
 ARG OMNIGRAPH_RELEASE_TAG=edge
-ARG OMNIGRAPH_SHA256_X86_64=68099e33941cc5c252f36d4c2a26f1dfff6b28e4eb627ba1f7bf098856d34349
-ARG OMNIGRAPH_SHA256_ARM64=d0e42176625584370a26c8a6ca43bc24447ea822483c46d971807475a5a5782a
+ARG OMNIGRAPH_SHA256_X86_64=6b53f3eff3793d4012fd6b5c151c5589390699ce42661e3ce2ff1ed18b995f4c
+ARG OMNIGRAPH_SHA256_ARM64=11c06689fcffa6e5fc9fbe9f632ba8e493f1f42997bbd10f09440f5e1d582aab
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
 FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS fetch
