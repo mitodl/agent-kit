@@ -72,13 +72,18 @@ def check_writable(
     branch: str | None,
     cfg: cfg_module.Config,
     slug: str,
-    actor: str | None = None,
+    actor: str | None,
 ) -> None:
     """Raise :class:`SharedGraphWriteRefused` unless :func:`owns_view` allows it.
 
-    ``actor`` is the identity this process writes as; it defaults to the
-    resolved one, so a caller that does not construct view names itself does
-    not have to thread it through.
+    ``actor`` is the identity the write is being made as, and ``None`` means
+    exactly one thing: there is no identity to own the view. Required, with no
+    fallback to :func:`~witan_code.identity.actor_id` — every caller already
+    resolves an actor, because it needs one to *name* the view it is about to
+    write, and a caller serving somebody else's write resolves theirs, not this
+    process's (:mod:`witan_code.ingest`). A default would make ``None`` mean
+    "logged out" or "ask the machine" depending on who was calling, and the
+    second reading is the one that cannot be right here.
 
     ``is_remote`` is "is this graph shared", which for a client is a property
     of its store (``client.is_remote``) and for the MCP tier serving somebody
@@ -86,7 +91,6 @@ def check_writable(
     exists (:mod:`witan_code.ingest`). Taking the bit rather than the client is
     what lets both ask the same question.
     """
-    actor = actor if actor is not None else identity_module.actor_id()
     if owns_view(is_remote=is_remote, branch=branch, cfg=cfg, actor=actor):
         return
     if branch is None:
