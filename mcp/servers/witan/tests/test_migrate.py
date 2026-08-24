@@ -2467,6 +2467,24 @@ def test_a_merge_that_carried_nothing_does_not_warn_about_the_deployment(
     assert capsys.readouterr().out == ""
 
 
+def test_a_merge_that_moved_rows_but_got_no_mark_warns(tmp_path, monkeypatch, capsys):
+    """The pre-0.29.0 deployment case. A merge that plainly did something and
+    still returned no mark means the next one cannot report divergence, and
+    saying nothing would leave that to be discovered by not being told."""
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+    cli_migrate._record_watermark(
+        "/store.omni",
+        "/target.omni",
+        {"decisions": [{"slug": "mem-a"}], "rows_loaded": 1},
+    )
+
+    # A short fragment: the console hard-wraps to the terminal width, so a
+    # longer phrase can arrive with a newline through the middle of it.
+    assert "reported no merge watermark" in capsys.readouterr().out
+
+
 @requires_omnigraph
 def test_merge_reports_divergence_against_two_real_stores(server, tmp_path):
     """The 2026-08-19 incident, replayed against actual stores.
