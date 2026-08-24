@@ -94,6 +94,30 @@ def no_real_remote(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("WITAN_TARGET", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def no_real_merge_watermarks(tmp_path_factory, monkeypatch):
+    """Keep merge watermarks out of the developer's real ``~/.config/witan``.
+
+    ``witan migrate merge`` records a per-pair watermark, and the default path
+    is a REAL user file next to the token cache. Any test that drives the merge
+    CLI without overriding ``WITAN_MERGE_WATERMARKS`` therefore writes to the
+    developer's own state.
+
+    Not hypothetical, and not caught by the suite: on 2026-08-24 the file had
+    ten entries keyed by ``/tmp/pytest-of-*/…/personal.omni`` from a single
+    afternoon's runs — accumulating one per run, since each pytest tmp path is
+    unique so nothing ever replaced anything. It surfaced only because the file
+    was opened by hand before a real merge.
+
+    Autouse for the same reason as ``no_real_remote`` above: the leak is a
+    property of forgetting an override, so the guard has to be the default
+    rather than something each test opts into. Tests that assert on watermark
+    contents set the variable themselves, and the later ``setenv`` wins.
+    """
+    marks = tmp_path_factory.mktemp("witan-watermarks") / "merge-watermarks.json"
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(marks))
+
+
 @pytest.fixture
 def tmp_state_dir(tmp_path, monkeypatch):
     """Redirect the system temp dir, which is where witan parks process state.
