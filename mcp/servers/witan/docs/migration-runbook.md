@@ -71,6 +71,10 @@ rather than in your environment. Read the decisions: `added` should be roughly
 the row count of your store, and `updated` should be small. A large `updated`
 on a first migration means slugs are colliding that shouldn't — stop there.
 
+This first run has no watermark to compare against, so it cannot tell you
+whether any collision is a divergence; every run after it can. See
+[Divergence](#divergence).
+
 **4. Run it:**
 
 ```bash
@@ -214,7 +218,7 @@ witan migrate merge [SOURCE] [--from <name>] [--to <name>] [--target <uri>] [--d
 | `--from <name>` | A `[targets.<name>]` block's `server`, in place of `SOURCE`. A target with only a `remote_url` is refused — nothing local to export. |
 | `--to <name>` | A `[targets.<name>]` block as the destination: through its deployment if it has a `remote_url`, into its `server` store if not. |
 | `--target <uri>` | A destination store URI. Defaults to your configured store. Mutually exclusive with `--to`; `.jsonl` is refused (a target is a graph, not a snapshot). |
-| `--dry-run` | Print the per-slug decisions, write nothing. |
+| `--dry-run` | Print the per-slug decisions, write nothing. Reports divergence; records no watermark. |
 
 Notes:
 
@@ -232,6 +236,42 @@ Notes:
   copy. Safe on a schedule.
 - Reconciliation covers nodes only. Edge rows (`Tagged`, `ParentOf`, …) have no
   slug and pass through unreconciled, same as raw `--mode merge`.
+
+## Divergence
+
+Newest-record-wins is a whole-**record** decision, and several witan fields are
+append-only logs rather than values — `WorkflowProject.description`, which
+accretes status blocks, most of all. When both stores have written the same node
+since they last agreed, keeping the newer record does not resolve a stale value;
+it deletes the other side's text.
+
+Every merge therefore records a **watermark** for the pair of stores: the newest
+timestamp in the source, and the newest that will be in the target once this
+merge's winners land. The next merge uses it to name the nodes both sides have
+written since:
+
+```
+2 node(s) changed on BOTH sides since the last merge (2026-08-19T19:46:00Z).
+Newest-record-wins keeps one side and drops the other's edit …
+  WorkflowProject   wp-witan-multi-user-service-deployment-dcf6ee
+    source 2026-08-19T19:49:00Z  target 2026-08-19T22:06:00Z  -> kept target
+```
+
+Nothing is merged for you. Reconcile the named slugs by hand — read both sides,
+write the combined value to whichever store you want to win, and re-run — then
+the merge resolves them on its own rule.
+
+- **The first merge of a pair has no watermark and says so.** That is "cannot
+  tell", not "nothing diverged"; until one is recorded, diff the projects you
+  care about yourself.
+- `--dry-run` reports divergence but records no watermark: the mark describes a
+  target with this merge's winners in it, and a dry run wrote none of them.
+- Marks live in `~/.config/witan/merge-watermarks.json`
+  (`$WITAN_MERGE_WATERMARKS`), beside the token cache, keyed by source store and
+  destination. Per-machine, and losing the file costs one merge's reporting.
+- The two sides are only ever compared against their own mark. A source is a
+  laptop's clock and a deployed target is a cluster's; comparing across them
+  would turn skew into invented divergences.
 
 ## Fallback: in-cluster merge (operator)
 

@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.29.0] - 2026-08-24
+
+### Fixed
+
+- **`witan migrate merge` no longer discards a divergent edit in silence.**
+  Reconciliation is newest-record-wins per node, which is right when one side is
+  simply stale. It is not the same thing when BOTH stores have written the same
+  node since they last agreed: there the loser's edit is deleted, and several
+  witan fields are append-only logs rather than values —
+  `WorkflowProject.description`, which accretes status blocks, above all. Hit
+  for real on 2026-08-19, where the local store held the fourth update to a
+  project description and the deployment held the fifth, and merging either way
+  would have dropped one permanently.
+
+  The loss was invisible: a discarded divergence counted as `kept`, the same
+  bucket as the 3000-odd nodes that genuinely needed no action, and `--dry-run`
+  printed `kept-target` for it exactly as it did for them.
+
+  A merge now records a watermark for the pair of stores — the newest timestamp
+  in the source, and the newest that will be in the target once its winners land
+  — in `~/.config/witan/merge-watermarks.json` (`$WITAN_MERGE_WATERMARKS`). The
+  next merge uses it to name every node both sides have written since, with both
+  timestamps and which side was kept. The merge rule is unchanged and nothing is
+  auto-merged; what changes is that the slugs to reconcile by hand are now
+  nameable. The decisions carry a `diverged` flag and the counts a `diverged`
+  total, which cuts across `updated`/`kept_target` rather than partitioning with
+  them.
+
+  Each side is only ever compared against its own mark — a source is a laptop's
+  clock and a deployed target is a cluster's, and comparing across them would
+  read skew as divergence. The first merge of a pair has no watermark and says
+  so, which is "cannot tell", not "nothing diverged". `--dry-run` reports
+  divergence but records nothing, since it wrote none of the winners its mark
+  would describe.
+
+  Over the deployment the watermark crosses as a `store_merge` parameter and is
+  threaded batch to batch, so the mark the client records covers the whole merge
+  rather than its last batch. A deployment too old to return one yields no mark
+  at all rather than a partial one, and the CLI says the next merge will be
+  blind.
+
 ## [0.28.0] - 2026-08-21
 
 ### Fixed

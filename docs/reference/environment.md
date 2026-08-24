@@ -54,6 +54,7 @@ token; both `witan` and `witan code` share one cache, so you log in once.
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `WITAN_MERGE_WATERMARKS` | `~/.config/witan/merge-watermarks.json` | Where `witan migrate merge` records what each pair of stores looked like when they last agreed, so the next merge can name the nodes both sides have written since. Beside the token cache, and per-machine — losing it costs one merge's divergence report. |
 | `WITAN_OIDC_AUDIENCE` | — | Audience/resource to request, matching the deployment's own `WITAN_OIDC_AUDIENCE`. Sent on the device-auth and token requests so an issuer with an audience mapper stamps the right `aud` claim. |
 | `WITAN_OIDC_CLIENT_ID` | — | OIDC client id presented during the device grant. |
 | `WITAN_OIDC_EXPIRY_SKEW_SECONDS` | `90` | How long before nominal expiry a cached token is treated as already expired and refreshed. Sized so a refresh happens before a long write starts rather than partway through one. |

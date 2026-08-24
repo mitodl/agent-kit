@@ -2054,3 +2054,464 @@ def test_claim_authorship_renders_a_bracketed_author_intact(monkeypatch, capsys)
         cli_migrate.claim_authorship(author)
         out = capsys.readouterr().out
         assert author in out, f"{author!r} did not survive rendering: {out!r}"
+
+
+# ── Divergence reporting (tk-witan-migrate-merge-silently-drops-divergent-edi) ──
+#
+# Newest-record-wins is the right rule and stays the rule. What these cover is
+# the case where applying it discards an edit rather than a stale value — both
+# stores wrote the same node since they last agreed — which used to land in the
+# `kept` bucket, indistinguishable from the thousands of nodes that genuinely
+# needed no action.
+
+
+def _node(node_type, slug, updated_at):
+    return {"type": node_type, "data": {"slug": slug, "updated_at": updated_at}}
+
+
+def _nodes(*rows):
+    return {(r["type"], r["data"]["slug"]): r for r in rows}
+
+
+_LAST_MERGE = {"source_ts": "2026-06-01T00:00:00Z", "target_ts": "2026-06-01T00:00:00Z"}
+
+
+def test_no_watermark_marks_nothing_diverged():
+    """Absent a watermark the answer is "cannot tell", not "nothing diverged".
+
+    Record-level timestamps alone cannot separate a target that is merely ahead
+    from one that advanced alongside the source, so guessing would put every
+    ordinary collision in a report whose only virtue is that it is short.
+    """
+    from witan import server as srv
+
+    decisions, _ = srv._reconcile_nodes(
+        _nodes(_node("Memory", "mem-a", "2026-06-02T00:00:00Z")),
+        _nodes(_node("Memory", "mem-a", "2026-06-03T00:00:00Z")),
+    )
+
+    assert decisions[0]["decision"] == "kept-target"
+    assert "diverged" not in decisions[0]
+    assert srv._decision_counts(decisions)["diverged"] == 0
+
+
+def test_a_target_only_edit_is_not_divergence():
+    """The noise case the watermark exists to exclude.
+
+    The source has not been touched since the last merge, so keeping the
+    target's newer row discards nothing. On a shared graph other people write
+    constantly, which makes this the common shape of a `kept-target` — reported,
+    it would bury the real thing.
+    """
+    from witan import server as srv
+
+    decisions, _ = srv._reconcile_nodes(
+        _nodes(_node("Memory", "mem-a", "2026-05-01T00:00:00Z")),
+        _nodes(_node("Memory", "mem-a", "2026-06-05T00:00:00Z")),
+        _LAST_MERGE,
+    )
+
+    assert decisions[0]["decision"] == "kept-target"
+    assert "diverged" not in decisions[0]
+
+
+def test_both_sides_written_since_the_last_merge_is_reported():
+    from witan import server as srv
+
+    decisions, winners = srv._reconcile_nodes(
+        _nodes(_node("WorkflowProject", "wp-x", "2026-06-02T00:00:00Z")),
+        _nodes(_node("WorkflowProject", "wp-x", "2026-06-03T00:00:00Z")),
+        _LAST_MERGE,
+    )
+
+    assert decisions[0]["diverged"] is True
+    # Reporting only. The rule is unchanged and so is the outcome: the target's
+    # row is newer, so it stays and the source row is not written.
+    assert decisions[0]["decision"] == "kept-target"
+    assert winners == []
+    assert srv._decision_counts(decisions)["diverged"] == 1
+    # Readable spellings ride along, because these two are the only timestamps
+    # a human is asked to compare and an 0.9 export gives them as epoch millis.
+    assert decisions[0]["source_at"] == "2026-06-02T00:00:00Z"
+    assert decisions[0]["target_at"] == "2026-06-03T00:00:00Z"
+
+
+def test_epoch_millis_timestamps_are_reported_readably():
+    """The representation the deployed graph actually exports.
+
+    Both stores in a real cutover are on omnigraph >= 0.9, so without this the
+    divergence report hands you two 13-digit integers to compare by eye.
+    """
+    from witan import server as srv
+
+    decisions, _ = srv._reconcile_nodes(
+        _nodes(_node("WorkflowProject", "wp-x", 1780358400000)),
+        _nodes(_node("WorkflowProject", "wp-x", 1780444800000)),
+        {"source_ts": 1780272000000, "target_ts": 1780272000000},
+    )
+
+    assert decisions[0]["diverged"] is True
+    assert decisions[0]["source_at"] == "2026-06-02T00:00:00Z"
+    assert decisions[0]["target_at"] == "2026-06-03T00:00:00Z"
+    # The raw values stay as exported; the readable pair is added, not swapped.
+    assert decisions[0]["source_ts"] == 1780358400000
+
+
+def test_divergence_is_reported_when_the_source_wins_too():
+    """The direction that overwrites the SHARED graph, which is the worse one.
+
+    A divergence resolved in the source's favour discards an edit somebody else
+    made in the deployment. It counts as `updated` — a perfectly ordinary-looking
+    bucket — so without the mark there is nothing at all to notice.
+    """
+    from witan import server as srv
+
+    decisions, winners = srv._reconcile_nodes(
+        _nodes(_node("WorkflowProject", "wp-x", "2026-06-05T00:00:00Z")),
+        _nodes(_node("WorkflowProject", "wp-x", "2026-06-02T00:00:00Z")),
+        _LAST_MERGE,
+    )
+
+    assert decisions[0]["decision"] == "updated"
+    assert decisions[0]["diverged"] is True
+    assert len(winners) == 1
+
+
+def test_diverged_count_cuts_across_the_other_buckets():
+    """`diverged` overlaps `updated`/`kept_target` rather than partitioning with
+    them — a divergence is still resolved as one of the two."""
+    from witan import server as srv
+
+    decisions, _ = srv._reconcile_nodes(
+        _nodes(
+            _node("Memory", "mem-src-wins", "2026-06-05T00:00:00Z"),
+            _node("Memory", "mem-dst-wins", "2026-06-02T00:00:00Z"),
+            _node("Memory", "mem-new", "2026-06-05T00:00:00Z"),
+        ),
+        _nodes(
+            _node("Memory", "mem-src-wins", "2026-06-03T00:00:00Z"),
+            _node("Memory", "mem-dst-wins", "2026-06-04T00:00:00Z"),
+        ),
+        _LAST_MERGE,
+    )
+
+    counts = srv._decision_counts(decisions)
+    assert (counts["added"], counts["updated"], counts["kept_target"]) == (1, 1, 1)
+    assert counts["diverged"] == 2
+    assert counts["added"] + counts["updated"] + counts["kept_target"] == len(decisions)
+
+
+def test_the_watermark_covers_the_rows_the_merge_itself_loads():
+    """A row this merge writes into the target must not read as "the target
+    changed" on the next run.
+
+    The winners land carrying their own (source) timestamps, so a mark taken
+    from the pre-merge target alone sits below them — and every row the merge
+    added would come back as a divergence next time round.
+    """
+    from witan import server as srv
+
+    source = _nodes(_node("Memory", "mem-a", "2026-06-05T00:00:00Z"))
+    target = _nodes(_node("Memory", "mem-a", "2026-06-01T00:00:00Z"))
+
+    decisions, winners = srv._reconcile_nodes(source, target)
+    assert decisions[0]["decision"] == "updated"
+
+    watermark = srv._next_watermark(None, source, target, winners)
+    assert watermark["target_ts"] == "2026-06-05T00:00:00Z"
+
+    # Replay: the target now holds what the merge just put there, and the
+    # source is untouched. Nothing diverged.
+    after, _ = srv._reconcile_nodes(
+        source, _nodes(_node("Memory", "mem-a", "2026-06-05T00:00:00Z")), watermark
+    )
+    assert "diverged" not in after[0]
+
+
+def test_the_watermark_accumulates_across_batches():
+    """The MCP path splits the source, so no single batch sees its newest row.
+
+    Carrying the running mark forward is what lets the client end up with one
+    covering the whole merge without comparing exported timestamps itself —
+    including when the newest row is not in the last batch.
+    """
+    from witan import server as srv
+
+    first = _nodes(_node("Memory", "mem-a", "2026-06-09T00:00:00Z"))
+    second = _nodes(_node("Memory", "mem-b", "2026-06-02T00:00:00Z"))
+
+    carried = srv._next_watermark(None, first, {}, [])
+    carried = srv._next_watermark(carried, second, {}, [])
+
+    assert carried["source_ts"] == "2026-06-09T00:00:00Z"
+
+
+def test_each_side_is_compared_against_its_own_mark():
+    """Never source-vs-target. The source is a laptop's clock and the target a
+    cluster's; comparing across them would read skew as divergence."""
+    from witan import server as srv
+
+    # The target's whole history sits "before" the source's, as it would under a
+    # few hours of clock skew. Neither side has moved since its own mark.
+    decisions, _ = srv._reconcile_nodes(
+        _nodes(_node("Memory", "mem-a", "2026-06-01T12:00:00Z")),
+        _nodes(_node("Memory", "mem-a", "2026-06-01T02:00:00Z")),
+        {"source_ts": "2026-06-01T12:00:00Z", "target_ts": "2026-06-01T02:00:00Z"},
+    )
+
+    assert "diverged" not in decisions[0]
+
+
+def test_watermark_file_round_trips_and_replaces_by_pair(tmp_path, monkeypatch):
+    from witan import merge_watermark as mw
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+
+    assert mw.read("/store.omni", "https://witan.example") is None
+
+    assert mw.write(
+        "/store.omni", "https://witan.example", {"source_ts": 1, "target_ts": 2}
+    )
+    entry = mw.read("/store.omni", "https://witan.example")
+    assert (entry["source_ts"], entry["target_ts"]) == (1, 2)
+
+    # Re-merging the same pair replaces its mark rather than accumulating one
+    # per run, while a different destination keeps its own.
+    mw.write("/store.omni", "https://witan.example", {"source_ts": 3, "target_ts": 4})
+    mw.write("/store.omni", "/other.omni", {"source_ts": 9, "target_ts": 9})
+    assert mw.read("/store.omni", "https://witan.example")["source_ts"] == 3
+    assert mw.read("/store.omni", "/other.omni")["source_ts"] == 9
+    assert len(mw._load()) == 2
+
+
+def test_a_corrupt_watermark_file_reads_as_absent(tmp_path, monkeypatch):
+    """Fails soft in the direction that loses the report, never the merge.
+
+    A half-written or hand-mangled hint file must not take down a cutover; the
+    cost of ignoring it is one run without divergence reporting, and the next
+    successful merge rewrites it.
+    """
+    from witan import merge_watermark as mw
+
+    marks = tmp_path / "marks.json"
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(marks))
+
+    for garbage in ('{"version": 1, "pairs"', "null", "[]", '{"version": 99}'):
+        marks.write_text(garbage)
+        assert mw.read("/store.omni", "/target.omni") is None
+
+    assert mw.write("/store.omni", "/target.omni", {"source_ts": 1, "target_ts": 1})
+    assert mw.read("/store.omni", "/target.omni") is not None
+
+
+class _FakeMergeProvider:
+    """Stands in for either merge provider — the server module or the proxy."""
+
+    remote_url = "https://witan.example/graphs/council"
+
+    def __init__(self):
+        self.since_seen = []
+
+    def merge_store(self, source, *, target, dry_run, source_author, since):
+        self.since_seen.append(since)
+        return {
+            "target": self.remote_url,
+            "decisions": [],
+            "added": 0,
+            "updated": 0,
+            "kept_target": 1,
+            "diverged": 0,
+            "rows_loaded": 0,
+            "watermark": {
+                "source_ts": "2026-06-01T00:00:00Z",
+                "target_ts": "2026-06-02T00:00:00Z",
+            },
+        }
+
+
+def test_merge_records_its_watermark_and_replays_it_next_run(tmp_path, monkeypatch):
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+    provider = _FakeMergeProvider()
+    monkeypatch.setattr(
+        cli_migrate, "_merge_destination", lambda to, t: (provider, None)
+    )
+    monkeypatch.setattr(cli_migrate, "_merge_source_author", lambda f: "pytest")
+
+    cli_migrate._merge("/store.omni", None, False)
+    cli_migrate._merge("/store.omni", None, False)
+
+    assert provider.since_seen[0] is None
+    assert provider.since_seen[1] == {
+        "source_ts": "2026-06-01T00:00:00Z",
+        "target_ts": "2026-06-02T00:00:00Z",
+    }
+    # Exactly the two marks. The stored entry also records which pair it
+    # describes, and a merge has no business sending a deployment the local
+    # path its rows came from.
+    assert "source" not in provider.since_seen[1]
+
+
+def test_a_dry_run_does_not_record_a_watermark(tmp_path, monkeypatch):
+    """The mark describes a target with this merge's winners in it, and a dry
+    run wrote none of them. Recording it would tell the next run that everything
+    up to here had already been merged."""
+    from witan import merge_watermark as mw
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+    provider = _FakeMergeProvider()
+    monkeypatch.setattr(
+        cli_migrate, "_merge_destination", lambda to, t: (provider, None)
+    )
+    monkeypatch.setattr(cli_migrate, "_merge_source_author", lambda f: "pytest")
+
+    cli_migrate._merge("/store.omni", None, True)
+
+    assert mw.read("/store.omni", provider.remote_url) is None
+
+
+def test_the_watermark_key_matches_between_the_read_and_the_write():
+    """Both ends of a merge look the destination up the same way.
+
+    The read happens before the call and the write after it, so a key derived
+    from the result would silently miss whatever normalization the callee did to
+    the address — and every merge would look like a first merge.
+    """
+    from witan.cli import migrate as cli_migrate
+
+    class _Module:
+        client = type("C", (), {"graph_uri": "/configured/graph.omni"})()
+
+    assert (
+        cli_migrate._destination_key(_FakeMergeProvider(), None)
+        == "https://witan.example/graphs/council"
+    )
+    assert cli_migrate._destination_key(_Module(), None) == "/configured/graph.omni"
+    assert cli_migrate._destination_key(_Module(), "/explicit.omni") == "/explicit.omni"
+
+
+def test_divergence_report_names_the_slugs_and_which_side_was_kept(capsys):
+    """Naming the slugs is the deliverable — the manual reconcile takes minutes
+    once you know where to look, and the summary counts never tell you."""
+    from witan.cli import migrate as cli_migrate
+
+    result = {
+        "decisions": [
+            {
+                "type": "WorkflowProject",
+                "slug": "wp-witan-multi-user",
+                "decision": "kept-target",
+                "source_ts": "2026-08-19T19:49:00Z",
+                "target_ts": "2026-08-19T22:06:00Z",
+                "diverged": True,
+            },
+            {
+                "type": "Memory",
+                "slug": "mem-untouched",
+                "decision": "kept-target",
+                "source_ts": "2026-01-01T00:00:00Z",
+                "target_ts": "2026-06-01T00:00:00Z",
+            },
+        ]
+    }
+
+    cli_migrate._report_divergence(
+        result, {"merged_at": "2026-08-19T19:46:00Z"}, dry_run=True
+    )
+    out = capsys.readouterr().out
+
+    assert "wp-witan-multi-user" in out
+    assert "kept target" in out
+    assert "mem-untouched" not in out
+
+
+def test_a_first_merge_says_it_cannot_report_divergence(capsys):
+    """Silence would read as "nothing diverged", which is the exact confusion
+    this whole feature exists to remove."""
+    from witan.cli import migrate as cli_migrate
+
+    cli_migrate._report_divergence(
+        {"decisions": [], "updated": 0, "kept_target": 3}, None, dry_run=True
+    )
+
+    assert "watermark" in capsys.readouterr().out
+
+
+def test_a_first_merge_that_only_adds_says_nothing(capsys):
+    """The note is about collisions it cannot judge. With none, it is noise on
+    the run that needs it least — a fresh cutover into an empty graph."""
+    from witan.cli import migrate as cli_migrate
+
+    cli_migrate._report_divergence(
+        {"decisions": [], "updated": 0, "kept_target": 0}, None, dry_run=True
+    )
+
+    assert capsys.readouterr().out == ""
+
+
+def test_a_merge_that_carried_nothing_does_not_warn_about_the_deployment(
+    tmp_path, monkeypatch, capsys
+):
+    """An empty source reports no mark because there was nothing to mark, not
+    because the deployment is too old. Warning would send someone hunting a
+    problem that isn't there."""
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+    cli_migrate._record_watermark(
+        "/store.omni", "/target.omni", {"decisions": [], "rows_loaded": 0}
+    )
+
+    assert capsys.readouterr().out == ""
+
+
+@requires_omnigraph
+def test_merge_reports_divergence_against_two_real_stores(server, tmp_path):
+    """The 2026-08-19 incident, replayed against actual stores.
+
+    Both sides advance after a merge; the second merge resolves the collision
+    newest-record-wins and, before this, reported the discarded edit as `kept` —
+    the same bucket as every node that needed nothing. The point of the assert
+    is not that a count went up but that the losing slug is now nameable.
+    """
+    from witan import config as cfg_mod
+    from witan import graph as graph_mod
+    from witan import server as srv
+
+    slug = "mem-diverged-d1d1d1"
+    source = graph_mod.OmnigraphClient(
+        _init_store(tmp_path / "source.omni"), cfg_mod.load().queries_dir
+    )
+    _insert_memory(
+        source, slug=slug, content="agreed", updated_at="2026-06-01T00:00:00Z"
+    )
+
+    first = srv.merge_store(source.graph_uri)
+    assert first["diverged"] == 0
+    watermark = first["watermark"]
+    assert watermark["source_ts"] and watermark["target_ts"]
+
+    # Both stores are written after that merge — the shape a merge is most
+    # likely to be run in, since writes going somewhere they should not is
+    # what prompts one.
+    _insert_memory(
+        source, slug=slug, content="edited locally", updated_at="2026-06-02T00:00:00Z"
+    )
+    _insert_memory(
+        srv.client,
+        slug=slug,
+        content="edited in the graph",
+        updated_at="2026-06-03T00:00:00Z",
+    )
+
+    blind = srv.merge_store(source.graph_uri, dry_run=True)
+    told = srv.merge_store(source.graph_uri, dry_run=True, since=watermark)
+
+    # Same decision either way; the difference is entirely whether the loss is
+    # visible. Without the watermark it is one of the `kept_target` rows.
+    assert blind["kept_target"] == told["kept_target"] == 1
+    assert blind["diverged"] == 0
+    assert told["diverged"] == 1
+    assert [d["slug"] for d in told["decisions"] if d.get("diverged")] == [slug]

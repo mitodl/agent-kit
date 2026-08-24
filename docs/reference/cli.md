@@ -1056,6 +1056,12 @@ entirely. Rows only in ``source`` are always added; rows only in the
 target are left untouched. Repeatable — re-running against an
 already-merged target loads nothing new.
 
+Each merge records a per-side watermark for the pair of stores, so the next
+one can name the nodes BOTH sides have written since — the case where
+newest-record-wins is not resolving a stale value but discarding somebody's
+edit. Nothing is auto-merged; the divergent slugs are reported for you to
+reconcile. The first merge of a pair has no watermark and says so.
+
 **Parameters**:
 
 * `SOURCE, --source`: Store URI to merge from (local path, ``s3://``, ``file://``, or an

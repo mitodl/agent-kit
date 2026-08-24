@@ -335,6 +335,17 @@ class RemoteServerProxy(RemoteMCPProxy):
     def _branch_means_checkout(self, name: str) -> bool:
         return name in _BRANCH_IS_CHECKOUT
 
+    @property
+    def remote_url(self) -> str:
+        """The deployment this proxy addresses.
+
+        Public because a caller sometimes has to name the destination *before*
+        making the call — ``witan migrate merge`` keys its merge watermark on
+        the pair of stores, and has to look one up before it has a result to
+        read the target off. Nothing else about the transport is exposed.
+        """
+        return self._url
+
     def _unreachable_hint(self) -> str:
         # Name the setting that is actually in play, read off the resolver's
         # own record of which source won (`url_source`) rather than inferred
@@ -373,6 +384,7 @@ class RemoteServerProxy(RemoteMCPProxy):
         target: str | None = None,
         dry_run: bool = False,
         source_author: str | None = None,
+        since: dict | None = None,
     ) -> dict:
         """Merge a local store into the deployment, as the logged-in user.
 
@@ -387,6 +399,13 @@ class RemoteServerProxy(RemoteMCPProxy):
         server resolves it from its own configuration — a client never names a
         store address, the same rule ADR-0005 (c) applies to witan-code's
         writes. Passing one is refused rather than ignored.
+
+        ``since`` is the previous merge's watermark for this pair of stores; it
+        goes out unchanged on every batch, and the running mark the batches
+        return comes back as ``watermark`` for the caller to record. The client
+        never compares an exported timestamp itself — the server folds each
+        batch into the running value, which is what makes the returned mark
+        cover the whole merge rather than its last batch.
         """
         if target is not None:
             raise RemoteToolUnavailable(
@@ -397,7 +416,18 @@ class RemoteServerProxy(RemoteMCPProxy):
             )
 
         decisions: list[dict] = []
-        totals = {"added": 0, "updated": 0, "kept_target": 0, "rows_loaded": 0}
+        totals = {
+            "added": 0,
+            "updated": 0,
+            "kept_target": 0,
+            "diverged": 0,
+            "rows_loaded": 0,
+        }
+        # Threaded batch to batch rather than reduced at the end: the source is
+        # split across batches, so no single result covers it, and folding the
+        # running value in server-side keeps every timestamp comparison on the
+        # side that knows how an export spells a timestamp.
+        watermark: dict | None = None
         with _source_export(source) as export:
             # MCP_LOAD_MAX_BYTES, not the default: these rows ride as a JSON
             # tool parameter, so the binding ceiling is the MCP session's 4 MiB
@@ -417,7 +447,11 @@ class RemoteServerProxy(RemoteMCPProxy):
             for index, batch in enumerate(batches):
                 try:
                     result = self.store_merge(
-                        rows=batch, dry_run=dry_run, claim_from_author=claim_from
+                        rows=batch,
+                        dry_run=dry_run,
+                        claim_from_author=claim_from,
+                        since=since,
+                        watermark=watermark,
                     )
                 except RemotePayloadTooLarge as exc:
                     # Only here is the caller known to be mid-batch, so only
@@ -442,12 +476,21 @@ class RemoteServerProxy(RemoteMCPProxy):
                 decisions.extend(result.get("decisions") or [])
                 for key in totals:
                     totals[key] += result.get(key, 0)
+                # An older deployment returns no watermark at all. Keeping the
+                # last one we did get would mark a fraction of the merge as the
+                # whole of it, which is worse than having none: the next run
+                # would compare against it and report nothing.
+                batch_watermark = result.get("watermark")
+                watermark = (
+                    batch_watermark if isinstance(batch_watermark, dict) else None
+                )
 
         return {
             "dry_run": dry_run,
             "merged": not dry_run,
             "target": self._url,
             "decisions": decisions,
+            "watermark": watermark,
             **totals,
         }
 

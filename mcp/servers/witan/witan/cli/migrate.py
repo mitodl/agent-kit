@@ -7,6 +7,7 @@ from typing import Annotated, NoReturn
 
 import cyclopts
 
+from .. import merge_watermark
 from ._common import _srv, console, esc, print_error, remote_proxy
 
 migrate_app = cyclopts.App(
@@ -202,6 +203,84 @@ def _merge_destination(to_target: str | None, target: str | None):
     )
 
 
+def _destination_key(provider, target: str | None) -> str:
+    """How a merge destination is named in the watermark file.
+
+    Computed from what is known BEFORE the merge — the watermark has to be read
+    to be passed in — and used again to write, so the two can't disagree. That
+    rules out ``result["target"]``, which is the same address after the callee
+    has normalized it.
+    """
+    remote_url = getattr(provider, "remote_url", None)
+    if remote_url:
+        return remote_url
+    if target:
+        return target
+    return provider.client.graph_uri
+
+
+def _since_marks(entry: dict | None) -> dict | None:
+    """Just the two timestamps out of a stored watermark entry."""
+    if not entry:
+        return None
+    return {"source_ts": entry.get("source_ts"), "target_ts": entry.get("target_ts")}
+
+
+def _report_divergence(result: dict, since: dict | None, dry_run: bool) -> None:
+    """Name the nodes both stores wrote, which reconciliation resolves by
+    discarding one side's edit.
+
+    The report is the whole feature. A discarded divergent edit is otherwise
+    indistinguishable in the summary from a node that genuinely needed no
+    action — it lands in ``kept``, which reads as "nothing to do" — and several
+    witan fields (``WorkflowProject.description`` above all) are append-only
+    logs where losing one side loses real content.
+    """
+    if not since:
+        # Only worth saying when something actually collided. A merge that only
+        # adds has nothing a watermark could have told us about, and the note
+        # would just be noise on the run that needs it least.
+        if result["updated"] or result["kept_target"]:
+            console.print(
+                "[dim]No merge watermark for this pair yet, so nothing can be "
+                "said about the collisions above. Recorded after this merge; "
+                "the next one will report divergence.[/dim]"
+            )
+        return
+    diverged = [d for d in result["decisions"] if d.get("diverged")]
+    if not diverged:
+        return
+    # Tense matters here. Before a dry run there is still a choice to make;
+    # after a real merge the losing edit is already gone from the target and
+    # the remedy is to put it back, not to reconsider.
+    consequence = (
+        "Newest-record-wins will keep one side and drop the other's edit. "
+        "Reconcile these before you merge for real"
+        if dry_run
+        else "Newest-record-wins kept one side and DROPPED the other's edit. "
+        "The losing text is still in the store that lost; put the combined "
+        "value back by hand"
+    )
+    console.print(
+        f"\n[yellow]{len(diverged)} node(s) changed on BOTH sides since the last "
+        f"merge[/yellow] (watermark {esc(str(since.get('merged_at')))}). "
+        f"{consequence} — for an append-only field (a WorkflowProject "
+        "description) this is lost content, not a stale value:"
+    )
+    for d in diverged:
+        kept = "source" if d["decision"] == "updated" else "target"
+        # `source_at`/`target_at` ahead of the raw `source_ts`/`target_ts`: an
+        # omnigraph >= 0.9 export spells a timestamp as epoch millis, and two
+        # 13-digit integers are not something to eyeball against each other.
+        source_at = d.get("source_at") or d["source_ts"]
+        target_at = d.get("target_at") or d["target_ts"]
+        console.print(
+            f"  {d['type']:16} {esc(d['slug'])}\n"
+            f"    source {esc(str(source_at))}  target {esc(str(target_at))}"
+            f"  -> kept {kept}"
+        )
+
+
 def _merge(
     source: str | None,
     target: str | None,
@@ -211,12 +290,19 @@ def _merge(
 ) -> None:
     source = _merge_source(source, from_target)
     s, target = _merge_destination(to_target, target)
+    key = _destination_key(s, target)
+    since = merge_watermark.read(source, key)
     try:
         result = s.merge_store(
             source,
             target=target,
             dry_run=dry_run,
             source_author=_merge_source_author(from_target),
+            # The two marks only. The stored entry also carries which pair it
+            # describes and when it was taken, which is this machine's business
+            # — a merge sends the deployment its rows, not the local path they
+            # came from.
+            since=_since_marks(since),
         )
     except RuntimeError as exc:
         print_error(exc)
@@ -230,6 +316,11 @@ def _merge(
             f"{result['added']} to add, {result['updated']} to update, "
             f"{result['kept_target']} kept (target already newer-or-equal)."
         )
+        # Deliberately not recorded: the watermark describes a graph with this
+        # merge's winners in it, and a dry run wrote none of them. Storing it
+        # would tell the next run that everything up to here had already been
+        # merged, when nothing had.
+        _report_divergence(result, since, dry_run=True)
         return
 
     console.print(
@@ -238,6 +329,32 @@ def _merge(
         f"{result['kept_target']} kept (target already newer-or-equal), "
         f"{result['rows_loaded']} rows loaded."
     )
+    _report_divergence(result, since, dry_run=False)
+    _record_watermark(source, key, result)
+
+
+def _record_watermark(source: str, key: str, result: dict) -> None:
+    """Store the mark this merge just established, or say why the next merge
+    will be blind without it."""
+    watermark = result.get("watermark")
+    if not watermark:
+        # A merge that carried no rows at all reports no mark either, and there
+        # is nothing wrong with that — warning about it would send someone
+        # looking for a deployment problem that isn't there.
+        if not result["decisions"] and not result["rows_loaded"]:
+            return
+        console.print(
+            "[yellow]This deployment reported no merge watermark, so the next "
+            "merge cannot report divergence. Upgrade it, or diff the projects "
+            "you care about by hand before merging again.[/yellow]"
+        )
+        return
+    if not merge_watermark.write(source, key, watermark):
+        console.print(
+            f"[yellow]Could not write {esc(str(merge_watermark.path()))} — the "
+            "merge itself is unaffected, but the next one will not be able to "
+            "report divergence.[/yellow]"
+        )
 
 
 def _migrate_storage(old_binary: str | None, yes: bool) -> None:
@@ -336,6 +453,12 @@ def merge(
     entirely. Rows only in ``source`` are always added; rows only in the
     target are left untouched. Repeatable — re-running against an
     already-merged target loads nothing new.
+
+    Each merge records a per-side watermark for the pair of stores, so the next
+    one can name the nodes BOTH sides have written since — the case where
+    newest-record-wins is not resolving a stale value but discarding somebody's
+    edit. Nothing is auto-merged; the divergent slugs are reported for you to
+    reconcile. The first merge of a pair has no watermark and says so.
 
     Parameters
     ----------
