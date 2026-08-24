@@ -6,6 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.29.1] - 2026-08-24
+
+### Fixed
+
+- **`task_update(status="in_progress")` could stamp a lease with nobody named
+  as holder.** It set `claimed_at` — deliberately, so "started" has one
+  representation rather than reading as instantly and permanently free — but
+  never touched `assignee`, so a caller that used it instead of `task_claim`
+  to mark work started (a common substitution: "update the status" reads as
+  the obvious verb, and the docstring only *preferred* `task_claim` rather
+  than refusing) left the task at `(in_progress, claimed_at set, assignee
+  null)`. `task_claim` correctly refuses that state and correctly cannot say
+  who holds it — which is exactly right once reached, but the state should
+  not have been reachable through the normal tool surface in the first
+  place. Live-checked against the deployed graph: several tasks across
+  unrelated projects are in it right now, so this was not a one-off.
+
+  `task_update` now defaults a missing `assignee` the same way `task_claim`
+  does — via `_claim_holder`, qualified by a new `session_id` parameter for
+  a deployed caller the same way `task_claim`'s already is — but only to
+  fill a genuine gap: a task that already has an assignee keeps it, so
+  marking someone else's task `in_progress` to log status does not silently
+  reassign it. The fill is resolved by `_update_task` itself, against the
+  read it takes immediately before writing — not from a value `task_update`
+  precomputed off an earlier, separate read — so a real `task_claim` landing
+  in between cannot be silently overwritten by a stale default. Existing
+  rows already in the broken state are left to their lease rather than
+  swept — a `readiness.status_pickable` task without a live lease is
+  reclaimable regardless of `assignee`, and backfilling one for another
+  actor's already-in-progress work would mean guessing an identity there is
+  no way to know correctly.
+
+  A blank `assignee` is now normalised to "not provided" rather than written
+  through. `_claim_holder` had always read one that way (`if assignee:`)
+  while the write path tested `is not None`, so the two disagreed and an
+  explicit `assignee=""` slipped past both halves of the fix above — the
+  blank was written AND the default declined to fill it, reconstructing the
+  same unnameable-holder state through the very parameter meant to prevent
+  it. Worse, on a task that already had a holder the blank silently
+  *cleared* it: a live lease whose owner was erased by a call that named
+  nobody. Blank now means "leave the assignee alone", so it fills a gap like
+  any other missing value and never clears one; whitespace counts as blank,
+  since a holder is displayed to humans and matched by `_holder_matches` and
+  `" "` names nobody either. Clearing an assignee is still deliberately not
+  offered here.
+
 ## [0.29.0] - 2026-08-24
 
 ### Fixed

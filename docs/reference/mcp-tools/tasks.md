@@ -93,7 +93,7 @@ lease and refuses if someone else holds it); to close a task prefer
 | `title` | str? | `null` | New short label for the work. |
 | `description` | str? | `null` | New full description. Replaces the existing text; it is not appended to. |
 | `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic`? | `null` | ``bug`` \| ``feature`` \| ``task`` \| ``chore`` \| ``epic``. |
-| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``open`` \| ``in_progress`` \| ``blocked`` \| ``closed``. Two values have<br>side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease, and<br>``closed`` stamps ``closed_at`` **and unblocks this task's dependents**,<br>exactly as ``task_close`` does. Prefer ``task_claim`` / ``task_close``<br>for those two transitions — they carry the ownership checks this does<br>not. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``open`` \| ``in_progress`` \| ``blocked`` \| ``closed``. Two values have<br>side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease, and<br>``closed`` stamps ``closed_at`` **and unblocks this task's dependents**,<br>exactly as ``task_close`` does. Prefer ``task_claim`` / ``task_close``<br>for those two transitions — they carry the ownership checks this does<br>not.<br>Setting ``in_progress`` with no ``assignee`` on a task that has none<br>recorded defaults it via ``_claim_holder`` — the same identity<br>``task_claim`` would use — rather than leaving<br>``(in_progress, claimed_at set, assignee null)`` reachable: that<br>combination is a live lease with nobody named on it, which<br>``task_claim`` correctly refuses and correctly cannot say who holds.<br>A task that already has an assignee keeps it; this only fills a gap,<br>never reassigns. |
 | `priority` | `p0` \| `p1` \| `p2` \| `p3`? | `null` | ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering. |
 | `repo` | str? | `null` | Canonical repo URI to (re)assign this task to. Pass an explicit value to<br>correct tasks that were created without proper repo context. |
 | `assignee` | str? | `null` | Holder identity to reassign the task to. Prefer ``task_claim`` to take a<br>task for yourself — it checks nobody else holds it, which this does not. |
@@ -102,6 +102,7 @@ lease and refuses if someone else holds it); to close a task prefer
 | `external_uri` | str? | `null` | Reference URI — e.g. the GitHub issue or PR this task tracks. |
 | `symbol_refs` | list[str]? | `null` | Code-graph symbol ids (``repo#path::Name``) this task concerns.<br>Replaces the existing list. |
 | `tags` | list[str]? | `null` | Free-form tags. Replaces the existing list rather than merging into it. |
+| `session_id` | str? | `null` | The calling agent session's id, used only to qualify the ``assignee``<br>this defaults when ``status="in_progress"`` leaves one to fill in —<br>see ``task_claim``'s ``session_id`` for why a deployed caller needs to<br>pass this explicitly (no shared environment to infer it from). Has no<br>effect when an explicit ``assignee`` is given, or when one already<br>exists on the task. Appended after every other parameter, not placed<br>near ``assignee``, so inserting it cannot shift what an existing<br>positional caller's later arguments bind to. |
 
 ## `task_claim`
 
