@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -5085,6 +5085,7 @@ def _update_task(
     surface_conflict: bool = False,
     conditional: bool = False,
     extra_steps: list[_Step] | None = None,
+    default_if_missing: dict[str, Callable[[], object]] | None = None,
 ) -> tuple[dict | None, str | None]:
     """Read a task, merge ``changes`` over its mutable fields, write it back.
 
@@ -5133,6 +5134,22 @@ def _update_task(
 
     A missing task still writes NOTHING, extras included — the early return
     below happens before any step is issued.
+
+    ``default_if_missing`` fills a field ONLY from the read this call itself
+    just took, never from a value a caller precomputed earlier. That
+    distinction is the whole point: ``task_update``'s own gap-fill for
+    ``assignee`` used to read the row, decide off THAT snapshot, then hand
+    the decided value back here as an ordinary ``changes`` entry — a second,
+    avoidable read-then-decide sitting in front of the read-then-decide this
+    function already does, doubling the window in which something else
+    (``task_claim``, most obviously) could set the field for real between
+    the two reads. `merged` below is built from `current`, read moments
+    before the write goes out, so resolving here — not before calling this
+    function — closes that avoidable half of the gap. It does NOT make the
+    write itself compare-and-swap: an unconditional ``task_update`` call can
+    still race its own write the same way every other field here already
+    can (see the CAS paragraph above); this only removes the extra, earlier
+    window this helper does not need to have.
     """
     if conditional and extra_steps:
         # Refused rather than silently downgraded. `change_many` composes the
@@ -5146,6 +5163,10 @@ def _update_task(
     if not rows:
         return None, None
     current = rows[0]
+    if default_if_missing:
+        for field, factory in default_if_missing.items():
+            if field not in changes and not current.get(field):
+                changes = {**changes, field: factory()}
     merged = {
         "slug": slug,
         "title": changes.get("title", current.get("title")),
@@ -5415,12 +5436,12 @@ def task_update(
     priority: TaskPriority | None = None,
     repo: str | None = None,
     assignee: str | None = None,
-    session_id: str | None = None,
     project_slug: str | None = None,
     parent: str | None = None,
     external_uri: str | None = None,
     symbol_refs: list[str] | None = None,
     tags: list[str] | None = None,
+    session_id: str | None = None,
 ) -> dict | None:
     """
     Update a task's mutable fields. Only non-null arguments are applied.
@@ -5465,13 +5486,6 @@ def task_update(
     assignee:
         Holder identity to reassign the task to. Prefer ``task_claim`` to take a
         task for yourself — it checks nobody else holds it, which this does not.
-    session_id:
-        The calling agent session's id, used only to qualify the ``assignee``
-        this defaults when ``status="in_progress"`` leaves one to fill in —
-        see ``task_claim``'s ``session_id`` for why a deployed caller needs to
-        pass this explicitly (no shared environment to infer it from). Has no
-        effect when an explicit ``assignee`` is given, or when one already
-        exists on the task.
     project_slug:
         ``wp-`` slug of the WorkflowProject this task rolls up to.
     parent:
@@ -5490,6 +5504,15 @@ def task_update(
         Replaces the existing list.
     tags:
         Free-form tags. Replaces the existing list rather than merging into it.
+    session_id:
+        The calling agent session's id, used only to qualify the ``assignee``
+        this defaults when ``status="in_progress"`` leaves one to fill in —
+        see ``task_claim``'s ``session_id`` for why a deployed caller needs to
+        pass this explicitly (no shared environment to infer it from). Has no
+        effect when an explicit ``assignee`` is given, or when one already
+        exists on the task. Appended after every other parameter, not placed
+        near ``assignee``, so inserting it cannot shift what an existing
+        positional caller's later arguments bind to.
     """
     changes: dict = {}
     if title is not None:
@@ -5512,6 +5535,17 @@ def task_update(
         changes["symbol_refs"] = symbol_refs
     if tags is not None:
         changes["tags"] = tags
+    # tk-task-update-can-still-manufacture-an-unnameable--9ba86a: a lease with
+    # no named holder is unrepresentable through this surface, not just
+    # discouraged. Resolved inside `_update_task`, against the read IT takes
+    # immediately before writing — not from a value decided here off an
+    # earlier, separate read — so a `task_claim` landing in between cannot be
+    # silently overwritten by a stale default; see `_update_task`'s own
+    # `default_if_missing` docstring for why that distinction matters. Only
+    # fills a GAP either way: a task that already has an assignee keeps it
+    # unless `assignee` was passed explicitly above, so a colleague marking a
+    # task in_progress to log status does not silently reassign it.
+    default_if_missing: dict[str, Callable[[], object]] = {}
     if status is not None:
         changes["status"] = status
         if status == "closed":
@@ -5521,19 +5555,8 @@ def task_update(
             # representation (see readiness.status_pickable's updated_at fallback
             # for stores/rows written before this existed).
             changes["claimed_at"] = now_iso()
-            # tk-task-update-can-still-manufacture-an-unnameable--9ba86a: a
-            # lease with no named holder is unrepresentable through this
-            # surface, not just discouraged. Only fills a GAP — a task that
-            # already has an assignee keeps it unless `assignee` was passed
-            # explicitly above, so a colleague marking a task in_progress to
-            # log status does not silently reassign it to themselves.
             if assignee is None:
-                current_rows = client.read("read.gq", "get_task", {"slug": slug})
-                current_assignee = (
-                    current_rows[0].get("assignee") if current_rows else None
-                )
-                if not current_assignee:
-                    changes["assignee"] = _claim_holder(None, session_id)
+                default_if_missing["assignee"] = lambda: _claim_holder(None, session_id)
 
     # The parent is one edit in two encodings — the `parent_slug` field and the
     # ParentOf edge — so it is one commit, not three. It used to update the
@@ -5547,7 +5570,12 @@ def task_update(
             ("mutations.gq", "link_parent_of", {"from": parent, "to": slug})
         )
 
-    updated, _new_commit = _update_task(slug, changes, extra_steps=extra_steps)
+    updated, _new_commit = _update_task(
+        slug,
+        changes,
+        extra_steps=extra_steps,
+        default_if_missing=default_if_missing or None,
+    )
 
     # Closing here must unblock dependents too, matching task_close.
     if status == "closed" and updated is not None:

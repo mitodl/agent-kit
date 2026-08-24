@@ -464,6 +464,59 @@ def test_task_update_defaulted_assignee_is_qualified_by_session_id(server):
 
 
 @requires_omnigraph
+def test_update_task_default_if_missing_does_not_override_a_real_assignee(server):
+    """`_update_task`'s `default_if_missing` checks the row's CURRENT value —
+    read by this same call, not decided earlier by the caller (see its
+    docstring: a caller that precomputed the value off its own separate read
+    could hand back a stale default that clobbers a real assignment made in
+    between). A task already claimed for real must keep that assignee even
+    when a `default_if_missing["assignee"]` factory is supplied.
+    """
+    from witan import server as srv
+
+    t = server.task_create(title="already claimed", description="x")
+    server.task_claim(t["slug"], assignee="real-claimant")
+
+    srv._update_task(
+        t["slug"],
+        {"status": "in_progress"},
+        default_if_missing={"assignee": lambda: "stale-default"},
+    )
+
+    assert server.task_get(t["slug"])["assignee"] == "real-claimant"
+
+
+@requires_omnigraph
+def test_update_task_default_if_missing_fills_a_genuine_gap(server):
+    from witan import server as srv
+
+    t = server.task_create(title="never claimed", description="x")
+
+    srv._update_task(
+        t["slug"],
+        {"status": "in_progress"},
+        default_if_missing={"assignee": lambda: "filled-in"},
+    )
+
+    assert server.task_get(t["slug"])["assignee"] == "filled-in"
+
+
+@requires_omnigraph
+def test_update_task_default_if_missing_never_overrides_an_explicit_change(server):
+    from witan import server as srv
+
+    t = server.task_create(title="explicit wins", description="x")
+
+    srv._update_task(
+        t["slug"],
+        {"status": "in_progress", "assignee": "explicit"},
+        default_if_missing={"assignee": lambda: "should-not-be-used"},
+    )
+
+    assert server.task_get(t["slug"])["assignee"] == "explicit"
+
+
+@requires_omnigraph
 def test_unleased_recent_in_progress_is_not_ready_or_claimable(server):
     """A task moved to in_progress with no assignee on record (e.g. a legacy row
     written before task_update stamped claimed_at) must still read as held while
