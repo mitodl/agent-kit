@@ -445,6 +445,50 @@ def test_task_update_to_in_progress_respects_an_explicit_assignee(server):
 
 
 @requires_omnigraph
+def test_task_update_to_in_progress_treats_a_blank_assignee_as_missing(server):
+    # The gap the first fix left, caught by Copilot as a suppressed review
+    # comment on #283 — which files no thread, so it did not show up in the
+    # unresolved count and was nearly missed.
+    #
+    # `_claim_holder` reads a blank assignee as missing (`if assignee:`) while
+    # the write path tested `is not None`, so an explicit "" was written
+    # straight through AND skipped the default: claimed_at stamped, no
+    # nameable holder. Exactly the state this task exists to make
+    # unrepresentable, reachable through the parameter meant to prevent it.
+    from witan import server as srv
+
+    t = server.task_create(title="blank assignee, marked started", description="x")
+    server.task_update(t["slug"], status="in_progress", assignee="")
+    node = server.task_get(t["slug"])
+    assert node["assignee"] == srv._current_author()
+    assert node["claimed_at"]
+
+
+@requires_omnigraph
+def test_task_update_to_in_progress_treats_a_whitespace_assignee_as_missing(server):
+    # Whitespace names nobody either, and a holder is both shown to humans and
+    # matched by _holder_matches, so " " must not survive as an identity.
+    from witan import server as srv
+
+    t = server.task_create(title="whitespace assignee", description="x")
+    server.task_update(t["slug"], status="in_progress", assignee="   ")
+    assert server.task_get(t["slug"])["assignee"] == srv._current_author()
+
+
+@requires_omnigraph
+def test_task_update_blank_assignee_does_not_clear_an_existing_holder(server):
+    # Blank means "not provided", not "unassign". A task that already has a
+    # holder keeps it — the same gap-filling-only rule the non-blank path
+    # follows, and the reason this normalises to None rather than erroring.
+    t = server.task_create(title="held, blank passed", description="x")
+    server.task_claim(t["slug"], assignee="original-holder")
+
+    server.task_update(t["slug"], status="in_progress", assignee="")
+
+    assert server.task_get(t["slug"])["assignee"] == "original-holder"
+
+
+@requires_omnigraph
 def test_task_update_defaulted_assignee_is_qualified_by_session_id(server):
     # Same qualification task_claim applies — see
     # test_caller_supplied_session_id_beats_the_server_environment — so a

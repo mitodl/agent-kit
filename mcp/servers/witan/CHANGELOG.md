@@ -38,6 +38,20 @@ a MINOR bump may include breaking changes).
   actor's already-in-progress work would mean guessing an identity there is
   no way to know correctly.
 
+  A blank `assignee` is now normalised to "not provided" rather than written
+  through. `_claim_holder` had always read one that way (`if assignee:`)
+  while the write path tested `is not None`, so the two disagreed and an
+  explicit `assignee=""` slipped past both halves of the fix above — the
+  blank was written AND the default declined to fill it, reconstructing the
+  same unnameable-holder state through the very parameter meant to prevent
+  it. Worse, on a task that already had a holder the blank silently
+  *cleared* it: a live lease whose owner was erased by a call that named
+  nobody. Blank now means "leave the assignee alone", so it fills a gap like
+  any other missing value and never clears one; whitespace counts as blank,
+  since a holder is displayed to humans and matched by `_holder_matches` and
+  `" "` names nobody either. Clearing an assignee is still deliberately not
+  offered here.
+
 ## [0.29.0] - 2026-08-24
 
 ### Fixed

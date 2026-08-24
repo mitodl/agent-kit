@@ -5514,6 +5514,26 @@ def task_update(
         near ``assignee``, so inserting it cannot shift what an existing
         positional caller's later arguments bind to.
     """
+    # A blank ``assignee`` is "not provided", not "provided as nothing".
+    # ``_claim_holder`` already reads it that way (``if assignee:``), and
+    # without this the two disagree: the ``is not None`` test below would write
+    # the blank straight through while the ``in_progress`` default further down
+    # declined to fill it, reconstructing the exact
+    # ``(in_progress, claimed_at set, no nameable holder)`` state this surface
+    # exists to make unrepresentable — see the ``status`` parameter's docstring.
+    # Normalised once, here, so every later branch agrees on what "provided"
+    # means rather than each re-deciding. Whitespace counts as blank because a
+    # holder is displayed to humans and matched by ``_holder_matches``; " "
+    # names nobody either.
+    #
+    # Not an error: the caller's intent (leave the assignee alone) is
+    # unambiguous and already expressible, so refusing would only turn a
+    # harmless call into a failed one. Clearing an assignee is deliberately
+    # still not offered here — the docstring calls this "reassign to", and
+    # nothing has asked for an unassign path.
+    if assignee is not None and not assignee.strip():
+        assignee = None
+
     changes: dict = {}
     if title is not None:
         changes["title"] = title
