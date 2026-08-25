@@ -76,6 +76,127 @@ def test_file_count_is_none_when_the_store_cannot_be_read(tmp_path, monkeypatch)
     assert store_module.file_count(ref, _StubConfig()) is None
 
 
+# ── store_health ──────────────────────────────────────────────────────────────
+
+# The real thing, from omnigraph 0.10.0 against a store 0.8.x wrote.
+_STALE_SCHEMA_ERROR = (
+    "__manifest is stamped at internal schema v4, but this omnigraph reads "
+    "only v6. This graph was created by omnigraph 0.8.x."
+)
+
+
+def _raising_client(monkeypatch, message: str) -> None:
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(store_module, "OmnigraphClient", _boom)
+
+
+def test_store_health_names_a_stale_on_disk_format_as_such(tmp_path, monkeypatch):
+    """The one unreadable-store failure with a known remedy.
+
+    Every code_* tool against such a store errors identically and forever, and
+    it is fixed by reindexing rather than by waiting or retrying — so it has to
+    be distinguishable from a store that is merely unreachable right now.
+    """
+    _raising_client(monkeypatch, _STALE_SCHEMA_ERROR)
+    ref = store_module.StoreRef(str(tmp_path / "x.omni"))
+
+    health = store_module.store_health(ref, _StubConfig())
+
+    assert health.ok is False
+    assert health.stale_schema is True
+    assert health.files is None
+    assert "internal schema v4" in health.error
+
+
+def test_store_health_does_not_call_every_other_failure_stale(tmp_path, monkeypatch):
+    _raising_client(monkeypatch, "connection refused")
+    ref = store_module.StoreRef(str(tmp_path / "x.omni"))
+
+    health = store_module.store_health(ref, _StubConfig())
+
+    assert health.ok is False
+    assert health.stale_schema is False
+
+
+def test_store_health_reports_an_empty_store_as_readable(tmp_path, monkeypatch):
+    """0 files and "cannot be opened" must not render the same.
+
+    Collapsing them is what let a dead code graph read as an under-indexed
+    repo for six weeks.
+    """
+    monkeypatch.setattr(
+        store_module, "OmnigraphClient", lambda *a, **kw: _StubClient([{"?": 0}])
+    )
+    ref = store_module.StoreRef(str(tmp_path / "x.omni"))
+
+    health = store_module.store_health(ref, _StubConfig())
+
+    assert health.ok is True
+    assert health.files == 0
+
+
+def test_health_report_covers_the_bridge_not_only_the_repo_stores(
+    tmp_path, monkeypatch
+):
+    """The bridge is the store nothing else watches.
+
+    It belongs to no repo, so per_repo_stores excludes it by design — and every
+    code_interface_* / code_cross_repo_impact tool reads it and nothing else
+    does. A readiness check that walks only the repo stores reports a healthy
+    system while cross-repo resolution is entirely broken.
+    """
+    code_dir = tmp_path / "code"
+    (code_dir / "https_github.com_test_cg.omni").mkdir(parents=True)
+    (code_dir / "_bridge.omni").mkdir()
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    monkeypatch.setattr(
+        store_module, "OmnigraphClient", lambda *a, **kw: _StubClient([{"f": 1}])
+    )
+
+    from witan_code import config as cfg_mod
+
+    probed = {str(h.ref) for h in store_module.health_report(cfg_mod.load())}
+
+    assert str(code_dir / "_bridge.omni") in probed
+    assert str(code_dir / "https_github.com_test_cg.omni") in probed
+
+
+# ── discard_store ─────────────────────────────────────────────────────────────
+
+
+def test_discard_store_takes_the_schema_stamp_with_it(tmp_path):
+    """A stamp outliving its store would suppress the apply on the fresh one.
+
+    schema_apply_if_changed skips when the stamped mtime matches the schema
+    file's, so a leftover stamp leaves the rebuilt store without its FTS
+    indexes — a rebuild that silently produces a half-working graph.
+    """
+    from witan_core.omnigraph import schema_stamp_path
+
+    store = tmp_path / "x.omni"
+    store.mkdir()
+    (store / "data.lance").write_text("payload")
+    schema_stamp_path(store).write_text("123.0")
+    store_module.repo_sidecar(store).write_text("https://github.com/test/cg")
+
+    freed = store_module.discard_store(store_module.StoreRef(str(store)))
+
+    assert not store.exists()
+    assert not schema_stamp_path(store).exists()
+    assert not store_module.repo_sidecar(store).exists()
+    assert freed >= len("payload")
+
+
+def test_discard_store_refuses_a_cluster_graph():
+    """The client cannot create a cluster graph, so it may not delete one."""
+    ref = store_module.StoreRef("https://omnigraph.test", graph_id="code-cg")
+
+    with pytest.raises(ValueError, match="cluster graph"):
+        store_module.discard_store(ref)
+
+
 # ── dir_stats ─────────────────────────────────────────────────────────────────
 
 

@@ -28,6 +28,32 @@ def test_find_binary_message_names_witan_code_setup(tmp_path, monkeypatch):
         OmnigraphClient._find_binary()
 
 
+def test_a_stale_on_disk_format_gets_a_rebuild_by_reindex_remedy():
+    """Not witan's export-with-the-old-binary migration.
+
+    A code graph is derived from a checkout, so it is rebuilt by reindexing —
+    which does not need the pre-upgrade binary to still be installed. Without
+    a hint set at all (the state this replaces) the base client re-raised the
+    raw Rust error, ANSI codes and backtrace boilerplate included, once per
+    tool call and with no remedy anyone could act on.
+    """
+    hint = OmnigraphClient._STORAGE_MISMATCH_HINT
+
+    assert hint is not None
+    assert "reindex" in hint
+    assert "migrate storage" not in hint
+
+
+def test_the_stale_format_detector_matches_omnigraphs_own_wording():
+    """Verbatim from omnigraph 0.10.0 opening a store 0.8.x wrote."""
+    from witan_code.graph import is_stale_schema
+
+    assert is_stale_schema(
+        "__manifest is stamped at internal schema v4, but this omnigraph reads only v6."
+    )
+    assert not is_stale_schema("tcp connect error")
+
+
 # ── check_writable: who may write a shared graph's default-branch view ───────
 #
 # On the cluster, a per-repo code graph is one graph for the whole team and its

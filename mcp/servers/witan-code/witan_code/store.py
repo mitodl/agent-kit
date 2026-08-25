@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -34,11 +35,12 @@ from witan_core.observability import get_logger
 from witan_core.omnigraph import (
     schema_apply,
     schema_apply_if_changed,
+    schema_stamp_path,
     shared_transport,
 )
 
 from . import config as cfg_module
-from .graph import OmnigraphClient
+from .graph import OmnigraphClient, is_stale_schema
 
 # Graph registration changes only when provisioning does (a Pulumi deploy), but
 # `_client_for_repo` asks "does this store exist" on every MCP tool call. One
@@ -457,6 +459,36 @@ def ensure_bridge_store(config: cfg_module.Config | None = None) -> StoreRef:
     return StoreRef(str(store))
 
 
+def discard_store(ref: StoreRef) -> int:
+    """Delete a LOCAL store directory and its sidecars. Returns bytes freed.
+
+    The rebuild step for a code graph, and it deletes rather than renaming
+    aside — the opposite of witan's ``migrate storage``, which keeps a
+    ``.pre-migrate`` copy. The asymmetry is the point: a memory graph holds
+    the only copy of what it knows, so a backup is the difference between a
+    migration and a data loss. A code graph holds a derivation of a checkout
+    that is still on disk, and the case this exists for is a store the
+    installed binary CANNOT OPEN — so the kept copy would be unreadable by
+    anything currently installed, indefinitely, at full size (27 GB for one
+    store here). Re-deriving it is the recovery; a copy is just the disk.
+
+    The schema stamp goes too. It records the mtime of the schema file as of
+    the last apply against a store that no longer exists, and leaving it would
+    make :func:`schema_apply_if_changed` skip the apply on the fresh store.
+
+    Refuses a cluster graph: the client cannot create one, so it has no
+    business deleting one either.
+    """
+    path = ref.local_path
+    if path is None:
+        raise ValueError(f"{ref} is a cluster graph — it cannot be rebuilt from here.")
+    freed = dir_stats(path)[0] if path.exists() else 0
+    shutil.rmtree(path, ignore_errors=True)
+    for sidecar in (schema_stamp_path(path), repo_sidecar(path)):
+        sidecar.unlink(missing_ok=True)
+    return freed
+
+
 # Wording that means "the graph is not there" rather than "I could not ask".
 #
 # Two phrasings because there are two hops. Directly against omnigraph-server
@@ -681,6 +713,76 @@ def repo_from_stem(stem: str) -> str:
     return stem
 
 
+# Stores already reported stale by `store_health`, so the warning is one line
+# per store for the life of the process rather than one per probe. A plain set
+# under `map_refs`' threads: the worst a lost race costs is a duplicate log
+# line, which is not worth a lock on a read path.
+_warned_stale: set[str] = set()
+
+
+@dataclass(frozen=True)
+class StoreHealth:
+    """Whether one code graph can actually be read, and why not when it can't.
+
+    ``files`` is the file count on a readable store and ``None`` otherwise —
+    the same value :func:`file_count` returns, since that is this probe with
+    the reason discarded. ``error`` carries the failure so a caller can say
+    something better than "?", and ``stale_schema`` marks the one failure with
+    a known remedy: a store written by an omnigraph whose on-disk format the
+    installed binary no longer reads.
+
+    That distinction is the whole point. "0 files" and "this store cannot be
+    opened" are the same rendering today, so a code graph that has been dead
+    since an omnigraph upgrade reads as a repo nobody has indexed much.
+    """
+
+    ref: StoreRef
+    files: int | None
+    error: str | None = None
+    stale_schema: bool = False
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+
+def store_health(ref: StoreRef, config: cfg_module.Config | None = None) -> StoreHealth:
+    """Read one file count out of ``ref``, keeping the failure if there is one.
+
+    The cheapest query that has to open the store to be answered, so it doubles
+    as the readiness probe: a graph that can answer ``count_files`` can serve
+    every other ``code_*`` read.
+    """
+    try:
+        rows = ref.client(config).read("code_read.gq", "count_files", {})
+    except Exception as exc:  # the reason IS the return value here, not a swallow
+        stale = is_stale_schema(str(exc))
+        # Warning for a stale schema, debug for anything else: a store the
+        # installed binary cannot open never recovers on its own, and it went
+        # unnoticed for six weeks precisely because nothing logged above debug.
+        # Every other failure is transient enough that a listing path (this
+        # runs on every prompt via the UserPromptSubmit hook) should stay quiet.
+        #
+        # Once per store per process, and WITHOUT the error body. The condition
+        # is one binary upgrade affecting every store at once, so `doctor`
+        # probes 55 of them in a breath and the un-deduplicated form buried its
+        # own table under 55 copies of the same paragraph — the "identical
+        # error per call" this exists to replace, moved to stderr. The store
+        # name is the part that differs and the only part worth repeating;
+        # callers that want the body have it on the returned StoreHealth.
+        if stale and str(ref) not in _warned_stale:
+            _warned_stale.add(str(ref))
+            logger.warning("witan.code.store.stale_schema", store=str(ref))
+        elif not stale:
+            logger.debug("witan.code.store.count_files_failed", exc_info=True)
+        return StoreHealth(ref, None, error=str(exc), stale_schema=stale)
+    if not rows:
+        return StoreHealth(ref, 0)
+    # Read positionally: the column takes the match variable's name on a
+    # populated store but is "?" on an empty one (see code_read.gq).
+    return StoreHealth(ref, next(iter(rows[0].values()), 0))
+
+
 def file_count(ref: StoreRef, config: cfg_module.Config | None = None) -> int | None:
     """How many files ``ref`` has indexed, or None if it can't be read.
 
@@ -688,19 +790,28 @@ def file_count(ref: StoreRef, config: cfg_module.Config | None = None) -> int | 
     file: this runs per store in ``code_indexed_repos`` and on every prompt via
     the UserPromptSubmit hook, and the bulk read it replaced would also have
     undercounted a store past all_file_hashes' 1,000,000-row cap.
+
+    Callers that can act on *why* a store is unreadable want
+    :func:`store_health`; this is that probe with the reason dropped.
     """
-    try:
-        rows = ref.client(config).read("code_read.gq", "count_files", {})
-    except Exception:  # noqa: BLE001 — degrade gracefully, a listing isn't critical
-        # Debug: the caller renders "unknown" for None, and this runs on the
-        # UserPromptSubmit hook path where a per-prompt warning would be noise.
-        logger.debug("witan.code.store.count_files_failed", exc_info=True)
-        return None
-    if not rows:
-        return 0
-    # Read positionally: the column takes the match variable's name on a
-    # populated store but is "?" on an empty one (see code_read.gq).
-    return next(iter(rows[0].values()), 0)
+    return store_health(ref, config).files
+
+
+def health_report(config: cfg_module.Config | None = None) -> list[StoreHealth]:
+    """Probe every per-repo code graph AND the derived bridge graph.
+
+    The bridge is included because it is the store that goes unwatched: it has
+    no repo of its own, so it appears in no repo listing, and every
+    ``code_interface_*`` / ``code_cross_repo_impact`` tool reads it. A readiness
+    check that walks only the per-repo stores reports a healthy system while
+    cross-repo resolution is entirely non-functional — which is what happened.
+    """
+    cfg = config or cfg_module.load()
+    refs = per_repo_stores(cfg)
+    bridge = bridge_store(cfg)
+    if bridge.exists(cfg):
+        refs = [*refs, bridge]
+    return map_refs(refs, lambda ref: store_health(ref, cfg))
 
 
 def dir_stats(path: Path) -> tuple[int, float]:

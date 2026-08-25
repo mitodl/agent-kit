@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.16.0] - 2026-08-25
+
+### Added
+
+- **`witan-code doctor` and the `code_store_health` tool — a readiness check
+  that covers the bridge store.** Every per-repo graph *and* the shared
+  `_bridge.omni`, probed with the cheapest query that has to open a store to
+  answer. The bridge is the point: it belongs to no repo, so it appears in no
+  repo listing, and `code_interface_search` / `code_interface_providers` /
+  `code_interface_consumers` / `code_cross_repo_impact` all read it and
+  nothing else does. A bridge that cannot be opened breaks all of them while
+  `code_indexed_repos` still lists every repo happily.
+
+  That is not hypothetical. On the machine this was written on, all 54 local
+  stores had been unreadable since an omnigraph upgrade — the bridge for six
+  weeks — and nothing reported it: the failure surfaced only as an identical
+  Rust backtrace per tool call, and the prompt hook went on asserting
+  "N other repos indexed, so cross-repo `code_interface_*` resolve" on every
+  single prompt while none of them could run.
+
+- **`witan-code reindex --rebuild`.** Deletes this repo's store, and the
+  bridge store if it is also unreadable, then indexes from scratch. Only the
+  stores that actually fail to open: `--rebuild` on a healthy store would
+  throw away a working index, and dropping a healthy bridge would take every
+  other repo's cross-repo bindings with it.
+
+  Deliberately not witan's `migrate storage` shape (export with the
+  pre-upgrade binary, reload with the new one, keep a `.pre-migrate` copy). A
+  memory graph holds the only copy of what it knows; a code graph holds a
+  derivation of a checkout that is still on disk. So this needs no old binary
+  and keeps no backup — a copy no installed binary can open is just disk, and
+  one of these stores is 27 GB.
+
+### Changed
+
+- **A stale on-disk format now fails with a remedy instead of a Rust
+  backtrace.** witan-code's `OmnigraphClient` sets the `_STORAGE_MISMATCH_HINT`
+  that witan-core has always supported and witan has always set; without it
+  the client re-raised omnigraph's raw error — ANSI escapes, `Location:`,
+  backtrace boilerplate — once per tool call, advising an export path that
+  needs a binary the upgrade replaced.
+
+- **`code_indexed_repos` distinguishes "unreadable" from "empty".** New
+  `unreadable` field carrying the reason; `files` stays `null`. The two used
+  to render identically, so a code graph that had been dead for weeks read as
+  a repo nobody had indexed much.
+
+- **The `UserPromptSubmit` block no longer claims cross-repo resolution works
+  without checking.** It probes the bridge (cached, one query per 5 min per
+  process) and says plainly when `code_interface_*` will fail. A store the
+  current repo cannot read replaces the size/freshness line with a warning
+  rather than rendering "? files" — unless an index is in flight, which is the
+  one benign way to see a store that will not open yet.
+
 ## [0.15.0] - 2026-08-21
 
 ### Changed

@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from witan_core.omnigraph import OmnigraphClient as _BaseOmnigraphClient
+from witan_core.omnigraph import _is_storage_version_mismatch
 
 from witan_core import chunking
 from . import config as cfg_module
@@ -22,8 +23,15 @@ __all__ = [
     "OmnigraphClient",
     "SharedGraphWriteRefused",
     "check_writable",
+    "is_stale_schema",
     "owns_view",
 ]
+
+# Re-exported under a public name because witan-code has a second, non-error
+# use for it: `store.store_health` classifies a store it probed deliberately,
+# not an exception that escaped. Same detector either way — a second copy of
+# the marker pair would drift.
+is_stale_schema = _is_storage_version_mismatch
 
 
 class SharedGraphWriteRefused(RuntimeError):
@@ -117,6 +125,19 @@ class OmnigraphClient(_BaseOmnigraphClient):
     """The base client, specialized for witan-code (per-repo code-graph stores)."""
 
     _SETUP_HINT = "witan-code setup (or `witan setup`, if witan is also installed)"
+    # Deliberately NOT witan's `migrate storage` advice. That path exports with
+    # the old binary and reloads with the new one, because a memory graph holds
+    # the only copy of what it knows. A code graph does not: it is derived from
+    # a checkout, and reindexing rebuilds it from source without needing the
+    # pre-upgrade binary to still be installed
+    # (tk-rebuild-derived-graphs-by-reindexing-not-by-expo-3b781b).
+    _STORAGE_MISMATCH_HINT = (
+        "This code graph was written by an older omnigraph and the installed "
+        "one cannot open it. A code graph is derived from the checkout, so it "
+        "is rebuilt by reindexing rather than migrated: run `witan-code "
+        "doctor` for every affected store, then `witan-code reindex --rebuild` "
+        "in each affected checkout."
+    )
 
     def __init__(
         self,

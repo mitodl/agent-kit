@@ -16,14 +16,25 @@ def _lock(tmp_path, monkeypatch, project_dir):
     return context._lock_path(project_dir)
 
 
-def _stub_store_stats(monkeypatch):
-    """Answer the store lookups without an omnigraph binary or a real store."""
+def _stub_store_stats(monkeypatch, health=None):
+    """Answer the store lookups without an omnigraph binary or a real store.
+
+    ``health`` overrides what the readiness probe reports; the default is a
+    healthy 3-file store. The bridge probe is stubbed to "no bridge here"
+    unless a caller says otherwise, so the coverage line stays about repo
+    counts in the tests that are about repo counts.
+    """
     monkeypatch.setattr(
         context.store_module,
         "repo_for_store",
         lambda s, cfg=None: "https://github.com/test/cg",
     )
-    monkeypatch.setattr(context.store_module, "file_count", lambda s, cfg=None: 3)
+    monkeypatch.setattr(
+        context.store_module,
+        "store_health",
+        lambda s, cfg=None: health or context.store_module.StoreHealth(s, 3),
+    )
+    monkeypatch.setattr(context, "_bridge_ok", lambda cfg: None)
 
 
 def test_inject_context_empty_without_repo(tmp_path, monkeypatch):
@@ -152,6 +163,86 @@ def test_inject_context_notes_in_progress_alongside_existing_store(
     text = context.inject_context()
 
     assert "background reindex is currently running" in text
+
+
+def test_inject_context_says_so_when_the_store_cannot_be_read(tmp_path, monkeypatch):
+    """An unreadable store rendered as "? files", which reads as cosmetic.
+
+    It is not: every `code_*` call against the repo errors. The block has to
+    push the agent off the tools rather than quietly understate the count.
+    """
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    code_dir = tmp_path / "code"
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    _lock(tmp_path, monkeypatch, tmp_path / "project")
+
+    store = code_dir / "https_github.com_test_cg.omni"
+    store.mkdir(parents=True)
+    _stub_store_stats(
+        monkeypatch,
+        health=context.store_module.StoreHealth(
+            None, None, error="internal schema v4", stale_schema=True
+        ),
+    )
+
+    text = context.inject_context()
+
+    assert "CANNOT BE READ" in text
+    assert "witan-code doctor" in text
+    assert "? files" not in text
+
+
+def test_inject_context_prefers_in_flight_to_unreadable(tmp_path, monkeypatch):
+    """A store being created right now is not a broken one.
+
+    `ensure_store` makes the directory before `omnigraph init` fills it, so a
+    prompt landing inside that window sees a store that exists and will not
+    open. The in-flight message already says not to trust it.
+    """
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    code_dir = tmp_path / "code"
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    lock = _lock(tmp_path, monkeypatch, tmp_path / "project")
+    lock.mkdir(parents=True)
+
+    store = code_dir / "https_github.com_test_cg.omni"
+    store.mkdir(parents=True)
+    _stub_store_stats(
+        monkeypatch,
+        health=context.store_module.StoreHealth(None, None, error="half-written"),
+    )
+
+    text = context.inject_context()
+
+    assert "CANNOT BE READ" not in text
+    assert "background reindex is currently running" in text
+
+
+def test_coverage_line_refuses_to_claim_cross_repo_works_with_a_dead_bridge(
+    tmp_path, monkeypatch
+):
+    """The line that was false for six weeks.
+
+    Every `code_interface_*` tool reads the bridge graph and nothing else does,
+    so a repo count says nothing about whether they resolve. Claiming they do
+    while the bridge cannot be opened is worse than silence: it turns a failed
+    query into "nothing consumes this".
+    """
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    code_dir = tmp_path / "code"
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    _lock(tmp_path, monkeypatch, tmp_path / "project")
+
+    store = code_dir / "https_github.com_test_cg.omni"
+    store.mkdir(parents=True)
+    (code_dir / "https_github.com_test_other.omni").mkdir()
+    _stub_store_stats(monkeypatch)
+    monkeypatch.setattr(context, "_bridge_ok", lambda cfg: False)
+
+    text = context.inject_context()
+
+    assert "cross-repo `code_interface_*` resolve" not in text
+    assert "code_interface_*` / `code_cross_repo_impact` call FAILS" in text
 
 
 def test_lock_path_does_not_collide_on_sanitization(tmp_path, monkeypatch):
