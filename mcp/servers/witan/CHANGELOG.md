@@ -8,6 +8,20 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The umbrella CLI configures observability, which is what actually covers
+  the CI indexer.** `witan code …` mounts witan_code's cyclopts App but not its
+  meta launcher, so `witan code index` — literally what
+  `docker/witan-ci-index.sh` runs — dispatches through `witan.cli._launcher`
+  and never executes witan-code's own. Configuring it only there (the first cut
+  of this fix) left the production path with no Sentry client and the incident
+  it was written for just as silent. The output-format forwarding a few lines
+  down is the tell: it exists because witan-code's launcher, which sets that
+  itself, is bypassed. Caught in review on #288.
+
+## [Unreleased]
+
 ### Changed
 
 - **`import witan.server` needing the omnigraph binary is now a decision on

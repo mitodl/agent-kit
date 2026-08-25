@@ -320,6 +320,20 @@ def _launcher(
         txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.
     """
     set_output_format(output_format)
+    # ★ HERE TOO, AND THIS IS THE PATH THAT MATTERS. `witan code …` mounts
+    # witan_code's cyclopts App (`app.command(_code_app, name="code")`) but NOT
+    # its meta launcher, so dispatch runs through THIS function and witan-code's
+    # own launcher never executes. The output-format forwarding just below is
+    # the tell: it exists precisely because witan-code's launcher — which sets
+    # that itself — is bypassed.
+    #
+    # The CI indexer runs `witan code index .` (docker/witan-ci-index.sh), so
+    # configuring observability only in witan-code's launcher would have left
+    # the exact incident this change exists to surface just as silent.
+    # Idempotent, and no-ops without the env vars; see witan_code.cli._launcher.
+    from witan_core.observability import configure_observability
+
+    configure_observability(instrument=False)
     try:
         from witan_code.output import set_output_format as set_code_output_format
 
