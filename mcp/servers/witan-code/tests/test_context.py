@@ -5,6 +5,8 @@ tests exercise context.py's own orchestration (repo detection, lock-file
 check, store-exists branching), not the underlying query.
 """
 
+import os
+import time
 from pathlib import Path
 
 from witan_code import context
@@ -243,6 +245,41 @@ def test_coverage_line_refuses_to_claim_cross_repo_works_with_a_dead_bridge(
 
     assert "cross-repo `code_interface_*` resolve" not in text
     assert "code_interface_*` / `code_cross_repo_impact` call FAILS" in text
+
+
+def test_the_bridge_verdict_is_cached_across_processes(tmp_path, monkeypatch):
+    """The hook is a fresh process per prompt, so an in-process memo caches
+    nothing. Without an on-disk cache the block costs a second store query on
+    every prompt for an answer that changes on a rebuild or an upgrade."""
+    from witan_code import config as cfg_mod
+
+    code_dir = tmp_path / "code"
+    (code_dir / "_bridge.omni").mkdir(parents=True)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    cfg = cfg_mod.load()
+
+    probes = []
+
+    def _probe(ref, config=None, *, bridge=False):
+        assert bridge, "the bridge must be probed with the bridge's own query"
+        probes.append(ref)
+        return context.store_module.StoreHealth(ref, None, error="stale")
+
+    monkeypatch.setattr(context.store_module, "store_health", _probe)
+
+    assert context._bridge_ok(cfg) is False
+    assert context._bridge_ok(cfg) is False  # would be a second query uncached
+    assert len(probes) == 1
+
+    # A cache older than the TTL is not trusted — a rebuild has to become
+    # visible without waiting for a process that never restarts.
+    os.utime(
+        context._bridge_probe_path(cfg),
+        (0, time.time() - context._BRIDGE_PROBE_TTL - 1),
+    )
+    context._bridge_ok(cfg)
+    assert len(probes) == 2
 
 
 def test_lock_path_does_not_collide_on_sanitization(tmp_path, monkeypatch):

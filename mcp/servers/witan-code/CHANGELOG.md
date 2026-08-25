@@ -54,11 +54,22 @@ a MINOR bump may include breaking changes).
   a repo nobody had indexed much.
 
 - **The `UserPromptSubmit` block no longer claims cross-repo resolution works
-  without checking.** It probes the bridge (cached, one query per 5 min per
-  process) and says plainly when `code_interface_*` will fail. A store the
-  current repo cannot read replaces the size/freshness line with a warning
-  rather than rendering "? files" — unless an index is in flight, which is the
-  one benign way to see a store that will not open yet.
+  without checking.** It probes the bridge and says plainly when
+  `code_interface_*` will fail. A store the current repo cannot read replaces
+  the size/freshness line with a warning rather than rendering "? files" —
+  unless an index is in flight, which is the one benign way to see a store
+  that will not open yet.
+
+  The verdict is cached on disk, not in the process: `witan-code
+  inject-context` is a fresh process per prompt, so a module-level memo would
+  cache nothing and the block would cost a second store query on every prompt.
+
+  The bridge is probed with `bridge.gq/count_bindings`, not the per-repo
+  `code_read.gq/count_files` — the bridge schema has no `CodeFile` node, so
+  the per-repo probe condemns a perfectly healthy bridge. That is not a
+  cosmetic misreport, because `--rebuild` keys off the same verdict: it was
+  caught deleting each freshly-rebuilt bridge on the very next repo of a
+  rebuild sweep, taking every other repo's bindings with it each time.
 
 ## [0.15.0] - 2026-08-21
 

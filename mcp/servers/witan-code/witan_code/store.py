@@ -734,27 +734,50 @@ class StoreHealth:
     That distinction is the whole point. "0 files" and "this store cannot be
     opened" are the same rendering today, so a code graph that has been dead
     since an omnigraph upgrade reads as a repo nobody has indexed much.
+
+    ``is_bridge`` records which store this is, since the probe had to know
+    anyway (the two schemas answer different queries). Carried rather than
+    re-derived: a caller that wants to label the bridge in a listing would
+    otherwise compare ``str(ref)`` against a freshly-resolved bridge path, and
+    that comparison is only right for as long as the two spellings agree.
     """
 
     ref: StoreRef
     files: int | None
     error: str | None = None
     stale_schema: bool = False
+    is_bridge: bool = False
 
     @property
     def ok(self) -> bool:
         return self.error is None
 
 
-def store_health(ref: StoreRef, config: cfg_module.Config | None = None) -> StoreHealth:
-    """Read one file count out of ``ref``, keeping the failure if there is one.
+def store_health(
+    ref: StoreRef,
+    config: cfg_module.Config | None = None,
+    *,
+    bridge: bool = False,
+) -> StoreHealth:
+    """Read one row count out of ``ref``, keeping the failure if there is one.
 
     The cheapest query that has to open the store to be answered, so it doubles
-    as the readiness probe: a graph that can answer ``count_files`` can serve
-    every other ``code_*`` read.
+    as the readiness probe: a graph that can answer its count can serve every
+    other read against it.
+
+    ``bridge`` picks WHICH count, and it is not optional. The bridge is a
+    different schema on a different query file — it has no ``CodeFile`` node at
+    all — so probing it with the per-repo ``count_files`` fails on a perfectly
+    healthy bridge. That misfire is not cosmetic here: ``reindex --rebuild``
+    keys off this verdict, so a bridge misreported as unreadable is a bridge
+    deleted on every rebuild, taking every other repo's bindings with it each
+    time. Caught mid-sweep doing exactly that.
     """
+    query_file, query = (
+        ("bridge.gq", "count_bindings") if bridge else ("code_read.gq", "count_files")
+    )
     try:
-        rows = ref.client(config).read("code_read.gq", "count_files", {})
+        rows = ref.client(config).read(query_file, query, {})
     except Exception as exc:  # the reason IS the return value here, not a swallow
         stale = is_stale_schema(str(exc))
         # Warning for a stale schema, debug for anything else: a store the
@@ -775,12 +798,14 @@ def store_health(ref: StoreRef, config: cfg_module.Config | None = None) -> Stor
             logger.warning("witan.code.store.stale_schema", store=str(ref))
         elif not stale:
             logger.debug("witan.code.store.count_files_failed", exc_info=True)
-        return StoreHealth(ref, None, error=str(exc), stale_schema=stale)
+        return StoreHealth(
+            ref, None, error=str(exc), stale_schema=stale, is_bridge=bridge
+        )
     if not rows:
-        return StoreHealth(ref, 0)
+        return StoreHealth(ref, 0, is_bridge=bridge)
     # Read positionally: the column takes the match variable's name on a
     # populated store but is "?" on an empty one (see code_read.gq).
-    return StoreHealth(ref, next(iter(rows[0].values()), 0))
+    return StoreHealth(ref, next(iter(rows[0].values()), 0), is_bridge=bridge)
 
 
 def file_count(ref: StoreRef, config: cfg_module.Config | None = None) -> int | None:
@@ -808,10 +833,11 @@ def health_report(config: cfg_module.Config | None = None) -> list[StoreHealth]:
     """
     cfg = config or cfg_module.load()
     refs = per_repo_stores(cfg)
+    report = map_refs(refs, lambda ref: store_health(ref, cfg))
     bridge = bridge_store(cfg)
     if bridge.exists(cfg):
-        refs = [*refs, bridge]
-    return map_refs(refs, lambda ref: store_health(ref, cfg))
+        report.append(store_health(bridge, cfg, bridge=True))
+    return report
 
 
 def dir_stats(path: Path) -> tuple[int, float]:

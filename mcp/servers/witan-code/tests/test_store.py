@@ -110,6 +110,61 @@ def test_store_health_names_a_stale_on_disk_format_as_such(tmp_path, monkeypatch
     assert "internal schema v4" in health.error
 
 
+def test_store_health_probes_the_bridge_with_a_query_the_bridge_has(
+    tmp_path, monkeypatch
+):
+    """The bridge is a different schema on a different query file.
+
+    It has no CodeFile node, so the per-repo `count_files` fails against a
+    perfectly healthy bridge. That misfire is not cosmetic: `reindex --rebuild`
+    keys off this verdict, so a bridge misreported as unreadable gets deleted
+    on every single rebuild, taking every other repo's bindings with it each
+    time. Caught mid-sweep doing exactly that.
+    """
+    asked: list[tuple[str, str]] = []
+
+    class _Recording:
+        def read(self, query_file, query, _params):
+            asked.append((query_file, query))
+            return [{"c": 7}]
+
+    monkeypatch.setattr(store_module, "OmnigraphClient", lambda *a, **kw: _Recording())
+    ref = store_module.StoreRef(str(tmp_path / "_bridge.omni"))
+
+    assert store_module.store_health(ref, _StubConfig(), bridge=True).files == 7
+    assert asked == [("bridge.gq", "count_bindings")]
+
+    asked.clear()
+    store_module.store_health(ref, _StubConfig())
+    assert asked == [("code_read.gq", "count_files")]
+
+
+@requires_stack
+def test_a_freshly_written_bridge_reads_as_healthy(sample_repo):
+    """The end-to-end version of the above, against a real store.
+
+    A stub can only pin which query is asked; this pins that the query the
+    bridge is asked actually answers on a bridge the indexer just wrote.
+    """
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+
+    # The bridge is only created for a repo that has a contract to record, and
+    # the stock sample has none.
+    (sample_repo / "settings.py").write_text(
+        "import os\n\nAPI_BASE_URL = os.environ['SERVICE_API_BASE_URL']\n"
+    )
+    cfg = cfg_mod.load()
+    indexer.index_path(sample_repo, force=False, config=cfg)
+    bridge = store_module.bridge_store(cfg)
+    assert bridge.exists(cfg)
+
+    assert store_module.store_health(bridge, cfg, bridge=True).ok
+    # And the wrong probe really does condemn it, so this is not a test that
+    # would pass either way.
+    assert not store_module.store_health(bridge, cfg).ok
+
+
 def test_store_health_does_not_call_every_other_failure_stale(tmp_path, monkeypatch):
     _raising_client(monkeypatch, "connection refused")
     ref = store_module.StoreRef(str(tmp_path / "x.omni"))

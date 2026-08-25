@@ -191,7 +191,10 @@ def _rebuild_stores(path: Path, *, yes: bool) -> None:
         if ref.exists(cfg) and not store_module.store_health(ref, cfg).ok:
             candidates.append(("this repo's code graph", ref))
     bridge = store_module.bridge_store(cfg)
-    if bridge.exists(cfg) and not store_module.store_health(bridge, cfg).ok:
+    if (
+        bridge.exists(cfg)
+        and not store_module.store_health(bridge, cfg, bridge=True).ok
+    ):
         candidates.append(("the shared cross-repo bridge graph", bridge))
 
     if not candidates:

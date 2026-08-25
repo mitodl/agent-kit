@@ -119,13 +119,31 @@ def _coverage_line(store: store_module.StoreRef, cfg: cfg_module.Config) -> str:
     )
 
 
-# One bridge probe per this many seconds per process. The hook runs on every
-# prompt and the bridge is one shared store, so an uncached probe would add a
-# query per prompt for an answer that only changes on a rebuild or an omnigraph
-# upgrade. A stale "healthy" for at most this long is the same exposure the
-# block's file count already carries.
+# One bridge probe per this many seconds, cached ON DISK.
+#
+# An in-process memo would cache nothing here: `witan-code inject-context` is a
+# fresh process per prompt, so a module-level dict is born and dies inside one
+# hook run. The hook already pays one store query for the repo's file count;
+# adding a second, uncached, on every prompt is a cost the block is not worth.
+#
+# The answer only changes when a store is rebuilt or omnigraph is upgraded, so
+# a few minutes of staleness is the same exposure the file count already
+# carries. The failure direction that matters is the safe one: a cache miss
+# probes, and an unwritable cache just means the next prompt probes again.
 _BRIDGE_PROBE_TTL = 300.0
-_bridge_probe: tuple[float, bool] | None = None
+
+
+def _bridge_probe_path(cfg: cfg_module.Config) -> Path:
+    """Where the cached bridge verdict lives — beside the session lock, in TMPDIR.
+
+    Keyed by a hash of the code dir rather than the path itself: two code dirs
+    must not collide on one cache entry, and a long path must not blow past a
+    filename limit — the same reasoning, and the same digest, as
+    :func:`_lock_path`.
+    """
+    tmp = Path(os.environ.get("TMPDIR", "/tmp"))
+    digest = hashlib.sha256(str(cfg.code_dir).encode()).hexdigest()[:16]
+    return tmp / f"codegraph-bridge-{digest}.probe"
 
 
 def _bridge_ok(cfg: cfg_module.Config) -> bool | None:
@@ -135,15 +153,22 @@ def _bridge_ok(cfg: cfg_module.Config) -> bool | None:
     with no bridge yet, has nothing broken — the repo-count line already covers
     it. A bridge that exists and will not open is a live failure.
     """
-    global _bridge_probe  # noqa: PLW0603 — process-lifetime memo, same as _graphs_cache
-    now = time.monotonic()
-    if _bridge_probe is not None and now - _bridge_probe[0] < _BRIDGE_PROBE_TTL:
-        return _bridge_probe[1]
     ref = store_module.bridge_store(cfg)
     if not ref.exists(cfg):
         return None
-    ok = store_module.store_health(ref, cfg).ok
-    _bridge_probe = (now, ok)
+    cache = _bridge_probe_path(cfg)
+    try:
+        if time.time() - cache.stat().st_mtime < _BRIDGE_PROBE_TTL:
+            return cache.read_text().strip() == "ok"
+    except OSError:
+        pass  # no cache, or an unreadable one: probe and rewrite it
+    ok = store_module.store_health(ref, cfg, bridge=True).ok
+    try:
+        cache.write_text("ok" if ok else "broken")
+    except OSError:
+        # A full or read-only TMPDIR costs a probe per prompt, not a wrong
+        # answer. Never let caching a verdict fail the block that reports it.
+        pass
     return ok
 
 

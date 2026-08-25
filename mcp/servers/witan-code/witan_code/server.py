@@ -1067,12 +1067,11 @@ def code_store_health() -> dict:
     (``witan-code reindex --rebuild``) rather than migrated.
     """
     report = store_module.health_report(cfg)
-    bridge = str(store_module.bridge_store(cfg))
     return {
         "stores": [
             {
                 "store": str(h.ref),
-                "kind": "bridge" if str(h.ref) == bridge else "repo",
+                "kind": "bridge" if h.is_bridge else "repo",
                 "ok": h.ok,
                 "files": h.files,
                 "error": h.error,
