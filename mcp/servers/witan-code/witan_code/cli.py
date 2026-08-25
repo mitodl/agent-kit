@@ -184,6 +184,24 @@ def _rebuild_stores(path: Path, *, yes: bool) -> None:
 
     console = Console()
     cfg = cfg_module.load()
+    # A rebuild deletes the WHOLE store, so the index that follows has to cover
+    # the whole repo. `reindex --rebuild src/` would empty the store and then
+    # refill only `src/`, leaving the rest of the repo silently unindexed — a
+    # worse state than the unreadable store it started from, and one nothing
+    # afterwards reports. Refuse rather than quietly widening the path the
+    # caller asked for.
+    #
+    # Asked of git rather than by walking up to a `.git` directory: in a linked
+    # worktree `.git` is a FILE, so the walk finds nothing and the guard would
+    # silently not apply in exactly the checkout layout this repo works in.
+    root = repo_module.git_toplevel(path)
+    if root is not None and path.resolve() != root.resolve():
+        console.print(
+            f"[red]--rebuild deletes the whole store, so it has to reindex the "
+            f"whole repo — but {path} is not the repo root.[/red] Re-run it as "
+            f"`witan-code reindex {root} --rebuild`."
+        )
+        raise SystemExit(1)
     slug = repo_module.detect(start=path)
     candidates = []
     if slug is not None:

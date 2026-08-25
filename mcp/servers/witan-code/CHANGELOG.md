@@ -39,6 +39,10 @@ a MINOR bump may include breaking changes).
   and keeps no backup — a copy no installed binary can open is just disk, and
   one of these stores is 27 GB.
 
+  Refuses a path that is not the repo root, since it deletes the whole store:
+  `reindex src/ --rebuild` would empty the store and refill only `src/`,
+  leaving the rest of the repo unindexed with nothing afterwards reporting it.
+
 ### Changed
 
 - **A stale on-disk format now fails with a remedy instead of a Rust

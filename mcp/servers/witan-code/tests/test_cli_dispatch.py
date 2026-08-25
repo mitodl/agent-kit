@@ -295,3 +295,33 @@ def test_branches_prune_is_refused_against_a_shared_store(monkeypatch, capsys):
     cli_module.branches(prune=True)
 
     assert "refusing to prune a shared graph" in capsys.readouterr().out
+
+
+def test_rebuild_refuses_a_path_that_is_not_the_repo_root(
+    tmp_path, monkeypatch, capsys
+):
+    """A rebuild deletes the whole store, so it must reindex the whole repo.
+
+    `reindex src/ --rebuild` would empty the store and refill only `src/`,
+    leaving the rest of the repo unindexed with nothing afterwards reporting
+    it — a worse state than the unreadable store it started from.
+    """
+    from witan_code import repo as repo_module
+    from witan_code import store as store_module
+
+    root = tmp_path / "checkout"
+    sub = root / "src"
+    sub.mkdir(parents=True)
+    monkeypatch.setattr(repo_module, "git_toplevel", lambda _p: root)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("deleted a store for a partial-path rebuild")
+
+    monkeypatch.setattr(store_module, "discard_store", _boom)
+
+    with pytest.raises(SystemExit):
+        cli_module._rebuild_stores(sub, yes=True)
+
+    out = capsys.readouterr().out
+    assert "not the repo root" in out
+    assert str(root) in out
