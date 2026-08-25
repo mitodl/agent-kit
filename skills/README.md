@@ -25,6 +25,7 @@ Skills are organized by **category**. Each skill lives in
 |----------|-------|-------------|
 | python | [`uv-python-workflow`](./python/uv-python-workflow/SKILL.md) | Use `uv` exclusively for all Python env & dependency management |
 | python | [`cyclopts-cli-scripts`](./python/cyclopts-cli-scripts/SKILL.md) | Use `cyclopts` for CLI scripts; place in `bin/` |
+| python | [`drf-api-performance`](./python/drf-api-performance/SKILL.md) | Fast DRF APIs: nesting limits, pagination count query, prefetch choice, no ORM in serializers |
 | dagster | [`dagster-code-location-structure`](./dagster/dagster-code-location-structure/SKILL.md) | `dg_projects/` layout, asset/sensor placement, one-at-a-time migration |
 | infrastructure | [`pulumi-modify-existing`](./infrastructure/pulumi-modify-existing/SKILL.md) | Modify existing stack entrypoint; never create new files; preserve `assumeRole` |
 | infrastructure | [`vault-k8s-auth`](./infrastructure/vault-k8s-auth/SKILL.md) | Wire Vault K8s auth via `hvac`; never hardcode role or mount path |
