@@ -118,6 +118,23 @@ def test_a_shared_branch_view_needs_an_identity_to_own_it():
         _check(remote=True, branch="feature-x", actor=None)
 
 
+def test_no_actor_means_logged_out_even_when_the_machine_has_one(logged_in_actor):
+    """`actor=None` is "nobody owns this write", never "go ask the process".
+
+    The guard used to fall back to `identity.actor_id()` here, which made the
+    refusal depend on whether whoever ran it had done a `witan login` — the
+    test above asserted the logged-out prose and CI, with no identity, was the
+    only place it held. It also meant a request arriving with no actor
+    (:mod:`witan_code.ingest`) was judged against the *server's* identity.
+    """
+    logged_in_actor("act-the-machine")
+
+    with pytest.raises(SharedGraphWriteRefused) as excinfo:
+        _check(remote=True, branch="feature-x", actor=None)
+    assert "witan login" in str(excinfo.value)
+    assert "act-the-machine" not in str(excinfo.value)
+
+
 def test_local_branch_views_need_no_actor():
     """A local store has one user, who owns every view in it — unchanged
     names, no migration, no login required to index offline."""
