@@ -101,3 +101,10 @@ witan-context covers three published packages, all developed in the
 Storage is [omnigraph](https://github.com/ModernRelay/omnigraph) — a local file, an
 `s3://` bucket, or a shared `omnigraph-server`. The same tools work against all
 three; only [`WITAN_MEMORY_URI`](reference/environment.md) changes.
+
+!!! note "For agents reading this site"
+
+    Every page here has a raw-markdown twin at the same URL with `.md`
+    appended — this page is also [`/index.md`](index.md). [`/llms.txt`](llms.txt)
+    is a link index into all of them; [`/llms-full.txt`](llms-full.txt) is the
+    whole site concatenated into one file.
