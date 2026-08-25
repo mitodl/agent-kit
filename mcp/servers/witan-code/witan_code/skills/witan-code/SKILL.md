@@ -89,7 +89,16 @@ repo looks identical to an unused one:
 | Question | Tool |
 |---|---|
 | Which repos are indexed, and how fresh? | `code_indexed_repos()` |
+| Can the stores actually be read at all? | `code_store_health()` |
 | Which branch views does a repo's store have? | `code_indexed_branches()` |
+
+`code_store_health()` is the one to reach for when `code_interface_*` or
+`code_cross_repo_impact` come back empty or erroring. Those four tools read one
+shared *bridge* graph that belongs to no repo, so it shows up in no repo
+listing — a bridge that cannot be opened breaks all of them while
+`code_indexed_repos()` still lists every repo happily. In `code_indexed_repos`
+output, `files: null` with a non-null `unreadable` means the same thing per
+repo: that store errors, it is not merely sparse.
 
 Every tool resolves the per-repo store from the current working directory and
 returns `[]`/`null` gracefully when nothing is indexed yet — an empty result
