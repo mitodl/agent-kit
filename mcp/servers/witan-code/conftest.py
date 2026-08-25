@@ -5,10 +5,15 @@ ambient input — HOME, the XDG dirs, the witan state files and graph stores, th
 terminal width — at import time rather than in a fixture, because the leak it
 exists to stop can happen while pytest is still collecting (importing
 ``witan.server`` creates a graph). A rootdir ``conftest.py`` is the earliest
-hook that runs for every invocation, `just test-*` or a bare ``pytest`` alike.
+hook that runs for every invocation.
 
-``pytest_plugins`` is only honoured in a rootdir conftest, which is the other
-reason this is here and not in ``tests/conftest.py``.
+★ IMPORTED, not named in ``pytest_plugins``. That setting is only honoured in
+whichever conftest is TOP-LEVEL for the rootdir pytest picked, and the rootdir
+depends on the arguments: run ``pytest`` from the repo root and all five of
+these become non-top-level, aborting collection outright with "Defining
+'pytest_plugins' in a non-top-level conftest is no longer supported". A plain
+import carries no such rule, does the same redirection (it happens at module
+import), and re-exporting the hook below makes this conftest its own plugin.
 """
 
 import sys
@@ -16,4 +21,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-pytest_plugins = ["testsupport.hermetic"]
+# The import is the point: `testsupport.hermetic` redirects the environment at
+# module scope. The hook re-export is what lets this conftest report a leak.
+from testsupport.hermetic import pytest_sessionfinish  # noqa: E402,F401

@@ -90,10 +90,27 @@ _CLEARED = (
     "WITAN_MODEL",
     "WITAN_AUTHOR",
     "WITAN_CONTEXT_TTL",
-    "WITAN_REQUIRE_OMNIGRAPH",
-    "WITAN_TEST_OMNIGRAPH_SERVER",
-    "WITAN_TEST_OMNIGRAPH_GRAPH",
+    "WITAN_OPTIMIZE_INTERVAL",
     "AC_KIT_CONFIG",
+    # Rendering and transport selectors. WITAN_OUTPUT_FORMAT is a cyclopts
+    # `env_var` on both CLIs, so an ambient `json` turns every table command's
+    # output into something no assertion here expects.
+    "WITAN_OUTPUT_FORMAT",
+    "WITAN_OMNIGRAPH_HTTP",
+    "OMNIGRAPH_BEARER_TOKEN",
+    # The write-path scanner. `WITAN_SCAN_ENABLED=false` is a documented
+    # opt-out, and inheriting it would run the whole suite with the scanner
+    # off — green, and testing something other than what ships.
+    "WITAN_SCAN_ENABLED",
+    "WITAN_SCAN_SECRET_ACTION",
+    "WITAN_SCAN_PII_ACTION",
+    "WITAN_SCAN_ENABLED_DETECTORS",
+    "WITAN_SCAN_DISABLED_DETECTORS",
+    "WITAN_SCAN_PLUGINS",
+    "WITAN_SCAN_ALLOWLIST",
+    # Identity of the calling agent session, which several code paths record
+    # as provenance.
+    "CLAUDE_SESSION_ID",
     # Observability: an exporter endpoint set on a developer's box would have
     # the suite emit spans at a real collector.
     "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -101,6 +118,39 @@ _CLEARED = (
     "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
     "SENTRY_DSN",
 )
+
+
+# ★ DELIBERATELY NOT CLEARED, and re-adding any of these breaks a check
+# silently — which is precisely the class of defect this module exists to end.
+#
+#   WITAN_REQUIRE_OMNIGRAPH      .github/workflows/witan-core-tests.yml sets
+#                                this to "1" on the test step so that a missing
+#                                omnigraph binary is a HARD FAILURE instead of a
+#                                skip. test_binary_contract.py reads it at
+#                                MODULE SCOPE, which runs after this plugin, so
+#                                popping it silently reverted the entire binary
+#                                contract suite to skipping green. That suite's
+#                                whole purpose is to stop itself being retired
+#                                quietly; clearing this retired it quietly.
+#
+#   WITAN_TEST_OMNIGRAPH_SERVER  The documented opt-in for the live-server
+#   WITAN_TEST_OMNIGRAPH_GRAPH   tests (`WITAN_TEST_OMNIGRAPH_SERVER=<url>
+#                                pytest -k live_server`). Their `skipif` is
+#                                evaluated at import, after this runs, so
+#                                clearing them made those tests permanently
+#                                unreachable — you could not opt in at all.
+#
+# The distinction is whether the variable selects BEHAVIOUR THE SUITE SHOULD NOT
+# INHERIT (clear it) or ENABLES A TEST MODE THE CALLER ASKED FOR (keep it). An
+# ambient value that changes what the code under test does is contamination; an
+# ambient value that a human or a workflow set to make the suite stricter is an
+# instruction.
+_EXEMPT = (
+    "WITAN_REQUIRE_OMNIGRAPH",
+    "WITAN_TEST_OMNIGRAPH_SERVER",
+    "WITAN_TEST_OMNIGRAPH_GRAPH",
+)
+assert not set(_CLEARED) & set(_EXEMPT), "an exempt selector must not also be cleared"
 
 
 def _redirect() -> None:
@@ -210,40 +260,138 @@ strict.
 """
 
 
+def _falsey(value: str) -> bool:
+    """Treat an explicitly-negative string as unset.
+
+    ``CI=false`` and ``CI=0`` are both set by real tooling, and a bare
+    truthiness check reads them as "yes, strict". Same parsing as
+    ``test_binary_contract.py`` uses for ``WITAN_REQUIRE_OMNIGRAPH``.
+    """
+    return value.strip().lower() in ("", "0", "false", "no", "off")
+
+
 def _strict() -> bool:
     override = os.environ.get(STRICT_ENV_VAR)
     if override is not None:
-        return override == "1"
-    return bool(os.environ.get("CI"))
+        return not _falsey(override)
+    return not _falsey(os.environ.get("CI", ""))
 
 
-_WATCHED = (
-    REAL_HOME / ".local" / "share" / "witan",
-    REAL_HOME / ".config" / "witan",
-    REAL_HOME / ".claude",
-    REAL_HOME / ".pi",
+# What to watch, and how deep. Depth matters more than it looks: the leak this
+# whole change exists to stop lands at ``~/.local/share/witan/code/<slug>.omni``
+# — INSIDE a ``code`` directory that already exists on any machine that has run
+# the indexer. Comparing only immediate children of ``~/.local/share/witan``
+# therefore saw no new name and reported nothing, on exactly the machines where
+# the leak was real. It only ever fired on CI, where the whole tree is absent so
+# ``code`` itself counts as new.
+#
+# Depth 3 covers store creation under ``code/`` and writes landing in an
+# existing store's ``nodes``/``edges``/``__manifest`` directories.
+#
+# ★ A depth is a bound, not a proof. A write buried deeper than this goes
+# unreported, and the check says so rather than implying it is exhaustive.
+_WATCHED_TREES = (
+    (REAL_HOME / ".local" / "share" / "witan", 3),
+    (REAL_HOME / ".config" / "witan", 2),
+)
+
+# Watched as FILES, by size and mtime, because the agent-kit#282 leak was an
+# APPEND to a file that already existed — a new-name check cannot see that, no
+# matter how deep it walks.
+_WATCHED_FILES = (
+    REAL_HOME / ".config" / "witan" / "merge-watermarks.json",
+    REAL_HOME / ".claude.json",
+    REAL_HOME / ".claude" / "settings.json",
+    REAL_HOME / ".pi" / "agent" / "mcp.json",
 )
 
 
-def _entries(directory: Path) -> set[str]:
-    """Top-level names under ``directory``, or empty if it does not exist."""
+# Paths a working machine rewrites on its own schedule. Measured, not guessed:
+# a 95-second idle probe (no tests running at all) and a parallel `just
+# test-all` between them reported exactly these — the indexer touching a
+# store's `.repo` sidecar, the OIDC client refreshing its token, Claude Code
+# persisting its own config.
+#
+# Only their MODIFICATION is ignored, never their creation. On CI none of these
+# exist, so a test that writes one still shows up as a `created` and is caught;
+# locally they pre-exist, so the churn is a modification and is filtered. That
+# keeps the agent-kit#282 shape — an append to an existing
+# `merge-watermarks.json`, which is NOT on this list — visible where it happens.
+#
+# ★ Four of five suites warned before this existed, every line of it ambient.
+# A check that cries wolf gets re-run past, which this file's own docstring says
+# is worth less than no check; the filter is what makes the warning mean
+# something off CI.
+_AMBIENT_CHURN = (
+    ".claude.json",  # Claude Code's own state, rewritten constantly
+    "tokens.json",  # refreshed by any witan client, incl. another session
+    "tokens.json.lock",
+)
+_AMBIENT_SUFFIXES = (
+    ".omni.repo",  # per-store sidecar, touched on any index
+    ".lock",
+    ".schema_mtime",
+)
+
+
+def _is_ambient(path_str: str) -> bool:
+    """Whether a MODIFICATION of this path is the machine rather than the suite."""
+    name = path_str.rsplit("/", 1)[-1]
+    return name in _AMBIENT_CHURN or path_str.endswith(_AMBIENT_SUFFIXES)
+
+
+def _marker(path: Path) -> str:
+    """A value that changes when ``path`` does. ``dir`` for directories.
+
+    Size and mtime rather than a hash: these trees hold hundreds of megabytes
+    of Lance data, and the check runs twice per session.
+    """
     try:
-        return {p.name for p in directory.iterdir()}
+        st = path.stat()
     except OSError:
-        return set()
+        return "<gone>"
+    if path.is_dir():
+        return "dir"
+    return f"{st.st_size}:{st.st_mtime_ns}"
 
 
-_BEFORE = {d: _entries(d) for d in _WATCHED}
+def _snapshot() -> dict[str, str]:
+    """Relative path -> marker, for everything currently watched."""
+    seen: dict[str, str] = {}
+
+    def walk(directory: Path, root: Path, depth: int) -> None:
+        if depth < 0:
+            return
+        try:
+            children = sorted(directory.iterdir())
+        except OSError:
+            return
+        for child in children:
+            # Absolute paths as keys, so a path reached by both the tree walk
+            # and the explicit file list is one entry rather than two.
+            seen[str(child)] = _marker(child)
+            if child.is_dir():
+                walk(child, root, depth - 1)
+
+    for root, depth in _WATCHED_TREES:
+        walk(root, root, depth - 1)
+    for path in _WATCHED_FILES:
+        if path.exists():
+            seen[str(path)] = _marker(path)
+    return seen
+
+
+_BEFORE = _snapshot()
 
 
 def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001 — pytest hook
-    """Report anything the suite added to the real home."""
-    leaked = {
-        directory: sorted(_entries(directory) - before)
-        for directory, before in _BEFORE.items()
-        if _entries(directory) - before
-    }
-    if not leaked:
+    """Report anything the suite added to, or changed in, the real home."""
+    now = _snapshot()
+    added = sorted(k for k in now if k not in _BEFORE)
+    changed = sorted(
+        k for k in now if k in _BEFORE and now[k] != _BEFORE[k] and not _is_ambient(k)
+    )
+    if not added and not changed:
         return
 
     lines = [
@@ -256,9 +404,8 @@ def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001 — pytest hook
         "  conftest.py.",
         "",
     ]
-    for directory, names in leaked.items():
-        lines.append(f"  {directory}")
-        lines.extend(f"    + {name}" for name in names)
+    lines.extend(f"    created  {name}" for name in added)
+    lines.extend(f"    modified {name}" for name in changed)
     lines.append("")
 
     if _strict():
