@@ -46,6 +46,7 @@ behavior, skill or not:
 ```python
 task_create(
     title="Retry loop swallows CancelledError",
+    description="The same retry loop discards CancelledError on the final attempt, same root cause as the reported bug.",
     type="bug", priority="p2",
     discovered_from=["tk-retry-logic-drops-the-last-attempt-s-e-4f9c21"],
 )
@@ -67,6 +68,18 @@ task_close(
 ```
 
 and offers to run `task_ready()` again so you can see what just unblocked.
+`/witan-task` doesn't store memory itself — that's not part of what it does —
+but the agent still records the lesson unprompted, same as in
+[Agent-driven](agent-driven.md#it-writes-the-fix-then-records-the-lesson):
+
+```python
+memory_store(
+    kind="lesson",
+    title="Retry loop must re-raise the last attempt's exception",
+    content="The final exception in a retry loop was being discarded, making a permanent failure look like a plain timeout to the caller. Re-raise on the last attempt.",
+    tags=["retry", "error-handling"],
+)
+```
 
 ## Where a second skill would come in
 

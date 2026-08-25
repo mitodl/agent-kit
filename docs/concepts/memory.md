@@ -7,24 +7,31 @@ and still useful later. It is the unit witan is built around: everything else
 
 ## Why "kind" instead of one big note pile
 
-Every memory carries a `kind`, and that single field decides *when* it should
-resurface:
+Every memory carries a required `kind`, and it's the field a person or an
+agent reaches for when *they* know what moment they're in — filtering
+`recall`'s search seed, or calling `memory_list(kind=…)` to browse one kind
+directly:
 
-| Kind | Answers | Read when |
+| Kind | Answers | Reach for it when |
 | --- | --- | --- |
 | `pattern` | "How do we do X here?" | About to write similar code |
 | `project_fact` | "What is true about this repo/service?" | Orienting in an unfamiliar codebase |
 | `lesson` | "What went wrong last time?" | Something has broken, or is about to |
 | `agent_context` | "What should the next session on *this task* know?" | Picking up someone else's in-flight work |
 
-A note with no kind gets read at none of those moments — nobody's query
-happens to land on it. Picking a kind is what makes a memory findable by the
-person who actually needs it, rather than only by someone who already knew it
-was there.
+**This is a filter you opt into, not something the store enforces on your
+behalf.** `recall`'s default (`kind` omitted) searches every kind at once —
+`kind` only narrows the query seed when you pass it explicitly. Picking the
+right kind at write time is still what makes the *narrowed* search useful
+later; it just doesn't gate the *default* one.
 
-`agent_context` is the odd one out: it is scoped to a specific piece of
-work rather than to a repo or topic in general, and it is the only kind
-meant to age out once that work is done.
+`agent_context` is intended for handoff notes scoped to one piece of
+work — link it to the task with `symbol_refs`/`tagged`/`addresses`, or it's
+just as findable by everyone as any other memory. Nothing in the store ages
+it out automatically either: unlike `supersedes`, there's no expiry
+mechanism, so a stale `agent_context` memory stays fully live in `recall`
+until someone updates, supersedes, or deletes it once the task it was about
+is done.
 
 ## Memories are a graph, not a table
 
@@ -36,6 +43,7 @@ is that memories point at each other, with the edge meaning something:
 | `supersedes` | This replaces that | The old one stops appearing by default |
 | `refines` | This sharpens that, without replacing it | Both appear; the newer one ranks higher |
 | `applies_to` | This pattern/lesson applies in that project's context | Following it pulls in the context |
+| `related_to` | Soft association, no stronger claim than "these two are connected" | `recall` expands across it like `applies_to` |
 | `contradicts` | These two disagree | **Both** appear, flagged — nothing is auto-resolved |
 | `tagged` | This memory is about that topic | Everything else tagged the same way expands with it |
 
@@ -65,8 +73,10 @@ do we know about vault?" is a graph query, not a grep.
 One topic kind is worth calling out: a `contract` topic's name is a bridge
 key — an environment variable, an HTTP endpoint, a package. That's the join
 between the memory graph and the [code graph](../getting-started/code-graph.md):
-`memory_for_contract("DATABASE_URL")` returns both what's been *written down*
-about that env var and what code *actually provides or consumes it*.
+`memory_for_contract("DATABASE_URL", kind="env_var")` returns both what's been
+*written down* about that env var and what code *actually provides or
+consumes it* — the `kind` argument is what turns on the second half; omit it
+and you get only the memories, no code-graph lookup.
 
 ## How you actually read this back
 

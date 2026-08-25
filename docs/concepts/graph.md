@@ -22,7 +22,7 @@ flowchart TB
     EPIC -->|ParentOf| SUB1
     EPIC -->|ParentOf| SUB2
     SUB2 -->|Blocks| OTHER
-    OTHER -->|DiscoveredFrom| FOUND
+    FOUND -->|DiscoveredFrom| OTHER
 ```
 
 - **`ParentOf`** — hierarchy. An epic decomposes into sub-issues; closing the
@@ -91,7 +91,9 @@ work:
 1. You claim `tk-retry-drops-last-error-4f9c21` → `task_claim` writes a
    `CodeBranch` linking your branch to that task.
 2. While fixing it you notice the retry loop also swallows a *different*
-   error class → `task_create(discovered_from=["tk-retry-drops-last-error-4f9c21"])`
+   error class → `task_create(title="…", description="…",
+   discovered_from=["tk-retry-drops-last-error-4f9c21"])` (both `title` and
+   `description` are required — `discovered_from` alone isn't a valid call)
    files `tk-swallowed-cancel-errors-b81a02`, linked `DiscoveredFrom` back to
    the task you were on.
 3. You store what you learned →

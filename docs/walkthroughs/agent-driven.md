@@ -33,10 +33,13 @@ before:
 recall(query="retry loop exception handling", task="tk-retry-logic-drops-the-last-attempt-s-e-4f9c21")
 ```
 
-`recall` seeds from both the query and the task, expands a hop across any
-linked memories, and comes back empty here — nobody has hit this before. If it
-hadn't been empty, the agent would read the existing lesson before writing
-code that repeats it.
+`recall` seeds from both the query and the task, expands a hop across
+`applies_to`/`related_to` edges plus topic and provenance siblings (not, say,
+a merely `refines`-linked memory — see [the memory
+model](../concepts/memory.md#memories-are-a-graph-not-a-table) for which
+edges actually widen a read), and comes back empty here — nobody has hit this
+before. If it hadn't been empty, the agent would read the existing lesson
+before writing code that repeats it.
 
 ## It finds the second bug on its own
 
@@ -48,6 +51,7 @@ prevent:
 ```python
 task_create(
     title="Retry loop swallows CancelledError",
+    description="The same retry loop discards CancelledError on the final attempt, same root cause as the reported bug.",
     type="bug",
     priority="p2",
     discovered_from=["tk-retry-logic-drops-the-last-attempt-s-e-4f9c21"],

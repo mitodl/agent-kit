@@ -9,19 +9,16 @@ running — you're about to fix this one by hand.
 witan tasks --ready
 ```
 
-```
-tk-retry-logic-drops-the-last-attempt-s-e-4f9c21  [p1]  open
-  Retry logic drops the last attempt's error
-```
+Prints a table titled "Ready tasks — mitodl/agent-kit" — priority, status,
+type, slug, title, and a few more columns — with
+`tk-retry-logic-drops-the-last-attempt-s-e-4f9c21` in it.
 
 ```bash
 witan task claim tk-retry-logic-drops-the-last-attempt-s-e-4f9c21
 ```
 
 ```
-Claimed tk-retry-logic-drops-the-last-attempt-s-e-4f9c21
-  status: in_progress
-  assignee: tmacey
+Claimed tk-retry-logic-drops-the-last-attempt-s-e-4f9c21 (assignee=tmacey)
 ```
 
 This sets `in_progress` with a lease under your author name and refuses if

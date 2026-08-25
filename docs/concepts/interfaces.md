@@ -41,7 +41,7 @@ meant to be reasoned over, not read on a screen. The CLI covers what a person
 sitting at a keyboard actually wants to do directly.
 
 Where the CLI and the MCP tools both offer an operation, **they are the same
-implementation** — `witan tasks` calls the identical function `task_list`
+implementation** — `witan tasks` calls the identical function that `task_list`
 exposes over MCP, then formats the result. They cannot disagree about what the
 graph says, because there's only one code path to disagree with itself. See
 [Architecture](../explanation/architecture.md#the-cli-is-not-a-second-implementation)

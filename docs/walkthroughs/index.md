@@ -43,7 +43,7 @@ code.
 | | CLI-driven | Agent-driven | Skills-driven |
 | --- | --- | --- | --- |
 | Who initiates each step | You, every time | The agent, on its own judgment | You, via a slash command; the agent follows a script |
-| Can store a memory? | No — `witan memory` only reads | Yes — `memory_store` | Yes — the skill calls `memory_store` for you |
+| Can store a memory? | No — `witan memory` only reads | Yes — `memory_store`, on the agent's own judgment | Yes, same as agent-driven — `/witan-task`/`/witan-workflow` don't call `memory_store` themselves, but the agent still can mid-session |
 | Picking which task to claim | You already know the slug | The agent reads it from context, or asks | `/witan-task` shows a picker |
 | Best for | Triage, scripting, a terminal you already have open | Work happening inside a normal agent session | The moments easy to get wrong by hand — claiming, session hand-off |
 
