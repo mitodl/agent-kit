@@ -393,3 +393,46 @@ def test_sentry_breadcrumbs_include_debug_records(monkeypatch):
     get_logger("test").debug("a debug breadcrumb")
     breadcrumbs = list(sentry_sdk.get_isolation_scope()._breadcrumbs)
     assert any(b["message"].find("a debug breadcrumb") != -1 for b in breadcrumbs)
+
+
+# ── The configured handler must late-bind sys.stderr ────────────────────────
+
+
+def test_the_configured_handler_follows_a_rebound_stderr():
+    """`configure_logging` runs ONCE per process; sys.stderr moves afterwards.
+
+    A `StreamHandler(sys.stderr)` captures the stream object at construction,
+    so anything that rebinds sys.stderr later — pytest's capsys,
+    `redirect_stderr`, a CLI swapping the stream — leaves every subsequent log
+    line going somewhere nobody reads. The module already solves this for its
+    UNCONFIGURED fallback with `_LateBoundStderr`; the configured path had the
+    same bug.
+
+    ★ THE ORDER IS THE TEST. Configure FIRST, rebind SECOND — that is the only
+    ordering the old implementation fails. A test that rebinds first (which is
+    what capsys-based tests do implicitly) passes either way and guards
+    nothing.
+    """
+    import io
+    from contextlib import redirect_stderr
+
+    from witan_core.observability.logging import (
+        configure_logging,
+        get_logger,
+        reset_logging,
+    )
+
+    reset_logging()
+    try:
+        configure_logging(log_format="json", level="INFO")
+
+        replacement = io.StringIO()
+        with redirect_stderr(replacement):
+            get_logger("late-bind-probe").error("witan.test.late_bound")
+
+        assert "witan.test.late_bound" in replacement.getvalue(), (
+            "the handler wrote to the stderr captured at configure time, not "
+            "the one in effect at log time"
+        )
+    finally:
+        reset_logging()

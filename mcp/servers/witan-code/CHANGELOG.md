@@ -10,6 +10,31 @@ a MINOR bump may include breaking changes).
 
 ### Fixed
 
+- **A failed cross-repo bridge write is reported instead of swallowed.** The
+  production bridge wedged for ~15 hours on 2026-08-25 and nothing said so:
+  every CI cycle logged the failure, printed `bindings=0 errors=0`, exited 0,
+  and raised no Sentry issue. Two independent causes.
+
+  The site logged at `warning`. `configure_sentry` installs
+  `LoggingIntegration(event_level=ERROR)` so a call site needs no
+  `capture_exception`, which makes the level the entire mechanism — and by that
+  contract a warning declares the failure "expected and already handled". A
+  throwing bridge write is neither. It logs at `error` now; verified end to end
+  against a recording transport (warning → 0 events, error → 1 issue with the
+  exception attached).
+
+  Sentry was also never initialised on that path: `configure_observability()`
+  ran only in `serve`, and the CI indexer runs `witan code index`. It now runs
+  in the CLI's meta launcher for every command, with `instrument=False` to keep
+  the OTel auto-instrumentors out of a short-lived CLI. Everything there no-ops
+  without its env var, so a developer with no `SENTRY_DSN` pays nothing.
+
+  The failure is now counted (`errors`) and flagged (`bridge=FAILED` in the
+  summary). `bindings=0` previously meant both "nothing to write" and "the
+  write threw". Deliberately still non-fatal — the per-repo index succeeds and
+  is worth keeping — but "non-fatal" and "unreported" are different claims.
+
+
 - **The test suite no longer asserts an environment.** Four tests
   (`test_branches.py`'s three branch-view assertions and
   `test_graph.py::test_a_shared_branch_view_needs_an_identity_to_own_it`)

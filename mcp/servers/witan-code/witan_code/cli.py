@@ -763,6 +763,11 @@ def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:
         # Only when it happened: a purge is newsworthy (rows were deleted),
         # but printing purged=0 on every routine index is noise.
         + (f" purged={stats.purged}" if stats.purged else "")
+        # Same rule, opposite reason: `bindings=0` is unremarkable on a run
+        # with nothing to write and alarming on one whose bridge write threw,
+        # and the number alone cannot tell you which. Say so in the one line
+        # anybody reads.
+        + (" bridge=FAILED" if stats.bridge_failed else "")
     )
 
 
@@ -1028,6 +1033,22 @@ def _launcher(
         stitch. Values: txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.
     """
     set_output_format(output_format)
+    # ★ EVERY command, not just `serve`. Until this was here, `serve` was the
+    # only entry point that configured observability — so the CI indexer, which
+    # runs `witan code index`, had no Sentry client at all and no amount of
+    # log-level correctness at a call site could have reported anything.
+    #
+    # It also puts structlog on the stdlib pipeline (`stdlib.LoggerFactory`),
+    # which is what Sentry's LoggingIntegration hooks; the unconfigured fallback
+    # writes straight to stderr and is invisible to it.
+    #
+    # `instrument=False` because this is a short-lived CLI: the OTel
+    # auto-instrumentors are worth their startup cost in a server process and
+    # not in `witan code repos`. Everything here no-ops without its env var —
+    # no SENTRY_DSN, no client — so a developer pays nothing.
+    from witan_core.observability import configure_observability
+
+    configure_observability(instrument=False)
     app(tokens)
 
 
