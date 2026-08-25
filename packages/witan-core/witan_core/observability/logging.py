@@ -224,7 +224,19 @@ def configure_logging(
         foreign_pre_chain=shared,
     )
     # See "STDOUT IS THE PROTOCOL" in the module docstring — stderr is explicit.
-    handler = logging.StreamHandler(sys.stderr)
+    #
+    # `_LateBoundStderr()` rather than `sys.stderr`, for the reason that class
+    # already documents: a StreamHandler captures the stream object at
+    # construction, and this runs ONCE per process. Anything that rebinds
+    # sys.stderr afterwards — pytest's capsys, contextlib.redirect_stderr, a
+    # CLI that swaps the stream — leaves every subsequent log line going to a
+    # stream nobody is reading. The fallback factory above was already fixed
+    # for exactly this; the configured path had the same bug and kept it,
+    # because nothing configured logging early enough for it to show. Adding
+    # `configure_observability()` to the witan-code CLI launcher made it show:
+    # the first test through the launcher pinned the handler to its own
+    # capsys, and a later test asserting on stderr saw an empty string.
+    handler = logging.StreamHandler(_LateBoundStderr())  # type: ignore[arg-type]
     handler.setFormatter(formatter)
 
     logging.config.dictConfig(
