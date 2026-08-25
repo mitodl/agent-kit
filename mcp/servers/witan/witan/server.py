@@ -102,6 +102,30 @@ def _ensure_graph(graph_uri: str) -> None:
 
     Creation keeps ``check=True``, and lets a missing binary raise — a store
     that does not exist yet has nothing to degrade to.
+
+    ★ SO ``import witan.server`` REQUIRES THE OMNIGRAPH BINARY ON A FRESH
+    INSTALL, and that is a decision rather than an oversight. It means a
+    caller that only wants the module object — a plugin loader, a docs
+    generator, ``pkgutil.walk_packages``, ``bin/check_core_floor.py`` — gets a
+    ``RuntimeError`` about a missing binary when it asked about nothing of the
+    kind. The alternative, deferring the bootstrap to first use, was weighed
+    and declined:
+
+    Importing this module IS a write, and the CLI depends on that being true.
+    ``witan.cli._common._srv`` diagnoses local-vs-deployed routing BEFORE
+    importing, and hands ``local_dispatch.local_server`` the import as an
+    unevaluated callable, so a refused write never reaches the store it is
+    refusing to touch. That ordering is the agent-kit#261 fix — a ``witan task
+    close`` that printed success, exited 0, and wrote to a local store while
+    the deployed graph still showed the task open nine days later. The
+    invariant is checkable in one line (``"witan.server" not in sys.modules``,
+    asserted in ``test_local_dispatch.py``); "the store is touched on first
+    use" would not be, because several legitimate paths reach the client
+    without passing the guard. A bright line around a failure mode that hid
+    for nine days is worth more than the import ergonomics it costs.
+
+    ``bin/check_core_floor.py`` reports this case as EXPECTED, naming this
+    function, so its output does not re-ask a settled question on every run.
     """
     if graph_uri.startswith(("http://", "https://", "s3://")):
         return
