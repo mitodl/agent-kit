@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Changed
+
+- **`import witan.server` needing the omnigraph binary is now a decision on
+  record, not an open question.** On a fresh install the module raises
+  `RuntimeError: omnigraph binary not found`, because `_ensure_graph` creates
+  the local store at module scope. `bin/check_core_floor.py` printed that on
+  every run under `UNRELATED`, alongside genuinely unexplained failures, which
+  is how a report becomes a line people learn to ignore.
+
+  Deferring the bootstrap to first use was weighed and declined. Importing this
+  module IS a write and the CLI depends on it: `_srv` diagnoses routing before
+  importing and hands the guard the import unevaluated, so a refused write never
+  reaches the store — the #261 fix, for a `task close` that reported success
+  against a graph nobody was reading for nine days. That invariant is checkable
+  in one line (`"witan.server" not in sys.modules`); "touched on first use"
+  would not be.
+
+  `_ensure_graph`'s docstring now carries the reasoning, and the floor check
+  reports this case as EXPECTED with its reason rather than as an anomaly.
+  Entries are matched on module, exception type and a message substring
+  together, so an unrelated `RuntimeError` from the same module cannot inherit
+  an explanation that does not apply to it. No behaviour change.
+
 ## [0.29.1] - 2026-08-24
 
 ### Fixed

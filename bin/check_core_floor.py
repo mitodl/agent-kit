@@ -101,25 +101,71 @@ CORE_REQUIREMENT = re.compile(
 # (a signature change evaluated at module scope, say), and this would miss it —
 # but a check that cries wolf is worth less than one with a known blind spot,
 # and the three escapes it exists to catch were all plain ImportErrors.
+#
+# ★ THE NON-FLOOR FAILURES SPLIT IN TWO, and the split is the difference
+# between a report and a line people learn to ignore. `witan.server` raising
+# `omnigraph binary not found` is not a defect awaiting a fix; it is a design
+# decision, taken deliberately and load-bearing for something else (see
+# EXPECTED_IMPORT_FAILURES). Printing it under the same heading as a genuinely
+# unexplained failure asks the reader to re-derive that on every run, and the
+# second or third time they do, they stop reading the section. So a known case
+# is named as known, with its reason, and only the rest is left open.
+#
+# The entries are matched on module + exception type + a substring of the
+# message, all three. Matching on the module alone would let some future
+# unrelated RuntimeError from `witan.server` inherit an explanation that does
+# not apply to it, which is the failure mode an allowlist like this has.
+EXPECTED_IMPORT_FAILURES = [
+    (
+        "witan.server",
+        "RuntimeError",
+        "omnigraph binary not found",
+        "witan.server bootstraps the local store at module scope "
+        "(`_ensure_graph`), which needs the omnigraph binary; `witan setup` "
+        "installs it. Deliberate: the CLI's local-dispatch guard holds this "
+        "import unevaluated precisely BECAUSE importing is what touches the "
+        "store, and that ordering is the agent-kit#261 fix. See "
+        "witan/server.py::_ensure_graph.",
+    ),
+]
+
 IMPORT_ALL = """
-import importlib, pkgutil, sys, traceback
+import importlib, json, pkgutil, sys, textwrap, traceback
 pkg = importlib.import_module(sys.argv[1])
+expected_spec = json.loads(sys.argv[2])
 names = [pkg.__name__] + [
     m.name for m in pkgutil.walk_packages(pkg.__path__, pkg.__name__ + ".")
 ]
-floor, other = [], []
+floor, expected, other = [], [], []
 for name in names:
     try:
         importlib.import_module(name)
     except Exception as exc:
         trace = "".join(traceback.format_exception(exc))
-        line = f"{name}: {type(exc).__name__}: {exc}"
+        kind = type(exc).__name__
+        line = f"{name}: {kind}: {exc}"
         missing_name = isinstance(exc, ImportError | AttributeError)
-        (floor if missing_name and "witan_core" in trace else other).append(line)
-ok = len(names) - len(floor) - len(other)
+        if missing_name and "witan_core" in trace:
+            floor.append(line)
+            continue
+        reason = next(
+            (
+                r
+                for mod, exc_type, needle, r in expected_spec
+                if mod == name and exc_type == kind and needle in str(exc)
+            ),
+            None,
+        )
+        (expected if reason else other).append(
+            (line, reason) if reason else line
+        )
+ok = len(names) - len(floor) - len(expected) - len(other)
 print(f"imported {ok}/{len(names)} modules")
 for line in floor:
     print("FAIL " + line)
+for line, reason in expected:
+    print("EXPECTED (by design; does not fail this check) " + line)
+    print(textwrap.fill(reason, 74, initial_indent="  > ", subsequent_indent="    "))
 for line in other:
     print("UNRELATED (not a witan_core import; does not fail this check) " + line)
 sys.exit(1 if floor else 0)
@@ -269,7 +315,14 @@ def check(root: Path, floor: Floor, workdir: Path) -> str | None:
         )
 
     imported = run(
-        [str(venv / "bin" / "python"), "-c", IMPORT_ALL, floor.package], cwd=workdir
+        [
+            str(venv / "bin" / "python"),
+            "-c",
+            IMPORT_ALL,
+            floor.package,
+            json.dumps(EXPECTED_IMPORT_FAILURES),
+        ],
+        cwd=workdir,
     )
     if imported.returncode != 0:
         return (
