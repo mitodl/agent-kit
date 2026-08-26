@@ -42,7 +42,7 @@ The usual moves, all of them from the serializer into the view's `get_queryset()
 | `instance.related.order_by(...).first()` | an ordered `Prefetch`, then index `[0]` in Python |
 | `Model.objects.get(...)` | `select_related()`, or accept the id and let the client resolve it |
 
-Two things that are easy to miss:
+Three things that are easy to miss:
 
 - `.count()` and `.exists()` are free on a prefetched relation - the related
   manager hands back the warm cache, and `QuerySet.count()` just measures it.
@@ -51,6 +51,7 @@ Two things that are easy to miss:
   discards the cache and puts you back to one query per object.
 - `__init__` and `to_representation()` count too. The rule is about the whole
   serializer, not just `SerializerMethodField`.
+- Any function call or property access a serializer makes could trigger a query.
 
 Logic that genuinely can't move into the queryset - anything a non-API caller also
 needs - belongs behind a
