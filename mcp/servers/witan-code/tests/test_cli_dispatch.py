@@ -325,3 +325,33 @@ def test_rebuild_refuses_a_path_that_is_not_the_repo_root(
     out = capsys.readouterr().out
     assert "not the repo root" in out
     assert str(root) in out
+
+
+def test_rebuild_refuses_a_file_path_with_real_git(tmp_path, monkeypatch, capsys):
+    """`index`/`reindex` accept a FILE, and `git -C <file>` exits 128.
+
+    Deliberately runs the real `git_toplevel` rather than stubbing it: the
+    stub in the test above returns a root for anything, so it cannot see this.
+    Reading "Not a directory" as "no repo" skipped the guard entirely and left
+    `reindex some_file.py --rebuild` deleting the whole store and refilling it
+    with one file — the exact outcome the guard exists to prevent.
+    """
+    import subprocess
+
+    from witan_code import store as store_module
+
+    root = tmp_path / "checkout"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    target = root / "a.py"
+    target.write_text("x = 1\n")
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("deleted a store for a single-file rebuild")
+
+    monkeypatch.setattr(store_module, "discard_store", _boom)
+
+    with pytest.raises(SystemExit):
+        cli_module._rebuild_stores(target, yes=True)
+
+    assert "not the repo root" in capsys.readouterr().out

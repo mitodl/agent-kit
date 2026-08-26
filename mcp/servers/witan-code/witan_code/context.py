@@ -152,9 +152,16 @@ def _bridge_ok(cfg: cfg_module.Config) -> bool | None:
     ``None`` and ``False`` are deliberately distinct. A repo indexed on its own,
     with no bridge yet, has nothing broken — the repo-count line already covers
     it. A bridge that exists and will not open is a live failure.
+
+    The absence check is LOCAL-ONLY, for the same reason as
+    :func:`store.health_report`'s: ``StoreRef.exists`` degrades every remote
+    probe failure to ``False``, so asking it about a cluster bridge turns "I
+    could not reach it" into "there isn't one" — and this block would then go
+    back to claiming cross-repo resolution works, which is the bug it was just
+    changed to stop telling.
     """
     ref = store_module.bridge_store(cfg)
-    if not ref.exists(cfg):
+    if not ref.is_remote and not ref.exists(cfg):
         return None
     cache = _bridge_probe_path(cfg)
     try:

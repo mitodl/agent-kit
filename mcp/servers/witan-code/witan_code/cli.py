@@ -194,7 +194,14 @@ def _rebuild_stores(path: Path, *, yes: bool) -> None:
     # Asked of git rather than by walking up to a `.git` directory: in a linked
     # worktree `.git` is a FILE, so the walk finds nothing and the guard would
     # silently not apply in exactly the checkout layout this repo works in.
-    root = repo_module.git_toplevel(path)
+    #
+    # From the PARENT when `path` is a file, because `index`/`reindex` accept
+    # one — and `git -C <file>` exits 128 ("Not a directory"), which this reads
+    # as "no repo" and skips the guard entirely. That left
+    # `reindex some_file.py --rebuild` deleting the whole store and refilling it
+    # with one file: the exact outcome the guard exists to prevent, reachable by
+    # the one argument shape most likely to be typed by accident.
+    root = repo_module.git_toplevel(path if path.is_dir() else path.parent)
     if root is not None and path.resolve() != root.resolve():
         console.print(
             f"[red]--rebuild deletes the whole store, so it has to reindex the "

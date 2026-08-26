@@ -252,6 +252,93 @@ def test_discard_store_refuses_a_cluster_graph():
         store_module.discard_store(ref)
 
 
+def test_discard_store_raises_rather_than_claiming_a_deletion_it_did_not_do(
+    tmp_path, monkeypatch
+):
+    """A failed delete must stop the rebuild, not be reported as freed bytes.
+
+    With `ignore_errors=True` a permissions error left the unreadable store in
+    place, removed the sidecars anyway, and returned a byte count the CLI
+    printed as "Deleted … (N freed)" — announcing a recovery that had not
+    happened, then reindexing into the same store that could not be opened.
+    """
+    from witan_core.omnigraph import schema_stamp_path
+
+    store = tmp_path / "x.omni"
+    store.mkdir()
+    (store / "data.lance").write_text("payload")
+    schema_stamp_path(store).write_text("123.0")
+
+    # Honours `ignore_errors` the way the real rmtree does, so this test can
+    # tell the two spellings apart. A stub that raises unconditionally cannot:
+    # it passes against `ignore_errors=True` too, proving nothing.
+    def _refuse(_path, ignore_errors=False, **_kwargs):
+        if ignore_errors:
+            return
+        raise PermissionError("read-only filesystem")
+
+    monkeypatch.setattr(store_module.shutil, "rmtree", _refuse)
+
+    with pytest.raises(PermissionError):
+        store_module.discard_store(store_module.StoreRef(str(store)))
+
+    # And the stamp survives alongside the store it describes — the correct
+    # state to stop in, since the store it was written for is still there.
+    assert store.exists()
+    assert schema_stamp_path(store).exists()
+
+
+# ── health_report: the bridge row ─────────────────────────────────────────────
+
+
+def test_an_unreachable_remote_bridge_is_reported_unhealthy_not_omitted(monkeypatch):
+    """`ok: true` while every bridge-backed tool fails is the failure this check exists to catch.
+
+    `StoreRef.exists` degrades EVERY remote probe failure to False on purpose,
+    so gating the bridge row on it dropped an unreadable cluster bridge out of
+    the report entirely — and `all(h.ok …)` then answered true.
+    """
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    monkeypatch.setattr(
+        store_module, "safe_cluster_graphs", lambda *a, **kw: frozenset()
+    )
+
+    def _unreachable(*_args, **_kwargs):
+        raise RuntimeError("tcp connect error")
+
+    monkeypatch.setattr(store_module, "OmnigraphClient", _unreachable)
+
+    from witan_code import config as cfg_mod
+
+    report = store_module.health_report(cfg_mod.load())
+
+    bridge_rows = [h for h in report if h.is_bridge]
+    assert len(bridge_rows) == 1, "the remote bridge must be probed, not skipped"
+    assert bridge_rows[0].ok is False
+    assert not all(h.ok for h in report)
+
+
+def test_a_missing_local_bridge_is_absence_not_failure(tmp_path, monkeypatch):
+    """A fresh install with no contracts yet has no bridge, and that is fine.
+
+    The remote rule above must not make `doctor` red on a healthy local setup
+    that simply has not written a bridge.
+    """
+    code_dir = tmp_path / "code"
+    (code_dir / "https_github.com_test_cg.omni").mkdir(parents=True)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    monkeypatch.setattr(
+        store_module, "OmnigraphClient", lambda *a, **kw: _StubClient([{"f": 1}])
+    )
+
+    from witan_code import config as cfg_mod
+
+    report = store_module.health_report(cfg_mod.load())
+
+    assert not any(h.is_bridge for h in report)
+    assert all(h.ok for h in report)
+
+
 # ── dir_stats ─────────────────────────────────────────────────────────────────
 
 

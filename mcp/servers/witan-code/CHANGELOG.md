@@ -42,6 +42,14 @@ a MINOR bump may include breaking changes).
   Refuses a path that is not the repo root, since it deletes the whole store:
   `reindex src/ --rebuild` would empty the store and refill only `src/`,
   leaving the rest of the repo unindexed with nothing afterwards reporting it.
+  The root is resolved from the parent directory when the path is a FILE —
+  `index`/`reindex` accept one, and `git -C <file>` exits 128, which read as
+  "not a repo" and skipped the guard on the argument shape most likely to be
+  typed by accident.
+
+  A failed deletion raises instead of being swallowed. `ignore_errors=True`
+  left an unreadable store in place while the sidecars went anyway and the CLI
+  printed "Deleted … (N freed)", announcing a recovery that had not happened.
 
 ### Changed
 
@@ -74,6 +82,15 @@ a MINOR bump may include breaking changes).
   cosmetic misreport, because `--rebuild` keys off the same verdict: it was
   caught deleting each freshly-rebuilt bridge on the very next repo of a
   rebuild sweep, taking every other repo's bindings with it each time.
+
+  A REMOTE bridge is always probed rather than gated on `StoreRef.exists`,
+  which degrades every failed remote probe to `False` by design. Gating on it
+  dropped an unreachable cluster bridge out of the report entirely and let
+  `code_store_health` answer `ok: true` while every `code_interface_*` tool
+  was failing — the exact condition the check exists to detect. A missing
+  LOCAL bridge is still absence, not failure: a repo with no contracts yet has
+  none, and reporting that as red would fail a healthy fresh install. The
+  prompt hook's own bridge probe carried the same defect and is fixed with it.
 
 ## [0.15.0] - 2026-08-21
 

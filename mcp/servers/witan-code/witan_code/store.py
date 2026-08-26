@@ -478,12 +478,22 @@ def discard_store(ref: StoreRef) -> int:
 
     Refuses a cluster graph: the client cannot create one, so it has no
     business deleting one either.
+
+    A deletion failure RAISES rather than being swallowed. This used to pass
+    ``ignore_errors=True``, which meant a permissions or filesystem error left
+    the unreadable store in place while the sidecars went anyway and the caller
+    printed "Deleted … (N freed)" — reporting a recovery that had not happened,
+    and then reindexing into the same store that could not be opened. Stopping
+    with the real error is the only honest outcome, and the sidecars surviving
+    alongside the store they describe is the correct state to stop in.
     """
     path = ref.local_path
     if path is None:
         raise ValueError(f"{ref} is a cluster graph — it cannot be rebuilt from here.")
-    freed = dir_stats(path)[0] if path.exists() else 0
-    shutil.rmtree(path, ignore_errors=True)
+    if not path.exists():
+        return 0
+    freed = dir_stats(path)[0]
+    shutil.rmtree(path)
     for sidecar in (schema_stamp_path(path), repo_sidecar(path)):
         sidecar.unlink(missing_ok=True)
     return freed
@@ -834,10 +844,29 @@ def health_report(config: cfg_module.Config | None = None) -> list[StoreHealth]:
     cfg = config or cfg_module.load()
     refs = per_repo_stores(cfg)
     report = map_refs(refs, lambda ref: store_health(ref, cfg))
-    bridge = bridge_store(cfg)
-    if bridge.exists(cfg):
-        report.append(store_health(bridge, cfg, bridge=True))
+    report.extend(_bridge_health(bridge_store(cfg), cfg))
     return report
+
+
+def _bridge_health(bridge: StoreRef, cfg: cfg_module.Config) -> list[StoreHealth]:
+    """The bridge's row, or none at all when there genuinely is no bridge.
+
+    ONLY A LOCAL ABSENCE IS REALLY ABSENCE. :meth:`StoreRef.exists` degrades
+    every remote probe failure to ``False`` on purpose — a read path has
+    nothing better to do with an unreachable server — so gating the remote
+    bridge on it drops an unreadable one out of the report entirely and lets
+    ``ok`` come back true while every ``code_interface_*`` tool is failing.
+    That is precisely the condition this readiness check exists to catch, so
+    the remote bridge is always probed and :func:`store_health` keeps the
+    error.
+
+    Locally, ``exists`` is a directory check and means what it says: a repo
+    with no contracts yet has no bridge, and reporting a missing directory as
+    a failure would make ``doctor`` red on a healthy fresh install.
+    """
+    if not bridge.is_remote and not bridge.exists(cfg):
+        return []
+    return [store_health(bridge, cfg, bridge=True)]
 
 
 def dir_stats(path: Path) -> tuple[int, float]:
