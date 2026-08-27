@@ -489,6 +489,56 @@ def test_task_update_blank_assignee_does_not_clear_an_existing_holder(server):
 
 
 @requires_omnigraph
+@requires_omnigraph
+def test_task_claim_reports_qualified_when_session_id_given(server, monkeypatch):
+    """A claim that names a session says so, so callers can check."""
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="qualified claim", description="x")
+    result = server.task_claim(t["slug"], session_id="sess-abcdefgh")
+
+    assert result["claimed"] is True
+    assert result["qualified"] is True
+    assert "warning" not in result
+
+
+@requires_omnigraph
+def test_task_claim_deployed_without_session_id_warns(server, monkeypatch):
+    """The uncovered path: an agent calling a deployed witan directly.
+
+    It cannot be refused — the server has no way to supply the id — so the
+    contract is that it is visible rather than silent.
+    """
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="unqualified claim", description="x")
+    result = server.task_claim(t["slug"])
+
+    assert result["claimed"] is True
+    assert result["qualified"] is False
+    assert "session_id" in result["warning"]
+
+
+@requires_omnigraph
+def test_task_claim_explicit_assignee_is_not_warned_about(server, monkeypatch):
+    """An explicit assignee is a deliberate choice (a worker name, a CI job).
+
+    Warning about it would fire on every such caller forever, and there is
+    nothing for them to fix.
+    """
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="worker claim", description="x")
+    result = server.task_claim(t["slug"], assignee="ci-runner-7")
+
+    assert result["claimed"] is True
+    assert result["qualified"] is False
+    assert "warning" not in result
+
+
 def test_task_update_defaulted_assignee_is_qualified_by_session_id(server):
     # Same qualification task_claim applies — see
     # test_caller_supplied_session_id_beats_the_server_environment — so a

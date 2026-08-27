@@ -5677,6 +5677,15 @@ async def task_claim(
     (see ``task_ready``); re-calling renews it. Pass ``force`` to steal a live
     claim.
 
+    A success also reports ``"qualified"``: whether the recorded holder names
+    the session as well as the person. ``false`` on a deployed call means the
+    caller sent no ``session_id`` and this person's concurrent sessions are
+    indistinguishable to the contention check — the mutual exclusion this tool
+    exists for is not in effect for them. That case carries a ``"warning"``
+    saying so. It is reported rather than refused because the server has no way
+    to supply the id itself, so refusing would break every caller that cannot
+    send one; see ``_claim_holder``.
+
     BEST-EFFORT CAS — omnigraph 0.8.x exposes no conditional-write primitive, so
     the claim write cannot be made atomic at the store. Instead we surface the
     Lance optimistic-concurrency conflict (rather than masking it with a retry)
@@ -5952,13 +5961,29 @@ async def task_claim(
         branch=branch,
         task_slug=slug,
     )
-    return {
+    result = {
         "slug": slug,
         "claimed": True,
         "assignee": holder,
         "claimed_at": now,
+        "qualified": _is_qualified(holder),
         "stole": bool(held and current_holder != holder),
     }
+    if not result["qualified"] and assignee is None and not _is_local_stdio():
+        # A deployed caller that sent no session_id claims under its bare
+        # identity, so this person's other concurrent sessions share the holder
+        # string and `current_holder != holder` above cannot separate them —
+        # the second session renews the first's lease and is told it claimed.
+        # The server cannot supply the id (a pod has no $CLAUDE_SESSION_ID and
+        # MCP 2026-07-28 carries no session state), so the collision stays
+        # possible; saying so here is what keeps it from being silent.
+        result["warning"] = (
+            f"Claimed as {holder!r}, which names no session. Your other "
+            "concurrent sessions claim under this same name and cannot be "
+            "told apart from this one, so one of them may hold this task "
+            "already. Pass session_id to task_claim to qualify it."
+        )
+    return result
 
 
 @_tool

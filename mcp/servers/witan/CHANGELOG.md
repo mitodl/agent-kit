@@ -8,6 +8,26 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **`task_claim` reports whether its holder names a session.** The success
+  return gains `"qualified"`, and a deployed call that defaulted the holder and
+  received no `session_id` also gets a `"warning"`. Without the id, one
+  person's concurrent sessions all claim under the same name, the
+  `current_holder != holder` contention check cannot separate them, and the
+  second session silently renews the first's lease while being told it claimed.
+  The server cannot supply the id (a pod has no `$CLAUDE_SESSION_ID`, MCP
+  carries no session state), so this is reported rather than refused. Sampling
+  the deployed graph found 13 such claims across three people. An explicit
+  `assignee` is exempt. See the 2026-08-27 addendum to ADR-0003.
+
+### Fixed
+
+- **The `witan-task` skill told callers to pass the session id as `assignee`.**
+  That replaces the holder instead of qualifying it, recording a session and no
+  person — there is one such holder in the deployed graph. It now says to pass
+  `session_id`, and to reserve `assignee` for a genuinely different worker.
+
 ### Fixed
 
 - **The umbrella CLI configures observability, which is what actually covers
