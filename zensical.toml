@@ -35,6 +35,18 @@ nav = [
     { "Tasks and projects" = "getting-started/tasks-and-projects.md" },
     { "Indexing a repository" = "getting-started/code-graph.md" },
   ] },
+  { "Concepts" = [
+    { "Overview" = "concepts/index.md" },
+    { "Memory and its four kinds" = "concepts/memory.md" },
+    { "The task and project graph" = "concepts/graph.md" },
+    { "Three ways in: CLI, agent, skills" = "concepts/interfaces.md" },
+  ] },
+  { "Walkthroughs" = [
+    { "Overview" = "walkthroughs/index.md" },
+    { "CLI-driven" = "walkthroughs/cli-driven.md" },
+    { "Agent-driven" = "walkthroughs/agent-driven.md" },
+    { "Skills-driven" = "walkthroughs/skills-driven.md" },
+  ] },
   { "Guides" = [
     { "Overview" = "guides/index.md" },
     { "witan user guide" = "guides/witan-user-guide.md" },

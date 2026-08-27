@@ -259,7 +259,9 @@ docs-gen:
 docs-check:
     ./bin/gen_docs.py --check
 
-# Build the static site into site/.
+# Build the static site into site/, plus llms.txt and a markdown mirror for
+# agents (bin/gen_llms.py) — see .readthedocs.yaml and docs.yml for why that
+# step runs as plain `python3`, not `uv run`.
 #
 # Pinned to the same Zensical as .github/workflows/docs.yml and
 # .readthedocs.yaml. Zensical is pre-1.0 and its output changes between patch
@@ -268,6 +270,7 @@ docs-check:
 # pin exists to prevent. Renovate bumps all three together.
 docs-build:
     uvx zensical@0.0.56 build
+    ./bin/gen_llms.py
 
 # Serve the docs locally with incremental rebuilds.
 docs-serve:

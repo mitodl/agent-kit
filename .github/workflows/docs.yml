@@ -23,6 +23,7 @@ on:
       - "packages/witan-core/**"
       - "docker/**"
       - "bin/gen_docs.py"
+      - "bin/gen_llms.py"
       - "zensical.toml"
       - ".readthedocs.yaml"
       - "uv.lock"
@@ -37,6 +38,7 @@ on:
       - "packages/witan-core/**"
       - "docker/**"
       - "bin/gen_docs.py"
+      - "bin/gen_llms.py"
       - "zensical.toml"
       - ".readthedocs.yaml"
       - "uv.lock"
@@ -120,3 +122,13 @@ jobs:
             echo "::error::Zensical did not report a completed build."
             exit 1
           fi
+
+      - name: Generate llms.txt and the markdown mirror
+        # Same script Read the Docs runs in .readthedocs.yaml's build.jobs, so
+        # this is what actually catches a mismatch between zensical.toml's nav
+        # and docs/ before it reaches the published site — a nav entry with no
+        # matching file, or vice versa, fails here as a plain traceback.
+        run: |
+          ./bin/gen_llms.py
+          test -s site/llms.txt
+          test -s site/llms-full.txt

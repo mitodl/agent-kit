@@ -217,19 +217,51 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: `bin/check_omnigraph_format.py` ("omnigraph 0.10.0 reads storage format 6,
 #: as declared."), so this is not a rebuild-every-graph event — the v0.10.0
 #: notes independently confirm the manifest schema stays at v6.
+#:
+#: ★ REFRESHED AGAIN 2026-08-26, after `witan-code (code graph)` went red on
+#: agent-kit#289 with the by-now-familiar checksum mismatch. `edge` had moved
+#: from bb0e3dc8bf to f714e5961147, two commits later:
+#:   #551 `feat(engine): expose branch-merge table-walk timing` — confined to
+#:        `crates/omnigraph/src/exec/merge.rs` and `instrumentation.rs`, plus
+#:        tests/docs. Opt-in developer instrumentation
+#:        (`MergeWriteProbes::merge_timing_snapshot`); the release notes say
+#:        outright "Production leaves the task-local probe unset and performs
+#:        no timing clock reads," and separately reconfirm "Internal manifest
+#:        schema remains v6."
+#:   #553 `ci: move Azure and vocabulary audits off PRs` — workflow files
+#:        only (`.github/workflows/*`, a new gating script). Ships nothing in
+#:        the binary.
+#: Re-ran the same vocabulary check as every prior refresh — a tree-wide `git
+#: grep` for every `_RETRYABLE`/`_NEEDS_REPAIR`/`_PRECONDITION_FAILED`/
+#: `_RECOVERY_REQUIRED` substring and the `"storage: "` prefix, at both refs —
+#: and every match count came back identical; no rename, no removal.
+#: `bin/check_omnigraph_format.py` against the freshly-installed binary again
+#: read "omnigraph 0.10.0 reads storage format 6, as declared."
+#:
+#: Each digest below was independently confirmed twice: against the release's
+#: published `.sha256`, and against a tarball downloaded fresh and hashed
+#: locally, in the same sitting. Worth naming why that second check matters —
+#: the first `omnigraph-linux-arm64.tar.gz` download here truncated
+#: mid-transfer (a plain connection reset, `curl` exit 56) and hashed to a
+#: THIRD value, distinct from both the published digest and the one below; a
+#: retry matched. A truncated download can produce a stable, wrong hash
+#: rather than an obvious error — check the transfer actually completed
+#: before trusting a locally-computed digest, not just that `curl` printed
+#: something.
+#:
 #: Reverting the experiment means restoring the v0.9.0 triple, which was:
 #:     linux-x86_64  507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197
 #:     linux-arm64   6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881
 #:     macos-arm64   69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "37b1333d83eeb18a30bff841e4801dd269a90f1b720d8ce9e69fc6c2c6c4add5"
+        "7633416d2192eb3b419f7e047759576587758bda80d0278eae6b11579a5e0943"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "8c02e1c0426debd809a355129adf315dd284f0afb87a5e5ee89af6a0188a475a"
+        "cec6d1ce1ac3bb16f1114d17bbd219ad003127f3d277d9fadd5bfb58cf2dce7c"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "a272a7830f4d2ddfd6c4295b9b4626aad9cd2caaa6fe30c6162b82d84b732adb"
+        "245bea28172dfafc231b6ee39c8b9fd0e6feeb928a96458f501e58b234b65f08"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
