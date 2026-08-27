@@ -193,10 +193,27 @@ def _resolve_client() -> OmnigraphClient:
     In deployed streamable-http mode, a validated JWT is required to reach
     any tool handler (FastMCP itself rejects unauthenticated requests via
     ``_jwt_verifier``), so ``get_access_token()`` returning ``None`` here
-    means this call is *not* a tool request — e.g. an admin/migration CLI
-    command (``apply-schema``, ``migrate-topics``) invoked directly inside
-    the deployed container. Those fall back to the shared default client
-    rather than erroring, since they have no per-user identity to isolate.
+    means this call is *not* a tool request, and there is no caller to
+    authenticate as. It refuses rather than borrowing ``_default_client``.
+
+    ★ THAT REFUSAL REPLACES A FALLBACK THAT COULD ONLY EVER 403. ADR-0004
+    justified the fallback by the admin/migration CLI (``apply-schema``,
+    ``migrate-topics``) "invoked directly inside the deployed container".
+    That path does not exist in the deployed topology: ol-infrastructure
+    sets ``WITAN_OIDC_ISSUER`` only on the MCP tier's own Deployment
+    (``applications/witan/deployment.py``), while the migration Job and the
+    break-glass pod (``migrations.py``, ``break_glass.py``) each run in
+    their own pod without it — so they take the branch above and are
+    untouched by this. The one pod that does reach here has
+    ``WITAN_MEMORY_TOKEN`` bound to ``svc-witan-ci``, which the memory Cedar
+    bundle has no group for at all: every call through the fallback came
+    back ``policy denied ... unknown actor 'svc-witan-ci'``. Worse, that is
+    the same message a genuinely missing actor-token entry produces, so the
+    guaranteed denial masked a signal that means something. Failing closed
+    here says which of the two it was, and says it before the HTTP call.
+
+    Sibling of ``witan_code.ingest._client``, which already refuses on this
+    same condition and for the same reason.
 
     Otherwise, the JWT's ``sub`` claim is mapped to an actor id and its
     pre-provisioned omnigraph bearer token is looked up, and a client for
@@ -208,7 +225,13 @@ def _resolve_client() -> OmnigraphClient:
         return _default_client
     token = get_access_token()
     if token is None:
-        return _default_client
+        raise RuntimeError(
+            "No authenticated actor for this request. This deployment resolves "
+            "the omnigraph identity from the caller's token, and this request "
+            "carries none. Admin and migration commands are served by the "
+            "break-glass pod and the migration Job, which authenticate as their "
+            "own service principal; they are not run inside the MCP tier."
+        )
     actor_id = derive_actor_id(token.claims.get("sub", ""))
     if actor_id in _actor_clients:
         return _actor_clients[actor_id]
@@ -238,8 +261,11 @@ def _current_author() -> str:
     Local stdio use keeps ``cfg.author`` (``WITAN_AUTHOR`` / git config /
     ``$USER``), which is already the right answer there. Same discriminator as
     ``_resolve_client`` / ``_is_local_stdio``; ``get_access_token()`` returning
-    ``None`` under a deployment means an admin/migration CLI call rather than a
-    tool request, which likewise has no caller identity to attribute.
+    ``None`` under a deployment means this is not a tool request and there is
+    no caller identity to attribute. ``_resolve_client`` refuses that case
+    outright, so nothing reaches the store under the configured author — but
+    this function has no store call to fail closed on, and answering with the
+    configured author is the honest answer to a question asked out of band.
 
     Prefers ``preferred_username`` so the value stays human-readable for author
     filters and the ranking author-trust config, falling back to ``email`` and

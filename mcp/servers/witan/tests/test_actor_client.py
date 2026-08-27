@@ -85,11 +85,18 @@ def test_local_mode_ignores_access_token_and_returns_default(local_mode, monkeyp
     assert srv._resolve_client() is srv._default_client
 
 
-def test_deployed_mode_falls_back_to_default_without_access_token(
-    deployed_mode, monkeypatch
-):
+def test_deployed_mode_refuses_without_access_token(deployed_mode, monkeypatch):
+    """No JWT under a deployment means no caller — refuse, do not borrow.
+
+    The fallback this replaces handed the request the module credential,
+    which in every deployed environment is ``svc-witan-ci`` — an actor the
+    memory Cedar bundle has no group for, so it could only ever come back
+    ``unknown actor``. Refusing before the HTTP call distinguishes that from
+    a genuinely missing actor-token entry, which produced the same message.
+    """
     monkeypatch.setattr(srv, "get_access_token", lambda: None)
-    assert srv._resolve_client() is srv._default_client
+    with pytest.raises(RuntimeError, match="No authenticated actor"):
+        srv._resolve_client()
 
 
 def test_deployed_mode_builds_per_actor_client_from_sub_claim(
@@ -152,7 +159,12 @@ def test_current_author_local_mode_ignores_jwt(local_mode, monkeypatch):
 def test_current_author_deployed_without_token_falls_back_to_config(
     deployed_mode, monkeypatch
 ):
-    """An admin/migration CLI call inside the container has no caller identity."""
+    """Attribution degrades to the configured author with no caller identity.
+
+    Unreachable in practice under a deployment now that ``_resolve_client``
+    refuses the same condition, but the two are independent functions and
+    this one has no store call to fail closed on.
+    """
     monkeypatch.setattr(srv, "cfg", srv.cfg.model_copy(update={"author": "witan-svc"}))
     monkeypatch.setattr(srv, "get_access_token", lambda: None)
     assert srv._current_author() == "witan-svc"

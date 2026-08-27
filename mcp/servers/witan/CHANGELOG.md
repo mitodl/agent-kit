@@ -8,6 +8,19 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **A deployed witan with no caller JWT now refuses instead of falling back to
+  the service credential.** `_resolve_client` handed those requests
+  `_default_client`, whose token is `WITAN_MEMORY_TOKEN` — bound to
+  `svc-witan-ci`, which `policy/memory.policy.yaml` declares no group for. Every
+  call through it came back `unknown actor 'svc-witan-ci'`, which is also what a
+  genuinely missing actor-token entry says, so a guaranteed 403 was masking a
+  real signal. ADR-0004 kept the fallback for admin/migration CLI commands "run
+  inside the deployed container"; those run in the migration Job and break-glass
+  pod, neither of which sets `WITAN_OIDC_ISSUER`, so they take the local branch
+  and are unaffected. See the 2026-08-27 addendum to ADR-0004.
+
 ### Fixed
 
 - **The umbrella CLI configures observability, which is what actually covers
