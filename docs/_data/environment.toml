@@ -240,6 +240,9 @@ desc = "Clone credential. Normally minted per-repo from the GitHub App above rat
 default = "https://api.github.com"
 desc = "GitHub API base URL. Only meaningful against GitHub Enterprise."
 
+[section.vars.WITAN_CODE_CI_ALLOW_PRIVATE_REPOS]
+desc = "Set to `1` to let the CI indexer write a private repo into a shared code graph. Refused by default: code graphs have no per-repo read scoping, so every witan user could read it (ADR-0010)."
+
 # ── Write-path scanning ──────────────────────────────────────────────────────
 
 [[section]]

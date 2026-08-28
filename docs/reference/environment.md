@@ -112,6 +112,7 @@ different entrypoint. Nothing else should set these.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `WITAN_CODE_CI_ALLOW_LOCAL_STORE` | — | Set to `1` to waive the `WITAN_CODE_SERVER`/`WITAN_CODE_TOKEN` requirement and index into local stores instead. For development runs of the indexer only. |
+| `WITAN_CODE_CI_ALLOW_PRIVATE_REPOS` | — | Set to `1` to let the CI indexer write a private repo into a shared code graph. Refused by default: code graphs have no per-repo read scoping, so every witan user could read it (ADR-0010). |
 | `WITAN_CODE_CI_REPOS` | — | **Required.** Whitespace-separated canonical repo URIs to sweep and index. |
 | `WITAN_CODE_CI_WORKDIR` | `/tmp/witan-ci-index` | Scratch directory for checkouts. Rejected unless it is an absolute path at least two components deep with no `..` or empty components — the guard that keeps a misconfigured value from pointing the cleanup at something important. |
 | `WITAN_CODE_GH_TOKEN` | — | Clone credential. Normally minted per-repo from the GitHub App above rather than set by hand. |
