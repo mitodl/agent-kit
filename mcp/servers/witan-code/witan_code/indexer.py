@@ -290,6 +290,13 @@ class IndexStats:
     edges: int = 0
     bindings: int = 0
     errors: int = 0
+    bridge_failed: bool = False
+    """The cross-repo bridge write raised, so ``bindings`` is not a count.
+
+    Without this, ``bindings=0`` means both "nothing to write" and "the write
+    threw", and the summary line is the only thing most people read. On
+    production those two states were indistinguishable for 15 hours.
+    """
     purged: int = 0
     """Files dropped from the store because they are no longer part of the
     repo — deleted, or newly excluded (a nested checkout, a skipped
@@ -535,7 +542,24 @@ def index_path(
             indexed_files=frozenset(indexed_rel) if can_purge else None,
         )
     except Exception as exc:  # noqa: BLE001 — bridge is best-effort, never fatal
-        logger.warning(
+        # ERROR, not warning, and the level is the whole mechanism. Sentry's
+        # LoggingIntegration is installed with `event_level=ERROR` precisely so
+        # a site like this needs no `capture_exception` call — but that also
+        # means a warning here was, by that same contract, a declaration that
+        # the failure is "expected and already handled". A bridge write that
+        # throws is neither.
+        #
+        # It cost 15 hours of silently-frozen cross-repo bindings on production
+        # to find that out: every CI cycle logged this line, reported
+        # `bindings=0 errors=0`, exited 0, and raised nothing anywhere. See
+        # witan_core.observability.telemetry.configure_sentry.
+        #
+        # Still not fatal — the per-repo index above IS written and is worth
+        # keeping — but "non-fatal" and "unreported" are different claims, and
+        # this only ever meant the first.
+        stats.errors += 1
+        stats.bridge_failed = True
+        logger.error(
             "witan.code.index.bridge_failed", repo=slug, error=str(exc), exc_info=True
         )
 

@@ -4,6 +4,10 @@ Why witan is built the way it is. These pages are for understanding rather than
 doing — read them when a design decision seems arbitrary, or when you are about
 to work against the grain of one.
 
+Looking for *what a thing is* rather than *why it's built that way*? Start
+with [Concepts](../concepts/index.md) instead — these pages assume that
+groundwork.
+
 <div class="grid cards" markdown>
 
 -   **[Architecture](architecture.md)**

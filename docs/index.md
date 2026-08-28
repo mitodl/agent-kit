@@ -52,6 +52,8 @@ tools; one entry in your agent's config gets you the whole surface.
 | If you want to… | Go to |
 | --- | --- |
 | Install it and store your first memory | [Get started](getting-started/index.md) |
+| Understand the mental model — memory kinds, the task graph, CLI vs. agent vs. skills | [Concepts](concepts/index.md) |
+| See the same scenario worked through the CLI, an agent, and a skill | [Walkthroughs](walkthroughs/index.md) |
 | Do a specific thing — index a repo, run against a deployed service, migrate a store | [Guides](guides/index.md) |
 | Look up a tool, flag, env var, or node type | [Reference](reference/index.md) |
 | Understand *why* it works the way it does | [Explanation](explanation/index.md) |
@@ -99,3 +101,10 @@ witan-context covers three published packages, all developed in the
 Storage is [omnigraph](https://github.com/ModernRelay/omnigraph) — a local file, an
 `s3://` bucket, or a shared `omnigraph-server`. The same tools work against all
 three; only [`WITAN_MEMORY_URI`](reference/environment.md) changes.
+
+!!! note "For agents reading this site"
+
+    Every page here has a raw-markdown twin at the same URL with `.md`
+    appended — this page is also [`/index.md`](index.md). [`/llms.txt`](llms.txt)
+    is a link index into all of them; [`/llms-full.txt`](llms-full.txt) is the
+    whole site concatenated into one file.

@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Fixed
+
+- **`configure_logging`'s handler no longer captures `sys.stderr` at call
+  time.** It built `logging.StreamHandler(sys.stderr)` once per process, so
+  anything that rebound `sys.stderr` afterwards — pytest's `capsys`,
+  `contextlib.redirect_stderr`, a CLI swapping the stream — left every
+  subsequent log line going to a stream nobody reads. The module already
+  documents this hazard for its *unconfigured* fallback and solves it there
+  with `_LateBoundStderr`; the configured path had the same bug and kept it,
+  because nothing configured logging early enough for it to surface. Adding
+  `configure_observability()` to witan-code's CLI launcher surfaced it: the
+  first test through the launcher pinned the handler to its own `capsys`, and a
+  later test asserting on stderr saw an empty string. Both paths late-bind now.
+
 ## [0.32.1] - 2026-08-24
 
 ### Changed

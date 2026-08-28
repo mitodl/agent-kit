@@ -156,6 +156,51 @@ def test_feature_branch_indexes_to_own_branch(tmp_path, monkeypatch):
 
 
 @requires_stack
+def test_a_logged_in_writer_owns_the_views_it_indexes(
+    tmp_path, monkeypatch, logged_in_actor
+):
+    """The other half of `witan_code.views`, which CI never reaches.
+
+    A GitHub runner has no witan identity, so every branch-view assertion above
+    is of the un-namespaced name. On a logged-in machine — every real user —
+    the views carry their owner, on the local store too (there is no second
+    naming rule for local stores). Asserting it here is what keeps the two
+    halves from drifting.
+    """
+    from witan_code import config as cfg_module
+    from witan_code import indexer
+    from witan_code.graph import OmnigraphClient
+    from witan_code.views import owner
+
+    actor = logged_in_actor("act-alice")
+    monkeypatch.setenv("WITAN_REPO", REPO)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_module.load()
+
+    base = _git_repo(tmp_path / "r")
+    (base / "svc.py").write_text(SAMPLE)
+    indexer.index_path(base, config=cfg)
+
+    _git(base, "checkout", "-q", "-b", "feature/new-api")
+    (base / "extra.py").write_text("def branch_only_symbol():\n    return 2\n")
+    indexer.index_path(base, config=cfg)
+
+    view = f"{actor}/feature_new-api"
+    store = str(cfg_module.store_path(REPO, cfg.code_dir))
+    main_client = OmnigraphClient(store, cfg.queries_dir)
+    assert view in main_client.list_branches()
+    assert "feature_new-api" not in main_client.list_branches(), (
+        "the un-namespaced name is the collision this scheme replaced"
+    )
+    assert owner(view) == actor
+
+    branch_client = OmnigraphClient(store, cfg.queries_dir, branch=view)
+    assert branch_client.read(
+        "code_read.gq", "find_by_name", {"name": "branch_only_symbol"}
+    )
+
+
+@requires_stack
 def test_branch_index_writes_to_bridge_overlay_not_main(tmp_path, monkeypatch):
     """A non-default branch's bridge writes land on its repo-qualified
     overlay branch (docs/BRANCH_INDEXING.md § Bridge store) — visible when

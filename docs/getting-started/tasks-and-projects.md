@@ -130,6 +130,10 @@ pattern mining.
 
     `/witan-task` and `/witan-workflow` automate the picking and linking. The
     CLI shown here is what they call underneath, and what you want for triage.
+    See [Three ways in](../concepts/interfaces.md) for how the CLI, an agent's
+    own tool calls, and a skill relate — and
+    [Walkthroughs](../walkthroughs/index.md) for this exact task worked
+    through all three.
 
 ## Branch tracking, for free
 
