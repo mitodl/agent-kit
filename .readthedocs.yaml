@@ -9,6 +9,11 @@
 # Markdown and never has to resolve tree-sitter, fastmcp, or an omnigraph
 # binary. `just docs-check` in CI is what guarantees the committed output
 # matches the code.
+#
+# bin/gen_llms.py (llms.txt, llms-full.txt, and a raw-markdown mirror for
+# agents) runs right after the HTML build, as plain `python3` rather than
+# `uv run` — same reasoning as above: nothing in this job may need the uv
+# workspace synced.
 
 version: 2
 
@@ -26,6 +31,7 @@ build:
     build:
       html:
         - zensical build
+        - python3 bin/gen_llms.py
     post_build:
       - mkdir -p $READTHEDOCS_OUTPUT/html/
       - cp --recursive site/* $READTHEDOCS_OUTPUT/html/

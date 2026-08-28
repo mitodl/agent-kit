@@ -28,8 +28,8 @@ ARG OMNIGRAPH_VERSION=0.10.0
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG.
 ARG OMNIGRAPH_RELEASE_TAG=edge
-ARG OMNIGRAPH_SHA256_X86_64=37b1333d83eeb18a30bff841e4801dd269a90f1b720d8ce9e69fc6c2c6c4add5
-ARG OMNIGRAPH_SHA256_ARM64=8c02e1c0426debd809a355129adf315dd284f0afb87a5e5ee89af6a0188a475a
+ARG OMNIGRAPH_SHA256_X86_64=7633416d2192eb3b419f7e047759576587758bda80d0278eae6b11579a5e0943
+ARG OMNIGRAPH_SHA256_ARM64=cec6d1ce1ac3bb16f1114d17bbd219ad003127f3d277d9fadd5bfb58cf2dce7c
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
 ARG WITAN_VERSION=0.8.0

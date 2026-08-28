@@ -412,6 +412,155 @@ def test_task_update_to_in_progress_stamps_claimed_at(server):
 
 
 @requires_omnigraph
+def test_task_update_to_in_progress_defaults_a_missing_assignee(server):
+    # tk-task-update-can-still-manufacture-an-unnameable--9ba86a: this used to
+    # stamp claimed_at without ever setting assignee, reaching exactly the
+    # state task_claim correctly refuses and correctly cannot name a holder
+    # for — a live lease with nobody on record.
+    from witan import server as srv
+
+    t = server.task_create(title="marked started, no assignee given", description="x")
+    server.task_update(t["slug"], status="in_progress")
+    node = server.task_get(t["slug"])
+    assert node["assignee"] == srv._current_author()
+
+
+@requires_omnigraph
+def test_task_update_to_in_progress_does_not_clobber_an_existing_assignee(server):
+    # Only fills a GAP. A colleague marking someone else's task in_progress to
+    # log status must not silently reassign it to themselves.
+    t = server.task_create(title="already held", description="x")
+    server.task_claim(t["slug"], assignee="original-holder")
+
+    server.task_update(t["slug"], status="in_progress")
+
+    assert server.task_get(t["slug"])["assignee"] == "original-holder"
+
+
+@requires_omnigraph
+def test_task_update_to_in_progress_respects_an_explicit_assignee(server):
+    t = server.task_create(title="explicit assignee", description="x")
+    server.task_update(t["slug"], status="in_progress", assignee="explicit-holder")
+    assert server.task_get(t["slug"])["assignee"] == "explicit-holder"
+
+
+@requires_omnigraph
+def test_task_update_to_in_progress_treats_a_blank_assignee_as_missing(server):
+    # The gap the first fix left, caught by Copilot as a suppressed review
+    # comment on #283 — which files no thread, so it did not show up in the
+    # unresolved count and was nearly missed.
+    #
+    # `_claim_holder` reads a blank assignee as missing (`if assignee:`) while
+    # the write path tested `is not None`, so an explicit "" was written
+    # straight through AND skipped the default: claimed_at stamped, no
+    # nameable holder. Exactly the state this task exists to make
+    # unrepresentable, reachable through the parameter meant to prevent it.
+    from witan import server as srv
+
+    t = server.task_create(title="blank assignee, marked started", description="x")
+    server.task_update(t["slug"], status="in_progress", assignee="")
+    node = server.task_get(t["slug"])
+    assert node["assignee"] == srv._current_author()
+    assert node["claimed_at"]
+
+
+@requires_omnigraph
+def test_task_update_to_in_progress_treats_a_whitespace_assignee_as_missing(server):
+    # Whitespace names nobody either, and a holder is both shown to humans and
+    # matched by _holder_matches, so " " must not survive as an identity.
+    from witan import server as srv
+
+    t = server.task_create(title="whitespace assignee", description="x")
+    server.task_update(t["slug"], status="in_progress", assignee="   ")
+    assert server.task_get(t["slug"])["assignee"] == srv._current_author()
+
+
+@requires_omnigraph
+def test_task_update_blank_assignee_does_not_clear_an_existing_holder(server):
+    # Blank means "not provided", not "unassign". A task that already has a
+    # holder keeps it — the same gap-filling-only rule the non-blank path
+    # follows, and the reason this normalises to None rather than erroring.
+    t = server.task_create(title="held, blank passed", description="x")
+    server.task_claim(t["slug"], assignee="original-holder")
+
+    server.task_update(t["slug"], status="in_progress", assignee="")
+
+    assert server.task_get(t["slug"])["assignee"] == "original-holder"
+
+
+@requires_omnigraph
+def test_task_update_defaulted_assignee_is_qualified_by_session_id(server):
+    # Same qualification task_claim applies — see
+    # test_caller_supplied_session_id_beats_the_server_environment — so a
+    # deployed caller marking its own work in_progress via task_update,
+    # without a session in the server's own environment to fall back to,
+    # still gets a holder two of its own parallel sessions cannot collide on.
+    from witan import server as srv
+
+    t = server.task_create(title="deployed caller", description="x")
+    server.task_update(
+        t["slug"],
+        status="in_progress",
+        session_id="cccccccc-9999-0000-1111-222222222222",
+    )
+    node = server.task_get(t["slug"])
+    assert node["assignee"] == f"{srv._current_author()}#cccccccc"
+
+
+@requires_omnigraph
+def test_update_task_default_if_missing_does_not_override_a_real_assignee(server):
+    """`_update_task`'s `default_if_missing` checks the row's CURRENT value —
+    read by this same call, not decided earlier by the caller (see its
+    docstring: a caller that precomputed the value off its own separate read
+    could hand back a stale default that clobbers a real assignment made in
+    between). A task already claimed for real must keep that assignee even
+    when a `default_if_missing["assignee"]` factory is supplied.
+    """
+    from witan import server as srv
+
+    t = server.task_create(title="already claimed", description="x")
+    server.task_claim(t["slug"], assignee="real-claimant")
+
+    srv._update_task(
+        t["slug"],
+        {"status": "in_progress"},
+        default_if_missing={"assignee": lambda: "stale-default"},
+    )
+
+    assert server.task_get(t["slug"])["assignee"] == "real-claimant"
+
+
+@requires_omnigraph
+def test_update_task_default_if_missing_fills_a_genuine_gap(server):
+    from witan import server as srv
+
+    t = server.task_create(title="never claimed", description="x")
+
+    srv._update_task(
+        t["slug"],
+        {"status": "in_progress"},
+        default_if_missing={"assignee": lambda: "filled-in"},
+    )
+
+    assert server.task_get(t["slug"])["assignee"] == "filled-in"
+
+
+@requires_omnigraph
+def test_update_task_default_if_missing_never_overrides_an_explicit_change(server):
+    from witan import server as srv
+
+    t = server.task_create(title="explicit wins", description="x")
+
+    srv._update_task(
+        t["slug"],
+        {"status": "in_progress", "assignee": "explicit"},
+        default_if_missing={"assignee": lambda: "should-not-be-used"},
+    )
+
+    assert server.task_get(t["slug"])["assignee"] == "explicit"
+
+
+@requires_omnigraph
 def test_unleased_recent_in_progress_is_not_ready_or_claimable(server):
     """A task moved to in_progress with no assignee on record (e.g. a legacy row
     written before task_update stamped claimed_at) must still read as held while
