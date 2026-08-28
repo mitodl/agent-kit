@@ -10,9 +10,109 @@ def test_create_defaults(server):
     res = server.task_create(title="do a thing", description="x")
     assert res["slug"].startswith("tk-")
     assert res["status"] == "open"
+    assert res["similar"] == []
     node = server.task_get(res["slug"])
     assert node["type"] == "task"
     assert node["priority"] == "p2"
+
+
+# ── Task search (tk-phase-0-bm25-task-search-project-search) ────────────────
+
+
+@requires_omnigraph
+def test_task_search_bm25_ranked(server):
+    server.task_create(title="uv usage", description="always use uv for python venvs")
+    server.task_create(title="no raw sql", description="avoid raw sql in django views")
+
+    hits = server.task_search("uv virtual environments")
+    assert hits and hits[0]["title"] == "uv usage"
+
+
+@requires_omnigraph
+def test_task_search_finds_title_only_terms(server):
+    t = server.task_create(
+        title="zebrafish quokka narwhal",
+        description="totally unrelated prose about compaction and fragments",
+    )
+
+    hits = server.task_search("zebrafish quokka narwhal")
+    assert [h["slug"] for h in hits] == [t["slug"]]
+
+
+@requires_omnigraph
+def test_task_search_dedups_both_field_matches(server):
+    t = server.task_create(
+        title="quokka narwhal", description="more about the quokka narwhal"
+    )
+
+    hits = server.task_search("quokka narwhal")
+    assert [h["slug"] for h in hits].count(t["slug"]) == 1
+
+
+@requires_omnigraph
+def test_task_search_includes_closed_tasks_by_default(server):
+    """Unlike the project search default, a closed task is still a useful
+    dedup signal (the work may already be done) — no status filter by default."""
+    t = server.task_create(title="quokka narwhal fix", description="quokka narwhal")
+    server.task_close(t["slug"], resolution="done")
+
+    hits = server.task_search("quokka narwhal")
+    assert t["slug"] in [h["slug"] for h in hits]
+
+    open_only = server.task_search("quokka narwhal", status="open")
+    assert t["slug"] not in [h["slug"] for h in open_only]
+
+
+@requires_omnigraph
+def test_task_search_scopes_by_repo(server):
+    server.task_create(
+        title="quokka narwhal in repo a",
+        description="quokka narwhal",
+        repo="https://github.com/test/a",
+    )
+    other = server.task_create(
+        title="quokka narwhal in repo b",
+        description="quokka narwhal",
+        repo="https://github.com/test/b",
+    )
+
+    hits = server.task_search("quokka narwhal", repo="https://github.com/test/b")
+    assert [h["slug"] for h in hits] == [other["slug"]]
+
+
+@requires_omnigraph
+def test_task_search_includes_unscoped_tasks_alongside_repo_scope(server):
+    """A repo-scoped search must not drop unscoped (repo=None) matches — same
+    convention task_list already follows (server.py:5518)."""
+    scoped = server.task_create(
+        title="quokka narwhal in repo a",
+        description="quokka narwhal",
+        repo="https://github.com/test/a",
+    )
+    unscoped = server.task_create(
+        title="quokka narwhal unscoped", description="x", repo=""
+    )
+
+    hits = {
+        h["slug"]
+        for h in server.task_search("quokka narwhal", repo="https://github.com/test/a")
+    }
+    assert scoped["slug"] in hits
+    assert unscoped["slug"] in hits
+
+
+@requires_omnigraph
+def test_task_create_returns_similar_tasks(server):
+    existing = server.task_create(
+        title="fix the flaky retry test", description="the retry test flakes on CI"
+    )
+
+    created = server.task_create(
+        title="fix the flaky retry test again",
+        description="the retry test still flakes on CI",
+    )
+    assert existing["slug"] in [s["slug"] for s in created["similar"]]
+    assert len(created["similar"]) <= 3
 
 
 @requires_omnigraph

@@ -17,6 +17,11 @@ sub-issue to an ``epic`` (or any parent task); use ``blocked_by`` to record
 dependencies so ``task_ready`` can withhold the task until its blockers
 close.
 
+Returns ``{"slug", "status", "repo", "similar"}`` — ``similar`` is up to 3
+BM25 matches on ``title`` against existing tasks (any status), a soft
+duplicate check. It never blocks creation; review it and close this task
+as a duplicate (``task_close``) if one of them is really the same work.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `title` | str | **required** | Short label and full text of the work. |
@@ -55,6 +60,23 @@ across all repos.
 | `project_slug` | str? | `null` | List the tasks of a WorkflowProject. |
 | `parent` | str? | `null` | List the direct children of a parent task/epic. |
 | `assignee` | str? | `null` | Filter to a single owner. |
+
+## `task_search`
+
+Plain BM25 text search over tasks (no graph expansion).
+
+Returns up to 20 tasks ranked by BM25 relevance, matched against
+``description`` and ``title`` (description matches are seeded ahead of
+title-only matches — see ``memory_search``'s doc for why). Run this
+before ``task_create`` to check whether the work is already tracked;
+``task_create`` also runs it automatically and returns the top matches
+as ``similar`` in its response.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `query` | str | **required** | Free-text search query. |
+| `repo` | str? | `null` | Repo scoping — see instructions. Matches against the detected repo<br>plus unscoped tasks (``repo=None``), same as ``task_list``. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | Optional filter: ``open``, ``in_progress``, ``blocked``, or<br>``closed``. Omit to search all statuses — a closed task is still<br>useful to surface (the work may already be done). |
 
 ## `task_ready`
 

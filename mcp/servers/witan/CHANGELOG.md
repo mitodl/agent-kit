@@ -10,6 +10,19 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
+- **`task_search`/`workflow_project_search`: BM25 full-text search for Task and
+  WorkflowProject nodes.** Only Memory had full-text search before this —
+  `task_list`/`workflow_project_list` are filters, not ranked search, so there
+  was no way to ask "does something like this already exist" for a task or
+  project. `task_create`/`workflow_project_create` now also return a
+  `similar` field (top 3 title matches, warn-only — never blocks creation),
+  surfaced by the CLI (`witan task create` / `witan project create`) as a
+  `similar:` line per match. Phase 0 of a 3-phase plan to reduce duplicate
+  task/project tracking: lexical search first, embeddings only if this proves
+  insufficient in practice. See memory
+  `pf-analysis-embeddings-for-task-workflowproject-mem-73b601` in the shared
+  witan memory graph for the full rationale.
+
 - **`task_claim` reports whether its holder names a session.** The success
   return gains `"qualified"`, and a deployed call that defaulted the holder and
   received no `session_id` also gets a `"warning"`. Without the id, one
