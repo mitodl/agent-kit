@@ -28,6 +28,7 @@ from witan_code.github_app import (
     GitHubAppError,
     app_jwt,
     from_env,
+    api_repo_host,
     installation_token,
     main,
     repo_is_private,
@@ -328,10 +329,63 @@ def test_repo_owner_name_splits_a_canonical_uri(uri, expected):
     assert repo_owner_name(uri) == expected
 
 
-@pytest.mark.parametrize("uri", ["agent-kit", "", "https://github.com/"])
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "agent-kit",
+        "",
+        "https://github.com/",
+        "https://github.com/mitodl",
+        # Scheme-relative: `urlsplit` gives it a netloc and no scheme, so a
+        # scheme check that only looked for "not empty" would let it through.
+        "//github.com/mitodl/agent-kit",
+        "http://github.com/mitodl/agent-kit",
+        "git@github.com:mitodl/agent-kit.git",
+    ],
+)
 def test_repo_owner_name_rejects_something_that_is_not_a_repo_uri(uri):
     with pytest.raises(GitHubAppError, match="owner and repository name"):
         repo_owner_name(uri)
+
+
+def test_repo_owner_name_rejects_extra_path_components():
+    """`.../a/b/c/d` must not be cleared by `c/d`'s visibility."""
+    with pytest.raises(GitHubAppError, match="owner and repository name"):
+        repo_owner_name("https://github.com/mitodl/agent-kit/tree/main")
+
+
+def test_repo_owner_name_rejects_a_host_the_api_does_not_answer_for():
+    """The clone uses the whole URI; the check uses only owner/name.
+
+    Left unchecked, `https://other.example/mitodl/agent-kit` would be approved
+    on `github.com/mitodl/agent-kit`'s visibility and then cloned from
+    `other.example` — the guard satisfied by a different repository entirely.
+    """
+    with pytest.raises(GitHubAppError, match="answers for 'github.com'"):
+        repo_owner_name("https://other.example/mitodl/agent-kit")
+
+
+def test_repo_owner_name_follows_an_enterprise_api_host():
+    api = "https://ghe.example/api/v3"
+    assert repo_owner_name("https://ghe.example/mitodl/agent-kit", api_url=api) == (
+        "mitodl",
+        "agent-kit",
+    )
+    # And github.com is then the mismatched host, not the privileged one.
+    with pytest.raises(GitHubAppError, match="answers for 'ghe.example'"):
+        repo_owner_name("https://github.com/mitodl/agent-kit", api_url=api)
+
+
+@pytest.mark.parametrize(
+    ("api_url", "expected"),
+    [
+        ("https://api.github.com", "github.com"),
+        ("https://ghe.example/api/v3", "ghe.example"),
+        ("https://API.GITHUB.COM/", "github.com"),
+    ],
+)
+def test_api_repo_host(api_url, expected):
+    assert api_repo_host(api_url) == expected
 
 
 def test_repo_is_private_asks_github_as_the_installation():

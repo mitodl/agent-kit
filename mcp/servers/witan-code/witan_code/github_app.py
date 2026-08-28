@@ -11,18 +11,30 @@ decision, not a plumbing one:
 - A **user PAT** is one credential, but long-lived and scoped to everything its
   owner can read — far more than the indexer needs, and rotation is manual.
 - A **GitHub App** issues installation tokens that expire in an hour, and its
-  *installation* is itself the list of repositories it can reach. That list is
-  managed by an org admin in GitHub rather than by this deployment's config, so
-  a private repo's code cannot be pulled into a shared graph by a Pulumi change
-  alone — two independently-controlled things have to agree first.
+  *installation* is the list of repositories it can reach — a list an org admin
+  manages in GitHub rather than one this deployment's config decides.
 
-Hence the App. The permissions it needs are ``contents: read`` to clone, and
-``metadata: read`` to answer :func:`repo_is_private` — which the entrypoint
-asks before each clone, because the *installation* narrows who can clone a
-private repo and nothing yet narrows who can read the graph that comes out of
-it. The installed App already holds both (verified against
-``GET /orgs/mitodl/installations``, 2026-08-28), so the guard needed no
-permission change.
+Hence the App. It needs ``contents: read`` to clone and ``metadata: read`` to
+answer :func:`repo_is_private`; the installed App already holds both (verified
+against ``GET /orgs/mitodl/installations``, 2026-08-28), so the visibility
+guard needed no permission change.
+
+★ THE INSTALLATION IS NOT THE CONTROL IT LOOKS LIKE. It is tempting to read
+the bullet above as "a private repo cannot reach a shared graph by a Pulumi
+change alone, because two independently-controlled things have to agree" —
+this module said exactly that until 2026-08-28, and it is false as installed.
+The same `GET /orgs/mitodl/installations` reports
+``repository_selection: "all"``, so the App can already reach every private
+repo in the org and adding one to ``managed_repos`` is the only step there is.
+
+What actually stops it is the entrypoint's refusal
+(``docker/witan-ci-index.sh``): every repo's visibility is checked before its
+clone, private ones are refused, and ``WITAN_CODE_CI_ALLOW_PRIVATE_REPOS=1`` is
+the explicit opt-in. That is a real second thing to agree, because it lives in
+the deployment where a reviewer sees it. It is a stopgap for a missing read
+control, not the control itself: a shared code graph grants ``read`` to every
+actor holding a token, so a private repo indexed into one is readable by every
+witan user. See ``docs/adr/0010-private-code-graph-read-scoping.md``.
 
 WHY A TOKEN PER REPO, NOT PER SWEEP
 
@@ -71,6 +83,7 @@ _MODULE = "witan_code.github_app"
 __all__ = [
     "AppCredentials",
     "GitHubAppError",
+    "api_repo_host",
     "app_jwt",
     "from_env",
     "installation_token",
@@ -91,6 +104,12 @@ _ENV_VARS = (APP_ID_ENV_VAR, INSTALLATION_ID_ENV_VAR, KEY_FILE_ENV_VAR)
 # plumbing is the part most likely to be subtly wrong, and it cannot be tested
 # at all if the API host is a constant. A GitHub Enterprise host would use it
 # for real.
+#
+# Pointing this at a stub also moves the host that repo URIs must be on:
+# `repo_owner_name` refuses a repo this API cannot answer for, so a stub on
+# 127.0.0.1:8731 has to be swept with `https://127.0.0.1:8731/owner/name`
+# URIs, not `https://github.com/...` ones. That is the guard working, not an
+# obstacle to route around.
 API_URL_ENV_VAR = "WITAN_CODE_GITHUB_API_URL"
 
 # Where the entrypoint keeps the installation token it minted for the repo it
@@ -277,27 +296,55 @@ def installation_token(
     return token
 
 
-def repo_owner_name(repo: str) -> tuple[str, str]:
+def api_repo_host(api_url: str) -> str:
+    """The repo host whose repositories ``api_url`` answers for.
+
+    ``https://api.github.com`` serves ``github.com``; a GitHub Enterprise API
+    (``https://ghe.example/api/v3``) serves its own host. Used to refuse a repo
+    URI whose host this API cannot speak for — see :func:`repo_owner_name`.
+    """
+    netloc = urlsplit(api_url.strip()).netloc.lower()
+    return netloc.removeprefix("api.") if netloc == "api.github.com" else netloc
+
+
+def repo_owner_name(repo: str, *, api_url: str = GITHUB_API_URL) -> tuple[str, str]:
     """``(owner, name)`` from a canonical repo URI, for the API path.
 
     The sweep works in canonical URIs (``https://github.com/mitodl/agent-kit``)
     because that is what witan-code detects from a checkout's remote and keys
     graphs on. GitHub's API wants the two components separately.
 
-    Parsed as a URL rather than split on ``/``, so that a host and a path are
-    told apart: splitting alone reads ``https://github.com/`` as the repo
-    ``github.com`` in the owner ``https:``, and the caller of this is a guard
-    that must not be satisfiable by a malformed value.
+    ★ THE URI IS VALIDATED, NOT JUST SPLIT, AND THAT IS THE POINT. The caller
+    is a guard that decides whether a repo may be cloned, and the *clone* uses
+    the whole URI while the *check* uses only these two components against
+    ``api_url``. Anything that lets those two disagree lets the guard approve
+    one repository and the sweep fetch another: `https://other.example/o/r`
+    would be cleared by `github.com/o/r`'s visibility, and
+    `https://github.com/a/b/c/d` by `c/d`'s. So this requires an ``https`` URI
+    whose host is the one ``api_url`` answers for (:func:`api_repo_host`) and
+    whose path is exactly two components — refusing, never repairing, anything
+    else. A repo URI outside the configured host is not "the same repo
+    elsewhere"; it is a question this API cannot answer, and an unanswered
+    question must fail closed.
     """
     split = urlsplit(repo.strip())
     path = split.path.removesuffix(".git")
     parts = [component for component in path.split("/") if component]
-    if not split.netloc or len(parts) < 2:
+    expected_host = api_repo_host(api_url)
+    if split.scheme != "https" or len(parts) != 2:  # noqa: PLR2004 — owner and name
         raise GitHubAppError(
             f"Cannot read an owner and repository name out of {repo!r}; "
-            "expected a canonical URI like https://github.com/owner/name."
+            f"expected a canonical URI like https://{expected_host}/owner/name."
         )
-    return parts[-2], parts[-1]
+    if split.netloc.lower() != expected_host:
+        raise GitHubAppError(
+            f"Refusing to check {repo!r} against {api_url}: that API answers "
+            f"for {expected_host!r}, so it would report some other "
+            f"repository's visibility while the clone used this URI. Point "
+            f"{API_URL_ENV_VAR} at the API for {split.netloc!r} if that is "
+            "the host meant."
+        )
+    return parts[0], parts[1]
 
 
 def repo_is_private(
@@ -321,7 +368,7 @@ def repo_is_private(
     """
     import httpx2
 
-    owner, name = repo_owner_name(repo)
+    owner, name = repo_owner_name(repo, api_url=api_url)
     owns = client is None
     http = client or httpx2.Client(timeout=_HTTP_TIMEOUT)
     url = f"{api_url.rstrip('/')}/repos/{owner}/{name}"
