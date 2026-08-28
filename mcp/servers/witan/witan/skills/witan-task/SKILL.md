@@ -47,6 +47,19 @@ So:
 - **Take the refusal seriously.** `{"claimed": false, "held_by": ...}` means
   someone is on it. Pick another task — do not `force` past a live lease
   without a reason you can state.
+- **Pass `session_id`, not `assignee`.** `task_claim(slug=..., session_id=...)`
+  — your `$CLAUDE_SESSION_ID` on Claude Code, any stable per-run id elsewhere.
+  It qualifies the holder as `<you>#<session>` so your own parallel sessions
+  are told apart; without it they all claim under one name, the contention
+  check cannot separate them, and the second session silently renews the
+  first's lease and is told it claimed. A deployed witan cannot infer the id
+  (a pod has no `$CLAUDE_SESSION_ID`, and MCP carries no session state), so an
+  agent talking to it directly has to send it — the CLI's proxy does this for
+  you, an MCP client does not. A success with `"qualified": false` and a
+  `"warning"` is the server telling you this happened.
+  Do **not** put the session id in `assignee`: that replaces the holder
+  outright, so the claim records a session and no person. Reserve `assignee`
+  for a genuinely different worker identity (a CI job, a named runner).
 - **Release what you drop.** `task_release(slug=...)` if you claim something
   and then move on, so it returns to ready work instead of ageing out.
 - **Claim as you go, not in bulk.** When handed a list, claim each task as you
@@ -86,9 +99,7 @@ MCP call fails, tell the user the witan server is not connected and stop.
     plus "Create a task" and "None".
 - On a chosen task: claim it (that is what picking it means — see **Claim
   before you work it**). Call
-  `task_claim(slug="<slug>", assignee="<holder>")` where `<holder>` identifies
-  this worker — use `$CLAUDE_SESSION_ID` (or another distinct id) so parallel
-  agents under one user don't collide; it defaults to the configured author.
+  `task_claim(slug="<slug>", session_id="<$CLAUDE_SESSION_ID>")`.
   `task_claim` sets `in_progress` with a lease and **refuses if someone else
   holds it** (`{"claimed": false, "held_by": ...}`) — surface that and offer
   another task instead of overwriting. On success confirm: "Claimed **{title}**

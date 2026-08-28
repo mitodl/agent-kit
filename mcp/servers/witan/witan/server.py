@@ -647,6 +647,12 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
     because the holder string is read by humans in refusal messages and task
     listings, and 8 hex chars is plenty to tell two concurrent sessions apart.
 
+    A caller-supplied ``session_id`` is not guaranteed to be
+    ``_SESSION_SUFFIX_RE``'s charset (``[0-9A-Za-z_-]``) — characters outside
+    it are stripped before truncating, so e.g. ``"run.1234"`` still qualifies
+    as ``"run1234"`` instead of silently producing a holder that
+    ``_is_qualified`` can't recognize as qualified.
+
     With no session id from either source there is only one session to be, so
     the bare identity is both correct and byte-identical to what older stores
     already hold.
@@ -655,7 +661,8 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
         return assignee
     identity = _current_author()
     session = session_id or os.environ.get("CLAUDE_SESSION_ID") or ""
-    return f"{identity}#{session[:8]}" if session else identity
+    suffix = re.sub(r"[^0-9A-Za-z_-]", "", session)[:8]
+    return f"{identity}#{suffix}" if suffix else identity
 
 
 def _holder_identity(holder: str | None) -> str | None:
@@ -5703,6 +5710,18 @@ async def task_claim(
     (see ``task_ready``); re-calling renews it. Pass ``force`` to steal a live
     claim.
 
+    A success also reports ``"qualified"``: whether the recorded holder names
+    the session as well as the person. ``false`` does **not** by itself mean
+    the caller omitted ``session_id`` — an explicit ``assignee`` always wins
+    over it (see ``_claim_holder``) and is unqualified by design, with no
+    warning. Only the presence of a ``"warning"`` key identifies the case this
+    exists to flag: a deployed call whose defaulted holder names no session,
+    so this person's concurrent sessions are indistinguishable to the
+    contention check — the mutual exclusion this tool exists for is not in
+    effect for them. It is reported rather than refused because the server has
+    no way to supply the id itself, so refusing would break every caller that
+    cannot send one.
+
     BEST-EFFORT CAS — omnigraph 0.8.x exposes no conditional-write primitive, so
     the claim write cannot be made atomic at the store. Instead we surface the
     Lance optimistic-concurrency conflict (rather than masking it with a retry)
@@ -5978,13 +5997,31 @@ async def task_claim(
         branch=branch,
         task_slug=slug,
     )
-    return {
+    result = {
         "slug": slug,
         "claimed": True,
         "assignee": holder,
         "claimed_at": now,
+        "qualified": _is_qualified(holder),
         "stole": bool(held and current_holder != holder),
     }
+    if not result["qualified"] and not assignee and not _is_local_stdio():
+        # A deployed caller that sent no session_id (or an empty one — see the
+        # `if assignee:` predicate in `_claim_holder`, which treats "" the
+        # same as omitted) claims under its bare identity, so this person's
+        # other concurrent sessions share the holder string and
+        # `current_holder != holder` above cannot separate them — the second
+        # session renews the first's lease and is told it claimed. The server
+        # cannot supply the id (a pod has no $CLAUDE_SESSION_ID and MCP
+        # 2026-07-28 carries no session state), so the collision stays
+        # possible; saying so here is what keeps it from being silent.
+        result["warning"] = (
+            f"Claimed as {holder!r}, which names no session. Your other "
+            "concurrent sessions claim under this same name and cannot be "
+            "told apart from this one, so one of them may hold this task "
+            "already. Pass session_id to task_claim to qualify it."
+        )
+    return result
 
 
 @_tool

@@ -93,3 +93,58 @@ callers both read *after* all racing writes have settled.
   task against the omnigraph project; until then this ADR is the ceiling.
 - **No schema or API change.** `task_claim`'s return shape gains a `lost_race`
   reason; existing `claimed`/`held`/`blocked`/`closed` paths are unchanged.
+
+## Addendum (2026-08-27) — mutual exclusion is off for a caller that sends no `session_id`, and now says so
+
+Everything above is about excluding two *people*. A separate hole excludes two
+of one person's *sessions*, and it is open for any MCP client that calls a
+deployed witan directly. `_claim_holder` qualifies the holder as
+`<identity>#<session>`, but the id has to arrive as an argument: a pod has no
+`$CLAUDE_SESSION_ID` and MCP 2026-07-28 carries no session state, so the server
+cannot supply it. `witan_core.remote.proxy._map_args` injects it for the CLI;
+nothing injects it for an agent. Without it both sessions claim under the bare
+`preferred_username`, `current_holder != holder` is False, and the second
+session renews the first's lease and is told `claimed: true`.
+
+**Measured before deciding.** Sampled the deployed graph via `witan tasks
+--all-repos --output-format json` across all four statuses (the listing is
+capped at 50 rows per status, so this is the recent slice, not the whole
+graph): 183 distinct tasks, 60 carrying an assignee. 35 holders are qualified.
+Of the 25 that are not, 11 are `Tobias Macey` — the local `cfg.author` shape,
+a hand-run CLI outside an agent session, not this hole. 13 are
+identity-shaped — four distinct login/email-form holders, counts 5/4/2/2 —
+which is exactly this: a deployed claim with no `session_id`. (Names omitted:
+this repo is public, and witan's own write-path scanner flags them as PII, which
+is how the omission got noticed.)
+That is 13 of 48 deployed claims, across three different people. The remaining
+one, a bare `session_01E2dsMxDihnRVJgcLoStQCv`, is the `witan-task` skill's own
+old instruction to pass the session id as `assignee` — which replaces the
+holder rather than qualifying it, recording a session and no person. Fixed in
+the skill as part of this change.
+
+Caveat on the number: this counts *current* assignee values on task nodes, not
+claim events. A task claimed unqualified and later re-claimed with a session id
+shows only the qualified holder. 13 is a floor on the incidence, not a rate.
+
+**Decision: (d) + (a) — make it observable, and tell callers.** `task_claim`'s
+success return gains `"qualified"`, plus a `"warning"` when a deployed call
+defaulted the holder and got no session id. An explicit `assignee` is exempt: a
+worker name is a deliberate choice with nothing to fix. The `witan-task` skill
+now tells callers to pass `session_id` and specifically not to put it in
+`assignee`.
+
+**Not refused, deliberately.** Refusing an unqualified deployed claim would
+break every caller that has no id to send, to prevent a collision that only
+occurs when that same person runs concurrent sessions. Silence was the harm;
+the claim still succeeds and now reports its own weakness.
+
+**(b) rejected on evidence, not assumption.** FastMCP does expose
+`get_http_headers`, so a server-visible per-connection value is reachable in
+principle. It does not help: no MCP client sends the agent's session id as a
+header, so (b) needs the same client cooperation (a) does, plus header plumbing
+through APISIX. (c) — a server-side registry — reintroduces the state ADR-0009
+removed.
+
+Re-run the measurement above to decide whether (b) ever becomes worth it. The
+signal is an assignee with no `#` that is identity-shaped rather than
+`cfg.author`-shaped.
