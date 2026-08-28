@@ -64,6 +64,92 @@ a MINOR bump may include breaking changes).
   against the serving process's identity rather than being refused for having
   none.
 
+## [0.16.0] - 2026-08-25
+
+### Added
+
+- **`witan-code doctor` and the `code_store_health` tool — a readiness check
+  that covers the bridge store.** Every per-repo graph *and* the shared
+  `_bridge.omni`, probed with the cheapest query that has to open a store to
+  answer. The bridge is the point: it belongs to no repo, so it appears in no
+  repo listing, and `code_interface_search` / `code_interface_providers` /
+  `code_interface_consumers` / `code_cross_repo_impact` all read it and
+  nothing else does. A bridge that cannot be opened breaks all of them while
+  `code_indexed_repos` still lists every repo happily.
+
+  That is not hypothetical. On the machine this was written on, all 54 local
+  stores had been unreadable since an omnigraph upgrade — the bridge for six
+  weeks — and nothing reported it: the failure surfaced only as an identical
+  Rust backtrace per tool call, and the prompt hook went on asserting
+  "N other repos indexed, so cross-repo `code_interface_*` resolve" on every
+  single prompt while none of them could run.
+
+- **`witan-code reindex --rebuild`.** Deletes this repo's store, and the
+  bridge store if it is also unreadable, then indexes from scratch. Only the
+  stores that actually fail to open: `--rebuild` on a healthy store would
+  throw away a working index, and dropping a healthy bridge would take every
+  other repo's cross-repo bindings with it.
+
+  Deliberately not witan's `migrate storage` shape (export with the
+  pre-upgrade binary, reload with the new one, keep a `.pre-migrate` copy). A
+  memory graph holds the only copy of what it knows; a code graph holds a
+  derivation of a checkout that is still on disk. So this needs no old binary
+  and keeps no backup — a copy no installed binary can open is just disk, and
+  one of these stores is 27 GB.
+
+  Refuses a path that is not the repo root, since it deletes the whole store:
+  `reindex src/ --rebuild` would empty the store and refill only `src/`,
+  leaving the rest of the repo unindexed with nothing afterwards reporting it.
+  The root is resolved from the parent directory when the path is a FILE —
+  `index`/`reindex` accept one, and `git -C <file>` exits 128, which read as
+  "not a repo" and skipped the guard on the argument shape most likely to be
+  typed by accident.
+
+  A failed deletion raises instead of being swallowed. `ignore_errors=True`
+  left an unreadable store in place while the sidecars went anyway and the CLI
+  printed "Deleted … (N freed)", announcing a recovery that had not happened.
+
+### Changed
+
+- **A stale on-disk format now fails with a remedy instead of a Rust
+  backtrace.** witan-code's `OmnigraphClient` sets the `_STORAGE_MISMATCH_HINT`
+  that witan-core has always supported and witan has always set; without it
+  the client re-raised omnigraph's raw error — ANSI escapes, `Location:`,
+  backtrace boilerplate — once per tool call, advising an export path that
+  needs a binary the upgrade replaced.
+
+- **`code_indexed_repos` distinguishes "unreadable" from "empty".** New
+  `unreadable` field carrying the reason; `files` stays `null`. The two used
+  to render identically, so a code graph that had been dead for weeks read as
+  a repo nobody had indexed much.
+
+- **The `UserPromptSubmit` block no longer claims cross-repo resolution works
+  without checking.** It probes the bridge and says plainly when
+  `code_interface_*` will fail. A store the current repo cannot read replaces
+  the size/freshness line with a warning rather than rendering "? files" —
+  unless an index is in flight, which is the one benign way to see a store
+  that will not open yet.
+
+  The verdict is cached on disk, not in the process: `witan-code
+  inject-context` is a fresh process per prompt, so a module-level memo would
+  cache nothing and the block would cost a second store query on every prompt.
+
+  The bridge is probed with `bridge.gq/count_bindings`, not the per-repo
+  `code_read.gq/count_files` — the bridge schema has no `CodeFile` node, so
+  the per-repo probe condemns a perfectly healthy bridge. That is not a
+  cosmetic misreport, because `--rebuild` keys off the same verdict: it was
+  caught deleting each freshly-rebuilt bridge on the very next repo of a
+  rebuild sweep, taking every other repo's bindings with it each time.
+
+  A REMOTE bridge is always probed rather than gated on `StoreRef.exists`,
+  which degrades every failed remote probe to `False` by design. Gating on it
+  dropped an unreachable cluster bridge out of the report entirely and let
+  `code_store_health` answer `ok: true` while every `code_interface_*` tool
+  was failing — the exact condition the check exists to detect. A missing
+  LOCAL bridge is still absence, not failure: a repo with no contracts yet has
+  none, and reporting that as red would fail a healthy fresh install. The
+  prompt hook's own bridge probe carried the same defect and is fixed with it.
+
 ## [0.15.0] - 2026-08-21
 
 ### Changed

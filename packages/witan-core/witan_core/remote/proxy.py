@@ -755,6 +755,21 @@ class RemoteMCPProxy:
         own words, but it is now a ``RuntimeError``, which is what the CLI has
         always caught for the identical in-process failure. Anything this does
         not recognise still propagates untouched.
+
+        ★ THE CHAINING RULE, ONE RULE FOR EVERY BRANCH: each classifier returns
+        the exception it LOCATED, and the replacement is raised ``from`` that,
+        never from ``exc``. Every classifier walks :func:`_chain`, because anyio
+        re-raises through an ``ExceptionGroup`` and the fault is then a member
+        of the group rather than the group itself — which is the whole reason
+        those helpers exist. Chaining ``exc`` therefore hands a caller reading
+        ``__cause__`` the container and makes them redo the walk that was just
+        done for them. Nothing is lost by the rule: the group is the exception
+        being handled, so it lands on ``__context__`` either way.
+
+        Stated here rather than per-branch so a sixth classifier inherits it,
+        instead of being pattern-matched off whichever neighbour gets read
+        first — which is how five of these six raise sites came to disagree
+        with the one that had a docstring promising a ``__cause__``.
         """
         try:
             yield
@@ -767,38 +782,36 @@ class RemoteMCPProxy:
         ):
             raise
         except Exception as exc:  # noqa: BLE001 — re-raised unless classified
+            # Every raise below chains from the LOCATED exception, not from
+            # `exc` — see "THE CHAINING RULE" above.
             oversized = payload_too_large(exc)
             if oversized is not None:
                 raise RemotePayloadTooLarge(
                     self._payload_too_large_error(name, oversized)
-                ) from exc
+                ) from oversized
             cut_off = gateway_failure(exc)
             if cut_off is not None:
                 status = cut_off.response.status_code
                 if self._writes(name):
                     raise RemoteWriteIndeterminate(
                         self._indeterminate_error(name, status)
-                    ) from exc
-                raise RemoteUnreachable(self._gateway_read_error(name, status)) from exc
+                    ) from cut_off
+                raise RemoteUnreachable(
+                    self._gateway_read_error(name, status)
+                ) from cut_off
             rejected = auth_failure(exc)
             if rejected is not None:
                 raise RemoteCredentialRejected(
                     self._credential_rejected_error(
                         name, rejected.response.status_code, refreshed=refreshed
                     )
-                ) from exc
+                ) from rejected
             dropped = _transport_failure(exc)
             if dropped is not None:
-                raise RemoteUnreachable(self._unreachable_error(dropped)) from exc
+                raise RemoteUnreachable(self._unreachable_error(dropped)) from dropped
             refused = tool_failure(exc)
             if refused is None:
                 raise
-            # Chained from the ToolError itself, not from `exc`. When anyio
-            # re-raises through an ExceptionGroup the two differ, and `from exc`
-            # would put the *group* on __cause__ — leaving a caller to re-walk
-            # it for the wire error this class promises to hand over. The group
-            # is not lost either way: it is the exception being handled, so it
-            # lands on __context__.
             raise RemoteToolFailed(str(refused)) from refused
 
     async def dispatch(self, name: str, /, **kwargs: Any) -> Any:

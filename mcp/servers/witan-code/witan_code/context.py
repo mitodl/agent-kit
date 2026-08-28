@@ -30,6 +30,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import os
+import time
 from pathlib import Path
 
 from . import config as cfg_module
@@ -78,18 +79,36 @@ _TOOLSEARCH_QUERY = '`ToolSearch(query="+code_ find_definition callers impact")`
 
 
 def _coverage_line(store: store_module.StoreRef, cfg: cfg_module.Config) -> str:
-    """One line on how many OTHER repos are indexed.
+    """One line on whether cross-repo resolution can answer anything here.
 
     This is the fact an agent cannot infer and gets silently wrong in one
-    direction: with no other repo indexed, ``code_interface_consumers`` and
-    friends return ``[]`` for everything, which is indistinguishable from a
-    genuine "nothing consumes this". Cheap — a glob locally, one cached graph
-    listing on the cluster; no store reads either way.
+    direction: ``code_interface_consumers`` and friends answering nothing is
+    indistinguishable from a genuine "nothing consumes this". Two different
+    things cause it, so both are checked.
+
+    HOW MANY OTHER REPOS ARE INDEXED is cheap — a glob locally, one cached
+    graph listing on the cluster, no store reads either way.
+
+    WHETHER THE BRIDGE GRAPH OPENS costs one query, because every
+    ``code_interface_*`` tool reads that one derived store and nothing else
+    does. It is not covered by the repo count: this line claimed cross-repo
+    resolution worked on every prompt for six weeks while the bridge had been
+    unreadable since an omnigraph upgrade, which is worse than saying nothing
+    — an agent that believes it concludes a contract has no consumers when the
+    truth is that the query could not run. The probe is cached
+    (:func:`_bridge_ok`) so the cost is one query per TTL, not per prompt.
     """
     try:
         others = [ref for ref in store_module.per_repo_stores(cfg) if ref != store]
     except OSError:  # degrade to silence, never blank the block
         return ""
+    if _bridge_ok(cfg) is False:
+        return (
+            "The cross-repo bridge graph cannot be read, so every "
+            "`code_interface_*` / `code_cross_repo_impact` call FAILS — do not "
+            "read their absence as absence of consumers. `code_store_health` "
+            "for why; `witan-code doctor` to fix."
+        )
     if not others:
         return (
             "No other repo is indexed: `code_interface_*` return `[]` here — "
@@ -98,6 +117,66 @@ def _coverage_line(store: store_module.StoreRef, cfg: cfg_module.Config) -> str:
     return (
         f"{len(others)} other repos indexed, so cross-repo `code_interface_*` resolve."
     )
+
+
+# One bridge probe per this many seconds, cached ON DISK.
+#
+# An in-process memo would cache nothing here: `witan-code inject-context` is a
+# fresh process per prompt, so a module-level dict is born and dies inside one
+# hook run. The hook already pays one store query for the repo's file count;
+# adding a second, uncached, on every prompt is a cost the block is not worth.
+#
+# The answer only changes when a store is rebuilt or omnigraph is upgraded, so
+# a few minutes of staleness is the same exposure the file count already
+# carries. The failure direction that matters is the safe one: a cache miss
+# probes, and an unwritable cache just means the next prompt probes again.
+_BRIDGE_PROBE_TTL = 300.0
+
+
+def _bridge_probe_path(cfg: cfg_module.Config) -> Path:
+    """Where the cached bridge verdict lives — beside the session lock, in TMPDIR.
+
+    Keyed by a hash of the code dir rather than the path itself: two code dirs
+    must not collide on one cache entry, and a long path must not blow past a
+    filename limit — the same reasoning, and the same digest, as
+    :func:`_lock_path`.
+    """
+    tmp = Path(os.environ.get("TMPDIR", "/tmp"))
+    digest = hashlib.sha256(str(cfg.code_dir).encode()).hexdigest()[:16]
+    return tmp / f"codegraph-bridge-{digest}.probe"
+
+
+def _bridge_ok(cfg: cfg_module.Config) -> bool | None:
+    """Whether the cross-repo bridge graph opens; ``None`` when there isn't one.
+
+    ``None`` and ``False`` are deliberately distinct. A repo indexed on its own,
+    with no bridge yet, has nothing broken — the repo-count line already covers
+    it. A bridge that exists and will not open is a live failure.
+
+    The absence check is LOCAL-ONLY, for the same reason as
+    :func:`store.health_report`'s: ``StoreRef.exists`` degrades every remote
+    probe failure to ``False``, so asking it about a cluster bridge turns "I
+    could not reach it" into "there isn't one" — and this block would then go
+    back to claiming cross-repo resolution works, which is the bug it was just
+    changed to stop telling.
+    """
+    ref = store_module.bridge_store(cfg)
+    if not ref.is_remote and not ref.exists(cfg):
+        return None
+    cache = _bridge_probe_path(cfg)
+    try:
+        if time.time() - cache.stat().st_mtime < _BRIDGE_PROBE_TTL:
+            return cache.read_text().strip() == "ok"
+    except OSError:
+        pass  # no cache, or an unreadable one: probe and rewrite it
+    ok = store_module.store_health(ref, cfg, bridge=True).ok
+    try:
+        cache.write_text("ok" if ok else "broken")
+    except OSError:
+        # A full or read-only TMPDIR costs a probe per prompt, not a wrong
+        # answer. Never let caching a verdict fail the block that reports it.
+        pass
+    return ok
 
 
 def inject_context() -> str:
@@ -125,7 +204,25 @@ def inject_context() -> str:
         )
 
     repo_uri = store_module.repo_for_store(store, cfg)
-    files = store_module.file_count(store, cfg)
+    health = store_module.store_health(store, cfg)
+    if not health.ok and not in_progress:
+        # An unreadable store used to render as "? files", which reads as a
+        # cosmetic gap in an otherwise working index. It is not: every `code_*`
+        # tool against this repo errors. Say that instead of the size/freshness
+        # block, which describes a graph nothing can query.
+        #
+        # Deferring to `in_progress` covers the one benign way to read this: a
+        # store directory that exists because an index is part-way through
+        # creating it. That is a graph on its way in, not one that is broken,
+        # and the in-flight message below already tells the agent not to trust
+        # what it holds yet.
+        return (
+            "## Code Graph\n\n"
+            f"`{repo_uri}`'s code graph CANNOT BE READ — every `code_*` tool "
+            "against this repo will fail. Use grep/Read here, and run "
+            "`witan-code doctor` to see the reason and the fix.\n"
+        )
+    files = health.files
     # No freshness line for a cluster graph: mtime is a property of a store
     # directory and there isn't one. Same degraded rendering as a mid-walk
     # failure — the block is worth having without it.

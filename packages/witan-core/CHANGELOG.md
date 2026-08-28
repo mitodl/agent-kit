@@ -22,6 +22,31 @@ a MINOR bump may include breaking changes).
   first test through the launcher pinned the handler to its own `capsys`, and a
   later test asserting on stderr saw an empty string. Both paths late-bind now.
 
+## [0.32.2] - 2026-08-25
+
+### Changed
+
+- **Every branch of `RemoteMCPProxy._reclassifying` now chains from the
+  exception it located, not from the one it caught.** Each classifier walks
+  `_chain` precisely because anyio re-raises through an `ExceptionGroup` and
+  the fault is a member of the group rather than the group itself — so
+  `raise … from exc` handed a caller reading `__cause__` the container and made
+  them redo the walk that had just been done for them. Five of the six raise
+  sites did that; only `RemoteToolFailed` (fixed in #209, because its docstring
+  published a `__cause__` contract the chaining made false) did not.
+
+  `RemotePayloadTooLarge`, `RemoteWriteIndeterminate`, `RemoteCredentialRejected`
+  and both `RemoteUnreachable` raises now put the located exception on
+  `__cause__` and the group on `__context__`. **This is an observable change**,
+  not the free consistency edit it was filed as: two existing tests asserted the
+  group on `__cause__` and had to be updated. Anything walking these exceptions
+  by hand should read `__context__` for the group.
+
+  The rule is now stated once in the `_reclassifying` docstring rather than as a
+  comment on the one branch that followed it — the branch count had already
+  grown from three to six while each new classifier copied whichever neighbour
+  was read first. Each branch has a test pinning `__cause__` / `__context__`.
+
 ## [0.32.1] - 2026-08-24
 
 ### Changed

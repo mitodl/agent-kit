@@ -32,8 +32,9 @@ queryset.
   filters or orders on that table** - the join is happening either way.
 - Three or four to-one joins are fine; **treat eight as the review threshold**
   where you check `EXPLAIN` and split the query instead of widening it further.
-- **Never query inside a serializer** - the body runs once per object, so a query
-  there is multiplied by the page size. The view's queryset assembles the data.
+- **Never query inside a serializer or call a function directly or indirectly
+  that makes one** - the body runs once per object, so a query there is multiplied
+  by the page size. The view's queryset assembles the data.
 - Declare `required_prefetches` on every serializer. It fails loudly under
   `DEBUG` and pytest; **in production it only logs**, so treat it as a
   development guardrail and not a reason to skip the prefetch.
