@@ -66,20 +66,39 @@ server is to index into a local `.omni` directory and report success — inside
 a pod whose filesystem is then discarded, while the shared graph goes stale.
 `WITAN_CODE_CI_ALLOW_LOCAL_STORE=1` waives them for testing the script itself.
 
-#### Cloning private repos (GitHub App)
+#### Cloning repos (GitHub App)
 
-Public repos clone anonymously and need no credential. For private ones, set
-all three of `WITAN_CODE_GITHUB_APP_ID`, `WITAN_CODE_GITHUB_APP_INSTALLATION_ID`,
-and `WITAN_CODE_GITHUB_APP_KEY_FILE` (a mounted PEM). A partial set is an
-error, not a fallback to anonymous — the latter fails only on private repos,
-which reads like a GitHub-side permissions problem rather than a missing mount.
+Public repos clone anonymously and need no credential. To authenticate clones,
+set all three of `WITAN_CODE_GITHUB_APP_ID`,
+`WITAN_CODE_GITHUB_APP_INSTALLATION_ID`, and `WITAN_CODE_GITHUB_APP_KEY_FILE`
+(a mounted PEM). A partial set is an error, not a fallback to anonymous — the
+latter fails only on private repos, which reads like a GitHub-side permissions
+problem rather than a missing mount.
 
 A GitHub App rather than a deploy key or a PAT: a deploy key is scoped to one
 repository, so a fleet sweep would need one per repo; a PAT is long-lived and
 carries everything its owner can read. An App issues tokens that expire in an
-hour, needs only `contents: read`, and its *installation* is the list of repos
-it can reach — managed by an org admin in GitHub, so a private repo cannot be
-pulled into a shared graph by a Pulumi config change alone.
+hour and needs only `contents: read` to clone plus `metadata: read` to answer
+the visibility check below.
+
+#### Private repos are refused
+
+A shared code graph grants `read` to every actor holding a bearer token, so a
+private repo indexed into one is readable by every witan user. The sweep
+therefore asks GitHub whether each repo is private **before** cloning it and
+refuses the private ones, counting the refusal as a failure so it reaches the
+job summary. A visibility question that cannot be answered (a 404, or GitHub
+unreachable) refuses too.
+
+`WITAN_CODE_CI_ALLOW_PRIVATE_REPOS=1` waives it. That is the explicit opt-in,
+not the fix — the fix is per-repo read scoping, designed in
+`mcp/servers/witan/docs/adr/0010-private-code-graph-read-scoping.md` and not
+built yet.
+
+Do not read the App's *installation* as a second control here. As installed on
+mitodl it is `repository_selection: "all"`, so it already reaches every private
+repo in the org and adding one to `managed_repos` is the only step there is.
+The refusal above is what makes that step visible.
 
 The token is minted **per repo**, not per sweep: it lasts an hour and a cold
 run is allowed three, so a single token would expire partway through the first

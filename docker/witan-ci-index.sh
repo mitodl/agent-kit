@@ -44,6 +44,10 @@
 #                          token authenticates the clones. Without them repos
 #                          are cloned anonymously, which is correct when every
 #                          managed repo is public. See witan_code/github_app.py.
+#   WITAN_CODE_CI_ALLOW_PRIVATE_REPOS=1
+#                          index private repos into shared graphs anyway. See
+#                          the refusal in the loop below for why that is not
+#                          the default, and what has to exist before it is.
 
 set -eu
 
@@ -139,6 +143,8 @@ if [ "${github_app}" = "1" ]; then
          "${WITAN_CODE_GITHUB_APP_INSTALLATION_ID}"
 fi
 
+allow_private="${WITAN_CODE_CI_ALLOW_PRIVATE_REPOS:-}"
+
 indexed=0
 failed=0
 # The names, not just the count. `indexed 13, failed 1` is the LAST line of the
@@ -170,6 +176,54 @@ for repo in ${WITAN_CODE_CI_REPOS}; do
             continue
         fi
         export WITAN_CODE_GH_TOKEN
+    fi
+
+    # ── Private repos are refused, and this is the only thing refusing them ──
+    #
+    # A shared code graph has no read scoping. There IS a Cedar bundle on it
+    # (policy/code-graph.policy.yaml) — but one bundle governs EVERY per-repo
+    # code graph, its `users-read-any-branch` rule grants `read`/`export` to
+    # `witan-users`, and `witan-users` is rendered at boot as every actor
+    # holding a bearer token (policy/render_groups.py). So every witan user
+    # can read every repo's graph. That costs nothing while every repo is public —
+    # and it is exactly the moment a private one is indexed that it starts
+    # costing, because the graph carries that repo's file paths, symbol names
+    # and call structure to every witan user. The App's installation narrows
+    # who can CLONE, never who can read the result.
+    #
+    # So the guard sits here, on the write path, rather than on the reviewed
+    # list in ol-infrastructure's `managed_repos`: this is where a repo
+    # actually becomes readable by everyone, whatever put it in the list.
+    #
+    # Only meaningful on the App path — cloning anonymously, a private repo
+    # fails at `git clone` regardless, and asking GitHub about it needs a
+    # credential this job would not have.
+    #
+    # Lift it by implementing per-repo read scoping
+    # (tk-per-repo-read-scoping-on-code-graphs-via-github--371b4d), not by
+    # setting the override, which exists so the decision to accept the
+    # exposure has to be written down in the deployment and reviewed.
+    if [ "${github_app}" = "1" ] && [ "${allow_private}" != "1" ]; then
+        if ! visibility="$(python -m witan_code.github_app --visibility "${repo}")"
+        then
+            # Deliberately not "assume public and carry on": the question went
+            # unanswered, and the failure mode of guessing is the one this
+            # guard exists to prevent.
+            echo "witan-ci-index: could not determine whether ${repo} is" \
+                 "private; refusing to index it" >&2
+            failed=$((failed + 1))
+            failed_repos="${failed_repos} ${repo}"
+            continue
+        fi
+        if [ "${visibility}" = "private" ]; then
+            echo "witan-ci-index: refusing to index private repo ${repo} into" \
+                 "a shared graph: code graphs have no per-repo read scoping," \
+                 "so every witan user would be able to read it. Set" \
+                 "WITAN_CODE_CI_ALLOW_PRIVATE_REPOS=1 to accept that." >&2
+            failed=$((failed + 1))
+            failed_repos="${failed_repos} ${repo}"
+            continue
+        fi
     fi
 
     echo "witan-ci-index: cloning ${repo}"
