@@ -109,10 +109,12 @@ def real_releases() -> dict[Version, str]:
     """Every published non-prerelease, non-draft release, version → tag name.
 
     Deliberately NOT ``/releases/latest``, which would be one request instead
-    of this loop: that endpoint picks the newest by ``created_at``, so a
-    patch cut on an older line after a newer minor (a v0.9.1 after v0.10.0)
-    would come back as "latest" and read as a regression against the pin.
-    Comparison here is by version, which is the question actually being asked.
+    of this loop. That endpoint returns whichever single release GitHub
+    considers latest, by its own recency ordering — not the highest version.
+    The two diverge as soon as a patch is cut on an older line after a newer
+    minor (a v0.9.1 released after a v0.10.0), and there the endpoint's answer
+    would read as a regression against the pin. Comparing versions explicitly
+    is the question actually being asked, and costs one extra request at most.
     """
     url = f"https://api.github.com/repos/{REPO}/releases?per_page=100"
     found: dict[Version, str] = {}
