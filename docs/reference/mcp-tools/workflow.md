@@ -92,7 +92,7 @@ its response.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `query` | str | **required** | Free-text search query. |
-| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted;<br>pass ``""`` to search across all repos. Applied in Python after the<br>BM25 fetch (``repos`` is a list, not match-filterable), so a repo<br>filter narrows within the top 20 BM25 hits rather than the full<br>corpus — same trade-off ``workflow_project_search`` inherits from<br>the query language's ranking-op ``limit`` requirement. |
+| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted;<br>pass ``""`` to search across all repos. Applied in Python after the<br>BM25 fetch (``repos`` is a list, not match-filterable) — the<br>underlying query is unbounded so this filter sees every match, not<br>just a small top-N, then the real ``limit 20`` is applied after. |
 | `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active`` — the useful default for a dedup check is<br>"is someone already working on this." |
 
 ## `workflow_project_update`
