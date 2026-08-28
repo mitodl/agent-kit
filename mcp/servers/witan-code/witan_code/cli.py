@@ -15,6 +15,7 @@ unconditionally.
 
 import asyncio
 import inspect
+import os
 import sys
 from pathlib import Path
 from typing import Annotated, Literal
@@ -143,9 +144,180 @@ def index(path: Path = Path(".")) -> None:
 
 
 @app.command
-def reindex(path: Path = Path(".")) -> None:
-    """Force re-index PATH, ignoring content hashes."""
+def reindex(
+    path: Path = Path("."), *, rebuild: bool = False, yes: bool = False
+) -> None:
+    """Force re-index PATH, ignoring content hashes.
+
+    Parameters
+    ----------
+    rebuild:
+        Delete this repo's code graph, and the shared bridge graph if it is
+        also unreadable, before indexing — the recovery for a store the
+        installed omnigraph cannot open (`witan-code doctor`). A code graph is
+        derived from the checkout, so this rebuilds it from source and needs no
+        pre-upgrade binary; the deleted store is not backed up, because a copy
+        nothing installed can read is just disk. Dropping the bridge costs
+        every OTHER repo's cross-repo bindings until each is reindexed too.
+    yes:
+        Skip the confirmation prompt for ``--rebuild``.
+    """
+    if rebuild:
+        _rebuild_stores(path, yes=yes)
     _print_summary("reindex", path, _index(path, force=True))
+
+
+def _rebuild_stores(path: Path, *, yes: bool) -> None:
+    """Delete the unreadable stores this reindex would otherwise write into.
+
+    Only the unreadable ones. ``--rebuild`` on a healthy store would throw away
+    a working index and re-derive an identical one, and the bridge in
+    particular carries every other repo's bindings — deleting it because THIS
+    repo needed rebuilding would take 50 other repos' cross-repo resolution
+    with it for no reason.
+    """
+    from rich.console import Console
+
+    from . import config as cfg_module
+    from . import repo as repo_module
+    from . import store as store_module
+
+    console = Console()
+    cfg = cfg_module.load()
+    # A rebuild deletes the WHOLE store, so the index that follows has to cover
+    # the whole repo. `reindex --rebuild src/` would empty the store and then
+    # refill only `src/`, leaving the rest of the repo silently unindexed — a
+    # worse state than the unreadable store it started from, and one nothing
+    # afterwards reports. Refuse rather than quietly widening the path the
+    # caller asked for.
+    #
+    # Asked of git rather than by walking up to a `.git` directory: in a linked
+    # worktree `.git` is a FILE, so the walk finds nothing and the guard would
+    # silently not apply in exactly the checkout layout this repo works in.
+    #
+    # From the PARENT when `path` is a file, because `index`/`reindex` accept
+    # one — and `git -C <file>` exits 128 ("Not a directory"), which this reads
+    # as "no repo" and skips the guard entirely. That left
+    # `reindex some_file.py --rebuild` deleting the whole store and refilling it
+    # with one file: the exact outcome the guard exists to prevent, reachable by
+    # the one argument shape most likely to be typed by accident.
+    root = repo_module.git_toplevel(path if path.is_dir() else path.parent)
+    if root is not None and path.resolve() != root.resolve():
+        console.print(
+            f"[red]--rebuild deletes the whole store, so it has to reindex the "
+            f"whole repo — but {path} is not the repo root.[/red] Re-run it as "
+            f"`witan-code reindex {root} --rebuild`."
+        )
+        raise SystemExit(1)
+    slug = repo_module.detect(start=path)
+    candidates = []
+    if slug is not None:
+        ref = store_module.store_for_repo(slug, cfg)
+        if ref.exists(cfg) and not store_module.store_health(ref, cfg).ok:
+            candidates.append(("this repo's code graph", ref))
+    bridge = store_module.bridge_store(cfg)
+    if (
+        bridge.exists(cfg)
+        and not store_module.store_health(bridge, cfg, bridge=True).ok
+    ):
+        candidates.append(("the shared cross-repo bridge graph", bridge))
+
+    if not candidates:
+        console.print(
+            "[dim]Nothing to rebuild — every store this repo writes reads fine.[/dim]"
+        )
+        return
+
+    for what, ref in candidates:
+        console.print(f"[yellow]Will DELETE {what}: {ref}[/yellow]")
+    if any(ref == bridge for _, ref in candidates):
+        console.print(
+            "[yellow]The bridge holds every indexed repo's cross-repo bindings. "
+            "Deleting it empties them all; each repo restores its own on its "
+            "next index.[/yellow]"
+        )
+    if not yes:
+        try:
+            answer = input("Continue? [y/N] ").strip().lower()
+        except EOFError:
+            console.print(
+                "[red]Aborted (non-interactive; pass --yes to skip the prompt).[/red]"
+            )
+            raise SystemExit(1) from None
+        if answer not in ("y", "yes"):
+            console.print("Aborted.")
+            raise SystemExit(1)
+
+    for what, ref in candidates:
+        freed = store_module.discard_store(ref)
+        console.print(f"[green]Deleted[/green] {what} ({_human_size(freed)} freed).")
+
+
+@app.command
+def doctor() -> None:
+    """Check that every code graph — per-repo and the shared bridge — can be read.
+
+    Exits non-zero when any store is unreadable, so it is usable as a check.
+    """
+    from rich.console import Console
+
+    # Deliberately NOT through `_srv()`. This asks about the stores THIS
+    # machine's `code_*` tools read, and the rebuild it recommends is a local
+    # maintenance action on local files — the same side of the split as
+    # `index`/`optimize`/`cleanup`. Dispatching to a deployment would report a
+    # cluster's health and then advise a rebuild of stores that are fine.
+    from . import server as server_module
+
+    console = Console()
+    report = _fn(server_module.code_store_health)()
+    rows = [
+        {
+            # Basename only: a local store path is `<code_dir>/<sanitized
+            # repo>.omni` and the shared prefix is the same on every row, so
+            # printing it in full wraps every store onto three lines and buries
+            # the status column this table exists for. A cluster graph's `store`
+            # is not a path and has no basename to take.
+            "store": os.path.basename(s["store"]),
+            "kind": s["kind"],
+            "status": "ok"
+            if s["ok"]
+            else ("stale schema" if s["stale_schema"] else "unreadable"),
+            "files": "-" if s["files"] is None else str(s["files"]),
+        }
+        for s in report["stores"]
+    ]
+    _render_table(
+        title="Code graph health",
+        columns=["store", "kind", "status", "files"],
+        rows=rows,
+        no_wrap={"kind", "status", "files"},
+    )
+    if report["ok"]:
+        console.print("[green]Every code graph reads.[/green]")
+        return
+
+    broken = [s for s in report["stores"] if not s["ok"]]
+    # One error body, not one per store: they are the same failure repeated,
+    # and printing 53 identical omnigraph errors is what made this invisible.
+    console.print(
+        f"\n[red]{len(broken)} of {len(report['stores'])} stores cannot be read.[/red]"
+    )
+    # Drop the remediation paragraph the client appends to a stale-schema error
+    # (`_friendly_storage_error` joins message and hint with a blank line): it
+    # tells the reader to run `witan-code doctor`, which is what they are
+    # reading the output of. The rebuild advice below replaces it.
+    body = broken[0]["error"].strip().rsplit("\n\n", 1)[0]
+    # markup=False, not just escaped: an omnigraph error is arbitrary text and
+    # a bracketed fragment in it must render as itself, not vanish into Rich's
+    # markup parser.
+    console.print(body, markup=False)
+    if report["stale_schema"]:
+        console.print(
+            "\nRebuild each affected repo with `witan-code reindex --rebuild` "
+            "from its checkout. The bridge graph is rebuilt alongside the "
+            "first one and refills as the rest are reindexed."
+        )
+    raise SystemExit(1)
 
 
 def _index(path: Path, *, force: bool) -> indexer.IndexStats:
@@ -872,7 +1044,13 @@ def repos() -> None:
     table_rows: list[dict[str, object]] = [
         {
             "repo": r["repo"],
-            "files": "?" if r["files"] is None else str(r["files"]),
+            # "?" meant both "empty-ish" and "this store cannot be opened",
+            # which is how 53 dead stores read as a normal listing. `.get`,
+            # not `[]`: a deployment older than the field still answers this
+            # listing, and it must degrade to the old rendering, not raise.
+            "files": ("ERROR" if r.get("unreadable") else "?")
+            if r["files"] is None
+            else str(r["files"]),
             # Both are null for a cluster graph — they describe a store
             # directory, which a client of a shared graph does not have.
             "size": _human_size(r["bytes"]),
@@ -888,6 +1066,11 @@ def repos() -> None:
         rows=table_rows,
         no_wrap={"files", "size", "last indexed"},
     )
+    if any(r.get("unreadable") for r in rows):
+        Console().print(
+            "[red]Some stores could not be read — `witan-code doctor` for "
+            "why.[/red] Their `code_*` tools do not return empty, they fail."
+        )
 
 
 # ── Remote auth (ADR 0005, path a) ───────────────────────────────────────────
