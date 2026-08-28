@@ -180,9 +180,12 @@ for repo in ${WITAN_CODE_CI_REPOS}; do
 
     # ── Private repos are refused, and this is the only thing refusing them ──
     #
-    # A shared code graph has no read scoping: `cluster.yaml` declares no
-    # `policy:` block, so any bearer token the server accepts can read every
-    # graph it serves. That costs nothing while every managed repo is public —
+    # A shared code graph has no read scoping. There IS a Cedar bundle on it
+    # (policy/code-graph.policy.yaml) — but one bundle governs EVERY per-repo
+    # code graph, its `users-read-any-branch` rule grants `read`/`export` to
+    # `witan-users`, and `witan-users` is rendered at boot as every actor
+    # holding a bearer token (policy/render_groups.py). So every witan user
+    # can read every repo's graph. That costs nothing while every repo is public —
     # and it is exactly the moment a private one is indexed that it starts
     # costing, because the graph carries that repo's file paths, symbol names
     # and call structure to every witan user. The App's installation narrows

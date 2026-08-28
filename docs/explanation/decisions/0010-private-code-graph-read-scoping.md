@@ -23,10 +23,25 @@
 ## Context
 
 A `code-<repo>` graph holds a repo's file paths, symbol names, and call
-structure. `cluster.yaml` declares no `policy:` block, so an omnigraph bearer
-token is all-or-nothing across every graph the server serves: any witan user
-can read every indexed repo's graph. While every indexed repo is public that
-costs nothing, which is why it has never been fixed.
+structure, and every witan user can read every one of them. While every indexed
+repo is public that costs nothing, which is why it has never been fixed.
+
+★ The mechanism is not the one the tracking task recorded, and the difference
+matters to the design. The task said "`cluster.yaml` declares no `policy:`
+block". It does: `policy/code-graph.policy.yaml` is a real Cedar bundle,
+templated by ol-infrastructure over the graph ids of every managed repo. What
+makes reads unscoped is *what the bundle says*, not its absence —
+
+- `applies_to` is the full list of per-repo graph ids, so **one bundle governs
+  all of them** and there is no per-repo distinction to make;
+- its `users-read-any-branch` rule grants `read`/`export` to `witan-users` on
+  any branch;
+- `witan-users` is rendered at boot from the live actor-token map
+  (`policy/render_groups.py`), i.e. **every actor holding a bearer token**.
+
+That is a better starting point than "no policy at all", because it means
+per-repo read scoping is expressible in the plane that already exists rather
+than needing a new one. See D3.
 
 The originating idea (2026-08-03) was to close it with the same GitHub App the
 CI indexer clones as: ask GitHub whether the calling actor can see repo R, and
@@ -125,42 +140,67 @@ change is blocked; do not build both.
 A user who has not linked has no GitHub identity, and therefore reads no
 private repo's graph. That is the correct default and needs no special case.
 
-### D3 — The access question is asked as the user, not as the App
+### D3 — Enforce in the Cedar bundle at render time, not per request in the MCP tier
 
-With a linked account, Keycloak holds the user's GitHub token and can hand it
-back over its broker endpoint. Ask `GET /repos/{owner}/{repo}` with it: 200
-means this user can read this repo, 404 means they cannot. That is the exact
-question, it needs no App permission beyond what exists, and it works for repos
-in any org — not only ones the App is installed on.
+A private repo gets **its own bundle**, whose reader group is not "every actor
+with a token" but the actors GitHub says can read that repo.
+`policy/render_groups.py` already computes group membership at boot from the
+live actor-token map, and `ol-infrastructure` already templates `applies_to`
+per graph; this is the same two mechanisms with a narrower input, not a new
+plane.
+
+This is the decision the corrected Context above makes available, and it is
+strictly better than the per-request check this ADR would otherwise have
+specified:
+
+- **Nothing on the read path.** No GitHub round trip per `code_*` call, so no
+  TTL cache, no added latency, and no new failure mode in a read.
+- **It binds at the data tier**, so it also covers readers that do not go
+  through the MCP tier at all — the in-cluster CI indexer reaches
+  omnigraph-server directly.
+- **Revocation latency is already-existing behaviour**, not a new parameter:
+  the `actor-tokens` VaultStaticSecret declares
+  `rolloutRestartTargets: [omnigraph-server]`, so the server re-renders its
+  groups on exactly the event that changes the actor set, hourly at worst.
+
+Rejected: resolving `actor can read repo R` per request in the MCP tier and
+feeding it to Cedar as an entity attribute. It is the obvious design when you
+believe there is no policy bundle, and it buys prompt revocation — at the cost
+of a cache whose TTL *is* the revocation latency anyway, a GitHub dependency in
+the read path, and an enforcement point that the direct-store reader bypasses.
+
+### D4 — The membership question is asked as the user, not as the App
+
+To render that group, ask GitHub, once per user per repo per render, whether
+the user can read the repo. With a linked account (D2), Keycloak holds the
+user's GitHub token and can hand it back over its broker endpoint; ask
+`GET /repos/{owner}/{repo}` with it — 200 means this user can read this repo,
+404 means they cannot.
 
 Rejected: `GET /repos/{o}/{r}/collaborators/{u}` as the App. It asks the
-question indirectly (collaborator status is not the same as readability —
-org-level and team-level grants are not collaborations), it is scoped to the
-App's installation so it cannot answer for other orgs, and the fine-grained
+question indirectly (collaborator status is not readability — org-level and
+team-level grants are not collaborations), it is scoped to the App's
+installation so it cannot answer for other orgs, and the fine-grained
 permission it requires is above `metadata: read` and was not established.
-Retrieving a brokered token and asking as the user avoids all three.
 
 ★ Unverified before implementing: that the realm's broker `read-token` role can
-be granted to the witan client, and what GitHub OAuth token lifetime/revocation
-behaviour that implies. If the brokered token turns out to be unavailable, D3
-falls back to the App-side collaborator check and the permission bump it needs
+be granted to the witan client, and what GitHub OAuth token lifetime and
+revocation behaviour that implies. If the brokered token is unavailable, D4
+falls back to the App-side collaborator check, and the permission bump it needs
 becomes its own review.
 
-### D4 — The check runs in the MCP tier and feeds Cedar, rather than beside it
+### D5 — Absent means denied, and a render that could not ask must say so
 
-The MCP tier is the only place with a validated per-request identity. The
-answer becomes a Cedar entity attribute — `actor can read repo R` — so there is
-one authorization path, not two, which is the whole point of preferring GitHub
-as the source of truth in the first place. Read paths that go straight to the
-store must route through it.
+A user who has not linked a GitHub account, or whom GitHub does not confirm, is
+not in the group and reads nothing. `render_groups.py` already drops a group
+with no members along with the rules referencing it — which denies rather than
+granting, and is the behaviour wanted here.
 
-### D5 — Deny on failure, cache with an explicit TTL, and say which happened
-
-A GitHub round trip per `code_*` call is not viable, so a membership answer is
-cached with a TTL, and revocation latency is that TTL — a deliberate parameter,
-written down, not an accident of implementation. GitHub unreachable denies. A
-denial must distinguish "you may not read this" from "we could not find out",
-because the second is an operational failure and the first is not.
+The failure that needs care is a render that could not reach GitHub. It must
+not silently produce a narrower group that reads as a revocation, nor reuse a
+stale one that reads as a grant: it should fail the render loudly, leaving the
+previous applied bundle in place, and log which repos it could not resolve.
+Group sizes are already logged per render, so the signal has somewhere to go.
 
 ## Consequences
 
@@ -178,3 +218,9 @@ because the second is an operational failure and the first is not.
   worth carrying: `code_indexed_repos` from a local stdio server describes the
   laptop, and a claim about the deployment needs `managed_repos` or a query
   that provably went to the cluster.
+- Two premises this ADR inherited from the tracking task were wrong, and both
+  were wrong in the direction of making the problem look simpler than it is.
+  "No `policy:` block" hid an existing enforcement plane that turns out to be
+  the right place to enforce; "the App can answer the read question" hid a
+  missing identity mapping that has to be built first. Neither survived being
+  checked, and checking cost minutes.
