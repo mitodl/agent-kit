@@ -266,6 +266,29 @@ def test_project_search_finds_title_only_terms(server):
 
 
 @requires_omnigraph
+def test_project_search_scoped_match_not_crowded_out_by_other_repo_hits(server):
+    """A relevant match in the requested repo must survive even when 20+
+    higher-scoring matches exist in other repos — the BM25 query itself must
+    not cap before the Python repo filter runs (over-fetch, cap after)."""
+    target = server.workflow_project_create(
+        title="a distant paraphrase",
+        description="dedup graph search work",
+        repos=["https://github.com/test/target"],
+    )
+    for i in range(25):
+        server.workflow_project_create(
+            title=f"dedup graph search #{i}",
+            description="dedup graph search dedup graph search dedup graph search",
+            repos=["https://github.com/test/other"],
+        )
+
+    hits = server.workflow_project_search(
+        "dedup graph search", repo="https://github.com/test/target"
+    )
+    assert target["slug"] in [h["slug"] for h in hits]
+
+
+@requires_omnigraph
 def test_project_search_dedups_both_field_matches(server):
     proj = server.workflow_project_create(
         title="quokka narwhal", description="more about the quokka narwhal"

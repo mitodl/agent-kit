@@ -525,6 +525,14 @@ query patterns_by_repo($repo: String) {
 // list, so membership isn't a graph match-filter — `workflow_project_search`
 // filters on repo membership in Python after fetching, same as
 // `workflow_project_list` does for its listing.
+//
+// Unbounded `limit`, same reasoning as `list_projects_by_status` above: a
+// small query-level cap applied *before* the Python repo filter could let 20
+// higher-scoring matches in other repos crowd out a real match in the
+// requested repo, so a repo-scoped search would incorrectly come back empty.
+// `workflow_project_search` re-applies the real `_SEARCH_LIMIT` cap in Python
+// after filtering. Safe to leave unbounded — corpus size is WorkflowProject
+// count, not Task/Memory count, so orders of magnitude smaller.
 
 query search_projects_all($query: String) {
     match {
@@ -536,7 +544,7 @@ query search_projects_all($query: String) {
         $p.tags, $p.github_issue, $p.updated_at
     }
     order { bm25($p.description, $query) desc }
-    limit 20
+    limit 1000000
 }
 
 query search_projects_by_status($query: String, $status: String) {
@@ -549,7 +557,7 @@ query search_projects_by_status($query: String, $status: String) {
         $p.tags, $p.github_issue, $p.updated_at
     }
     order { bm25($p.description, $query) desc }
-    limit 20
+    limit 1000000
 }
 
 query search_projects_all_title($query: String) {
@@ -562,7 +570,7 @@ query search_projects_all_title($query: String) {
         $p.tags, $p.github_issue, $p.updated_at
     }
     order { bm25($p.title, $query) desc }
-    limit 20
+    limit 1000000
 }
 
 query search_projects_by_status_title($query: String, $status: String) {
@@ -575,7 +583,7 @@ query search_projects_by_status_title($query: String, $status: String) {
         $p.tags, $p.github_issue, $p.updated_at
     }
     order { bm25($p.title, $query) desc }
-    limit 20
+    limit 1000000
 }
 
 query get_workflow_project($slug: String) {

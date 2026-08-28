@@ -20,6 +20,12 @@ frontend, and the infra repo that deploys it) or none (a cross-cutting
 objective not yet tied to any repo). The repo set also grows automatically
 as sessions run in new repos — see ``workflow_session_start``.
 
+Returns ``{"slug", "repos", "phase", "similar"}`` — ``similar`` is up to 3
+BM25 matches on ``title`` against other *active* projects (searched across
+all repos, not just this one — the same objective tracked from a
+different repo is still a duplicate), a soft duplicate check. It never
+blocks creation.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `title` | str | **required** | Short name for the project. Used in listings and injected context. |
@@ -72,6 +78,22 @@ context into new sessions.
 | `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active``. |
 | `phase` | `discovery` \| `spec` \| `implementation` \| `delivery`? | `null` | Optional phase filter applied after fetching. |
 | `ready` | bool | `False` | When ``True``, only return active projects whose blockers are all<br>completed (i.e. projects that are unblocked and actionable). |
+
+## `workflow_project_search`
+
+Plain BM25 text search over workflow projects (no graph expansion).
+
+Returns up to 20 projects ranked by BM25 relevance, matched against
+``description`` and ``title``. Run this before ``workflow_project_create``
+to check whether the objective is already tracked; ``workflow_project_create``
+also runs it automatically and returns the top matches as ``similar`` in
+its response.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `query` | str | **required** | Free-text search query. |
+| `repo` | str? | `null` | Canonical repo URI to filter to (membership test against each<br>project's repo set). Auto-detected from ``.git/config`` if omitted;<br>pass ``""`` to search across all repos. Applied in Python after the<br>BM25 fetch (``repos`` is a list, not match-filterable), so a repo<br>filter narrows within the top 20 BM25 hits rather than the full<br>corpus — same trade-off ``workflow_project_search`` inherits from<br>the query language's ranking-op ``limit`` requirement. |
+| `status` | `active` \| `completed` \| `abandoned`? | `'active'` | ``active`` \| ``completed`` \| ``abandoned`` \| ``None`` for all.<br>Defaults to ``active`` — the useful default for a dedup check is<br>"is someone already working on this." |
 
 ## `workflow_project_update`
 

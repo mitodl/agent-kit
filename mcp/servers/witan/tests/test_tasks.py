@@ -81,6 +81,27 @@ def test_task_search_scopes_by_repo(server):
 
 
 @requires_omnigraph
+def test_task_search_includes_unscoped_tasks_alongside_repo_scope(server):
+    """A repo-scoped search must not drop unscoped (repo=None) matches — same
+    convention task_list already follows (server.py:5518)."""
+    scoped = server.task_create(
+        title="quokka narwhal in repo a",
+        description="quokka narwhal",
+        repo="https://github.com/test/a",
+    )
+    unscoped = server.task_create(
+        title="quokka narwhal unscoped", description="x", repo=""
+    )
+
+    hits = {
+        h["slug"]
+        for h in server.task_search("quokka narwhal", repo="https://github.com/test/a")
+    }
+    assert scoped["slug"] in hits
+    assert unscoped["slug"] in hits
+
+
+@requires_omnigraph
 def test_task_create_returns_similar_tasks(server):
     existing = server.task_create(
         title="fix the flaky retry test", description="the retry test flakes on CI"

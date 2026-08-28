@@ -3941,7 +3941,10 @@ def _search_project_rows(query: str, status: str | None) -> list[dict]:
     """BM25 candidate rows in score-desc order — the WorkflowProject twin of
     ``_search_rows``. No by-repo dispatch: ``repos`` is a list, so repo
     membership is filtered in Python by the caller, same as
-    ``workflow_project_list``.
+    ``workflow_project_list``. The underlying queries are unbounded (see the
+    read.gq comment above ``search_projects_all``) precisely so that
+    post-fetch repo filtering can't silently drop a real match that scored
+    below some small query-level cap.
     """
     if status:
         name = "search_projects_by_status"
@@ -3983,10 +3986,9 @@ def workflow_project_search(
         Canonical repo URI to filter to (membership test against each
         project's repo set). Auto-detected from ``.git/config`` if omitted;
         pass ``""`` to search across all repos. Applied in Python after the
-        BM25 fetch (``repos`` is a list, not match-filterable), so a repo
-        filter narrows within the top 20 BM25 hits rather than the full
-        corpus — same trade-off ``workflow_project_search`` inherits from
-        the query language's ranking-op ``limit`` requirement.
+        BM25 fetch (``repos`` is a list, not match-filterable) — the
+        underlying query is unbounded so this filter sees every match, not
+        just a small top-N, then the real ``limit 20`` is applied after.
     status:
         ``active`` | ``completed`` | ``abandoned`` | ``None`` for all.
         Defaults to ``active`` — the useful default for a dedup check is
@@ -5546,32 +5548,49 @@ def task_list(
     return rows
 
 
-def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[dict]:
-    """BM25 candidate rows in score-desc order — the Task twin of
-    ``_search_rows``. Same content-then-title union reasoning (§ header note
-    on the Memory search pairs in read.gq); `description` stands in for
-    Memory's `content` as the primary matched field.
+def _search_task_bm25(name: str, params: dict) -> list[dict]:
+    """One content-then-title BM25 union for a Task search query pair. Same
+    reasoning as the Memory search pairs (§ header note in read.gq).
     """
-    detected = repo_module.detect(override=repo)
-    if detected and status:
-        name = "search_tasks_by_repo_and_status"
-        params = {"query": query, "repo": detected, "status": status}
-    elif detected:
-        name = "search_tasks_by_repo"
-        params = {"query": query, "repo": detected}
-    elif status:
-        name = "search_tasks_by_status"
-        params = {"query": query, "status": status}
-    else:
-        name = "search_tasks_all"
-        params = {"query": query}
-
     rows = list(client.read("read.gq", name, params))
     seen = {r["slug"] for r in rows}
     rows.extend(
         r
         for r in client.read("read.gq", f"{name}_title", params)
         if r["slug"] not in seen
+    )
+    return rows
+
+
+def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[dict]:
+    """BM25 candidate rows in score-desc order — the Task twin of
+    ``_search_rows``; `description` stands in for Memory's `content` as the
+    primary matched field.
+    """
+    detected = repo_module.detect(override=repo)
+    if not detected:
+        name = "search_tasks_by_status" if status else "search_tasks_all"
+        params = {"query": query, **({"status": status} if status else {})}
+        return _search_task_bm25(name, params)
+
+    if status:
+        name = "search_tasks_by_repo_and_status"
+        params = {"query": query, "repo": detected, "status": status}
+    else:
+        name = "search_tasks_by_repo"
+        params = {"query": query, "repo": detected}
+    rows = _search_task_bm25(name, params)
+
+    # Merge in unscoped (repo=None) matches — task_list's convention
+    # (server.py:5518): unscoped tasks were created without git context and
+    # should stay visible regardless of which repo you're searching from.
+    global_name = "search_tasks_by_status" if status else "search_tasks_all"
+    global_params = {"query": query, **({"status": status} if status else {})}
+    seen = {r["slug"] for r in rows}
+    rows.extend(
+        r
+        for r in _search_task_bm25(global_name, global_params)
+        if not r.get("repo") and r["slug"] not in seen
     )
     return rows
 
@@ -5597,7 +5616,8 @@ def task_search(
     query:
         Free-text search query.
     repo:
-        Repo scoping — see instructions.
+        Repo scoping — see instructions. Matches against the detected repo
+        plus unscoped tasks (``repo=None``), same as ``task_list``.
     status:
         Optional filter: ``open``, ``in_progress``, ``blocked``, or
         ``closed``. Omit to search all statuses — a closed task is still
