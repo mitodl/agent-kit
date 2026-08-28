@@ -54,6 +54,33 @@ def test_project_create_with_phase_and_repo(server, monkeypatch):
 
 
 @requires_omnigraph
+def test_project_create_prints_similar_hint(server, monkeypatch):
+    """A near-duplicate project title surfaces a `similar:` line."""
+    from witan.cli.projects import project_create
+
+    printed = _patch_server(monkeypatch, server)
+    project_create(title="dedup graph search", description="add semantic search")
+    printed.clear()
+
+    project_create(title="dedup graph search v2", description="add semantic search")
+
+    combined = "\n".join(printed)
+    assert "similar:" in combined
+    assert "dedup graph search" in combined
+
+
+@requires_omnigraph
+def test_project_create_no_similar_hint_when_no_matches(server, monkeypatch):
+    from witan.cli.projects import project_create
+
+    printed = _patch_server(monkeypatch, server)
+    project_create(title="wholly novel objective zzz", description="d")
+
+    combined = "\n".join(printed)
+    assert "similar:" not in combined
+
+
+@requires_omnigraph
 def test_task_create_minimal(server, monkeypatch):
     """task_create_cmd with just title/description produces an open task."""
     from witan.cli.tasks import task_create_cmd
@@ -64,6 +91,36 @@ def test_task_create_minimal(server, monkeypatch):
     combined = "\n".join(printed)
     assert "tk-" in combined
     assert "open" in combined
+
+
+@requires_omnigraph
+def test_task_create_prints_similar_hint(server, monkeypatch):
+    """A near-duplicate task title surfaces a `similar:` line with its status."""
+    from witan.cli.tasks import task_create_cmd
+
+    printed = _patch_server(monkeypatch, server)
+    task_create_cmd(title="fix the flaky retry test", description="flakes on CI")
+    printed.clear()
+
+    task_create_cmd(
+        title="fix the flaky retry test again", description="still flakes on CI"
+    )
+
+    combined = "\n".join(printed)
+    assert "similar:" in combined
+    assert "fix the flaky retry test" in combined
+    assert "open" in combined
+
+
+@requires_omnigraph
+def test_task_create_no_similar_hint_when_no_matches(server, monkeypatch):
+    from witan.cli.tasks import task_create_cmd
+
+    printed = _patch_server(monkeypatch, server)
+    task_create_cmd(title="wholly novel task zzz", description="d")
+
+    combined = "\n".join(printed)
+    assert "similar:" not in combined
 
 
 @requires_omnigraph

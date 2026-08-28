@@ -238,6 +238,75 @@ def test_project_list_active_default(server):
     assert proj["slug"] in completed
 
 
+# ── Project search (tk-phase-0-bm25-task-search-project-search) ─────────────
+
+
+@requires_omnigraph
+def test_project_search_bm25_ranked(server):
+    server.workflow_project_create(
+        title="vault k8s auth", description="wire vault kubernetes auth for a service"
+    )
+    server.workflow_project_create(
+        title="unrelated", description="something about a totally different area"
+    )
+
+    hits = server.workflow_project_search("vault kubernetes auth")
+    assert hits and hits[0]["title"] == "vault k8s auth"
+
+
+@requires_omnigraph
+def test_project_search_finds_title_only_terms(server):
+    proj = server.workflow_project_create(
+        title="zebrafish quokka narwhal",
+        description="totally unrelated prose about compaction and fragments",
+    )
+
+    hits = server.workflow_project_search("zebrafish quokka narwhal")
+    assert [h["slug"] for h in hits] == [proj["slug"]]
+
+
+@requires_omnigraph
+def test_project_search_dedups_both_field_matches(server):
+    proj = server.workflow_project_create(
+        title="quokka narwhal", description="more about the quokka narwhal"
+    )
+
+    hits = server.workflow_project_search("quokka narwhal")
+    assert [h["slug"] for h in hits].count(proj["slug"]) == 1
+
+
+@requires_omnigraph
+def test_project_search_excludes_completed_by_default(server):
+    proj = server.workflow_project_create(
+        title="quokka narwhal project", description="quokka narwhal work"
+    )
+    server.workflow_project_complete(proj["slug"], outcome="done")
+
+    assert server.workflow_project_search("quokka narwhal") == []
+    all_status = server.workflow_project_search("quokka narwhal", status=None)
+    assert proj["slug"] in [h["slug"] for h in all_status]
+
+
+@requires_omnigraph
+def test_project_create_returns_similar_projects(server):
+    existing = server.workflow_project_create(
+        title="dedup graph search", description="add semantic search to the graph"
+    )
+
+    created = server.workflow_project_create(
+        title="dedup graph search v2", description="add semantic search to the graph"
+    )
+    assert existing["slug"] in [s["slug"] for s in created["similar"]]
+
+
+@requires_omnigraph
+def test_project_create_similar_empty_when_no_matches(server):
+    created = server.workflow_project_create(
+        title="zzz nothing else like this zzz", description="wholly novel objective"
+    )
+    assert created["similar"] == []
+
+
 # ── Project dependency / blocking tests ──────────────────────────────────────
 
 

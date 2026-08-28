@@ -3705,6 +3705,12 @@ def workflow_project_create(
     objective not yet tied to any repo). The repo set also grows automatically
     as sessions run in new repos — see ``workflow_session_start``.
 
+    Returns ``{"slug", "repos", "phase", "similar"}`` — ``similar`` is up to 3
+    BM25 matches on ``title`` against other *active* projects (searched across
+    all repos, not just this one — the same objective tracked from a
+    different repo is still a duplicate), a soft duplicate check. It never
+    blocks creation.
+
     Parameters
     ----------
     title:
@@ -3732,6 +3738,15 @@ def workflow_project_create(
     slug = _make_slug("workflow_project", title)
     repo_set = _merge_repos(repos, repo_module.detect())
 
+    # Soft duplicate check (tk-phase-0-bm25-task-search-project-search): see
+    # task_create's identical rationale. Unscoped by repo on purpose — the
+    # same objective logged from a different repo is exactly the case this
+    # is meant to catch.
+    similar = [
+        {"slug": r["slug"], "title": r["title"], "phase": r["phase"]}
+        for r in _search_project_rows(title, "active")[:3]
+    ]
+
     client.change(
         "mutations.gq",
         "insert_workflow_project",
@@ -3750,7 +3765,7 @@ def workflow_project_create(
             "updated_at": now,
         },
     )
-    return {"slug": slug, "repos": repo_set, "phase": phase}
+    return {"slug": slug, "repos": repo_set, "phase": phase, "similar": similar}
 
 
 @_tool
@@ -3920,6 +3935,68 @@ def workflow_project_list(
         rows = [r for r in rows if _project_is_ready(r, status_cache)]
 
     return rows
+
+
+def _search_project_rows(query: str, status: str | None) -> list[dict]:
+    """BM25 candidate rows in score-desc order — the WorkflowProject twin of
+    ``_search_rows``. No by-repo dispatch: ``repos`` is a list, so repo
+    membership is filtered in Python by the caller, same as
+    ``workflow_project_list``.
+    """
+    if status:
+        name = "search_projects_by_status"
+        params = {"query": query, "status": status}
+    else:
+        name = "search_projects_all"
+        params = {"query": query}
+
+    rows = list(client.read("read.gq", name, params))
+    seen = {r["slug"] for r in rows}
+    rows.extend(
+        r
+        for r in client.read("read.gq", f"{name}_title", params)
+        if r["slug"] not in seen
+    )
+    return rows
+
+
+@_tool
+def workflow_project_search(
+    query: str,
+    repo: str | None = None,
+    status: WorkflowStatus | None = "active",
+) -> list[dict]:
+    """
+    Plain BM25 text search over workflow projects (no graph expansion).
+
+    Returns up to 20 projects ranked by BM25 relevance, matched against
+    ``description`` and ``title``. Run this before ``workflow_project_create``
+    to check whether the objective is already tracked; ``workflow_project_create``
+    also runs it automatically and returns the top matches as ``similar`` in
+    its response.
+
+    Parameters
+    ----------
+    query:
+        Free-text search query.
+    repo:
+        Canonical repo URI to filter to (membership test against each
+        project's repo set). Auto-detected from ``.git/config`` if omitted;
+        pass ``""`` to search across all repos. Applied in Python after the
+        BM25 fetch (``repos`` is a list, not match-filterable), so a repo
+        filter narrows within the top 20 BM25 hits rather than the full
+        corpus — same trade-off ``workflow_project_search`` inherits from
+        the query language's ranking-op ``limit`` requirement.
+    status:
+        ``active`` | ``completed`` | ``abandoned`` | ``None`` for all.
+        Defaults to ``active`` — the useful default for a dedup check is
+        "is someone already working on this."
+    """
+    rows = _search_project_rows(query, status)
+    detected_repo = repo_module.detect(override=repo)
+    if detected_repo:
+        rows = [r for r in rows if detected_repo in _project_repos(r)]
+    return rows[:_SEARCH_LIMIT]
 
 
 @_tool
@@ -5277,6 +5354,11 @@ async def task_create(
     dependencies so ``task_ready`` can withhold the task until its blockers
     close.
 
+    Returns ``{"slug", "status", "repo", "similar"}`` — ``similar`` is up to 3
+    BM25 matches on ``title`` against existing tasks (any status), a soft
+    duplicate check. It never blocks creation; review it and close this task
+    as a duplicate (``task_close``) if one of them is really the same work.
+
     Parameters
     ----------
     title, description:
@@ -5308,6 +5390,15 @@ async def task_create(
     # unscoped task (today's behavior) under automation / an unsupported client.
     repo = await elicit.repo_or_detect(ctx, repo)
     detected_repo = repo_module.detect(override=repo)
+    # Soft duplicate check (tk-phase-0-bm25-task-search-project-search):
+    # BM25-search the title against existing tasks before minting a new one.
+    # Warn-only — never blocks the create — since a lexical hit on the title
+    # is a decent duplicate signal but nowhere near certain; the caller
+    # decides whether a `similar` hit means "use that one instead."
+    similar = [
+        {"slug": r["slug"], "title": r["title"], "status": r["status"]}
+        for r in (await _offload(_search_task_rows, title, detected_repo, None))[:3]
+    ]
     # Only "blocked" if a blocker is not already closed — otherwise it's ready
     # now and would never be auto-unblocked.
     status: TaskStatus = "open"
@@ -5366,7 +5457,12 @@ async def task_create(
         )
     await _offload(client.change_many, steps)
 
-    return {"slug": slug, "status": status, "repo": detected_repo}
+    return {
+        "slug": slug,
+        "status": status,
+        "repo": detected_repo,
+        "similar": similar,
+    }
 
 
 @_tool
@@ -5448,6 +5544,66 @@ def task_list(
     if assignee:
         rows = [r for r in rows if _holder_matches(r.get("assignee"), assignee)]
     return rows
+
+
+def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[dict]:
+    """BM25 candidate rows in score-desc order — the Task twin of
+    ``_search_rows``. Same content-then-title union reasoning (§ header note
+    on the Memory search pairs in read.gq); `description` stands in for
+    Memory's `content` as the primary matched field.
+    """
+    detected = repo_module.detect(override=repo)
+    if detected and status:
+        name = "search_tasks_by_repo_and_status"
+        params = {"query": query, "repo": detected, "status": status}
+    elif detected:
+        name = "search_tasks_by_repo"
+        params = {"query": query, "repo": detected}
+    elif status:
+        name = "search_tasks_by_status"
+        params = {"query": query, "status": status}
+    else:
+        name = "search_tasks_all"
+        params = {"query": query}
+
+    rows = list(client.read("read.gq", name, params))
+    seen = {r["slug"] for r in rows}
+    rows.extend(
+        r
+        for r in client.read("read.gq", f"{name}_title", params)
+        if r["slug"] not in seen
+    )
+    return rows
+
+
+@_tool
+def task_search(
+    query: str,
+    repo: str | None = None,
+    status: TaskStatus | None = None,
+) -> list[dict]:
+    """
+    Plain BM25 text search over tasks (no graph expansion).
+
+    Returns up to 20 tasks ranked by BM25 relevance, matched against
+    ``description`` and ``title`` (description matches are seeded ahead of
+    title-only matches — see ``memory_search``'s doc for why). Run this
+    before ``task_create`` to check whether the work is already tracked;
+    ``task_create`` also runs it automatically and returns the top matches
+    as ``similar`` in its response.
+
+    Parameters
+    ----------
+    query:
+        Free-text search query.
+    repo:
+        Repo scoping — see instructions.
+    status:
+        Optional filter: ``open``, ``in_progress``, ``blocked``, or
+        ``closed``. Omit to search all statuses — a closed task is still
+        useful to surface (the work may already be done).
+    """
+    return _search_task_rows(query, repo, status)[:_SEARCH_LIMIT]
 
 
 @_tool

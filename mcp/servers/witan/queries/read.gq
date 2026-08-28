@@ -521,6 +521,63 @@ query patterns_by_repo($repo: String) {
 
 // ── Workflow Projects ─────────────────────────────────────────────
 
+// Search (BM25 on description, then title). No by-repo variant: `repos` is a
+// list, so membership isn't a graph match-filter — `workflow_project_search`
+// filters on repo membership in Python after fetching, same as
+// `workflow_project_list` does for its listing.
+
+query search_projects_all($query: String) {
+    match {
+        $p: WorkflowProject
+        search($p.description, $query)
+    }
+    return {
+        $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
+        $p.tags, $p.github_issue, $p.updated_at
+    }
+    order { bm25($p.description, $query) desc }
+    limit 20
+}
+
+query search_projects_by_status($query: String, $status: String) {
+    match {
+        $p: WorkflowProject { status: $status }
+        search($p.description, $query)
+    }
+    return {
+        $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
+        $p.tags, $p.github_issue, $p.updated_at
+    }
+    order { bm25($p.description, $query) desc }
+    limit 20
+}
+
+query search_projects_all_title($query: String) {
+    match {
+        $p: WorkflowProject
+        search($p.title, $query)
+    }
+    return {
+        $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
+        $p.tags, $p.github_issue, $p.updated_at
+    }
+    order { bm25($p.title, $query) desc }
+    limit 20
+}
+
+query search_projects_by_status_title($query: String, $status: String) {
+    match {
+        $p: WorkflowProject { status: $status }
+        search($p.title, $query)
+    }
+    return {
+        $p.slug, $p.title, $p.description, $p.repos, $p.status, $p.phase,
+        $p.tags, $p.github_issue, $p.updated_at
+    }
+    order { bm25($p.title, $query) desc }
+    limit 20
+}
+
 query get_workflow_project($slug: String) {
     match {
         $p: WorkflowProject { slug: $slug }
@@ -723,6 +780,122 @@ query list_all_traces() {
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────
+
+// Search (BM25 on description, then title) — see the header note on the
+// Memory search pairs above; same reasoning applies here (no `or` across
+// two `search` predicates, so `_search_task_rows` unions the two runs).
+
+query search_tasks_all($query: String) {
+    match {
+        $t: Task
+        search($t.description, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.description, $query) desc }
+    limit 20
+}
+
+query search_tasks_by_repo($query: String, $repo: String) {
+    match {
+        $t: Task { repo: $repo }
+        search($t.description, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.description, $query) desc }
+    limit 20
+}
+
+query search_tasks_by_status($query: String, $status: String) {
+    match {
+        $t: Task { status: $status }
+        search($t.description, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.description, $query) desc }
+    limit 20
+}
+
+query search_tasks_by_repo_and_status($query: String, $repo: String, $status: String) {
+    match {
+        $t: Task { repo: $repo, status: $status }
+        search($t.description, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.description, $query) desc }
+    limit 20
+}
+
+query search_tasks_all_title($query: String) {
+    match {
+        $t: Task
+        search($t.title, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.title, $query) desc }
+    limit 20
+}
+
+query search_tasks_by_repo_title($query: String, $repo: String) {
+    match {
+        $t: Task { repo: $repo }
+        search($t.title, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.title, $query) desc }
+    limit 20
+}
+
+query search_tasks_by_status_title($query: String, $status: String) {
+    match {
+        $t: Task { status: $status }
+        search($t.title, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.title, $query) desc }
+    limit 20
+}
+
+query search_tasks_by_repo_and_status_title($query: String, $repo: String, $status: String) {
+    match {
+        $t: Task { repo: $repo, status: $status }
+        search($t.title, $query)
+    }
+    return {
+        $t.slug, $t.title, $t.description, $t.repo, $t.type, $t.status,
+        $t.priority, $t.project_slug, $t.parent_slug, $t.assignee,
+        $t.external_uri, $t.tags, $t.updated_at
+    }
+    order { bm25($t.title, $query) desc }
+    limit 20
+}
 
 query get_task($slug: String) {
     match {
