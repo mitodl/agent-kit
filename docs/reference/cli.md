@@ -71,6 +71,7 @@ witan — agent memory, planning, and collaboration graph.
 - [`code`](#witan-code)
     - [`index`](#witan-code-index)
     - [`reindex`](#witan-code-reindex)
+    - [`doctor`](#witan-code-doctor)
     - [`deps`](#witan-code-deps)
     - [`symbols`](#witan-code-symbols)
     - [`stitch`](#witan-code-stitch)
@@ -1212,7 +1213,7 @@ Incrementally index PATH (file or directory). Unchanged files are skipped.
 ### witan code reindex
 
 ```console
-witan code reindex [ARGS]
+witan code reindex [OPTIONS] [ARGS]
 ```
 
 Force re-index PATH, ignoring content hashes.
@@ -1220,6 +1221,24 @@ Force re-index PATH, ignoring content hashes.
 **Parameters**:
 
 * `PATH, --path`: *[default: .]*
+* `--rebuild, --no-rebuild`: Delete this repo's code graph, and the shared bridge graph if it is
+    also unreadable, before indexing — the recovery for a store the
+    installed omnigraph cannot open (`witan-code doctor`). A code graph is
+    derived from the checkout, so this rebuilds it from source and needs no
+    pre-upgrade binary; the deleted store is not backed up, because a copy
+    nothing installed can read is just disk. Dropping the bridge costs
+    every OTHER repo's cross-repo bindings until each is reindexed too. *[default: False]*
+* `--yes, --no-yes`: Skip the confirmation prompt for ``--rebuild``. *[default: False]*
+
+### witan code doctor
+
+```console
+witan code doctor
+```
+
+Check that every code graph — per-repo and the shared bridge — can be read.
+
+Exits non-zero when any store is unreadable, so it is usable as a check.
 
 ### witan code deps
 

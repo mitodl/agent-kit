@@ -16,6 +16,20 @@ query delete_bindings_in_file($repo_file: String) {
     delete InterfaceBinding where repo_file = $repo_file
 }
 
+// The readiness probe (`store.store_health`). The bridge's per-repo sibling
+// answers this with code_read.gq's `count_files`, which matches CodeFile — a
+// node the bridge schema does not have, so asking it here reports a perfectly
+// healthy bridge as unreadable. Counted in the engine, like `count_files`, and
+// read positionally for the same reason: the column takes the match variable's
+// name on a populated store but "?" on an empty one.
+
+query count_bindings() {
+    match {
+        $b: InterfaceBinding
+    }
+    return { count($b) }
+}
+
 // All bindings — read once to build the cross-repo dependency visualization.
 
 query all_bindings() {

@@ -76,6 +76,269 @@ def test_file_count_is_none_when_the_store_cannot_be_read(tmp_path, monkeypatch)
     assert store_module.file_count(ref, _StubConfig()) is None
 
 
+# ── store_health ──────────────────────────────────────────────────────────────
+
+# The real thing, from omnigraph 0.10.0 against a store 0.8.x wrote.
+_STALE_SCHEMA_ERROR = (
+    "__manifest is stamped at internal schema v4, but this omnigraph reads "
+    "only v6. This graph was created by omnigraph 0.8.x."
+)
+
+
+def _raising_client(monkeypatch, message: str) -> None:
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(store_module, "OmnigraphClient", _boom)
+
+
+def test_store_health_names_a_stale_on_disk_format_as_such(tmp_path, monkeypatch):
+    """The one unreadable-store failure with a known remedy.
+
+    Every code_* tool against such a store errors identically and forever, and
+    it is fixed by reindexing rather than by waiting or retrying — so it has to
+    be distinguishable from a store that is merely unreachable right now.
+    """
+    _raising_client(monkeypatch, _STALE_SCHEMA_ERROR)
+    ref = store_module.StoreRef(str(tmp_path / "x.omni"))
+
+    health = store_module.store_health(ref, _StubConfig())
+
+    assert health.ok is False
+    assert health.stale_schema is True
+    assert health.files is None
+    assert "internal schema v4" in health.error
+
+
+def test_store_health_probes_the_bridge_with_a_query_the_bridge_has(
+    tmp_path, monkeypatch
+):
+    """The bridge is a different schema on a different query file.
+
+    It has no CodeFile node, so the per-repo `count_files` fails against a
+    perfectly healthy bridge. That misfire is not cosmetic: `reindex --rebuild`
+    keys off this verdict, so a bridge misreported as unreadable gets deleted
+    on every single rebuild, taking every other repo's bindings with it each
+    time. Caught mid-sweep doing exactly that.
+    """
+    asked: list[tuple[str, str]] = []
+
+    class _Recording:
+        def read(self, query_file, query, _params):
+            asked.append((query_file, query))
+            return [{"c": 7}]
+
+    monkeypatch.setattr(store_module, "OmnigraphClient", lambda *a, **kw: _Recording())
+    ref = store_module.StoreRef(str(tmp_path / "_bridge.omni"))
+
+    assert store_module.store_health(ref, _StubConfig(), bridge=True).files == 7
+    assert asked == [("bridge.gq", "count_bindings")]
+
+    asked.clear()
+    store_module.store_health(ref, _StubConfig())
+    assert asked == [("code_read.gq", "count_files")]
+
+
+@requires_stack
+def test_a_freshly_written_bridge_reads_as_healthy(sample_repo):
+    """The end-to-end version of the above, against a real store.
+
+    A stub can only pin which query is asked; this pins that the query the
+    bridge is asked actually answers on a bridge the indexer just wrote.
+    """
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+
+    # The bridge is only created for a repo that has a contract to record, and
+    # the stock sample has none.
+    (sample_repo / "settings.py").write_text(
+        "import os\n\nAPI_BASE_URL = os.environ['SERVICE_API_BASE_URL']\n"
+    )
+    cfg = cfg_mod.load()
+    indexer.index_path(sample_repo, force=False, config=cfg)
+    bridge = store_module.bridge_store(cfg)
+    assert bridge.exists(cfg)
+
+    assert store_module.store_health(bridge, cfg, bridge=True).ok
+    # And the wrong probe really does condemn it, so this is not a test that
+    # would pass either way.
+    assert not store_module.store_health(bridge, cfg).ok
+
+
+def test_store_health_does_not_call_every_other_failure_stale(tmp_path, monkeypatch):
+    _raising_client(monkeypatch, "connection refused")
+    ref = store_module.StoreRef(str(tmp_path / "x.omni"))
+
+    health = store_module.store_health(ref, _StubConfig())
+
+    assert health.ok is False
+    assert health.stale_schema is False
+
+
+def test_store_health_reports_an_empty_store_as_readable(tmp_path, monkeypatch):
+    """0 files and "cannot be opened" must not render the same.
+
+    Collapsing them is what let a dead code graph read as an under-indexed
+    repo for six weeks.
+    """
+    monkeypatch.setattr(
+        store_module, "OmnigraphClient", lambda *a, **kw: _StubClient([{"?": 0}])
+    )
+    ref = store_module.StoreRef(str(tmp_path / "x.omni"))
+
+    health = store_module.store_health(ref, _StubConfig())
+
+    assert health.ok is True
+    assert health.files == 0
+
+
+def test_health_report_covers_the_bridge_not_only_the_repo_stores(
+    tmp_path, monkeypatch
+):
+    """The bridge is the store nothing else watches.
+
+    It belongs to no repo, so per_repo_stores excludes it by design — and every
+    code_interface_* / code_cross_repo_impact tool reads it and nothing else
+    does. A readiness check that walks only the repo stores reports a healthy
+    system while cross-repo resolution is entirely broken.
+    """
+    code_dir = tmp_path / "code"
+    (code_dir / "https_github.com_test_cg.omni").mkdir(parents=True)
+    (code_dir / "_bridge.omni").mkdir()
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    monkeypatch.setattr(
+        store_module, "OmnigraphClient", lambda *a, **kw: _StubClient([{"f": 1}])
+    )
+
+    from witan_code import config as cfg_mod
+
+    probed = {str(h.ref) for h in store_module.health_report(cfg_mod.load())}
+
+    assert str(code_dir / "_bridge.omni") in probed
+    assert str(code_dir / "https_github.com_test_cg.omni") in probed
+
+
+# ── discard_store ─────────────────────────────────────────────────────────────
+
+
+def test_discard_store_takes_the_schema_stamp_with_it(tmp_path):
+    """A stamp outliving its store would suppress the apply on the fresh one.
+
+    schema_apply_if_changed skips when the stamped mtime matches the schema
+    file's, so a leftover stamp leaves the rebuilt store without its FTS
+    indexes — a rebuild that silently produces a half-working graph.
+    """
+    from witan_core.omnigraph import schema_stamp_path
+
+    store = tmp_path / "x.omni"
+    store.mkdir()
+    (store / "data.lance").write_text("payload")
+    schema_stamp_path(store).write_text("123.0")
+    store_module.repo_sidecar(store).write_text("https://github.com/test/cg")
+
+    freed = store_module.discard_store(store_module.StoreRef(str(store)))
+
+    assert not store.exists()
+    assert not schema_stamp_path(store).exists()
+    assert not store_module.repo_sidecar(store).exists()
+    assert freed >= len("payload")
+
+
+def test_discard_store_refuses_a_cluster_graph():
+    """The client cannot create a cluster graph, so it may not delete one."""
+    ref = store_module.StoreRef("https://omnigraph.test", graph_id="code-cg")
+
+    with pytest.raises(ValueError, match="cluster graph"):
+        store_module.discard_store(ref)
+
+
+def test_discard_store_raises_rather_than_claiming_a_deletion_it_did_not_do(
+    tmp_path, monkeypatch
+):
+    """A failed delete must stop the rebuild, not be reported as freed bytes.
+
+    With `ignore_errors=True` a permissions error left the unreadable store in
+    place, removed the sidecars anyway, and returned a byte count the CLI
+    printed as "Deleted … (N freed)" — announcing a recovery that had not
+    happened, then reindexing into the same store that could not be opened.
+    """
+    from witan_core.omnigraph import schema_stamp_path
+
+    store = tmp_path / "x.omni"
+    store.mkdir()
+    (store / "data.lance").write_text("payload")
+    schema_stamp_path(store).write_text("123.0")
+
+    # Honours `ignore_errors` the way the real rmtree does, so this test can
+    # tell the two spellings apart. A stub that raises unconditionally cannot:
+    # it passes against `ignore_errors=True` too, proving nothing.
+    def _refuse(_path, ignore_errors=False, **_kwargs):
+        if ignore_errors:
+            return
+        raise PermissionError("read-only filesystem")
+
+    monkeypatch.setattr(store_module.shutil, "rmtree", _refuse)
+
+    with pytest.raises(PermissionError):
+        store_module.discard_store(store_module.StoreRef(str(store)))
+
+    # And the stamp survives alongside the store it describes — the correct
+    # state to stop in, since the store it was written for is still there.
+    assert store.exists()
+    assert schema_stamp_path(store).exists()
+
+
+# ── health_report: the bridge row ─────────────────────────────────────────────
+
+
+def test_an_unreachable_remote_bridge_is_reported_unhealthy_not_omitted(monkeypatch):
+    """`ok: true` while every bridge-backed tool fails is the failure this check exists to catch.
+
+    `StoreRef.exists` degrades EVERY remote probe failure to False on purpose,
+    so gating the bridge row on it dropped an unreadable cluster bridge out of
+    the report entirely — and `all(h.ok …)` then answered true.
+    """
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    monkeypatch.setattr(
+        store_module, "safe_cluster_graphs", lambda *a, **kw: frozenset()
+    )
+
+    def _unreachable(*_args, **_kwargs):
+        raise RuntimeError("tcp connect error")
+
+    monkeypatch.setattr(store_module, "OmnigraphClient", _unreachable)
+
+    from witan_code import config as cfg_mod
+
+    report = store_module.health_report(cfg_mod.load())
+
+    bridge_rows = [h for h in report if h.is_bridge]
+    assert len(bridge_rows) == 1, "the remote bridge must be probed, not skipped"
+    assert bridge_rows[0].ok is False
+    assert not all(h.ok for h in report)
+
+
+def test_a_missing_local_bridge_is_absence_not_failure(tmp_path, monkeypatch):
+    """A fresh install with no contracts yet has no bridge, and that is fine.
+
+    The remote rule above must not make `doctor` red on a healthy local setup
+    that simply has not written a bridge.
+    """
+    code_dir = tmp_path / "code"
+    (code_dir / "https_github.com_test_cg.omni").mkdir(parents=True)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    monkeypatch.setattr(
+        store_module, "OmnigraphClient", lambda *a, **kw: _StubClient([{"f": 1}])
+    )
+
+    from witan_code import config as cfg_mod
+
+    report = store_module.health_report(cfg_mod.load())
+
+    assert not any(h.is_bridge for h in report)
+    assert all(h.ok for h in report)
+
+
 # ── dir_stats ─────────────────────────────────────────────────────────────────
 
 

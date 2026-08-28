@@ -108,8 +108,13 @@ The repositories that have a code graph indexed, and how big each is.
 
 Use it to check coverage before trusting a negative result — a symbol
 search returning nothing means something different when the repo in
-question was never indexed. ``files`` is None for a store that could not be
-read; ``last_indexed`` is a Unix timestamp.
+question was never indexed. ``last_indexed`` is a Unix timestamp.
+
+``files`` is None for a store that could not be read, and ``unreadable``
+then carries why. Read the pair together: a repo listed with ``files: null``
+is NOT a repo with little indexed, it is one whose code graph no ``code_*``
+tool can query at all, and treating its empty results as "nothing found"
+is a confident wrong answer. ``unreadable`` is null on a healthy store.
 
 ``bytes`` and ``last_indexed`` are both null for a graph on the shared
 omnigraph-server: they describe a directory on this machine, and a client
@@ -243,6 +248,31 @@ cross-repo fan-out concatenates each store's ranked results.
 | `kind` | `function` \| `method` \| `class` \| `module` \| `variable` \| `interface` \| `type` \| `enum` \| `key` \| `table` \| `cte` \| `block`? | `null` | Optional filter to a single symbol kind: ``function``, ``method``,<br>``class``, ``module``, ``variable``, ``interface``, ``type``, ``enum``,<br>``key``, ``table``, ``cte``, or ``block``. Pass e.g. ``kind="function"``<br>to exclude the many YAML ``key`` symbols when searching for code. |
 | `repo` | str? | `null` | Canonical repo URI to search. Defaults to the repo detected from the<br>checkout, and fans out across every indexed repo only when no repo is<br>detected at all — ``repo=""`` does **not** force that, unlike the witan<br>memory/task tools; it is falsy and behaves like omitting the argument.<br>BM25 ranking is per-store, so a fan-out concatenates each store's<br>ranked results rather than producing one global ordering. |
 | `branch` | str? | `null` | Git branch whose indexed view to query. Defaults to the checkout's<br>branch when querying the current repo; when ``repo`` names a different<br>repo and ``branch`` is omitted, reads that store's default (main) view. |
+
+## `code_store_health`
+
+Whether every code graph — per-repo AND the shared cross-repo bridge — opens.
+
+The readiness check for witan-code. Call it when ``code_*`` tools return
+errors, or return nothing where you expected something, before concluding
+that a symbol or a consumer does not exist.
+
+The bridge graph is why this is its own tool rather than a column on
+code_indexed_repos. It belongs to no repo, so it appears in no repo
+listing, yet ``code_interface_search`` / ``code_interface_providers`` /
+``code_interface_consumers`` / ``code_cross_repo_impact`` all read it and
+nothing else does. A bridge that cannot be opened makes every one of those
+fail while every per-repo listing still looks healthy — which is how it
+stayed broken for six weeks.
+
+Returns ``{"stores": [{store, kind, ok, files, error, stale_schema}],
+"ok": bool, "stale_schema": [store, ...]}``. ``stale_schema`` names the
+stores written by an omnigraph whose on-disk format the installed binary
+no longer reads — the one failure with a known remedy, since a code graph
+is derived from its checkout and is rebuilt by reindexing
+(``witan-code reindex --rebuild``) rather than migrated.
+
+*Takes no parameters.*
 
 ## `code_symbols_in_file`
 
