@@ -1,0 +1,105 @@
+name: omnigraph release watch
+
+# witan pins omnigraph to upstream's MOVING `edge` tag across three tiers, a
+# deliberate decision taken while waiting for a real 0.10.0 release. Upstream
+# force-updates `edge` on every push to main, so the pinned asset digests go
+# stale on upstream's schedule: three drifts in one week (#248, #250, #281),
+# each found by a red `witan-code` job, and the 08-24 one blocked every open PR
+# in the repo rather than only the one that hit it. A real release is the
+# trigger to stop tracking `edge` and end that class of toil.
+#
+# Nobody was watching for it. Renovate cannot: its datasource proposes only
+# versions GREATER than the pin, and the pin already declares 0.10.0 (what the
+# `edge` build reports), so upstream cutting v0.10.0 compares equal and raises
+# nothing. bin/check_omnigraph_release.py's docstring has the full reasoning.
+#
+# ★ DELIBERATELY NOT A PULL-REQUEST GATE. Exit 1 here means upstream released
+# something, which is not a defect in anybody's branch — failing every PR on
+# the day it happens is the same shape as the problem this relieves. The blast
+# radius is one issue: information, not a gate.
+on:
+  schedule:
+    # Mondays 13:20 UTC. Weekly because upstream cuts releases on the order of
+    # months (v0.8.0 → v0.9.0 was five weeks), so a tighter cadence would only
+    # re-ask a question whose answer had not changed. Off the hour to stay out
+    # of the scheduling spike GitHub's own docs warn delays cron runs.
+    - cron: "20 13 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check-release:
+    name: omnigraph release watch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      # --extra cli for cyclopts; --with packaging for the version comparison,
+      # which is not a witan-core dependency and should not become one for the
+      # sake of one script.
+      - name: Install dependencies
+        run: uv sync --frozen --package witan-core --extra cli
+
+      # Exit 1 is the finding, not a failure, so the step must not end the job.
+      # Exit 2 IS a failure — the check could not run, and a watch that has
+      # silently stopped watching is worse than no watch.
+      - name: Check for a real omnigraph release
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          just check-omnigraph-release --json-file release.json
+          code=$?
+          set -e
+          if [ "$code" -gt 1 ]; then
+            exit "$code"
+          fi
+          echo "released=$([ "$code" -eq 1 ] && echo true || echo false)" >>"$GITHUB_OUTPUT"
+
+      # Everything upstream controls (the tag, and the title built from it)
+      # reaches the shell through jq out of a file, never through a `${{ }}`
+      # expansion — a release tag is an attacker-controllable string as far as
+      # this repo is concerned.
+      #
+      # A closed issue counts as answered: --state all. Deciding not to adopt a
+      # release is a legitimate outcome, and re-filing it every Monday would
+      # train everyone to ignore the one that matters. The next release at or
+      # above the pin has a different title and files afresh.
+      - name: File an issue if one is not already open
+        if: steps.check.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          title=$(jq -r .title release.json)
+          jq -r .body release.json >issue-body.md
+
+          # Matched locally on the exact title rather than with `gh issue list
+          # --search`: the title carries backticks and an em dash, and GitHub's
+          # search tokenises rather than matching literally, so a search that
+          # quietly missed would file a duplicate every Monday.
+          existing=$(gh issue list --state all --limit 200 --json number,title \
+            | jq -r --arg t "$title" \
+                '[.[] | select(.title == $t) | .number] | first // empty')
+
+          if [ -n "$existing" ]; then
+            echo "already filed as #$existing — nothing to do"
+            exit 0
+          fi
+
+          gh issue create --title "$title" --body-file issue-body.md

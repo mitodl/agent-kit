@@ -11,7 +11,7 @@
 	"customManagers": [
 		{
 			"customType": "regex",
-			"description": "The omnigraph binary version, pinned in THREE places that must move together: witan-core's shared installer (what `witan setup` fetches onto a developer's PATH), and the two Dockerfiles (what the deployed data tier and the MCP tier's bundled CLI run). A partial bump ships a client and a server on different releases, and omnigraph uses strict single-version storage — a 0.8.x binary refuses a 0.9.x graph and vice versa — so a split-version deploy is a hard outage, not a soft degradation. `just check-omnigraph-pins` enforces agreement in CI as a backstop.",
+			"description": "The omnigraph binary version, pinned in THREE places that must move together: witan-core's shared installer (what `witan setup` fetches onto a developer's PATH), and the two Dockerfiles (what the deployed data tier and the MCP tier's bundled CLI run). A partial bump ships a client and a server on different releases, and omnigraph uses strict single-version storage — a 0.8.x binary refuses a 0.9.x graph and vice versa — so a split-version deploy is a hard outage, not a soft degradation. `just check-omnigraph-pins` enforces agreement in CI as a backstop. NOTE THE BLIND SPOT while the repo tracks the moving `edge` tag: the version pin declares what the `edge` build REPORTS, so upstream cutting that version for real compares equal to `currentValue` and raises nothing here. `.github/workflows/omnigraph-release-watch.yml` covers that case.",
 			"managerFilePatterns": [
 				"/^packages/witan-core/witan_core/omnigraph_install\\.py$/",
 				"/^docker/omnigraph-server\\.Dockerfile$/",

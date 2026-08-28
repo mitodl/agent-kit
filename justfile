@@ -132,6 +132,19 @@ check-omnigraph-pins:
 check-omnigraph-format *args:
     uv run --package witan-core --extra cli python bin/check_omnigraph_format.py {{ args }}
 
+# Report whether upstream has cut a real release at or above the pinned version
+# — the signal to stop tracking the moving `edge` tag.
+#
+# NEEDS NETWORK: it asks the GitHub API which omnigraph releases exist.
+#
+# ★ NOT A GATE, AND NOT ON PULL REQUESTS. Exit 1 here means "upstream released
+# something", which is not a defect in anyone's branch; blocking PRs on it would
+# reproduce the toil it exists to relieve. `.github/workflows/omnigraph-release-
+# watch.yml` runs it weekly and turns exit 1 into an issue. Renovate cannot
+# cover this case — see the script's module docstring for why.
+check-omnigraph-release *args:
+    uv run --package witan-core --extra cli --with packaging python bin/check_omnigraph_release.py {{ args }}
+
 # Runs in CI on every PR, so drift is caught however the bump was made — which
 # matters, because the previous drift happened by NOT using the tool: three of
 # five packages had a `[tool.bumpversion].current_version` stranded several

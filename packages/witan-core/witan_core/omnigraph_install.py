@@ -71,6 +71,14 @@ _OMNIGRAPH_VERSION = "0.10.0"
 #: Renovate manages the VERSION line only (see renovate.json). While this is
 #: ``edge`` a bump is not meaningful, so pin a real ``v<version>`` before
 #: treating dependency updates here as authoritative.
+#:
+#: ★ AND RENOVATE CANNOT TELL YOU WHEN TO DO THAT. It proposes only versions
+#: GREATER than ``_OMNIGRAPH_VERSION``, which already declares 0.10.0 because
+#: that is what the ``edge`` build reports — so upstream cutting a real v0.10.0,
+#: the exact event that ends the moving-tag arrangement, compares equal and
+#: raises nothing. ``bin/check_omnigraph_release.py`` watches for it weekly
+#: (``.github/workflows/omnigraph-release-watch.yml``) and files an issue.
+#: Setting this constant to a real ``v<version>`` retires that watch on its own.
 _OMNIGRAPH_RELEASE_TAG = "edge"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
