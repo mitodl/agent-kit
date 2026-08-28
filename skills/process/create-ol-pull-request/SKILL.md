@@ -60,10 +60,10 @@ inferring the body and asking them to correct it:
 |-------|---------------|
 | **Title** | Ask the user; offer one derived from the branch name / commits as a default they can overwrite |
 | **Linked tickets** | Ask for issue numbers (Closes #, Fixes #, or N/A) |
-| **Description** | Ask what the PR does; summarise from commits only if the user says "summarise" |
+| **Description** | Ask what the PR does; summarise from commits only if the user says "summarise"; summary should be short and high level; put detailed technical explanation of the PR in the `<details/>` block |
 | **Screenshots** | Ask if UI changes are present; skip section if not applicable |
 | **Testing notes** | Ask how the changes were tested and how a reviewer can validate |
-| **Additional context** | Ask for reviewer notes, caveats, or checklist items; skip if none |
+| **Additional context** | Ask for reviewer notes, caveats, or checklist items |
 | **Draft?** | Ask if this should be a draft PR (default: no) |
 
 **Use the user's words.** They know the intent behind the diff; the commits
@@ -91,16 +91,23 @@ and confirm before creating the PR.
 <!-- Closes #<n> | Fixes #<n> | N/A -->
 
 ### Description (What does it do?)
-<description>
+<!-- description -->
+
+<details>
+<summary><b>Implementation details</b></summary>
+<br>
+
+<!-- agent notes on implementation technical details, ask user if they want to omit this --> 
+</details>
 
 ### Screenshots (if appropriate):
-<screenshot checklist, or delete section if not applicable>
+<!-- screenshot checklist, or delete section if not applicable -->
 
 ### How can this be tested?
-<testing instructions>
+<!-- testing instructions -->
 
 ### Additional Context
-<reviewer notes, or delete section if not applicable>
+<!-- notes from author to reviewer -->
 ```
 
 Checklist section (uncomment and populate **only** if there are pre-merge steps):
@@ -220,6 +227,9 @@ If the diff is self-explanatory, a two-line description is the correct length.
 - **Checklist**: only uncomment and use the Checklist section when there are
   explicit pre-merge steps (e.g. Vault secret updates, migration runs). Leave
   it out otherwise.
+- **Technical Details**: this is where a detailed explanation of the technical
+  approach should go instead of the "Description" section. The complexity of 
+  this explanation should be proportional to the complexity and/or risk of the change.
 - **Draft PRs**: suggest `--draft` if the branch is a work-in-progress or the
   user mentions it isn't ready for review.
 
