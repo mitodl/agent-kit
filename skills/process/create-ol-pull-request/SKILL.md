@@ -60,7 +60,7 @@ inferring the body and asking them to correct it:
 |-------|---------------|
 | **Title** | Ask the user; offer one derived from the branch name / commits as a default they can overwrite |
 | **Linked tickets** | Ask for issue numbers (Closes #, Fixes #, or N/A) |
-| **Description** | Ask what the PR does; summarise from commits only if the user says "summarise"; summary should be short and high level; put detailed technical explanation of the PR in the `<details/>` block |
+| **Description** | Ask what the PR does; summarise from commits only if the user says "summarise"; summary should be short and high level; put detailed technical explanation of the PR in the `<details>` block |
 | **Screenshots** | Ask if UI changes are present; skip section if not applicable |
 | **Testing notes** | Ask how the changes were tested and how a reviewer can validate |
 | **Additional context** | Ask for reviewer notes, caveats, or checklist items |
