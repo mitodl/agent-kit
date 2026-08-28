@@ -539,6 +539,41 @@ def test_task_claim_explicit_assignee_is_not_warned_about(server, monkeypatch):
     assert "warning" not in result
 
 
+@requires_omnigraph
+def test_task_claim_deployed_with_empty_assignee_warns(server, monkeypatch):
+    # `_claim_holder` reads `assignee=""` as missing (`if assignee:`), so the
+    # warning predicate must use the same test — checking `assignee is None`
+    # let an empty string through as if it were a deliberate explicit
+    # assignee, silently skipping the warning for the exact unsafe case
+    # (defaulted, unqualified holder) it exists to flag.
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="empty-assignee claim", description="x")
+    result = server.task_claim(t["slug"], assignee="")
+
+    assert result["claimed"] is True
+    assert result["qualified"] is False
+    assert "session_id" in result["warning"]
+
+
+@requires_omnigraph
+def test_task_claim_session_id_outside_charset_still_qualifies(server, monkeypatch):
+    # `_SESSION_SUFFIX_RE` only recognizes `[0-9A-Za-z_-]`. A session_id with
+    # any other character (e.g. a `.` in a dotted run id) must still qualify
+    # the holder — disallowed characters are stripped, not passed through
+    # verbatim to silently produce an unrecognizable suffix.
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="dotted session id", description="x")
+    result = server.task_claim(t["slug"], session_id="run.1234")
+
+    assert result["claimed"] is True
+    assert result["qualified"] is True
+    assert "warning" not in result
+
+
 def test_task_update_defaulted_assignee_is_qualified_by_session_id(server):
     # Same qualification task_claim applies — see
     # test_caller_supplied_session_id_beats_the_server_environment — so a

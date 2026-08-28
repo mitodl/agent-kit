@@ -119,13 +119,16 @@ expires if the holder never closes/releases, making the task reclaimable
 claim.
 
 A success also reports ``"qualified"``: whether the recorded holder names
-the session as well as the person. ``false`` on a deployed call means the
-caller sent no ``session_id`` and this person's concurrent sessions are
-indistinguishable to the contention check — the mutual exclusion this tool
-exists for is not in effect for them. That case carries a ``"warning"``
-saying so. It is reported rather than refused because the server has no way
-to supply the id itself, so refusing would break every caller that cannot
-send one; see ``_claim_holder``.
+the session as well as the person. ``false`` does **not** by itself mean
+the caller omitted ``session_id`` — an explicit ``assignee`` always wins
+over it (see ``_claim_holder``) and is unqualified by design, with no
+warning. Only the presence of a ``"warning"`` key identifies the case this
+exists to flag: a deployed call whose defaulted holder names no session,
+so this person's concurrent sessions are indistinguishable to the
+contention check — the mutual exclusion this tool exists for is not in
+effect for them. It is reported rather than refused because the server has
+no way to supply the id itself, so refusing would break every caller that
+cannot send one.
 
 BEST-EFFORT CAS — omnigraph 0.8.x exposes no conditional-write primitive, so
 the claim write cannot be made atomic at the store. Instead we surface the
