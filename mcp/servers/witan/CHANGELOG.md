@@ -10,6 +10,18 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
+- **`witan.task_claim.verify` logs `write_graph_commit_id`.** The line already
+  carried `caught_up` and `verify_attempts`, but neither is readable on its
+  own: `caught_up` is `True` both when the post-write catch-up check ran and
+  passed *and* when `write_commit is None` short-circuited it, and
+  `verify_attempts` stays `1` in that second case for the same reason. So a
+  tier supplying no `graph_commit_id` logs exactly what a healthy verified
+  claim logs. Telling them apart previously meant inferring it from a
+  neighbouring `witan.task_update.conditional` line, which reports a different
+  call's *read* commit. `null` now means the check never ran. Found while
+  investigating `tk-investigate-the-root-cause-of-the-2s-verificatio-f154aa`
+  against 14 days of deployed production logs.
+
 - **`task_search`/`workflow_project_search`: BM25 full-text search for Task and
   WorkflowProject nodes.** Only Memory had full-text search before this —
   `task_list`/`workflow_project_list` are filters, not ranked search, so there

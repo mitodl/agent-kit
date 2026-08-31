@@ -1414,6 +1414,85 @@ def test_claim_verification_gives_up_after_max_attempts(server, monkeypatch):
     assert res["claimed"] is True
 
 
+def _verify_events(capfd):
+    """The ``witan.task_claim.verify`` payloads the server emitted on stderr.
+
+    Read off the real JSON log stream rather than through ``caplog``, which
+    does not see these once ``configure_logging(force=True)`` has
+    reconfigured logging. Parsing the JSON the server actually writes is the
+    stronger assertion anyway: it pins the shape production emits.
+    """
+    import json
+
+    events = []
+    for line in capfd.readouterr().err.splitlines():
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("event") == "witan.task_claim.verify":
+            events.append(payload)
+    return events
+
+
+@requires_omnigraph
+def test_verify_log_distinguishes_a_checked_catch_up_from_a_skipped_one(
+    server, monkeypatch, capfd
+):
+    """``caught_up`` alone cannot tell the healthy case from the degraded one.
+
+    It is ``True`` both when the catch-up check ran and passed and when
+    ``write_commit is None`` short-circuited it, and ``verify_attempts`` is 1
+    in both — so a log carrying only those two fields reads as "no staleness"
+    on a tier that never supplied a commit to catch up to. Investigating the
+    deployed service against exactly these fields is what surfaced the gap:
+    the healthy reading had to be argued from a *neighbouring* call's
+    ``witan.task_update.conditional`` line rather than read off this one.
+
+    ``write_graph_commit_id`` is what settles it, so both directions are
+    pinned here rather than only the happy one. The commit-supplying tier is
+    simulated because the CLI transport these tests run over never returns a
+    ``graph_commit_id`` — the same reason the neighbouring catch-up tests
+    stub ``change``.
+    """
+    from witan_core.observability import configure_logging, reset_logging
+
+    from witan import server as srv
+
+    real_change = srv.client.change
+
+    # Sorts BEFORE a real ULID (which currently starts "01M..."), so the
+    # catch-up comparison is satisfied on the first read. A sentinel sorting
+    # after one would exhaust the retry loop and report caught_up=False —
+    # correctly, which is the ordering these ids are chosen for.
+    def change_returning_a_commit(*args, **kwargs):
+        real_change(*args, **kwargs)
+        return "00WRITE"
+
+    configure_logging(log_format="json", level="INFO", force=True)
+    try:
+        t = server.task_create(title="commit-supplying-tier", description="x")
+        monkeypatch.setattr(srv.client, "change", change_returning_a_commit)
+        capfd.readouterr()
+        server.task_claim(t["slug"], assignee="agentA")
+        [supplied] = _verify_events(capfd)
+
+        monkeypatch.setattr(srv.client, "change", real_change)
+        t2 = server.task_create(title="no-commit-tier", description="x")
+        capfd.readouterr()
+        server.task_claim(t2["slug"], assignee="agentA")
+        [degraded] = _verify_events(capfd)
+    finally:
+        reset_logging()
+
+    # Both look identical on the two fields that used to be the whole story.
+    assert supplied["caught_up"] is degraded["caught_up"] is True
+    assert supplied["verify_attempts"] == degraded["verify_attempts"] == 1
+    # The new field is the only thing that separates them.
+    assert supplied["write_graph_commit_id"] == "00WRITE"
+    assert degraded["write_graph_commit_id"] is None
+
+
 @requires_omnigraph
 def test_conditional_update_refuses_to_ride_with_extra_steps(server):
     """Refused, not silently downgraded to an unconditional multi-step commit.
