@@ -424,7 +424,7 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: Upstream calls it a controlled cutover, not a rolling upgrade: stop old
 #: readers/writers and keep a recoverable backup first. A local store is one
 #: command; the DEPLOYED graph needs scheduling, which is
-#: tk-rebuild-full-text-indexes-on-the-deployed-witan--<see task>. Nothing here
+#: tk-rebuild-full-text-indexes-on-the-deployed-witan--076eb6. Nothing here
 #: performs it — this constant only decides which binary a future install or
 #: image build fetches.
 #:
