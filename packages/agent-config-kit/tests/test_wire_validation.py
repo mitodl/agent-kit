@@ -106,6 +106,27 @@ def test_pi_serialized_remote_entry_is_schema_valid_and_has_no_leaked_fields():
     assert entry == {"url": "https://example.com/mcp"}
 
 
+def test_pi_serialized_remote_entry_with_oauth_transforms_callback_port():
+    # Pi's real shape differs from the manifest's canonical
+    # {clientId, callbackPort} — a top-level "auth" discriminator, and
+    # callbackPort becomes a full localhost redirectUri.
+    remote = RemoteServer(
+        url="https://example.com/mcp",
+        oauth={"clientId": "example-cli", "callbackPort": 8080},
+    )
+    entry = pi.serialize_mcp(remote)
+
+    PiMcpServer.model_validate(entry)
+    assert entry == {
+        "url": "https://example.com/mcp",
+        "auth": "oauth",
+        "oauth": {
+            "clientId": "example-cli",
+            "redirectUri": "http://localhost:8080/callback",
+        },
+    }
+
+
 def test_claude_serialized_remote_entry_has_no_leaked_fields():
     # No published schema covers ~/.claude.json's MCP servers (see spec's open
     # questions) so there's no vendored model to validate against — only
@@ -114,3 +135,19 @@ def test_claude_serialized_remote_entry_has_no_leaked_fields():
     entry = claude.serialize_mcp(remote)
 
     assert entry == {"type": "http", "url": "https://example.com/mcp"}
+
+
+def test_claude_serialized_remote_entry_with_oauth_is_passthrough():
+    # Unlike Pi, Claude Code's own documented shape already matches the
+    # manifest's canonical {clientId, callbackPort} — no transform needed.
+    remote = RemoteServer(
+        url="https://example.com/mcp",
+        oauth={"clientId": "example-cli", "callbackPort": 8080},
+    )
+    entry = claude.serialize_mcp(remote)
+
+    assert entry == {
+        "type": "http",
+        "url": "https://example.com/mcp",
+        "oauth": {"clientId": "example-cli", "callbackPort": 8080},
+    }

@@ -10,11 +10,28 @@
 #
 # ToolHive SWE has no local process to build or run — it's just three
 # remote, Streamable HTTP servers (one per environment tier). Auth is
-# Keycloak OAuth 2.1: the first call to each server opens a browser
-# consent flow, so there is no token or API key to set here. Only want
-# one or two tiers? Delete the [mcp_servers.toolhive-swe-*] table(s) you
-# don't need before running `agent-kit apply` — each tier is a separate
-# OAuth prompt and you likely only have Keycloak access to some of them.
+# Keycloak OAuth 2.1 via ONE shared, Pulumi-managed public client
+# (toolhive-swe-cli — no per-user registration; see
+# ol-infrastructure#5666). The `oauth` table below is required, not
+# optional: the vMCP validates only tokens minted for that client, and
+# `callbackPort` must be 8080 for everyone — it's a fixed value
+# registered as the client's redirect URI in Keycloak (RFC 8252 loopback
+# redirects need an exact match, not a negotiated port), not something
+# you can pick per-install. The first call still opens a browser consent
+# flow; there's just a fixed client_id behind it now instead of each
+# install self-registering one. Only want one or two tiers? Delete the
+# [mcp_servers.toolhive-swe-*] table(s) you don't need before running
+# `agent-kit apply` — each tier is a separate OAuth prompt and you likely
+# only have Keycloak access to some of them.
+#
+# `oauth` is wired for the `claude`, `pi`, and `opencode` platform
+# adapters. Copilot's adapter intentionally drops `headers`/`oauth`
+# entirely (see its docstring in agent_config_kit/adapters/copilot.py —
+# no upstream schema is publicly fetchable for VS Code's mcp.json, so
+# this was never verified rather than confirmed unsupported), so
+# `agent-kit apply` for Copilot silently omits this table's OAuth config;
+# Copilot users of these servers still need whatever manual credential
+# step Copilot's own docs describe.
 #
 # Profiles mirror the skills/ category layout (see AGENTS.md) so a
 # consumer picks up just the skills relevant to their work, instead of
@@ -36,16 +53,19 @@
 kind = "remote"
 url = "https://toolhive-swe.ci.ol.mit.edu/mcp"
 transport = "streamable-http"
+oauth = { clientId = "toolhive-swe-cli", callbackPort = 8080 }
 
 [mcp_servers.toolhive-swe-qa]
 kind = "remote"
 url = "https://toolhive-swe.qa.ol.mit.edu/mcp"
 transport = "streamable-http"
+oauth = { clientId = "toolhive-swe-cli", callbackPort = 8080 }
 
 [mcp_servers.toolhive-swe-prod]
 kind = "remote"
 url = "https://toolhive-swe.ol.mit.edu/mcp"
 transport = "streamable-http"
+oauth = { clientId = "toolhive-swe-cli", callbackPort = 8080 }
 
 [skills]
 address-pr-feedback             = "skills/process/address-pr-feedback/SKILL.md"

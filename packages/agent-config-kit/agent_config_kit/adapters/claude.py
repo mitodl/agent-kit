@@ -43,6 +43,13 @@ def serialize_mcp(server: McpServer) -> dict:
         }
         if server.headers:
             data["headers"] = server.headers
+        # Verbatim passthrough (same approach as the OpenCode adapter): the
+        # manifest's canonical oauth shape is {clientId, callbackPort}, which
+        # is already Claude Code's own documented `claude mcp add-json` shape
+        # (docs.claude.com/en/docs/claude-code/mcp, "pre-configured OAuth
+        # credentials" — confirmed 2026-08-31), so no transform is needed here.
+        if server.oauth is not None:
+            data["oauth"] = server.oauth
 
     return data
 
