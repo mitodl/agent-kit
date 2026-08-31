@@ -474,6 +474,29 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
         # and destroy the very simultaneity the probe is trying to create.
         proc.stdin.write(json.dumps(payload))
         proc.stdin.close()
+        # ★ AND DROP THE HANDLE, which is not tidiness — it is what keeps the
+        # collection loop below working on Python 3.12 and 3.11.
+        #
+        # `communicate()` starts by flushing stdin if `self.stdin` is truthy. A
+        # CLOSED file object is still truthy, and flushing it raises
+        # `ValueError: I/O operation on closed file` — which `_communicate`
+        # does not catch, because it only guards BrokenPipeError. So closing
+        # stdin at launch (which the comment above explains we must do) made
+        # every later `communicate()` raise, aborting the probe in its first
+        # phase before a single measurement was taken.
+        #
+        # 3.13 and 3.14 tolerate it; 3.11 and 3.12 do not, and this package
+        # declares `requires-python = ">=3.11"`. Measured, not inferred: the
+        # same launch/collect pattern raises on 3.11 and 3.12 and returns
+        # normally on 3.13 and 3.14.
+        #
+        # Setting the attribute to None is how you say "there is no stdin to
+        # flush", and it is safe because both places that touch it guard on it
+        # being falsy — `_communicate` opens with
+        # `if self.stdin and not self._communication_started:` and `__exit__`
+        # with `if self.stdin:`. (`__del__` never references stdin at all.)
+        # Read out of the 3.12 stdlib source, not remembered.
+        proc.stdin = None
         procs.append((mode, index, proc))
 
     # ★ ONE ABSOLUTE DEADLINE FOR THE WHOLE PHASE, not a fresh one per worker.
