@@ -21,12 +21,23 @@ on:
   schedule:
     # Mondays 13:20 UTC. Weekly because upstream cuts releases on the order of
     # months (v0.8.0 → v0.9.0 was five weeks), so a tighter cadence would only
-    # re-ask a question whose answer had not changed. Off the hour to stay out
-    # of the scheduling spike GitHub's own docs warn delays cron runs.
+    # re-ask a question whose answer had not changed. Off the hour because
+    # that is where scheduled-run queueing is heaviest.
     - cron: "20 13 * * 1"
   workflow_dispatch:
 
 permissions: {}
+
+# The "does an issue already exist" lookup and the `gh issue create` that
+# follows it are two calls, not one atomic operation, so two runs overlapping
+# — a manual dispatch landing on top of the Monday schedule — could both
+# observe nothing and both file. Serialising the workflow removes the window
+# rather than narrowing it. `cancel-in-progress: false` because the run that
+# is already going is the one holding the answer; cancelling it to start
+# another would reopen exactly the gap this closes.
+concurrency:
+  group: omnigraph-release-watch
+  cancel-in-progress: false
 
 jobs:
   check-release:
@@ -85,16 +96,35 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          LABEL: omnigraph-release-watch
         run: |
           title=$(jq -r .title release.json)
           jq -r .body release.json >issue-body.md
+
+          # THE LABEL IS WHAT MAKES THE LOOKUP BELOW EXHAUSTIVE, and that is
+          # its whole job — it is not decoration. Scanning the repo's N most
+          # recent issues would be a WINDOW: a closed release issue eventually
+          # ages past it, the lookup stops finding it, and the permanent
+          # `--state all` dedupe silently becomes "dedupe for a while". Scoped
+          # to this label the candidate set is at most one issue per omnigraph
+          # release ever, so the limit below cannot be reached by anything
+          # short of 500 upstream releases.
+          #
+          # Cheaper than paginating every issue in the repo, which would grow
+          # without bound and pull in every PR too (the REST issues endpoint
+          # returns both). The tradeoff: stripping the label by hand makes the
+          # next run file a duplicate. That fails safe and visibly.
+          gh label create "$LABEL" --color ededed \
+            --description "Filed by .github/workflows/omnigraph-release-watch.yml" \
+            2>/dev/null || true
 
           # Matched locally on the exact title rather than with `gh issue list
           # --search`. The title carries backticks and an em dash, and issue
           # search is a relevance query, not a literal string match — the cost
           # of it quietly missing is a duplicate issue every Monday, so the
           # comparison is done here where its semantics are visible.
-          existing=$(gh issue list --state all --limit 200 --json number,title \
+          existing=$(gh issue list --state all --label "$LABEL" --limit 500 \
+            --json number,title \
             | jq -r --arg t "$title" \
                 '[.[] | select(.title == $t) | .number] | first // empty')
 
@@ -103,4 +133,4 @@ jobs:
             exit 0
           fi
 
-          gh issue create --title "$title" --body-file issue-body.md
+          gh issue create --title "$title" --body-file issue-body.md --label "$LABEL"
