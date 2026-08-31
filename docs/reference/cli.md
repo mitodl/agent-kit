@@ -49,6 +49,7 @@ witan — agent memory, planning, and collaboration graph.
 - [`tasks`](#witan-tasks)
 - [`task`](#witan-task)
     - [`create`](#witan-task-create)
+    - [`comment`](#witan-task-comment)
     - [`close`](#witan-task-close)
     - [`claim`](#witan-task-claim)
     - [`release`](#witan-task-release)
@@ -762,6 +763,7 @@ Manage tasks.
 
 * [`claim`](#witan-task-claim): Claim a task for work (status in_progress, with a lease).
 * [`close`](#witan-task-close): Close a task, recording an optional resolution.
+* [`comment`](#witan-task-comment): Leave an attributed, append-only comment on a task.
 * [`create`](#witan-task-create): Create a task in the work-coordination graph.
 * [`link`](#witan-task-link): Link two tasks (or a task to a memory).
 * [`release`](#witan-task-release): Release a claim, returning the task to ``open`` (or another status).
@@ -797,6 +799,22 @@ Create a task in the work-coordination graph.
 * `--external-uri`:
 * `--symbol-refs, --empty-symbol-refs`:
 * `--tags, --empty-tags`:
+
+### witan task comment
+
+```console
+witan task comment SLUG TEXT
+```
+
+Leave an attributed, append-only comment on a task.
+
+For saying something *about* a task — typically someone else's in-flight
+one — without rewriting their description or filing a task that is not work.
+
+**Parameters**:
+
+* `SLUG, --slug`: **[required]**
+* `TEXT, --text`: **[required]**
 
 ### witan task close
 

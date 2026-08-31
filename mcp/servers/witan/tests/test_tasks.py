@@ -1247,3 +1247,135 @@ def test_conditional_update_refuses_to_ride_with_extra_steps(server):
             conditional=True,
             extra_steps=[("mutations.gq", "update_task", {"slug": t["slug"]})],
         )
+
+
+# ── Task comments ──────────────────────────────────────────────────
+
+
+@requires_omnigraph
+def test_comment_is_attributed_and_read_back_by_task_get(server):
+    from witan import server as srv
+
+    t = server.task_create(title="held work", description="the original premise")
+    before = server.task_get(t["slug"])
+
+    res = server.task_comment(slug=t["slug"], text="  your premise is wrong  ")
+    assert res["commented"] is True
+    assert res["slug"].startswith("tc-")
+    assert res["author"] == srv.cfg.author
+
+    after = server.task_get(t["slug"])
+    assert [(c["author"], c["body"]) for c in after["comments"]] == [
+        (srv.cfg.author, "your premise is wrong")
+    ]
+    # The task itself is untouched — including `updated_at`, which doubles as
+    # the advisory-lease start for an in_progress task with no `claimed_at`.
+    assert after["description"] == before["description"]
+    assert after["updated_at"] == before["updated_at"]
+
+
+@requires_omnigraph
+def test_comments_come_back_oldest_first(server):
+    t = server.task_create(title="threaded", description="x")
+    for n in ("first", "second", "third"):
+        server.task_comment(slug=t["slug"], text=n)
+    assert [c["body"] for c in server.task_get(t["slug"])["comments"]] == [
+        "first",
+        "second",
+        "third",
+    ]
+
+
+@requires_omnigraph
+def test_comment_refuses_empty_text_and_unknown_task(server):
+    t = server.task_create(title="real", description="x")
+
+    blank = server.task_comment(slug=t["slug"], text="   \n  ")
+    assert blank["commented"] is False
+    assert "empty" in blank["reason"]
+
+    missing = server.task_comment(slug="tk-nope-000000", text="hello")
+    assert missing["commented"] is False
+    assert "tk-nope-000000" in missing["reason"]
+
+    assert server.task_get(t["slug"])["comments"] == []
+
+
+@requires_omnigraph
+def test_comments_are_scoped_to_their_own_task(server):
+    a = server.task_create(title="task a", description="x")
+    b = server.task_create(title="task b", description="x")
+    server.task_comment(slug=a["slug"], text="about a")
+
+    assert len(server.task_get(a["slug"])["comments"]) == 1
+    assert server.task_get(b["slug"])["comments"] == []
+
+
+@requires_omnigraph
+def test_task_list_at_me_resolves_the_calling_identity(server):
+    mine = server.task_create(title="mine", description="x")
+    theirs = server.task_create(title="theirs", description="x")
+    server.task_claim(mine["slug"])
+    server.task_claim(theirs["slug"], assignee="someone-else")
+
+    slugs = {t["slug"] for t in server.task_list(assignee="@me", status="in_progress")}
+    assert slugs == {mine["slug"]}
+
+
+@requires_omnigraph
+def test_task_get_survives_a_store_without_the_comment_type(server, monkeypatch):
+    """A deployed store provisioned before TaskComment answers `unknown node
+    type`; that must cost the comments field, not the whole task read."""
+    from witan import server as srv
+
+    t = server.task_create(title="pre-migration", description="x")
+    real_read = srv.client.read
+
+    def read(query_file, query_name, params):
+        if query_name == "list_task_comments":
+            raise RuntimeError("unknown node type `TaskComment`")
+        return real_read(query_file, query_name, params)
+
+    monkeypatch.setattr(srv.client, "read", read)
+    node = server.task_get(t["slug"])
+    assert node["title"] == "pre-migration"
+    assert node["comments"] == []
+
+
+@requires_omnigraph
+def test_comment_refuses_rather_than_reporting_a_write_that_did_not_happen(
+    server, monkeypatch
+):
+    """A store with no TaskComment type makes the READ degrade to `[]`, which is
+    indistinguishable from an uncommented task. The WRITE must not degrade the
+    same way — reporting success for text that was never stored loses it."""
+    from witan import server as srv
+
+    t = server.task_create(title="pre-migration", description="x")
+
+    def change(*args, **kwargs):
+        raise RuntimeError("type error: T10: unknown node/edge type `TaskComment`")
+
+    monkeypatch.setattr(srv.client, "change", change)
+    res = server.task_comment(slug=t["slug"], text="this must not be lost silently")
+    assert res["commented"] is False
+    assert "witan migrate schema" in res["reason"]
+
+
+@requires_omnigraph
+def test_a_real_read_failure_is_not_mistaken_for_a_missing_comment_type(
+    server, monkeypatch
+):
+    from witan import server as srv
+
+    t = server.task_create(title="x", description="x")
+    real_read = srv.client.read
+
+    def read(query_file, query_name, params):
+        if query_name == "list_task_comments":
+            raise RuntimeError("connection refused")
+        return real_read(query_file, query_name, params)
+
+    monkeypatch.setattr(srv.client, "read", read)
+    with pytest.raises(RuntimeError, match="connection refused"):
+        server.task_get(t["slug"])

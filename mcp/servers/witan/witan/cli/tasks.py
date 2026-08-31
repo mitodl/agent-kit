@@ -181,6 +181,16 @@ def _task_show(slug: str) -> None:
     if t.get("resolution"):
         console.print(f"\n  resolution: {esc(t['resolution'])}")
 
+    comments = t.get("comments") or []
+    if comments:
+        console.print(f"\n[bold]{len(comments)} comment(s)[/bold]")
+        for c in comments:
+            console.print(
+                f"\n  [cyan]{esc(c.get('author'))}[/cyan] "
+                f"[dim]{esc(c.get('created_at'))}[/dim]"
+            )
+            console.print(f"  {esc(c.get('body'))}")
+
 
 task_app = cyclopts.App(
     name="task",
@@ -242,6 +252,28 @@ def task_create_cmd(
     console.print(f"  status: {_styled(result['status'], _STATUS_STYLE)}")
     if result.get("repo"):
         console.print(f"  repo: {_short_repo(result['repo'])}")
+
+
+@task_app.command(name="comment")
+def task_comment_cmd(slug: str, text: str) -> None:
+    """Leave an attributed, append-only comment on a task.
+
+    For saying something *about* a task — typically someone else's in-flight
+    one — without rewriting their description or filing a task that is not work.
+
+    Parameters
+    ----------
+    slug: The ``tk-`` slug to comment on.
+    text: The comment body.
+    """
+    result = _fn(_srv().task_comment)(slug=slug, text=text)
+    if not result.get("commented"):
+        print_error(result.get("reason") or "comment not recorded")
+        raise SystemExit(1)
+    console.print(
+        f"[green]Commented on[/green] [bold]{slug}[/bold] "
+        f"as {esc(result['author'])} ({result['slug']})"
+    )
 
 
 @task_app.command(name="close")

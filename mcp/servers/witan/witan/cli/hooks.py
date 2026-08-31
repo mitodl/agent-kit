@@ -88,6 +88,7 @@ def inject_context(*, debug: bool = False) -> None:
         cfg.graph_token,
         debug=debug,
         graph_id=cfg.graph_name,
+        author=cfg.author,
     )
     if text:
         print(text)

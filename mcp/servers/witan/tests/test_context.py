@@ -1097,3 +1097,88 @@ def test_inject_context_remote_cache_key_is_the_deployment_url(tmp_path, monkeyp
     ctx_module.inject_context_remote(server, "https://witan-b.example.org/mcp")
     # A different deployment's URL must not read the first one's cache.
     assert len(server.calls) > calls_after_first
+
+
+@requires_omnigraph
+def test_inject_context_surfaces_unread_comment_once(tmp_path, monkeypatch):
+    """A comment on a task this identity holds interrupts the prompt — and then
+    stops interrupting, because rendering it is what marks it delivered."""
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    # The rendered-block cache would serve the first render back verbatim and
+    # hide whether the second one actually re-decided anything.
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    store, queries_dir = _setup(tmp_path, monkeypatch, "https://github.com/test/cmt")
+    monkeypatch.chdir(_git_repo(tmp_path / "r"))
+
+    # `cfg.author` is resolved at import, so it is the identity `task_claim`
+    # records here — not whatever WITAN_AUTHOR was set to afterwards.
+    me = srv.cfg.author
+    task = _unwrap(srv.task_create)(title="held work", description="x")
+    _unwrap(srv.task_claim)(task["slug"])
+    _unwrap(srv.task_comment)(slug=task["slug"], text="the premise cannot fire")
+
+    first = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    assert "## ⚠ New Comments on Work You Hold" in first
+    assert "the premise cannot fire" in first
+    assert me in first
+
+    second = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    assert "New Comments on Work You Hold" not in second
+
+    # A later comment is unread again — the watermark is a timestamp, not a flag.
+    _unwrap(srv.task_comment)(slug=task["slug"], text="and here is why")
+    third = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    assert "and here is why" in third
+    assert "the premise cannot fire" not in third
+
+
+@requires_omnigraph
+def test_inject_context_ignores_comments_on_tasks_you_do_not_hold(
+    tmp_path, monkeypatch
+):
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    store, queries_dir = _setup(tmp_path, monkeypatch, "https://github.com/test/cmt2")
+    monkeypatch.chdir(_git_repo(tmp_path / "r"))
+
+    theirs = _unwrap(srv.task_create)(title="not yours", description="x")
+    _unwrap(srv.task_claim)(theirs["slug"], assignee="someone-else")
+    _unwrap(srv.task_comment)(slug=theirs["slug"], text="a note for them")
+
+    unclaimed = _unwrap(srv.task_create)(title="nobody holds this", description="x")
+    _unwrap(srv.task_comment)(slug=unclaimed["slug"], text="a note for whoever")
+
+    text = ctx_module.inject_context(
+        str(store), queries_dir, None, author=srv.cfg.author
+    )
+    assert "New Comments on Work You Hold" not in text
+    assert "a note for them" not in text
+    assert "a note for whoever" not in text
+
+
+@requires_omnigraph
+def test_inject_context_without_an_author_skips_the_comment_block(
+    tmp_path, monkeypatch
+):
+    """No identity to match holders against — the block is skipped, and the
+    rest of the context is unaffected."""
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    store, queries_dir = _setup(tmp_path, monkeypatch, "https://github.com/test/cmt3")
+    monkeypatch.chdir(_git_repo(tmp_path / "r"))
+
+    held = _unwrap(srv.task_create)(title="held work", description="x")
+    _unwrap(srv.task_claim)(held["slug"])
+    _unwrap(srv.task_comment)(slug=held["slug"], text="unseen")
+    _unwrap(srv.task_create)(title="ready work", description="x")
+
+    text = ctx_module.inject_context(str(store), queries_dir, None)
+    assert "New Comments on Work You Hold" not in text
+    assert "## Ready Tasks" in text
+    assert "ready work" in text

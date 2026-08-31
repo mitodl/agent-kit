@@ -285,7 +285,25 @@ Create a task in the work-coordination graph.
 witan task create "Fix flaky retry test" --type bug --priority p1 --blocked-by tk-abc123
 ```
 
+### `task comment` — comment
+
+Leave an attributed, append-only comment on a task — typically someone else's
+in-flight one — without rewriting their description or filing a task that is
+not work. Comments show up in `witan task <slug>`, in `task_get`, and in the
+holder's injected session context if they are actively working it.
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `SLUG` (positional) | str | required | The `tk-` slug to comment on |
+| `TEXT` (positional) | str | required | The comment body |
+
+```bash
+witan task comment tk-fix-flaky-retry-abc123 \
+  "The retry is not flaky — the fixture leaks a socket. See pf-…"
+```
+
 ### `task run` — claim and launch
+
 
 Claim one or more tasks and launch an agent to execute them. Without a slug,
 shows an interactive picker of ready tasks; multiple selections offer a

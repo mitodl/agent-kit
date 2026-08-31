@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from witan_core.observability import get_logger
@@ -90,6 +91,38 @@ def _output_cache_file(graph_uri: str, repo: str | None, branch: str | None) -> 
     key = f"{graph_uri}|{repo}|{branch}"
     digest = hashlib.sha1(key.encode()).hexdigest()[:16]
     return session_state.session_state_dir() / f"witan-ctx-{digest}.json"
+
+
+# ── Unread-comment watermark ──────────────────────────────────────────────────
+#
+# A comment on a task you hold should interrupt once, not every prompt until you
+# release the task — so the hook needs to know what it has already shown you.
+#
+# Kept in a local file rather than as read receipts in the graph, deliberately.
+# "Read" here means "was rendered into this machine's prompt", which is a fact
+# about a client, not about the shared work graph; storing it there would make
+# every prompt a write, and would still be answering the wrong question for any
+# other reader. Losing the file re-shows a comment, which is the harmless
+# direction to fail in.
+
+
+def _seen_file(cache_key: str) -> Path:
+    digest = hashlib.sha1(cache_key.encode()).hexdigest()[:16]
+    return session_state.session_state_dir() / f"witan-seen-{digest}.json"
+
+
+def _read_seen(cache_key: str) -> dict[str, str]:
+    """``{task_slug: newest comment timestamp already shown}``; ``{}`` if unusable."""
+    try:
+        data = json.loads(_seen_file(cache_key).read_text())
+    except Exception:  # noqa: BLE001 — missing/corrupt watermark → show everything
+        logger.debug("witan.context.seen_read_failed", exc_info=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_seen(cache_key: str, seen: dict[str, str]) -> None:
+    _atomic_write_private(_seen_file(cache_key), json.dumps(seen))
 
 
 def _read_output_cache(
@@ -204,11 +237,16 @@ def inject_context(
     token: str | None,
     debug: bool = False,
     graph_id: str | None = None,
+    author: str | None = None,
 ) -> str:
     """Return markdown context for active projects + ready tasks, or empty string.
 
     Builds the same output as ``workflow-context-inject.sh`` without the
     checkout-relative QUERIES_DIR assumption.
+
+    ``author`` is the local identity (``cfg.author``) tasks are matched against
+    to find the ones this machine holds, so their unread comments can be
+    surfaced. Omitted, that block is simply skipped — the rest is unaffected.
 
     With ``debug=True`` the fault-tolerant swallows still return ``""`` (the hook
     must never crash a prompt), but each one first reports *why* to stderr — a
@@ -304,6 +342,16 @@ def inject_context(
             branch_tasks = []
     open_branch_tasks = [t for t in branch_tasks if t.get("status") != "closed"]
 
+    # Isolated for the same reason as the CodeBranch read above: a store that
+    # has not re-applied ``schema.pg`` since ``TaskComment`` was added answers
+    # `unknown node type`, and that must cost this block only.
+    def comments_for(slug: str) -> list[dict]:
+        return client.read("read.gq", "list_task_comments", {"task_slug": slug})
+
+    commented = _held_task_comments(
+        _held_by(all_rows, author), comments_for, graph_uri, debug=debug
+    )
+
     # Shared with ``task_ready`` so the injected list and the tool agree —
     # including the reclaim of ``in_progress`` tasks whose lease has lapsed.
     ready = readiness.filter_ready(tasks)
@@ -321,9 +369,76 @@ def inject_context(
         sessions_by_project=sessions_by_project,
         ready=ready,
         open_branch_tasks=open_branch_tasks,
+        commented=commented,
         stale_repo_case=stale_repo_case,
         debug=debug,
     )
+
+
+# A prompt preamble has to stay readable, and someone holding four tasks at once
+# has a bigger problem than an elided comment. Both caps bound the block; the
+# full thread is always one ``task_get`` away, which the block says.
+_HELD_TASK_LIMIT = 3
+_COMMENT_PREVIEW_CHARS = 400
+
+
+def _held_by(rows: list[dict], author: str | None) -> list[dict]:
+    """The ``in_progress`` tasks among ``rows`` that ``author`` holds.
+
+    Person-level, not session-level: a comment on a task another of your own
+    sessions claimed is still addressed to you, and this session is as able to
+    act on it as that one.
+
+    Lease expiry is deliberately NOT consulted. It answers "may someone else
+    take this?", which is a different question from "is this the work in front
+    of me?" — and the 60-minute lease lapses routinely mid-task, exactly when a
+    correction is most worth reading.
+    """
+    if not author:
+        return []
+    return [
+        r
+        for r in rows
+        if r.get("status") == "in_progress"
+        and readiness.holder_identity(r.get("assignee")) == author
+    ]
+
+
+def _held_task_comments(
+    held: list[dict],
+    comments_for: Callable[[str], list[dict]],
+    cache_key: str,
+    *,
+    debug: bool,
+) -> list[tuple[dict, list[dict]]]:
+    """``(task, unread comments)`` for each held task that has any.
+
+    ``comments_for`` is how the caller's transport fetches one task's thread —
+    a direct graph read locally, ``task_get`` over MCP against a deployment.
+    Nothing here is fetched unless a task is actually held, so the common case
+    (holding nothing) costs no reads at all.
+
+    Unread is decided against the local watermark, and the watermark is only
+    advanced by :func:`_render_context_block` — so a comment that was fetched
+    but never rendered (the block was dropped, the caller failed later) is
+    still unread next time.
+    """
+    if not held:
+        return []
+    seen = _read_seen(cache_key)
+    out: list[tuple[dict, list[dict]]] = []
+    for task in held[:_HELD_TASK_LIMIT]:
+        try:
+            comments = comments_for(task["slug"])
+        except Exception:  # noqa: BLE001 — never blank the rest of the block
+            _dbg_exc(debug, f"comment read failed for {task['slug']!r}")
+            continue
+        watermark = seen.get(task["slug"]) or ""
+        unread = [c for c in comments if (c.get("created_at") or "") > watermark]
+        if unread:
+            out.append((task, unread))
+    _dbg(debug, f"held={len(held)} task(s) with unread comments={len(out)}")
+    return out
 
 
 def _render_context_block(
@@ -335,6 +450,7 @@ def _render_context_block(
     sessions_by_project: dict[str, list[dict]],
     ready: list[dict],
     open_branch_tasks: list[dict],
+    commented: list[tuple[dict, list[dict]]],
     stale_repo_case: bool,
     debug: bool,
 ) -> str:
@@ -343,9 +459,42 @@ def _render_context_block(
     ``cache_key`` stands in for ``graph_uri`` in the output-cache key — for the
     remote path (:func:`inject_context_remote`) that is the deployment's own
     URL rather than a store path, so a laptop's local graph and a deployment
-    never collide on the same cache file (see ``_output_cache_file``).
+    never collide on the same cache file (see ``_output_cache_file``). It keys
+    the unread-comment watermark for the same reason.
+
+    Advancing that watermark is this function's job rather than the callers'
+    because rendering IS the delivery: the string returned here is injected
+    into the prompt, so a comment that reaches this point has been shown.
     """
     lines: list[str] = []
+
+    # First, ahead of the projects and ready-work blocks. A comment on work you
+    # are already holding is the only thing here addressed to you specifically,
+    # and it is usually a correction to the plan you are mid-way through.
+    if commented:
+        lines += [
+            "## ⚠ New Comments on Work You Hold",
+            "",
+            "Another agent or teammate has commented on a task you have "
+            "claimed. Read this before continuing — a comment is how someone "
+            "says the task's own description is wrong without overwriting it:",
+            "",
+        ]
+        for task, unread in commented:
+            lines.append(
+                f"- **{task.get('title', task['slug'])}** (slug: `{task['slug']}`)"
+            )
+            for comment in unread:
+                body = " ".join((comment.get("body") or "").split())
+                if len(body) > _COMMENT_PREVIEW_CHARS:
+                    body = body[:_COMMENT_PREVIEW_CHARS].rstrip() + "…"
+                lines.append(f"  - {comment.get('author', 'unknown')}: {body}")
+        lines += [
+            "",
+            "Full threads (and any older comments elided here) are in "
+            "`task_get(slug=...)`. Reply with `task_comment(slug=..., text=...)`.",
+            "",
+        ]
 
     if projects:
         proj_header = f"This repository has {len(projects)} active tracked project(s)"
@@ -435,6 +584,12 @@ def _render_context_block(
             lines.append("If this is unrelated work, ignore the above.")
         output = "\n".join(lines)
 
+    if commented:
+        seen = _read_seen(cache_key)
+        for task, unread in commented:
+            seen[task["slug"]] = max(c.get("created_at") or "" for c in unread)
+        _write_seen(cache_key, seen)
+
     # Cache the freshly rendered block (including an empty one) so the next
     # prompt in this window skips the graph reads entirely.
     _write_output_cache(cache_key, repo, branch, output)
@@ -459,6 +614,12 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
     a tool-calling proxy built the same way ``_srv()`` builds one for a remote
     target (``witan.cli._common.remote_proxy``), so this makes exactly the
     tool calls an agent's own session would make.
+
+    Held-task identity is the one thing this path does BETTER: the local one
+    matches against ``cfg.author``, while ``task_list(assignee="@me")`` is
+    resolved from the caller's token by the deployment — the only identity that
+    is correct there, since the two namespaces need not agree (see
+    ``server.claim_authorship``).
 
     Degrades relative to :func:`inject_context` in one remaining place:
     stale-repo-case detection has no remote-tool equivalent and is always
@@ -535,6 +696,19 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
         "stale-repo-case detection unavailable (no remote tool equivalent yet)",
     )
 
+    # Isolated like the branch read above: a deployment predating `@me` or
+    # `TaskComment` costs this block and nothing else.
+    try:
+        held = server.task_list(assignee="@me", status="in_progress")
+    except Exception:  # noqa: BLE001
+        _dbg_exc(debug, "held-task read failed — no comment block")
+        held = []
+
+    def comments_for(slug: str) -> list[dict]:
+        return (server.task_get(slug=slug) or {}).get("comments") or []
+
+    commented = _held_task_comments(held, comments_for, remote_url, debug=debug)
+
     return _render_context_block(
         cache_key=remote_url,
         repo=repo,
@@ -543,6 +717,7 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
         sessions_by_project=sessions_by_project,
         ready=ready,
         open_branch_tasks=open_branch_tasks,
+        commented=commented,
         stale_repo_case=False,
         debug=debug,
     )

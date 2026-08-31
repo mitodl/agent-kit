@@ -1,16 +1,40 @@
-"""Single source of truth for "is this task ready to work?".
+"""Single source of truth for "is this task ready to work?" and "who holds it?".
 
 ``task_ready`` (server) and the context-injection hook both answer this, and
 they used to answer it differently: the tool honored advisory-claim lease expiry
 (an ``in_progress`` task whose holder crashed becomes reclaimable), the hook did
 not. So the injected "Ready Tasks" list disagreed with ``task_ready()``. Both now
 share ``status_pickable`` / ``is_ready`` / ``filter_ready`` from here.
+
+``holder_identity`` is here for the same reason: the hook decides whether a task
+is one *you* hold before it will surface comments on it, and that reading of a
+holder string must match the server's.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import datetime, timezone
+
+# A holder is ``"<identity>#<session>"`` — see ``server._claim_holder``. Matched
+# conservatively (the charset of a session id, anchored at the end) so an
+# identity that happens to contain a '#' is not mistaken for a qualified one.
+#
+# '#' rather than the more obvious "identity [session]": holder strings are
+# printed straight into `rich` consoles by the task CLI, and rich reads
+# ``[aaaaaaaa]`` as a style tag and *swallows* it. That silently rendered every
+# session's holder as the bare identity again — reintroducing the exact
+# indistinguishability this qualifier exists to remove, at the one place a human
+# reads it. A delimiter that is not markup in any of our output paths avoids
+# having to remember to escape it at each one.
+SESSION_SUFFIX_RE = re.compile(r"#[0-9A-Za-z_-]{1,64}$")
+
+
+def holder_identity(holder: str | None) -> str | None:
+    """Strip a holder's ``#<session>`` qualifier, leaving the person."""
+    return SESSION_SUFFIX_RE.sub("", holder) if holder else holder
+
 
 # Advisory-claim lease: a task left ``in_progress`` longer than this without being
 # re-claimed is treated as abandoned (the holder likely crashed) and becomes

@@ -6,10 +6,13 @@ description: >
   dependencies, and close finished tasks. Also use it whenever you are about to
   START work on an existing `tk-` task from anywhere — the ready-task list in
   your session context, a `witan project run` prompt, or a slug someone named —
-  because that task must be claimed before the first edit. `/witan-task` shows
-  ready work for the current repo; `/witan-task new` creates a task;
-  `/witan-task list` lists tasks; `/witan-task close` closes one. Backed by the
-  witan MCP server (task_* tools).
+  because that task must be claimed before the first edit. Also use it to leave
+  feedback on a task you are NOT executing — a wrong premise, a mechanism that
+  cannot fire, work already done elsewhere — via `task_comment`, rather than
+  editing someone else's description or filing a task that is not work.
+  `/witan-task` shows ready work for the current repo; `/witan-task new`
+  creates a task; `/witan-task list` lists tasks; `/witan-task close` closes
+  one. Backed by the witan MCP server (task_* tools).
 license: BSD-3-Clause
 metadata:
   category: workflow
@@ -55,6 +58,39 @@ So:
 
 `witan task run` already claims before it launches the agent, so a session
 started that way arrives holding its task; its prompt says so.
+
+**Read the comments when you claim.** `task_get(slug=...)` returns a `comments`
+list alongside the description. A comment is how another agent tells you the
+task's own text is wrong, so treat it as outranking the description it sits
+next to — a task that says "add a check that fails during `pulumi preview`" and
+carries a comment saying that preview never runs on those pipelines is not a
+task to execute as written.
+
+## Comment on someone else's task
+
+When you find a problem with a task you are not executing, say it on the task:
+
+```
+task_comment(slug="tk-...", text="<the correction, with evidence>")
+```
+
+The comment is attributed to you, timestamped, and append-only — it cannot be
+edited or deleted, and it does not touch the task. It shows up in `task_get`,
+and in the holder's injected session context if they are actively working it.
+
+Reach for it instead of the two things that used to be the only options:
+
+- **Not `task_update`.** Rewriting the description destroys another author's
+  text and leaves no trace of who disagreed or why.
+- **Not `task_create`.** A task whose real content is "your premise is wrong"
+  is not work. It lands in everyone's ready-work list, has to be filed at the
+  parent's priority to sit near it, and closing it means "I read this" — which
+  is not what closing a task means anywhere else.
+
+A comment is read once, by whoever executes that task. If what you found is
+reusable knowledge about the repo, that is a `memory_store` (a project fact or
+lesson) — and it is fine to do both: store the fact, then comment with the
+correction and a pointer to it.
 
 ## When to use this vs. your built-in todo list
 

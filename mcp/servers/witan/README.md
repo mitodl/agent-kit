@@ -148,8 +148,9 @@ tasks hard-link to projects, sessions, and memories. See
 | Tool | Description |
 |---|---|
 | `task_create` | Create a task (`tk-` slug). Supports `parent` (epic → sub-issue), `blocked_by`, `project_slug`, `external_uri` (e.g. a GitHub issue), and `symbol_refs` |
-| `task_get` | Fetch a single task by slug |
-| `task_list` | List tasks filtered by repo, status, project, parent (epic children), or assignee |
+| `task_get` | Fetch a single task by slug, including its `comments` |
+| `task_list` | List tasks filtered by repo, status, project, parent (epic children), or assignee (`"@me"` resolves to the caller) |
+| `task_comment` | Leave an attributed, append-only note **on** a task without changing it — for telling the holder their premise is wrong instead of overwriting their description or filing a task that is not work |
 | `task_update` | Update mutable fields — reassign, re-prioritise, re-parent, attach a URI (to *claim* for work, prefer `task_claim`) |
 | `task_claim` | **Advisory claim** for parallel/multi-user agents: set `in_progress` under an `assignee` with a lease; refuses if actively held (use `force` to steal). Read-check-write, not an atomic lock — see `claimed_at` lease + the CAS follow-up |
 | `task_release` | Drop a claim: clear assignee/lease, return the task to `open` |
@@ -163,6 +164,18 @@ Tasks are **hierarchical** (an `epic` decomposes into sub-issues via `parent`, w
 `parentSlug` denormalized for fast child lookup) and **dependency-aware** (`blocked_by`
 maintains a denormalized `blockedBy` list that drives the `task_ready` query without
 graph traversal). `external_uri` links a task to a GitHub issue/PR or any reference.
+
+**Comments** (`TaskComment`) are the way to say something *about* a task rather
+than to it. Every other write primitive either mutates the task (`task_update`,
+which overwrites another author's text) or creates a node (`task_create`, which
+puts a non-work item into the ready-work list) — so a one-paragraph correction
+used to cost a whole p0 task plus a `parent` edge written onto someone else's
+claimed row. `task_comment` is flat and append-only: no threading, no editing,
+no deleting, no resolution. It deliberately leaves the task's own row untouched,
+`updated_at` included, since that field doubles as the advisory-lease start for
+an `in_progress` task with no `claimed_at` — bumping it would silently renew a
+stranger's claim. Comments come back oldest-first in `task_get`, and the
+`UserPromptSubmit` hook surfaces unread ones on a task you hold (see below).
 
 ### Code Branch Tracking
 
@@ -189,6 +202,15 @@ Wired in automatically, best-effort — no dedicated tool call needed:
   Branch** section when the current checkout's branch already carries an
   open task — a signal that this session should likely continue that work
   rather than pick up something new.
+- The same hook surfaces a **New Comments on Work You Hold** section, ahead of
+  everything else, when an `in_progress` task held by this identity has a
+  comment it has not shown yet. "Unread" is a local watermark in the session
+  state dir, not a read receipt in the graph: it records what was rendered into
+  *this machine's* prompt, which is a fact about a client rather than about
+  shared work. Losing the file re-shows a comment, which is the harmless
+  direction to fail in. Held tasks are found via `cfg.author` locally and
+  `task_list(assignee="@me")` against a deployment, where the identity comes
+  from the caller's token and the client cannot know it.
 
 Both call sites no-op silently with no repo/branch context (detached HEAD,
 outside a git repo, or a store that predates this feature and hasn't run

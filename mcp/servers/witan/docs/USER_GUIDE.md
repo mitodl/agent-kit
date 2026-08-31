@@ -138,6 +138,23 @@ A typical session:
    `task_close` with a `resolution` when you're done. Filing follow-up work
    discovered mid-task: `task_create(discovered_from=["tk-…"], …)`.
 
+   `task_get` returns the task's **comments** along with its description —
+   read them before executing, because a comment is how someone tells you
+   the description is wrong without overwriting it.
+
+1. **Correct someone else's task instead of clobbering it.**
+
+   ```bash
+   witan task comment tk-… "That guard cannot fire on these pipelines — …"
+   ```
+
+   Use this (`task_comment` from an agent session) when you find a problem
+   with work you are *not* executing. It is attributed, timestamped, and
+   append-only; it changes nothing about the task, so it neither destroys
+   the other author's text (`task_update` would) nor adds an item that is
+   not work to everyone's ready list (`task_create` would). Unread comments
+   on a task you hold are pushed into your session context.
+
 3. **Store what you learned.**
 
    Any durable, shareable fact — a coding pattern, a project-specific quirk,

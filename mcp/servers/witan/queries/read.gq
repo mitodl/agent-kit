@@ -842,6 +842,18 @@ query list_tasks_by_parent($parent_slug: String) {
     order { $t.priority, $t.updated_at desc }
 }
 
+// ── Task comments ──────────────────────────────────────────────────
+// Oldest first: a thread reads in the order it was written, and the context
+// hook's unread watermark compares against the LAST element.
+
+query list_task_comments($task_slug: String) {
+    match {
+        $c: TaskComment { task_slug: $task_slug }
+    }
+    return { $c.slug, $c.task_slug, $c.body, $c.author, $c.created_at }
+    order { $c.created_at }
+}
+
 // ── Reverse symbol references (Layer 1 ← Layer 2 composition) ──────
 // Return nodes carrying symbol_refs so the server can filter for a specific
 // code-graph symbol id in Python (list-membership, scoped by repo).
@@ -1085,4 +1097,9 @@ query list_all_trace_authors() {
 query list_all_task_authors() {
     match { $t: Task }
     return { $t.slug, $t.author }
+}
+
+query list_all_task_comment_authors() {
+    match { $c: TaskComment }
+    return { $c.slug, $c.author }
 }

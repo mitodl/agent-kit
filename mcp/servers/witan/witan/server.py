@@ -360,6 +360,12 @@ mcp = FastMCP(
         "  it contains a secret → rotate the credential. memory_delete removes it "
         "from the current graph but not from history, and no tool can erase "
         "that.\n\n"
+        "Found a problem with someone else's task? task_comment(slug, text) "
+        "leaves an attributed, append-only note ON it. Do NOT reach for "
+        "task_update (it overwrites their description) or task_create (it puts "
+        "an item that is not work into everyone's ready-work list). Comments "
+        "come back in task_get, so read them before executing a task you "
+        "claimed — they are often a correction to its own description.\n\n"
         "Naming: the task_* tools track work items (task_create, task_claim, "
         "task_ready, …) and have nothing to do with MCP's own tasks/* extension "
         "for long-running calls. A task_* slug is a unit of work someone is "
@@ -558,6 +564,7 @@ _KIND_PREFIX = {
     "workflow_session": "ws",
     "workflow_trace": "wt",
     "task": "tk",
+    "task_comment": "tc",
 }
 
 
@@ -574,18 +581,20 @@ _lease_expired = readiness.lease_expired
 # this stable placeholder instead of the raw (possibly-None) holder.
 _UNKNOWN_HOLDER = "unknown (no assignee on record)"
 
-# A holder is ``"<identity>#<session>"`` — see ``_claim_holder``. Matched
-# conservatively (the charset of a session id, anchored at the end) so an
-# identity that happens to contain a '#' is not mistaken for a qualified one.
-#
-# '#' rather than the more obvious "identity [session]": holder strings are
-# printed straight into `rich` consoles by the task CLI, and rich reads
-# ``[aaaaaaaa]`` as a style tag and *swallows* it. That silently rendered every
-# session's holder as the bare identity again — reintroducing the exact
-# indistinguishability this qualifier exists to remove, at the one place a human
-# reads it. A delimiter that is not markup in any of our output paths avoids
-# having to remember to escape it at each one.
-_SESSION_SUFFIX_RE = re.compile(r"#[0-9A-Za-z_-]{1,64}$")
+# ``task_list(assignee=…)`` sentinel for "whoever is calling". A client cannot
+# spell its own holder itself against a deployment: the identity there comes
+# from the JWT (``preferred_username``), which need not match the local
+# ``cfg.author`` a CLI-side caller knows — that mismatch is the whole subject of
+# ``claim_authorship``. Resolving it server-side is the only way the context
+# hook can ask "which tasks do I hold?" on both transports.
+_ME = "@me"
+
+# The holder-string spelling lives in ``readiness`` alongside the claim lease,
+# shared with the context hook (which decides "is this a task I hold?" before
+# surfacing comments on it) — re-exported here under the historical names, the
+# same way ``_lease_expired`` is above.
+_SESSION_SUFFIX_RE = readiness.SESSION_SUFFIX_RE
+_holder_identity = readiness.holder_identity
 
 
 def _claim_holder(assignee: str | None = None, session_id: str | None = None) -> str:
@@ -630,11 +639,6 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
     identity = _current_author()
     session = session_id or os.environ.get("CLAUDE_SESSION_ID") or ""
     return f"{identity}#{session[:8]}" if session else identity
-
-
-def _holder_identity(holder: str | None) -> str | None:
-    """Strip a holder's ``#<session>`` qualifier, leaving the person."""
-    return _SESSION_SUFFIX_RE.sub("", holder) if holder else holder
 
 
 def _is_qualified(holder: str | None) -> bool:
@@ -1593,6 +1597,7 @@ _RECONCILE_TS_FIELDS: dict[str, tuple[str, ...]] = {
     "WorkflowSession": ("ended_at", "started_at"),
     "WorkflowTrace": ("created_at",),
     "Topic": ("created_at",),
+    "TaskComment": ("created_at",),
 }
 
 
@@ -1674,6 +1679,7 @@ _AUTHORED_TYPES = (
     "WorkflowSession",
     "WorkflowTrace",
     "Task",
+    "TaskComment",
 )
 
 
@@ -2392,6 +2398,12 @@ _AUTHORSHIP_SOURCES = (
     ),
     ("WorkflowTrace", "list_all_trace_authors", "set_workflow_trace_author", False),
     ("Task", "list_all_task_authors", "set_task_author", True),
+    (
+        "TaskComment",
+        "list_all_task_comment_authors",
+        "set_task_comment_author",
+        False,
+    ),
 )
 
 
@@ -5373,13 +5385,133 @@ async def task_create(
 def task_get(slug: str) -> dict | None:
     """Retrieve a single task by slug. Returns the full node or ``null``.
 
+    The node carries a ``comments`` list — attributed, append-only notes left by
+    ``task_comment``, oldest first. READ THEM BEFORE EXECUTING: a comment is how
+    another agent says the task's stated premise is wrong without overwriting
+    your description, so it is often a correction to the very plan the
+    description sets out.
+
     Parameters
     ----------
     slug:
         The ``tk-`` slug to retrieve.
     """
     rows = client.read("read.gq", "get_task", {"slug": slug})
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    return {**rows[0], "comments": _task_comments(slug)}
+
+
+def _no_comment_type(exc: Exception) -> bool:
+    """Whether ``exc`` is the store saying it has never heard of ``TaskComment``.
+
+    Reachable in two ways, neither of them exotic. ``_ensure_graph`` re-applies
+    ``schema.pg`` only to a LOCAL store, so a deployed graph provisioned before
+    this node type existed answers ``unknown node/edge type``. And a local store
+    whose schema has drifted far enough that ``schema apply`` REFUSES the
+    migration outright ("removing constraints from 'Task' is not supported")
+    never picks up any new type either, silently, since the re-apply is
+    best-effort by design.
+    """
+    message = str(exc).lower()
+    return "unknown node" in message and "taskcomment" in message
+
+
+_MIGRATE_HINT = (
+    "this store has no TaskComment type — run `witan migrate schema`, and if "
+    "that refuses the migration, the store needs an export/re-init"
+)
+
+
+def _task_comments(slug: str) -> list[dict]:
+    """A task's comments, oldest first; ``[]`` if the store cannot answer.
+
+    Isolated exactly as the context hook isolates its ``code_branch_tasks``
+    read: an unguarded read here would let a store without the type break
+    ``task_get`` outright, breaking the whole task surface to add one field to
+    it. Only the missing-type case is swallowed — anything else is a real read
+    failure and propagates.
+    """
+    try:
+        return client.read("read.gq", "list_task_comments", {"task_slug": slug})
+    except RuntimeError as exc:
+        if not _no_comment_type(exc):
+            raise
+        logger.warning(
+            "witan.task_comments.unavailable", task_slug=slug, hint=_MIGRATE_HINT
+        )
+        return []
+
+
+@_tool
+def task_comment(slug: str, text: str) -> dict:
+    """
+    Leave an attributed, append-only comment ON a task without changing it.
+
+    THIS IS THE TOOL FOR SAYING SOMETHING *ABOUT* SOMEONE ELSE'S TASK. Reach for
+    it when you have found a problem with a task you are not executing — its
+    premise is wrong, its mechanism cannot fire, the work is already done
+    elsewhere. The alternatives are both worse: ``task_update`` overwrites the
+    other author's description, and ``task_create`` puts an item that is not
+    work into everyone's ready-work list.
+
+    The comment is attributed to you and stamped, and appears in ``task_get`` —
+    and, for a task the holder's session is actively working, in their injected
+    context. Flat and permanent: no threading, no editing, no deleting.
+
+    NOT for your own execution notes on your own task (that is the task's
+    ``description`` or ``resolution``), and not for reusable repo knowledge
+    (that is ``memory_store`` — a comment is read once by one executor).
+
+    Parameters
+    ----------
+    slug:
+        The ``tk-`` slug to comment on.
+    text:
+        The comment body. Say the thing itself, with evidence — the holder is
+        mid-execution and will act on this instead of the description.
+    """
+    body = text.strip()
+    if not body:
+        return {"commented": False, "reason": "comment text is empty"}
+    if not client.read("read.gq", "get_task", {"slug": slug}):
+        return {"commented": False, "reason": f"no task {slug!r}"}
+
+    now = now_iso()
+    author = _current_author()
+    comment_slug = _make_slug("task_comment", body)
+    # The task's own row is deliberately left untouched — not merely to avoid a
+    # second commit. ``status_pickable`` falls back to ``updated_at`` as the
+    # lease start for an ``in_progress`` task with no ``claimed_at``, so bumping
+    # it here would silently renew a stranger's advisory claim every time
+    # somebody commented on their task.
+    try:
+        client.change(
+            "mutations.gq",
+            "insert_task_comment",
+            {
+                "slug": comment_slug,
+                "task_slug": slug,
+                "body": body,
+                "author": author,
+                "created_at": now,
+            },
+        )
+    except RuntimeError as exc:
+        # The read side degrades to "no comments", which is indistinguishable
+        # from a task nobody has commented on. A write must not degrade the
+        # same way: reporting success for text that was never stored is how a
+        # correction gets lost. Say what is wrong and what fixes it.
+        if not _no_comment_type(exc):
+            raise
+        return {"commented": False, "reason": _MIGRATE_HINT}
+    return {
+        "commented": True,
+        "slug": comment_slug,
+        "task_slug": slug,
+        "author": author,
+        "created_at": now,
+    }
 
 
 @_tool
@@ -5408,8 +5540,12 @@ def task_list(
     parent:
         List the direct children of a parent task/epic.
     assignee:
-        Filter to a single owner.
+        Filter to a single owner. ``"@me"`` resolves to the calling identity
+        (every session of it) — the only spelling that works from a client
+        that cannot know the identity a deployment resolves from its token.
     """
+    if assignee == _ME:
+        assignee = _holder_identity(_current_author())
     if project_slug:
         rows = client.read(
             "read.gq", "list_tasks_by_project", {"project_slug": project_slug}

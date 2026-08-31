@@ -8,6 +8,52 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **`task_comment` — say something *about* a task without mutating it or
+  filing work.** There was no primitive for this. Every write either changed
+  the task (`task_update`, which overwrites another author's description) or
+  created a node (`task_create`, `memory_store`), so an agent that found a
+  problem with someone else's in-flight task had to pick one. On 2026-08-27 a
+  one-paragraph correction — the task's stated mechanism could not fire on the
+  affected pipelines — cost a whole p0 task whose real content was "your
+  premise is wrong", a `parent` edge written onto someone else's claimed row to
+  buy discoverability, and a project fact to hold the evidence. The ready-work
+  list gained an item that was not work, filed p0 so it would sit next to its
+  parent, competing with real p0s; and closing it would have meant "I read
+  this", which is not what closing a task means anywhere else.
+
+  A `TaskComment` is attributed to the caller, timestamped, and append-only.
+  Flat on purpose: no threading, no editing, no deleting, no resolution — those
+  are decisions to make when something needs them, not up front. It leaves the
+  task's own row alone, `updated_at` included: that field doubles as the
+  advisory-lease start for an `in_progress` task with no `claimed_at`, so
+  bumping it would silently renew a stranger's claim every time somebody
+  commented on their task.
+
+  Surfaced at both places an executing agent actually looks. `task_get` returns
+  them oldest-first under `comments` (guarded: a deployed store provisioned
+  before `TaskComment` answers `unknown node type`, and that must cost the
+  field rather than the whole task read). And the `UserPromptSubmit` hook
+  renders **New Comments on Work You Hold** *first*, ahead of projects and
+  ready work — a correction to the task you are mid-way through is the one
+  thing in that block addressed to you specifically.
+
+  Unread state is a local watermark in the session state dir, not a read
+  receipt in the graph. "Read" here means "was rendered into this machine's
+  prompt", which is a fact about a client; putting it in the shared graph would
+  make every prompt a write and still answer the wrong question for any other
+  reader. Losing the file re-shows a comment, which is the harmless direction.
+  Also `witan task comment <slug> <text>`, and comments in `witan task <slug>`.
+
+- **`task_list(assignee="@me")` resolves to the calling identity.** The context
+  hook has to ask "which tasks do I hold?" on both transports, and a client
+  cannot spell its own holder against a deployment: the identity there comes
+  from the JWT `preferred_username`, which need not match the local
+  `cfg.author` — that mismatch is the entire subject of `claim_authorship`.
+  Resolving the sentinel server-side is the only spelling that is correct in
+  both places.
+
 ### Fixed
 
 - **The umbrella CLI configures observability, which is what actually covers
