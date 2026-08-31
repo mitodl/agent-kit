@@ -130,11 +130,18 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: and confirm it against the tarball you actually downloaded (`sha256sum`) in
 #: the same sitting — on a moving tag the two assets can be republished a
 #: minute apart, and a digest read across that gap describes neither build.
-#: ★ THESE ARE THE `edge` BUILD OF 2026-08-24T19:47-19:58Z (through
-#: bb0e3dc8bf), NOT v0.9.0's. Refreshed from the 2026-08-24T12:50Z triple
-#: (972f1666c5) after CI failed the checksum check on agent-kit#283 — the
-#: SECOND refresh in one day, which is the moving tag behaving as documented
-#: below rather than anything going wrong.
+#: ★ THE DIGESTS BELOW ARE THE `edge` BUILD OF 2026-08-30T23:09Z (through
+#: ac620eea87), NOT v0.9.0's. THAT IS THE ONLY LINE HERE STATING WHICH BUILD
+#: IS PINNED — everything after it is the refresh history in order, appended
+#: rather than rewritten, and each block describes the build CURRENT AT ITS
+#: OWN DATE. Read the last block (2026-08-31) for what is pinned now; read
+#: the earlier ones for what was checked and what it cost to learn.
+#:
+#: ── 2026-08-24, the `edge` build through bb0e3dc8bf ──
+#: Refreshed from the 2026-08-24T12:50Z triple (972f1666c5) after CI failed
+#: the checksum check on agent-kit#283 — the SECOND refresh in one day, which
+#: is the moving tag behaving as documented below rather than anything going
+#: wrong.
 #:
 #: Two commits landed in between and only ONE carries behaviour:
 #:   #545 `feat(azure): implement RFC-0029 Blob storage preview` — 82 files,
@@ -257,19 +264,119 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: before trusting a locally-computed digest, not just that `curl` printed
 #: something.
 #:
+#: ★★ REFRESHED AGAIN 2026-08-31, and THIS ONE IS NOT LIKE THE OTHERS. Red
+#: `witan-code (code graph)` again (agent-kit#298, and every other open PR),
+#: but `edge` had moved f714e5961147 -> ac620eea87e8a91cc5349276c3afc58f40fe4308:
+#: 29 commits, 160 files. Every previous refresh here was two or three commits.
+#: Read the six that reach witan rather than the subject lines:
+#:
+#:   #561 `fix(recovery): heal stranded effect-free intents without a reopen`
+#:        ★ THIS CLOSES OUR OWN UPSTREAM ISSUE #554 — the pending-Mutation
+#:        recovery barrier that wedged the production code-bridge graph for
+#:        ~15 hours (tk-production-code-bridge-graph-is-wedged-on-a-pend-8318a4,
+#:        whose only remaining item was "upstream response on #554; that is
+#:        the real fix"). A write dying between arming its recovery sidecar
+#:        and its first table commit stranded an Armed, effect-free intent,
+#:        and the heal deferred every Armed intent to the next ReadWrite open
+#:        — which a long-lived server never performs, so the barrier refused
+#:        every write until a restart. Now re-proven effect-free from the live
+#:        heal and retired. ★ DO NOT BUILD THE ROLLOUT-RESTART STOPGAP that
+#:        task holds in reserve; this is the actual fix.
+#:
+#:   #569 `fix(query): fail closed on missing required parameters`
+#:        ★ THE ONE BEHAVIOUR CHANGE THAT COULD BREAK US, and it is a change
+#:        in our favour. Previously an unresolved parameter in a node-property
+#:        match caused the pushdown filter to be OMITTED — silently widening
+#:        the query to every row. Now it errors before scanning. So any read
+#:        that ever omitted a declared parameter was quietly returning
+#:        over-broad results and will now fail loudly instead.
+#:        Note `omnigraph.py`'s read path does NOT validate that every
+#:        declared parameter is supplied, the way `change`/`_compose_steps`
+#:        do — it just `json.dumps(params)`. Nothing in 2172 tests trips this
+#:        (see below), so no such caller exists today, but the read path has
+#:        no guard keeping it that way.
+#:
+#:   #579 `fix(branch): name every branch life by an incarnation-suffixed
+#:        native ref` — deleting a branch and recreating it under the SAME
+#:        NAME reused the same storage paths, so a warm handle's path-keyed
+#:        cache served the dead life's metadata to the new one ("all columns
+#:        in a record batch must have the same length", or stale rows).
+#:        witan-code does exactly that: `reaper` deletes a stale branch view
+#:        and `GraphStore.ensure_branch` recreates it under the git branch's
+#:        name. Latent bug we had not hit yet, now fixed upstream.
+#:
+#:   #531 `perf(mutate): stage independent tables at the loader's write
+#:        concurrency` — `stage_all` now stages at `OMNIGRAPH_LOAD_CONCURRENCY`
+#:        (default 8) instead of a pinned 1. ★ THIS INVALIDATES EVERY
+#:        WRITE-CEILING NUMBER THIS PROJECT HOLDS: they were all measured on
+#:        pinned-1 staging. Re-measure before trusting
+#:        tk-the-write-gate-is-sized-against-a-3-45s-solo-wri-73fc2b's EWMA
+#:        sizing or tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2.
+#:        Publication, ordering and failure semantics are untouched upstream.
+#:
+#:   #542 `perf(engine): reclaim deleted branch forks in the background` —
+#:        `branch_delete` now returns at ref removal, with the per-dataset
+#:        Lance fork reclaim continuing asynchronously. The reaper's deletes
+#:        get faster; anything that deletes and then measures storage, or
+#:        immediately recreates, is now racing physical cleanup. Safe in
+#:        combination with #579, which stops a recreated branch sharing paths
+#:        with its predecessor.
+#:
+#:   #571 `perf(query): enable projection pushdown for node scans` — a node
+#:        scan read every column of every row regardless of what the query
+#:        referenced; the projection came from the schema alone and RETURN was
+#:        applied in memory afterwards. Now derived from the query.
+#:        ★ THE HEADLINE UPSTREAM NUMBER DOES NOT APPLY TO US, and it is worth
+#:        saying so rather than quoting it: their ~13 GB/OOM case is a
+#:        never-referenced `Vector(3072)` column dominating the read, and
+#:        witan defaults `WITAN_EMBED_ENABLED` OFF — `recall` runs BM25-only
+#:        and needs no embedding provider, so our Memory rows carry no vector
+#:        to skip. What we get is the narrower win of not reading unreferenced
+#:        scalar columns. The big version of this only arrives if embeddings
+#:        are ever switched on, at which point re-read this.
+#:
+#: The rest is benchmark/DST harness work (#527, #555-#560, #568/#570/#577),
+#: merge-lineage internals (#540/#541, #573), CI, and docs.
+#:
+#: CHECKS RUN, same as every refresh here plus one this jump earned:
+#:   * Vocabulary — tree-wide `git grep` at BOTH refs (never a diff scan; see
+#:     the trap recorded above) for all 13 `_RETRYABLE`/`_NEEDS_REPAIR`/
+#:     `_PRECONDITION_FAILED`/`_RECOVERY_REQUIRED` substrings. ALL 13
+#:     IDENTICAL. `storage:` moved 66 -> 80 files, and every one of the 14 is
+#:     in the NEW `omnigraph-bench`/`omnigraph-dst` crates; none is in a
+#:     shipping crate, and the tarball still contains exactly `omnigraph`,
+#:     `omnigraph-server`, `omnigraph-azure-admission`. Zero files lost a hit.
+#:     The instrument returned non-zero for 13 of 14 rows, so a zero here is
+#:     readable as data rather than as a broken scan.
+#:   * Version/format — `omnigraph version` on THIS binary reads 0.10.0 and
+#:     internal-schema 6, unchanged. NOT a rebuild-every-graph event.
+#:   * ★ THE WHOLE TEST SUITE AGAINST THIS BINARY, which no previous refresh
+#:     here did and a 29-commit jump with a query-semantics change warrants:
+#:     witan-core 584, witan-council 1008, witan-code 580 — 2172 passed. (One
+#:     failure, `test_pre_upgrade_candidates_exclude_the_current_binary`, was
+#:     an artifact of putting a second `omnigraph` on PATH to run this at all;
+#:     it passes without the override, and the function under test is pure
+#:     PATH-scanning Python that never invokes the binary.)
+#:
+#: Digests taken by downloading all three tarballs and hashing them locally,
+#: cross-checked against each published `.sha256` in the same sitting — all
+#: three matched. `refs/tags/edge` read directly before AND after every
+#: download and identical throughout (ac620eea87), so this triple describes
+#: one build rather than a window.
+#:
 #: Reverting the experiment means restoring the v0.9.0 triple, which was:
 #:     linux-x86_64  507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197
 #:     linux-arm64   6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881
 #:     macos-arm64   69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "7633416d2192eb3b419f7e047759576587758bda80d0278eae6b11579a5e0943"
+        "6a0fba8842a2071c558abf2c1a399ce5e11d359dff78b6ae6ff3676617f95680"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "cec6d1ce1ac3bb16f1114d17bbd219ad003127f3d277d9fadd5bfb58cf2dce7c"
+        "dd40fa4169a89af41cddbdeb8fe441b714438633297e153876b4889ec0af3a86"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "245bea28172dfafc231b6ee39c8b9fd0e6feeb928a96458f501e58b234b65f08"
+        "990fcab686922f885f959a0f6204f61d0770ef7af6f058bac9df14cc587a2248"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
