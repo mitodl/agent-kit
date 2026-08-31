@@ -5474,7 +5474,8 @@ def task_comment(slug: str, text: str) -> dict:
     body = text.strip()
     if not body:
         return {"commented": False, "reason": "comment text is empty"}
-    if not client.read("read.gq", "get_task", {"slug": slug}):
+    task_rows = client.read("read.gq", "get_task", {"slug": slug})
+    if not task_rows:
         return {"commented": False, "reason": f"no task {slug!r}"}
 
     now = now_iso()
@@ -5495,6 +5496,16 @@ def task_comment(slug: str, text: str) -> dict:
                 "body": body,
                 "author": author,
                 "created_at": now,
+                # For the write guard, not for the graph: `_repo_of(params)` is
+                # how a `[scan.overlay]` table keyed on a repo reaches a node
+                # that has no repo of its own. `insert_task_comment` does not
+                # declare `$repo` and its insert body does not reference it, so
+                # the stored row is unaffected — an undeclared param is ignored
+                # rather than rejected. That is engine behaviour rather than a
+                # documented guarantee, which is why the end-to-end
+                # `task_comment` tests run against the real binary: if a future
+                # omnigraph rejects it, they fail here rather than in the field.
+                "repo": task_rows[0].get("repo"),
             },
         )
     except RuntimeError as exc:

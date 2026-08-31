@@ -31,9 +31,14 @@ enabled = false
 
 By default, `OmnigraphClient.change()` scans the free-text fields of every
 `insert_*`/`update_*` mutation (see `FIELD_MAP` in `witan/scan/enforce.py`) —
-this covers memories, topics, workflow projects/sessions/traces, and tasks by
-construction; no per-tool wiring is needed for new node types beyond adding a
-`FIELD_MAP` entry.
+this covers memories, topics, workflow projects/sessions/traces, tasks, and task
+comments by construction; no per-tool wiring is needed for new node types beyond
+adding a `FIELD_MAP` entry.
+
+A node with no `repo` field of its own can still be governed by a per-repo
+`[scan.overlay]` table: the overlay resolves from the mutation's `repo`
+parameter, so `task_comment` passes its task's repo alongside the comment body
+for exactly that reason.
 
 ## Config surface
 

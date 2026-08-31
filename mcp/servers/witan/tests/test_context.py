@@ -862,13 +862,22 @@ class _FakeRemoteServer:
     """
 
     def __init__(
-        self, projects, ready, sessions_by_project, branch_tasks=None, raises=()
+        self,
+        projects,
+        ready,
+        sessions_by_project,
+        branch_tasks=None,
+        raises=(),
+        held=None,
+        comments=None,
     ):
         self.calls: list[tuple[str, dict]] = []
         self._projects = projects
         self._ready = ready
         self._sessions_by_project = sessions_by_project
         self._branch_tasks = branch_tasks or []
+        self._held = held or []
+        self._comments = comments or {}
         # Tool names this fake answers with an error, standing in for a
         # deployment that predates the tool (its proxy raises on an unknown
         # tool name rather than returning empty).
@@ -897,6 +906,16 @@ class _FakeRemoteServer:
         self.calls.append(("task_for_branch", kwargs))
         self._guard("task_for_branch")
         return self._branch_tasks
+
+    def task_list(self, **kwargs):
+        self.calls.append(("task_list", kwargs))
+        self._guard("task_list")
+        return self._held
+
+    def task_get(self, **kwargs):
+        self.calls.append(("task_get", kwargs))
+        self._guard("task_get")
+        return {"comments": self._comments.get(kwargs.get("slug"), [])}
 
 
 def test_inject_context_remote_reads_through_the_proxy(tmp_path, monkeypatch):
@@ -1182,3 +1201,138 @@ def test_inject_context_without_an_author_skips_the_comment_block(
     assert "New Comments on Work You Hold" not in text
     assert "## Ready Tasks" in text
     assert "ready work" in text
+
+
+@requires_omnigraph
+def test_inject_context_does_not_cache_a_render_carrying_comments(
+    tmp_path, monkeypatch
+):
+    """The one-time comment block survives the output cache being ON.
+
+    The sibling tests above set ``WITAN_CONTEXT_TTL=0``, which is exactly the
+    production behaviour that hid this: delivery is recorded when the block is
+    rendered, so caching that render would re-serve an already-delivered
+    comment on every prompt for the rest of the TTL (Copilot review on
+    agent-kit#310). Default TTL here, deliberately.
+    """
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    store, queries_dir = _setup(tmp_path, monkeypatch, "https://github.com/test/cch")
+    monkeypatch.chdir(_git_repo(tmp_path / "r"))
+
+    me = srv.cfg.author
+    task = _unwrap(srv.task_create)(title="held work", description="x")
+    _unwrap(srv.task_claim)(task["slug"])
+    _unwrap(srv.task_comment)(slug=task["slug"], text="the premise cannot fire")
+
+    first = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    assert "the premise cannot fire" in first
+
+    second = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    assert "New Comments on Work You Hold" not in second
+
+    # ...and the comment-free render IS cached, so skipping the write above
+    # costs one round of reads rather than disabling the cache outright.
+    repo, branch = ctx_module._cached_repo_and_branch()
+    assert ctx_module._read_output_cache(str(store), repo, branch) == second
+
+
+@requires_omnigraph
+def test_inject_context_surfaces_a_comment_that_arrives_out_of_order(
+    tmp_path, monkeypatch
+):
+    """Delivery is tracked by comment slug, not by a `created_at` watermark.
+
+    ``store_merge`` reconciles ``TaskComment`` like any other type, so a comment
+    authored earlier against another store can land here after a later one has
+    already been shown. A timestamp watermark hid it permanently.
+    """
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    store, queries_dir = _setup(tmp_path, monkeypatch, "https://github.com/test/ooo")
+    monkeypatch.chdir(_git_repo(tmp_path / "r"))
+
+    me = srv.cfg.author
+    task = _unwrap(srv.task_create)(title="held work", description="x")
+    _unwrap(srv.task_claim)(task["slug"])
+    _unwrap(srv.task_comment)(slug=task["slug"], text="the later comment")
+
+    first = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    assert "the later comment" in first
+
+    # What a merge from another store looks like on arrival: a row whose
+    # `created_at` predates one already delivered.
+    srv.client.change(
+        "mutations.gq",
+        "insert_task_comment",
+        {
+            "slug": "tc-merged-from-elsewhere",
+            "task_slug": task["slug"],
+            "body": "authored earlier, arrived later",
+            "author": "someone-else",
+            "created_at": "2000-01-01T00:00:00Z",
+        },
+    )
+
+    second = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    assert "authored earlier, arrived later" in second
+    assert "the later comment" not in second
+
+
+@requires_omnigraph
+def test_inject_context_caps_comments_rendered_per_block(tmp_path, monkeypatch):
+    """Comments are append-only and unread ones accumulate, so the block needs a
+    count cap to be bounded — and the overflow must be held back for the next
+    render rather than marked delivered unseen."""
+    from witan import context as ctx_module
+    from witan import server as srv
+
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    store, queries_dir = _setup(tmp_path, monkeypatch, "https://github.com/test/cap")
+    monkeypatch.chdir(_git_repo(tmp_path / "r"))
+
+    me = srv.cfg.author
+    task = _unwrap(srv.task_create)(title="held work", description="x")
+    _unwrap(srv.task_claim)(task["slug"])
+
+    total = ctx_module._COMMENT_RENDER_LIMIT + 2
+    for i in range(total):
+        _unwrap(srv.task_comment)(slug=task["slug"], text=f"comment number {i}")
+
+    first = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    shown = [i for i in range(total) if f"comment number {i}" in first]
+    assert shown == list(range(ctx_module._COMMENT_RENDER_LIMIT))
+    assert "and 2 more unread" in first
+
+    second = ctx_module.inject_context(str(store), queries_dir, None, author=me)
+    still = [i for i in range(total) if f"comment number {i}" in second]
+    assert still == list(range(ctx_module._COMMENT_RENDER_LIMIT, total))
+
+
+def test_inject_context_remote_asks_for_held_tasks_across_all_repos(
+    tmp_path, monkeypatch
+):
+    """`task_list` is a repo-scoped tool, so an OMITTED repo is filled in with
+    the current checkout's by `RemoteMCPProxy._map_args` — which would make the
+    remote path miss comments on held tasks in other repos, while the local path
+    scans every repo. The explicit sentinel keeps both answering the same
+    question."""
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/held-scope")
+
+    server = _FakeRemoteServer(projects=[], ready=[], sessions_by_project={})
+    ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
+
+    assert (
+        "task_list",
+        {"assignee": "@me", "status": "in_progress", "repo": ""},
+    ) in server.calls

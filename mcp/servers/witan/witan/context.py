@@ -93,7 +93,7 @@ def _output_cache_file(graph_uri: str, repo: str | None, branch: str | None) -> 
     return session_state.session_state_dir() / f"witan-ctx-{digest}.json"
 
 
-# ── Unread-comment watermark ──────────────────────────────────────────────────
+# ── Delivered-comment record ──────────────────────────────────────────────────
 #
 # A comment on a task you hold should interrupt once, not every prompt until you
 # release the task — so the hook needs to know what it has already shown you.
@@ -104,6 +104,13 @@ def _output_cache_file(graph_uri: str, repo: str | None, branch: str | None) -> 
 # every prompt a write, and would still be answering the wrong question for any
 # other reader. Losing the file re-shows a comment, which is the harmless
 # direction to fail in.
+#
+# A SET OF SLUGS, NOT A TIMESTAMP WATERMARK. `created_at` orders comments but is
+# not an arrival sequence: `store_merge` reconciles `TaskComment` like any other
+# type (`_RECONCILE_TS_FIELDS`), so a comment written at 09:00 against another
+# store can land here after 10:00 has already been marked delivered. A watermark
+# would silently swallow it forever — the one direction this file must not fail
+# in. Membership has no such ordering assumption.
 
 
 def _seen_file(cache_key: str) -> Path:
@@ -111,17 +118,28 @@ def _seen_file(cache_key: str) -> Path:
     return session_state.session_state_dir() / f"witan-seen-{digest}.json"
 
 
-def _read_seen(cache_key: str) -> dict[str, str]:
-    """``{task_slug: newest comment timestamp already shown}``; ``{}`` if unusable."""
+def _read_seen(cache_key: str) -> dict[str, list[str]]:
+    """``{task_slug: [comment slugs already shown]}``; ``{}`` if unusable.
+
+    A pre-slug file (values were a timestamp string) reads as ``{}`` for those
+    tasks rather than being migrated: the whole record is one prompt's worth of
+    re-shown comments, and a migration would have to invent slugs it cannot know.
+    """
     try:
         data = json.loads(_seen_file(cache_key).read_text())
-    except Exception:  # noqa: BLE001 — missing/corrupt watermark → show everything
+    except Exception:  # noqa: BLE001 — missing/corrupt record → show everything
         logger.debug("witan.context.seen_read_failed", exc_info=True)
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        k: v
+        for k, v in data.items()
+        if isinstance(v, list) and all(isinstance(s, str) for s in v)
+    }
 
 
-def _write_seen(cache_key: str, seen: dict[str, str]) -> None:
+def _write_seen(cache_key: str, seen: dict[str, list[str]]) -> None:
     _atomic_write_private(_seen_file(cache_key), json.dumps(seen))
 
 
@@ -376,9 +394,16 @@ def inject_context(
 
 
 # A prompt preamble has to stay readable, and someone holding four tasks at once
-# has a bigger problem than an elided comment. Both caps bound the block; the
-# full thread is always one ``task_get`` away, which the block says.
+# has a bigger problem than an elided comment. All three caps bound the block;
+# the full thread is always one ``task_get`` away, which the block says.
+#
+# ``_COMMENT_RENDER_LIMIT`` is the one that makes "bounded" true rather than
+# merely likely: comments are append-only and unread ones accumulate, so without
+# a count cap a flooded task injects an arbitrarily large prompt no matter how
+# short each preview is. Comments past it stay undelivered — not dropped — and
+# lead the next block.
 _HELD_TASK_LIMIT = 3
+_COMMENT_RENDER_LIMIT = 5
 _COMMENT_PREVIEW_CHARS = 400
 
 
@@ -418,10 +443,10 @@ def _held_task_comments(
     Nothing here is fetched unless a task is actually held, so the common case
     (holding nothing) costs no reads at all.
 
-    Unread is decided against the local watermark, and the watermark is only
-    advanced by :func:`_render_context_block` — so a comment that was fetched
-    but never rendered (the block was dropped, the caller failed later) is
-    still unread next time.
+    Unread is decided against the local delivered-slug record, which is only
+    added to by :func:`_render_context_block` — so a comment that was fetched
+    but never rendered (the block was dropped, the caller failed later, it fell
+    past ``_COMMENT_RENDER_LIMIT``) is still unread next time.
     """
     if not held:
         return []
@@ -433,8 +458,8 @@ def _held_task_comments(
         except Exception:  # noqa: BLE001 — never blank the rest of the block
             _dbg_exc(debug, f"comment read failed for {task['slug']!r}")
             continue
-        watermark = seen.get(task["slug"]) or ""
-        unread = [c for c in comments if (c.get("created_at") or "") > watermark]
+        delivered = set(seen.get(task["slug"]) or ())
+        unread = [c for c in comments if c.get("slug") not in delivered]
         if unread:
             out.append((task, unread))
     _dbg(debug, f"held={len(held)} task(s) with unread comments={len(out)}")
@@ -460,13 +485,17 @@ def _render_context_block(
     remote path (:func:`inject_context_remote`) that is the deployment's own
     URL rather than a store path, so a laptop's local graph and a deployment
     never collide on the same cache file (see ``_output_cache_file``). It keys
-    the unread-comment watermark for the same reason.
+    the delivered-comment record for the same reason.
 
-    Advancing that watermark is this function's job rather than the callers'
-    because rendering IS the delivery: the string returned here is injected
-    into the prompt, so a comment that reaches this point has been shown.
+    Recording delivery is this function's job rather than the callers' because
+    rendering IS the delivery: the string returned here is injected into the
+    prompt, so a comment that reaches this point has been shown — and only the
+    ones that reach it, which is why the ``_COMMENT_RENDER_LIMIT`` slice and the
+    record are built from the same list.
     """
     lines: list[str] = []
+    # What this render actually delivers, which is what gets recorded below.
+    rendered: list[tuple[dict, list[dict]]] = []
 
     # First, ahead of the projects and ready-work blocks. A comment on work you
     # are already holding is the only thing here addressed to you specifically,
@@ -481,14 +510,21 @@ def _render_context_block(
             "",
         ]
         for task, unread in commented:
+            shown = unread[:_COMMENT_RENDER_LIMIT]
+            rendered.append((task, shown))
             lines.append(
                 f"- **{task.get('title', task['slug'])}** (slug: `{task['slug']}`)"
             )
-            for comment in unread:
+            for comment in shown:
                 body = " ".join((comment.get("body") or "").split())
                 if len(body) > _COMMENT_PREVIEW_CHARS:
                     body = body[:_COMMENT_PREVIEW_CHARS].rstrip() + "…"
                 lines.append(f"  - {comment.get('author', 'unknown')}: {body}")
+            if (held_back := len(unread) - len(shown)) > 0:
+                lines.append(
+                    f"  - …and {held_back} more unread — still undelivered, "
+                    "they lead the next block."
+                )
         lines += [
             "",
             "Full threads (and any older comments elided here) are in "
@@ -586,13 +622,24 @@ def _render_context_block(
 
     if commented:
         seen = _read_seen(cache_key)
-        for task, unread in commented:
-            seen[task["slug"]] = max(c.get("created_at") or "" for c in unread)
+        for task, shown in rendered:
+            already = seen.get(task["slug"]) or []
+            seen[task["slug"]] = already + [
+                s for c in shown if (s := c.get("slug")) and s not in already
+            ]
         _write_seen(cache_key, seen)
 
     # Cache the freshly rendered block (including an empty one) so the next
-    # prompt in this window skips the graph reads entirely.
-    _write_output_cache(cache_key, repo, branch, output)
+    # prompt in this window skips the graph reads entirely — EXCEPT when it
+    # carries comments. Delivery was just recorded, so re-serving this string
+    # for the rest of the TTL would re-interrupt with comments the record now
+    # calls delivered, turning "interrupts once" into "interrupts for 30
+    # seconds". Skipping the write costs one extra round of graph reads on the
+    # next prompt, which then renders without the block and caches that.
+    if commented:
+        _dbg(debug, "not caching a render carrying comments (one-time delivery)")
+    else:
+        _write_output_cache(cache_key, repo, branch, output)
     _dbg(
         debug,
         f"rendered {len(output)} chars"
@@ -698,8 +745,15 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
 
     # Isolated like the branch read above: a deployment predating `@me` or
     # `TaskComment` costs this block and nothing else.
+    #
+    # `repo=""` is load-bearing, not decoration. An OMITTED repo is filled in
+    # client-side by `RemoteMCPProxy._map_args` (`task_list` is in
+    # `_REPO_IS_SCOPE_OR_STAMP`), which would scope this to whichever checkout
+    # the hook fired in — while the local path answers from an all-repos
+    # `list_unscoped_tasks` scan. The sentinel makes both transports answer the
+    # same question: which tasks do I hold, anywhere.
     try:
-        held = server.task_list(assignee="@me", status="in_progress")
+        held = server.task_list(assignee="@me", status="in_progress", repo="")
     except Exception:  # noqa: BLE001
         _dbg_exc(debug, "held-task read failed — no comment block")
         held = []

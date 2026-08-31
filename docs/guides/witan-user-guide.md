@@ -152,7 +152,7 @@ A typical session:
    read them before executing, because a comment is how someone tells you
    the description is wrong without overwriting it.
 
-1. **Correct someone else's task instead of clobbering it.**
+3. **Correct someone else's task instead of clobbering it.**
 
    ```bash
    witan task comment tk-… "That guard cannot fire on these pipelines — …"
@@ -165,7 +165,7 @@ A typical session:
    not work to everyone's ready list (`task_create` would). Unread comments
    on a task you hold are pushed into your session context.
 
-3. **Store what you learned.**
+4. **Store what you learned.**
 
    Any durable, shareable fact — a coding pattern, a project-specific quirk,
    a lesson from a bug you just fixed — belongs in witan, not your agent's
@@ -182,7 +182,7 @@ A typical session:
    witan memory "flaky retry" --kind pattern
    ```
 
-4. **Track a multi-session project.** For work that spans more than one
+5. **Track a multi-session project.** For work that spans more than one
    session, create (or resume) a `WorkflowProject` rather than tracking
    state in your head:
 
