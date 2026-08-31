@@ -31,13 +31,14 @@
 # covered it when it did not, and a partial bump is silent until deploy.
 
 ARG OMNIGRAPH_VERSION=0.10.0
-# Upstream tag to fetch from. `edge` is the rolling build of upstream main,
-# republished on every push there; a real release is `v${OMNIGRAPH_VERSION}`.
+# Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
+# is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
-# witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG.
-ARG OMNIGRAPH_RELEASE_TAG=edge
-ARG OMNIGRAPH_SHA256_X86_64=6a0fba8842a2071c558abf2c1a399ce5e11d359dff78b6ae6ff3676617f95680
-ARG OMNIGRAPH_SHA256_ARM64=dd40fa4169a89af41cddbdeb8fe441b714438633297e153876b4889ec0af3a86
+# witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG, which also records
+# why this is a release tag again and what Lance 11 asks of an existing graph.
+ARG OMNIGRAPH_RELEASE_TAG=v0.10.0
+ARG OMNIGRAPH_SHA256_X86_64=05d3ce4ec0ab51a876befd89b643c3e7f2d5489be0398a38cef6fb3a0d257fc1
+ARG OMNIGRAPH_SHA256_ARM64=dd3ac09123a68882454db7e689da4c306c41677826237098df4e76b0f73d8d5e
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
 FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS fetch
