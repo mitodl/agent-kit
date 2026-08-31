@@ -1,6 +1,6 @@
 [project]
 name = "witan-code"
-version = "0.16.0"
+version = "0.17.0"
 description = "witan-code — tree-sitter code graph + cross-repo bridge (mounts under `witan code`)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -122,7 +122,7 @@ dependencies = [
     # conflict, since both sides named the same number. Re-check it by hand on
     # every rebase; a floor one release low here is silent.
     "witan-core[cli,remote,observability,sentry]>=0.32,<1",
-    "fastmcp>=3.4.2,<5",
+    "fastmcp>=4,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled
     # in by fastmcp, declared explicitly since config.py imports it directly.
@@ -162,10 +162,9 @@ dependencies = [
 [project.optional-dependencies]
 # The io.modelcontextprotocol/tasks extension (SEP-2663), which lets a client
 # poll a long `code_reindex` instead of holding the tool call open. Optional
-# because it exists only for fastmcp 4.x while the pin above still spans 3.4.x,
-# and because it pulls a Docket/Redis stack that the default in-process
+# because it pulls a Docket/Redis stack that the default in-process
 # `memory://` backend does not need. server.py registers it when importable.
-tasks = ["fastmcp-tasks>=4.0.0b1,<5"]
+tasks = ["fastmcp-tasks>=4,<5"]
 
 [project.urls]
 Homepage = "https://github.com/mitodl/agent-kit/tree/main/mcp/servers/witan-code"
@@ -195,7 +194,7 @@ witan-core = { workspace = true }
 # cryptography: test_github_app generates a throwaway RSA key so the JWT path
 # is exercised for real rather than mocked. joserfc requires it at runtime, so
 # this only makes an existing import explicit.
-test = ["pytest>=8", "fastmcp-tasks>=4.0.0b1,<5", "cryptography"]
+test = ["pytest>=8", "fastmcp-tasks>=4,<5", "cryptography"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -205,7 +204,7 @@ testpaths = ["tests"]
 packages = ["witan_code"]
 
 [tool.bumpversion]
-current_version = "0.16.0"
+current_version = "0.17.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

@@ -1,6 +1,6 @@
 [project]
 name = "witan-core"
-version = "0.32.2"
+version = "0.33.0"
 description = "Shared core for the witan MCP servers (witan-council + witan-code)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -21,13 +21,13 @@ dependencies = []
 # both servers already depend on, so this stays a valid leaf→leaf edge.
 cli = ["cyclopts>=4,<5", "rich>=13", "agent-config-kit>=0.4,<1"]
 # elicit.py (fastmcp.server.elicitation.AcceptedElicitation).
-mcp = ["fastmcp>=3.4.2,<5"]
+mcp = ["fastmcp>=4,<5"]
 # remote/ — the OIDC device-auth + token cache (httpx2) and the MCP-client proxy
 # (fastmcp). ADR-0005 path-a client stack; a server's CLI uses it to reach its
 # deployed self. fastmcp 4.x itself depends on httpx2 (Pydantic's maintained
 # fork of httpx), not classic httpx, so this stays the one HTTP client in the
 # dependency tree instead of adding a second.
-remote = ["httpx2>=2.5", "fastmcp>=3.4.2,<5"]
+remote = ["httpx2>=2.5", "fastmcp>=4,<5"]
 # observability/ — structlog config + OpenTelemetry, patterned after
 # mitol-django-observability. structlog is the hard requirement; the OTel halves
 # are imported defensively so a install that wants structured logs without an
@@ -46,11 +46,9 @@ observability = [
 # from that extra — and a deployment that already ships Loki/Tempo via OTel may
 # not want a second, SaaS error-tracking dependency pulled in by default.
 #
-# Capped below 3.0: the workspace's blanket `prerelease = "allow"` (root
-# pyproject.toml, needed for fastmcp-slim) would otherwise let the resolver
-# pick 3.0's alpha line, which bundles its own opentelemetry-sdk dependency —
-# a second, unrelated copy of the exact package `observability` above already
-# pins and configures.
+# Capped below 3.0: sentry-sdk's 3.0 alpha line bundles its own
+# opentelemetry-sdk dependency — a second, unrelated copy of the exact package
+# `observability` above already pins and configures.
 sentry = ["sentry-sdk>=2.20,<3"]
 
 [project.urls]
@@ -66,7 +64,7 @@ build-backend = "hatchling.build"
 packages = ["witan_core"]
 
 [tool.bumpversion]
-current_version = "0.32.2"
+current_version = "0.33.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
@@ -87,7 +85,7 @@ replace = 'version = "{new_version}"'
 test = [
     "pytest>=8",
     "rich>=13",
-    "fastmcp>=3.4.2,<5",
+    "fastmcp>=4,<5",
     "cyclopts>=4,<5",
     "agent-config-kit>=0.4,<1",
     "httpx2>=2.5",

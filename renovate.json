@@ -3,7 +3,7 @@
 	"extends": ["local>mitodl/.github:renovate-config"],
 	"packageRules": [
 		{
-			"description": "fastmcp is deliberately locked to a 4.0 pre-release while 4.0 is in beta (see the [tool.uv] prerelease note in the root pyproject). Every bump — beta to beta, or beta to GA — swaps the MCP protocol layer under both servers, so it always gets human review instead of automerging.",
+			"description": "fastmcp carries the MCP protocol layer under both servers (protocol era negotiation, elicitation wire mechanism, list-cache hints), so a bump always gets human review instead of automerging.",
 			"matchDepNames": ["fastmcp", "fastmcp-slim"],
 			"automerge": false
 		}
