@@ -1455,6 +1455,8 @@ def test_verify_log_distinguishes_a_checked_catch_up_from_a_skipped_one(
     ``graph_commit_id`` — the same reason the neighbouring catch-up tests
     stub ``change``.
     """
+    import logging
+
     from witan_core.observability import configure_logging, reset_logging
 
     from witan import server as srv
@@ -1484,6 +1486,11 @@ def test_verify_log_distinguishes_a_checked_catch_up_from_a_skipped_one(
         [degraded] = _verify_events(capfd)
     finally:
         reset_logging()
+        # `reset_logging` clears structlog's guard and re-pins its stderr
+        # default, but the root handler `configure_logging`'s dictConfig
+        # installed survives it — leaking JSON logging into later tests. Same
+        # cleanup as tests/test_audit.py and tests/test_context.py.
+        logging.getLogger().handlers.clear()
 
     # Both look identical on the two fields that used to be the whole story.
     assert supplied["caught_up"] is degraded["caught_up"] is True
