@@ -1845,3 +1845,36 @@ def test_the_wait_is_capped_at_the_last_viable_moment(monkeypatch):
     elapsed = time.monotonic() - started
     assert elapsed < 2.0, "should give up near the viable boundary, not at 30s"
     assert elapsed > 0.2, "should have waited while admission was still viable"
+
+
+# ── omnigraph 0.10.0's full-text rebuild guard (upstream #581) ──────────────
+#
+# Literal, for the reason `_WRITE_AUTHORITY_STDERR` is: taken from the `#[error]`
+# attribute on `OmniError::FullTextIndexRebuildRequired` in
+# crates/omnigraph/src/error.rs at v0.10.0.
+_FTS_REBUILD_STDERR = (
+    "omnigraph query failed:\n"
+    "full-text index 'memory_content' requires rebuild: analyzer generation "
+    "cannot be proven compatible; run omnigraph rebuild-full-text-indexes "
+    "<URI> --branch <branch> on the live branch (historical snapshots are "
+    "unchanged)"
+)
+
+
+def test_full_text_rebuild_required_is_terminal_on_the_cli_path():
+    """Lance 11 changed the analyzer, so an index built by Lance 10 cannot serve
+    a 0.10.0 `search()`/`bm25()` query. Retrying never clears it — upstream says
+    so outright — so classifying it RETRYABLE would burn the whole attempt
+    budget and then report a timeout-shaped failure for a permanent condition
+    whose remedy is printed right there in the message.
+    """
+    assert (
+        og._classify_cli_error(_FTS_REBUILD_STDERR) == _http.FULL_TEXT_REBUILD_REQUIRED
+    )
+
+
+def test_full_text_rebuild_is_not_confused_with_a_repair():
+    """NEEDS_REPAIR would run `omnigraph repair --force` on a graph that is not
+    damaged. Upstream is explicit that ordinary reads stay available and only
+    the full-text index is refused."""
+    assert og._classify_cli_error(_FTS_REBUILD_STDERR) != _http.NEEDS_REPAIR

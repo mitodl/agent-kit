@@ -79,6 +79,30 @@ OK = "ok"
 #: classification is what makes that true on our side too.
 PRECONDITION_FAILED = "precondition_failed"
 
+#: A full-text index whose analyzer generation cannot be proven compatible with
+#: the running engine — omnigraph 0.10.0's ``FullTextIndexRebuildRequired``,
+#: answered as HTTP 409 with a ``full_text_index_rebuild_required`` detail
+#: object (upstream #581).
+#:
+#: ★ TERMINAL, AND IT HAS TO BE NAMED BECAUSE 409 ALREADY MEANS "RETRY ME".
+#: :func:`classify_status` treats a bare 409 as :data:`RETRYABLE` on the status
+#: alone — deliberately, see the comment there — so without this check first,
+#: every BM25/``search()`` request against a pre-upgrade index would be retried
+#: the full budget and then surface as a generic retry-exhausted error, hiding
+#: the one sentence that says what to do. Upstream is explicit that it "is not
+#: cleared by retrying".
+#:
+#: ★ IT IS NOT A BROKEN GRAPH, and specifically not :data:`NEEDS_REPAIR`.
+#: Upstream's own doc comment on the variant: "Ordinary reads remain available;
+#: do not return a partial indexed result." Only full-text queries are refused,
+#: and the fix is one explicit command per branch:
+#:
+#:     omnigraph rebuild-full-text-indexes <URI> --branch <branch>
+#:
+#: Running ``omnigraph repair`` here would be a much heavier hammer aimed at
+#: the wrong thing.
+FULL_TEXT_REBUILD_REQUIRED = "full_text_rebuild_required"
+
 #: The branch-wide write barrier: "recovery required for operation …: pending
 #: Load recovery operation blocks writes on branch 'main'".
 #:
@@ -236,6 +260,18 @@ def classify_status(status: int, message: str) -> str:
         for marker in ("stale view", "manifest table version", "refresh and retry")
     ):
         return RETRYABLE
+    # BEFORE the 409 catch-all below, which would otherwise retry this to
+    # exhaustion — see FULL_TEXT_REBUILD_REQUIRED. The structured detail key is
+    # the primary signal because it is a wire contract; the prose is checked too
+    # so the CLI path and any non-JSON relay reach the same answer.
+    if any(
+        marker in lowered
+        for marker in (
+            "full_text_index_rebuild_required",
+            "rebuild-full-text-indexes",
+        )
+    ):
+        return FULL_TEXT_REBUILD_REQUIRED
     if status == 409:
         # ★ A CONFLICT IS THE ONE STATUS THAT MEANS "RETRY ME" MOST LITERALLY,
         # and it was falling through to FATAL because this function only ever

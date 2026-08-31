@@ -37,41 +37,48 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-#: ★ TEMPORARILY ON `edge` (0.10.0) FOR A RE-TEST — NOT A DECISION TO ADOPT IT.
+#: 0.10.0, from the real ``v0.10.0`` release — no longer the `edge` re-test.
 #: 0.10.0 was reverted on 2026-08-14 for halving the write ceiling
-#: (agent-kit#233). Three witan-side confounds have since been fixed and the
-#: measurement is worth repeating; see
-#: tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2 for the
-#: hypothesis and the revert procedure. If you are reading this after the
-#: experiment concluded, it should already be back on 0.9.0/v0.9.0 — if it is
-#: not, that is the bug.
+#: (agent-kit#233); three witan-side confounds were fixed and the measurement
+#: repeated on `edge` (tk-omnigraph-0-10-0-edge-halved-the-write-ceiling-r-7ba7c2).
+#: Upstream cut ``v0.10.0`` on 2026-08-31T21:29Z, which ended the re-test by
+#: giving the build under test an immutable tag: the paragraph that used to
+#: stand here said the pin should go back to 0.9.0/v0.9.0 if the experiment had
+#: concluded, and pinning the released 0.10.0 is that same instruction answered
+#: forwards rather than backwards. The write-ceiling task holds the measurement.
 _OMNIGRAPH_VERSION = "0.10.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which
 #: ``release-edge.yml`` force-updates and re-publishes on every push there.
 #:
-#: Separate from ``_OMNIGRAPH_VERSION`` because on a moving tag the two genuinely
-#: differ: ``edge`` currently ships a binary that reports ``0.10.0``, and there is
-#: no ``v0.10.0`` release to download. Collapsing them into one string would
-#: either break the URL or break the "already installed, skipping" check, which
-#: compares against what ``omnigraph --version`` actually prints.
+#: Kept as its own constant even now that it is just ``v`` + the version: the
+#: two genuinely diverge on a moving tag, and collapsing them would break
+#: either the URL or the "already installed, skipping" check, which compares
+#: against what ``omnigraph --version`` actually prints.
 #:
-#: ★ A MOVING TAG WEAKENS THAT SKIP CHECK, and the caveat is the price of using
-#: one: two different `edge` builds both report ``0.10.0``, so a machine that
-#: installed yesterday's will not re-download today's.
+#: ★ OFF THE MOVING TAG AS OF 2026-08-31, AND THAT IS THE POINT OF THIS LINE.
+#: ``edge`` is force-updated on every push to upstream main, so a pinned digest
+#: describes a build that stops being downloadable the moment upstream merges:
+#: it moved twice in the seven hours after the 2026-08-31 refresh (#305), and
+#: each move turned `witan-code (code graph)` red on every open PR and left a
+#: fresh ``witan setup`` unable to fetch a binary at all. A release tag is
+#: immutable, so the digests below stay valid until someone deliberately moves
+#: them.
 #:
 #: There is no flag or environment override for this — the tag is a property of
 #: the repo, not of a run, precisely because all three tiers must agree on it
 #: (``just check-omnigraph-pins``). To be certain which build you are on:
 #: delete the binary and re-run ``witan setup``, which re-downloads and verifies
-#: against the digest pinned below. To move OFF the moving tag, edit this
-#: constant to ``v<version>`` and refresh those digests in the same commit.
+#: against the digest pinned below. To go BACK to a moving tag, set this to
+#: ``edge`` and refresh those digests in the same commit — and expect the red
+#: check described above to return with it.
 #:
-#: Renovate manages the VERSION line only (see renovate.json). While this is
-#: ``edge`` a bump is not meaningful, so pin a real ``v<version>`` before
-#: treating dependency updates here as authoritative.
-_OMNIGRAPH_RELEASE_TAG = "edge"
+#: Renovate manages the VERSION line only (see renovate.json). Now that this is
+#: a real ``v<version>``, a Renovate bump here IS meaningful — it must move this
+#: tag, the three digests, and both Dockerfiles together, which is what
+#: ``just check-omnigraph-pins`` enforces.
+_OMNIGRAPH_RELEASE_TAG = "v0.10.0"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
 #: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
@@ -122,12 +129,17 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #: and confirm it against the tarball you actually downloaded (`sha256sum`) in
 #: the same sitting — on a moving tag the two assets can be republished a
 #: minute apart, and a digest read across that gap describes neither build.
-#: ★ THE DIGESTS BELOW ARE THE `edge` BUILD OF 2026-08-30T23:09Z (through
-#: ac620eea87), NOT v0.9.0's. THAT IS THE ONLY LINE HERE STATING WHICH BUILD
-#: IS PINNED — everything after it is the refresh history in order, appended
-#: rather than rewritten, and each block describes the build CURRENT AT ITS
-#: OWN DATE. Read the last block (2026-08-31) for what is pinned now; read
-#: the earlier ones for what was checked and what it cost to learn.
+#: ★ THE DIGESTS BELOW ARE THE RELEASED `v0.10.0` (2026-08-31T21:29Z), NOT an
+#: `edge` build and not v0.9.0's. THAT IS THE ONLY LINE HERE STATING WHICH
+#: BUILD IS PINNED — everything after it is the refresh history in order,
+#: appended rather than rewritten, and each block describes the build CURRENT
+#: AT ITS OWN DATE. Read the last block for what is pinned now; read the
+#: earlier ones for what was checked and what it cost to learn.
+#:
+#: The "confirm it against the tarball you actually downloaded in the same
+#: sitting" instruction above was written for the moving tag and is now belt
+#: and braces rather than load-bearing: a release tag cannot be republished
+#: under you mid-refresh. It was still done for this one.
 #:
 #: ── 2026-08-24, the `edge` build through bb0e3dc8bf ──
 #: Refreshed from the 2026-08-24T12:50Z triple (972f1666c5) after CI failed
@@ -360,15 +372,120 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:     linux-x86_64  507a36f385bea073e7f284fe476befbb4cd788b32bfa85d6f4cd5e943b663197
 #:     linux-arm64   6742a7fcf2761cb5841a38990c38383d7a884da2c65e3e7cc884afbbf2b2d881
 #:     macos-arm64   69f78c93e661e8ea2b92deafe6330650a0921a003c2099b75b226482a90dc03e
+#:
+#: ★★ 2026-08-31, THE SECOND ENTRY OF THIS DATE, AND IT LEAVES THE MOVING TAG.
+#: Not a refresh: `_OMNIGRAPH_RELEASE_TAG` goes `edge` -> `v0.10.0`.
+#:
+#: WHY NOW — THE PIN BROKE TWICE IN ONE DAY, and the second time is this entry.
+#: `witan-code (code graph)` is uncached precisely to report this, so its
+#: history dates the breakage:
+#:   * 11:32Z — red on agent-kit#300 and #302, against the PRE-#305 pin.
+#:   * 14:44Z — #305 refreshes to ac620eea87. Green again at 14:45-14:53Z
+#:     (#298, #138, #304), and still green at 16:36Z (#306) and 18:35Z (#307).
+#:   * Four commits then land upstream (18:28Z, 19:05Z, 19:36Z, 20:16Z), each
+#:     force-updating `edge` and republishing its assets.
+#:   * 20:13Z — red again on #308 and #309, and 21:21Z on #310. PRs still
+#:     showing green are holding results from before the move, not passing now.
+#: So the refresh above held roughly six hours. A fresh `witan setup` fails the
+#: same way and for the same reason: the pinned digest names a tarball upstream
+#: has already replaced. The block above spent its length on which 29 commits
+#: arrived; the recurring cost was never the reading, it was the half-life.
+#:
+#: Upstream cut `v0.10.0` at 21:29Z tagging
+#: a625748c8bf41e21654c48321fa31d295add7621 — EXACTLY the commit the
+#: then-current `edge` build was cut from (`compare` reports identical) — so
+#: this pins the same source under a name that cannot move. The re-test the
+#: header paragraph described is over by virtue of its subject shipping.
+#:
+#: WHAT ARRIVED since the pinned ac620eea87: 4 commits, 67 files.
+#:   #581 `feat(storage): upgrade to Lance 11 with safe full-text rebuilding`
+#:        — the only one carrying operator consequence. See the ★ below.
+#:   #582 `fix(compiler): reject undeclared variables in property matches`
+#:        A `$var` used in a match property must now be a declared query
+#:        parameter, or typecheck fails with T3. This is about QUERY TEXT, not
+#:        about the params dict a caller passes: an extra key the query does not
+#:        declare is still accepted and ignored. `queries/*.gq` are clean under
+#:        it — the suites below exercise every one of them.
+#:   #585 `release: qualify v0.10 upgrade and isolate FTS test counters`
+#:        Upstream's own cross-version v0.9->v0.10 suite plus release notes.
+#:   #586 `test(bench): remove synthetic worker timing race` — tests only.
+#:
+#: ★ LANCE 11 CHANGES THE ANALYZER, AND FULL-TEXT SEARCH FAILS CLOSED UNTIL
+#: EACH BRANCH IS REBUILT. `_OMNIGRAPH_INTERNAL_SCHEMA` stays 6 and `omnigraph
+#: version` on this binary agrees, so `bin/check_omnigraph_format.py` is green
+#: — correctly, because the on-disk format did not move. What moved is the
+#: full-text analyzer.
+#:
+#: The silent-under-return that motivated upstream #581 (their regression cites
+#: `organism` and `university`) is what RAW Lance does on a generation
+#: mismatch. 0.10.0 does NOT ship that behaviour: it added a guard. A selected
+#: index whose analyzer generation cannot be proven compatible raises
+#: `OmniError::FullTextIndexRebuildRequired` — HTTP 409 with a
+#: `full_text_index_rebuild_required` detail, and upstream's own doc comment
+#: says "Ordinary reads remain available; do not return a partial indexed
+#: result". So search is UNAVAILABLE, not quietly worse, and non-search reads
+#: are untouched.
+#:
+#: Every `search()`/`bm25()` query in `read.gq` sits on such an index — memory
+#: search and the Task/WorkflowProject BM25 search both — so on any graph
+#: written before this binary, those queries are refused until:
+#:     omnigraph rebuild-full-text-indexes <URI> --branch <branch>
+#: Upstream calls it a controlled cutover, not a rolling upgrade: stop old
+#: readers/writers and keep a recoverable backup first. A local store is one
+#: command; the DEPLOYED graph needs scheduling, which is
+#: tk-rebuild-full-text-indexes-on-the-deployed-witan--076eb6. Nothing here
+#: performs it — this constant only decides which binary a future install or
+#: image build fetches.
+#:
+#: ★ AND THE CLIENT HAD TO LEARN THAT 409 FIRST, which is why this commit is
+#: not digests alone. `classify_status` treats a bare 409 as RETRYABLE on the
+#: status, so an un-taught client would retry every refused search the full
+#: budget and then report a timeout-shaped failure, burying the remedy the
+#: server already printed. `_http.FULL_TEXT_REBUILD_REQUIRED` classifies it
+#: terminal on both transports.
+#:
+#: CHECKS RUN, against the v0.10.0 binary (downloaded, digest-verified, run
+#: from a scratch dir):
+#:   * Vocabulary — all 14 `_RETRYABLE`/`_NEEDS_REPAIR`/`_PRECONDITION_FAILED`/
+#:     `_RECOVERY_REQUIRED` substrings against the 4-commit range. Every PROSE
+#:     marker (`stale view`, `omnigraph repair`, `refresh and retry`,
+#:     `reprepare from the current branch`, `write authority`, `ahead of
+#:     manifest`, ...) is untouched. `recovery_required`/`precondition_failure`
+#:     appear on both sides of `omnigraph-server/src/lib.rs` (+149/-271), a
+#:     refactor that preserves the HTTP field names rather than renaming them.
+#:   * Version/format — reads 0.10.0, internal-schema 6, unchanged.
+#:   * Suites against this binary: witan-core 588, witan-council 1009,
+#:     witan-code 580 — 2177 passed, NO failures and no artifact exclusions.
+#:
+#:     ★ GETTING THAT NUMBER HONESTLY TAKES ONE STEP, and skipping it silently
+#:     tests the wrong binary. `testsupport/hermetic.py` PREPENDS the real
+#:     `~/.local/bin` to PATH (deliberately — see its docstring), so putting a
+#:     candidate binary earlier on PATH does NOT make the suite use it: the
+#:     machine's installed omnigraph still wins, and everything passes while
+#:     proving nothing about the new one. Run with `HOME` pointed at a scratch
+#:     dir holding the candidate at `$HOME/.local/bin/omnigraph`, with the real
+#:     `~/.local/bin` OFF PATH so only one omnigraph is reachable — otherwise
+#:     `test_pre_upgrade_candidates_exclude_the_current_binary` correctly
+#:     reports the second one and looks like a failure.
+#:
+#: Digests taken by downloading all three tarballs and hashing them locally,
+#: cross-checked against each published `.sha256` — all three matched. On an
+#: immutable tag the same-sitting caveat no longer bites.
+#:
+#: Going back to the moving tag means restoring the `edge` triple superseded
+#: here, which was the ac620eea87 build:
+#:     linux-x86_64  6a0fba8842a2071c558abf2c1a399ce5e11d359dff78b6ae6ff3676617f95680
+#:     linux-arm64   dd40fa4169a89af41cddbdeb8fe441b714438633297e153876b4889ec0af3a86
+#:     macos-arm64   990fcab686922f885f959a0f6204f61d0770ef7af6f058bac9df14cc587a2248
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "6a0fba8842a2071c558abf2c1a399ce5e11d359dff78b6ae6ff3676617f95680"
+        "05d3ce4ec0ab51a876befd89b643c3e7f2d5489be0398a38cef6fb3a0d257fc1"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "dd40fa4169a89af41cddbdeb8fe441b714438633297e153876b4889ec0af3a86"
+        "dd3ac09123a68882454db7e689da4c306c41677826237098df4e76b0f73d8d5e"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "990fcab686922f885f959a0f6204f61d0770ef7af6f058bac9df14cc587a2248"
+        "7c3b8fadbe590486a192c734d8c3d38cce0e4da1f02940e6ac306c1ada67f171"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
