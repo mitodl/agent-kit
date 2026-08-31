@@ -146,6 +146,21 @@ _PRECONDITION_FAILED = ("precondition_failure", "precondition failed")
 # node:ClaimRow); reopen the graph read-write before retrying". Matching the
 # stem they share rather than either sentence.
 _RECOVERY_REQUIRED = ("recovery required", "recovery_required")
+
+# Checked BEFORE _RETRYABLE for the same reason the HTTP side checks it before
+# its 409 catch-all: this is terminal, and retrying only delays the one message
+# that says what to do. omnigraph 0.10.0 prints, verbatim:
+#
+#   full-text index '<name>' requires rebuild: <reason>; run omnigraph
+#   rebuild-full-text-indexes <URI> --branch <branch> on the live branch
+#   (historical snapshots are unchanged)
+#
+# The command name is the marker rather than "requires rebuild" alone, which is
+# generic enough to collide with a future unrelated message.
+_FULL_TEXT_REBUILD_REQUIRED = (
+    "rebuild-full-text-indexes",
+    "full_text_index_rebuild_required",
+)
 _MAX_ATTEMPTS = 8
 
 # omnigraph uses strict single-version storage: a release that bumps the
@@ -524,6 +539,8 @@ def _classify_cli_error(stderr: str) -> str:
         return _http.PRECONDITION_FAILED
     if any(m in lowered for m in _RECOVERY_REQUIRED):
         return _http.RECOVERY_REQUIRED
+    if any(m in lowered for m in _FULL_TEXT_REBUILD_REQUIRED):
+        return _http.FULL_TEXT_REBUILD_REQUIRED
     if any(m in lowered for m in _NEEDS_REPAIR):
         return _http.NEEDS_REPAIR
     if any(m in lowered for m in _RETRYABLE):
@@ -2085,6 +2102,19 @@ class OmnigraphClient:
                         f"precondition no longer held — the graph moved since "
                         f"you read it. NOTHING WAS WRITTEN, and this write must "
                         f"not be retried as-is; re-read and decide:\n{err.strip()}"
+                    )
+                if kind == _http.FULL_TEXT_REBUILD_REQUIRED:
+                    # TERMINAL, on the first attempt. The index cannot serve
+                    # this engine's analyzer and no amount of retrying changes
+                    # that; upstream says so outright. Ordinary reads are
+                    # unaffected — only full-text queries land here — so this is
+                    # not a broken graph, and the remedy is in the server's own
+                    # message, which is why it is passed through whole.
+                    raise RuntimeError(
+                        f"omnigraph {label} was refused because a full-text "
+                        f"index needs an explicit rebuild for this engine "
+                        f"version. Retrying will not clear it, and ordinary "
+                        f"(non-search) reads are unaffected:\n{err.strip()}"
                     )
                 if surface_conflict and kind == _http.RETRYABLE:
                     # A compare-and-swap caller wants to lose the race, not

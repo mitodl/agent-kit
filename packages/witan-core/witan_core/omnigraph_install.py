@@ -410,23 +410,39 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:        Upstream's own cross-version v0.9->v0.10 suite plus release notes.
 #:   #586 `test(bench): remove synthetic worker timing race` — tests only.
 #:
-#: ★ LANCE 11 CHANGES ENGLISH STEMMING, AND THE STORAGE-FORMAT GATE WILL NOT
-#: TELL YOU. `_OMNIGRAPH_INTERNAL_SCHEMA` stays 6 and `omnigraph version` on
-#: this binary agrees, so `bin/check_omnigraph_format.py` is green — correctly,
-#: because the on-disk format did not move. What DID move is the full-text
-#: analyzer: an index built by Lance 10 read with the Lance 11 analyzer SILENTLY
-#: UNDER-RETURNS (upstream's own regression cites `organism` and `university`).
+#: ★ LANCE 11 CHANGES THE ANALYZER, AND FULL-TEXT SEARCH FAILS CLOSED UNTIL
+#: EACH BRANCH IS REBUILT. `_OMNIGRAPH_INTERNAL_SCHEMA` stays 6 and `omnigraph
+#: version` on this binary agrees, so `bin/check_omnigraph_format.py` is green
+#: — correctly, because the on-disk format did not move. What moved is the
+#: full-text analyzer.
+#:
+#: The silent-under-return that motivated upstream #581 (their regression cites
+#: `organism` and `university`) is what RAW Lance does on a generation
+#: mismatch. 0.10.0 does NOT ship that behaviour: it added a guard. A selected
+#: index whose analyzer generation cannot be proven compatible raises
+#: `OmniError::FullTextIndexRebuildRequired` — HTTP 409 with a
+#: `full_text_index_rebuild_required` detail, and upstream's own doc comment
+#: says "Ordinary reads remain available; do not return a partial indexed
+#: result". So search is UNAVAILABLE, not quietly worse, and non-search reads
+#: are untouched.
+#:
 #: Every `search()`/`bm25()` query in `read.gq` sits on such an index — memory
 #: search and the Task/WorkflowProject BM25 search both — so on any graph
-#: written before this binary, search quietly gets worse rather than failing.
-#: The remedy is explicit and per branch:
-#:     omnigraph rebuild-full-text-indexes <store> --branch <branch>
+#: written before this binary, those queries are refused until:
+#:     omnigraph rebuild-full-text-indexes <URI> --branch <branch>
 #: Upstream calls it a controlled cutover, not a rolling upgrade: stop old
 #: readers/writers and keep a recoverable backup first. A local store is one
 #: command; the DEPLOYED graph needs scheduling, which is
 #: tk-rebuild-full-text-indexes-on-the-deployed-witan--076eb6. Nothing here
 #: performs it — this constant only decides which binary a future install or
 #: image build fetches.
+#:
+#: ★ AND THE CLIENT HAD TO LEARN THAT 409 FIRST, which is why this commit is
+#: not digests alone. `classify_status` treats a bare 409 as RETRYABLE on the
+#: status, so an un-taught client would retry every refused search the full
+#: budget and then report a timeout-shaped failure, burying the remedy the
+#: server already printed. `_http.FULL_TEXT_REBUILD_REQUIRED` classifies it
+#: terminal on both transports.
 #:
 #: CHECKS RUN, against the v0.10.0 binary (downloaded, digest-verified, run
 #: from a scratch dir):
@@ -438,8 +454,8 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:     appear on both sides of `omnigraph-server/src/lib.rs` (+149/-271), a
 #:     refactor that preserves the HTTP field names rather than renaming them.
 #:   * Version/format — reads 0.10.0, internal-schema 6, unchanged.
-#:   * Suites against this binary: witan-core 584, witan-council 1009,
-#:     witan-code 580 — 2173 passed, NO failures and no artifact exclusions.
+#:   * Suites against this binary: witan-core 588, witan-council 1009,
+#:     witan-code 580 — 2177 passed, NO failures and no artifact exclusions.
 #:
 #:     ★ GETTING THAT NUMBER HONESTLY TAKES ONE STEP, and skipping it silently
 #:     tests the wrong binary. `testsupport/hermetic.py` PREPENDS the real
