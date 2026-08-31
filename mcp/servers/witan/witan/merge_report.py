@@ -24,8 +24,10 @@ verdict would hide whichever failure the other's arithmetic happens to absorb.
     rows with no slug to reconcile on: edge rows, and any typed row exported
     without a slug. Loaded additively, never reconciled.
 ``duplicate_slugs``
-    rows collapsed onto an earlier row sharing their ``(type, slug)``. Zero for
-    a real ``omnigraph export`` (slug is the key), non-zero only for a
+    rows displaced by a LATER row sharing their ``(type, slug)``. The
+    classifier keys a dict, so the last such row in the source is the one
+    kept and reconciled, and each earlier one counts here. Zero for a real
+    ``omnigraph export`` (slug is the key), non-zero only for a
     hand-assembled source — and counted rather than ignored precisely so that
     case does not read as a shortfall. A check that cries wolf on a legitimate
     source is worse than no check.

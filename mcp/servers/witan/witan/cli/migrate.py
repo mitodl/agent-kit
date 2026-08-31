@@ -306,10 +306,17 @@ def _report_accounting(result: dict, *, incomplete_reason: str | None = None) ->
     """
     check = merge_report.accounting(result)
     if check is None:
+        # Deliberately NOT "verify by hand per the runbook". The manual check
+        # is `omnigraph export` on the target, and against a deployment the
+        # caller cannot run it — the data tier is ClusterIP-only and they hold
+        # no token for it, which is the same gap this whole report exists to
+        # close. Sending them to a check they cannot run is worse than saying
+        # plainly that nobody without cluster access can answer this yet.
         console.print(
             "[yellow]This deployment does not report merge accounting, so "
-            "witan cannot confirm every source row arrived. Upgrade it, or "
-            "verify by hand per docs/migration-runbook.md.[/yellow]"
+            "witan cannot confirm every source row arrived. Ask for it to be "
+            "upgraded; until then only someone with data-tier access can "
+            "verify this merge (`omnigraph export` on the target).[/yellow]"
         )
         return
 
@@ -365,20 +372,40 @@ def _report_partial(exc: BaseException) -> None:
     partial = merge_report.partial_of(exc)
     if partial is None:
         return
-    applied = partial.get("batches_applied")
-    if not applied:
-        # Nothing landed, so there is nothing to reconcile and no decision to
-        # help someone make. The failure itself already says the graph is
-        # untouched (`_merge_batch_refusal`: "Nothing was applied: this was the
-        # first batch"), and five lines of arithmetic under it would bury a
-        # refusal that is meant to read as one line.
+    applied = partial.get("batches_applied") or 0
+    if applied:
+        # Only the COMPLETED batches are asserted here. Whether the one that
+        # failed landed is unknown on some paths (`RemoteWriteIndeterminate` is
+        # dispatched-and-cut, and says so itself), so this states the
+        # observable fact and leaves that batch's fate to the failure's own
+        # message rather than implying the whole merge stopped cleanly.
+        _report_accounting(
+            partial,
+            incomplete_reason=(
+                f"{applied} batch(es) landed before this and are not rolled back."
+            ),
+        )
         return
-    _report_accounting(
-        partial,
-        incomplete_reason=(
-            f"The merge stopped after {applied} batch(es); it did not roll back."
-        ),
-    )
+
+    # NO BATCH IS CONFIRMED APPLIED, which is NOT the same as nothing having
+    # landed — `RemoteWriteIndeterminate` means the batch in flight was
+    # dispatched and may well have committed. The accounting block is dropped
+    # here because with a zero batch count it can add no number the failure
+    # does not already carry, and burying a refusal that is meant to read as
+    # one line costs more than it gives.
+    #
+    # ★ THAT ONLY HOLDS WHILE THE FAILURE SAYS SOMETHING. Every error on this
+    # path does (`_merge_batch_refusal`, `_merge_batch_indeterminate`, the
+    # data-tier outage message, a tool refusal) — except an interrupt, which
+    # has no message of its own. Silence there would read as "nothing
+    # happened", so it gets the one fact it is missing.
+    if partial.get("interrupted"):
+        console.print(
+            "[yellow]The batch in flight when you interrupted may or may not "
+            "have been applied, and nothing after it was sent. Re-run the same "
+            "`witan migrate merge` — it is idempotent, so a batch that did land "
+            "is reconciled rather than duplicated.[/yellow]"
+        )
 
 
 def _merge(

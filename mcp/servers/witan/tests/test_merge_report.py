@@ -376,6 +376,11 @@ def test_the_classifier_counts_rows_it_collapses(tmp_path):
     nodes, passthrough, duplicates = srv._classify_rows(rows, "merge batch")
 
     assert (len(nodes), len(passthrough), duplicates) == (1, 1, 1)
+    # WHICH row survives is documented, so it is asserted: the dict assignment
+    # means the LAST row wins and the earlier one is what the count counts.
+    # The docs said this backwards until review caught it, and a
+    # hand-assembled source's author needs to know which record reconciles.
+    assert nodes[("Memory", "mem-dup-aaaaaa")]["data"]["content"] == "second"
     # Still the single classifier for both transports: the wire path and the
     # file path must agree on all three values, not just the first two.
     assert srv._classify_rows(rows, "merge batch") == srv._parse_export(export)

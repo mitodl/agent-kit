@@ -1768,10 +1768,13 @@ def _classify_rows(
     from or targeting any graph with edges failed outright. ``source`` names
     what is being classified so the surviving error still points at a file.
 
-    The third element is how many rows were COLLAPSED by the keying above — a
-    second row sharing an earlier one's ``(type, slug)``. Zero for a real
-    export, where slug is the key, and returned rather than dropped so that a
-    hand-assembled source still balances against
+    The third element is how many rows were DISPLACED by the keying above. The
+    dict assignment means a later row sharing an earlier one's ``(type, slug)``
+    overwrites it, so **the last such row in ``rows`` is the one kept and
+    reconciled** and each earlier one is counted here — worth knowing for a
+    hand-assembled source, since which of the two is reconciled follows from
+    their order. Zero for a real export, where slug is the key. Returned rather
+    than dropped so that such a source still balances against
     :func:`witan.merge_report.accounting`'s identity instead of reading as
     rows that went missing.
     """
@@ -2263,6 +2266,9 @@ def merge_store(
                             "target": target,
                             "batches": len(batches),
                             "batches_applied": index,
+                            # See the remote path's copy: an interrupt is the
+                            # one failure here with no message of its own.
+                            "interrupted": isinstance(exc, KeyboardInterrupt),
                             "rows_loaded": loaded,
                             **accounting,
                             **counts,
@@ -2394,8 +2400,9 @@ def store_merge(
 
     Also returns this batch's ``source_rows`` (records received),
     ``passthrough`` (edge rows and any typed row with no slug — loaded
-    additively, never reconciled) and ``duplicate_slugs`` (records collapsed
-    onto an earlier one sharing their ``(type, slug)``). Summing them across
+    additively, never reconciled) and ``duplicate_slugs`` (records displaced by
+    a LATER record sharing their ``(type, slug)``; the last one in the batch is
+    the one reconciled). Summing them across
     the batches of one merge is what lets a client confirm every source row was
     accounted for — the caller cannot export the deployed graph to check by
     hand, which is the whole reason these are reported. See

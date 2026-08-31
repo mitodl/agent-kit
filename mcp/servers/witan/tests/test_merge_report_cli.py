@@ -130,7 +130,13 @@ def test_an_interrupted_merge_is_reported_as_incomplete(monkeypatch, stub_source
     assert "NOT verified" in report
     assert "the source held 100 row(s) and this merge accounts for 40" in report
     assert "60 row(s) never reached a decision" in report
-    assert "stopped after 2 batch(es); it did not roll back" in report
+    # States only what is observable. The batch that FAILED may still have
+    # committed on some paths (`RemoteWriteIndeterminate` is dispatched-then-
+    # cut), so the report must not imply the merge stopped cleanly at 2.
+    assert "2 batch(es) landed before this and are not rolled back" in report
+    assert "did not roll back" not in report, (
+        "must not assert anything about the batch that failed"
+    )
     assert "idempotent" in report, "the user needs to know re-running is the remedy"
 
 
@@ -217,3 +223,80 @@ def test_a_dry_run_verdict_is_conditional_not_a_claim_about_the_graph(
     verdict = [line for line in printed if "Verified" in line]
     assert verdict, printed
     assert "would be accounted for" in verdict[0]
+
+
+def test_an_interrupt_before_any_batch_landed_still_names_the_one_in_flight(
+    monkeypatch, stub_source
+):
+    """A zero batch count is NOT proof that nothing landed.
+
+    The batch in flight was dispatched and may have committed — which every
+    other failure on this path states in its own message, and an interrupt
+    does not, having no message at all. Silence would read as "nothing
+    happened", which is the one thing that cannot be asserted here.
+    """
+    from witan import merge_report
+    from witan.cli import migrate
+
+    interrupt = KeyboardInterrupt()
+    merge_report.attach_partial(
+        interrupt,
+        {
+            "target": "https://witan.example/mcp",
+            "batches_applied": 0,
+            "interrupted": True,
+            "source_rows": 100,
+            "added": 0,
+            "updated": 0,
+            "kept_target": 0,
+            "diverged": 0,
+            "passthrough": 0,
+            "duplicate_slugs": 0,
+            "rows_loaded": 0,
+        },
+    )
+    monkeypatch.setattr(migrate, "_srv", lambda: _StubProvider(error=interrupt))
+    printed = _capture(monkeypatch)
+
+    with pytest.raises(SystemExit):
+        migrate._merge(stub_source, target=None, dry_run=False)
+
+    report = "\n".join(printed)
+    assert "may or may not have been applied" in report
+    assert "idempotent" in report
+    # Still not the full accounting block: with no batch confirmed there is no
+    # number to show that the failure does not already carry.
+    assert "NOT verified" not in report
+
+
+def test_the_cannot_tell_message_does_not_send_the_user_to_a_check_they_cannot_run(
+    monkeypatch, stub_source
+):
+    """The manual fallback is `omnigraph export` on the target, which against a
+    deployment needs data-tier access the caller does not have — the same gap
+    this report exists to close."""
+    from witan.cli import migrate
+
+    provider = _StubProvider(
+        {
+            "merged": True,
+            "target": "https://witan.example/mcp",
+            "decisions": [],
+            "added": 3,
+            "updated": 0,
+            "kept_target": 0,
+            "diverged": 0,
+            "rows_loaded": 3,
+            "watermark": None,
+        }
+    )
+    monkeypatch.setattr(migrate, "_srv", lambda: provider)
+    printed = _capture(monkeypatch)
+
+    migrate._merge(stub_source, target=None, dry_run=False)
+
+    report = "\n".join(printed)
+    assert "data-tier access" in report
+    assert "migration-runbook" not in report, (
+        "the runbook's manual check is exactly what this caller cannot run"
+    )

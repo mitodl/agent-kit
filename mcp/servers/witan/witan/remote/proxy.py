@@ -531,6 +531,12 @@ class RemoteServerProxy(RemoteMCPProxy):
                             "dry_run": dry_run,
                             "target": self._url,
                             "batches_applied": applied,
+                            # An interrupt is the one failure on this path
+                            # carrying no message of its own, so the reporter
+                            # has to supply what the others state for
+                            # themselves — above all that the batch in flight
+                            # may still have committed.
+                            "interrupted": isinstance(exc, KeyboardInterrupt),
                             "source_rows": source_rows if accounted else None,
                             **totals,
                         },
