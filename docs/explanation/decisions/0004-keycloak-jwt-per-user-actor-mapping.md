@@ -400,3 +400,50 @@ The read side is unfixed and tracked separately:
 `workflow_trace_list(author=…)` exact-matches, so migrated traces stay
 invisible to their own author's filter, and the ranking layer's author-trust
 signal keys on the same string.
+
+## Addendum (2026-08-27) — the no-JWT fallback to `_default_client` is removed
+
+D4's resolution above ends with: "A request with no access token in scope (an
+admin/migration CLI command run inside the deployed container, not an MCP tool
+call ...) also falls back to `_default_client`." That fallback is gone.
+`_resolve_client` now raises `No authenticated actor for this request` instead.
+
+Two findings, both checked against the deployed topology rather than reasoned
+from this ADR's own text:
+
+1. **The fallback could only ever be denied.** `_default_client` carries
+   `cfg.graph_token`, which ol-infrastructure's
+   `applications/witan/deployment.py` binds to the `svc-witan-ci` secret. The
+   memory Cedar bundle declares no `witan-ci` group at all —
+   `policy/memory.policy.yaml` defines exactly `witan-users`, `witan-service`
+   and `witan-admin`, and says so in a comment ("There is NO witan-ci actor on
+   this graph"), which is what the omnigraph-server boot log's
+   `render-policy-groups` line reports — so every call through the fallback
+   came back `policy denied action 'read' for unknown actor 'svc-witan-ci'`
+   (HTTP 403), reproduced against CI with `list_memories`, `search_all` and
+   `list_memories_by_kind`.
+   Excluding the code-graph pipeline's identity from the memory graph is
+   deliberate and correct; configuring it as witan's memory fallback is what
+   was wrong.
+
+2. **The caller D4 kept it for is in a different pod.** `WITAN_OIDC_ISSUER` is
+   set only on the MCP tier's own Deployment. The migration Job
+   (`applications/witan/migrations.py`) and the break-glass pod
+   (`break_glass.py`) each run in their own pod without it, so they take the
+   `not identity_cfg.oidc_issuer` branch and reach `_default_client`
+   unchanged — under `svc-witan-admin` where it is provisioned. Nothing the
+   fallback was justified by was using it.
+
+The cost of keeping it was not just dead weight. `unknown actor` is also
+exactly what a genuinely missing entry in the actor-token map produces, so a
+guaranteed-403 fallback masked a message that means something. Failing closed
+before the HTTP call says which of the two it was.
+
+This makes the memory path a sibling of `witan_code.ingest._client`, which
+already refused this condition, with the same argument: falling back to the
+service identity defeats the attribution the layer exists to provide.
+
+Option (b) — rebinding the fallback to `svc-witan`, which *is* in the memory
+bundle — was not taken. It is a policy decision (it would grant reads with no
+user identity), and `svc-witan` is described in ol-infrastructure but not yet
+provisioned with a credential, so it is not the one-line change it looks like.

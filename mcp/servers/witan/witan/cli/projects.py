@@ -330,6 +330,11 @@ def project_create(
     if result.get("repos"):
         console.print(f"  repos: {', '.join(_short_repo(r) for r in result['repos'])}")
     console.print(f"  phase: {result['phase']}")
+    for hit in result.get("similar") or []:
+        console.print(
+            f"  [yellow]similar:[/yellow] {hit['slug']} [{esc(hit['phase'])}] "
+            f"{esc(hit['title'])}"
+        )
 
 
 @project_app.command(name="update")

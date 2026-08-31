@@ -193,10 +193,27 @@ def _resolve_client() -> OmnigraphClient:
     In deployed streamable-http mode, a validated JWT is required to reach
     any tool handler (FastMCP itself rejects unauthenticated requests via
     ``_jwt_verifier``), so ``get_access_token()`` returning ``None`` here
-    means this call is *not* a tool request — e.g. an admin/migration CLI
-    command (``apply-schema``, ``migrate-topics``) invoked directly inside
-    the deployed container. Those fall back to the shared default client
-    rather than erroring, since they have no per-user identity to isolate.
+    means this call is *not* a tool request, and there is no caller to
+    authenticate as. It refuses rather than borrowing ``_default_client``.
+
+    ★ THAT REFUSAL REPLACES A FALLBACK THAT COULD ONLY EVER 403. ADR-0004
+    justified the fallback by the admin/migration CLI (``apply-schema``,
+    ``migrate-topics``) "invoked directly inside the deployed container".
+    That path does not exist in the deployed topology: ol-infrastructure
+    sets ``WITAN_OIDC_ISSUER`` only on the MCP tier's own Deployment
+    (``applications/witan/deployment.py``), while the migration Job and the
+    break-glass pod (``migrations.py``, ``break_glass.py``) each run in
+    their own pod without it — so they take the branch above and are
+    untouched by this. The one pod that does reach here has
+    ``WITAN_MEMORY_TOKEN`` bound to ``svc-witan-ci``, which the memory Cedar
+    bundle has no group for at all: every call through the fallback came
+    back ``policy denied ... unknown actor 'svc-witan-ci'``. Worse, that is
+    the same message a genuinely missing actor-token entry produces, so the
+    guaranteed denial masked a signal that means something. Failing closed
+    here says which of the two it was, and says it before the HTTP call.
+
+    Sibling of ``witan_code.ingest._client``, which already refuses on this
+    same condition and for the same reason.
 
     Otherwise, the JWT's ``sub`` claim is mapped to an actor id and its
     pre-provisioned omnigraph bearer token is looked up, and a client for
@@ -208,7 +225,13 @@ def _resolve_client() -> OmnigraphClient:
         return _default_client
     token = get_access_token()
     if token is None:
-        return _default_client
+        raise RuntimeError(
+            "No authenticated actor for this request. This deployment resolves "
+            "the omnigraph identity from the caller's token, and this request "
+            "carries none. Admin and migration commands are served by the "
+            "break-glass pod and the migration Job, which authenticate as their "
+            "own service principal; they are not run inside the MCP tier."
+        )
     actor_id = derive_actor_id(token.claims.get("sub", ""))
     if actor_id in _actor_clients:
         return _actor_clients[actor_id]
@@ -238,8 +261,11 @@ def _current_author() -> str:
     Local stdio use keeps ``cfg.author`` (``WITAN_AUTHOR`` / git config /
     ``$USER``), which is already the right answer there. Same discriminator as
     ``_resolve_client`` / ``_is_local_stdio``; ``get_access_token()`` returning
-    ``None`` under a deployment means an admin/migration CLI call rather than a
-    tool request, which likewise has no caller identity to attribute.
+    ``None`` under a deployment means this is not a tool request and there is
+    no caller identity to attribute. ``_resolve_client`` refuses that case
+    outright, so nothing reaches the store under the configured author — but
+    this function has no store call to fail closed on, and answering with the
+    configured author is the honest answer to a question asked out of band.
 
     Prefers ``preferred_username`` so the value stays human-readable for author
     filters and the ranking author-trust config, falling back to ``email`` and
@@ -630,6 +656,12 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
     because the holder string is read by humans in refusal messages and task
     listings, and 8 hex chars is plenty to tell two concurrent sessions apart.
 
+    A caller-supplied ``session_id`` is not guaranteed to be
+    ``_SESSION_SUFFIX_RE``'s charset (``[0-9A-Za-z_-]``) — characters outside
+    it are stripped before truncating, so e.g. ``"run.1234"`` still qualifies
+    as ``"run1234"`` instead of silently producing a holder that
+    ``_is_qualified`` can't recognize as qualified.
+
     With no session id from either source there is only one session to be, so
     the bare identity is both correct and byte-identical to what older stores
     already hold.
@@ -638,7 +670,8 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
         return assignee
     identity = _current_author()
     session = session_id or os.environ.get("CLAUDE_SESSION_ID") or ""
-    return f"{identity}#{session[:8]}" if session else identity
+    suffix = re.sub(r"[^0-9A-Za-z_-]", "", session)[:8]
+    return f"{identity}#{suffix}" if suffix else identity
 
 
 def _is_qualified(holder: str | None) -> bool:
@@ -3717,6 +3750,12 @@ def workflow_project_create(
     objective not yet tied to any repo). The repo set also grows automatically
     as sessions run in new repos — see ``workflow_session_start``.
 
+    Returns ``{"slug", "repos", "phase", "similar"}`` — ``similar`` is up to 3
+    BM25 matches on ``title`` against other *active* projects (searched across
+    all repos, not just this one — the same objective tracked from a
+    different repo is still a duplicate), a soft duplicate check. It never
+    blocks creation.
+
     Parameters
     ----------
     title:
@@ -3744,6 +3783,15 @@ def workflow_project_create(
     slug = _make_slug("workflow_project", title)
     repo_set = _merge_repos(repos, repo_module.detect())
 
+    # Soft duplicate check (tk-phase-0-bm25-task-search-project-search): see
+    # task_create's identical rationale. Unscoped by repo on purpose — the
+    # same objective logged from a different repo is exactly the case this
+    # is meant to catch.
+    similar = [
+        {"slug": r["slug"], "title": r["title"], "phase": r["phase"]}
+        for r in _search_project_rows(title, "active")[:3]
+    ]
+
     client.change(
         "mutations.gq",
         "insert_workflow_project",
@@ -3762,7 +3810,7 @@ def workflow_project_create(
             "updated_at": now,
         },
     )
-    return {"slug": slug, "repos": repo_set, "phase": phase}
+    return {"slug": slug, "repos": repo_set, "phase": phase, "similar": similar}
 
 
 @_tool
@@ -3932,6 +3980,70 @@ def workflow_project_list(
         rows = [r for r in rows if _project_is_ready(r, status_cache)]
 
     return rows
+
+
+def _search_project_rows(query: str, status: str | None) -> list[dict]:
+    """BM25 candidate rows in score-desc order — the WorkflowProject twin of
+    ``_search_rows``. No by-repo dispatch: ``repos`` is a list, so repo
+    membership is filtered in Python by the caller, same as
+    ``workflow_project_list``. The underlying queries are unbounded (see the
+    read.gq comment above ``search_projects_all``) precisely so that
+    post-fetch repo filtering can't silently drop a real match that scored
+    below some small query-level cap.
+    """
+    if status:
+        name = "search_projects_by_status"
+        params = {"query": query, "status": status}
+    else:
+        name = "search_projects_all"
+        params = {"query": query}
+
+    rows = list(client.read("read.gq", name, params))
+    seen = {r["slug"] for r in rows}
+    rows.extend(
+        r
+        for r in client.read("read.gq", f"{name}_title", params)
+        if r["slug"] not in seen
+    )
+    return rows
+
+
+@_tool
+def workflow_project_search(
+    query: str,
+    repo: str | None = None,
+    status: WorkflowStatus | None = "active",
+) -> list[dict]:
+    """
+    Plain BM25 text search over workflow projects (no graph expansion).
+
+    Returns up to 20 projects ranked by BM25 relevance, matched against
+    ``description`` and ``title``. Run this before ``workflow_project_create``
+    to check whether the objective is already tracked; ``workflow_project_create``
+    also runs it automatically and returns the top matches as ``similar`` in
+    its response.
+
+    Parameters
+    ----------
+    query:
+        Free-text search query.
+    repo:
+        Canonical repo URI to filter to (membership test against each
+        project's repo set). Auto-detected from ``.git/config`` if omitted;
+        pass ``""`` to search across all repos. Applied in Python after the
+        BM25 fetch (``repos`` is a list, not match-filterable) — the
+        underlying query is unbounded so this filter sees every match, not
+        just a small top-N, then the real ``limit 20`` is applied after.
+    status:
+        ``active`` | ``completed`` | ``abandoned`` | ``None`` for all.
+        Defaults to ``active`` — the useful default for a dedup check is
+        "is someone already working on this."
+    """
+    rows = _search_project_rows(query, status)
+    detected_repo = repo_module.detect(override=repo)
+    if detected_repo:
+        rows = [r for r in rows if detected_repo in _project_repos(r)]
+    return rows[:_SEARCH_LIMIT]
 
 
 @_tool
@@ -5289,6 +5401,11 @@ async def task_create(
     dependencies so ``task_ready`` can withhold the task until its blockers
     close.
 
+    Returns ``{"slug", "status", "repo", "similar"}`` — ``similar`` is up to 3
+    BM25 matches on ``title`` against existing tasks (any status), a soft
+    duplicate check. It never blocks creation; review it and close this task
+    as a duplicate (``task_close``) if one of them is really the same work.
+
     Parameters
     ----------
     title, description:
@@ -5320,6 +5437,15 @@ async def task_create(
     # unscoped task (today's behavior) under automation / an unsupported client.
     repo = await elicit.repo_or_detect(ctx, repo)
     detected_repo = repo_module.detect(override=repo)
+    # Soft duplicate check (tk-phase-0-bm25-task-search-project-search):
+    # BM25-search the title against existing tasks before minting a new one.
+    # Warn-only — never blocks the create — since a lexical hit on the title
+    # is a decent duplicate signal but nowhere near certain; the caller
+    # decides whether a `similar` hit means "use that one instead."
+    similar = [
+        {"slug": r["slug"], "title": r["title"], "status": r["status"]}
+        for r in (await _offload(_search_task_rows, title, detected_repo, None))[:3]
+    ]
     # Only "blocked" if a blocker is not already closed — otherwise it's ready
     # now and would never be auto-unblocked.
     status: TaskStatus = "open"
@@ -5378,7 +5504,12 @@ async def task_create(
         )
     await _offload(client.change_many, steps)
 
-    return {"slug": slug, "status": status, "repo": detected_repo}
+    return {
+        "slug": slug,
+        "status": status,
+        "repo": detected_repo,
+        "similar": similar,
+    }
 
 
 @_tool
@@ -5595,6 +5726,84 @@ def task_list(
     if assignee:
         rows = [r for r in rows if _holder_matches(r.get("assignee"), assignee)]
     return rows
+
+
+def _search_task_bm25(name: str, params: dict) -> list[dict]:
+    """One content-then-title BM25 union for a Task search query pair. Same
+    reasoning as the Memory search pairs (§ header note in read.gq).
+    """
+    rows = list(client.read("read.gq", name, params))
+    seen = {r["slug"] for r in rows}
+    rows.extend(
+        r
+        for r in client.read("read.gq", f"{name}_title", params)
+        if r["slug"] not in seen
+    )
+    return rows
+
+
+def _search_task_rows(query: str, repo: str | None, status: str | None) -> list[dict]:
+    """BM25 candidate rows in score-desc order — the Task twin of
+    ``_search_rows``; `description` stands in for Memory's `content` as the
+    primary matched field.
+    """
+    detected = repo_module.detect(override=repo)
+    if not detected:
+        name = "search_tasks_by_status" if status else "search_tasks_all"
+        params = {"query": query, **({"status": status} if status else {})}
+        return _search_task_bm25(name, params)
+
+    if status:
+        name = "search_tasks_by_repo_and_status"
+        params = {"query": query, "repo": detected, "status": status}
+    else:
+        name = "search_tasks_by_repo"
+        params = {"query": query, "repo": detected}
+    rows = _search_task_bm25(name, params)
+
+    # Merge in unscoped (repo=None) matches — task_list's convention
+    # (server.py:5518): unscoped tasks were created without git context and
+    # should stay visible regardless of which repo you're searching from.
+    global_name = "search_tasks_by_status" if status else "search_tasks_all"
+    global_params = {"query": query, **({"status": status} if status else {})}
+    seen = {r["slug"] for r in rows}
+    rows.extend(
+        r
+        for r in _search_task_bm25(global_name, global_params)
+        if not r.get("repo") and r["slug"] not in seen
+    )
+    return rows
+
+
+@_tool
+def task_search(
+    query: str,
+    repo: str | None = None,
+    status: TaskStatus | None = None,
+) -> list[dict]:
+    """
+    Plain BM25 text search over tasks (no graph expansion).
+
+    Returns up to 20 tasks ranked by BM25 relevance, matched against
+    ``description`` and ``title`` (description matches are seeded ahead of
+    title-only matches — see ``memory_search``'s doc for why). Run this
+    before ``task_create`` to check whether the work is already tracked;
+    ``task_create`` also runs it automatically and returns the top matches
+    as ``similar`` in its response.
+
+    Parameters
+    ----------
+    query:
+        Free-text search query.
+    repo:
+        Repo scoping — see instructions. Matches against the detected repo
+        plus unscoped tasks (``repo=None``), same as ``task_list``.
+    status:
+        Optional filter: ``open``, ``in_progress``, ``blocked``, or
+        ``closed``. Omit to search all statuses — a closed task is still
+        useful to surface (the work may already be done).
+    """
+    return _search_task_rows(query, repo, status)[:_SEARCH_LIMIT]
 
 
 @_tool
@@ -5823,6 +6032,18 @@ async def task_claim(
     expires if the holder never closes/releases, making the task reclaimable
     (see ``task_ready``); re-calling renews it. Pass ``force`` to steal a live
     claim.
+
+    A success also reports ``"qualified"``: whether the recorded holder names
+    the session as well as the person. ``false`` does **not** by itself mean
+    the caller omitted ``session_id`` — an explicit ``assignee`` always wins
+    over it (see ``_claim_holder``) and is unqualified by design, with no
+    warning. Only the presence of a ``"warning"`` key identifies the case this
+    exists to flag: a deployed call whose defaulted holder names no session,
+    so this person's concurrent sessions are indistinguishable to the
+    contention check — the mutual exclusion this tool exists for is not in
+    effect for them. It is reported rather than refused because the server has
+    no way to supply the id itself, so refusing would break every caller that
+    cannot send one.
 
     BEST-EFFORT CAS — omnigraph 0.8.x exposes no conditional-write primitive, so
     the claim write cannot be made atomic at the store. Instead we surface the
@@ -6099,13 +6320,31 @@ async def task_claim(
         branch=branch,
         task_slug=slug,
     )
-    return {
+    result = {
         "slug": slug,
         "claimed": True,
         "assignee": holder,
         "claimed_at": now,
+        "qualified": _is_qualified(holder),
         "stole": bool(held and current_holder != holder),
     }
+    if not result["qualified"] and not assignee and not _is_local_stdio():
+        # A deployed caller that sent no session_id (or an empty one — see the
+        # `if assignee:` predicate in `_claim_holder`, which treats "" the
+        # same as omitted) claims under its bare identity, so this person's
+        # other concurrent sessions share the holder string and
+        # `current_holder != holder` above cannot separate them — the second
+        # session renews the first's lease and is told it claimed. The server
+        # cannot supply the id (a pod has no $CLAUDE_SESSION_ID and MCP
+        # 2026-07-28 carries no session state), so the collision stays
+        # possible; saying so here is what keeps it from being silent.
+        result["warning"] = (
+            f"Claimed as {holder!r}, which names no session. Your other "
+            "concurrent sessions claim under this same name and cannot be "
+            "told apart from this one, so one of them may hold this task "
+            "already. Pass session_id to task_claim to qualify it."
+        )
+    return result
 
 
 @_tool

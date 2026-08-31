@@ -10,9 +10,109 @@ def test_create_defaults(server):
     res = server.task_create(title="do a thing", description="x")
     assert res["slug"].startswith("tk-")
     assert res["status"] == "open"
+    assert res["similar"] == []
     node = server.task_get(res["slug"])
     assert node["type"] == "task"
     assert node["priority"] == "p2"
+
+
+# ── Task search (tk-phase-0-bm25-task-search-project-search) ────────────────
+
+
+@requires_omnigraph
+def test_task_search_bm25_ranked(server):
+    server.task_create(title="uv usage", description="always use uv for python venvs")
+    server.task_create(title="no raw sql", description="avoid raw sql in django views")
+
+    hits = server.task_search("uv virtual environments")
+    assert hits and hits[0]["title"] == "uv usage"
+
+
+@requires_omnigraph
+def test_task_search_finds_title_only_terms(server):
+    t = server.task_create(
+        title="zebrafish quokka narwhal",
+        description="totally unrelated prose about compaction and fragments",
+    )
+
+    hits = server.task_search("zebrafish quokka narwhal")
+    assert [h["slug"] for h in hits] == [t["slug"]]
+
+
+@requires_omnigraph
+def test_task_search_dedups_both_field_matches(server):
+    t = server.task_create(
+        title="quokka narwhal", description="more about the quokka narwhal"
+    )
+
+    hits = server.task_search("quokka narwhal")
+    assert [h["slug"] for h in hits].count(t["slug"]) == 1
+
+
+@requires_omnigraph
+def test_task_search_includes_closed_tasks_by_default(server):
+    """Unlike the project search default, a closed task is still a useful
+    dedup signal (the work may already be done) — no status filter by default."""
+    t = server.task_create(title="quokka narwhal fix", description="quokka narwhal")
+    server.task_close(t["slug"], resolution="done")
+
+    hits = server.task_search("quokka narwhal")
+    assert t["slug"] in [h["slug"] for h in hits]
+
+    open_only = server.task_search("quokka narwhal", status="open")
+    assert t["slug"] not in [h["slug"] for h in open_only]
+
+
+@requires_omnigraph
+def test_task_search_scopes_by_repo(server):
+    server.task_create(
+        title="quokka narwhal in repo a",
+        description="quokka narwhal",
+        repo="https://github.com/test/a",
+    )
+    other = server.task_create(
+        title="quokka narwhal in repo b",
+        description="quokka narwhal",
+        repo="https://github.com/test/b",
+    )
+
+    hits = server.task_search("quokka narwhal", repo="https://github.com/test/b")
+    assert [h["slug"] for h in hits] == [other["slug"]]
+
+
+@requires_omnigraph
+def test_task_search_includes_unscoped_tasks_alongside_repo_scope(server):
+    """A repo-scoped search must not drop unscoped (repo=None) matches — same
+    convention task_list already follows (server.py:5518)."""
+    scoped = server.task_create(
+        title="quokka narwhal in repo a",
+        description="quokka narwhal",
+        repo="https://github.com/test/a",
+    )
+    unscoped = server.task_create(
+        title="quokka narwhal unscoped", description="x", repo=""
+    )
+
+    hits = {
+        h["slug"]
+        for h in server.task_search("quokka narwhal", repo="https://github.com/test/a")
+    }
+    assert scoped["slug"] in hits
+    assert unscoped["slug"] in hits
+
+
+@requires_omnigraph
+def test_task_create_returns_similar_tasks(server):
+    existing = server.task_create(
+        title="fix the flaky retry test", description="the retry test flakes on CI"
+    )
+
+    created = server.task_create(
+        title="fix the flaky retry test again",
+        description="the retry test still flakes on CI",
+    )
+    assert existing["slug"] in [s["slug"] for s in created["similar"]]
+    assert len(created["similar"]) <= 3
 
 
 @requires_omnigraph
@@ -489,6 +589,91 @@ def test_task_update_blank_assignee_does_not_clear_an_existing_holder(server):
 
 
 @requires_omnigraph
+@requires_omnigraph
+def test_task_claim_reports_qualified_when_session_id_given(server, monkeypatch):
+    """A claim that names a session says so, so callers can check."""
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="qualified claim", description="x")
+    result = server.task_claim(t["slug"], session_id="sess-abcdefgh")
+
+    assert result["claimed"] is True
+    assert result["qualified"] is True
+    assert "warning" not in result
+
+
+@requires_omnigraph
+def test_task_claim_deployed_without_session_id_warns(server, monkeypatch):
+    """The uncovered path: an agent calling a deployed witan directly.
+
+    It cannot be refused — the server has no way to supply the id — so the
+    contract is that it is visible rather than silent.
+    """
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="unqualified claim", description="x")
+    result = server.task_claim(t["slug"])
+
+    assert result["claimed"] is True
+    assert result["qualified"] is False
+    assert "session_id" in result["warning"]
+
+
+@requires_omnigraph
+def test_task_claim_explicit_assignee_is_not_warned_about(server, monkeypatch):
+    """An explicit assignee is a deliberate choice (a worker name, a CI job).
+
+    Warning about it would fire on every such caller forever, and there is
+    nothing for them to fix.
+    """
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="worker claim", description="x")
+    result = server.task_claim(t["slug"], assignee="ci-runner-7")
+
+    assert result["claimed"] is True
+    assert result["qualified"] is False
+    assert "warning" not in result
+
+
+@requires_omnigraph
+def test_task_claim_deployed_with_empty_assignee_warns(server, monkeypatch):
+    # `_claim_holder` reads `assignee=""` as missing (`if assignee:`), so the
+    # warning predicate must use the same test — checking `assignee is None`
+    # let an empty string through as if it were a deliberate explicit
+    # assignee, silently skipping the warning for the exact unsafe case
+    # (defaulted, unqualified holder) it exists to flag.
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="empty-assignee claim", description="x")
+    result = server.task_claim(t["slug"], assignee="")
+
+    assert result["claimed"] is True
+    assert result["qualified"] is False
+    assert "session_id" in result["warning"]
+
+
+@requires_omnigraph
+def test_task_claim_session_id_outside_charset_still_qualifies(server, monkeypatch):
+    # `_SESSION_SUFFIX_RE` only recognizes `[0-9A-Za-z_-]`. A session_id with
+    # any other character (e.g. a `.` in a dotted run id) must still qualify
+    # the holder — disallowed characters are stripped, not passed through
+    # verbatim to silently produce an unrecognizable suffix.
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
+    t = server.task_create(title="dotted session id", description="x")
+    result = server.task_claim(t["slug"], session_id="run.1234")
+
+    assert result["claimed"] is True
+    assert result["qualified"] is True
+    assert "warning" not in result
+
+
 def test_task_update_defaulted_assignee_is_qualified_by_session_id(server):
     # Same qualification task_claim applies — see
     # test_caller_supplied_session_id_beats_the_server_environment — so a

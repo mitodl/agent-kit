@@ -493,8 +493,9 @@ graph):
 
 | Tool | Returns |
 |------|---------|
-| `code_indexed_repos()` | every indexed repo with file count, size, and last-indexed timestamp |
+| `code_indexed_repos()` | every indexed repo with file count, size, and last-indexed timestamp; `files: null` + `unreadable: <why>` for a store no `code_*` tool can query |
 | `code_indexed_branches(branch=None)` | the in-flight branch views each repo's store carries, and who owns each; pass a git branch to see every writer's view of it |
+| `code_store_health()` | whether every code graph opens — per-repo **and the bridge**; the readiness check to run before reading an empty result as "nothing found" (see [Rebuilding an unreadable store](#rebuilding-an-unreadable-store)) |
 
 ## CLI
 
@@ -503,7 +504,12 @@ graph):
 - `setup [--dry-run]` — fetch the pinned omnigraph binary to `~/.local/bin/`
   for standalone use (see [Install](#install)).
 - `index [PATH]` — incremental; skips files whose content hash is unchanged.
-- `reindex [PATH]` — force rebuild a path.
+- `reindex [PATH] [--rebuild] [--yes]` — force rebuild a path. `--rebuild`
+  first deletes this repo's store, and the bridge store, *if they cannot be
+  read* — see [Rebuilding an unreadable store](#rebuilding-an-unreadable-store).
+- `doctor` — check that every code graph opens: each per-repo store **and the
+  shared bridge store**, which belongs to no repo and so appears in no other
+  listing. Exits non-zero if any is unreadable, so it works as a check.
 - `repos` — list all indexed repos with file count, symbol count, and store size.
 - `branches [--branch B] [--prune]` — list the in-flight branch views per
   store; `--branch` shows every writer's view of one git branch (how you find
@@ -601,6 +607,38 @@ mechanisms keep this in check, mirroring that module (deliberately duplicated
   busy store. `optimize` is non-destructive and safe to run repeatedly;
   `cleanup` GCs old Lance versions to reclaim disk and is destructive, so it
   requires `--yes`.
+
+## Rebuilding an unreadable store
+
+omnigraph uses strict single-version storage: a release that bumps the
+on-disk format refuses to open a graph an older binary wrote (`__manifest is
+stamped at internal schema vN, but this omnigraph reads only vM`). Every
+`code_*` read against such a store errors, permanently, until it is rebuilt.
+
+`witan-code doctor` is how you find out. It probes every per-repo store **and
+the bridge store**, which is the one that goes unwatched: it belongs to no
+repo, so it is in no repo listing, and `code_interface_search` /
+`code_interface_providers` / `code_interface_consumers` /
+`code_cross_repo_impact` all read it and nothing else does. A bridge that
+cannot be opened breaks all of those while every per-repo listing still looks
+healthy.
+
+The fix is **not** witan's `witan migrate storage` (export with the
+pre-upgrade binary, reload with the new one). A code graph is *derived* from a
+checkout that is still on disk, so reindexing rebuilds it from source and
+needs no old binary:
+
+```console
+witan-code doctor                    # which stores, and why
+witan-code reindex --rebuild         # from each affected checkout
+```
+
+`--rebuild` deletes only the stores it could not read — this repo's, and the
+bridge if it is unreadable too — then indexes from scratch. Nothing is kept
+aside: a copy no installed binary can open is just disk. Dropping the bridge
+does cost every *other* repo's cross-repo bindings, and each restores its own
+on its next index, so a machine with many indexed repos wants a
+`witan-code reindex --rebuild` pass over each checkout it cares about.
 
 ## Skill
 

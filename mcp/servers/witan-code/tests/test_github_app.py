@@ -20,6 +20,7 @@ from witan_code.github_app import (
     EXIT_ERROR,
     EXIT_NOT_CONFIGURED,
     EXIT_OK,
+    GH_TOKEN_ENV_VAR,
     GITHUB_API_URL,
     INSTALLATION_ID_ENV_VAR,
     KEY_FILE_ENV_VAR,
@@ -27,8 +28,11 @@ from witan_code.github_app import (
     GitHubAppError,
     app_jwt,
     from_env,
+    api_repo_host,
     installation_token,
     main,
+    repo_is_private,
+    repo_owner_name,
 )
 
 _JWT_MAX_LIFETIME = 600  # GitHub's hard limit on an App JWT.
@@ -308,3 +312,218 @@ def test_main_reports_a_mint_failure(tmp_path, pem, monkeypatch, capsys):
 
 def test_main_rejects_an_unknown_argument():
     assert main(["--nope"]) == EXIT_ERROR
+
+
+# ── repo_owner_name / repo_is_private ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        ("https://github.com/mitodl/agent-kit", ("mitodl", "agent-kit")),
+        ("https://github.com/mitodl/agent-kit/", ("mitodl", "agent-kit")),
+        ("https://github.com/mitodl/agent-kit.git", ("mitodl", "agent-kit")),
+    ],
+)
+def test_repo_owner_name_splits_a_canonical_uri(uri, expected):
+    assert repo_owner_name(uri) == expected
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "agent-kit",
+        "",
+        "https://github.com/",
+        "https://github.com/mitodl",
+        # Scheme-relative: `urlsplit` gives it a netloc and no scheme, so a
+        # scheme check that only looked for "not empty" would let it through.
+        "//github.com/mitodl/agent-kit",
+        "http://github.com/mitodl/agent-kit",
+        "git@github.com:mitodl/agent-kit.git",
+    ],
+)
+def test_repo_owner_name_rejects_something_that_is_not_a_repo_uri(uri):
+    with pytest.raises(GitHubAppError, match="owner and repository name"):
+        repo_owner_name(uri)
+
+
+def test_repo_owner_name_rejects_extra_path_components():
+    """`.../a/b/c/d` must not be cleared by `c/d`'s visibility."""
+    with pytest.raises(GitHubAppError, match="owner and repository name"):
+        repo_owner_name("https://github.com/mitodl/agent-kit/tree/main")
+
+
+def test_repo_owner_name_rejects_a_host_the_api_does_not_answer_for():
+    """The clone uses the whole URI; the check uses only owner/name.
+
+    Left unchecked, `https://other.example/mitodl/agent-kit` would be approved
+    on `github.com/mitodl/agent-kit`'s visibility and then cloned from
+    `other.example` — the guard satisfied by a different repository entirely.
+    """
+    with pytest.raises(GitHubAppError, match="answers for 'github.com'"):
+        repo_owner_name("https://other.example/mitodl/agent-kit")
+
+
+def test_repo_owner_name_follows_an_enterprise_api_host():
+    api = "https://ghe.example/api/v3"
+    assert repo_owner_name("https://ghe.example/mitodl/agent-kit", api_url=api) == (
+        "mitodl",
+        "agent-kit",
+    )
+    # And github.com is then the mismatched host, not the privileged one.
+    with pytest.raises(GitHubAppError, match="answers for 'ghe.example'"):
+        repo_owner_name("https://github.com/mitodl/agent-kit", api_url=api)
+
+
+@pytest.mark.parametrize(
+    ("api_url", "expected"),
+    [
+        ("https://api.github.com", "github.com"),
+        ("https://ghe.example/api/v3", "ghe.example"),
+        ("https://API.GITHUB.COM/", "github.com"),
+    ],
+)
+def test_api_repo_host(api_url, expected):
+    assert api_repo_host(api_url) == expected
+
+
+def test_repo_is_private_asks_github_as_the_installation():
+    seen = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers["Authorization"]
+        seen["method"] = request.method
+        return httpx2.Response(200, json={"private": True})
+
+    private = repo_is_private(
+        "https://github.com/mitodl/secret-thing", "ghs_x", client=_client(handler)
+    )
+
+    assert private is True
+    assert seen["method"] == "GET"
+    assert seen["url"] == "https://api.github.com/repos/mitodl/secret-thing"
+    # The installation token, not the App JWT: the App itself cannot see repos.
+    assert seen["auth"] == "Bearer ghs_x"
+
+
+def test_repo_is_private_is_false_for_a_public_repo():
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"private": False})
+
+    assert (
+        repo_is_private(
+            "https://github.com/mitodl/agent-kit", "ghs_x", client=_client(handler)
+        )
+        is False
+    )
+
+
+def test_repo_is_private_raises_on_a_404_rather_than_calling_it_public():
+    """An installation that cannot see a repo has not answered the question."""
+
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(404, json={"message": "Not Found"})
+
+    with pytest.raises(GitHubAppError, match="would not describe"):
+        repo_is_private(
+            "https://github.com/mitodl/gone", "ghs_x", client=_client(handler)
+        )
+
+
+@pytest.mark.parametrize("body", [{}, {"private": "yes"}])
+def test_repo_is_private_raises_when_the_answer_is_not_a_boolean(body):
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=body)
+
+    with pytest.raises(GitHubAppError):
+        repo_is_private(
+            "https://github.com/mitodl/agent-kit", "ghs_x", client=_client(handler)
+        )
+
+
+def test_repo_is_private_raises_when_github_is_unreachable():
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ConnectError("no route")
+
+    with pytest.raises(GitHubAppError, match="Could not reach"):
+        repo_is_private(
+            "https://github.com/mitodl/agent-kit", "ghs_x", client=_client(handler)
+        )
+
+
+def test_repo_is_private_leaves_a_caller_supplied_client_open():
+    client = _client(lambda _: httpx2.Response(200, json={"private": False}))
+    repo_is_private("https://github.com/mitodl/agent-kit", "ghs_x", client=client)
+    assert not client.is_closed
+
+
+# ── main --visibility ─────────────────────────────────────────────────────────
+
+
+def test_main_visibility_prints_the_answer(tmp_path, pem, monkeypatch, capsys):
+    for name, value in _env(tmp_path, pem).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv(GH_TOKEN_ENV_VAR, "ghs_already_minted")
+    seen = {}
+
+    def fake(repo, token, *, api_url):
+        seen.update(repo=repo, token=token, api_url=api_url)
+        return True
+
+    monkeypatch.setattr("witan_code.github_app.repo_is_private", fake)
+    assert main(["--visibility", "https://github.com/mitodl/x"]) == EXIT_OK
+    assert capsys.readouterr().out.strip() == "private"
+    # Reuses the token the entrypoint already minted rather than exchanging a
+    # second App JWT for another one — see GH_TOKEN_ENV_VAR.
+    assert seen["token"] == "ghs_already_minted"
+    assert seen["repo"] == "https://github.com/mitodl/x"
+
+
+def test_main_visibility_mints_a_token_when_none_is_in_the_environment(
+    tmp_path, pem, monkeypatch, capsys
+):
+    for name, value in _env(tmp_path, pem).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv(GH_TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setattr(
+        "witan_code.github_app.installation_token",
+        lambda _creds, *, api_url: "ghs_fresh",
+    )
+    monkeypatch.setattr(
+        "witan_code.github_app.repo_is_private",
+        lambda _repo, token, *, api_url: token == "ghs_fresh",
+    )
+    assert main(["--visibility", "https://github.com/mitodl/x"]) == EXIT_OK
+    assert capsys.readouterr().out.strip() == "private"
+
+
+def test_main_visibility_reports_not_configured_without_an_app(monkeypatch):
+    """No App means no private repo could have been cloned in the first place."""
+    for name in (APP_ID_ENV_VAR, INSTALLATION_ID_ENV_VAR, KEY_FILE_ENV_VAR):
+        monkeypatch.delenv(name, raising=False)
+    assert main(["--visibility", "https://github.com/mitodl/x"]) == EXIT_NOT_CONFIGURED
+
+
+def test_main_visibility_reports_a_lookup_failure(tmp_path, pem, monkeypatch, capsys):
+    for name, value in _env(tmp_path, pem).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv(GH_TOKEN_ENV_VAR, "ghs_x")
+
+    def boom(_repo, _token, *, api_url):
+        raise GitHubAppError("GitHub said no")
+
+    monkeypatch.setattr("witan_code.github_app.repo_is_private", boom)
+    assert main(["--visibility", "https://github.com/mitodl/x"]) == EXIT_ERROR
+    assert "GitHub said no" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv", [["--visibility"], ["--visibility", "a", "b"]])
+def test_main_rejects_a_malformed_visibility_invocation(
+    argv, tmp_path, pem, monkeypatch
+):
+    """The usage error comes before any credential or network work."""
+    for name, value in _env(tmp_path, pem).items():
+        monkeypatch.setenv(name, value)
+    assert main(argv) == EXIT_ERROR

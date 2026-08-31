@@ -252,6 +252,11 @@ def task_create_cmd(
     console.print(f"  status: {_styled(result['status'], _STATUS_STYLE)}")
     if result.get("repo"):
         console.print(f"  repo: {_short_repo(result['repo'])}")
+    for hit in result.get("similar") or []:
+        console.print(
+            f"  [yellow]similar:[/yellow] {hit['slug']} "
+            f"[{_styled(hit['status'], _STATUS_STYLE)}] {esc(hit['title'])}"
+        )
 
 
 @task_app.command(name="comment")

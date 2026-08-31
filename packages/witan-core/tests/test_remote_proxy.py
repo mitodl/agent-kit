@@ -430,6 +430,19 @@ def test_a_drop_noticed_only_while_closing_is_still_unreachable():
         proxy.task_get(slug="x")
 
 
+def test_a_drop_carries_the_transport_error_as_its_cause():
+    # One test per classified branch, all asserting the same rule, because the
+    # branches drifted apart precisely when only one of them had a test that
+    # said which exception belonged on __cause__.
+    inner = httpx2.ReadError("connection reset by peer")
+    group = ExceptionGroup("unhandled", [inner])
+    proxy = _ScriptedProxy(group, at="call")
+    with pytest.raises(RemoteUnreachable) as caught:
+        proxy.task_get(slug="x")
+    assert caught.value.__cause__ is inner
+    assert caught.value.__context__ is group
+
+
 def test_a_non_transport_cleanup_error_still_propagates_as_itself():
     # Only transport faults are reclassified. A cleanup bug is a bug, and
     # relabelling it "the deployment could not be reached" would send whoever
@@ -680,11 +693,17 @@ def test_payload_too_large_terminates_on_a_cause_cycle():
 
 
 def test_a_413_carries_the_underlying_error_as_its_cause():
-    original = ExceptionGroup("unhandled", [_http_413()])
-    proxy = _ScriptedProxy(original, at="call")
+    # The 413 itself on __cause__, not the group it arrived inside — the same
+    # rule every branch of _reclassifying now follows. This used to assert the
+    # group, which is the container the classifier had just walked _chain to
+    # look past; a caller reading __cause__ had to redo that walk.
+    inner = _http_413()
+    group = ExceptionGroup("unhandled", [inner])
+    proxy = _ScriptedProxy(group, at="call")
     with pytest.raises(RemotePayloadTooLarge) as caught:
         proxy.task_get(slug="x")
-    assert caught.value.__cause__ is original
+    assert caught.value.__cause__ is inner
+    assert caught.value.__context__ is group
 
 
 # ── a call the gateway cut off after dispatching it ───────────────────────
@@ -791,11 +810,30 @@ def test_a_gateway_cutoff_during_teardown_is_still_classified():
 
 
 def test_an_indeterminate_write_carries_the_underlying_error_as_its_cause():
-    original = ExceptionGroup("unhandled", [_gateway_error(502)])
-    proxy = _ScriptedProxy(original, at="call")
+    # The 502 on __cause__, the group on __context__ — see the 413 test above.
+    inner = _gateway_error(502)
+    group = ExceptionGroup("unhandled", [inner])
+    proxy = _ScriptedProxy(group, at="call")
     with pytest.raises(RemoteWriteIndeterminate) as caught:
         proxy.memory_store(content="x")
-    assert caught.value.__cause__ is original
+    assert caught.value.__cause__ is inner
+    assert caught.value.__context__ is group
+
+
+def test_a_gateway_cut_read_carries_the_gateway_error_as_its_cause():
+    # The read half of the same branch: it raises a different class, from a
+    # different `raise` statement, so it needs its own assertion — the two
+    # gateway raises are exactly the kind of near-duplicate that drifts.
+    inner = _gateway_error(502)
+    group = ExceptionGroup("unhandled", [inner])
+    # _ReadingProxy, not _ScriptedProxy: an unclassified tool is assumed to
+    # write (see test_an_unclassified_tool_is_assumed_to_write), which would
+    # take the RemoteWriteIndeterminate raise instead of this one.
+    proxy = _ReadingProxy(group, at="call")
+    with pytest.raises(RemoteUnreachable) as caught:
+        proxy.task_get(slug="x")
+    assert caught.value.__cause__ is inner
+    assert caught.value.__context__ is group
 
 
 # ── answering a deployed server's elicitation prompt ──────────────────────
@@ -1075,6 +1113,19 @@ def test_a_rejected_credential_is_not_reported_as_unreachable(status):
     assert "rejected the credential" in message
     assert f"HTTP {status}" in message
     assert "re-authenticate" in message
+
+
+def test_a_rejected_credential_carries_the_auth_error_as_its_cause():
+    # Completes the set: every branch of _reclassifying now pins which
+    # exception lands on __cause__, so the rule cannot drift one branch at a
+    # time again.
+    inner = _auth_error(401)
+    group = ExceptionGroup("unhandled", [inner])
+    proxy = _ScriptedProxy(group, at="call")
+    with pytest.raises(RemoteCredentialRejected) as caught:
+        proxy.task_get(slug="x")
+    assert caught.value.__cause__ is inner
+    assert caught.value.__context__ is group
 
 
 def test_a_read_refreshes_once_and_retries():

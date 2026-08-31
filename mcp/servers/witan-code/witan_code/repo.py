@@ -69,6 +69,28 @@ def _git_origin(start: Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def git_toplevel(start: Path) -> Path | None:
+    """The working-tree root containing ``start``, or ``None`` if it is not one.
+
+    Asked of git for the same reason as :func:`_git_origin`: in a linked
+    worktree ``.git`` is a file, so walking up looking for a ``.git``
+    *directory* finds the wrong root or none at all.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    top = result.stdout.strip()
+    return Path(top) if top else None
+
+
 def _parse_origin(git_config: Path) -> str | None:
     """Parse .git/config and return the normalised ``origin`` remote URL."""
     parser = configparser.RawConfigParser()

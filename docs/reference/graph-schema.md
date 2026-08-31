@@ -75,7 +75,7 @@ e.g. wp-add-vault-k8s-auth-a3f912
 | --- | --- | --- |
 | `slug` | `String @key` |  |
 | `title` | `String @index` |  |
-| `description` | `String` |  |
+| `description` | `String @index` | @index enables BM25 search($p.description, …) in workflow_project_search |
 | `repos` | `[String]?` |  |
 | `status` | `enum(active, completed, abandoned) @index` |  |
 | `phase` | `enum(discovery, spec, implementation, delivery) @index` |  |
@@ -154,7 +154,7 @@ e.g. tk-wire-vault-sidecar-9c1d04
 | --- | --- | --- |
 | `slug` | `String @key` |  |
 | `title` | `String @index` |  |
-| `description` | `String` |  |
+| `description` | `String @index` | @index enables BM25 search($t.description, …) in task_search |
 | `repo` | `String? @index` |  |
 | `type` | `enum(bug, feature, task, chore, epic) @index` |  |
 | `status` | `enum(open, in_progress, blocked, closed) @index` |  |

@@ -10,6 +10,30 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
+- **`task_search`/`workflow_project_search`: BM25 full-text search for Task and
+  WorkflowProject nodes.** Only Memory had full-text search before this —
+  `task_list`/`workflow_project_list` are filters, not ranked search, so there
+  was no way to ask "does something like this already exist" for a task or
+  project. `task_create`/`workflow_project_create` now also return a
+  `similar` field (top 3 title matches, warn-only — never blocks creation),
+  surfaced by the CLI (`witan task create` / `witan project create`) as a
+  `similar:` line per match. Phase 0 of a 3-phase plan to reduce duplicate
+  task/project tracking: lexical search first, embeddings only if this proves
+  insufficient in practice. See memory
+  `pf-analysis-embeddings-for-task-workflowproject-mem-73b601` in the shared
+  witan memory graph for the full rationale.
+
+- **`task_claim` reports whether its holder names a session.** The success
+  return gains `"qualified"`, and a deployed call that defaulted the holder and
+  received no `session_id` also gets a `"warning"`. Without the id, one
+  person's concurrent sessions all claim under the same name, the
+  `current_holder != holder` contention check cannot separate them, and the
+  second session silently renews the first's lease while being told it claimed.
+  The server cannot supply the id (a pod has no `$CLAUDE_SESSION_ID`, MCP
+  carries no session state), so this is reported rather than refused. Sampling
+  the deployed graph found 13 such claims across three people. An explicit
+  `assignee` is exempt. See the 2026-08-27 addendum to ADR-0003.
+
 - **`task_comment` — say something *about* a task without mutating it or
   filing work.** There was no primitive for this. Every write either changed
   the task (`task_update`, which overwrites another author's description) or
@@ -39,11 +63,25 @@ a MINOR bump may include breaking changes).
   ready work — a correction to the task you are mid-way through is the one
   thing in that block addressed to you specifically.
 
-  Unread state is a local watermark in the session state dir, not a read
-  receipt in the graph. "Read" here means "was rendered into this machine's
-  prompt", which is a fact about a client; putting it in the shared graph would
-  make every prompt a write and still answer the wrong question for any other
+  Unread state is a local record in the session state dir, not a read receipt
+  in the graph. "Read" here means "was rendered into this machine's prompt",
+  which is a fact about a client; putting it in the shared graph would make
+  every prompt a write and still answer the wrong question for any other
   reader. Losing the file re-shows a comment, which is the harmless direction.
+  It records delivered comment *slugs* rather than a `created_at` watermark,
+  because `store_merge` reconciles `TaskComment` like any other type — a
+  comment authored earlier against another store can arrive after a later one
+  was shown, and a watermark would swallow it permanently. The block renders at
+  most five comments per task and marks only those delivered, so an append-only
+  thread cannot grow the prompt without bound; the rest lead the next block. A
+  render carrying comments is deliberately not written to the output cache,
+  since delivery is recorded at render time and re-serving it would turn
+  "interrupts once" into "interrupts for the whole TTL".
+
+  Comment bodies go through the same write-path scanning as every other
+  free-text field (`insert_task_comment` is in `scan.enforce.FIELD_MAP`), with
+  the task's repo passed along so per-repo `[scan.overlay]` policy still
+  applies to a node that has no repo of its own.
   Also `witan task comment <slug> <text>`, and comments in `witan task <slug>`.
 
 - **`task_list(assignee="@me")` resolves to the calling identity.** The context
@@ -53,6 +91,26 @@ a MINOR bump may include breaking changes).
   `cfg.author` — that mismatch is the entire subject of `claim_authorship`.
   Resolving the sentinel server-side is the only spelling that is correct in
   both places.
+
+### Changed
+
+- **A deployed witan with no caller JWT now refuses instead of falling back to
+  the service credential.** `_resolve_client` handed those requests
+  `_default_client`, whose token is `WITAN_MEMORY_TOKEN` — bound to
+  `svc-witan-ci`, which `policy/memory.policy.yaml` declares no group for. Every
+  call through it came back `unknown actor 'svc-witan-ci'`, which is also what a
+  genuinely missing actor-token entry says, so a guaranteed 403 was masking a
+  real signal. ADR-0004 kept the fallback for admin/migration CLI commands "run
+  inside the deployed container"; those run in the migration Job and break-glass
+  pod, neither of which sets `WITAN_OIDC_ISSUER`, so they take the local branch
+  and are unaffected. See the 2026-08-27 addendum to ADR-0004.
+
+### Fixed
+
+- **The `witan-task` skill told callers to pass the session id as `assignee`.**
+  That replaces the holder instead of qualifying it, recording a session and no
+  person — there is one such holder in the deployed graph. It now says to pass
+  `session_id`, and to reserve `assignee` for a genuinely different worker.
 
 ### Fixed
 

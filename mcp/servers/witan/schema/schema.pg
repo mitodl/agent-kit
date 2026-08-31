@@ -76,7 +76,7 @@ edge Tagged: Memory -> Topic
 node WorkflowProject {
     slug:        String @key
     title:       String @index
-    description: String
+    description: String @index    // @index enables BM25 search($p.description, …) in workflow_project_search
     // Set of canonical repo URIs this project spans (may be many, or none —
     // a "floating" cross-repo objective). Membership is filtered in Python;
     // list fields aren't indexed/match-filterable in this engine.
@@ -179,7 +179,7 @@ edge ProjectBlocks: WorkflowProject -> WorkflowProject
 node Task {
     slug:        String @key
     title:       String @index
-    description: String
+    description: String @index    // @index enables BM25 search($t.description, …) in task_search
     repo:        String? @index
     type:        enum(bug, feature, task, chore, epic) @index
     status:      enum(open, in_progress, blocked, closed) @index

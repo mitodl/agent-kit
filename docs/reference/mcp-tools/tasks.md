@@ -17,6 +17,11 @@ sub-issue to an ``epic`` (or any parent task); use ``blocked_by`` to record
 dependencies so ``task_ready`` can withhold the task until its blockers
 close.
 
+Returns ``{"slug", "status", "repo", "similar"}`` — ``similar`` is up to 3
+BM25 matches on ``title`` against existing tasks (any status), a soft
+duplicate check. It never blocks creation; review it and close this task
+as a duplicate (``task_close``) if one of them is really the same work.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `title` | str | **required** | Short label and full text of the work. |
@@ -61,6 +66,23 @@ across all repos.
 | `project_slug` | str? | `null` | List the tasks of a WorkflowProject. |
 | `parent` | str? | `null` | List the direct children of a parent task/epic. |
 | `assignee` | str? | `null` | Filter to a single owner. ``"@me"`` resolves to the calling identity<br>(every session of it) — the only spelling that works from a client<br>that cannot know the identity a deployment resolves from its token. |
+
+## `task_search`
+
+Plain BM25 text search over tasks (no graph expansion).
+
+Returns up to 20 tasks ranked by BM25 relevance, matched against
+``description`` and ``title`` (description matches are seeded ahead of
+title-only matches — see ``memory_search``'s doc for why). Run this
+before ``task_create`` to check whether the work is already tracked;
+``task_create`` also runs it automatically and returns the top matches
+as ``similar`` in its response.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `query` | str | **required** | Free-text search query. |
+| `repo` | str? | `null` | Repo scoping — see instructions. Matches against the detected repo<br>plus unscoped tasks (``repo=None``), same as ``task_list``. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | Optional filter: ``open``, ``in_progress``, ``blocked``, or<br>``closed``. Omit to search all statuses — a closed task is still<br>useful to surface (the work may already be done). |
 
 ## `task_ready`
 
@@ -123,6 +145,18 @@ or the graph is too busy to complete the CAS after retrying
 expires if the holder never closes/releases, making the task reclaimable
 (see ``task_ready``); re-calling renews it. Pass ``force`` to steal a live
 claim.
+
+A success also reports ``"qualified"``: whether the recorded holder names
+the session as well as the person. ``false`` does **not** by itself mean
+the caller omitted ``session_id`` — an explicit ``assignee`` always wins
+over it (see ``_claim_holder``) and is unqualified by design, with no
+warning. Only the presence of a ``"warning"`` key identifies the case this
+exists to flag: a deployed call whose defaulted holder names no session,
+so this person's concurrent sessions are indistinguishable to the
+contention check — the mutual exclusion this tool exists for is not in
+effect for them. It is reported rather than refused because the server has
+no way to supply the id itself, so refusing would break every caller that
+cannot send one.
 
 BEST-EFFORT CAS — omnigraph 0.8.x exposes no conditional-write primitive, so
 the claim write cannot be made atomic at the store. Instead we surface the
