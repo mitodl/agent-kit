@@ -33,6 +33,7 @@ from witan_core.remote.proxy import (
     RemoteWriteIndeterminate,
 )
 
+from .. import merge_report
 from .. import repo as repo_module
 from .. import session_state
 from ..config import RemoteConfig
@@ -410,6 +411,13 @@ class RemoteServerProxy(RemoteMCPProxy):
         never compares an exported timestamp itself — the server folds each
         batch into the running value, which is what makes the returned mark
         cover the whole merge rather than its last batch.
+
+        Also returns the accounting :mod:`witan.merge_report` checks — the
+        source's own row count, and the per-batch buckets summed across the
+        merge — because this caller cannot export the deployed graph to check
+        by hand. A merge that stops part-way leaves those totals on the raised
+        exception instead of losing them, so an incomplete merge reports as
+        incomplete rather than only as failed.
         """
         if target is not None:
             raise RemoteToolUnavailable(
@@ -426,17 +434,38 @@ class RemoteServerProxy(RemoteMCPProxy):
             "kept_target": 0,
             "diverged": 0,
             "rows_loaded": 0,
+            # Summed from the server's per-batch reports rather than counted
+            # here, even though this side holds the rows: `passthrough` and
+            # `duplicate_slugs` are what the server's classifier DID with the
+            # batch, and duplicate collapsing happens per batch. Re-deriving
+            # them client-side would be a second implementation of the rule
+            # `_classify_rows` exists to be the only copy of.
+            "passthrough": 0,
+            "duplicate_slugs": 0,
         }
         # Threaded batch to batch rather than reduced at the end: the source is
         # split across batches, so no single result covers it, and folding the
         # running value in server-side keeps every timestamp comparison on the
         # side that knows how an export spells a timestamp.
         watermark: dict | None = None
+        # `None` once any batch answers without the accounting fields — an
+        # older deployment. Same rule as `watermark` below: an unusable total
+        # is reported as "cannot tell" rather than as a shortfall, which is
+        # what defaulting the missing counts to zero would have looked like.
+        accounted = True
         with _source_export(source) as export:
+            rows = _read_export(export)
+            # Counted on THIS side and before the first batch is sent, which is
+            # the only place it can be counted: the number exists to be
+            # compared against what the batches report back, and a merge that
+            # dies half way reports nothing for the batches it never sent.
+            # Totalling the server's own per-batch counts instead would make it
+            # agree with itself by construction.
+            source_rows = len(rows)
             # MCP_LOAD_MAX_BYTES, not the default: these rows ride as a JSON
             # tool parameter, so the binding ceiling is the MCP session's 4 MiB
             # body cap, not omnigraph's much larger buffered-body one.
-            batches = chunk_records(_read_export(export), MCP_LOAD_MAX_BYTES)
+            batches = chunk_records(rows, MCP_LOAD_MAX_BYTES)
             # The identity the SOURCE store wrote under, supplied by the
             # caller because only it knows which store this is: `--from <name>`
             # merges a target the ambient configuration is not pointed at, and
@@ -448,38 +477,75 @@ class RemoteServerProxy(RemoteMCPProxy):
             # The deployment cannot derive this itself, for the same reason it
             # cannot derive `repo`: no access to this machine's config.
             claim_from = source_author or self._resolve_local_author()
+            # Counted rather than taken from `enumerate`'s last value: an empty
+            # source yields no batches at all and would leave that unbound.
+            applied = 0
             for index, batch in enumerate(batches):
+                # Nested rather than one flat `try`: the two handlers below
+                # replace the exception with a better-worded one, and the outer
+                # handler has to see THAT — plus an interrupt, a transport
+                # failure, or anything else — so the totals ride out on
+                # whatever actually reaches the caller.
                 try:
-                    result = self.store_merge(
-                        rows=batch,
-                        dry_run=dry_run,
-                        claim_from_author=claim_from,
-                        since=since,
-                        watermark=watermark,
-                    )
-                except RemotePayloadTooLarge as exc:
-                    # Only here is the caller known to be mid-batch, so only
-                    # here can the budget and the partial-write state be stated
-                    # as fact rather than assumed for every tool call.
-                    raise RemotePayloadTooLarge(
-                        _merge_batch_refusal(
-                            exc,
-                            batch=index,
-                            budget=MCP_LOAD_MAX_BYTES,
+                    try:
+                        result = self.store_merge(
+                            rows=batch,
                             dry_run=dry_run,
+                            claim_from_author=claim_from,
+                            since=since,
+                            watermark=watermark,
                         )
-                    ) from exc
-                except RemoteWriteIndeterminate as exc:
-                    # Same reasoning as the 413 above, opposite conclusion: the
-                    # generic advice ("re-read before retrying") is wrong for a
-                    # merge, which is idempotent by construction and whose
-                    # remedy is simply to run it again.
-                    raise RemoteWriteIndeterminate(
-                        _merge_batch_indeterminate(exc, batch=index, dry_run=dry_run)
-                    ) from exc
+                    except RemotePayloadTooLarge as exc:
+                        # Only here is the caller known to be mid-batch, so
+                        # only here can the budget and the partial-write state
+                        # be stated as fact rather than assumed for every tool
+                        # call.
+                        raise RemotePayloadTooLarge(
+                            _merge_batch_refusal(
+                                exc,
+                                batch=index,
+                                budget=MCP_LOAD_MAX_BYTES,
+                                dry_run=dry_run,
+                            )
+                        ) from exc
+                    except RemoteWriteIndeterminate as exc:
+                        # Same reasoning as the 413 above, opposite conclusion:
+                        # the generic advice ("re-read before retrying") is
+                        # wrong for a merge, which is idempotent by
+                        # construction and whose remedy is simply to run it
+                        # again.
+                        raise RemoteWriteIndeterminate(
+                            _merge_batch_indeterminate(
+                                exc, batch=index, dry_run=dry_run
+                            )
+                        ) from exc
+                except BaseException as exc:
+                    # The totals are the state as of the last COMPLETED batch:
+                    # this one contributed nothing, which is exactly the point.
+                    # Its rows are counted in `source_rows` and sit in no
+                    # bucket, so the report shows them as unaccounted for
+                    # instead of the merge merely looking failed.
+                    merge_report.attach_partial(
+                        exc,
+                        {
+                            "dry_run": dry_run,
+                            "target": self._url,
+                            "batches_applied": applied,
+                            "source_rows": source_rows if accounted else None,
+                            **totals,
+                        },
+                    )
+                    raise
+                applied += 1
                 decisions.extend(result.get("decisions") or [])
                 for key in totals:
                     totals[key] += result.get(key, 0)
+                # Same rule as the watermark below, and the same reason: a
+                # deployment that does not report these leaves the merge
+                # unverifiable, and a total summed over the batches that DID
+                # report would understate the source and read as a shortfall.
+                if not isinstance(result.get("source_rows"), int):
+                    accounted = False
                 # An older deployment returns no watermark at all. Keeping the
                 # last one we did get would mark a fraction of the merge as the
                 # whole of it, which is worse than having none: the next run
@@ -495,6 +561,10 @@ class RemoteServerProxy(RemoteMCPProxy):
             "target": self._url,
             "decisions": decisions,
             "watermark": watermark,
+            # Counted client-side, deliberately — see where it is assigned.
+            "source_rows": source_rows if accounted else None,
+            "batches": applied,
+            "batches_applied": applied,
             **totals,
         }
 

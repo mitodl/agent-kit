@@ -702,7 +702,7 @@ def test_merge_carries_edges_across_from_a_store_that_has_them(server, tmp_path)
 
     export = tmp_path / "source.jsonl"
     source_store.export_to(export, label="export (test source)")
-    _, edges = srv._parse_export(export)
+    _, edges, _ = srv._parse_export(export)
     assert edges, "fixture must produce edge rows or it does not guard anything"
 
     result = srv.merge_store(source_store.graph_uri)
@@ -746,7 +746,7 @@ def test_parse_export_reads_real_edge_rows_as_edges(tmp_path):
         '"data": {"id": "01KZEH5Z994JBHHB4BHHTVH2YY"}}\n'
     )
 
-    nodes, edges = srv._parse_export(export)
+    nodes, edges, _ = srv._parse_export(export)
 
     assert set(nodes) == {("Memory", "mem-x-aaaaaa")}
     assert edges == [

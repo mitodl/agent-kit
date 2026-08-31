@@ -198,14 +198,33 @@ omnigraph export --store ~/.local/share/witan/graph.omni > alice.jsonl
 witan migrate merge alice.jsonl --target combined.omni
 ```
 
-Preview with `--dry-run` first, then verify:
+Preview with `--dry-run` first. The merge then verifies itself:
+
+```
+Merged … into …: 2 added, 1 updated, 1 kept (target already newer-or-equal), 5 rows loaded.
+Verified: all 6 source row(s) accounted for (2 added + 1 updated + 1 kept + 2 edge/unkeyed).
+```
+
+Every source record lands in exactly one of those buckets, so a total that
+does not reconcile means rows that were read from the source and never
+decided or never written — which is what a merge that stopped part-way looks
+like. It reports `NOT verified` with the shortfall and says to re-run; the
+merge is idempotent, so rows that already landed are kept rather than
+duplicated. Interrupting a merge reports the same way rather than only saying
+it was interrupted.
+
+This is the verification to use against a deployed target. The older manual
+check needs an export of the target:
 
 ```bash
 omnigraph export --store <target> | jq -r .type | sort | uniq -c
 ```
 
 Type counts in the target should equal the union of the sources' counts, minus
-collisions resolved in the target's favour.
+collisions resolved in the target's favour. It only works store-to-store: the
+deployment's data tier is ClusterIP-only and an ordinary user holds no
+omnigraph bearer token for it, which is why the merge reports its own
+accounting.
 
 ## Flags
 
