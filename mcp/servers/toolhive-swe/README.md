@@ -20,7 +20,7 @@ endpoint or routing header):
 | | |
 |---|---|
 | **Transport** | Streamable HTTP only (no stdio, no SSE) |
-| **Auth** | OAuth 2.1 via Keycloak — browser consent flow on first connect (no token/API key to store) |
+| **Auth** | OAuth 2.1 via Keycloak, through one shared, pre-registered public client (`toolhive-swe-cli`) — no per-user or per-install registration. Browser consent flow on first connect; no secret to store. |
 
 ## Quick Start
 
@@ -34,8 +34,11 @@ catalog; there is no separate manifest or install script for this server.
 uv tool install 'agent-config-kit[cli]'
 
 # From the repo root — registers all three tiers (plus the skill catalog),
-# on every agent platform agent-kit detects on your machine (Claude Code,
-# Pi, GitHub Copilot, OpenCode):
+# on every agent platform agent-kit detects on your machine. OAuth is fully
+# wired for Claude Code, Pi, and OpenCode; GitHub Copilot is NOT — its
+# adapter has no verified OAuth config shape to write (see Notes below), so
+# `agent-kit apply` still creates the Copilot entry but without credentials,
+# and it won't be able to connect to these servers on its own:
 agent-kit apply agent-config.toml
 
 # Preview without writing anything:
@@ -51,7 +54,9 @@ agent-kit validate agent-config.toml
 `agent-kit apply` registers at **global** scope by default (available from any
 repo / directory you work in, not just this project) — see the manifest's
 `[options]` if you want to change that. On first use of each server, your
-agent opens a browser for the Keycloak OAuth consent flow (once per tier).
+agent opens a browser for the Keycloak OAuth consent flow (once per tier),
+authenticating against the shared `toolhive-swe-cli` client the manifest
+declares — there's nothing per-user to register beforehand.
 For Claude Code, run `/mcp` (or `claude mcp list`) to confirm the connections
 and authenticate.
 
@@ -73,14 +78,27 @@ merge [`config/claude.json`](./config/claude.json) into it by hand.
 - An account in the `ol-platform-engineering` Keycloak realm for **each tier**
   you want to connect to (ci / qa / production accounts are provisioned
   separately — access to one tier does not imply access to another).
-- An MCP client that supports remote Streamable HTTP transport and OAuth
-  (Claude Code, Claude Desktop, VS Code/Copilot, Cursor, Windsurf, …).
+- An MCP client that supports remote Streamable HTTP transport, OAuth, and a
+  pre-registered (non-dynamically-registered) client_id — Claude Code and Pi
+  are fully wired via `agent-kit apply`; Claude Desktop and any other
+  OAuth-capable client work with manual config. GitHub Copilot/VS Code is
+  NOT currently supported through `agent-kit` (see Notes) even though it
+  can register the endpoint URL.
 
 ## Notes
 
-- No secrets are stored in this repo or in your config — the manifest contains
-  only the public per-tier endpoint URLs. Authentication is handled entirely
-  by the Keycloak OAuth flow.
+- No secrets are stored in this repo or in your config: the manifest contains
+  the per-tier endpoint URLs plus a shared `oauth` client_id
+  (`toolhive-swe-cli`) — a public identifier, not a secret; the client has no
+  client_secret. Authentication itself is handled entirely by the Keycloak
+  OAuth flow.
+- GitHub Copilot's adapter intentionally drops `oauth` config: there's no
+  verified upstream schema for VS Code's `mcp.json` remote-server auth shape
+  (agent-config-kit's `adapters/copilot.py`), so nothing was guessed at. If
+  you use these servers from Copilot, you'll need whatever manual
+  authentication step Copilot's own docs describe for a pre-registered OAuth
+  client — `agent-kit` can still write the endpoint URL, just not the
+  credentials.
 - `agent-config.toml`'s `[options] scope` defaults to `global`; pass
   `--scope project` to `agent-kit apply` to share via a project-local config
   (e.g. `.mcp.json`) instead.
