@@ -36,6 +36,7 @@ FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
     "insert_workflow_trace": ("WorkflowTrace", ("title", "description", "outcome")),
     "insert_task": ("Task", ("title", "description", "external_uri")),
     "update_task": ("Task", ("title", "description", "resolution", "external_uri")),
+    "insert_task_comment": ("TaskComment", ("body",)),
 }
 
 
@@ -64,7 +65,11 @@ def _repo_of(params: dict) -> str | None:
     ``repo`` (a single value) covers most mutations; ``repos`` (a list, e.g.
     ``insert_workflow_project``) uses the first entry — a project spanning
     several repos gets one policy, not a per-field split that would need a
-    v2 overlay shape to express."""
+    v2 overlay shape to express.
+
+    ``repo`` need not be a field of the node being written: ``insert_task_comment``
+    passes its task's repo purely so this resolves, since a ``TaskComment`` has
+    no repo of its own but is still governed by its task's overlay."""
     repo = params.get("repo")
     if isinstance(repo, str) and repo:
         return repo

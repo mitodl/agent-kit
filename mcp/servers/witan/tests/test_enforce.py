@@ -282,3 +282,35 @@ def test_change_guard_block_prevents_persist(monkeypatch, tmp_path):
             "mutations.gq", "insert_memory", {"title": "t", "content": "AKIA"}
         )
     assert called is False
+
+
+# ── TaskComment coverage ────────────────────────────────────────────────────────
+
+
+def test_task_comment_body_is_scanned():
+    """`task_comment` is a free-text write like any other, so it is subject to
+    the same block/redact/warn policy — a body carrying a secret is refused."""
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIA")])
+    with pytest.raises(WriteBlocked):
+        guard("insert_task_comment", {"body": "the key is AKIA", "slug": "tc-1"})
+
+
+def test_task_comment_body_is_redacted():
+    guard = _guard([MatchScanner("email", "pii", "a@b.com")])
+    out = guard("insert_task_comment", {"body": "ping a@b.com", "slug": "tc-1"})
+    assert "a@b.com" not in out["body"]
+
+
+def test_task_comment_overlay_keys_on_the_tasks_repo():
+    """A TaskComment has no repo of its own; `task_comment` passes its task's so
+    a `[scan.overlay]` table still reaches it."""
+    guard = _guard(
+        [MatchScanner("aws_key", "secret", "AKIA")],
+        overlay={"github.com/example/legacy": {"secret_action": "warn"}},
+    )
+    params = {
+        "body": "AKIA stays",
+        "slug": "tc-1",
+        "repo": "github.com/example/legacy",
+    }
+    assert guard("insert_task_comment", params) == params

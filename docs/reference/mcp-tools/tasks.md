@@ -41,6 +41,12 @@ as a duplicate (``task_close``) if one of them is really the same work.
 
 Retrieve a single task by slug. Returns the full node or ``null``.
 
+The node carries a ``comments`` list — attributed, append-only notes left by
+``task_comment``, oldest first. READ THEM BEFORE EXECUTING: a comment is how
+another agent says the task's stated premise is wrong without overwriting
+your description, so it is often a correction to the very plan the
+description sets out.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to retrieve. |
@@ -59,7 +65,7 @@ across all repos.
 | `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``open`` \| ``in_progress`` \| ``blocked`` \| ``closed``. |
 | `project_slug` | str? | `null` | List the tasks of a WorkflowProject. |
 | `parent` | str? | `null` | List the direct children of a parent task/epic. |
-| `assignee` | str? | `null` | Filter to a single owner. |
+| `assignee` | str? | `null` | Filter to a single owner. ``"@me"`` resolves to the calling identity<br>(every session of it) — the only spelling that works from a client<br>that cannot know the identity a deployment resolves from its token. |
 
 ## `task_search`
 
@@ -197,6 +203,30 @@ Closing a blocker is what unblocks its dependents — they become visible to
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to close. |
 | `resolution` | str? | `null` | Short note on what was actually done. Worth writing: this is what a<br>later reader sees when asking why the task ended, and closing without<br>one leaves that unanswerable. |
+
+## `task_comment`
+
+Leave an attributed, append-only comment ON a task without changing it.
+
+THIS IS THE TOOL FOR SAYING SOMETHING *ABOUT* SOMEONE ELSE'S TASK. Reach for
+it when you have found a problem with a task you are not executing — its
+premise is wrong, its mechanism cannot fire, the work is already done
+elsewhere. The alternatives are both worse: ``task_update`` overwrites the
+other author's description, and ``task_create`` puts an item that is not
+work into everyone's ready-work list.
+
+The comment is attributed to you and stamped, and appears in ``task_get`` —
+and, for a task the holder's session is actively working, in their injected
+context. Flat and permanent: no threading, no editing, no deleting.
+
+NOT for your own execution notes on your own task (that is the task's
+``description`` or ``resolution``), and not for reusable repo knowledge
+(that is ``memory_store`` — a comment is read once by one executor).
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `slug` | str | **required** | The ``tk-`` slug to comment on. |
+| `text` | str | **required** | The comment body. Say the thing itself, with evidence — the holder is<br>mid-execution and will act on this instead of the description. |
 
 ## `task_link`
 

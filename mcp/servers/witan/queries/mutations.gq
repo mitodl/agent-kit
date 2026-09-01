@@ -475,6 +475,26 @@ query update_task(
         where slug = $slug
 }
 
+// ── Task comments ──────────────────────────────────────────────────
+// Append-only: there is no update or delete counterpart, and that is the
+// point — a comment is a matter of record, not a field of the task.
+
+query insert_task_comment(
+    $slug: String,
+    $task_slug: String,
+    $body: String,
+    $author: String,
+    $created_at: DateTime
+) {
+    insert TaskComment {
+        slug: $slug,
+        task_slug: $task_slug,
+        body: $body,
+        author: $author,
+        created_at: $created_at
+    }
+}
+
 // ── Task edge mutations ────────────────────────────────────────────
 
 query link_blocks($from: String, $to: String) {
@@ -623,5 +643,11 @@ query set_workflow_trace_author($slug: String, $author: String) {
 query set_task_author($slug: String, $author: String, $updated_at: DateTime) {
     update Task
         set { author: $author, updated_at: $updated_at }
+        where slug = $slug
+}
+
+query set_task_comment_author($slug: String, $author: String) {
+    update TaskComment
+        set { author: $author }
         where slug = $slug
 }

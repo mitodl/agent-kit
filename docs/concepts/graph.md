@@ -40,6 +40,22 @@ See [Coordinating work](../explanation/task-coordination.md) for what a claim
 on a task actually guarantees (less than a lock, more than nothing), and the
 [graph schema reference](../reference/graph-schema.md#task) for every field.
 
+### Comments: saying something *about* a task
+
+The three edges above all relate one task to another. A `TaskComment` is the
+different thing: attributed, timestamped, append-only text that hangs off a
+task without being part of it.
+
+It exists because the alternatives are both wrong for a correction. Editing the
+description (`task_update`) destroys another author's text; filing a task
+(`task_create`) puts something that is not work into everyone's ready-work
+list. `task_comment(slug, text)` is neither — it changes nothing about the
+task, not even `updated_at`, and it never appears in `task_ready`.
+
+Comments come back with `task_get`, oldest first, and unread ones on a task you
+hold are pushed into your session context ahead of everything else. Flat by
+design: no threads, no edits, no deletes, no resolved state.
+
 ## Projects: an objective across sessions
 
 A `WorkflowProject` tracks something bigger than one sitting — it moves

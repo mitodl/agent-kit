@@ -109,6 +109,47 @@ not stay held forever, and the lease is also the backstop that recovers any task
 that ends up mis-owned through the window above. `task_release` hands one back
 deliberately.
 
+## Saying something about a task
+
+A claim answers "who is on this?". It does not answer "is this task even
+right?" — and until `task_comment` existed there was nowhere to put that answer.
+Every write primitive either mutated the task (`task_update`, which overwrites
+another author's description) or created a node (`task_create`, `memory_store`),
+so an agent that found a problem with someone else's in-flight work had to
+choose between clobbering their text and inflating the work list.
+
+What that cost, concretely: a one-paragraph correction — the task's stated
+mechanism could not fire on the pipelines it named — became a whole `p0` task
+whose real content was "your premise is wrong", parented under the original so
+its holder would encounter it. The ready-work list gained an item that was not
+work; it had to be filed `p0` to sit next to its parent, so it competed with
+real `p0`s; a `parent` edge was written onto someone else's claimed row; and
+closing it would have meant "I read this", which is not what closing a task
+means anywhere else.
+
+`task_comment(slug, text)` is the primitive that was missing. A comment is
+attributed, timestamped, and append-only — and it is **flat**: no threading, no
+editing, no deleting, no resolution state. Those are all decisions to make when
+something actually needs them.
+
+Two details are load-bearing:
+
+- **It does not touch the task's row, `updated_at` included.** That field
+  doubles as the advisory-lease start for an `in_progress` task with no
+  `claimed_at`, so bumping it would silently renew a stranger's claim every
+  time somebody commented on their task.
+- **It is surfaced where an executing agent already looks**, not where a
+  curious one might. `task_get` returns comments alongside the description, and
+  the context-injection hook puts unread comments on a task you hold *first* —
+  ahead of projects and ready work. A correction to the task in front of you is
+  the only thing in that block addressed to you specifically. Unread is a local
+  watermark rather than a read receipt in the graph, because "was rendered into
+  this machine's prompt" is a fact about a client, not about shared work.
+
+A comment is read once, by whoever executes that task. Reusable knowledge about
+the repo still belongs in a `Memory` — the two compose: store the fact, then
+comment with the correction and a pointer to it.
+
 ## Projects and sessions
 
 A `WorkflowProject` tracks an objective across many sessions, through four

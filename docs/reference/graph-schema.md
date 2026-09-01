@@ -173,6 +173,30 @@ e.g. tk-wire-vault-sidecar-9c1d04
 | `symbol_refs` | `[String]?` | soft refs into the code-graph store |
 | `tags` | `[String]?` |  |
 
+### `TaskComment`
+
+TaskComment: attributed, append-only feedback *about* a task, held outside
+the task's own text. Before this existed, an agent that found a problem with
+someone else's in-flight task could only overwrite their description or file
+a task whose real content was "your premise is wrong" — putting a non-work
+item into the ready-work list.
+
+Flat by design: no threading, no edit, no resolution, no read state. Adding
+any of those is a decision to make once someone needs it.
+
+`task_slug` is denormalized instead of an edge because the only read is "the
+comments on this task", which an @index answers without a traversal.
+
+Slug convention: tc-&lt;sanitised-body-prefix&gt;-&lt;6hex&gt;
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `slug` | `String @key` |  |
+| `task_slug` | `String @index` |  |
+| `body` | `String` |  |
+| `author` | `String @index` |  |
+| `created_at` | `DateTime @index` |  |
+
 ### `CodeBranch`
 
 Links a git branch to the task/project it is carrying, so "which branch
