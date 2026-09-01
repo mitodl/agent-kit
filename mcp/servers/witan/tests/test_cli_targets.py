@@ -655,6 +655,29 @@ def test_direct_without_a_code_server_is_refused(config_file, monkeypatch):
     assert not config_file.exists()
 
 
+def test_direct_is_not_satisfied_by_the_memory_graph_server(config_file, monkeypatch):
+    """`--server` is the memory graph; the code tier reads `code_server` alone.
+
+    Accepting it would write `code_transport = "direct"` with no code address,
+    which resolves to a local directory — this command's own defect, re-entered
+    through its validator.
+    """
+    from witan.cli.targets import add
+
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        add(
+            "broken",
+            remote_url="https://witan.example.org/mcp",
+            oidc_issuer="https://sso.example.org/realms/eng",
+            server="s3://bucket/graph.omni",
+            code_transport="direct",
+        )
+
+    assert "needs --code-server" in recorder.export_text()
+    assert not config_file.exists()
+
+
 def test_mcp_without_a_remote_url_is_refused(config_file, monkeypatch):
     from witan.cli.targets import add
 

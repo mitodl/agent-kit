@@ -140,8 +140,17 @@ default and every branch you have indexed since is sitting on your own machine �
 working, findable by you, invisible to everyone else. Nothing reports this as a
 failure, which is exactly why it is worth checking.
 
+Print your own target's block and look for `code_transport` in it — a bare
+`grep` over the file will happily match some *other* target's key and tell you
+you are fine when you are not:
+
 ```bash
-grep -A1 code_transport ~/.config/witan/config.toml   # nothing? read on
+awk '/^\[targets\.ol\]/{f=1;print;next} /^\[/{f=0} f' ~/.config/witan/config.toml
+```
+
+No `code_transport` line in that block? Re-register it:
+
+```bash
 witan target add ol --force \
     --remote-url https://witan.ci.ol.mit.edu/mcp \
     --oidc-issuer https://sso-ci.ol.mit.edu/realms/ol-platform-engineering \
@@ -151,8 +160,10 @@ witan target add ol --force \
 
 `--force` replaces the block in place, and re-running `add` with the same
 arguments now writes `code_transport = "mcp"` as well. Adding the one line by
-hand does the same thing. Your existing login is unaffected — the token cache is
-keyed on the endpoint, which has not changed.
+hand does the same thing. Your existing login survives as long as you keep
+`oidc_issuer` and `oidc_client_id` the same: the token cache is keyed on that
+pair, not on `remote_url` (`DeviceAuth._cache_key`). Change either one and you
+are pointed at a different cache entry and will need to log in again.
 
 Re-index whatever you want shared afterwards: the local index is not migrated,
 and `witan code index` writes wherever the config now points.

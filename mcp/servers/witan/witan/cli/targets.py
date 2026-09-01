@@ -355,12 +355,21 @@ def add(
     if code_transport is None and remote_url:
         code_transport = "mcp"
 
-    if code_transport == "direct" and not (code_server or server):
+    # `--server` deliberately does NOT satisfy this. It addresses the memory
+    # graph, and `witan_code.config.load()` resolves the code tier from
+    # `code_server` alone — it never falls back to `server`. Accepting it here
+    # would write a block with `code_transport = "direct"` and no code address,
+    # which resolves to a local directory: the exact split this command is
+    # being taught to prevent, re-entered through the validator.
+    if code_transport == "direct" and not code_server:
         console.print(
             "[red]--code-transport direct needs --code-server.[/red] Direct means "
             "addressing the omnigraph-server holding the code graphs, which is "
             "ClusterIP-only; from outside the cluster use "
-            "[bold]--code-transport mcp[/bold] instead."
+            "[bold]--code-transport mcp[/bold] instead. "
+            "[bold]--server[/bold] does not count here — that is the memory "
+            "graph's store, and the code tier is resolved from "
+            "[bold]--code-server[/bold] only."
         )
         raise SystemExit(1)
 
