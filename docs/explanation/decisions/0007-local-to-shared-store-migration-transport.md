@@ -30,7 +30,7 @@
 ## Context
 
 The migration *procedure* was built and tested; the *transport* to the deployed
-graph was not. `witan migrate merge <source> --target <target>` exports both
+graph was not. `witan migrate merge <source> --target-uri <target>` exports both
 sides, reconciles node collisions on `updated_at` rather than last-write-wins,
 and is idempotent — the hard part, and it works. But it addressed every store
 as `--store <uri>`, and none of the reachable spellings of "the deployed graph"

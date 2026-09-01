@@ -187,15 +187,15 @@ Same command, a store or a named target on each end:
 witan migrate merge --from personal --to work
 
 # by path: merge each machine's store into a shared third one
-witan migrate merge machine-a.omni --target combined.omni
-witan migrate merge machine-b.omni --target combined.omni
+witan migrate merge machine-a.omni --target-uri combined.omni
+witan migrate merge machine-b.omni --target-uri combined.omni
 
 # machine migration: the target starts empty and is created automatically
-witan migrate merge old-machine.omni --target new-machine.omni
+witan migrate merge old-machine.omni --target-uri new-machine.omni
 
 # from a store that can't travel — hand over its export instead
 omnigraph export --store ~/.local/share/witan/graph.omni > alice.jsonl
-witan migrate merge alice.jsonl --target combined.omni
+witan migrate merge alice.jsonl --target-uri combined.omni
 ```
 
 Preview with `--dry-run` first. The merge then verifies itself:
@@ -229,7 +229,7 @@ accounting.
 ## Flags
 
 ```
-witan migrate merge [SOURCE] [--from <name>] [--to <name>] [--target <uri>] [--dry-run]
+witan migrate merge [SOURCE] [--from <name>] [--to <name>] [--target-uri <uri>] [--dry-run]
 ```
 
 | Flag | Means |

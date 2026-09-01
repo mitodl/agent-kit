@@ -560,8 +560,8 @@ happens to match someone's target name cannot change what the command does.
 
 ```bash
 witan migrate merge ~/.local/share/witan-laptop-b/graph.omni --dry-run
-witan migrate merge old-machine.omni --target new-machine.omni
-witan migrate merge alice-export.jsonl --target http://127.0.0.1:8080/graphs/council
+witan migrate merge old-machine.omni --target-uri new-machine.omni
+witan migrate merge alice-export.jsonl --target-uri http://127.0.0.1:8080/graphs/council
 witan migrate merge --from personal --to work              # two named local stores
 witan migrate merge ~/.local/share/witan/graph.omni --to ol   # onto the deployment
 ```

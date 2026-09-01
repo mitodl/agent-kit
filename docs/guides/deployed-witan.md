@@ -358,7 +358,7 @@ Reads are unaffected by all of this and stay fast under the same load.
   exception** — it has a per-actor form and is how you bring your own history
   across. See the
   [migration runbook](migration-runbook.md#local-shared-the-cutover).
-- **`witan migrate merge --target …` is refused.** Against a deployment the
+- **`witan migrate merge --target-uri …` is refused.** Against a deployment the
   target is the deployment's own graph, resolved server-side. Name the
   deployment with `--to <name>` instead, or unset `remote_url` to merge
   between stores you address yourself.

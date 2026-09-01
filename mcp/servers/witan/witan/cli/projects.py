@@ -26,6 +26,7 @@ from ._common import (
     render_table,
     WorkflowPhase,
 )
+from .selected_target import selected_target
 from .run_helpers import (
     _launch_agent,
     _merge_prompts,
@@ -519,7 +520,6 @@ def project_unblock(slug: str, blocks: str) -> None:
 def project_run(
     slug: str | None = None,
     *,
-    target: str | None = None,
     agent: str | None = None,
     model: str | None = None,
     dry_run: bool = False,
@@ -543,7 +543,7 @@ def project_run(
     all_repos: Span all repos in the picker.
     """
     try:
-        cfg = cfg_module.load(target=target)
+        cfg = cfg_module.load(target=selected_target())
     except ValueError as exc:
         print_error(exc)
         raise SystemExit(1) from None

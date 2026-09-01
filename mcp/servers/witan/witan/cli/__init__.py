@@ -35,6 +35,7 @@ from . import (
 )
 from ._common import app, console, print_error, stderr_console
 from .code_routing import warn_if_code_graph_is_local
+from .selected_target import selected_target, set_selected_target
 from .migrate import migrate_app
 from .output import OutputFormat, set_output_format
 from .run_helpers import _run_task_slug
@@ -224,7 +225,6 @@ def serve(
 def run(
     slug: str,
     *,
-    target: str | None = None,
     agent: str | None = None,
     model: str | None = None,
     claim: bool = True,
@@ -238,8 +238,6 @@ def run(
 
     Parameters
     ----------
-    target: Named config target to use (overrides auto-detection by repo org).
-        Also overridable via WITAN_TARGET env var.
     agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo). Overrides
         WITAN_AGENT env var and target/config-file default.
     model: Model passed to the agent's --model flag. Overrides WITAN_MODEL env
@@ -248,7 +246,7 @@ def run(
     dry_run: Print the prompt and exit without launching or claiming.
     """
     try:
-        cfg = cfg_module.load(target=target)
+        cfg = cfg_module.load(target=selected_target())
     except ValueError as exc:
         print_error(exc)
         raise SystemExit(1) from None
@@ -264,6 +262,10 @@ def _launcher(
         OutputFormat,
         cyclopts.Parameter(name="--output-format", env_var="WITAN_OUTPUT_FORMAT"),
     ] = "txt",
+    target: Annotated[
+        str | None,
+        cyclopts.Parameter(name="--target", env_var="WITAN_TARGET"),
+    ] = None,
 ) -> None:
     """witan — agent memory, planning, and collaboration graph.
 
@@ -272,8 +274,17 @@ def _launcher(
     output_format: Output format for table commands. Commands include tasks,
         projects, memory, traces, scan, and mounted witan-code tables. Values:
         txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.
+    target: Which deployment to talk to.
+        Names a [targets.<name>] block, and applies to every command — `witan
+        tasks`, `witan memory` and `witan code index` included, none of which
+        could be pointed at one before. Overrides auto-detection by checkout
+        path and repo org. Env: WITAN_TARGET.
     """
     set_output_format(output_format)
+    # Bound HERE, before `app(tokens)`, which is the whole point: the routing
+    # check below runs before a command's own arguments are bound, so a
+    # per-command flag was invisible to it. See witan/cli/selected_target.py.
+    set_selected_target(target)
     # ★ HERE TOO, AND THIS IS THE PATH THAT MATTERS. `witan code …` mounts
     # witan_code's cyclopts App (`app.command(_code_app, name="code")`) but NOT
     # its meta launcher, so dispatch runs through THIS function and witan-code's
@@ -315,32 +326,20 @@ def _warn_about_routing(tokens: tuple[str, ...]) -> None:
     test: cyclopts has already bound this function's own options by the time it
     is called, so the command name is the first token that survives.
 
-    Not an explicit ``--target`` either, and that is the same argument a third
-    time. This runs BEFORE ``app(tokens)``, which is the call that binds a
-    command's arguments — so all this can resolve is the ambient target
-    (``WITAN_TARGET``, else the checkout's ``match_*``), which under
-    ``witan whoami --target qa`` is a DIFFERENT target from the one the command
-    reports on. Warning then answers about a target nobody asked about and,
-    worse, stamps that target's throttle file: the run that should have warned
-    the human is silenced for a day by a run that was about something else.
-    Under-warning here is the safe direction, and the gap is small — every
-    command that takes ``--target`` either prints the routing itself
-    (``whoami``'s ``Code`` line) or is not an indexing command.
-
-    Presence is all this checks, never which command the flag binds to: argv
-    cannot tell you that (``witan run <agent> --target qa`` may be the agent's
-    flag), and guessing is how the wrong target gets warned about again.
-    Making ``--target`` a real app-level option is the actual fix — see
-    tk-target-is-a-per-command-flag-so-the-pre-dispatch-44ea22, which also
-    records why that cannot be done additively.
+    An explicit ``--target`` is now HONOURED rather than dodged. It used to be
+    declared per command, so it was bound by ``app(tokens)`` — the line after
+    this one — and invisible here; the check resolved the ambient target,
+    warned about a target nobody had asked about, and stamped that target's
+    throttle file, silencing the next ambient run for a day. The workaround was
+    to skip the warning entirely whenever ``--target`` appeared in argv. Now
+    the launcher binds it, so the check answers for the target the command will
+    actually use, and its throttle is keyed to that same target.
     """
     if not stderr_console.is_terminal:
         return
     if tokens[:1] == ("serve",):
         return
-    if any(t == "--target" or t.startswith("--target=") for t in tokens):
-        return
-    warn_if_code_graph_is_local(throttle=True)
+    warn_if_code_graph_is_local(throttle=True, target=selected_target())
 
 
 def main() -> None:
