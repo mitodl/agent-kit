@@ -21,6 +21,25 @@ a MINOR bump may include breaking changes).
   call's *read* commit. `null` now means the check never ran. Found while
   investigating `tk-investigate-the-root-cause-of-the-2s-verificatio-f154aa`
   against 14 days of deployed production logs.
+- **`witan migrate merge` verifies that every source row arrived.** The counts
+  it printed said what the merge *decided*; none of them answered "did all of
+  it arrive?". The documented way to answer that was `omnigraph export` on both
+  stores plus a `jq` type-count comparison, which is unavailable to exactly the
+  person who most needs it — once the target is the deployed graph, the data
+  tier is ClusterIP-only and an ordinary user holds no bearer token to export
+  it. `store_merge` and `merge_store` now also report `source_rows`,
+  `passthrough` (edge and unkeyed rows) and `duplicate_slugs`, and the merge
+  reconciles them against its decisions: `Verified: all N source row(s)
+  accounted for (…)`, showing the arithmetic rather than a verdict the reader
+  cannot check. Two identities are checked, because the two transports stop in
+  different halves — over the deployment a failed batch returns no decisions
+  at all, while in process reconciliation completes over the whole export
+  before the first load, so only a written-row check sees a load that died. A
+  merge that stops part-way (including one interrupted at the terminal) now
+  reports how much landed and that re-running is the remedy, instead of only
+  reporting that it failed. A deployment too old to report the fields says so
+  rather than computing a zero, which would have read as a merge that lost
+  every edge row in the source.
 
 - **`task_search`/`workflow_project_search`: BM25 full-text search for Task and
   WorkflowProject nodes.** Only Memory had full-text search before this —

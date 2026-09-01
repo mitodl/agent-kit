@@ -7,7 +7,7 @@ from typing import Annotated, NoReturn
 
 import cyclopts
 
-from .. import merge_watermark
+from .. import merge_report, merge_watermark
 from ._common import _srv, console, esc, print_error, remote_proxy
 
 migrate_app = cyclopts.App(
@@ -290,6 +290,124 @@ def _report_divergence(result: dict, since: dict | None, dry_run: bool) -> None:
         )
 
 
+def _report_accounting(result: dict, *, incomplete_reason: str | None = None) -> None:
+    """Answer "did all of it arrive?" from the merge's own numbers.
+
+    The counts above this in the summary say what the merge DECIDED. None of
+    them says whether the decisions covered the whole source, which is the
+    question someone migrating into the deployment actually has — and the one
+    they cannot answer for themselves, since the data tier is ClusterIP-only
+    and they hold no token to export the graph they just wrote to.
+
+    ``incomplete_reason`` is set when this is rendering the totals off a failed
+    merge. The numbers are then a floor rather than a result, and saying so is
+    the difference between "here is what landed" and a report that reads like a
+    successful merge with odd arithmetic.
+    """
+    check = merge_report.accounting(result)
+    if check is None:
+        # Deliberately NOT "verify by hand per the runbook". The manual check
+        # is `omnigraph export` on the target, and against a deployment the
+        # caller cannot run it — the data tier is ClusterIP-only and they hold
+        # no token for it, which is the same gap this whole report exists to
+        # close. Sending them to a check they cannot run is worse than saying
+        # plainly that nobody without cluster access can answer this yet.
+        console.print(
+            "[yellow]This deployment does not report merge accounting, so "
+            "witan cannot confirm every source row arrived. Ask for it to be "
+            "upgraded; until then only someone with data-tier access can "
+            "verify this merge (`omnigraph export` on the target).[/yellow]"
+        )
+        return
+
+    total = check["source_rows"]
+    b = check["breakdown"]
+    # Shown for a complete merge too, not just a failing one. The arithmetic is
+    # the evidence; a bare "verified" the reader cannot check is worth less
+    # than the four numbers it was computed from.
+    working = (
+        f"{b['added']} added + {b['updated']} updated + {b['kept_target']} kept"
+        f" + {b['passthrough']} edge/unkeyed"
+    )
+    if b["duplicate_slugs"]:
+        working += f" + {b['duplicate_slugs']} duplicate slug(s)"
+
+    if check["complete"] and not incomplete_reason:
+        verb = "would be accounted for" if check["dry_run"] else "accounted for"
+        console.print(
+            f"[green]Verified[/green]: all {total} source row(s) {verb} ({working})."
+        )
+        return
+
+    console.print(
+        f"\n[red]NOT verified[/red]: the source held {total} row(s) and this "
+        f"merge accounts for {check['decided']} ({working})."
+    )
+    if check["undecided"] > 0:
+        console.print(
+            f"  {check['undecided']} row(s) never reached a decision — they "
+            "were read from the source and never sent."
+        )
+    if check["unwritten"]:
+        console.print(
+            f"  {check['unwritten']} row(s) were decided but not written "
+            f"({check['rows_loaded']} of {check['expected_loaded']} loaded)."
+        )
+    if incomplete_reason:
+        console.print(f"  {incomplete_reason}")
+    console.print(
+        "[yellow]Re-run the same `witan migrate merge` — it is idempotent, so "
+        "rows that already landed are kept rather than duplicated.[/yellow]"
+    )
+
+
+def _report_partial(exc: BaseException) -> None:
+    """Render the accounting off a merge that died part-way, if it left any.
+
+    A merge's batches commit independently. The exception says what went wrong
+    and cannot say how much landed, and "how much landed" is what decides
+    whether to re-run or go looking — so the totals travel out on the exception
+    (``witan.merge_report.attach_partial``) and are reported here.
+    """
+    partial = merge_report.partial_of(exc)
+    if partial is None:
+        return
+    applied = partial.get("batches_applied") or 0
+    if applied:
+        # Only the COMPLETED batches are asserted here. Whether the one that
+        # failed landed is unknown on some paths (`RemoteWriteIndeterminate` is
+        # dispatched-and-cut, and says so itself), so this states the
+        # observable fact and leaves that batch's fate to the failure's own
+        # message rather than implying the whole merge stopped cleanly.
+        _report_accounting(
+            partial,
+            incomplete_reason=(
+                f"{applied} batch(es) landed before this and are not rolled back."
+            ),
+        )
+        return
+
+    # NO BATCH IS CONFIRMED APPLIED, which is NOT the same as nothing having
+    # landed — `RemoteWriteIndeterminate` means the batch in flight was
+    # dispatched and may well have committed. The accounting block is dropped
+    # here because with a zero batch count it can add no number the failure
+    # does not already carry, and burying a refusal that is meant to read as
+    # one line costs more than it gives.
+    #
+    # ★ THAT ONLY HOLDS WHILE THE FAILURE SAYS SOMETHING. Every error on this
+    # path does (`_merge_batch_refusal`, `_merge_batch_indeterminate`, the
+    # data-tier outage message, a tool refusal) — except an interrupt, which
+    # has no message of its own. Silence there would read as "nothing
+    # happened", so it gets the one fact it is missing.
+    if partial.get("interrupted"):
+        console.print(
+            "[yellow]The batch in flight when you interrupted may or may not "
+            "have been applied, and nothing after it was sent. Re-run the same "
+            "`witan migrate merge` — it is idempotent, so a batch that did land "
+            "is reconciled rather than duplicated.[/yellow]"
+        )
+
+
 def _merge(
     source: str | None,
     target: str | None,
@@ -319,7 +437,18 @@ def _merge(
         )
     except RuntimeError as exc:
         print_error(exc)
+        _report_partial(exc)
         raise SystemExit(1) from None
+    except KeyboardInterrupt as exc:
+        # Caught HERE rather than left to the top-level handler, and it is the
+        # case this reporting exists for: a merge interrupted mid-batch has
+        # already applied everything before the interrupt, and the default
+        # traceback says nothing about how much. The watermark stays retired
+        # (`_invalidate_watermark` ran before the first batch), which is the
+        # right state for a graph whose last write was half a merge.
+        console.print("\n[red]Interrupted.[/red]")
+        _report_partial(exc)
+        raise SystemExit(130) from None
 
     if dry_run:
         console.print(f"[yellow]Dry run[/yellow] against {result['target']}:")
@@ -329,6 +458,7 @@ def _merge(
             f"{result['added']} to add, {result['updated']} to update, "
             f"{result['kept_target']} kept (target already newer-or-equal)."
         )
+        _report_accounting(result)
         # Deliberately not recorded: the watermark describes a graph with this
         # merge's winners in it, and a dry run wrote none of them. Storing it
         # would tell the next run that everything up to here had already been
@@ -342,6 +472,7 @@ def _merge(
         f"{result['kept_target']} kept (target already newer-or-equal), "
         f"{result['rows_loaded']} rows loaded."
     )
+    _report_accounting(result)
     _report_divergence(result, since, dry_run=False)
     _record_watermark(source, key, result)
 

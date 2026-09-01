@@ -40,7 +40,7 @@ from witan_core.omnigraph import (
 )
 
 from . import config as cfg_module
-from . import elicit, readiness, scan, session_state
+from . import elicit, merge_report, readiness, scan, session_state
 from . import repo as repo_module
 from .graph import (
     OmnigraphClient,
@@ -1750,7 +1750,7 @@ def _claim_authorship(
 
 def _classify_rows(
     rows: Iterable[dict], source: str
-) -> tuple[dict[tuple[str, str], dict], list[dict]]:
+) -> tuple[dict[tuple[str, str], dict], list[dict], int]:
     """Split ``omnigraph export`` records into reconcilable nodes and pass-through rows.
 
     An export holds two record shapes, and they do not share a discriminator:
@@ -1767,9 +1767,20 @@ def _classify_rows(
     ``"type"`` as corruption and raised on the first edge, so a merge sourced
     from or targeting any graph with edges failed outright. ``source`` names
     what is being classified so the surviving error still points at a file.
+
+    The third element is how many rows were DISPLACED by the keying above. The
+    dict assignment means a later row sharing an earlier one's ``(type, slug)``
+    overwrites it, so **the last such row in ``rows`` is the one kept and
+    reconciled** and each earlier one is counted here — worth knowing for a
+    hand-assembled source, since which of the two is reconciled follows from
+    their order. Zero for a real export, where slug is the key. Returned rather
+    than dropped so that such a source still balances against
+    :func:`witan.merge_report.accounting`'s identity instead of reading as
+    rows that went missing.
     """
     nodes: dict[tuple[str, str], dict] = {}
     passthrough: list[dict] = []
+    duplicates = 0
     for row in rows:
         # A JSONL line is only *conventionally* an object: `[]`, `null`, `3`
         # and `"…"` all parse fine and would reach `.get` as an AttributeError,
@@ -1790,13 +1801,15 @@ def _classify_rows(
             continue
         slug = (row.get("data") or {}).get("slug")
         if slug:
+            if (row_type, slug) in nodes:
+                duplicates += 1
             nodes[(row_type, slug)] = row
         else:
             passthrough.append(row)
-    return nodes, passthrough
+    return nodes, passthrough, duplicates
 
 
-def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict]]:
+def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict], int]:
     """Read an ``omnigraph export`` JSONL file into ``_classify_rows``'s split.
 
     An export is an external boundary (another process's output, not
@@ -2125,6 +2138,12 @@ def merge_store(
     ``rows_loaded`` and the raw ``load`` output. ``watermark`` is the mark to
     record for the next merge — the caller persists it, since only the caller
     knows which two stores these were.
+
+    Also returns ``source_rows``/``passthrough``/``duplicate_slugs``, which let
+    :func:`witan.merge_report.accounting` answer "did all of it arrive?"
+    without a second export of either store. A load that fails part-way leaves
+    the batches before it applied; how far it got is attached to the raised
+    exception by :func:`witan.merge_report.attach_partial` rather than lost.
     """
     # `_acquire_store_lock`/`_ensure_graph` build filesystem `Path`s directly
     # from the URI and don't strip a URI scheme — same convention as the rest
@@ -2171,12 +2190,22 @@ def merge_store(
                 _store_client(source).export_to(source_file, label="export (source)")
             target_client.export_to(target_file, label="export (target)")
 
-            source_nodes, source_edges = _parse_export(source_file)
-            target_nodes, _ = _parse_export(target_file)
+            source_nodes, source_edges, source_dupes = _parse_export(source_file)
+            target_nodes, _, _ = _parse_export(target_file)
 
             decisions, winners = _reconcile_nodes(source_nodes, target_nodes, since)
             counts = _decision_counts(decisions)
             watermark = _next_watermark(None, source_nodes, target_nodes, winners)
+            # The accounting identity `witan.merge_report` checks against, in
+            # the terms this side of the merge knows: every source record is a
+            # decision, a pass-through, or a collapsed duplicate. Counted from
+            # the classifier's own output rather than by re-reading the export,
+            # so the total and the buckets cannot disagree.
+            accounting = {
+                "source_rows": len(source_nodes) + len(source_edges) + source_dupes,
+                "passthrough": len(source_edges),
+                "duplicate_slugs": source_dupes,
+            }
 
             if dry_run:
                 return {
@@ -2184,6 +2213,7 @@ def merge_store(
                     "target": target,
                     "decisions": decisions,
                     "watermark": watermark,
+                    **accounting,
                     **counts,
                 }
 
@@ -2195,6 +2225,7 @@ def merge_store(
                     "decisions": decisions,
                     "rows_loaded": 0,
                     "watermark": watermark,
+                    **accounting,
                     **counts,
                 }
 
@@ -2217,10 +2248,34 @@ def merge_store(
             # makes a re-sent row lose to its own already-applied copy, which
             # is the same "repeatable by construction" property this function's
             # docstring already promises.
-            outputs = [
-                target_client.load_batch(batch, "merge")
-                for batch in chunking.chunk_records(to_load)
-            ]
+            outputs = []
+            loaded = 0
+            batches = list(chunking.chunk_records(to_load))
+            for index, batch in enumerate(batches):
+                try:
+                    outputs.append(target_client.load_batch(batch, "merge"))
+                except BaseException as exc:
+                    # The batches before this one ARE applied — the comment
+                    # above says so — and that is precisely what a caller
+                    # cannot see from an exception. Attaching how far the merge
+                    # got is what lets the CLI report an incomplete merge as
+                    # incomplete instead of only as failed.
+                    merge_report.attach_partial(
+                        exc,
+                        {
+                            "target": target,
+                            "batches": len(batches),
+                            "batches_applied": index,
+                            # See the remote path's copy: an interrupt is the
+                            # one failure here with no message of its own.
+                            "interrupted": isinstance(exc, KeyboardInterrupt),
+                            "rows_loaded": loaded,
+                            **accounting,
+                            **counts,
+                        },
+                    )
+                    raise
+                loaded += len(batch)
             load_out = "\n".join(out.strip() for out in outputs if out.strip())
 
     return {
@@ -2228,8 +2283,11 @@ def merge_store(
         "target": target,
         "decisions": decisions,
         "rows_loaded": len(to_load),
+        "batches": len(batches),
+        "batches_applied": len(batches),
         "output": load_out.strip(),
         "watermark": watermark,
+        **accounting,
         **counts,
     }
 
@@ -2339,6 +2397,16 @@ def store_merge(
     ``kept_target``/``diverged`` counts, ``rows_loaded``, and the running
     ``watermark`` to hand to the next batch. With ``dry_run`` the decisions are
     computed and nothing is written.
+
+    Also returns this batch's ``source_rows`` (records received),
+    ``passthrough`` (edge rows and any typed row with no slug — loaded
+    additively, never reconciled) and ``duplicate_slugs`` (records displaced by
+    a LATER record sharing their ``(type, slug)``; the last one in the batch is
+    the one reconciled). Summing them across
+    the batches of one merge is what lets a client confirm every source row was
+    accounted for — the caller cannot export the deployed graph to check by
+    hand, which is the whole reason these are reported. See
+    :mod:`witan.merge_report` for the identity they satisfy.
     """
     if not rows:
         return {
@@ -2346,10 +2414,21 @@ def store_merge(
             "rows_loaded": 0,
             "dry_run": dry_run,
             "watermark": watermark or {"source_ts": None, "target_ts": None},
+            "source_rows": 0,
+            "passthrough": 0,
+            "duplicate_slugs": 0,
             **_decision_counts([]),
         }
 
-    source_nodes, source_edges = _classify_rows(rows, "merge batch")
+    source_nodes, source_edges, source_dupes = _classify_rows(rows, "merge batch")
+    # This batch's share of the accounting identity — see
+    # `witan.merge_report`. Summed across batches by the client, which is the
+    # only side that knows how many batches one merge became.
+    accounting = {
+        "source_rows": len(source_nodes) + len(source_edges) + source_dupes,
+        "passthrough": len(source_edges),
+        "duplicate_slugs": source_dupes,
+    }
 
     # Before reconciliation, not after: reconciliation compares timestamps, so
     # the restamp cannot change who wins, and applying it here means the winner
@@ -2368,7 +2447,7 @@ def store_merge(
         target_file = Path(tmp) / "target.jsonl"
         with _data_tier_outage_reads_as_retryable():
             client.export_to(target_file, label="export (deployed graph)")
-        target_nodes, _ = _parse_export(target_file)
+        target_nodes, _, _ = _parse_export(target_file)
 
     decisions, winners = _reconcile_nodes(source_nodes, target_nodes, since)
     counts = _decision_counts(decisions)
@@ -2391,6 +2470,7 @@ def store_merge(
             "rows_loaded": 0,
             "authorship_claimed": claimed,
             "watermark": next_watermark,
+            **accounting,
             **counts,
         }
 
@@ -2403,6 +2483,7 @@ def store_merge(
         "rows_loaded": len(to_load),
         "authorship_claimed": claimed,
         "watermark": next_watermark,
+        **accounting,
         **counts,
     }
 
