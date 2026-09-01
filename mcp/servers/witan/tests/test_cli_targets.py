@@ -1000,6 +1000,118 @@ def test_set_verifies_a_changed_issuer_before_writing(config_file, monkeypatch):
     assert config_file.read_text() == _AMENDABLE
 
 
+def test_set_does_not_match_a_key_inside_a_multiline_string(config_file, monkeypatch):
+    """Regression, PR #317 review: a regex scan has no TOML lexical context.
+
+    `author = "…"` inside a multi-line string is CONTENT, not an assignment.
+    Rewriting it corrupted `model`, popped `author` from the pending set so it
+    was never actually assigned, and still parsed — so the command reported
+    success having done neither of the two things it claimed.
+    """
+    from witan.cli.targets import set_
+
+    config_file.write_text(
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'model = """\nauthor = "embedded text"\n"""\n'
+    )
+    _capture(monkeypatch)
+    set_("ol", author="new@example.org")
+
+    block = _targets_of(config_file)["ol"]
+    assert block["model"] == 'author = "embedded text"\n'
+    assert block["author"] == "new@example.org"
+
+
+def test_set_ignores_a_key_inside_a_multiline_array(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text(
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'match_orgs = [\n  "mitodl",\n  "author = fake",\n]\n'
+    )
+    _capture(monkeypatch)
+    set_("ol", author="new@example.org")
+
+    block = _targets_of(config_file)["ol"]
+    assert block["match_orgs"] == ["mitodl", "author = fake"]
+    assert block["author"] == "new@example.org"
+
+
+def test_set_keeps_an_inline_comment_on_the_key_it_changes(config_file, monkeypatch):
+    """Regression, PR #317 review: the promise is that comments survive.
+
+    Also covers the two things a naive `split("#")` gets wrong — an indented
+    assignment, and a `#` that is part of the value rather than a comment.
+    """
+    from witan.cli.targets import set_
+
+    config_file.write_text(
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'author = "old@example.org"   # attribution identity\n'
+        '  agent = "claude"\n'
+        'graph = "has#hash"  # the value contains a hash\n'
+    )
+    _capture(monkeypatch)
+    set_("ol", author="new@example.org", agent="pi", graph="other#hash")
+
+    text = config_file.read_text()
+    assert 'author = "new@example.org"   # attribution identity\n' in text
+    assert '  agent = "pi"\n' in text  # indentation kept
+    assert 'graph = "other#hash"  # the value contains a hash\n' in text
+    assert _targets_of(config_file)["ol"]["graph"] == "other#hash"
+
+
+def test_set_preserves_the_config_file_mode(config_file, no_verify, monkeypatch):
+    """Regression, PR #317 review: `os.replace` keeps the TEMP file's mode.
+
+    A config chmod'd to 0600 because it holds `token`/`code_token` was widened
+    to the umask default (commonly 0644) by any `target add`/`set`/`remove`.
+    """
+    from witan.cli.targets import add, set_
+
+    config_file.write_text(
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'token = "secret-abc"\n'
+    )
+    config_file.chmod(0o600)
+    _capture(monkeypatch)
+
+    set_("ol", author="new@example.org")
+    assert config_file.stat().st_mode & 0o777 == 0o600
+
+    # The same helper backs `add` and `remove`, which had the same hole.
+    add("other", server="/tmp/g.omni", author="x")
+    assert config_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_set_rechecks_the_transport_rule_when_remote_url_is_touched(
+    config_file, monkeypatch
+):
+    """Regression, PR #317 review: clearing the endpoint strands `mcp`.
+
+    `--remote-url ''` used to skip the transport check entirely, writing a
+    target whose code-graph writes point at an endpoint that is not configured.
+    """
+    from witan.cli.targets import set_
+
+    original = (
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'code_transport = "mcp"\n'
+    )
+    config_file.write_text(original)
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        set_("ol", remote_url="")
+
+    assert "needs remote_url" in recorder.export_text()
+    assert config_file.read_text() == original
+
+
 def test_set_result_is_readable_by_load_remote_config(
     config_file, no_verify, monkeypatch
 ):

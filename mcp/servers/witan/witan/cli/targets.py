@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import tomllib
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import cyclopts
 import tomli_w
@@ -195,18 +196,84 @@ def _key_re(key: str) -> re.Pattern[str]:
     return re.compile(rf"^\s*(?:{quoted}|\"{quoted}\"|'{quoted}')\s*=")
 
 
-def _spans_lines(line: str) -> bool:
-    """Whether ``line``'s value is left open — an array or table split over lines.
+class _LineScan(NamedTuple):
+    """Where one line leaves the scanner, and where its own comment starts."""
 
-    Rewriting only the first line of a multi-line array would orphan its
-    remaining elements and the closing bracket, which is a syntax error rather
-    than a wrong value. Detected so the command can refuse with a message
-    naming the cause; the parse check before writing would otherwise report it
-    as an unattributed TOML error.
+    open_delim: str | None
+    """The ``\"\"\"``/``'''`` still unclosed at end of line, if any."""
+    depth: int
+    """Bracket nesting still open at end of line — a multi-line array or table."""
+    comment_at: int | None
+    """Index of the ``#`` starting this line's trailing comment, if any."""
+
+
+def _scan(line: str, open_delim: str | None, depth: int) -> _LineScan:
+    """Walk one line's TOML lexical structure, given the state it starts in.
+
+    Regex alone cannot tell an assignment from text that merely looks like one.
+    A multi-line string is the case that bites:
+
+        model = \"\"\"
+        author = "embedded text"
+        \"\"\"
+
+    the middle line is string CONTENT, but ``_key_re("author")`` matches it. A
+    scan without lexical state rewrote that content, popped ``author`` from the
+    pending set so it was never actually assigned, and still parsed afterwards
+    — so the command corrupted one value, silently skipped the change it was
+    asked to make, and reported success.
     """
-    value = line.split("=", 1)[1] if "=" in line else ""
-    value = value.split("#", 1)[0]
-    return value.count("[") > value.count("]") or value.count("{") > value.count("}")
+    i, size, comment_at = 0, len(line), None
+    while i < size:
+        if open_delim is not None:
+            if line.startswith(open_delim, i):
+                i, open_delim = i + 3, None
+            else:
+                i += 1
+            continue
+        if line.startswith('"""', i) or line.startswith("'''", i):
+            open_delim, i = line[i : i + 3], i + 3
+            continue
+        char = line[i]
+        if char in "\"'":
+            i += 1
+            while i < size:
+                # Only a basic string honours backslash escapes; in a literal
+                # string a backslash is an ordinary character.
+                if char == '"' and line[i] == "\\":
+                    i += 2
+                    continue
+                if line[i] == char:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if char == "#":
+            comment_at = i
+            break
+        if char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+        i += 1
+    return _LineScan(open_delim, depth, comment_at)
+
+
+def _rewritten(line: str, key: str, value: object, comment_at: int | None) -> str:
+    """``line`` with ``key``'s value replaced, keeping indent and any comment.
+
+    Emitting a bare ``_toml_value`` would drop an inline comment on the very
+    key being changed (``author = "old"  # attribution identity``), which
+    contradicts what this command promises about comments — and would silently
+    de-indent an indented assignment.
+    """
+    indent = line[: len(line) - len(line.lstrip())]
+    trailing = ""
+    if comment_at is not None:
+        before = line[:comment_at]
+        gap = before[len(before.rstrip()) :]
+        trailing = gap + line[comment_at:].rstrip("\n")
+    return f"{indent}{_toml_value(key, value)}{trailing}\n"
 
 
 def set_target_keys(
@@ -215,12 +282,16 @@ def set_target_keys(
     """Assign ``updates`` inside ``[targets.<name>]``, a line at a time.
 
     Returns ``(new_text, found)``. Keys already present are rewritten where
-    they sit; the rest are appended to the end of the table in
-    :data:`_FIELD_ORDER`. Everything else in the block — other keys, including
-    ones no ``add`` flag can write, and any comments between them — is carried
-    through untouched, which is the whole point of this over ``add --force``.
+    they sit — keeping their indentation and any trailing comment — and the
+    rest are appended to the end of the table in :data:`_FIELD_ORDER`.
+    Everything else in the block is carried through untouched, which is the
+    whole point of this over ``add --force``.
 
-    Raises ``ValueError`` if an existing assignment spans several lines.
+    Only real top-level assignments are matched: :func:`_scan` carries TOML
+    lexical state across the block, so a line that merely looks like a ``key =``
+    because it sits inside a multi-line string or array is left alone.
+
+    Raises ``ValueError`` if the assignment to rewrite spans several lines.
     """
     lines = text.splitlines(keepends=True)
     span = find_target_block(lines, name)
@@ -230,14 +301,29 @@ def set_target_keys(
 
     pending = dict(updates)
     body: list[str] = []
+    open_delim, depth = None, 0
     for line in lines[start:end]:
-        key = next((k for k in pending if _key_re(k).match(line)), None)
+        # Whether this line STARTS at the table's top level. Computed before
+        # scanning it, since a line that opens a multi-line value is itself a
+        # genuine assignment.
+        top_level = open_delim is None and depth <= 0
+        scan = _scan(line, open_delim, depth)
+        key = (
+            next((k for k in pending if _key_re(k).match(line)), None)
+            if top_level
+            else None
+        )
         if key is None:
             body.append(line)
+            open_delim, depth = scan.open_delim, scan.depth
             continue
-        if _spans_lines(line):
+        if scan.open_delim is not None or scan.depth > 0:
+            # Rewriting only the first line of a value that continues would
+            # orphan the rest — a syntax error rather than a wrong value. Named
+            # so the refusal says which key; the parse check before writing
+            # would otherwise report it as an unattributed TOML error.
             raise ValueError(key)
-        body.append(_toml_value(key, pending.pop(key)) + "\n")
+        body.append(_rewritten(line, key, pending.pop(key), scan.comment_at))
 
     if body and not body[-1].endswith("\n"):
         body[-1] += "\n"
@@ -269,6 +355,12 @@ def _write_config(path: Path, text: str) -> None:
     reader already decodes it as such (``load_toml`` opens in binary and hands
     bytes to ``tomllib``), and ``default_config_toml()`` is full of non-ASCII
     box-drawing characters that a locale codec like cp1252 cannot encode.
+
+    Carrying the original's permissions across matters because the replacement
+    is a DIFFERENT file: ``os.replace`` keeps the temp file's mode, which is
+    ``0o666 & ~umask`` — commonly 0644. A config the user chmod'd to 0600
+    because it holds a ``token``/``code_token`` would be quietly widened to
+    world-readable by an unrelated setting change.
     """
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
@@ -276,6 +368,10 @@ def _write_config(path: Path, text: str) -> None:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
+        # Only when replacing: a file being created here has no prior mode to
+        # inherit, and the umask is the right default for a new one.
+        if path.exists():
+            os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
         os.replace(tmp, path)
     except OSError:
         tmp.unlink(missing_ok=True)
@@ -564,7 +660,12 @@ def _merged_invariant_error(merged: dict[str, object], touched: set[str]) -> str
             "deployed witan with a per-user OIDC token; without an issuer it has "
             "nowhere to get one."
         )
-    if not touched & {"code_transport", "code_server"}:
+    # `remote_url` counts as touching the transport rule, not just the issuer
+    # one: `set ol --remote-url ""` against a block that already says
+    # `code_transport = "mcp"` leaves code-graph writes pointed at an endpoint
+    # that is no longer configured, and the failure surfaces later, somewhere
+    # else.
+    if not touched & {"code_transport", "code_server", "remote_url"}:
         return None
     transport = merged.get("code_transport")
     if transport == "direct" and not merged.get("code_server"):
