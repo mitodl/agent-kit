@@ -227,6 +227,52 @@ def test_repair_still_wins_over_a_conflict_status():
     assert ogh.classify_status(409, message) == ogh.NEEDS_REPAIR
 
 
+def test_full_text_rebuild_required_is_terminal_not_a_retryable_conflict():
+    """omnigraph 0.10.0 (upstream #581) answers a stale full-text index with a
+    409 carrying `full_text_index_rebuild_required`. The bare-409 rule below it
+    would retry that to exhaustion and bury the remedy, so this must be caught
+    on the structured key AND on the server's prose."""
+    body = json.dumps(
+        {
+            "error": (
+                "full-text index 'memory_content' requires rebuild: analyzer "
+                "generation cannot be proven compatible; run omnigraph "
+                "rebuild-full-text-indexes <URI> --branch <branch> on the live "
+                "branch (historical snapshots are unchanged)"
+            ),
+            "code": "conflict",
+            "details": {
+                "full_text_index_rebuild_required": {
+                    "index": "memory_content",
+                    "reason": "analyzer generation cannot be proven compatible",
+                }
+            },
+        }
+    )
+    assert ogh.classify_status(409, body) == ogh.FULL_TEXT_REBUILD_REQUIRED
+    assert ogh.classify_status(409, body) != ogh.RETRYABLE
+
+    # The detail key alone is enough — a relay that drops the prose still
+    # classifies correctly.
+    assert (
+        ogh.classify_status(
+            409, '{"details": {"full_text_index_rebuild_required": {}}}'
+        )
+        == ogh.FULL_TEXT_REBUILD_REQUIRED
+    )
+
+
+def test_a_plain_conflict_is_still_retryable():
+    """The guard above must not swallow the ordinary lost-race 409 that
+    `task_claim` depends on."""
+    message = (
+        "write authority 'graph_head:main' changed during preparation "
+        "(expected 01M08E24Y, current 01M08E27K) - reprepare from the "
+        "current branch state"
+    )
+    assert ogh.classify_status(409, message) == ogh.RETRYABLE
+
+
 def test_error_message_uses_the_servers_own_wording():
     body = json.dumps({"error": "policy denied action 'change'", "code": "forbidden"})
     assert ogh.error_message(403, body) == (
