@@ -41,6 +41,7 @@ from witan_core.omnigraph import (
 
 from . import config as cfg_module
 from .graph import OmnigraphClient, is_stale_schema
+from .visualize import short_repo
 
 # Graph registration changes only when provisioning does (a Pulumi deploy), but
 # `_client_for_repo` asks "does this store exist" on every MCP tool call. One
@@ -142,6 +143,27 @@ class StoreRef:
         if self.is_remote and self.graph_id:
             return f"{self.uri} (graph {self.graph_id})"
         return self.uri
+
+    @property
+    def label(self) -> str:
+        """Short identifier for a table column — which graph, not where it is.
+
+        :meth:`__str__` is the full address and is what a refusal should print.
+        This is the version that fits in a column: the part that DIFFERS
+        between rows, with the endpoint or directory prefix that is identical
+        on every row dropped.
+
+        Taking ``os.path.basename`` of the full address instead is right only
+        for a local store. An MCP-routed address ends in the endpoint URL, so
+        every cluster graph in a listing came out as the same ``mcp)`` — which
+        made ``witan-code doctor`` unable to name which graph was broken in
+        exactly the configuration a deployed target now uses.
+        """
+        if self.via_mcp:
+            return short_repo(self.via_mcp)
+        if self.is_remote:
+            return self.graph_id or self.uri
+        return Path(self.uri).name
 
     def client(
         self,

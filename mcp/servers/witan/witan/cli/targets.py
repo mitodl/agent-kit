@@ -1,4 +1,4 @@
-"""``witan target add|list|remove`` — manage ``[targets.<name>]`` config blocks.
+"""``witan target add|set|list|remove`` — manage ``[targets.<name>]`` config blocks.
 
 Joining a deployed witan used to mean hand-writing TOML: two URLs you had to
 get exactly right, in a file you had to know the path of. A typo in the issuer
@@ -14,12 +14,21 @@ issuer is then a clear error about the issuer, before anything is written.
 Blocks are *appended as text* rather than round-tripped through a TOML writer:
 the shipped config.toml is almost entirely comments documenting every key, and
 re-serialising the parsed document would silently delete all of them.
+
+``target set`` extends that a line at a time. It exists because amending one
+key on a registered target otherwise meant ``add --force``, which rebuilds the
+block from the flags it was given and so DELETES every key it cannot express —
+``token``, ``model``, ``code_dir``, ``code_token``, ``index_role``, ``actor``
+are all readable from a target block and none of them are ``add`` parameters.
+Measured, not inferred: ``add ol --force`` replaying the four flags the
+onboarding doc lists drops six keys off a block that had them.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import tomllib
 from pathlib import Path
 from typing import Literal
 
@@ -171,6 +180,78 @@ def replace_target_block(text: str, name: str, block: str) -> tuple[str, bool]:
         return text, False
     start, end = span
     return "".join(lines[:start]) + block + "".join(lines[end:]), True
+
+
+def _key_re(key: str) -> re.Pattern[str]:
+    """Match a ``key = `` assignment in any of TOML's key spellings.
+
+    Same reasoning as :func:`_header_re`: a key may be bare, basic-quoted or
+    literal-quoted. Missing a spelling here would leave the original
+    assignment in place *and* append a second one, which is a duplicate-key
+    TOML error — so the whole file stops parsing rather than one setting being
+    wrong.
+    """
+    quoted = re.escape(key)
+    return re.compile(rf"^\s*(?:{quoted}|\"{quoted}\"|'{quoted}')\s*=")
+
+
+def _spans_lines(line: str) -> bool:
+    """Whether ``line``'s value is left open — an array or table split over lines.
+
+    Rewriting only the first line of a multi-line array would orphan its
+    remaining elements and the closing bracket, which is a syntax error rather
+    than a wrong value. Detected so the command can refuse with a message
+    naming the cause; the parse check before writing would otherwise report it
+    as an unattributed TOML error.
+    """
+    value = line.split("=", 1)[1] if "=" in line else ""
+    value = value.split("#", 1)[0]
+    return value.count("[") > value.count("]") or value.count("{") > value.count("}")
+
+
+def set_target_keys(
+    text: str, name: str, updates: dict[str, object]
+) -> tuple[str, bool]:
+    """Assign ``updates`` inside ``[targets.<name>]``, a line at a time.
+
+    Returns ``(new_text, found)``. Keys already present are rewritten where
+    they sit; the rest are appended to the end of the table in
+    :data:`_FIELD_ORDER`. Everything else in the block — other keys, including
+    ones no ``add`` flag can write, and any comments between them — is carried
+    through untouched, which is the whole point of this over ``add --force``.
+
+    Raises ``ValueError`` if an existing assignment spans several lines.
+    """
+    lines = text.splitlines(keepends=True)
+    span = find_target_block(lines, name)
+    if span is None:
+        return text, False
+    start, end = span
+
+    pending = dict(updates)
+    body: list[str] = []
+    for line in lines[start:end]:
+        key = next((k for k in pending if _key_re(k).match(line)), None)
+        if key is None:
+            body.append(line)
+            continue
+        if _spans_lines(line):
+            raise ValueError(key)
+        body.append(_toml_value(key, pending.pop(key)) + "\n")
+
+    if body and not body[-1].endswith("\n"):
+        body[-1] += "\n"
+    body.extend(
+        f"{_toml_value(key, pending[key])}\n" for key in _FIELD_ORDER if key in pending
+    )
+    # Anything not in _FIELD_ORDER, so a new key stays reachable even if the
+    # ordering list has not been taught about it.
+    body.extend(
+        f"{_toml_value(key, value)}\n"
+        for key, value in pending.items()
+        if key not in _FIELD_ORDER
+    )
+    return "".join(lines[:start]) + "".join(body) + "".join(lines[end:]), True
 
 
 def _write_config(path: Path, text: str) -> None:
@@ -456,6 +537,235 @@ def add(
         console.print(
             f"  Next: [bold]witan login --target {name}[/bold], then "
             f"[bold]witan whoami --target {name}[/bold] to confirm."
+        )
+
+
+def _merged_invariant_error(merged: dict[str, object], touched: set[str]) -> str | None:
+    """The cross-field rule this amendment breaks, or None.
+
+    Checked against the block as it will END UP, not against the flags passed:
+    ``set ol --code-transport mcp`` is valid precisely because ``remote_url``
+    is already in the block. ``add`` can only look at its own arguments, since
+    it is writing the block from nothing.
+
+    Each rule runs only when the amendment touches a key it is about. A block
+    can be invalid before this command ever sees it (nothing stops a
+    hand-written one), and refusing `set ol --author …` over an unrelated
+    pre-existing defect would report a confusing error for a change that
+    neither caused nor worsened it.
+    """
+    if (
+        touched & {"remote_url", "oidc_issuer"}
+        and merged.get("remote_url")
+        and not merged.get("oidc_issuer")
+    ):
+        return (
+            "[red]remote_url needs oidc_issuer.[/red] The CLI authenticates to a "
+            "deployed witan with a per-user OIDC token; without an issuer it has "
+            "nowhere to get one."
+        )
+    if not touched & {"code_transport", "code_server"}:
+        return None
+    transport = merged.get("code_transport")
+    if transport == "direct" and not merged.get("code_server"):
+        return (
+            "[red]--code-transport direct needs code_server.[/red] Direct means "
+            "addressing the omnigraph-server holding the code graphs, which is "
+            "ClusterIP-only; from outside the cluster use "
+            "[bold]--code-transport mcp[/bold] instead. [bold]server[/bold] does "
+            "not count — that is the memory graph's store, and the code tier is "
+            "resolved from [bold]code_server[/bold] only."
+        )
+    if transport == "mcp" and not merged.get("remote_url"):
+        return (
+            "[red]--code-transport mcp needs remote_url.[/red] mcp routes code-graph "
+            "writes through the deployed witan endpoint, so there has to be one. "
+            "This target has none, so it is not a deployment — nothing to route to."
+        )
+    return None
+
+
+def _list_update(raw: list[str] | None) -> list[str] | None:
+    """One match list's new value, or None to leave the key alone.
+
+    ``_split_csv`` collapses an empty list to None, which is right for ``add``
+    (an absent key IS an empty list) and wrong here: cyclopts gives every list
+    parameter an ``--empty-<name>`` flag, and under that rule an explicit
+    ``--empty-match-orgs`` would arrive indistinguishable from not passing it
+    and be reported as "nothing to set". An empty list is a real amendment —
+    "stop selecting yourself for anything" — so it is kept as ``[]``.
+    """
+    return None if raw is None else (_split_csv(raw) or [])
+
+
+@targets_app.command(name="set")
+def set_(
+    name: str,
+    *,
+    remote_url: str | None = None,
+    oidc_issuer: str | None = None,
+    oidc_client_id: str | None = None,
+    oidc_audience: str | None = None,
+    server: str | None = None,
+    graph: str | None = None,
+    code_server: str | None = None,
+    code_transport: Literal["direct", "mcp"] | None = None,
+    author: str | None = None,
+    agent: str | None = None,
+    match_orgs: list[str] | None = None,
+    match_repos: list[str] | None = None,
+    match_hosts: list[str] | None = None,
+    match_paths: list[str] | None = None,
+    verify: bool = True,
+    dry_run: bool = False,
+) -> None:
+    """Change individual keys on a registered target, leaving the rest alone.
+
+    The command for amending a target you already have. Only the keys you name
+    are touched::
+
+        witan target set ol --code-transport mcp
+
+    Use this rather than ``add --force`` to change one thing. ``add`` builds the
+    block from its own flags, so replacing a block that way silently drops every
+    key ``add`` has no parameter for — ``token``, ``model``, ``code_dir``,
+    ``code_token``, ``index_role``, ``actor`` — along with any flag you did not
+    re-type. ``set`` rewrites assignments where they sit and leaves the rest of
+    the block, comments included, exactly as it found it.
+
+    Cross-field rules are checked against the block as it will end up, so
+    ``--code-transport mcp`` is accepted when ``remote_url`` is already there.
+    The rewritten file is parsed before it is written: a change that would leave
+    the config unreadable is refused, and nothing on disk changes.
+
+    Parameters
+    ----------
+    name: Target to amend — the ``<name>`` in ``[targets.<name>]``.
+    remote_url: Deployed witan MCP endpoint, e.g. https://witan.example.org/mcp.
+    oidc_issuer: OIDC realm issuer minting its tokens; required with remote_url.
+    oidc_client_id: Public OIDC device-grant client id.
+    oidc_audience: Expected JWT audience, matching the deployment's audience.
+    server: omnigraph store URI or server URL, for a local/self-hosted target.
+    graph: omnigraph graph id addressed on ``server``.
+    code_server: omnigraph-server URL holding this target's code graphs.
+        The DATA tier, reachable from inside the cluster only — distinct from
+        ``--server``, which addresses the memory graph.
+    code_transport: How code-graph writes reach the cluster.
+        ``mcp`` routes them through the deployed witan endpoint and is what a
+        target with a ``remote_url`` wants; ``direct`` addresses
+        ``--code-server`` and only works from inside the cluster.
+    author: Attribution written to graph nodes under this target.
+    agent: Default agent CLI for ``witan run`` under this target.
+    match_orgs: Repo orgs that should route here (repeatable, or comma-separated).
+    match_repos: Repo URIs/paths that should route here.
+    match_hosts: Repo hosts that should route here.
+    match_paths: Local checkout path prefixes that should route here.
+    verify: Check the OIDC issuer's discovery document before writing.
+    dry_run: Print the amended block without writing it.
+    """
+    updates: dict[str, object] = {
+        key: value
+        for key, value in (
+            ("remote_url", remote_url),
+            ("oidc_issuer", oidc_issuer),
+            ("oidc_client_id", oidc_client_id),
+            ("oidc_audience", oidc_audience),
+            ("server", server),
+            ("graph", graph),
+            ("code_server", code_server),
+            ("code_transport", code_transport),
+            ("author", author),
+            ("agent", agent),
+            ("match_orgs", _list_update(match_orgs)),
+            ("match_repos", _list_update(match_repos)),
+            ("match_hosts", _list_update(match_hosts)),
+            ("match_paths", _list_update(match_paths)),
+        )
+        if value is not None
+    }
+    if not updates:
+        console.print(
+            "[red]Nothing to set.[/red] Name at least one key, e.g. "
+            f"[bold]witan target set {name} --code-transport mcp[/bold]."
+        )
+        raise SystemExit(1)
+
+    try:
+        tables = cfg_module.parse_target_tables(cfg_module._load_toml())
+    except ValueError as exc:
+        print_error(exc)
+        raise SystemExit(1) from None
+    if name not in tables:
+        available = ", ".join(tables) or "(none defined)"
+        console.print(
+            f"[red]No target {name!r}[/red] in {cfg_module.config_path()}. "
+            f"Available: {available}\n"
+            "  Register it first with [bold]witan target add[/bold]."
+        )
+        raise SystemExit(1)
+
+    if error := _merged_invariant_error({**tables[name], **updates}, set(updates)):
+        console.print(error)
+        raise SystemExit(1)
+
+    path = cfg_module.config_path()
+    text = path.read_text(encoding="utf-8")
+    try:
+        new_text, found = set_target_keys(text, name, updates)
+    except ValueError as exc:
+        console.print(
+            f"[red]{exc.args[0]} is written across several lines[/red] in {path}, "
+            "which this command cannot rewrite safely. Collapse it onto one line "
+            "(or edit it by hand), then re-run."
+        )
+        raise SystemExit(1) from None
+    if not found:
+        # The reader parsed the table but the text scan did not find it — an
+        # exotic header spelling. Same refusal as `add --force`: guessing here
+        # would append a duplicate table and leave the file unparseable.
+        console.print(
+            f"[red]Could not locate the \\[targets.{name}] block[/red] in {path} "
+            "to amend it — its header is written in a form this command cannot "
+            "rewrite safely. Edit it by hand, then re-run."
+        )
+        raise SystemExit(1)
+
+    # Parse before writing, not after. This command's whole reason to exist is
+    # that the alternative was several people hand-editing the same TOML, where
+    # one typo takes down every witan command rather than one setting — so it
+    # must not be able to produce that state itself.
+    try:
+        cfg_module.parse_target_tables(tomllib.loads(new_text))
+    except (ValueError, tomllib.TOMLDecodeError) as exc:
+        console.print(
+            f"[red]Refusing to write — the result would not parse:[/red] {exc}\n"
+            f"  {path} is unchanged."
+        )
+        raise SystemExit(1) from None
+
+    if dry_run:
+        console.print(f"[dim]→ {path}[/dim]\n")
+        lines = new_text.splitlines(keepends=True)
+        span = find_target_block(lines, name)
+        assert span is not None  # noqa: S101 — just parsed and located above
+        # markup=False: a `[targets.x]` header is valid Rich markup and would
+        # otherwise be parsed as a style tag and vanish from the output.
+        console.print("".join(lines[span[0] : span[1]]).rstrip(), markup=False)
+        console.print("\n[dim](dry-run — nothing written)[/dim]")
+        return
+
+    if oidc_issuer and verify:
+        _verify_issuer(oidc_issuer)
+
+    _write_config(path, new_text)
+    changed = ", ".join(sorted(updates))
+    console.print(
+        f"[green]Updated target[/green] [bold]{name}[/bold] ({changed}) → {path}"
+    )
+    if "code_transport" in updates:
+        console.print(
+            "  Existing local indexes are not migrated. Re-run "
+            "[bold]witan code index[/bold] for anything you want shared."
         )
 
 
