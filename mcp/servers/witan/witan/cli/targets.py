@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Literal
 
 import cyclopts
 import tomli_w
@@ -48,6 +49,8 @@ _FIELD_ORDER = (
     "oidc_audience",
     "server",
     "graph",
+    "code_server",
+    "code_transport",
     "author",
     "agent",
     "match_orgs",
@@ -232,6 +235,8 @@ def add(
     oidc_audience: str | None = None,
     server: str | None = None,
     graph: str | None = None,
+    code_server: str | None = None,
+    code_transport: Literal["direct", "mcp"] | None = None,
     author: str | None = None,
     agent: str | None = None,
     match_orgs: list[str] | None = None,
@@ -259,6 +264,12 @@ def add(
         witan login --target hosted
         witan whoami --target hosted
 
+    That registers code graphs on the deployment too: ``--remote-url`` implies
+    ``code_transport = "mcp"``, so branches you index are visible to the rest of
+    the team rather than staying on this machine. Pass
+    ``--code-transport direct`` (with ``--code-server``) for an in-cluster
+    writer such as the CI indexer.
+
     Passing ``--match-orgs``/``--match-repos``/``--match-hosts``/``--match-paths``
     lets the target select itself for matching checkouts, so ``--target`` is not
     needed after the first time. Without any of them the target is only ever
@@ -273,6 +284,13 @@ def add(
     oidc_audience: Expected JWT audience, matching the deployment's audience.
     server: omnigraph store URI or server URL, for a local/self-hosted target.
     graph: omnigraph graph id addressed on ``server``.
+    code_server: omnigraph-server URL holding this target's code graphs.
+        The DATA tier, reachable from inside the cluster only — distinct from
+        ``--server``, which addresses the memory graph.
+    code_transport: How code-graph writes reach the cluster.
+        ``mcp`` routes them through the deployed witan endpoint and is the
+        default alongside ``--remote-url``; ``direct`` addresses
+        ``--code-server`` and only works from inside the cluster.
     author: Attribution written to graph nodes under this target.
     agent: Default agent CLI for ``witan run`` under this target.
     match_orgs: Repo orgs that should route here (repeatable, or comma-separated).
@@ -318,6 +336,41 @@ def add(
         )
         raise SystemExit(1)
 
+    # ── Code graphs, which are routed SEPARATELY from memory ─────────────────
+    #
+    # `remote_url` routes the memory/work graph; `code_transport` routes the
+    # code graphs, and nothing tied them together. A block written without this
+    # gave you memory on the deployment and code graphs in a directory on one
+    # laptop — the state ADR-0005 rejected outright when it chose to route
+    # writes through the MCP tier ("in-cluster-only indexing was rejected
+    # because it gives up the per-developer branch views ADR-0006 built").
+    #
+    # So a deployed target defaults to `mcp` rather than inheriting the global
+    # `direct`. `direct` is for writers that share the cluster network (the CI
+    # indexer, maintenance jobs); anyone registering a `--remote-url` is by
+    # definition outside it, and for them `direct` fails as an unreachable host
+    # rather than as a configuration error. Written as an explicit key rather
+    # than left to a changed default, so the global default keeps meaning what
+    # the in-cluster writers need.
+    if code_transport is None and remote_url:
+        code_transport = "mcp"
+
+    if code_transport == "direct" and not (code_server or server):
+        console.print(
+            "[red]--code-transport direct needs --code-server.[/red] Direct means "
+            "addressing the omnigraph-server holding the code graphs, which is "
+            "ClusterIP-only; from outside the cluster use "
+            "[bold]--code-transport mcp[/bold] instead."
+        )
+        raise SystemExit(1)
+
+    if code_transport == "mcp" and not remote_url:
+        console.print(
+            "[red]--code-transport mcp needs --remote-url.[/red] mcp routes code-graph "
+            "writes through the deployed witan endpoint, so there has to be one."
+        )
+        raise SystemExit(1)
+
     existing = _existing_names()
     if name in existing and not force:
         console.print(
@@ -333,6 +386,8 @@ def add(
         "oidc_audience": oidc_audience,
         "server": server,
         "graph": graph,
+        "code_server": code_server,
+        "code_transport": code_transport,
         "author": author,
         "agent": agent,
         "match_orgs": _split_csv(match_orgs),
