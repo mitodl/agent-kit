@@ -169,6 +169,7 @@ weight to `0` to reproduce the raw BM25 order.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `WITAN_CONTEXT_TTL` | `30.0` | How long the rendered session-context block is cached on disk, in seconds. Only the first prompt in the window pays to build it; the rest read one small file. `0` disables the cache. The content is advisory, so a few seconds of staleness is fine. |
+| `WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL` | `86400` | Minimum seconds between repeats of the warning that a target's memory graph is deployed while its code graphs are still local. `0` disables it. Per target, so switching to a misrouted one warns straight away. Only a terminal ever sees it: hooks, CI and pipes are skipped so they cannot spend the window on nobody. |
 | `WITAN_LOG_FORMAT` | — | Log rendering: `console` or `json`. Defaults to `console` when stderr is a TTY and `json` when it is not — a deployed pod gets structured logs and a developer gets colours, neither having to pass a flag. |
 | `WITAN_LOG_LEVEL` | `INFO` | Log level. Takes precedence over the bare `LOG_LEVEL`, which is also honoured for deployments that set it org-wide. |
 | `WITAN_OPTIMIZE_INTERVAL` | `86400` | Minimum seconds between throttled background `optimize` runs on the memory store. `0` disables. The `Stop` hook spawns a detached run at most this often, so compaction never blocks a session. |
