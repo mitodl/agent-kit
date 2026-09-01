@@ -437,3 +437,33 @@ Option (b) — rebinding the fallback to `svc-witan`, which *is* in the memory
 bundle — was not taken. It is a policy decision (it would grant reads with no
 user identity), and `svc-witan` is described in ol-infrastructure but not yet
 provisioned with a credential, so it is not the one-line change it looks like.
+
+## Addendum (2026-09-01) — ToolHive is gone; the decision stands, its framing does not
+
+This ADR and its 2026-07-08 addendum both reason about witan as a container
+*hosted by ToolHive* behind a vMCP — "ToolHive still hosts the container
+(lifecycle, networking, registry)", "ToolHive is hosting/lifecycle only for this
+service". That is no longer the deployment.
+
+witan is now served as a plain Kubernetes Deployment and Service behind APISIX
+in all three environments; there is no ToolHive proxy runner and no vMCP in
+front of it. ol-infrastructure's `applications/witan/deployment.py` opens with
+"witan's serving tier: a plain Deployment and Service, no ToolHive" and carries
+the reasoning under "── WHY TOOLHIVE IS GONE ──". `toolhive_swe` keeps ToolHive
+and should; this is about the witan tier specifically.
+
+★ THE DECISION IS UNAFFECTED, which is why this is an addendum and not a
+supersession. D1 chose to have witan validate the caller's OIDC token itself
+and derive the actor from `sub`, rather than depend on the broker in front of
+it propagating end-user identity. Removing the broker removes the alternative,
+not the choice: witan still validates its own JWT and still maps `sub` to an
+actor, exactly as decided here.
+
+What IS void is the open question the 07-08 addendum left behind — whether a
+differently-configured ToolHive stack could supply per-user JWT forwarding,
+Cedar authz or RFC 8693 token exchange and thereby narrow D1's own
+`JWTVerifier` path. With ToolHive out of this service's path there is nothing
+to delegate to, so that trade no longer exists to be revisited.
+
+Read every ToolHive and vMCP mention above this line as describing the
+deployment as it was, not as it is.
