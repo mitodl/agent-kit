@@ -377,3 +377,78 @@ def test_unknown_index_role_is_rejected(monkeypatch, toml_file):
 
     with pytest.raises(ValueError, match="Unknown index_role"):
         load()
+
+
+# ── The seam with `witan target add` ─────────────────────────────────────────
+
+
+def test_the_block_witan_target_add_writes_routes_code_graphs_to_the_cluster(
+    monkeypatch, toml_file
+):
+    """The exact block `witan target add --remote-url …` emits, read back here.
+
+    These are two packages agreeing by convention, not by a shared type: witan
+    (witan-council) renders the TOML, witan-code parses it, and nothing fails
+    loudly if they drift. Before `target add` learned `--code-transport`, a
+    deployed target had no `code_transport` key at all and fell through to the
+    `direct` default, leaving code graphs on the developer's own machine while
+    memory went to the deployment — silently, since a local store is a working
+    store. Keep this literal in step with `witan.cli.targets._FIELD_ORDER`.
+    """
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.ol]
+            remote_url = "https://witan.ci.ol.mit.edu/mcp"
+            oidc_issuer = "https://sso-ci.ol.mit.edu/realms/ol-platform-engineering"
+            oidc_audience = "witan"
+            code_transport = "mcp"
+            match_orgs = ["mitodl"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_CODE_TRANSPORT", raising=False)
+    monkeypatch.delenv("WITAN_CODE_SERVER", raising=False)
+
+    cfg = load()
+    assert cfg.target_name == "ol"
+    assert cfg.code_transport == "mcp"
+    # `mcp` alone makes it a cluster graph — code_server stays unset, because
+    # the deployment holds the address and resolves the actor from the JWT.
+    assert cfg.code_server is None
+    assert cfg.is_cluster
+
+
+def test_a_deployed_target_without_code_transport_still_falls_back_to_local(
+    monkeypatch, toml_file
+):
+    """The pre-fix shape, pinned so the regression is legible rather than silent.
+
+    This is what every target registered before 2026-09-01 looks like. It is
+    not an error and never was — which is the whole problem, and why the
+    onboarding doc now tells people to re-run `target add --force`.
+    """
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.ol]
+            remote_url = "https://witan.ci.ol.mit.edu/mcp"
+            oidc_issuer = "https://sso-ci.ol.mit.edu/realms/ol-platform-engineering"
+            match_orgs = ["mitodl"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/mitodl/agent-kit")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_CODE_TRANSPORT", raising=False)
+    monkeypatch.delenv("WITAN_CODE_SERVER", raising=False)
+
+    cfg = load()
+    assert cfg.code_transport == "direct"
+    assert not cfg.is_cluster
+    # Memory is deployed while code graphs are not — the split this task fixed.
+    assert load_remote_config() is not None

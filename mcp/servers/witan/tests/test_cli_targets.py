@@ -580,3 +580,110 @@ def test_list_marks_the_pinned_target_not_the_matching_one(config_file, monkeypa
     ]
     assert len(marked) == 1
     assert "personal" in marked[0]
+
+
+# ── code_transport ───────────────────────────────────────────────────────────
+#
+# A deployed target that routes memory to the cluster and code graphs to a
+# laptop is the defect these cover (tk-the-documented-onboarding-cannot-point-
+# witan-cod-6d4675): it is silent, and every measured non-maintainer landed in
+# it. ADR-0005 chose the MCP tier precisely so a developer's checkout could
+# write branch views, so a `--remote-url` target defaulting to `direct` was
+# giving up the thing the deployment was built for.
+
+
+def test_remote_target_defaults_code_graphs_to_the_deployment(
+    config_file, no_verify, monkeypatch
+):
+    from witan.cli.targets import add
+
+    _capture(monkeypatch)
+    add(
+        "hosted",
+        remote_url="https://witan.example.org/mcp",
+        oidc_issuer="https://sso.example.org/realms/eng",
+    )
+
+    assert _targets_of(config_file)["hosted"]["code_transport"] == "mcp"
+
+
+def test_explicit_direct_overrides_the_remote_default(
+    config_file, no_verify, monkeypatch
+):
+    """The CI indexer shares the cluster network and must keep addressing it."""
+    from witan.cli.targets import add
+
+    _capture(monkeypatch)
+    add(
+        "ci",
+        remote_url="https://witan.example.org/mcp",
+        oidc_issuer="https://sso.example.org/realms/eng",
+        code_transport="direct",
+        code_server="http://omnigraph-server:8080",
+    )
+
+    block = _targets_of(config_file)["ci"]
+    assert block["code_transport"] == "direct"
+    assert block["code_server"] == "http://omnigraph-server:8080"
+
+
+def test_local_target_does_not_gain_a_code_transport(
+    config_file, no_verify, monkeypatch
+):
+    """No --remote-url, nothing to route through: the global default stands."""
+    from witan.cli.targets import add
+
+    _capture(monkeypatch)
+    add("local", server="s3://bucket/graph.omni", graph="council")
+
+    assert "code_transport" not in _targets_of(config_file)["local"]
+
+
+def test_direct_without_a_code_server_is_refused(config_file, monkeypatch):
+    from witan.cli.targets import add
+
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        add(
+            "broken",
+            remote_url="https://witan.example.org/mcp",
+            oidc_issuer="https://sso.example.org/realms/eng",
+            code_transport="direct",
+        )
+
+    assert "needs --code-server" in recorder.export_text()
+    assert not config_file.exists()
+
+
+def test_direct_is_not_satisfied_by_the_memory_graph_server(config_file, monkeypatch):
+    """`--server` is the memory graph; the code tier reads `code_server` alone.
+
+    Accepting it would write `code_transport = "direct"` with no code address,
+    which resolves to a local directory — this command's own defect, re-entered
+    through its validator.
+    """
+    from witan.cli.targets import add
+
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        add(
+            "broken",
+            remote_url="https://witan.example.org/mcp",
+            oidc_issuer="https://sso.example.org/realms/eng",
+            server="s3://bucket/graph.omni",
+            code_transport="direct",
+        )
+
+    assert "needs --code-server" in recorder.export_text()
+    assert not config_file.exists()
+
+
+def test_mcp_without_a_remote_url_is_refused(config_file, monkeypatch):
+    from witan.cli.targets import add
+
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        add("broken", server="s3://bucket/graph.omni", code_transport="mcp")
+
+    assert "needs --remote-url" in recorder.export_text()
+    assert not config_file.exists()

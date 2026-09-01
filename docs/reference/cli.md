@@ -683,6 +683,12 @@ Joining a deployment is then::
     witan login --target hosted
     witan whoami --target hosted
 
+That registers code graphs on the deployment too: ``--remote-url`` implies
+``code_transport = "mcp"``, so branches you index are visible to the rest of
+the team rather than staying on this machine. Pass
+``--code-transport direct`` (with ``--code-server``) for an in-cluster
+writer such as the CI indexer.
+
 Passing ``--match-orgs``/``--match-repos``/``--match-hosts``/``--match-paths``
 lets the target select itself for matching checkouts, so ``--target`` is not
 needed after the first time. Without any of them the target is only ever
@@ -697,6 +703,11 @@ reached explicitly (``--target``/``WITAN_TARGET``).
 * `--oidc-audience`:
 * `--server`:
 * `--graph`:
+* `--code-server`: The DATA tier, reachable from inside the cluster only — distinct from
+    ``--server``, which addresses the memory graph.
+* `--code-transport`: ``mcp`` routes them through the deployed witan endpoint and is the
+    default alongside ``--remote-url``; ``direct`` addresses
+    ``--code-server`` and only works from inside the cluster. *[choices: direct, mcp]*
 * `--author`:
 * `--agent`:
 * `--match-orgs, --empty-match-orgs`:

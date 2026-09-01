@@ -66,6 +66,20 @@ it actually covers, survives the shell, and routes **both** `witan` and
 `witan-code` at once (they share one endpoint and one token cache — there is no
 separate `WITAN_CODE_REMOTE_URL`).
 
+**This puts your code graphs on the cluster too.** `--remote-url` implies
+`code_transport = "mcp"`, which is what makes a branch you index visible to
+anyone else — that is the whole point of indexing per writer (ADR-0005/0006).
+Scanning still happens locally, because it needs your checkout; `code_transport`
+decides only where the resulting index is *written*. You cannot write a code
+graph's `main`, which belongs to the CI indexer; what you get is your own branch
+view.
+
+Pass `--code-transport direct --code-server <url>` instead for a writer that
+already shares the cluster network (the CI indexer, maintenance jobs). `direct`
+is the global default because those in-cluster writers are the ones who need it;
+from a laptop it fails as an unreachable host, which is why a `--remote-url`
+target overrides it.
+
 `witan target list` shows what is configured and marks with `*` the target in
 effect for the current checkout; `witan target remove ol` deletes the block
 again. Re-running `target add` with an existing name refuses rather than
@@ -79,6 +93,7 @@ overwriting — pass `--force` to replace it in place.
 remote_url = "https://witan.ci.ol.mit.edu/mcp"
 oidc_issuer = "https://sso-ci.ol.mit.edu/realms/ol-platform-engineering"
 oidc_audience = "witan"
+code_transport = "mcp"
 match_orgs = ["mitodl"]
 ```
 
@@ -106,6 +121,42 @@ Selector precedence is by **specificity, not file order**: every target's
 `match_orgs` (`witan_core.target_config.match_target`). A `match_paths` target
 at the bottom of the file therefore beats a `match_orgs` target at the top;
 position only breaks ties *within* one tier.
+
+### Already registered?
+
+`target add` only grew `--code-transport` on 2026-09-01. Blocks written before
+that have no `code_transport` key, so they fall through to the global `direct`
+default and every branch you have indexed since is sitting on your own machine —
+working, findable by you, invisible to everyone else. Nothing reports this as a
+failure, which is exactly why it is worth checking.
+
+Print your own target's block and look for `code_transport` in it — a bare
+`grep` over the file will happily match some *other* target's key and tell you
+you are fine when you are not:
+
+```bash
+awk '/^\[targets\.ol\]/{f=1;print;next} /^\[/{f=0} f' ~/.config/witan/config.toml
+```
+
+No `code_transport` line in that block? Re-register it:
+
+```bash
+witan target add ol --force \
+    --remote-url https://witan.ci.ol.mit.edu/mcp \
+    --oidc-issuer https://sso-ci.ol.mit.edu/realms/ol-platform-engineering \
+    --oidc-audience witan \
+    --match-orgs mitodl
+```
+
+`--force` replaces the block in place, and re-running `add` with the same
+arguments now writes `code_transport = "mcp"` as well. Adding the one line by
+hand does the same thing. Your existing login survives as long as you keep
+`oidc_issuer` and `oidc_client_id` the same: the token cache is keyed on that
+pair, not on `remote_url` (`DeviceAuth._cache_key`). Change either one and you
+are pointed at a different cache entry and will need to log in again.
+
+Re-index whatever you want shared afterwards: the local index is not migrated,
+and `witan code index` writes wherever the config now points.
 
 ## 2. Log in
 
@@ -276,10 +327,17 @@ Reads are unaffected by all of this and stay fast under the same load.
   target is the deployment's own graph, resolved server-side. Name the
   deployment with `--to <name>` instead, or unset `remote_url` to merge
   between stores you address yourself.
-- **witan-code went remote and you didn't want it to.** Expected — one endpoint
-  serves both tool surfaces, so the four `remote_*`/`oidc_*` keys route both
-  CLIs. Indexing stays local either way (it needs your checkout); only reads
-  move. ADR-0005's 2026-07-31 amendment explains the coupling.
+- **witan-code went remote and you didn't want it to.** Expected for *reads* —
+  one endpoint serves both tool surfaces, so the four `remote_*`/`oidc_*` keys
+  route both CLIs. ADR-0005's 2026-07-31 amendment explains the coupling.
+- **Your code graphs are still local.** Check `code_transport` on the block.
+  Scanning always happens locally (it needs your checkout), but *where the
+  index is written* is `code_transport`'s call: `mcp` writes to the cluster,
+  `direct` addresses `--code-server`, and the global default is `direct`, which
+  from outside the cluster means a directory on this machine. `witan` warns on
+  startup when your memory graph is deployed and your code graphs are not.
+  Targets registered before this was wired have no `code_transport` key — see
+  [Already registered?](#already-registered) to add it.
 
 ## References
 

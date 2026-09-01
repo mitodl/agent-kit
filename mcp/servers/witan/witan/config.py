@@ -523,8 +523,15 @@ def default_config_toml() -> str:
 # target can also carry remote_url/oidc_issuer/oidc_client_id/oidc_audience
 # to point the CLI at a deployed witan service instead of running in-process
 # (see witan_core.remote.config.RemoteConfig, ADR 0005). Those four keys route
-# BOTH CLIs — `witan` and `witan-code` — since the deployment serves both tool
-# surfaces on one endpoint.
+# BOTH CLIs' READS — `witan` and `witan-code` — since the deployment serves
+# both tool surfaces on one endpoint.
+#
+# Where witan-code WRITES is a separate question, answered by code_transport:
+# "mcp" writes indexed branches to the cluster through that same endpoint,
+# "direct" addresses code_server (in-cluster writers only), and the default is
+# "direct" — so a deployed target without this key indexes to a directory on
+# this machine, which nothing reports as a failure. `witan target add
+# --remote-url` writes code_transport = "mcp" for you.
 #
 # [targets.work]
 # server = "http://witan.internal:8080"
