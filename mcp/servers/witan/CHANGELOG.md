@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [Unreleased]
+## [0.30.0] - 2026-09-01
 
 ### Added
 
@@ -66,6 +66,14 @@ a MINOR bump may include breaking changes).
   `assignee` is exempt. See the 2026-08-27 addendum to ADR-0003.
 
 ### Changed
+
+- **Floor raised to `fastmcp>=4,<5`.** FastMCP 4.0 went GA; the
+  `fastmcp>=3.4.2,<5` straddle this package carried alongside witan-core is
+  dropped. No behavior change on this package's own code — witan-core's
+  version-sniffing shims are what actually moved (see its changelog); this is
+  a dependency-floor release, breaking only for a caller still resolving
+  fastmcp 3.4.x, which pre-1.0 semver treats as a MINOR bump. Closes
+  `tk-move-the-fastmcp-floor-to-4-when-4-0-goes-ga-454f78`.
 
 - **A deployed witan with no caller JWT now refuses instead of falling back to
   the service credential.** `_resolve_client` handed those requests

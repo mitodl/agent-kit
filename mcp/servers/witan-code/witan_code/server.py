@@ -74,8 +74,8 @@ mcp.add_middleware(elicit.MRTRElicitationMiddleware())
 
 # The `io.modelcontextprotocol/tasks` extension (SEP-2663), which lets a client
 # take a handle on a long `code_reindex` and poll it instead of holding a tool
-# call open for minutes. Optional (`witan-code[tasks]`): it exists only for
-# fastmcp 4.x, and this package still supports the 3.4.x end of its pin. The
+# call open for minutes. Optional (`witan-code[tasks]`): it pulls a Docket/Redis
+# stack that the default in-process `memory://` backend does not need. The
 # flag has to gate the tool declaration too — a `task=True` tool refuses to
 # serve at all when the extension is missing, rather than degrading.
 #

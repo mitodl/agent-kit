@@ -30,10 +30,7 @@ Two shape details make that work:
   ``_map_args``.
 
 The tool list is held for as long as the server's own ``ttlMs`` says
-(MCP 2026-07-28), rather than for the process lifetime as it used to be. MCP
-SDK v2 renamed the schema field to ``input_schema``; ``_tool_input_schema``
-reads whichever the installed fastmcp exposes, since the package supports both
-3.4.x and 4.x.
+(MCP 2026-07-28), rather than for the process lifetime as it used to be.
 
 Server-specific policy is supplied by subclasses via the hooks below:
 :meth:`~RemoteMCPProxy._is_admin_tool` / :meth:`~RemoteMCPProxy._admin_error`
@@ -371,29 +368,13 @@ async def console_elicitation_handler(
 
 
 def _tool_input_schema(tool: Any) -> dict:
-    """A listed tool's input schema, across the MCP SDK v1→v2 field rename.
-
-    fastmcp 3.4.x exposes ``inputSchema``; SDK v2 (fastmcp 4.x) renamed it to
-    ``input_schema`` and warns on the old spelling. Both are supported versions
-    of this package, so read the new name and fall back.
-    """
-    schema = getattr(tool, "input_schema", None)
-    return schema if schema is not None else tool.inputSchema
-
-
-_MISSING = object()
+    """A listed tool's input schema."""
+    return tool.input_schema
 
 
 def _next_cursor(result: Any) -> str | None:
-    """A list result's pagination cursor, across the same v1→v2 rename.
-
-    Unlike the input schema, ``None`` is the *normal* value here — it means the
-    last page — so presence has to be tested rather than truthiness. Reading the
-    camelCase alias on a v2 result emits a deprecation warning, and this is on
-    the path of every single tool call.
-    """
-    cursor = getattr(result, "next_cursor", _MISSING)
-    return result.nextCursor if cursor is _MISSING else cursor
+    """A list result's pagination cursor, or ``None`` on the last page."""
+    return result.next_cursor
 
 
 class RemoteMCPProxy:

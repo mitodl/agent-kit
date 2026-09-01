@@ -42,16 +42,11 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+import mcp_types
 from fastmcp.exceptions import FastMCPError
 from fastmcp.server.elicitation import AcceptedElicitation
 from fastmcp.server.middleware import Middleware
-
-try:  # fastmcp 4.x (MCP SDK v2). 3.4.x has no MRTR — see _wire_mode.
-    import mcp_types
-    from mcp_types.version import MODERN_PROTOCOL_VERSIONS
-except ImportError:  # pragma: no cover — exercised by the 3.4.x half of the pin
-    mcp_types = None  # type: ignore[assignment]
-    MODERN_PROTOCOL_VERSIONS = frozenset()
+from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 
 if TYPE_CHECKING:
     from fastmcp import Context
@@ -113,8 +108,6 @@ def _wire_mode(ctx: Context) -> str:
     the whole call rather than degrade); ``_BACKCHANNEL`` on the handshake eras,
     where ``ctx.elicit`` still works and reports its own unsupported clients.
     """
-    if mcp_types is None:
-        return _BACKCHANNEL
     request_context = getattr(ctx, "request_context", None)
     version = getattr(request_context, "protocol_version", None)
     if version not in MODERN_PROTOCOL_VERSIONS:
@@ -300,8 +293,8 @@ class MRTRElicitationMiddleware(Middleware):
 
     Register once per server (``mcp.add_middleware(MRTRElicitationMiddleware())``)
     to make :func:`confirm` / :func:`text` work on 2026-07-28 connections. Inert
-    on the handshake eras and under fastmcp 3.4.x, where the helpers use
-    ``ctx.elicit`` and never raise :class:`InputRequired`.
+    on the handshake eras, where the helpers use ``ctx.elicit`` and never raise
+    :class:`InputRequired`.
     """
 
     async def on_call_tool(self, context, call_next):  # noqa: ANN001, ANN201

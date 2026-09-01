@@ -8,6 +8,22 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-09-01
+
+### Changed
+
+- **Floor raised to `fastmcp>=4,<5`; the `fastmcp>=3.4.2,<5` straddle is
+  dropped.** FastMCP 4.0 went GA, so the version-sniffing shims that kept this
+  package working on both the 3.4.x and 4.x line are gone: `_tool_input_schema`
+  and `_next_cursor` (`remote/proxy.py`) now read the SDK v2 field names
+  directly instead of falling back to the camelCase alias; `elicit.py` imports
+  `mcp_types` unconditionally instead of behind a try/except; `caching.py`'s
+  `hint_kwargs` always returns the `cache_ttl`/`cache_scope` hint instead of
+  probing `FastMCP.__init__`'s signature first. No public API changed — this is
+  a dependency-floor and internal-cleanup release, breaking only for a caller
+  still resolving fastmcp 3.4.x, which pre-1.0 semver treats as a MINOR bump.
+  Closes `tk-move-the-fastmcp-floor-to-4-when-4-0-goes-ga-454f78`.
+
 ### Fixed
 
 - **`configure_logging`'s handler no longer captures `sys.stderr` at call

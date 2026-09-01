@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [Unreleased]
+## [0.17.0] - 2026-09-01
 
 ### Fixed
 
@@ -54,6 +54,16 @@ a MINOR bump may include breaking changes).
   the views carry their owner, on the local store too.
 
 ### Changed
+
+- **Floor raised to `fastmcp>=4,<5`; the optional `tasks` extra moves to
+  `fastmcp-tasks>=4,<5`.** FastMCP 4.0 went GA, so the `fastmcp>=3.4.2,<5`
+  straddle is dropped, along with the `witan-code[tasks]`-only reason that
+  extra used to also need `--prerelease=allow` under uv. No behavior change on
+  this package's own code — witan-core's version-sniffing shims are what
+  actually moved (see its changelog); this is a dependency-floor release,
+  breaking only for a caller still resolving fastmcp 3.4.x, which pre-1.0
+  semver treats as a MINOR bump. Closes
+  `tk-move-the-fastmcp-floor-to-4-when-4-0-goes-ga-454f78`.
 
 - **`graph.check_writable` requires `actor`; `None` now means "no identity",
   full stop.** It used to fall back to `identity.actor_id()`, which gave the

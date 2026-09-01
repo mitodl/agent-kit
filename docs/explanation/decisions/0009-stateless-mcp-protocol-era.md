@@ -58,12 +58,6 @@ as a tool argument.
 
 ### Forces
 
-- FastMCP 4.0 is still a beta (`4.0.0b1`) at the time of writing; the `mcp` SDK
-  underneath it is 2.0.0 stable. The pins were widened to
-  `fastmcp>=3.4.2,<5` rather than moved to 4.x, so the packages resolve to
-  3.4.5 for anyone who has not opted into prereleases, while our own lock — and
-  therefore the container image — runs the beta. Requiring 4.x outright was
-  tried and backed out; see the last entry under Consequences for why.
 - Both witan servers are also used locally over `stdio`, where none of the
   above matters. Nothing here may make the local path worse.
 - The elicitation contract established when it was added is *additive*: a
@@ -128,22 +122,15 @@ exactly that long instead of for the process lifetime.
   fanning out to several tools pays several handshakes. On a 2026-07-28
   connection there is no handshake to pay for. The deferred persistent-session
   spike is correspondingly less urgent.
-- **Revisit when FastMCP 4.0 goes GA.** The beta is what the lock and image
-  currently resolve; CI therefore only exercises the 4.x end of the published
-  pin range, and the 3.4.5 end has been verified locally only.
-- **The straddle stays until GA, and the reason is distribution, not code.**
-  Everything above needs FastMCP 4, so supporting 3.4.x costs real
-  version-sniffing shims — `inputSchema` vs `input_schema`, `nextCursor` vs
+- **FastMCP 4.0 went GA 2026-08-31; the 3.4.x straddle is dropped.** All three
+  packages now floor `fastmcp>=4,<5` directly, and the version-sniffing shims
+  this required — `inputSchema` vs `input_schema`, `nextCursor` vs
   `next_cursor`, a conditional `mcp_types` import, a signature check before
-  passing `cache_ttl` — guarding a path CI never exercises, since resolution
-  only ever installs one major. Requiring `fastmcp>=4.0.0b1` was implemented and
-  reverted anyway: `uv tool install` and `uvx --from` both refuse to resolve a
-  pre-release pulled in transitively (fastmcp pins `fastmcp-slim` to its own
-  exact version) without `--prerelease=allow`, and those are the documented
-  install paths. `ol-agent-kit` is caught too without being touched, since it
-  floors `witan-council`/`witan-code` open-ended so new releases are picked up
-  automatically — publishing would have broken a fresh
-  `uv tool install ol-agent-kit`. Nor can it be fixed from the publishing side:
-  `[tool.uv] prerelease` is project-local and never travels in wheel metadata.
-  `pip install` is unaffected. Tracked in
+  passing `cache_ttl` — are gone along with the tests that stood in for the
+  version CI never happened to install. The workspace-root
+  `[tool.uv] prerelease = "allow"` needed to resolve the pre-release
+  `fastmcp-slim` pin is gone too. An earlier attempt to require `fastmcp>=4.0.0b1`
+  before GA was implemented and reverted: `uv tool install` and `uvx --from`
+  both refused to resolve a pre-release pulled in transitively, which does not
+  apply to a stable release. Tracked in
   `tk-move-the-fastmcp-floor-to-4-when-4-0-goes-ga-454f78`.
