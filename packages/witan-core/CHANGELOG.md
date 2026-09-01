@@ -8,7 +8,7 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
-## [0.33.0] - 2026-08-31
+## [0.33.0] - 2026-09-01
 
 ### Changed
 
