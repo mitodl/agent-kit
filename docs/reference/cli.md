@@ -1573,7 +1573,8 @@ server so a single MCP entry exposes everything.
 
 Defaults to ``stdio`` for local per-user use (Claude Desktop, ``uvx``). Pass
 ``--transport streamable-http`` (or set ``WITAN_MCP_TRANSPORT``) to expose an
-HTTP endpoint for a shared, deployed service — this is what ToolHive hosts.
+HTTP endpoint for a shared, deployed service — this is what the deployed
+witan tier runs, behind APISIX.
 
 The legacy HTTP+SSE transport is not offered: MCP 2026-07-28 deprecates it
 with a 12-month offramp, and witan has no deployment on it to carry over.

@@ -63,9 +63,10 @@ layer, deliberately thin.
 
     ```mermaid
     flowchart LR
-        CLI["witan CLI"] -->|"OIDC + MCP"| W
-        AGT["Agent"] -->|"MCP streamable-http"| W
-        W["witan tier<br/><small>ToolHive-hosted</small>"] -->|"http"| O
+        CLI["witan CLI"] -->|"OIDC + MCP"| GW
+        AGT["Agent"] -->|"MCP streamable-http"| GW
+        GW["APISIX<br/><small>ingress</small>"] --> W
+        W["witan tier<br/><small>Deployment + Service</small>"] -->|"http"| O
         O["omnigraph-server<br/><small>data tier</small>"] --> S3[("S3")]
         CI["CI indexer<br/><small>CronJob</small>"] --> O
     ```
