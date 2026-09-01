@@ -687,3 +687,441 @@ def test_mcp_without_a_remote_url_is_refused(config_file, monkeypatch):
 
     assert "needs --remote-url" in recorder.export_text()
     assert not config_file.exists()
+
+
+# ── `witan target set` ───────────────────────────────────────────────────────
+#
+# The command exists because `add --force` was the only way to amend a
+# registered target, and it rebuilds the block from its own flags. The first
+# test below is the measurement that motivated it: six keys, all readable from
+# a target block, none of them an `add` parameter, all gone after a --force
+# that replays exactly the flags the onboarding doc lists.
+
+_AMENDABLE = """\
+# a comment above the section
+
+[targets.ol]
+remote_url = "https://witan.example.org/mcp"
+oidc_issuer = "https://sso.example.org/realms/eng"
+author = "someone@example.org"
+# a hand-written note
+model = "opus"
+token = "static-token-abc"
+code_dir = "/data/mycode"
+code_token = "code-token"
+index_role = "ci"
+actor = "act-deadbeef"
+match_orgs = ["mitodl"]
+
+[targets.local]
+server = "/home/me/graph.omni"
+
+[rank]
+alpha = 1
+"""
+
+_UNEXPRESSIBLE = ("model", "token", "code_dir", "code_token", "index_role", "actor")
+"""Target keys that `add` has no flag for, so `add --force` cannot carry them."""
+
+_MULTILINE = (
+    "[targets.ol]\n"
+    'remote_url = "https://witan.example.org/mcp"\n'
+    'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+    'match_orgs = [\n    "mitodl",\n    "openedx",\n]\n'
+)
+
+
+def test_add_force_drops_the_keys_it_cannot_express(
+    config_file, no_verify, monkeypatch
+):
+    """Why `set` exists — the documented `--force` re-register loses data."""
+    from witan.cli.targets import add
+
+    config_file.write_text(_AMENDABLE)
+    _capture(monkeypatch)
+    add(
+        "ol",
+        force=True,
+        remote_url="https://witan.example.org/mcp",
+        oidc_issuer="https://sso.example.org/realms/eng",
+        match_orgs=["mitodl"],
+    )
+
+    block = _targets_of(config_file)["ol"]
+    assert block["code_transport"] == "mcp"  # it does do the intended thing
+    assert [key for key in _UNEXPRESSIBLE if key in block] == []
+    assert "author" not in block  # and any flag not re-typed goes too
+
+
+def test_set_amends_one_key_and_keeps_everything_else(config_file, monkeypatch):
+    """The same amendment as above, without the collateral damage."""
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    _capture(monkeypatch)
+    set_("ol", code_transport="mcp")
+
+    parsed = _targets_of(config_file)
+    assert parsed["ol"]["code_transport"] == "mcp"
+    for key in _UNEXPRESSIBLE:
+        assert key in parsed["ol"], key
+    assert parsed["ol"]["author"] == "someone@example.org"
+    assert parsed["ol"]["match_orgs"] == ["mitodl"]
+    # Neighbours and comments survive too.
+    assert parsed["local"]["server"] == "/home/me/graph.omni"
+    text = config_file.read_text()
+    assert "# a hand-written note" in text
+    assert "# a comment above the section" in text
+    assert tomllib.loads(text)["rank"]["alpha"] == 1
+
+
+def test_set_rewrites_an_existing_key_in_place(config_file, monkeypatch):
+    """Not appended a second time — that would be a duplicate-key TOML error."""
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    _capture(monkeypatch)
+    set_("ol", author="new@example.org")
+
+    text = config_file.read_text()
+    assert text.count("author = ") == 1
+    assert _targets_of(config_file)["ol"]["author"] == "new@example.org"
+
+
+def test_set_checks_invariants_against_the_merged_block(config_file, monkeypatch):
+    """`--code-transport mcp` is valid here *because* remote_url is already set.
+
+    Validating the flags alone — as `add` must, writing from nothing — would
+    refuse the single most common amendment this command exists for.
+    """
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    _capture(monkeypatch)
+    set_("ol", code_transport="mcp")
+
+    assert _targets_of(config_file)["ol"]["code_transport"] == "mcp"
+
+
+def test_set_mcp_on_a_target_with_no_remote_url_is_refused(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        set_("local", code_transport="mcp")
+
+    assert "needs remote_url" in recorder.export_text()
+    assert "code_transport" not in _targets_of(config_file)["local"]
+
+
+def test_set_direct_without_a_code_server_is_refused(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        set_("ol", code_transport="direct")
+
+    assert "needs code_server" in recorder.export_text()
+    assert "code_transport" not in _targets_of(config_file)["ol"]
+
+
+def test_set_direct_with_a_code_server_is_accepted(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    _capture(monkeypatch)
+    set_("ol", code_transport="direct", code_server="http://omnigraph:8080")
+
+    block = _targets_of(config_file)["ol"]
+    assert block["code_transport"] == "direct"
+    assert block["code_server"] == "http://omnigraph:8080"
+
+
+def test_set_does_not_block_on_a_defect_it_did_not_cause(config_file, monkeypatch):
+    """A block can already be invalid — nothing stops a hand-written one.
+
+    Refusing an unrelated amendment over a pre-existing defect would report a
+    confusing error for a change that neither caused nor worsened it.
+    """
+    from witan.cli.targets import set_
+
+    config_file.write_text(
+        '[targets.broken]\nremote_url = "https://witan.example.org/mcp"\n'
+    )  # no oidc_issuer — invalid, and not this command's doing
+    _capture(monkeypatch)
+    set_("broken", author="new@example.org")
+
+    assert _targets_of(config_file)["broken"]["author"] == "new@example.org"
+
+
+def test_set_still_refuses_to_create_that_defect(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text('[targets.local]\nserver = "/home/me/graph.omni"\n')
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        set_("local", remote_url="https://witan.example.org/mcp")
+
+    assert "needs oidc_issuer" in recorder.export_text()
+    assert "remote_url" not in _targets_of(config_file)["local"]
+
+
+def test_set_unknown_target_lists_the_ones_there_are(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        set_("nope", author="x")
+
+    out = recorder.export_text()
+    assert "No target 'nope'" in out
+    assert "ol" in out and "local" in out
+    assert config_file.read_text() == _AMENDABLE
+
+
+def test_set_treats_an_explicit_empty_list_as_an_amendment(config_file, monkeypatch):
+    """`--empty-match-orgs` means "select yourself for nothing", not "no-op".
+
+    `_split_csv` collapses `[]` to None, which would make the explicit flag
+    indistinguishable from not passing it and report "nothing to set".
+    """
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    _capture(monkeypatch)
+    set_("ol", match_orgs=[])
+
+    assert _targets_of(config_file)["ol"]["match_orgs"] == []
+
+
+def test_set_with_no_keys_says_so(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        set_("ol")
+
+    assert "Nothing to set" in recorder.export_text()
+    assert config_file.read_text() == _AMENDABLE
+
+
+def test_set_dry_run_writes_nothing_and_shows_the_result(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    recorder = _capture(monkeypatch)
+    set_("ol", code_transport="mcp", dry_run=True)
+
+    assert 'code_transport = "mcp"' in recorder.export_text()
+    assert config_file.read_text() == _AMENDABLE
+
+
+def test_set_refuses_a_multiline_value_rather_than_orphaning_it(
+    config_file, monkeypatch
+):
+    """Rewriting the first line alone would leave a syntax error, not a wrong value."""
+    from witan.cli.targets import set_
+
+    config_file.write_text(_MULTILINE)
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        set_("ol", match_orgs=["mitodl"])
+
+    assert "written across several lines" in recorder.export_text()
+    assert config_file.read_text() == _MULTILINE
+
+
+def test_set_leaves_a_multiline_value_alone_when_amending_another_key(
+    config_file, monkeypatch
+):
+    from witan.cli.targets import set_
+
+    config_file.write_text(_MULTILINE)
+    _capture(monkeypatch)
+    set_("ol", code_transport="mcp")
+
+    block = _targets_of(config_file)["ol"]
+    assert block["code_transport"] == "mcp"
+    assert block["match_orgs"] == ["mitodl", "openedx"]
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["[targets.ol]", '[targets."ol"]', "[ targets . 'ol' ]"],
+)
+def test_set_handles_every_toml_header_spelling(config_file, monkeypatch, header):
+    """A missed spelling would append a second `[targets.ol]` — unparseable."""
+    from witan.cli.targets import set_
+
+    config_file.write_text(
+        f'{header}\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+    )
+    _capture(monkeypatch)
+    set_("ol", code_transport="mcp")
+
+    assert _targets_of(config_file)["ol"]["code_transport"] == "mcp"
+
+
+def test_set_handles_a_quoted_key_spelling(config_file, monkeypatch):
+    """`"author" = …` is the same key; missing it would write a duplicate."""
+    from witan.cli.targets import set_
+
+    config_file.write_text(
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        '"author" = "old@example.org"\n'
+    )
+    _capture(monkeypatch)
+    set_("ol", author="new@example.org")
+
+    assert _targets_of(config_file)["ol"]["author"] == "new@example.org"
+
+
+def test_set_verifies_a_changed_issuer_before_writing(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    _capture(monkeypatch)
+
+    def _fail(issuer, **kwargs):
+        from witan_core.remote.oidc import RemoteAuthError
+
+        raise RemoteAuthError("no discovery document")
+
+    monkeypatch.setattr("witan_core.remote.oidc.discover_endpoints", _fail)
+    with pytest.raises(SystemExit):
+        set_("ol", oidc_issuer="https://typo.example.org/realms/eng")
+
+    assert config_file.read_text() == _AMENDABLE
+
+
+def test_set_does_not_match_a_key_inside_a_multiline_string(config_file, monkeypatch):
+    """Regression, PR #317 review: a regex scan has no TOML lexical context.
+
+    `author = "…"` inside a multi-line string is CONTENT, not an assignment.
+    Rewriting it corrupted `model`, popped `author` from the pending set so it
+    was never actually assigned, and still parsed — so the command reported
+    success having done neither of the two things it claimed.
+    """
+    from witan.cli.targets import set_
+
+    config_file.write_text(
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'model = """\nauthor = "embedded text"\n"""\n'
+    )
+    _capture(monkeypatch)
+    set_("ol", author="new@example.org")
+
+    block = _targets_of(config_file)["ol"]
+    assert block["model"] == 'author = "embedded text"\n'
+    assert block["author"] == "new@example.org"
+
+
+def test_set_ignores_a_key_inside_a_multiline_array(config_file, monkeypatch):
+    from witan.cli.targets import set_
+
+    config_file.write_text(
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'match_orgs = [\n  "mitodl",\n  "author = fake",\n]\n'
+    )
+    _capture(monkeypatch)
+    set_("ol", author="new@example.org")
+
+    block = _targets_of(config_file)["ol"]
+    assert block["match_orgs"] == ["mitodl", "author = fake"]
+    assert block["author"] == "new@example.org"
+
+
+def test_set_keeps_an_inline_comment_on_the_key_it_changes(config_file, monkeypatch):
+    """Regression, PR #317 review: the promise is that comments survive.
+
+    Also covers the two things a naive `split("#")` gets wrong — an indented
+    assignment, and a `#` that is part of the value rather than a comment.
+    """
+    from witan.cli.targets import set_
+
+    config_file.write_text(
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'author = "old@example.org"   # attribution identity\n'
+        '  agent = "claude"\n'
+        'graph = "has#hash"  # the value contains a hash\n'
+    )
+    _capture(monkeypatch)
+    set_("ol", author="new@example.org", agent="pi", graph="other#hash")
+
+    text = config_file.read_text()
+    assert 'author = "new@example.org"   # attribution identity\n' in text
+    assert '  agent = "pi"\n' in text  # indentation kept
+    assert 'graph = "other#hash"  # the value contains a hash\n' in text
+    assert _targets_of(config_file)["ol"]["graph"] == "other#hash"
+
+
+def test_set_preserves_the_config_file_mode(config_file, no_verify, monkeypatch):
+    """Regression, PR #317 review: `os.replace` keeps the TEMP file's mode.
+
+    A config chmod'd to 0600 because it holds `token`/`code_token` was widened
+    to the umask default (commonly 0644) by any `target add`/`set`/`remove`.
+    """
+    from witan.cli.targets import add, set_
+
+    config_file.write_text(
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'token = "secret-abc"\n'
+    )
+    config_file.chmod(0o600)
+    _capture(monkeypatch)
+
+    set_("ol", author="new@example.org")
+    assert config_file.stat().st_mode & 0o777 == 0o600
+
+    # The same helper backs `add` and `remove`, which had the same hole.
+    add("other", server="/tmp/g.omni", author="x")
+    assert config_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_set_rechecks_the_transport_rule_when_remote_url_is_touched(
+    config_file, monkeypatch
+):
+    """Regression, PR #317 review: clearing the endpoint strands `mcp`.
+
+    `--remote-url ''` used to skip the transport check entirely, writing a
+    target whose code-graph writes point at an endpoint that is not configured.
+    """
+    from witan.cli.targets import set_
+
+    original = (
+        '[targets.ol]\nremote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/eng"\n'
+        'code_transport = "mcp"\n'
+    )
+    config_file.write_text(original)
+    recorder = _capture(monkeypatch)
+    with pytest.raises(SystemExit):
+        set_("ol", remote_url="")
+
+    assert "needs remote_url" in recorder.export_text()
+    assert config_file.read_text() == original
+
+
+def test_set_result_is_readable_by_load_remote_config(
+    config_file, no_verify, monkeypatch
+):
+    """The point of the amendment: the routing the rest of the CLI then reads."""
+    from witan import config as cfg_module
+    from witan.cli.targets import set_
+
+    config_file.write_text(_AMENDABLE)
+    _capture(monkeypatch)
+    set_("ol", code_transport="mcp")
+
+    remote = cfg_module.load_remote_config(target="ol")
+    assert remote.url == "https://witan.example.org/mcp"

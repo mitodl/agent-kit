@@ -184,6 +184,43 @@ def test_the_transport_decides_the_address(monkeypatch, tmp_path):
     assert bridge.via_mcp == cfg_module.BRIDGE_GRAPH_ID
 
 
+def test_label_names_the_graph_a_row_is(monkeypatch, tmp_path):
+    """Every MCP-routed address ends in the same endpoint.
+
+    Taking a basename of the full address — what `witan-code doctor` did —
+    therefore rendered all 14 of production's cluster graphs as `mcp)`, so the
+    table could not say which one was broken in exactly the configuration a
+    deployed target uses.
+    """
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setenv("WITAN_CODE_TRANSPORT", cfg_module.CODE_TRANSPORT_MCP)
+    monkeypatch.setenv("WITAN_REMOTE_URL", "https://witan.example.org/mcp")
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/ol")
+
+    ref = store_module.store_for_repo(REPO, cfg_module.load())
+    assert ref.label == "test/cg"
+    assert str(ref).endswith("(via https://witan.example.org/mcp)")
+    assert store_module.bridge_store(cfg_module.load()).label == (
+        cfg_module.BRIDGE_GRAPH_ID
+    )
+
+
+def test_label_falls_back_to_the_store_name_off_the_mcp_path(monkeypatch, tmp_path):
+    """A local store and a directly-addressed cluster graph keep their own names."""
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.delenv("WITAN_CODE_TRANSPORT", raising=False)
+    monkeypatch.delenv("WITAN_CODE_SERVER", raising=False)
+    monkeypatch.delenv("WITAN_REMOTE_URL", raising=False)
+
+    local = store_module.store_for_repo(REPO, cfg_module.load())
+    assert local.label.endswith(".omni")
+    assert "/" not in local.label
+
+    monkeypatch.setenv("WITAN_CODE_SERVER", "http://omnigraph:8080")
+    direct = store_module.store_for_repo(REPO, cfg_module.load())
+    assert direct.label == direct.graph_id
+
+
 def test_the_endpoint_comes_from_the_config_that_asked_for_it(monkeypatch, tmp_path):
     """A `Config` from an explicit `load(target=…)` must resolve *that*
     target's endpoint. Re-running target selection would fall back to

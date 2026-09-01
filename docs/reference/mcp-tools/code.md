@@ -265,8 +265,11 @@ nothing else does. A bridge that cannot be opened makes every one of those
 fail while every per-repo listing still looks healthy — which is how it
 stayed broken for six weeks.
 
-Returns ``{"stores": [{store, kind, ok, files, error, stale_schema}],
-"ok": bool, "stale_schema": [store, ...]}``. ``stale_schema`` names the
+Returns ``{"stores": [{store, label, kind, ok, files, error,
+stale_schema}], "ok": bool, "stale_schema": [store, ...]}``. ``store`` is
+the full address; ``label`` is the short form that identifies WHICH graph a
+row is, which for a cluster graph the address does not (it ends in the
+endpoint, identical on every row). ``stale_schema`` names the
 stores written by an omnigraph whose on-disk format the installed binary
 no longer reads — the one failure with a known remedy, since a code graph
 is derived from its checkout and is rebuilt by reindexing

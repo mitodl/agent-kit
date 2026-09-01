@@ -15,7 +15,6 @@ unconditionally.
 
 import asyncio
 import inspect
-import os
 import sys
 from pathlib import Path
 from typing import Annotated, Literal
@@ -272,12 +271,15 @@ def doctor() -> None:
     report = _fn(server_module.code_store_health)()
     rows = [
         {
-            # Basename only: a local store path is `<code_dir>/<sanitized
-            # repo>.omni` and the shared prefix is the same on every row, so
-            # printing it in full wraps every store onto three lines and buries
-            # the status column this table exists for. A cluster graph's `store`
-            # is not a path and has no basename to take.
-            "store": os.path.basename(s["store"]),
+            # The short form, not the address: a local store path is
+            # `<code_dir>/<sanitized repo>.omni` and a cluster graph's address
+            # ends in the endpoint, so in both cases the shared part is
+            # identical on every row — printed in full it wraps each store onto
+            # three lines and buries the status column this table exists for.
+            # Computed by StoreRef.label rather than here, because the three
+            # address forms are that type's business and taking a basename of
+            # the MCP one silently collapsed all 14 rows to `mcp)`.
+            "store": s["label"],
             "kind": s["kind"],
             "status": "ok"
             if s["ok"]

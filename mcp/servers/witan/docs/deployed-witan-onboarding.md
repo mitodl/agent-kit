@@ -82,8 +82,10 @@ target overrides it.
 
 `witan target list` shows what is configured and marks with `*` the target in
 effect for the current checkout; `witan target remove ol` deletes the block
-again. Re-running `target add` with an existing name refuses rather than
-overwriting — pass `--force` to replace it in place.
+again. To change one setting on a target you already have, use
+`witan target set ol --<key> <value>`, which touches only the keys you name —
+not `add --force`, which rebuilds the block from its flags and so drops
+everything you did not re-type. See [Already registered?](#already-registered).
 
 <details>
 <summary>What that writes, if you would rather edit the TOML by hand</summary>
@@ -138,22 +140,45 @@ you are fine when you are not:
 awk '/^\[targets\.ol\]/{f=1;print;next} /^\[/{f=0} f' ~/.config/witan/config.toml
 ```
 
-No `code_transport` line in that block? Re-register it:
+No `code_transport` line in that block? Add it:
 
 ```bash
-witan target add ol --force \
-    --remote-url https://witan.ci.ol.mit.edu/mcp \
-    --oidc-issuer https://sso-ci.ol.mit.edu/realms/ol-platform-engineering \
-    --oidc-audience witan \
-    --match-orgs mitodl
+witan target set ol --code-transport mcp
 ```
 
-`--force` replaces the block in place, and re-running `add` with the same
-arguments now writes `code_transport = "mcp"` as well. Adding the one line by
-hand does the same thing. Your existing login survives as long as you keep
-`oidc_issuer` and `oidc_client_id` the same: the token cache is keyed on that
-pair, not on `remote_url` (`DeviceAuth._cache_key`). Change either one and you
-are pointed at a different cache entry and will need to log in again.
+That is the whole procedure. `set` changes the keys you name and nothing else,
+rewriting each where it sits, so the rest of the block — including any comment
+in it — comes through untouched. `--dry-run` shows the amended block first.
+
+**Do not use `add --force` for this.** `add` builds the block from the flags it
+is given, so replacing a block that way deletes every key it has no flag for.
+`token`, `model`, `code_dir`, `code_token`, `index_role` and `actor` are all
+readable from a target block and none of them are `add` parameters, so a
+`--force` re-register drops all six — plus any flag you did not re-type.
+
+Your existing login survives: the token cache is keyed on `(oidc_issuer,
+oidc_client_id)` (`DeviceAuth._cache_key`), and this changes neither.
+
+Then confirm the graphs you want are actually there:
+
+```bash
+witan code doctor
+```
+
+Cluster code graphs are **declared by provisioning**, not created by the client
+— `managed_repos` in ol-infrastructure
+`src/ol_infrastructure/applications/omnigraph/Pulumi.<env>.yaml`, read by
+`applications/omnigraph/data_tier.py`. `doctor` lists the ones your target can
+reach, by repo. As of 2026-09-01 production serves 14 — `agent-kit`,
+`learn-ai`, `lehrer`, `mit-learn`, `mitxonline`, `mitxpro`, `ocw-hugo-themes`,
+`ocw-studio`, `odl-video-service`, `ol-concourse`, `ol-data-platform`,
+`ol-django`, `ol-infrastructure`, `open-edx-plugins` — plus the shared
+`code-bridge`.
+
+If a repo you work in is not on that list, indexing it fails with
+`ClusterGraphMissing` rather than quietly writing somewhere else. Adding one
+needs a `pulumi up` plus an `omnigraph cluster apply` and a server restart, so
+raise it before you switch rather than after.
 
 Re-index whatever you want shared afterwards: the local index is not migrated,
 and `witan code index` writes wherever the config now points.

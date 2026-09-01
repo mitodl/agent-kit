@@ -44,6 +44,7 @@ witan — agent memory, planning, and collaboration graph.
 - [`setup`](#witan-setup)
 - [`target`](#witan-target)
     - [`add`](#witan-target-add)
+    - [`set`](#witan-target-set)
     - [`list`](#witan-target-list)
     - [`remove`](#witan-target-remove)
 - [`tasks`](#witan-tasks)
@@ -717,6 +718,54 @@ reached explicitly (``--target``/``WITAN_TARGET``).
 * `--force, --no-force`: *[default: False]*
 * `--verify, --no-verify`: *[default: True]*
 * `--login, --no-login`: *[default: False]*
+* `--dry-run, --no-dry-run`: *[default: False]*
+
+### witan target set
+
+```console
+witan target set [OPTIONS] NAME
+```
+
+Change individual keys on a registered target, leaving the rest alone.
+
+The command for amending a target you already have. Only the keys you name
+are touched::
+
+    witan target set ol --code-transport mcp
+
+Use this rather than ``add --force`` to change one thing. ``add`` builds the
+block from its own flags, so replacing a block that way silently drops every
+key ``add`` has no parameter for — ``token``, ``model``, ``code_dir``,
+``code_token``, ``index_role``, ``actor`` — along with any flag you did not
+re-type. ``set`` rewrites assignments where they sit and leaves the rest of
+the block, comments included, exactly as it found it.
+
+Cross-field rules are checked against the block as it will end up, so
+``--code-transport mcp`` is accepted when ``remote_url`` is already there.
+The rewritten file is parsed before it is written: a change that would leave
+the config unreadable is refused, and nothing on disk changes.
+
+**Parameters**:
+
+* `NAME, --name`: **[required]**
+* `--remote-url`:
+* `--oidc-issuer`:
+* `--oidc-client-id`:
+* `--oidc-audience`:
+* `--server`:
+* `--graph`:
+* `--code-server`: The DATA tier, reachable from inside the cluster only — distinct from
+    ``--server``, which addresses the memory graph.
+* `--code-transport`: ``mcp`` routes them through the deployed witan endpoint and is what a
+    target with a ``remote_url`` wants; ``direct`` addresses
+    ``--code-server`` and only works from inside the cluster. *[choices: direct, mcp]*
+* `--author`:
+* `--agent`:
+* `--match-orgs, --empty-match-orgs`:
+* `--match-repos, --empty-match-repos`:
+* `--match-hosts, --empty-match-hosts`:
+* `--match-paths, --empty-match-paths`:
+* `--verify, --no-verify`: *[default: True]*
 * `--dry-run, --no-dry-run`: *[default: False]*
 
 ### witan target list
