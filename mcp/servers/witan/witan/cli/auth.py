@@ -13,6 +13,7 @@ from .. import config as cfg_module
 from ..identity import derive_actor_id
 from ..remote import oidc
 from ._common import app, console, esc, print_error
+from .code_routing import code_graph_destination
 
 
 def _remote_or_exit(target: str | None = None) -> cfg_module.RemoteConfig:
@@ -141,6 +142,13 @@ def whoami(*, target: str | None = None) -> None:
     if remote.target_name:
         console.print(f"[bold]Target[/bold]    {remote.target_name}")
     console.print(f"[bold]Endpoint[/bold]  {esc(remote.url)}")
+    # "What am I pointed at?" is the question this command exists to answer,
+    # and until this it answered only the identity half — while the OTHER half
+    # is routed by a separate setting that can, and on production did, disagree
+    # with this one for months without anything saying so.
+    code_dest = code_graph_destination(remote.target_name)
+    if code_dest:
+        console.print(f"[bold]Code[/bold]      {esc(code_dest)}")
     console.print(
         f"[bold]User[/bold]      {esc(claims.get('preferred_username', '?'))}"
     )

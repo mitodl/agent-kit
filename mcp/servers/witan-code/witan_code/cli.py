@@ -927,6 +927,17 @@ def setup(
 
 
 def _print_summary(action: str, path: Path, stats: indexer.IndexStats) -> None:
+    # ★ WHERE THE SYMBOLS WENT, UNCONDITIONALLY. Memory and code graphs are
+    # routed by separate settings, so a target whose memory is deployed can
+    # still index onto this laptop — and this command, whose entire output is
+    # about where symbols went, used to be silent about which graph it wrote.
+    # Printed for local and shared alike: a line that appears only in the bad
+    # case is a line nobody has learned to look for.
+    if stats.store:
+        print(
+            f"store: {stats.store}"
+            + (f" branch={stats.branch}" if stats.branch else "")
+        )
     print(
         f"{action} {path}: "
         f"scanned={stats.scanned} indexed={stats.indexed} "

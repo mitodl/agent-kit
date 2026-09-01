@@ -15,7 +15,6 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 import cyclopts
-from rich.markup import escape
 
 from .. import config as cfg_module
 
@@ -35,6 +34,7 @@ from . import (
     traces,  # noqa: F401
 )
 from ._common import app, console, print_error, stderr_console
+from .code_routing import warn_if_code_graph_is_local
 from .migrate import migrate_app
 from .output import OutputFormat, set_output_format
 from .run_helpers import _run_task_slug
@@ -74,53 +74,6 @@ try:
     app.command(_code_app, name="code")
 except ImportError:
     pass
-
-
-def _local_code_graph_warning(transport: str, target_name: str | None) -> str:
-    """The warning text, separated from the config read so it can be tested.
-
-    Everything interpolated here is escaped, because the target name lands
-    inside brackets: "target [production]" is valid Rich markup for a style
-    called `production`, so unescaped the name is either swallowed on render or
-    raises on a name Rich cannot parse. Splitting this out also keeps the
-    escaping under test where `witan-code` is not installed — otherwise the
-    only test of it skips, which is no test at all.
-    """
-    where = f"target [{target_name}]" if target_name else "config"
-    return (
-        f"[yellow]witan: memory graph is deployed, code graphs are local "
-        f"(code_transport = {escape(repr(transport))}). Branches indexed here "
-        f'stay on this machine. Set code_transport = "mcp" on {escape(where)} '
-        f"to share them.[/yellow]"
-    )
-
-
-def _warn_if_code_graph_is_local() -> None:
-    """Warn when the memory graph is deployed but code graphs are not.
-
-    The two are routed by SEPARATE settings — ``remote_url`` sends the
-    work/memory graph to the deployment, ``code_transport = "mcp"`` sends the
-    code graphs — and nothing ties them together. A target that sets the first
-    and not the second gives you an agent whose memory is shared and whose code
-    graph is a directory on one laptop, which defeats the point of indexing a
-    branch at all: the reason branches are indexed per writer is so another
-    session, and another developer, can see work that is still in flight.
-
-    A warning rather than a refusal. Unlike the memory-graph fallback this
-    module exists to stop, this one is legible from the outside — `witan code`
-    reports the store path it used — and a local code graph is a legitimate
-    choice for someone who has not provisioned cluster graphs yet.
-    """
-    try:
-        from witan_code import config as code_cfg_module
-    except ImportError:
-        return
-    code_cfg = code_cfg_module.load()
-    if code_cfg.code_transport == code_cfg_module.CODE_TRANSPORT_MCP:
-        return
-    stderr_console.print(
-        _local_code_graph_warning(code_cfg.code_transport, code_cfg.target_name)
-    )
 
 
 def _serve_target(transport: str):
@@ -175,7 +128,7 @@ def _serve_target(transport: str):
     except Exception as exc:  # noqa: BLE001 — every failure mode is the same answer
         print_error(remote_startup_failure(remote, exc), stderr=True)
         raise SystemExit(1) from None
-    _warn_if_code_graph_is_local()
+    warn_if_code_graph_is_local()
     return server
 
 
@@ -340,7 +293,32 @@ def _launcher(
         set_code_output_format(output_format)
     except ImportError:
         pass
+    _warn_about_routing(tokens)
     app(tokens)
+
+
+def _warn_about_routing(tokens: tuple[str, ...]) -> None:
+    """Surface the local-code-graph warning on the path a person actually reads.
+
+    ★ TWO GATES, AND BOTH ARE THE DIFFERENCE BETWEEN A SIGNAL AND NOISE.
+
+    A tty, because everything else that runs this CLI is a machine: the Stop
+    and context hooks, the CI indexer (``witan code index .``), a shell
+    pipeline. None of them has a reader, and worse, any of them firing the
+    warning would consume the throttle window below and buy the silence for the
+    human who was supposed to get it — the same defect this call site exists to
+    fix, one layer down.
+
+    Not ``serve``, because ``_serve_target`` warns for itself, unthrottled, and
+    a serve run must not spend the window either. Positional 0 is the whole
+    test: cyclopts has already bound this function's own options by the time it
+    is called, so the command name is the first token that survives.
+    """
+    if not stderr_console.is_terminal:
+        return
+    if tokens[:1] == ("serve",):
+        return
+    warn_if_code_graph_is_local(throttle=True)
 
 
 def main() -> None:

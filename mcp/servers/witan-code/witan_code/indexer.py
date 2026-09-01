@@ -303,6 +303,20 @@ class IndexStats:
     directory). Full-repo runs only; reported so a mass cleanup is visible
     rather than silent."""
 
+    store: str = ""
+    """Where the run wrote — a local directory, or the shared graph's address.
+
+    ``witan code index`` is the command whose whole output is about where
+    symbols went, and it happily wrote to a laptop under a deployed target
+    without comment. Carried on the stats rather than recomputed by the
+    printer so a FAILED run reports the same destination a successful one
+    does — that is precisely the run where "which graph was this?" is the
+    open question.
+    """
+
+    branch: str = ""
+    """The branch view written, or empty on the repo's default branch."""
+
 
 class IndexFailed(RuntimeError):
     """A write phase of :func:`index_path` failed, carrying what it knows.
@@ -412,7 +426,7 @@ def index_path(
     for row in client.read("code_read.gq", "all_file_hashes", {}):
         existing[row["slug"]] = row.get("content_hash")
 
-    stats = IndexStats()
+    stats = IndexStats(store=str(store), branch=branch or "")
     records: list[dict] = []
     reindexed_file_ids: list[str] = []
     bindings: list[ParsedBinding] = []

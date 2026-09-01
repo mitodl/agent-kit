@@ -21,6 +21,9 @@ def test_index_extracts_symbols_and_edges(sample_repo):
 
     slug = repo_mod.detect()
     store = store_mod.store_for_repo(slug, cfg)
+    # The destination the summary reports comes off the run itself, so this is
+    # what stops that line drifting from where the rows actually landed.
+    assert stats.store == str(store)
     client = OmnigraphClient(str(store), cfg.queries_dir)
 
     runs = client.read("code_read.gq", "find_by_name", {"name": "run"})
