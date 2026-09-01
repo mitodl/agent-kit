@@ -57,14 +57,20 @@ def _local_code_graph_warning(transport: str, target_name: str | None) -> str:
     )
 
 
-def _code_config(target: str | None = None):
+def _code_config(target: str | None = None, *, strict: bool = False):
     """``witan_code``'s resolved config, or ``None`` if there is nothing to say.
 
-    Both misses are deliberate. witan-code may not be installed — the umbrella
-    works standalone. And a config this cannot parse is not this function's
-    error to report: the command the user actually ran raises on the same load
-    with a message about the key that is wrong, and pre-empting it with a
-    routing warning would bury that.
+    ``None`` for a missing witan-code is unconditional — the umbrella works
+    standalone.
+
+    ``strict`` decides what an unparseable config means, and the two callers
+    genuinely differ. For the ambient warning it is not this function's error
+    to report: the command the user actually ran raises on the same load with a
+    message naming the key that is wrong, and pre-empting it with a routing
+    warning would bury that. ``code_graph_destination`` has no such backstop —
+    ``witan whoami`` loads the code config here and NOWHERE ELSE, so swallowing
+    the error there just drops the ``Code`` line and reports nothing, which is
+    the silent-misrouting failure this module exists to end.
     """
     try:
         from witan_code import config as code_cfg_module
@@ -73,6 +79,8 @@ def _code_config(target: str | None = None):
     try:
         return code_cfg_module.load(target=target)
     except ValueError:
+        if strict:
+            raise
         return None
 
 
@@ -80,16 +88,25 @@ def code_graph_destination(target: str | None = None) -> str | None:
     """One line answering "where do my indexed branches go?", or ``None``.
 
     ``witan whoami`` is the command people run to ask what they are pointed at,
-    and until this it answered only the identity half.
+    and until this it answered only the identity half. Raises ``ValueError``
+    when the code config is invalid: the caller reports it, because a silent
+    omission here reads as "nothing to say" rather than "cannot tell".
+
+    Transport is checked BEFORE ``code_server`` because that is the order
+    ``store_for_repo`` resolves in (``witan_code/store.py``): ``mcp`` wins and
+    ``code_server`` goes unread, so reporting the server for a config that sets
+    both would describe a route indexing does not take.
     """
-    cfg = _code_config(target)
+    cfg = _code_config(target, strict=True)
     if cfg is None:
         return None
     if not cfg.is_cluster:
         return f"local to this machine, under {cfg.code_dir}"
-    if cfg.code_server:
-        return f'shared, at {cfg.code_server} (code_transport = "direct")'
-    return 'shared, through this endpoint (code_transport = "mcp")'
+    from witan_code import config as code_cfg_module
+
+    if cfg.code_transport == code_cfg_module.CODE_TRANSPORT_MCP:
+        return 'shared, through this endpoint (code_transport = "mcp")'
+    return f'shared, at {cfg.code_server} (code_transport = "direct")'
 
 
 def _stamp_file(target_name: str | None) -> Path:

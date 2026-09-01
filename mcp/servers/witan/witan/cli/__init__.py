@@ -313,10 +313,31 @@ def _warn_about_routing(tokens: tuple[str, ...]) -> None:
     a serve run must not spend the window either. Positional 0 is the whole
     test: cyclopts has already bound this function's own options by the time it
     is called, so the command name is the first token that survives.
+
+    Not an explicit ``--target`` either, and that is the same argument a third
+    time. This runs BEFORE ``app(tokens)``, which is the call that binds a
+    command's arguments — so all this can resolve is the ambient target
+    (``WITAN_TARGET``, else the checkout's ``match_*``), which under
+    ``witan whoami --target qa`` is a DIFFERENT target from the one the command
+    reports on. Warning then answers about a target nobody asked about and,
+    worse, stamps that target's throttle file: the run that should have warned
+    the human is silenced for a day by a run that was about something else.
+    Under-warning here is the safe direction, and the gap is small — every
+    command that takes ``--target`` either prints the routing itself
+    (``whoami``'s ``Code`` line) or is not an indexing command.
+
+    Presence is all this checks, never which command the flag binds to: argv
+    cannot tell you that (``witan run <agent> --target qa`` may be the agent's
+    flag), and guessing is how the wrong target gets warned about again.
+    Making ``--target`` a real app-level option is the actual fix — see
+    tk-target-is-a-per-command-flag-so-the-pre-dispatch-44ea22, which also
+    records why that cannot be done additively.
     """
     if not stderr_console.is_terminal:
         return
     if tokens[:1] == ("serve",):
+        return
+    if any(t == "--target" or t.startswith("--target=") for t in tokens):
         return
     warn_if_code_graph_is_local(throttle=True)
 

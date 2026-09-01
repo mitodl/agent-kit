@@ -146,9 +146,18 @@ def whoami(*, target: str | None = None) -> None:
     # and until this it answered only the identity half — while the OTHER half
     # is routed by a separate setting that can, and on production did, disagree
     # with this one for months without anything saying so.
-    code_dest = code_graph_destination(remote.target_name)
-    if code_dest:
-        console.print(f"[bold]Code[/bold]      {esc(code_dest)}")
+    # An unreadable code config is REPORTED here, not swallowed. This is the
+    # only place whoami loads it, so returning None on a bad `code_transport`
+    # would drop the line entirely and leave the misconfiguration looking like
+    # "witan-code isn't installed". Printed rather than raised: the identity
+    # half below is still correct and still worth showing.
+    try:
+        code_dest = code_graph_destination(remote.target_name)
+    except ValueError as exc:
+        console.print(f"[bold]Code[/bold]      [red]unreadable — {esc(str(exc))}[/red]")
+    else:
+        if code_dest:
+            console.print(f"[bold]Code[/bold]      {esc(code_dest)}")
     console.print(
         f"[bold]User[/bold]      {esc(claims.get('preferred_username', '?'))}"
     )

@@ -85,3 +85,38 @@ def test_a_failed_index_still_names_the_store(monkeypatch, capsys):
         cli_module.index(Path("."))
 
     assert "https://witan.example/mcp" in capsys.readouterr().out
+
+
+def test_a_setup_failure_names_the_store_it_was_reaching(tmp_path, monkeypatch):
+    """Regression, PR #316 review: the guarantee has to cover setup, not just
+    the load.
+
+    `ensure_branch` and the existing-hash read are REMOTE calls, and `IndexStats`
+    used to be built after both. So an unreachable endpoint or a rejected token
+    raised before the stats object existed, `_index` had nothing to print, and
+    the run that most needed a destination reported none — the exact gap the
+    "a failed run still identifies its graph" guarantee was added to close.
+    """
+    import subprocess
+
+    from witan_code import config as cfg_module
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    src = tmp_path / "repo"
+    src.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=src, check=True)
+    (src / "a.py").write_text("def a():\n    return 1\n")
+
+    def _unreachable(self, *a, **k):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(OmnigraphClient, "ensure_branch", _unreachable)
+
+    with pytest.raises(indexer.IndexFailed) as excinfo:
+        indexer.index_path(src, config=cfg_module.load())
+
+    assert excinfo.value.phase == "branch setup"
+    assert excinfo.value.stats.store  # the destination, not an empty string
+    assert "cg" in excinfo.value.stats.store

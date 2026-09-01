@@ -262,6 +262,44 @@ def test_serve_is_left_to_warn_for_itself(monkeypatch, routing_calls):
     assert routing_calls == []
 
 
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        ("whoami", "--target", "qa"),
+        ("whoami", "--target=qa"),
+        ("run", "claude", "--target", "qa"),
+    ],
+)
+def test_an_explicit_target_is_left_alone(monkeypatch, routing_calls, tokens):
+    """This runs before `app(tokens)` binds arguments, so it can only resolve
+    the AMBIENT target — a different one from what `--target qa` selects.
+    Warning would answer about a target nobody asked about and stamp that
+    target's throttle file, silencing the next ambient run for a day.
+
+    Presence is all that is checked; argv cannot say which command the flag
+    binds to. The real fix is an app-level option —
+    tk-target-is-a-per-command-flag-so-the-pre-dispatch-44ea22.
+    """
+    from witan.cli import _warn_about_routing
+
+    _on_a_terminal(monkeypatch, True)
+    _warn_about_routing(tokens)
+
+    assert routing_calls == []
+
+
+def test_a_target_valued_argument_does_not_look_like_the_flag(
+    monkeypatch, routing_calls
+):
+    """Only the flag itself suppresses — not a value that happens to say it."""
+    from witan.cli import _warn_about_routing
+
+    _on_a_terminal(monkeypatch, True)
+    _warn_about_routing(("memory", "add", "--target"[2:]))
+
+    assert routing_calls == [{"throttle": True}]
+
+
 # ── `witan whoami` answering the other half ──────────────────────────────────
 
 
@@ -280,7 +318,9 @@ def test_whoami_reports_code_graphs_routed_through_the_endpoint(code_installed):
 
     code_installed(_FakeCodeConfig(code_transport="mcp"))
 
-    assert "shared" in code_graph_destination()
+    assert code_graph_destination() == (
+        'shared, through this endpoint (code_transport = "mcp")'
+    )
 
 
 def test_whoami_reports_a_directly_addressed_code_server(code_installed):
@@ -288,7 +328,75 @@ def test_whoami_reports_a_directly_addressed_code_server(code_installed):
 
     code_installed(_FakeCodeConfig(code_server="https://omnigraph.example"))
 
-    assert "https://omnigraph.example" in code_graph_destination()
+    # Equality, not `in`: a substring check against a URL is the shape CodeQL
+    # flags as incomplete sanitization (py/incomplete-url-substring-
+    # sanitization), and asserting the whole line is a better test anyway.
+    assert code_graph_destination() == (
+        'shared, at https://omnigraph.example (code_transport = "direct")'
+    )
+
+
+def test_whoami_reports_mcp_when_a_code_server_is_also_set(code_installed):
+    """Transport wins, because that is the order `store_for_repo` resolves in.
+
+    `witan_code/store.py::store_for_repo` checks `_via_mcp` first and returns
+    without reading `code_server`, so a config setting both indexes through the
+    endpoint. Reporting the server here described a route indexing never takes.
+    """
+    from witan.cli.code_routing import code_graph_destination
+
+    code_installed(
+        _FakeCodeConfig(code_transport="mcp", code_server="https://omnigraph.example")
+    )
+
+    assert code_graph_destination() == (
+        'shared, through this endpoint (code_transport = "mcp")'
+    )
+
+
+def test_whoami_surfaces_an_unreadable_code_config(code_installed, monkeypatch):
+    """`whoami` is the ONLY place that loads the code config in that command.
+
+    Swallowing the error drops the `Code` line, which reads as "witan-code is
+    not installed" rather than "your routing config is broken" — the silent
+    failure this module exists to end.
+    """
+    import sys
+
+    from witan.cli.code_routing import code_graph_destination
+
+    code_installed(_FakeCodeConfig())
+
+    def _boom(target=None):
+        raise ValueError("Unknown code_transport 'mpc'. Known transports: direct, mcp")
+
+    monkeypatch.setattr(sys.modules["witan_code.config"], "load", _boom)
+
+    with pytest.raises(ValueError, match="Unknown code_transport"):
+        code_graph_destination()
+
+
+def test_the_ambient_warning_still_swallows_an_unreadable_code_config(
+    code_installed, deployed, monkeypatch, capsys
+):
+    """The other caller keeps best-effort suppression, for the original reason.
+
+    The command the user actually ran raises on the same load with a message
+    naming the bad key; pre-empting it with a routing warning would bury that.
+    """
+    import sys
+
+    from witan.cli import code_routing
+
+    code_installed(_FakeCodeConfig())
+
+    def _boom(target=None):
+        raise ValueError("Unknown code_transport 'mpc'")
+
+    monkeypatch.setattr(sys.modules["witan_code.config"], "load", _boom)
+
+    code_routing.warn_if_code_graph_is_local()  # must not raise
+    assert "code_transport" not in capsys.readouterr().err
 
 
 def test_whoami_asks_about_the_target_it_resolved_the_identity_for(code_installed):
