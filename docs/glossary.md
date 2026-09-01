@@ -24,8 +24,8 @@ enforces: the graph will let you advance whenever you like, and the point of
 recording criteria is to make advancing without meeting them a visible choice
 instead of a quiet one.
 
-**Slug prefixes** — every node's slug names its kind, followed by a short
-uniqueness suffix.
+**Slug prefixes** — every node's slug names its kind. Most carry a short
+random suffix so two nodes created with the same title do not collide.
 
 | Prefix | Node |
 | --- | --- |
@@ -37,14 +37,23 @@ uniqueness suffix.
 | `wp-` | WorkflowProject |
 | `ws-` | WorkflowSession |
 | `wt-` | WorkflowTrace |
+| `tp-` | Topic |
 
 So `les-` and `pat-` are both memories; the prefix tells you which of the
 [four kinds](concepts/memory.md) it is without a lookup.
 
+`tp-` is the exception to the suffix rule, deliberately: a Topic's slug is
+`tp-<kind>-<name>` and is *deterministic*, with no random part. That is what
+makes storing the same topic twice a no-op — the second write collides on the
+key instead of creating a near-duplicate.
+
 **Session** — one agent working stint, registered with
 `workflow_session_start` and linked to a project. A session is what gives a
-memory or a task its provenance edge; several sessions may be open on one
-project at once, which is the case the coordination primitives exist for.
+*memory* its provenance edge (`SessionProduced`, which the schema defines only
+as `WorkflowSession -> Memory` — tasks are related to sessions through the
+project and the branch they are worked on, not by that edge). Several sessions
+may be open on one project at once, which is the case the coordination
+primitives exist for.
 
 ---
 
@@ -52,8 +61,13 @@ project at once, which is the case the coordination primitives exist for.
 
 **Actor** — the identity a call is attributed to. Against a deployed witan it
 is derived per request from the caller's own JWT, so writes carry the person
-who made them rather than the service's own credential. Actor ids are of the form
-`act-<id>`, mapped from the token's `sub`.
+who made them rather than the service's own credential. A human caller's actor id is
+derived from the token's `sub` and is of the form `act-<id>`.
+
+Service identities are **not** `act-`-prefixed — they are named literally
+(`svc-witan-ci`, `svc-witan-admin`). The Cedar bundles are rendered against
+those exact names, so reading `act-` as universal is how a policy ends up
+denying CI or the break-glass identity.
 
 **Cedar bundle** — the policy that decides whether an actor may read or write a
 given graph. It is evaluated at the data tier, so it applies to every client
@@ -121,10 +135,12 @@ the backend, not witan reporting a result.
 
     Older material describes witan being served through a ToolHive-managed
     vMCP aggregator. That tier was removed: witan is now served as a plain
-    Deployment behind APISIX in every environment. Mentions of `vMCP`, the
-    proxy runner, or a ToolHive sidecar in the architecture notes and ADRs are
-    historical — they explain why the tier is gone, not how requests are
-    served today.
+    Deployment behind APISIX in every environment.
+
+    Treat every `vMCP`, proxy-runner or ToolHive sidecar mention elsewhere in
+    these docs as describing the **former** topology. Some of those pages say
+    so; others still present it as the current shape and simply have not caught
+    up. Neither kind reflects how a request is served today.
 
 ---
 
@@ -138,6 +154,16 @@ behind the data tier.
 keep one developer's in-progress reindex from disturbing the shared view.
 
 **Merge** — reconciling one store's contents into another, as when a personal
-store is migrated into the shared graph. Reconciliation is by `(type, slug)`,
-and it is idempotent: re-running a merge that partly failed writes only what is
-missing.
+store is migrated into the shared graph. Reconciliation is by `(type, slug)`
+and the rule is **newest-record-wins**: a source row that is newer than the
+target's overwrites it, so a merge updates existing rows as well as adding
+absent ones.
+
+That matters in one direction worth knowing about — if both sides edited the
+same node since the last merge, the older edit loses, and quietly. Supplying
+the previous merge's watermark is what makes such a node get reported as
+`diverged` rather than resolved in silence.
+
+Re-running a merge that partly failed is still safe: reconciliation is against
+the target as it stands when each batch arrives, so a re-run writes nothing for
+rows that already landed unchanged.
