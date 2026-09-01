@@ -6147,11 +6147,21 @@ async def task_claim(
     caught_up = write_commit is None or (
         verify_commit is not None and verify_commit >= write_commit
     )
+    # ★ `write_graph_commit_id` IS WHAT MAKES THE OTHER TWO FIELDS READABLE.
+    # `caught_up` is `True` both when the catch-up check ran and passed AND
+    # when `write_commit is None` short-circuited it, and `verify_attempts`
+    # stays 1 in that second case for the same reason — so on their own the
+    # healthy reading and the degraded one are indistinguishable in the log.
+    # Without this field, deciding which you are looking at means inferring it
+    # from `witan.task_update.conditional.unconditional_fallback` on a
+    # neighbouring line, which is a different call's read commit, not this
+    # write's. `null` here means the catch-up check never ran.
     logger.info(
         "witan.task_claim.verify",
         task_slug=slug,
         holder=holder,
         winner_seen=winner,
+        write_graph_commit_id=write_commit,
         verify_graph_commit_id=verify_commit,
         verify_attempts=verify_attempts,
         caught_up=caught_up,
