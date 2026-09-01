@@ -96,6 +96,7 @@ nav = [
       { "0010 Code-graph read scoping" = "explanation/decisions/0010-private-code-graph-read-scoping.md" },
     ] },
   ] },
+  { "Glossary" = "glossary.md" },
   { "Internals" = [
     { "Overview" = "internals/index.md" },
     { "Agent memory implementation guide" = "internals/agent-memory.md" },
