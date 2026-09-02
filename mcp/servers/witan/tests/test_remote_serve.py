@@ -139,7 +139,7 @@ def test_serve_target_uses_the_local_server_when_no_remote_is_configured(monkeyp
     from witan import cli as cli_module
     from witan import config as cfg_module
 
-    monkeypatch.setattr(cfg_module, "load_remote_config", lambda: None)
+    monkeypatch.setattr(cfg_module, "load_remote_config", lambda target=None: None)
     import witan.server as srv
 
     assert cli_module._serve_target("stdio") is srv.mcp
@@ -149,7 +149,7 @@ def test_serve_target_exits_instead_of_serving_the_local_store(monkeypatch, caps
     from witan import cli as cli_module
     from witan import config as cfg_module
 
-    monkeypatch.setattr(cfg_module, "load_remote_config", lambda: REMOTE)
+    monkeypatch.setattr(cfg_module, "load_remote_config", lambda target=None: REMOTE)
 
     async def _boom(_remote):
         raise RemoteUnreachable("the deployment is not answering")
@@ -184,7 +184,7 @@ def test_a_deployed_target_is_not_served_over_a_socket(monkeypatch, capsys):
     from witan import cli as cli_module
     from witan import config as cfg_module
 
-    monkeypatch.setattr(cfg_module, "load_remote_config", lambda: REMOTE)
+    monkeypatch.setattr(cfg_module, "load_remote_config", lambda target=None: REMOTE)
     with pytest.raises(SystemExit):
         cli_module._serve_target("streamable-http")
     captured = capsys.readouterr()

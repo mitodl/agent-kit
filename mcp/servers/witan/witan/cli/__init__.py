@@ -108,7 +108,7 @@ def _serve_target(transport: str):
     from .remote_errors import remote_serving_needs_stdio, remote_startup_failure
 
     try:
-        remote = cfg_module.load_remote_config()
+        remote = cfg_module.load_remote_config(target=selected_target())
     except ValueError as exc:
         print_error(exc, stderr=True)
         raise SystemExit(1) from None
@@ -301,8 +301,15 @@ def _launcher(
     configure_observability(instrument=False)
     try:
         from witan_code.output import set_output_format as set_code_output_format
+        from witan_code.selected_target import (
+            set_selected_target as set_code_selected_target,
+        )
 
         set_code_output_format(output_format)
+        # The same forwarding, and for the bigger prize: `witan code index` is
+        # the command that WRITES a code graph, and this is the only way the
+        # launcher's --target reaches it.
+        set_code_selected_target(target)
     except ImportError:
         pass
     _warn_about_routing(tokens)

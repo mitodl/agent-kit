@@ -109,33 +109,125 @@ def test_serve_still_warns_for_itself(monkeypatch):
 
 
 def test_commands_that_never_had_the_flag_now_read_it(monkeypatch):
-    """`witan tasks`/`memory`/`code index` could only be steered by the env var.
+    """`witan tasks`/`memory`/`projects` could only be steered by the env var.
 
-    Asserted through the accessor the commands call rather than by driving each
-    one, since the point is that they all share a single resolution path.
+    Driven through ``_srv()`` — the resolution path those commands actually
+    dispatch through — and NOT through the accessor. Asserting the accessor is
+    what made the first cut of this change look correct while
+    ``witan --target ci tasks`` still read production: the launcher recorded
+    the flag faithfully and nothing on the dispatch path ever asked for it.
     """
-    monkeypatch.setattr("witan.cli.app", lambda tokens: None)
+    from witan import config as cfg_module
+    from witan.cli import _common
+
+    seen = {}
+    monkeypatch.setattr(_common, "_server", None)
+    monkeypatch.setattr(
+        cfg_module,
+        "load_remote_config",
+        lambda target=None: seen.setdefault("remote", target),
+    )
+    monkeypatch.setattr(_common, "remote_proxy", lambda remote: remote)
+    set_selected_target("ci")
+
+    _common._srv()
+
+    assert seen["remote"] == "ci"
+
+
+def test_the_local_dispatch_diagnosis_gets_the_same_target(monkeypatch):
+    """The other half of ``_srv()``. This one decides whether opening the local
+    store was deliberate, and a target named on the command line is one of the
+    three things that make it so — diagnosing against the ambient target would
+    call a deliberate local dispatch accidental, and vice versa."""
+    from witan import config as cfg_module
+    from witan.cli import _common
+
+    seen = {}
+    monkeypatch.setattr(_common, "_server", None)
+    monkeypatch.setattr(cfg_module, "load_remote_config", lambda target=None: None)
+    monkeypatch.setattr(
+        cfg_module,
+        "diagnose_local_dispatch",
+        lambda target=None: seen.setdefault("diagnosed", target),
+    )
+    monkeypatch.setattr(
+        "witan.cli.local_dispatch.local_server", lambda diagnosis: diagnosis
+    )
+    set_selected_target("work")
+
+    _common._srv()
+
+    assert seen["diagnosed"] == "work"
+
+
+def test_an_unknown_target_is_refused_rather_than_ignored(monkeypatch):
+    """The tell that the flag was never being consulted: a name that matches no
+    ``[targets.<name>]`` block produced a normal table off the ambient target
+    instead of an error, because ``_select_target`` was never asked about it."""
+    from witan.cli import _common
+
+    monkeypatch.setattr(_common, "_server", None)
+    set_selected_target("nosuchtarget")
+
+    with pytest.raises(SystemExit):
+        _common._srv()
+
+
+def test_serve_resolves_the_named_target_too(monkeypatch):
+    """`serve` is the MCP surface every agent session talks to, and agent-kit
+    #261 is what happens when it resolves a different target from the CLI in
+    the same directory: the hook read the deployment while the agent's tools
+    wrote the laptop. It is exempt from the routing WARNING (it has no reader),
+    never from the routing itself."""
+    from witan import config as cfg_module
+    from witan.cli import _serve_target
+
+    seen = {}
+
+    def _record(target=None):
+        seen["target"] = target
+        return None  # local branch; which server comes back is not the point
+
+    monkeypatch.setattr(cfg_module, "load_remote_config", _record)
+    set_selected_target("qa")
+
+    _serve_target("stdio")
+
+    assert seen["target"] == "qa"
+
+
+def test_the_launcher_forwards_the_target_into_witan_code(monkeypatch):
+    """`witan code …` mounts witan-code's App but not its meta launcher, so
+    this forwarding is the only way the flag reaches `witan code index` — the
+    command that WRITES a code graph, and the main prize of moving the flag.
+
+    Stubbed into ``sys.modules`` rather than imported: witan-code is not a
+    dependency of witan-council's test environment (the launcher's own import
+    sits under ``except ImportError``), so a real import here would be a test
+    that never runs in CI. Same pattern as the ``--output-format`` twin in
+    test_cli_output_format.py.
+    """
+    import sys
+    import types
+
+    import witan.cli as cli_module
+
+    forwarded = []
+    fake_pkg = types.ModuleType("witan_code")
+    fake_output = types.ModuleType("witan_code.output")
+    fake_output.set_output_format = lambda fmt: None
+    fake_target = types.ModuleType("witan_code.selected_target")
+    fake_target.set_selected_target = forwarded.append
+    monkeypatch.setitem(sys.modules, "witan_code", fake_pkg)
+    monkeypatch.setitem(sys.modules, "witan_code.output", fake_output)
+    monkeypatch.setitem(sys.modules, "witan_code.selected_target", fake_target)
+    monkeypatch.setattr(cli_module, "app", lambda tokens: None)
     _on_a_terminal(monkeypatch, False)
 
-    _launcher("tasks", target="ci")
+    cli_module._launcher("code", "index", ".", target="qa")
 
-    assert selected_target() == "ci"
-
-
-def test_the_auth_commands_read_the_launcher_bound_target(monkeypatch):
-    """They dropped their own parameter — a meta-level flag is consumed by the
-    launcher, so keeping it would have bound `None` here while the launcher
-    held the real value, silently falling back to the ambient target."""
-    from witan.cli import auth
-
-    seen = []
-    monkeypatch.setattr(auth, "_remote_or_exit", lambda t: seen.append(t) or _stop())
-
-    set_selected_target("qa")
-    with pytest.raises(_Stop):
-        auth.whoami()
-
-    assert seen == ["qa"]
+    assert forwarded == ["qa"]
 
 
 class _Stop(Exception):
