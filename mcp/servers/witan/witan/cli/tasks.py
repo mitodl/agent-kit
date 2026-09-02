@@ -511,7 +511,6 @@ def task_run(
     Parameters
     ----------
     slug: Task slug to run directly (skips the picker).
-    target: Named config target (overrides auto-detection).
     agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
     model: Model flag passed to the agent.
     claim: Mark each task in_progress before launching.

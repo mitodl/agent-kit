@@ -535,7 +535,6 @@ def project_run(
     Parameters
     ----------
     slug: Project slug to run directly (skips the picker).
-    target: Named config target (overrides auto-detection).
     agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
     model: Model flag passed to the agent.
     dry_run: Print the prompt(s) without launching.

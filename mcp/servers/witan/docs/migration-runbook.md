@@ -237,7 +237,7 @@ witan migrate merge [SOURCE] [--from <name>] [--to <name>] [--target-uri <uri>] 
 | `SOURCE` | Store URI to merge **from**: local path, `s3://`, `file://`, `http(s)://`, or a local `omnigraph export` `.jsonl`. |
 | `--from <name>` | A `[targets.<name>]` block's `server`, in place of `SOURCE`. A target with only a `remote_url` is refused — nothing local to export. |
 | `--to <name>` | A `[targets.<name>]` block as the destination: through its deployment if it has a `remote_url`, into its `server` store if not. |
-| `--target <uri>` | A destination store URI. Defaults to your configured store. Mutually exclusive with `--to`; `.jsonl` is refused (a target is a graph, not a snapshot). |
+| `--target-uri <uri>` | A destination store URI. Defaults to your configured store. Mutually exclusive with `--to`; `.jsonl` is refused (a target is a graph, not a snapshot). |
 | `--dry-run` | Print the per-slug decisions, write nothing. Reports divergence; records no watermark. |
 
 Notes:
@@ -249,7 +249,7 @@ Notes:
 - A deployed graph addressed by URI is
   `http(s)://<host>:<port>/graphs/<graph-id>` — the `/graphs/<id>` part is
   required.
-- Against a deployment, `--target` is refused: the destination is that
+- Against a deployment, `--target-uri` is refused: the destination is that
   deployment's own graph, resolved server-side. Use `--to <name>`.
 - Merging is **repeatable**. A re-run against an already-merged target loads
   nothing, because every source row loses reconciliation to its own applied

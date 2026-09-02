@@ -111,12 +111,16 @@ other selectors — see the `load()` docstring in `witan/config.py` for the
 precedence order. To force a target regardless, `WITAN_TARGET=ol witan …`.
 
 Note the corollary: a target with **no** `match_*` selectors never selects
-itself, so it is only ever reached explicitly. **Export `WITAN_TARGET=ol` for
-that case** — the read and write commands (`witan tasks`, `witan memory`, …)
-resolve their target from the environment and the checkout, and take no
-by-name flag. `WITAN_TARGET` covers every command; the by-name flags cover
-`login`/`logout`/`whoami` (`--target <name>`) and `witan migrate merge`
-(`--from <name>`/`--to <name>`, which name the two ends of a merge).
+itself, so it is only ever reached explicitly. Name it with `--target ol` on
+any command, or export `WITAN_TARGET=ol` for a whole shell — `--target` wins
+over the env var, which wins over `match_*` auto-detection.
+
+`--target` is an app-level option, so it works on every command and in either
+position (`witan --target ol tasks` and `witan tasks --target ol` are the
+same). `witan migrate merge` additionally takes `--from <name>`/`--to <name>`,
+which name the two ENDS of a merge rather than the one target a command runs
+against; its destination-by-URI flag is `--target-uri`, deliberately not
+`--target`, because it takes a store address rather than a configured name.
 
 Selector precedence is by **specificity, not file order**: every target's
 `match_paths` is checked before any `match_repos`, then `match_hosts`, then

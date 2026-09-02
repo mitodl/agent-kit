@@ -143,9 +143,12 @@ subsequent ``witan …`` commands.
 
 ``--target`` names which ``[targets.<name>]`` block to authenticate
 against — needed for one with no ``match_*`` criteria, since that never
-selects itself. It is an app-level option now (``witan --target ol
-login``, or before the subcommand either way), so it is documented on the
-launcher rather than repeated here.
+selects itself. It is an app-level option now, so either position works::
+
+    witan --target ol login
+    witan login --target ol
+
+It is documented on the launcher rather than repeated on each command.
 
 **Parameters**:
 

@@ -236,14 +236,14 @@ moving a local store onto the shared multi-tenant server — same command in
 all three cases:
 
 ```bash
-witan migrate merge [source] [--from <name>] [--to <name>] [--target <uri>] [--dry-run]
+witan migrate merge [source] [--from <name>] [--to <name>] [--target-uri <uri>] [--dry-run]
 ```
 
 Reconciles slug collisions newest-record-wins (by timestamp) rather than
 `omnigraph load --mode merge`'s raw last-loaded-wins overwrite, and is
 repeatable — re-running against an already-merged target loads nothing new.
 `--from`/`--to` name `[targets.<name>]` config blocks (`--to ol` is how a local
-store moves onto the deployment); `--target` names a store URI. Never
+store moves onto the deployment); `--target-uri` names a store URI. Never
 `mv`/copy a store directly (Lance embeds absolute paths). See
 [`docs/migration-runbook.md`](docs/migration-runbook.md) for the procedure and
 [`docs/store-merge-findings.md`](docs/store-merge-findings.md) for what was
