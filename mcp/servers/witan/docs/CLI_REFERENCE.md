@@ -544,8 +544,8 @@ already-merged target loads nothing.
 |---|---|---|---|
 | `SOURCE` (positional) | str \| None | required unless `--from` | A store URI (local path, `s3://`, `file://`, or an `http(s)://` omnigraph-server) **or** the path to a *local* `omnigraph export` JSONL — anything ending `.jsonl` is read as an export rather than re-exported, and is never fetched remotely (download it yourself and pass the path) |
 | `--from` | str \| None | none | A `[targets.<name>]` block's `server`, in place of `SOURCE`. A target carrying only a `remote_url` is refused — there is no remote-export path, so it has nothing to merge from |
-| `--to` | str \| None | ambient target | A `[targets.<name>]` block as the destination: through that deployment when it has a `remote_url`, into its `server` store when it does not. The explicit spelling of `WITAN_TARGET=<name>`. Mutually exclusive with `--target` |
-| `--target` | str \| None | configured store | Store URI to merge into. A missing local target is created and schema-applied; a missing remote one is assumed to exist |
+| `--to` | str \| None | ambient target | A `[targets.<name>]` block as the destination: through that deployment when it has a `remote_url`, into its `server` store when it does not. The explicit spelling of `WITAN_TARGET=<name>`. Mutually exclusive with `--target-uri` |
+| `--target-uri` | str \| None | configured store | Store URI to merge into. A missing local target is created and schema-applied; a missing remote one is assumed to exist |
 | `--dry-run` | bool | `False` | Print the per-slug decision (`added`/`updated`/`kept-target`) without writing |
 
 A `.jsonl` source is how a store crosses machines: Lance embeds absolute paths,
@@ -554,14 +554,14 @@ its export can. A deployed graph is addressed as a server, not a store
 (`http(s)://<host>:<port>/graphs/<graph-id>`), since omnigraph 0.8.1 rejects an
 http(s) `--store`.
 
-`--from`/`--to` name config targets; `--target` names a store URI. The
+`--from`/`--to` name config targets; `--target-uri` names a store URI. The
 distinction is fixed rather than sniffed from the string, so a store path that
 happens to match someone's target name cannot change what the command does.
 
 ```bash
 witan migrate merge ~/.local/share/witan-laptop-b/graph.omni --dry-run
-witan migrate merge old-machine.omni --target new-machine.omni
-witan migrate merge alice-export.jsonl --target http://127.0.0.1:8080/graphs/council
+witan migrate merge old-machine.omni --target-uri new-machine.omni
+witan migrate merge alice-export.jsonl --target-uri http://127.0.0.1:8080/graphs/council
 witan migrate merge --from personal --to work              # two named local stores
 witan migrate merge ~/.local/share/witan/graph.omni --to ol   # onto the deployment
 ```

@@ -9,6 +9,7 @@ from witan_core.observability import get_logger
 
 from .. import config as cfg_module
 from ._common import app
+from .selected_target import selected_target
 
 logger = get_logger("witan.hook")
 
@@ -42,7 +43,7 @@ def inject_context(*, debug: bool = False) -> None:
     # "never blocks" contract this command documents. Same guard as
     # `session-checkpoint`.
     try:
-        remote = cfg_module.load_remote_config()
+        remote = cfg_module.load_remote_config(target=selected_target())
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — never fail the hook
         if debug:
             logger.debug("witan.hook.config_load_failed", error=str(exc), exc_info=True)

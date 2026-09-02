@@ -14,6 +14,7 @@ from ..identity import derive_actor_id
 from ..remote import oidc
 from ._common import app, console, esc, print_error
 from .code_routing import code_graph_destination
+from .selected_target import selected_target
 
 
 def _remote_or_exit(target: str | None = None) -> cfg_module.RemoteConfig:
@@ -33,20 +34,23 @@ def _remote_or_exit(target: str | None = None) -> cfg_module.RemoteConfig:
 
 
 @app.command
-def login(*, target: str | None = None) -> None:
+def login() -> None:
     """Authenticate to the deployed witan service via the OIDC device grant.
 
     Prints a verification URL and a user code; approve it in a browser, and the
     resulting token is cached (mode 0600) and refreshed automatically for
     subsequent ``witan …`` commands.
 
-    Parameters
-    ----------
-    target: Named ``[targets.<name>]`` block to authenticate against. Needed for
-        a target with no ``match_*`` criteria, which never selects itself. Also
-        settable via ``WITAN_TARGET``.
+    ``--target`` names which ``[targets.<name>]`` block to authenticate
+    against — needed for one with no ``match_*`` criteria, since that never
+    selects itself. It is an app-level option now, so either position works::
+
+        witan --target ol login
+        witan login --target ol
+
+    It is documented on the launcher rather than repeated on each command.
     """
-    remote = _remote_or_exit(target)
+    remote = _remote_or_exit(selected_target())
 
     def _prompt(device: dict) -> None:
         complete = device.get("verification_uri_complete")
@@ -72,14 +76,12 @@ def login(*, target: str | None = None) -> None:
 
 
 @app.command
-def logout(*, target: str | None = None) -> None:
+def logout() -> None:
     """Forget the cached token for the configured deployment.
 
-    Parameters
-    ----------
-    target: Named ``[targets.<name>]`` block to log out of.
+    ``--target`` selects which one; see the launcher's help.
     """
-    remote = _remote_or_exit(target)
+    remote = _remote_or_exit(selected_target())
     if oidc.logout(remote):
         console.print(f"[green]Logged out[/green] of {esc(remote.url)}")
     else:
@@ -118,14 +120,12 @@ def _login_validity(life: oidc.SessionLife) -> str:
 
 
 @app.command
-def whoami(*, target: str | None = None) -> None:
+def whoami() -> None:
     """Show the identity the CLI presents to the deployed witan service.
 
-    Parameters
-    ----------
-    target: Named ``[targets.<name>]`` block to report on.
+    ``--target`` selects which one; see the launcher's help.
     """
-    remote = _remote_or_exit(target)
+    remote = _remote_or_exit(selected_target())
     try:
         token = oidc.get_valid_token(remote)
     except oidc.NeedsLogin as exc:

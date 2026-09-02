@@ -122,8 +122,14 @@ def test_launcher_propagates_output_format_to_mounted_witan_code(monkeypatch):
     fake_pkg = types.ModuleType("witan_code")
     fake_output = types.ModuleType("witan_code.output")
     fake_output.set_output_format = calls.append
+    # Both fakes, because the launcher imports both in one `try`: leave
+    # `selected_target` out and the ImportError skips the forwarding entirely,
+    # and this test then passes on an empty list rather than on the behaviour.
+    fake_target = types.ModuleType("witan_code.selected_target")
+    fake_target.set_selected_target = lambda name: None
     monkeypatch.setitem(sys.modules, "witan_code", fake_pkg)
     monkeypatch.setitem(sys.modules, "witan_code.output", fake_output)
+    monkeypatch.setitem(sys.modules, "witan_code.selected_target", fake_target)
     monkeypatch.setattr(cli_module, "app", lambda tokens: None)
 
     cli_module._launcher("code", "repos", output_format="json")

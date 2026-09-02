@@ -170,7 +170,7 @@ def _merge_destination(to_target: str | None, target: str | None):
 
     Without ``--to`` this is the ambient resolution every other command uses
     (``_srv()``, picked from ``WITAN_TARGET``/``match_*`` before any flag is
-    read) and ``--target``'s literal URI, if given. With ``--to <name>`` the
+    read) and ``--target-uri``'s literal URI, if given. With ``--to <name>`` the
     destination is the named block instead: its deployment's own proxy when it
     carries a ``remote_url`` — the same object ``WITAN_TARGET=<name>`` would
     have produced, chosen on the command line rather than out of the
@@ -180,8 +180,8 @@ def _merge_destination(to_target: str | None, target: str | None):
 
     if to_target and target:
         _fail(
-            "--to names a configured target and --target a store URI; both name "
-            "the destination, so pass one or the other."
+            "--to names a configured target and --target-uri a store URI; both "
+            "name the destination, so pass one or the other."
         )
     if not to_target:
         return _srv(), target
@@ -199,7 +199,7 @@ def _merge_destination(to_target: str | None, target: str | None):
         return server_module, _target_store_uri(to_target, block)
     _fail(
         f"Target {to_target!r} configures neither `remote_url` nor `server`, so "
-        "there is nothing to merge into. Give it one, or pass --target <uri>."
+        "there is nothing to merge into. Give it one, or pass --target-uri <uri>."
     )
 
 
@@ -612,7 +612,7 @@ def merge(
     *,
     from_: Annotated[str | None, cyclopts.Parameter(name="--from")] = None,
     to: Annotated[str | None, cyclopts.Parameter(name="--to")] = None,
-    target: str | None = None,
+    target_uri: Annotated[str | None, cyclopts.Parameter(name="--target-uri")] = None,
     dry_run: bool = False,
 ) -> None:
     """Merge another store's data into this store, newest-record-wins on collisions.
@@ -652,19 +652,26 @@ def merge(
         ``WITAN_TARGET`` does out of the environment: a target with a
         ``remote_url`` is merged into through that deployment (as you, over
         MCP), one with only a ``server`` into that store URI. Mutually
-        exclusive with ``target``, which names a store rather than a target.
-    target:
+        exclusive with ``target_uri``, which names a store rather than a
+        target.
+    target_uri:
         Store URI to merge into. Defaults to the configured store. Created
         automatically if it's a local path that doesn't exist yet. A deployed
         graph is ``http(s)://<host>:<port>/graphs/<graph-id>`` (or just the
         configured store, when running in-cluster). Unlike ``source``, a
         ``.jsonl`` target is refused rather than treated as a store: merging
         appends to a graph, and an export is a snapshot of one.
+
+        Named ``--target-uri`` and not ``--target`` because ``--target`` is
+        the app-level option naming a configured ``[targets.<name>]``
+        block. This takes a STORE URI, so sharing the spelling would have
+        meant the launcher swallowing ``s3://bucket/graph.omni`` and
+        resolving it as a target name.
     dry_run:
         Preview the reconciliation decision for every colliding slug without
         writing anything.
     """
-    _merge(source, target, dry_run, from_target=from_, to_target=to)
+    _merge(source, target_uri, dry_run, from_target=from_, to_target=to)
 
 
 @migrate_app.command

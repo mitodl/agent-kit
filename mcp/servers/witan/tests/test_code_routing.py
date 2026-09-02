@@ -236,7 +236,10 @@ def test_an_ordinary_command_warns_on_a_terminal(monkeypatch, routing_calls):
     _on_a_terminal(monkeypatch, True)
     _warn_about_routing(("tasks",))
 
-    assert routing_calls == [{"throttle": True}]
+    # `target` is whatever the launcher bound — None here, meaning "nothing
+    # named on this command line", which falls through to WITAN_TARGET and the
+    # checkout's match_* rules.
+    assert routing_calls == [{"throttle": True, "target": None}]
 
 
 def test_nothing_is_said_when_no_person_is_reading(monkeypatch, routing_calls):
@@ -262,42 +265,12 @@ def test_serve_is_left_to_warn_for_itself(monkeypatch, routing_calls):
     assert routing_calls == []
 
 
-@pytest.mark.parametrize(
-    "tokens",
-    [
-        ("whoami", "--target", "qa"),
-        ("whoami", "--target=qa"),
-        ("run", "claude", "--target", "qa"),
-    ],
-)
-def test_an_explicit_target_is_left_alone(monkeypatch, routing_calls, tokens):
-    """This runs before `app(tokens)` binds arguments, so it can only resolve
-    the AMBIENT target — a different one from what `--target qa` selects.
-    Warning would answer about a target nobody asked about and stamp that
-    target's throttle file, silencing the next ambient run for a day.
-
-    Presence is all that is checked; argv cannot say which command the flag
-    binds to. The real fix is an app-level option —
-    tk-target-is-a-per-command-flag-so-the-pre-dispatch-44ea22.
-    """
-    from witan.cli import _warn_about_routing
-
-    _on_a_terminal(monkeypatch, True)
-    _warn_about_routing(tokens)
-
-    assert routing_calls == []
-
-
-def test_a_target_valued_argument_does_not_look_like_the_flag(
-    monkeypatch, routing_calls
-):
-    """Only the flag itself suppresses — not a value that happens to say it."""
-    from witan.cli import _warn_about_routing
-
-    _on_a_terminal(monkeypatch, True)
-    _warn_about_routing(("memory", "add", "--target"[2:]))
-
-    assert routing_calls == [{"throttle": True}]
+# The two tests that used to sit here — "an explicit --target is left alone"
+# and its "a value that merely says --target does not count" companion — are
+# gone rather than updated. They asserted an argv scan that no longer exists:
+# `--target` is bound by the meta launcher now, so the check is TOLD which
+# target and does not have to guess from tokens. The behaviour that replaced
+# them is in tests/test_cli_global_target.py.
 
 
 # ── `witan whoami` answering the other half ──────────────────────────────────

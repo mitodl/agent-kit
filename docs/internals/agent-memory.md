@@ -1263,8 +1263,8 @@ last-loaded-wins overwrite on any slug collision, with no error and exit 0:
 
 ```bash
 # preview the per-slug decisions first
-witan migrate merge ~/.local/share/witan/graph.omni --target <target> --dry-run
-witan migrate merge ~/.local/share/witan/graph.omni --target <target>
+witan migrate merge ~/.local/share/witan/graph.omni --target-uri <uri> --dry-run
+witan migrate merge ~/.local/share/witan/graph.omni --target-uri <uri>
 ```
 
 For the **deployed** multi-tenant service the target is not reachable from a

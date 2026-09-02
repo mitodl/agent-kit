@@ -14,6 +14,7 @@ from witan_core.cli import make_app
 
 from .. import repo as repo_module
 from .output import dump_structured, get_output_format
+from .selected_target import selected_target
 
 # Enum literals mirrored from witan.server — drive CLI argument validation.
 MemoryKind = Literal["pattern", "project_fact", "lesson", "agent_context"]
@@ -60,16 +61,26 @@ def _srv():
     importing first and refusing afterwards would have already written to the
     graph the refusal exists to protect. ``local_server`` receives the import as
     a callable and only runs it if a read is actually allowed.
+
+    ★ AND IT RESOLVES THE LAUNCHER'S ``--target``, which is the difference
+    between the flag working and the flag lying. This is the dispatch path for
+    ``witan tasks``, ``witan memory``, ``witan projects`` and every other
+    graph-reading command — the ones that never had a ``--target`` of their own
+    and are the whole reason it moved to the launcher. Resolving the ambient
+    target here instead left ``witan --target ci tasks`` reading production and
+    saying nothing, and an unknown name raised no error either, because
+    ``_select_target`` was never asked about one.
     """
     global _server
     if _server is None:
         from .. import config as cfg_module
 
+        target = selected_target()
         # A misconfigured remote (e.g. WITAN_REMOTE_URL without WITAN_OIDC_ISSUER)
         # raises ValueError here; surface it as a clean CLI error rather than
         # letting a traceback escape every command that touches the graph.
         try:
-            remote = cfg_module.load_remote_config()
+            remote = cfg_module.load_remote_config(target=target)
         except ValueError as exc:
             print_error(exc)
             raise SystemExit(1) from None
@@ -78,7 +89,7 @@ def _srv():
         else:
             from .local_dispatch import local_server
 
-            _server = local_server(cfg_module.diagnose_local_dispatch())
+            _server = local_server(cfg_module.diagnose_local_dispatch(target=target))
     return _server
 
 

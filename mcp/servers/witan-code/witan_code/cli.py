@@ -49,16 +49,23 @@ def _srv():
     ``RemoteServerProxy`` when ``WITAN_REMOTE_URL`` (or a matched target's
     ``remote_url``) is set. The proxy mirrors the server module's tool surface,
     so every call site is identical either way.
+
+    Under ``witan code …`` the target comes from witan's launcher, which mounts
+    this App without this package's launcher and forwards what it bound into
+    :mod:`witan_code.selected_target`. ``witan code index`` writing a code graph
+    to whichever deployment the checkout happened to match, while the flag said
+    otherwise, is the failure this reaches back to prevent.
     """
     global _server
     if _server is None:
         from . import config as cfg_module
+        from .selected_target import selected_target
 
         # A misconfigured remote (e.g. WITAN_REMOTE_URL without
         # WITAN_OIDC_ISSUER) raises ValueError here; surface it as a clean CLI
         # error rather than letting a traceback escape every read command.
         try:
-            remote = cfg_module.load_remote_config()
+            remote = cfg_module.load_remote_config(selected_target())
         except ValueError as exc:
             print(exc)
             raise SystemExit(1) from None
@@ -1091,9 +1098,10 @@ def repos() -> None:
 
 def _remote_or_exit():
     from . import config as cfg_module
+    from .selected_target import selected_target
 
     try:
-        remote = cfg_module.load_remote_config()
+        remote = cfg_module.load_remote_config(selected_target())
     except ValueError as exc:
         print(exc)
         raise SystemExit(1) from None

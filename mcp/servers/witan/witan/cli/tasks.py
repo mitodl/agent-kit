@@ -26,6 +26,7 @@ from ._common import (
     print_error,
     render_table,
 )
+from .selected_target import selected_target
 from .run_helpers import (
     _launch_agent,
     _merge_prompts,
@@ -492,7 +493,6 @@ def task_unlink_cmd(from_slug: str, to_slug: str, kind: TaskLinkKind) -> None:
 def task_run(
     slug: str | None = None,
     *,
-    target: str | None = None,
     agent: str | None = None,
     model: str | None = None,
     claim: bool = True,
@@ -511,7 +511,6 @@ def task_run(
     Parameters
     ----------
     slug: Task slug to run directly (skips the picker).
-    target: Named config target (overrides auto-detection).
     agent: Agent CLI to launch (claude, pi, copilot, opencode, kilo).
     model: Model flag passed to the agent.
     claim: Mark each task in_progress before launching.
@@ -525,7 +524,7 @@ def task_run(
     project: Scope the picker to a specific wp- project slug.
     """
     try:
-        cfg = cfg_module.load(target=target)
+        cfg = cfg_module.load(target=selected_target())
     except ValueError as exc:
         print_error(exc)
         raise SystemExit(1) from None

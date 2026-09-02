@@ -116,22 +116,30 @@ def _stamp_file(target_name: str | None) -> Path:
     return session_state.session_state_dir() / f"witan-code-local-{digest}.json"
 
 
-def warn_if_code_graph_is_local(*, throttle: bool = False) -> None:
+def warn_if_code_graph_is_local(
+    *, throttle: bool = False, target: str | None = None
+) -> None:
     """Warn when the memory graph is deployed but code graphs are not.
 
     ``throttle`` is for the CLI dispatch path, which reaches every command: it
     both suppresses a repeat inside the window and records that the warning was
     shown. ``witan serve`` passes it off — its stderr may have no reader, so a
     serve run must not consume the one warning a human would otherwise get.
+
+    ``target`` is the ``--target`` named on this command line, which the meta
+    launcher binds before dispatch. Passing it is what makes the answer — and
+    the throttle stamp, which is keyed on the target — belong to the target the
+    command is actually going to use. Left ``None``, resolution falls through to
+    ``WITAN_TARGET`` and the checkout's ``match_*`` rules as before.
     """
     try:
-        remote = cfg_module.load_remote_config()
+        remote = cfg_module.load_remote_config(target=target)
     except ValueError:
         # Same reasoning as `_code_config`: the command being run reports this.
         return
     if remote is None:
         return
-    cfg = _code_config()
+    cfg = _code_config(target)
     if cfg is None or cfg.is_cluster:
         return
     stamp = _stamp_file(cfg.target_name)
