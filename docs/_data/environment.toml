@@ -348,6 +348,10 @@ title = "Maintenance and observability"
 default = "86400"
 desc = "Minimum seconds between throttled background `optimize` runs on the memory store. `0` disables. The `Stop` hook spawns a detached run at most this often, so compaction never blocks a session."
 
+[section.vars.WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL]
+default = "86400"
+desc = "Minimum seconds between repeats of the warning that a target's memory graph is deployed while its code graphs are still local. `0` disables it. Per target, so switching to a misrouted one warns straight away. Only a terminal ever sees it: hooks, CI and pipes are skipped so they cannot spend the window on nobody."
+
 [section.vars.WITAN_CONTEXT_TTL]
 default = "30.0"
 desc = "How long the rendered session-context block is cached on disk, in seconds. Only the first prompt in the window pays to build it; the rest read one small file. `0` disables the cache. The content is advisory, so a few seconds of staleness is fine."

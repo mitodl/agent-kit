@@ -303,6 +303,20 @@ class IndexStats:
     directory). Full-repo runs only; reported so a mass cleanup is visible
     rather than silent."""
 
+    store: str = ""
+    """Where the run wrote — a local directory, or the shared graph's address.
+
+    ``witan code index`` is the command whose whole output is about where
+    symbols went, and it happily wrote to a laptop under a deployed target
+    without comment. Carried on the stats rather than recomputed by the
+    printer so a FAILED run reports the same destination a successful one
+    does — that is precisely the run where "which graph was this?" is the
+    open question.
+    """
+
+    branch: str = ""
+    """The branch view written, or empty on the repo's default branch."""
+
 
 class IndexFailed(RuntimeError):
     """A write phase of :func:`index_path` failed, carrying what it knows.
@@ -397,22 +411,36 @@ def index_path(
     branch = views.repo_view(git_branch, actor=actor) if git_branch else None
 
     store = ensure_store(slug, cfg)
+    # Built HERE, before the first remote call, not after the setup reads
+    # below. The guarantee is that a failed run still says which graph it was
+    # writing to, and the setup calls are remote — an unreachable endpoint or a
+    # rejected token raised before `stats` existed, so `_index` had nothing to
+    # print and the run that most needed a destination reported none.
+    stats = IndexStats(store=str(store), branch=branch or "")
+
     client = store.client(cfg, branch=branch)
+    # Deliberately OUTSIDE the phases below. This raises
+    # SharedGraphWriteRefused, which is a clean, self-explanatory refusal with
+    # its own message — not the unattributed failure the phases exist to
+    # annotate — and callers assert on that type directly
+    # (tests/test_indexer_scope.py). Wrapping it would rename the exception for
+    # no diagnostic gain.
     check_writable(
         is_remote=client.is_remote, branch=branch, cfg=cfg, slug=slug, actor=actor
     )
     # The hash read below never forks; create the branch before reading.
-    client.ensure_branch()
+    with _write_phase("branch setup", stats, branch=branch or ""):
+        client.ensure_branch()
 
     # One query for all existing file hashes → the incremental skip check is
     # in-memory, not a query per file. Read even under `force` (where the
     # hashes go unused): a full-repo run also needs the stored file set to
     # find rows for files that are no longer part of the repo.
     existing: dict[str, str] = {}
-    for row in client.read("code_read.gq", "all_file_hashes", {}):
-        existing[row["slug"]] = row.get("content_hash")
+    with _write_phase("existing-hash read", stats):
+        for row in client.read("code_read.gq", "all_file_hashes", {}):
+            existing[row["slug"]] = row.get("content_hash")
 
-    stats = IndexStats()
     records: list[dict] = []
     reindexed_file_ids: list[str] = []
     bindings: list[ParsedBinding] = []
