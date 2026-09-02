@@ -301,14 +301,30 @@ def _launcher(
     configure_observability(instrument=False)
     try:
         from witan_code.output import set_output_format as set_code_output_format
+
+        set_code_output_format(output_format)
+    except ImportError:
+        pass
+    # ★ A SEPARATE `try`, AND THE SEPARATION IS THE POINT. These two forwardings
+    # have different minimum witan-code versions: `witan_code.output` has been
+    # there for many releases, `witan_code.selected_target` only from 0.18.0.
+    # witan-code is not a dependency of this package — it is an optional runtime
+    # mount, installed alongside (`uv tool install --with witan-code
+    # witan-council`) — so NOTHING constrains the pair, and an upgrade of one
+    # without the other is an ordinary user state rather than a mistake.
+    #
+    # Sharing one block meant a witan-code too old for the second import sent
+    # BOTH down `except ImportError`, silently taking `--output-format` with it:
+    # a stale extension cost a feature that had nothing to do with it, with no
+    # error either way. Split, a stale witan-code costs only the forwarding it
+    # is actually too old for.
+    try:
         from witan_code.selected_target import (
             set_selected_target as set_code_selected_target,
         )
 
-        set_code_output_format(output_format)
-        # The same forwarding, and for the bigger prize: `witan code index` is
-        # the command that WRITES a code graph, and this is the only way the
-        # launcher's --target reaches it.
+        # The bigger prize: `witan code index` is the command that WRITES a code
+        # graph, and this is the only way the launcher's --target reaches it.
         set_code_selected_target(target)
     except ImportError:
         pass
