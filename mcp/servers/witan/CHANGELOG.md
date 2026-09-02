@@ -6,6 +6,89 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.31.0] - 2026-09-02
+
+### Changed
+
+- **BREAKING: `witan migrate merge --target <uri>` is now `--target-uri <uri>`.**
+  `--target` became an app-level option naming a configured `[targets.<name>]`
+  block (below), and `migrate merge` was the one command where the same spelling
+  meant something else — a store URI, with `--to` as its target-name flag. Left
+  alone, the launcher would have swallowed `s3://bucket/graph.omni` and resolved
+  it as a configured target while `merge` received no destination at all, on the
+  one command whose whole job is moving data between stores. Only the public
+  flag changed; `--from`/`--to` are untouched, and the internal plumbing still
+  calls it `target` because internally it genuinely is a target URI.
+
+- **`--target` is an app-level option, so every command takes it.** It used to
+  be declared per command, on seven of them, which left `witan tasks`, `witan
+  memory` and `witan code index` — the last being the command that *writes* code
+  graphs — reachable only through `WITAN_TARGET` or checkout auto-detection. It
+  is now bound by the launcher, works in either position (`witan --target ol
+  tasks` and `witan tasks --target ol` are the same), and still resolves
+  `--target` > `WITAN_TARGET` > `match_*`. The seven commands dropped their own
+  parameter: a meta-level flag is consumed by the launcher and stripped from the
+  tokens the subcommand parses, so keeping it would have left each of them
+  binding `None` and silently falling back to the ambient target.
+
+### Added
+
+- **`witan target set <name> --<key> <value>`** — amend one key on a registered
+  target. The previously documented way to do that was `target add --force`,
+  which rebuilds the block from the flags it is given and therefore DELETES
+  every key it has no parameter for: `author`, `model`, `token`, `code_dir`,
+  `code_token`, `index_role` and `actor` were all dropped by a re-register
+  replaying the four flags the onboarding doc listed. It hid because one TOML
+  block feeds two config models with different field sets, and neither declares
+  `extra`, so each silently discards the other's keys. `set` rewrites each named
+  assignment where it sits — keeping its indentation and any trailing comment —
+  parses the result before writing it, and refuses a value that spans several
+  lines rather than half-rewriting it.
+
+- **`witan target add --code-transport` / `--code-server`.** `--remote-url` now
+  implies `code_transport = "mcp"`, so a target registered for a deployment puts
+  its code graphs there too rather than on the laptop. Written as an explicit
+  key rather than by changing the global default, which keeps meaning what the
+  in-cluster writers (CI indexer, maintenance jobs) need.
+
+- **`task_comment(slug, text)`** — say something *about* a task without mutating
+  it. Every write primitive either overwrote another author's description or
+  created a node, so an agent that found a problem with someone else's in-flight
+  task had to choose between clobbering their text and inflating the work list.
+  A `TaskComment` is attributed, timestamped and append-only, and deliberately
+  leaves the task's row alone including `updated_at` — that field doubles as the
+  advisory-lease start for an `in_progress` task with no `claimed_at`, so bumping
+  it would silently renew a stranger's claim. Surfaced by `task_get` and by the
+  UserPromptSubmit hook.
+
+- **`witan whoami` reports code-graph routing.** It answered only the identity
+  half while the other half is routed by a separate setting that can, and on
+  production did, disagree with it for months with nothing saying so. An
+  unreadable code config is now reported in place of the line rather than
+  swallowed — `whoami` loads that config nowhere else, so dropping the line read
+  as "witan-code is not installed".
+
+### Fixed
+
+- **The local-code-graph warning reaches a reader.** The one runtime detection
+  that a target has memory on the deployment and code graphs on the laptop was
+  emitted only from `witan serve`, into an MCP subprocess's stderr, while the
+  person who could act on it is in a terminal. It now also fires on the CLI
+  dispatch path, throttled once per day per target
+  (`WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL`), gated on a tty so the hooks and the
+  CI indexer cannot spend the window that was meant for a human.
+
+- **`witan target add`/`set`/`remove` no longer widen the config file's
+  permissions.** `os.replace` keeps the *temp* file's mode, which is
+  `0o666 & ~umask` — commonly 0644 — so a config chmod'd to 0600 because it
+  holds a `token`/`code_token` was quietly made world-readable by any setting
+  change. Measured 0600 → 0644 before the fix.
+
+- **`witan whoami` reported a code-graph route indexing does not take.**
+  `store_for_repo` checks the MCP transport first and returns without reading
+  `code_server`, so a config setting both indexes through the endpoint; the
+  reporter checked `code_server` first and said "direct".
+
 ## [0.30.0] - 2026-09-01
 
 ### Added
