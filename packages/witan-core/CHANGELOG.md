@@ -8,6 +8,23 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-09-03
+
+### Fixed
+
+- **The read path now validates declared-vs-supplied query parameters, matching
+  the check the mutate path (`compose_batch`) already runs.** `_read_rows` (behind
+  both `read` and `read_with_commit`) previously sent whatever params a caller
+  passed with no check that every parameter the query declares was supplied. On
+  an omnigraph engine predating upstream #569, an unbound query variable did not
+  error — it silently widened the read to every row instead of applying the
+  intended filter. The check now raises `KeyError` naming the missing
+  parameter(s) before the call reaches the CLI or server, on every omnigraph
+  version. Same convention as the write path: an optional parameter must still
+  be supplied explicitly as `None`, just not omitted. `compose_batch`'s own
+  check is refactored onto the same `_declared_params` helper rather than
+  duplicating the set-comprehension.
+
 ## [0.33.0] - 2026-09-01
 
 ### Changed
