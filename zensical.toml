@@ -108,6 +108,7 @@ nav = [
       { "Workflow UX (P1)" = "internals/design/witan-workflow-ux-p1-spec.md" },
       { "Workflow hooks & elicitation" = "internals/design/witan-workflow-hooks-elicitation-evaluation.md" },
       { "Remote call overhead spike" = "internals/design/omnigraph-remote-call-overhead-spike.md" },
+      { "witan-code uptake diagnosis" = "internals/design/witan-code-uptake-diagnosis.md" },
       { "agent-config-kit" = "internals/design/agent-config-kit-spec.md" },
       { "agent-config-kit CLI" = "internals/design/agent-config-kit-cli-spec.md" },
       { "agent-config-kit profiles" = "internals/design/agent-config-kit-profiles-composition-spec.md" },
