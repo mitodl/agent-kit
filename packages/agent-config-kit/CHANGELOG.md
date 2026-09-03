@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.6.0] - 2026-09-03
+
+### Fixed
+
+- **The Claude and Pi adapters now write a `RemoteServer`'s `oauth` config
+  instead of silently dropping it.** Only the OpenCode adapter read
+  `RemoteServer.oauth`; Claude's adapter never referenced it at all (any
+  `oauth` table in the manifest was lost on `apply`), and Pi's model had no
+  field for it. This went unnoticed until ol-infrastructure#5666 switched
+  `toolhive-swe` from anonymous Dynamic Client Registration to a single
+  Pulumi-managed public Keycloak client, which requires every MCP client to
+  be told a fixed `clientId`/`callbackPort` up front — `agent-kit apply`
+  silently produced a config that could no longer authenticate at all, with
+  no error at apply time.
+  - Claude: 2-line passthrough — `claude mcp add-json`'s own documented shape
+    is already `{clientId, callbackPort}` (docs.claude.com/en/docs/claude-code/mcp).
+  - Pi: a field-name transform, not a passthrough — Pi's live docs
+    (pi.dev/packages/pi-mcp-adapter) use a different shape (`"auth": "oauth"`
+    plus `oauth.redirectUri`, not `oauth.callbackPort`). Every other oauth
+    field (`clientSecret`, `scope`, `redirectUri`, `authServerMetadataUrl`)
+    is preserved rather than dropped, matching what OpenCode's adapter
+    already did.
+  - `agent-config.toml`'s three `toolhive-swe-*` entries need this fix to
+    actually take effect — an `apply` run against an older install of this
+    package will keep silently omitting `oauth` with no error.
+
 ## [0.5.0] - 2026-07-31
 
 ### Changed
