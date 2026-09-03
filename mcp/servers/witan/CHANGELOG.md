@@ -6,64 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
-## [0.30.0] - 2026-09-01
+## [0.31.0] - 2026-09-03
+
+★ Two entries below were previously misfiled under `[0.30.0]`
+(`task_comment` and `task_list(assignee="@me")`): both landed in
+f82d3c1 (#310), which merged 11 minutes *after* 47bb80a (#308) — the
+commit that set `version = "0.30.0"` and fired the PyPI publish. Neither
+was in that wheel. Moved here, to the release that actually ships them.
+Conversely, the `_ensure_graph` entry below was misfiled as
+`[Unreleased]`: 85dc12a (#286) is an ancestor of 47bb80a, so it *was*
+part of 0.30.0 and is relabelled accordingly.
 
 ### Added
 
-- **`witan.task_claim.verify` logs `write_graph_commit_id`.** The line already
-  carried `caught_up` and `verify_attempts`, but neither is readable on its
-  own: `caught_up` is `True` both when the post-write catch-up check ran and
-  passed *and* when `write_commit is None` short-circuited it, and
-  `verify_attempts` stays `1` in that second case for the same reason. So a
-  tier supplying no `graph_commit_id` logs exactly what a healthy verified
-  claim logs. Telling them apart previously meant inferring it from a
-  neighbouring `witan.task_update.conditional` line, which reports a different
-  call's *read* commit. `null` now means the check never ran. Found while
-  investigating `tk-investigate-the-root-cause-of-the-2s-verificatio-f154aa`
-  against 14 days of deployed production logs.
-- **`witan migrate merge` verifies that every source row arrived.** The counts
-  it printed said what the merge *decided*; none of them answered "did all of
-  it arrive?". The documented way to answer that was `omnigraph export` on both
-  stores plus a `jq` type-count comparison, which is unavailable to exactly the
-  person who most needs it — once the target is the deployed graph, the data
-  tier is ClusterIP-only and an ordinary user holds no bearer token to export
-  it. `store_merge` and `merge_store` now also report `source_rows`,
-  `passthrough` (edge and unkeyed rows) and `duplicate_slugs`, and the merge
-  reconciles them against its decisions: `Verified: all N source row(s)
-  accounted for (…)`, showing the arithmetic rather than a verdict the reader
-  cannot check. Two identities are checked, because the two transports stop in
-  different halves — over the deployment a failed batch returns no decisions
-  at all, while in process reconciliation completes over the whole export
-  before the first load, so only a written-row check sees a load that died. A
-  merge that stops part-way (including one interrupted at the terminal) now
-  reports how much landed and that re-running is the remedy, instead of only
-  reporting that it failed. A deployment too old to report the fields says so
-  rather than computing a zero, which would have read as a merge that lost
-  every edge row in the source.
+- **`witan target add` routes code graphs to the deployment.**
+  `remote_url` routed the memory graph; `code_transport` routes the code
+  graphs, and nothing tied them together — `target add` (the documented
+  onboarding command) could not express the second at all, so every
+  deployed target fell through to the `direct` default and indexed code
+  graphs to a directory on the developer's machine while memory went to
+  the cluster, with nothing reporting it. Measured on production before
+  this change: over 13 days, three non-maintainers were on the shared
+  memory graph and none had ever indexed a code graph into it.
+  `--remote-url` now implies `code_transport = "mcp"`, written as an
+  explicit key. `--code-transport direct` requires `--code-server`, and
+  `mcp` requires `--remote-url`; both refuse rather than writing a block
+  that cannot work.
 
-- **`task_search`/`workflow_project_search`: BM25 full-text search for Task and
-  WorkflowProject nodes.** Only Memory had full-text search before this —
-  `task_list`/`workflow_project_list` are filters, not ranked search, so there
-  was no way to ask "does something like this already exist" for a task or
-  project. `task_create`/`workflow_project_create` now also return a
-  `similar` field (top 3 title matches, warn-only — never blocks creation),
-  surfaced by the CLI (`witan task create` / `witan project create`) as a
-  `similar:` line per match. Phase 0 of a 3-phase plan to reduce duplicate
-  task/project tracking: lexical search first, embeddings only if this proves
-  insufficient in practice. See memory
-  `pf-analysis-embeddings-for-task-workflowproject-mem-73b601` in the shared
-  witan memory graph for the full rationale.
+- **`witan target set <name> --key value…` amends one key in place.**
+  `target add --force` was the documented way to fix a target, and it
+  rebuilds the whole block from the flags it is given — a re-register
+  passing only the flags the onboarding doc lists kept 5 keys and
+  silently *deleted* the other 6 a target block can carry (`author`,
+  `model`, `token`, `code_dir`, `code_token`, `index_role`, `actor`),
+  none of which `add` has a parameter for. `set` rewrites named keys
+  where they sit and carries everything else — including comments —
+  through untouched; new keys append in a fixed field order. Cross-field
+  rules (e.g. `--code-transport mcp` needs `remote_url`) are checked
+  against the block as it will end up, and the rewritten file is parsed
+  before being written. `code_store_health` and `witan code doctor`'s
+  store column also gain `StoreRef.label`, so an MCP-routed graph
+  address renders its graph name instead of the tail of an endpoint URL
+  (`mcp)` for every row).
 
-- **`task_claim` reports whether its holder names a session.** The success
-  return gains `"qualified"`, and a deployed call that defaulted the holder and
-  received no `session_id` also gets a `"warning"`. Without the id, one
-  person's concurrent sessions all claim under the same name, the
-  `current_holder != holder` contention check cannot separate them, and the
-  second session silently renews the first's lease while being told it claimed.
-  The server cannot supply the id (a pod has no `$CLAUDE_SESSION_ID`, MCP
-  carries no session state), so this is reported rather than refused. Sampling
-  the deployed graph found 13 such claims across three people. An explicit
-  `assignee` is exempt. See the 2026-08-27 addendum to ADR-0003.
+- **`--target` is an app-level option on every command, not a per-command
+  flag on seven of them.** `witan tasks`, `witan memory` and `witan code
+  index` — the command that *writes* code graphs — never had the flag at
+  all; `WITAN_TARGET` was the only way to point them at a target. Worse,
+  the pre-dispatch routing warning ran before argument binding and so
+  could not see a per-command `--target` either, misattributing its
+  check to the ambient target. `--target` now binds once on the meta
+  launcher (`witan --target qa whoami` and `witan whoami --target qa`
+  both work), and every store-opening path — `tasks`, `memory`,
+  `projects`, `code index`, `code doctor`, `inject-context`, `serve` —
+  resolves the launcher's target instead of re-deriving one.
+
+  **Breaking:** `witan migrate merge --target` is renamed
+  `--target-uri`. That flag was never a configured-target name — it is a
+  store URI, and `--to` is the command's target-name flag — so it could
+  not keep the now-global `--target` spelling without the launcher
+  swallowing a URI like `s3://bucket/graph.omni` and resolving it as a
+  target name while `merge` received nothing.
 
 - **`task_comment` — say something *about* a task without mutating it or
   filing work.** There was no primitive for this. Every write either changed
@@ -125,6 +128,112 @@ a MINOR bump may include breaking changes).
 
 ### Changed
 
+- **`import witan.server` needing the omnigraph binary is now a decision on
+  record, not an open question.** On a fresh install the module raises
+  `RuntimeError: omnigraph binary not found`, because `_ensure_graph` creates
+  the local store at module scope. `bin/check_core_floor.py` printed that on
+  every run under `UNRELATED`, alongside genuinely unexplained failures, which
+  is how a report becomes a line people learn to ignore.
+
+  Deferring the bootstrap to first use was weighed and declined. Importing this
+  module IS a write and the CLI depends on it: `_srv` diagnoses routing before
+  importing and hands the guard the import unevaluated, so a refused write never
+  reaches the store — the #261 fix, for a `task close` that reported success
+  against a graph nobody was reading for nine days. That invariant is checkable
+  in one line (`"witan.server" not in sys.modules`); "touched on first use"
+  would not be.
+
+  `_ensure_graph`'s docstring now carries the reasoning, and the floor check
+  reports this case as EXPECTED with its reason rather than as an anomaly.
+  Entries are matched on module, exception type and a message substring
+  together, so an unrelated `RuntimeError` from the same module cannot inherit
+  an explanation that does not apply to it. No behaviour change.
+
+- **Docs stopped describing the removed ToolHive tier as current.** witan is
+  served as a plain Deployment and Service behind APISIX in all three
+  environments (ToolHive was removed, ol-infrastructure#5448); the
+  architecture diagram still labelled that tier `ToolHive-hosted` and the CLI
+  reference described `--transport streamable-http` as "what ToolHive hosts".
+  ADR-0004 is left as history with a dated addendum rather than superseded —
+  its decision (witan validates the caller's OIDC token itself) is unaffected
+  by the broker's removal.
+
+### Fixed
+
+- **The local-code-graph warning had no reader.** Detection was correct and
+  had one call site, `witan serve`, whose stderr belongs to the agent harness
+  and in practice is swallowed — so a target with memory on the deployment and
+  code graphs on the laptop produced no signal anywhere a human would see it.
+  Three non-maintainers were in that state on production, and the
+  maintainer's own config turned out to be too. Now surfaced at three points:
+  the CLI dispatch path (throttled to once/day/target, gated on a tty so the
+  Stop hook, context hook and CI indexer can't consume the window), `witan
+  code index` (prints its resolved store unconditionally, including on a
+  failed run), and `witan whoami`. Not a refusal — a local code graph is
+  legitimate for someone who hasn't provisioned cluster graphs; the problem
+  was reach, not severity.
+
+## [0.30.0] - 2026-09-01
+
+### Added
+
+- **`witan.task_claim.verify` logs `write_graph_commit_id`.** The line already
+  carried `caught_up` and `verify_attempts`, but neither is readable on its
+  own: `caught_up` is `True` both when the post-write catch-up check ran and
+  passed *and* when `write_commit is None` short-circuited it, and
+  `verify_attempts` stays `1` in that second case for the same reason. So a
+  tier supplying no `graph_commit_id` logs exactly what a healthy verified
+  claim logs. Telling them apart previously meant inferring it from a
+  neighbouring `witan.task_update.conditional` line, which reports a different
+  call's *read* commit. `null` now means the check never ran. Found while
+  investigating `tk-investigate-the-root-cause-of-the-2s-verificatio-f154aa`
+  against 14 days of deployed production logs.
+- **`witan migrate merge` verifies that every source row arrived.** The counts
+  it printed said what the merge *decided*; none of them answered "did all of
+  it arrive?". The documented way to answer that was `omnigraph export` on both
+  stores plus a `jq` type-count comparison, which is unavailable to exactly the
+  person who most needs it — once the target is the deployed graph, the data
+  tier is ClusterIP-only and an ordinary user holds no bearer token to export
+  it. `store_merge` and `merge_store` now also report `source_rows`,
+  `passthrough` (edge and unkeyed rows) and `duplicate_slugs`, and the merge
+  reconciles them against its decisions: `Verified: all N source row(s)
+  accounted for (…)`, showing the arithmetic rather than a verdict the reader
+  cannot check. Two identities are checked, because the two transports stop in
+  different halves — over the deployment a failed batch returns no decisions
+  at all, while in process reconciliation completes over the whole export
+  before the first load, so only a written-row check sees a load that died. A
+  merge that stops part-way (including one interrupted at the terminal) now
+  reports how much landed and that re-running is the remedy, instead of only
+  reporting that it failed. A deployment too old to report the fields says so
+  rather than computing a zero, which would have read as a merge that lost
+  every edge row in the source.
+
+- **`task_search`/`workflow_project_search`: BM25 full-text search for Task and
+  WorkflowProject nodes.** Only Memory had full-text search before this —
+  `task_list`/`workflow_project_list` are filters, not ranked search, so there
+  was no way to ask "does something like this already exist" for a task or
+  project. `task_create`/`workflow_project_create` now also return a
+  `similar` field (top 3 title matches, warn-only — never blocks creation),
+  surfaced by the CLI (`witan task create` / `witan project create`) as a
+  `similar:` line per match. Phase 0 of a 3-phase plan to reduce duplicate
+  task/project tracking: lexical search first, embeddings only if this proves
+  insufficient in practice. See memory
+  `pf-analysis-embeddings-for-task-workflowproject-mem-73b601` in the shared
+  witan memory graph for the full rationale.
+
+- **`task_claim` reports whether its holder names a session.** The success
+  return gains `"qualified"`, and a deployed call that defaulted the holder and
+  received no `session_id` also gets a `"warning"`. Without the id, one
+  person's concurrent sessions all claim under the same name, the
+  `current_holder != holder` contention check cannot separate them, and the
+  second session silently renews the first's lease while being told it claimed.
+  The server cannot supply the id (a pod has no `$CLAUDE_SESSION_ID`, MCP
+  carries no session state), so this is reported rather than refused. Sampling
+  the deployed graph found 13 such claims across three people. An explicit
+  `assignee` is exempt. See the 2026-08-27 addendum to ADR-0003.
+
+### Changed
+
 - **Floor raised to `fastmcp>=4,<5`.** FastMCP 4.0 went GA; the
   `fastmcp>=3.4.2,<5` straddle this package carried alongside witan-core is
   dropped. No behavior change on this package's own code — witan-core's
@@ -151,8 +260,6 @@ a MINOR bump may include breaking changes).
   person — there is one such holder in the deployed graph. It now says to pass
   `session_id`, and to reserve `assignee` for a genuinely different worker.
 
-### Fixed
-
 - **The umbrella CLI configures observability, which is what actually covers
   the CI indexer.** `witan code …` mounts witan_code's cyclopts App but not its
   meta launcher, so `witan code index` — literally what
@@ -162,31 +269,6 @@ a MINOR bump may include breaking changes).
   it was written for just as silent. The output-format forwarding a few lines
   down is the tell: it exists because witan-code's launcher, which sets that
   itself, is bypassed. Caught in review on #288.
-
-## [Unreleased]
-
-### Changed
-
-- **`import witan.server` needing the omnigraph binary is now a decision on
-  record, not an open question.** On a fresh install the module raises
-  `RuntimeError: omnigraph binary not found`, because `_ensure_graph` creates
-  the local store at module scope. `bin/check_core_floor.py` printed that on
-  every run under `UNRELATED`, alongside genuinely unexplained failures, which
-  is how a report becomes a line people learn to ignore.
-
-  Deferring the bootstrap to first use was weighed and declined. Importing this
-  module IS a write and the CLI depends on it: `_srv` diagnoses routing before
-  importing and hands the guard the import unevaluated, so a refused write never
-  reaches the store — the #261 fix, for a `task close` that reported success
-  against a graph nobody was reading for nine days. That invariant is checkable
-  in one line (`"witan.server" not in sys.modules`); "touched on first use"
-  would not be.
-
-  `_ensure_graph`'s docstring now carries the reasoning, and the floor check
-  reports this case as EXPECTED with its reason rather than as an anomaly.
-  Entries are matched on module, exception type and a message substring
-  together, so an unrelated `RuntimeError` from the same module cannot inherit
-  an explanation that does not apply to it. No behaviour change.
 
 ## [0.29.1] - 2026-08-24
 
