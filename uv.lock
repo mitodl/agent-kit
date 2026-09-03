@@ -19,7 +19,7 @@ members = [
 
 [[package]]
 name = "agent-config-kit"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "packages/agent-config-kit" }
 dependencies = [
     { name = "pydantic" },
