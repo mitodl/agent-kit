@@ -225,24 +225,26 @@ Slug convention: "&lt;repo URI&gt;|&lt;git branch&gt;"
 
 Edges are directional and typed. A traversal names the edge in lowercase (`supersedes`, `blocks`), while the schema declares it in PascalCase.
 
-| Edge | From | To | Meaning |
-| --- | --- | --- | --- |
-| `Supersedes` | `Memory` | `Memory` | Supersedes: a newer memory replaces an older one. Link new → old when updating a pattern or lesson that has changed. |
-| `AppliesTo` | `Memory` | `Memory` | AppliesTo: links a pattern or lesson to a project fact that provides context. e.g. a pattern "always use uv" AppliesTo project fact "ol-django uses uv". |
-| `Refines` | `Memory` | `Memory` | Refines: a newer memory sharpens/extends an older one without replacing it. |
-| `Contradicts` | `Memory` | `Memory` | Contradicts: two memories conflict. Symmetric in meaning; stored one direction and traversed both ways. Never hidden — surfaced for review. |
-| `RelatedTo` | `Memory` | `Memory` | RelatedTo: soft associative link. Symmetric; stored one direction. |
-| `Tagged` | `Memory` | `Topic` | Tagged: a Memory is about a Topic. Real Layer-1 edge (traversable). |
-| `BelongsTo` | `WorkflowSession` | `WorkflowProject` | BelongsTo: links each WorkflowSession to its WorkflowProject. |
-| `Produced` | `WorkflowProject` | `WorkflowTrace` | Produced: links a completed WorkflowProject to its WorkflowTrace (one-to-one). |
-| `Informed` | `WorkflowProject` | `Memory` | Informed: links a WorkflowProject to Memory nodes consulted or created during the project (patterns, lessons, agent_context, project_facts). |
-| `SessionProduced` | `WorkflowSession` | `Memory` | SessionProduced: a WorkflowSession created or substantively updated a Memory. Session-grain provenance (Informed is project-grain). The bare name `Produced` is taken (WorkflowProject -&gt; WorkflowTrace), hence the qualified name. |
-| `ProjectBlocks` | `WorkflowProject` | `WorkflowProject` | ProjectBlocks: a blocking project must complete before the blocked project is "ready". |
-| `Blocks` | `Task` | `Task` | Blocks: a blocker task must close before the blocked task is "ready". |
-| `ParentOf` | `Task` | `Task` | ParentOf: hierarchy — an epic (or parent task) contains child tasks. |
-| `DiscoveredFrom` | `Task` | `Task` | DiscoveredFrom: provenance — a task surfaced while working another task. |
-| `TaskBelongsTo` | `Task` | `WorkflowProject` | TaskBelongsTo: a task rolls up to a WorkflowProject. |
-| `Addresses` | `Task` | `Memory` | Addresses: a task is motivated by a Memory node (lesson, project fact). |
-| `Closes` | `WorkflowSession` | `Task` | Closes: a WorkflowSession executed/closed a task. |
-| `WorksOn` | `CodeBranch` | `Task` | WorksOn: a CodeBranch is carrying out a Task. |
-| `ForProject` | `CodeBranch` | `WorkflowProject` | ForProject: a CodeBranch belongs to a WorkflowProject. |
+An edge with properties exposes them only through a **bound** traversal — `$src $w:supersedes $dst` binds the matched edge row, making `$w.confidence` a column you can project, filter, and order on. The unbound form (`$src supersedes $dst`) still only asserts the edge exists. Binding also drops set semantics: one row per *edge*, so parallel edges between the same pair arrive as separate rows.
+
+| Edge | From | To | Properties | Meaning |
+| --- | --- | --- | --- | --- |
+| `Supersedes` | `Memory` | `Memory` | `confidence: enum(asserted, inferred)? @index`, `role: String?`, `author: String?`, `created_at: DateTime?` | Supersedes: a newer memory replaces an older one. Link new → old when updating a pattern or lesson that has changed. |
+| `AppliesTo` | `Memory` | `Memory` | `confidence: enum(asserted, inferred)? @index`, `role: String?`, `author: String?`, `created_at: DateTime?` | AppliesTo: links a pattern or lesson to a project fact that provides context. e.g. a pattern "always use uv" AppliesTo project fact "ol-django uses uv". |
+| `Refines` | `Memory` | `Memory` | `confidence: enum(asserted, inferred)? @index`, `role: String?`, `author: String?`, `created_at: DateTime?` | Refines: a newer memory sharpens/extends an older one without replacing it. |
+| `Contradicts` | `Memory` | `Memory` | `confidence: enum(asserted, inferred)? @index`, `role: String?`, `author: String?`, `created_at: DateTime?` | Contradicts: two memories conflict. Symmetric in meaning; stored one direction and traversed both ways. Never hidden — surfaced for review. |
+| `RelatedTo` | `Memory` | `Memory` | `confidence: enum(asserted, inferred)? @index`, `role: String?`, `author: String?`, `created_at: DateTime?` | RelatedTo: soft associative link. Symmetric; stored one direction. |
+| `Tagged` | `Memory` | `Topic` | `confidence: enum(asserted, inferred)? @index`, `role: String?`, `author: String?`, `created_at: DateTime?` | Tagged: a Memory is about a Topic. Real Layer-1 edge (traversable).  The one edge witan writes BOTH ways: `inferred` when auto-derived from a memory's `tags`, `asserted` when a caller named the topic through memory_link(kind="tagged"). recall's topic-sibling expansion is the widest and noisiest hop it takes, so this is where the weighting earns its keep. |
+| `BelongsTo` | `WorkflowSession` | `WorkflowProject` | — | BelongsTo: links each WorkflowSession to its WorkflowProject. |
+| `Produced` | `WorkflowProject` | `WorkflowTrace` | — | Produced: links a completed WorkflowProject to its WorkflowTrace (one-to-one). |
+| `Informed` | `WorkflowProject` | `Memory` | — | Informed: links a WorkflowProject to Memory nodes consulted or created during the project (patterns, lessons, agent_context, project_facts). |
+| `SessionProduced` | `WorkflowSession` | `Memory` | — | SessionProduced: a WorkflowSession created or substantively updated a Memory. Session-grain provenance (Informed is project-grain). The bare name `Produced` is taken (WorkflowProject -&gt; WorkflowTrace), hence the qualified name. |
+| `ProjectBlocks` | `WorkflowProject` | `WorkflowProject` | — | ProjectBlocks: a blocking project must complete before the blocked project is "ready". |
+| `Blocks` | `Task` | `Task` | — | Blocks: a blocker task must close before the blocked task is "ready". |
+| `ParentOf` | `Task` | `Task` | — | ParentOf: hierarchy — an epic (or parent task) contains child tasks. |
+| `DiscoveredFrom` | `Task` | `Task` | — | DiscoveredFrom: provenance — a task surfaced while working another task. |
+| `TaskBelongsTo` | `Task` | `WorkflowProject` | — | TaskBelongsTo: a task rolls up to a WorkflowProject. |
+| `Addresses` | `Task` | `Memory` | — | Addresses: a task is motivated by a Memory node (lesson, project fact). |
+| `Closes` | `WorkflowSession` | `Task` | — | Closes: a WorkflowSession executed/closed a task. |
+| `WorksOn` | `CodeBranch` | `Task` | — | WorksOn: a CodeBranch is carrying out a Task. |
+| `ForProject` | `CodeBranch` | `WorkflowProject` | — | ForProject: a CodeBranch belongs to a WorkflowProject. |

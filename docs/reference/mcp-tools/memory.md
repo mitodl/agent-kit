@@ -18,7 +18,16 @@ its symbol_refs), and ``topic`` (memories tagged to it). Expands ``hops``
 (default 1, capped at 2) along AppliesTo/RelatedTo edges, topic siblings, and
 provenance siblings; prunes superseded memories (unless
 ``include_superseded``); flags Contradicts pairs; and re-ranks with the
-composite score minus a per-hop distance penalty so seeds outrank neighbours.
+composite score minus a distance penalty so seeds outrank neighbours.
+
+Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
+edge — today that means a Tagged edge promoted from a free-string tag,
+rather than a link someone named — costs ``w_inferred_edge`` extra
+distance, so a shared tag no longer pulls as hard as an asserted
+``related_to``. A neighbour reachable both ways is scored at its best
+route. Edges written before edge properties existed are unstamped and score
+as asserted, so this reweights the graph as it is rewritten rather than all
+at once; ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
 
 With no edges in the graph the result equals ``memory_search`` — expansion is
 additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
@@ -34,7 +43,7 @@ Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}`
 | `topic` | str? | `null` | A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,<br>``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join<br>surface, so this seed in particular can pull in other repositories. |
 | `repo` | str? | `null` | Repo scoping — see instructions. Applies to the ``query`` seed only;<br>symbol, task, and topic seeds resolve wherever they live. |
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Restrict the ``query`` seed to one memory kind: ``pattern``,<br>``project_fact``, ``lesson``, or ``agent_context``. |
-| `hops` | int | `1` | How far to expand from the seeds along ``AppliesTo`` / ``RelatedTo``<br>edges, topic siblings, and provenance siblings. Clamped to 0–2. ``0``<br>disables expansion and returns the seeds alone; ``1`` (the default) is<br>almost always right, since each extra hop widens results faster than it<br>deepens them. |
+| `hops` | int | `1` | How far to expand from the seeds along ``AppliesTo`` / ``RelatedTo``<br>edges, topic siblings, and provenance siblings. Clamped to 0–2. ``0``<br>disables expansion and returns the seeds alone; ``1`` (the default) is<br>almost always right, since each extra hop widens results faster than it<br>deepens them. Counts HOPS, not the fractional distance the inferred-edge<br>surcharge produces — the surcharge only reranks, it never truncates the<br>walk. |
 | `limit` | int | `20` | Maximum memories to return after re-ranking. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` hides them, which is what makes recall return current<br>knowledge rather than its history. |
 
@@ -70,7 +79,7 @@ Returns the full node or ``null`` if not found.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``pat-`` / ``pf-`` / ``les-`` / ``ctx-`` slug to retrieve. |
-| `include_topics` | bool | `False` | When ``True``, attach a ``topics`` list of the Topic nodes this memory is<br>tagged with (slug/name/kind). |
+| `include_topics` | bool | `False` | When ``True``, attach a ``topics`` list of the Topic nodes this memory is<br>tagged with (slug/name/kind), each with an ``edge`` dict describing the<br>link. ``edge.confidence`` is what separates a topic someone named from<br>one promoted out of the memory's free-string ``tags``. |
 
 ## `memory_update`
 
@@ -193,6 +202,8 @@ link to itself. Returns ``linked: False`` in those cases rather than raising.
 | `from_slug` | str | **required** | The memory the edge points **from**. Direction is load-bearing for the<br>asymmetric kinds — for ``supersedes`` this is the *newer* memory. |
 | `to_slug` | str | **required** | The memory the edge points **to** — for ``supersedes``, the older memory<br>being replaced. For ``kind="tagged"`` this is a Topic instead: either an<br>existing ``tp-`` slug or a ``name:kind`` spec, which auto-creates it. |
 | `kind` | `supersedes` \| `refines` \| `applies_to` \| `contradicts` \| `related_to` \| `tagged` | **required** | Which edge to write: ``supersedes`` \| ``refines`` \| ``applies_to`` \|<br>``contradicts`` \| ``related_to`` \| ``tagged``. See the descriptions<br>above — ``supersedes`` is the one that changes what default reads<br>return. |
+| `role` | str? | `null` | Free text saying WHY these two are linked, stored on the edge and<br>returned by ``memory_neighbors``. The edge kind says what KIND of<br>relation it is; this says what the relation is ABOUT ("both configure<br>the Vault sidecar", "same incident"). Worth a sentence on a<br>``related_to``, where the kind alone tells a later reader nothing. |
+| `confidence` | `asserted` \| `inferred` | `'asserted'` | ``asserted`` (default) when you are naming both endpoints because you<br>know they belong together; ``inferred`` when the link is a guess worth<br>recording but not worth ranking on. ``recall`` expands along asserted<br>edges in preference to inferred ones, so this is the knob that decides<br>whether a speculative link pulls its neighbour into other people's<br>results. |
 
 ## `memory_neighbors`
 
@@ -201,6 +212,13 @@ Return the memories directly linked to ``slug``, grouped by edge kind.
 For symmetric kinds (``contradicts``, ``related_to``) both directions are
 unioned and de-duplicated. Use after ``memory_get`` to see what a memory
 connects to.
+
+Each neighbour carries an ``edge`` dict — ``{confidence, role, author,
+created_at}`` — describing the LINK rather than either endpoint. ``role``
+is what answers "why are these two connected", which the edge kind alone
+does not; ``created_at`` is when the link was made, which neither node's
+timestamps record. All four are ``null`` on edges written before the
+properties existed, and nothing backfills them.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

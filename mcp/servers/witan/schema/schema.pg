@@ -30,23 +30,77 @@ node Memory {
     confidence: F32?         // author/agent-set trust 0.0–1.0; null treated as default
 }
 
+// ── Memory edge properties ────────────────────────────────────────
+//
+// Every memory↔memory edge and Tagged carries the same four optional
+// properties. They are readable only through a BOUND traversal — the
+// `$src $w:edgename $dst` form, which binds the matched edge row so
+// `$w.confidence` is a projectable/filterable column. The unbound form
+// (`$src edgename $dst`) still just asserts the edge exists.
+//
+// confidence  — how the link came to be. `asserted` means a caller named both
+//               endpoints (memory_link); `inferred` means witan derived it,
+//               which today is the Tagged edge auto-created from a memory's
+//               free-string `tags`. This is what recall weights its expansion
+//               by: an inferred neighbour is further away than an asserted one.
+// role        — free text saying WHY the two are linked, so a reader of
+//               memory_neighbors does not have to guess from the edge kind
+//               alone. Set by the caller; never derived.
+// author      — who/what wrote the edge. Node-level `author` answers who wrote
+//               the memory, which is a different question.
+// created_at  — when the edge was written, which is NOT derivable from either
+//               endpoint's timestamps. `memory_neighbors` orders on it so a
+//               re-link reads as an update rather than a parallel edge.
+//
+// ALL FOUR ARE NULLABLE AND EVERY EDGE WRITTEN BEFORE 2026-09 HAS THEM NULL.
+// Adding them is a supported additive migration (`omnigraph schema plan` says
+// `supported: yes`) — no format break, no rebuild — but nothing backfills the
+// existing rows, so readers must treat null as "unknown" rather than as
+// `inferred`. Scoring a null as inferred would silently re-rank the whole
+// existing graph on the day this shipped.
+
 // Supersedes: a newer memory replaces an older one.
 // Link new → old when updating a pattern or lesson that has changed.
-edge Supersedes: Memory -> Memory
+edge Supersedes: Memory -> Memory {
+    confidence: enum(asserted, inferred)? @index
+    role:       String?
+    author:     String?
+    created_at: DateTime?
+}
 
 // AppliesTo: links a pattern or lesson to a project fact that provides context.
 // e.g. a pattern "always use uv" AppliesTo project fact "ol-django uses uv".
-edge AppliesTo: Memory -> Memory
+edge AppliesTo: Memory -> Memory {
+    confidence: enum(asserted, inferred)? @index
+    role:       String?
+    author:     String?
+    created_at: DateTime?
+}
 
 // Refines: a newer memory sharpens/extends an older one without replacing it.
-edge Refines: Memory -> Memory
+edge Refines: Memory -> Memory {
+    confidence: enum(asserted, inferred)? @index
+    role:       String?
+    author:     String?
+    created_at: DateTime?
+}
 
 // Contradicts: two memories conflict. Symmetric in meaning; stored one
 // direction and traversed both ways. Never hidden — surfaced for review.
-edge Contradicts: Memory -> Memory
+edge Contradicts: Memory -> Memory {
+    confidence: enum(asserted, inferred)? @index
+    role:       String?
+    author:     String?
+    created_at: DateTime?
+}
 
 // RelatedTo: soft associative link. Symmetric; stored one direction.
-edge RelatedTo: Memory -> Memory
+edge RelatedTo: Memory -> Memory {
+    confidence: enum(asserted, inferred)? @index
+    role:       String?
+    author:     String?
+    created_at: DateTime?
+}
 
 // Topic: a join-surface node memories attach to. One node type, several kinds:
 //   topic    — promoted from a free-string tag
@@ -62,7 +116,17 @@ node Topic {
 }
 
 // Tagged: a Memory is about a Topic. Real Layer-1 edge (traversable).
-edge Tagged: Memory -> Topic
+//
+// The one edge witan writes BOTH ways: `inferred` when auto-derived from a
+// memory's `tags`, `asserted` when a caller named the topic through
+// memory_link(kind="tagged"). recall's topic-sibling expansion is the widest
+// and noisiest hop it takes, so this is where the weighting earns its keep.
+edge Tagged: Memory -> Topic {
+    confidence: enum(asserted, inferred)? @index
+    role:       String?
+    author:     String?
+    created_at: DateTime?
+}
 
 // ── Workflow Tracking ─────────────────────────────────────────────
 //

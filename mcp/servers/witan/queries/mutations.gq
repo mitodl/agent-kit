@@ -82,25 +82,111 @@ query delete_memory($slug: String) {
 }
 
 // ── Edges ─────────────────────────────────────────────────────────
+//
+// Every link carries the four edge properties from schema.pg § Memory edge
+// properties. They are declared `String?`/`DateTime?` because the engine
+// refuses a null for a non-nullable param outright ("null is not accepted for
+// non-nullable parameter") — and `role` legitimately has no value on most
+// links. All four must still be SUPPLIED on every call: the client validates
+// declared-vs-supplied params and raises on a missing one, so omitting `role`
+// is an error, not a default.
+//
+// ★ INSERT IS NOT AN UPSERT. Two inserts of the same (from, to) make two
+// PARALLEL edges, which the old unbound traversals collapsed to one row and
+// the new bound ones do not. `memory_neighbors` is what keeps that from
+// showing as a duplicate: it de-duplicates on the neighbour slug, newest edge
+// first. Nothing here deduplicates on write — edges have no key, and
+// `delete <Edge> where ...` takes a single condition, so there is no
+// "delete just this (from, to)" to build an upsert out of.
 
-query link_supersedes($from: String, $to: String) {
-    insert Supersedes { from: $from, to: $to }
+query link_supersedes(
+    $from: String,
+    $to: String,
+    $confidence: String?,
+    $role: String?,
+    $author: String?,
+    $created_at: DateTime?
+) {
+    insert Supersedes {
+        from: $from,
+        to: $to,
+        confidence: $confidence,
+        role: $role,
+        author: $author,
+        created_at: $created_at
+    }
 }
 
-query link_applies_to($from: String, $to: String) {
-    insert AppliesTo { from: $from, to: $to }
+query link_applies_to(
+    $from: String,
+    $to: String,
+    $confidence: String?,
+    $role: String?,
+    $author: String?,
+    $created_at: DateTime?
+) {
+    insert AppliesTo {
+        from: $from,
+        to: $to,
+        confidence: $confidence,
+        role: $role,
+        author: $author,
+        created_at: $created_at
+    }
 }
 
-query link_refines($from: String, $to: String) {
-    insert Refines { from: $from, to: $to }
+query link_refines(
+    $from: String,
+    $to: String,
+    $confidence: String?,
+    $role: String?,
+    $author: String?,
+    $created_at: DateTime?
+) {
+    insert Refines {
+        from: $from,
+        to: $to,
+        confidence: $confidence,
+        role: $role,
+        author: $author,
+        created_at: $created_at
+    }
 }
 
-query link_contradicts($from: String, $to: String) {
-    insert Contradicts { from: $from, to: $to }
+query link_contradicts(
+    $from: String,
+    $to: String,
+    $confidence: String?,
+    $role: String?,
+    $author: String?,
+    $created_at: DateTime?
+) {
+    insert Contradicts {
+        from: $from,
+        to: $to,
+        confidence: $confidence,
+        role: $role,
+        author: $author,
+        created_at: $created_at
+    }
 }
 
-query link_related_to($from: String, $to: String) {
-    insert RelatedTo { from: $from, to: $to }
+query link_related_to(
+    $from: String,
+    $to: String,
+    $confidence: String?,
+    $role: String?,
+    $author: String?,
+    $created_at: DateTime?
+) {
+    insert RelatedTo {
+        from: $from,
+        to: $to,
+        confidence: $confidence,
+        role: $role,
+        author: $author,
+        created_at: $created_at
+    }
 }
 
 // ── Topics ────────────────────────────────────────────────────────
@@ -111,8 +197,22 @@ query insert_topic(
     insert Topic { slug: $slug, name: $name, kind: $kind, created_at: $created_at }
 }
 
-query link_tagged($from: String, $to: String) {
-    insert Tagged { from: $from, to: $to }
+query link_tagged(
+    $from: String,
+    $to: String,
+    $confidence: String?,
+    $role: String?,
+    $author: String?,
+    $created_at: DateTime?
+) {
+    insert Tagged {
+        from: $from,
+        to: $to,
+        confidence: $confidence,
+        role: $role,
+        author: $author,
+        created_at: $created_at
+    }
 }
 
 // ── Workflow Project mutations ─────────────────────────────────────

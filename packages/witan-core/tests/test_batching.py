@@ -328,7 +328,22 @@ def test_change_many_composes_against_the_real_witan_mutations():
                 "insert_topic",
                 {"slug": "tp-x", "name": "x", "kind": "topic", "created_at": now},
             ),
-            ("mutations.gq", "link_tagged", {"from": "mem-1", "to": "tp-x"}),
+            (
+                "mutations.gq",
+                "link_tagged",
+                {
+                    "from": "mem-1",
+                    "to": "tp-x",
+                    # The edge's own properties, and a tag-derived Tagged edge
+                    # is `inferred` by definition. Supplied in full because the
+                    # splicer requires every declared param — dropping `role`
+                    # is what this test's KeyError branch exists to catch.
+                    "confidence": "inferred",
+                    "role": "tag",
+                    "author": "a",
+                    "created_at": now,
+                },
+            ),
         ],
         lambda f: (queries / f).read_text(),
     )

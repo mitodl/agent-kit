@@ -35,6 +35,12 @@ this covers memories, topics, workflow projects/sessions/traces, tasks, and task
 comments by construction; no per-tool wiring is needed for new node types beyond
 adding a `FIELD_MAP` entry.
 
+Edges are covered too, not just nodes: the `link_*` mutations scan the `role`
+an edge carries, which is caller-supplied prose reaching the store the same way
+a memory's `content` does. The other three edge properties are machine-set (an
+enum, the resolved author, a timestamp) and are out of scope like every other
+structured param.
+
 A node with no `repo` field of its own can still be governed by a per-repo
 `[scan.overlay]` table: the overlay resolves from the mutation's `repo`
 parameter, so `task_comment` passes its task's repo alongside the comment body

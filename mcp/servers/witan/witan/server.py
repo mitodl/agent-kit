@@ -533,6 +533,13 @@ def _tool(fn):
 
     Read tools pay one ``take_redactions()`` on an empty contextvar.
 
+    ``_edge_property_errors`` rides along here for the same reason and with the
+    same argument: a store that has not applied the current ``schema.pg`` can
+    fail on an edge property from any tool that reads or writes one, and the
+    number of those only grows. Naming them individually is the
+    enumerate-the-paths approach this docstring already records failing four
+    times.
+
     ``functools.wraps`` copies ``__wrapped__``, so ``inspect.signature`` — and
     therefore FastMCP's schema generation — still sees the real parameters.
     """
@@ -540,12 +547,14 @@ def _tool(fn):
 
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
-            return scan.annotate(await fn(*args, **kwargs))
+            with _edge_property_errors():
+                return scan.annotate(await fn(*args, **kwargs))
     else:
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            return scan.annotate(fn(*args, **kwargs))
+            with _edge_property_errors():
+                return scan.annotate(fn(*args, **kwargs))
 
     return mcp.tool(wrapper)
 
@@ -569,6 +578,107 @@ _MEMORY_LINK_MUTATIONS = {
     "contradicts": "link_contradicts",
     "related_to": "link_related_to",
 }
+
+#: How a link came to exist — schema.pg § Memory edge properties.
+#: ``asserted`` is a caller naming both endpoints through ``memory_link``;
+#: ``inferred`` is witan deriving the edge, which today means the ``Tagged``
+#: edge auto-created from a memory's free-string ``tags``.
+EdgeConfidence = Literal["asserted", "inferred"]
+
+#: What an edge property means when it is NULL: an edge written before
+#: 2026-09, when these properties did not exist. Nothing backfills them.
+#:
+#: ★ NULL SCORES AS ``asserted``, WHICH IS THE CONSERVATIVE CHOICE AND NOT THE
+#: OBVIOUS ONE. Most null Tagged edges genuinely are tag-derived and would be
+#: `inferred` had they been written today, so reading null as `inferred` looks
+#: more accurate. It is also how you re-rank an entire existing graph on the
+#: day this ships, silently, for every caller of `recall` — a behaviour change
+#: nobody asked for, dressed as a bug fix. So an unstamped edge keeps exactly
+#: the weight it had before the properties existed, and the weighting takes
+#: hold as the graph is rewritten.
+_EDGE_CONFIDENCE_DEFAULT: EdgeConfidence = "asserted"
+
+
+def _edge_props(
+    confidence: EdgeConfidence = "asserted",
+    role: str | None = None,
+) -> dict:
+    """The four edge properties every ``link_*`` mutation declares.
+
+    All four are supplied on every call — the client raises on a declared
+    param that is not passed, so a null ``role`` is passed explicitly rather
+    than omitted. ``author``/``created_at`` describe the EDGE, and neither is
+    derivable from its endpoints: a memory written last year can be linked
+    today, by someone who did not write either end.
+    """
+    return {
+        "confidence": confidence,
+        "role": role,
+        "author": _current_author(),
+        "created_at": now_iso(),
+    }
+
+
+#: What a store says when it has never heard of the edge properties:
+#: "type error: T6: edge `RelatedTo` has no property `confidence`" on a read,
+#: T11 on a write.
+#:
+#: ★ ANCHORED ON THE ``type error: T<n>:`` PREFIX, not just the phrase. The
+#: matching happens inside an ``except RuntimeError``, and ``scan.WriteBlocked``
+#: — a deliberate refusal — is a RuntimeError subclass. A loose substring match
+#: would rewrite one of those into a plain RuntimeError and lose its type on the
+#: way out. The engine's prefix is something only the engine emits.
+_NO_EDGE_PROPS = re.compile(
+    r"type error: T\d+:.*\bhas no property `(?:confidence|role|author|created_at)`"
+)
+
+_EDGE_PROPS_HINT = (
+    "this store's edges have no properties yet — run `witan migrate schema` "
+    "(an additive migration: no rebuild, no format change, existing edges keep "
+    "their rows with the new properties null)"
+)
+
+
+@contextmanager
+def _edge_property_errors() -> Iterator[None]:
+    """Re-raise a missing-edge-property failure with the one-command fix.
+
+    DELIBERATELY NOT A FALLBACK. The alternative — keeping the old unbound
+    queries alongside the bound ones and switching on the error — is the
+    `_title`-twin hazard read.gq already warns about, two query sets that must
+    be kept in step forever, to paper over a state one command fixes. And it
+    would degrade `recall` SILENTLY: expansion would keep working, just worse,
+    which is the failure nobody notices.
+
+    A local store never gets here — ``_ensure_graph`` re-applies ``schema.pg``
+    when its mtime moves. A deployed graph does, if the release lands before
+    provisioning applies the schema.
+    """
+    try:
+        yield
+    except RuntimeError as exc:
+        if not _NO_EDGE_PROPS.search(str(exc)):
+            raise
+        raise RuntimeError(f"{exc}\n\n{_EDGE_PROPS_HINT}") from exc
+
+
+def _edge_meta(row: dict) -> dict:
+    """Pull the ``edge_*`` columns out of a bound-traversal row.
+
+    The ``as edge_*`` aliases in read.gq exist because the client strips a
+    column's alias prefix at the first dot, so an unaliased ``$w.created_at``
+    would land on the same key as the node's ``created_at``. Unpacking them
+    back into a nested ``edge`` dict is the other half of that: it gives the
+    caller ``{"created_at": <node>, "edge": {"created_at": <edge>}}`` instead
+    of two flat keys that differ only by prefix.
+    """
+    return {
+        "confidence": row.pop("edge_confidence", None),
+        "role": row.pop("edge_role", None),
+        "author": row.pop("edge_author", None),
+        "created_at": row.pop("edge_created_at", None),
+    }
+
 
 # Edge kind → read queries whose union gives a memory's neighbours along it.
 # Symmetric kinds (contradicts, related_to) are stored one direction and unioned
@@ -901,9 +1011,27 @@ def _lookup_topic_slug(topic: str) -> str | None:
 def _tag_memory_steps(
     memory_slug: str, name: str, kind: str
 ) -> list[tuple[str, str, dict]]:
-    """Upsert a Topic and link ``memory_slug`` to it, as batchable steps."""
+    """Upsert a Topic and link ``memory_slug`` to it, as batchable steps.
+
+    The edge is stamped ``inferred``: nobody named this Topic, it was promoted
+    from a free string in the memory's ``tags``. That is the whole asserted-vs-
+    inferred distinction doing its job — a shared tag is weak evidence that two
+    memories belong together, and ``recall``'s topic-sibling hop is its widest,
+    so this is where the weighting has something to bite on.
+    """
     slug, steps = _upsert_topic_steps(name, kind)
-    return [*steps, ("mutations.gq", "link_tagged", {"from": memory_slug, "to": slug})]
+    return [
+        *steps,
+        (
+            "mutations.gq",
+            "link_tagged",
+            {
+                "from": memory_slug,
+                "to": slug,
+                **_edge_props("inferred", role="tag"),
+            },
+        ),
+    ]
 
 
 # Statements per commit in the topic backfill. Bounds the inline GQ body — the
@@ -959,7 +1087,18 @@ def migrate_topics() -> dict:
                 seen_topics.add(topic_slug)
             if topic_slug not in existing:
                 steps.append(
-                    ("mutations.gq", "link_tagged", {"from": slug, "to": topic_slug})
+                    (
+                        "mutations.gq",
+                        "link_tagged",
+                        {
+                            "from": slug,
+                            "to": topic_slug,
+                            # Same provenance the live write path stamps — this
+                            # backfill promotes tags, so its edges are inferred
+                            # for exactly the same reason.
+                            **_edge_props("inferred", role="tag"),
+                        },
+                    )
                 )
                 edges_created += 1
         if len(steps) >= _MIGRATE_BATCH_SIZE:
@@ -3163,14 +3302,24 @@ def memory_get(slug: str, include_topics: bool = False) -> dict | None:
         The ``pat-`` / ``pf-`` / ``les-`` / ``ctx-`` slug to retrieve.
     include_topics:
         When ``True``, attach a ``topics`` list of the Topic nodes this memory is
-        tagged with (slug/name/kind).
+        tagged with (slug/name/kind), each with an ``edge`` dict describing the
+        link. ``edge.confidence`` is what separates a topic someone named from
+        one promoted out of the memory's free-string ``tags``.
     """
     rows = client.read("read.gq", "get_memory", {"slug": slug})
     if not rows:
         return None
     node = rows[0]
     if include_topics:
-        node["topics"] = client.read("read.gq", "topics_for_memory", {"slug": slug})
+        # Same de-duplication as memory_neighbors, and for the same reason: the
+        # traversal is bound now, so a memory tagged to one Topic twice arrives
+        # on two rows. read.gq orders newest-first, so `setdefault` keeps the
+        # most recent link's provenance.
+        topics: dict[str, dict] = {}
+        for row in client.read("read.gq", "topics_for_memory", {"slug": slug}):
+            edge = _edge_meta(row)  # pops the edge_* columns off `row`
+            topics.setdefault(row["slug"], {**row, "edge": edge})
+        node["topics"] = list(topics.values())
     return node
 
 
@@ -3349,7 +3498,12 @@ def memory_delete(slug: str, confirm: bool = False) -> dict:
 
 @_tool
 async def memory_link(
-    from_slug: str, to_slug: str, kind: MemoryLinkKind, ctx: Context | None = None
+    from_slug: str,
+    to_slug: str,
+    kind: MemoryLinkKind,
+    role: str | None = None,
+    confidence: EdgeConfidence = "asserted",
+    ctx: Context | None = None,
 ) -> dict:
     """
     Create a typed edge between two memories.
@@ -3385,6 +3539,19 @@ async def memory_link(
         ``contradicts`` | ``related_to`` | ``tagged``. See the descriptions
         above — ``supersedes`` is the one that changes what default reads
         return.
+    role:
+        Free text saying WHY these two are linked, stored on the edge and
+        returned by ``memory_neighbors``. The edge kind says what KIND of
+        relation it is; this says what the relation is ABOUT ("both configure
+        the Vault sidecar", "same incident"). Worth a sentence on a
+        ``related_to``, where the kind alone tells a later reader nothing.
+    confidence:
+        ``asserted`` (default) when you are naming both endpoints because you
+        know they belong together; ``inferred`` when the link is a guess worth
+        recording but not worth ranking on. ``recall`` expands along asserted
+        edges in preference to inferred ones, so this is the knob that decides
+        whether a speculative link pulls its neighbour into other people's
+        results.
     """
     if from_slug == to_slug:
         return {
@@ -3415,14 +3582,25 @@ async def memory_link(
                 "linked": False,
                 "missing": [to_slug],
             }
+        props = _edge_props(confidence, role)
         await _offload(
             client.change_many,
             [
                 *topic_steps,
-                ("mutations.gq", "link_tagged", {"from": from_slug, "to": topic_slug}),
+                (
+                    "mutations.gq",
+                    "link_tagged",
+                    {"from": from_slug, "to": topic_slug, **props},
+                ),
             ],
         )
-        return {"from": from_slug, "to": topic_slug, "kind": kind, "linked": True}
+        return {
+            "from": from_slug,
+            "to": topic_slug,
+            "kind": kind,
+            "linked": True,
+            "edge": props,
+        }
 
     endpoints = {from_slug, to_slug}
     present = {
@@ -3458,14 +3636,21 @@ async def memory_link(
             "reason": "declined",
         }
 
+    props = _edge_props(confidence, role)
     await _offload(
         client.change,
         "mutations.gq",
         _MEMORY_LINK_MUTATIONS[kind],
-        {"from": from_slug, "to": to_slug},
+        {"from": from_slug, "to": to_slug, **props},
     )
     _invalidate_edge_index()  # supersede/contradict/support sets changed
-    return {"from": from_slug, "to": to_slug, "kind": kind, "linked": True}
+    return {
+        "from": from_slug,
+        "to": to_slug,
+        "kind": kind,
+        "linked": True,
+        "edge": props,
+    }
 
 
 @_tool
@@ -3476,6 +3661,13 @@ def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> di
     For symmetric kinds (``contradicts``, ``related_to``) both directions are
     unioned and de-duplicated. Use after ``memory_get`` to see what a memory
     connects to.
+
+    Each neighbour carries an ``edge`` dict — ``{confidence, role, author,
+    created_at}`` — describing the LINK rather than either endpoint. ``role``
+    is what answers "why are these two connected", which the edge kind alone
+    does not; ``created_at`` is when the link was made, which neither node's
+    timestamps record. All four are ``null`` on edges written before the
+    properties existed, and nothing backfills them.
 
     Parameters
     ----------
@@ -3495,7 +3687,15 @@ def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> di
         merged: dict[str, dict] = {}
         for query_name in _MEMORY_NEIGHBOR_QUERIES[kind]:
             for row in client.read("read.gq", query_name, {"slug": slug}):
-                merged[row["slug"]] = row
+                # ONE ROW PER EDGE now that the traversal is bound, so a pair
+                # linked twice arrives twice. `setdefault` keeps the FIRST,
+                # and read.gq orders `$w.created_at desc`, so the survivor is
+                # the newest link: re-linking a pair with a different role
+                # reads as an update instead of a second neighbour. Holding
+                # one-entry-per-neighbour is this tool's documented contract,
+                # so parallel edges must not change the count.
+                edge = _edge_meta(row)  # pops the edge_* columns off `row`
+                merged.setdefault(row["slug"], {**row, "edge": edge})
         neighbors[kind] = list(merged.values())
     return {"slug": slug, "neighbors": neighbors}
 
@@ -7006,24 +7206,44 @@ def memory_symbols(slug: str) -> dict:
 # ── Graph-aware recall (spec §8) ──────────────────────────────────
 
 
-def _expand_neighbors(slug: str) -> set[str]:
-    """One-hop memory neighbours of ``slug``: along AppliesTo/RelatedTo, topic
-    siblings (Tagged), and provenance siblings (same producing session).
+#: The expansion queries, and which edge-confidence columns each row carries.
+#: ``topic_siblings`` reports two — the seed's own Tagged edge and the
+#: sibling's — because a shared-topic hop is only as good as the weaker end.
+#: ``provenance_siblings`` traverses ``SessionProduced``, which carries no
+#: properties, so its rows report none and score as the default.
+_EXPANSION_QUERIES: dict[str, tuple[str, ...]] = {
+    "applies_to_targets": ("edge_confidence",),
+    "applies_to_sources": ("edge_confidence",),
+    "related_out": ("edge_confidence",),
+    "related_in": ("edge_confidence",),
+    "topic_siblings": ("seed_edge_confidence", "edge_confidence"),
+    "provenance_siblings": (),
+}
 
-    Each relation is a single conjunctive query — topic_siblings and
-    provenance_siblings join memory→topic/session→memory in one roundtrip rather
-    than fanning out per topic/session."""
-    out: set[str] = set()
-    for query in (
-        "applies_to_targets",
-        "applies_to_sources",
-        "related_out",
-        "related_in",
-        "topic_siblings",
-        "provenance_siblings",
-    ):
-        out.update(r["slug"] for r in client.read("read.gq", query, {"slug": slug}))
-    out.discard(slug)
+
+def _expand_neighbors(slug: str) -> dict[str, bool]:
+    """One-hop memory neighbours of ``slug`` → whether the hop was ASSERTED.
+
+    Covers AppliesTo/RelatedTo, topic siblings (Tagged), and provenance
+    siblings (same producing session). Each relation is a single conjunctive
+    query — topic_siblings and provenance_siblings join memory→topic/session→
+    memory in one roundtrip rather than fanning out per topic/session.
+
+    BEST PATH WINS. A neighbour reachable by both an asserted and an inferred
+    route is asserted: the inferred route is extra evidence for a link we
+    already trust, not a reason to trust it less. Since the queries are bound
+    traversals now, one neighbour can arrive on many rows (parallel edges,
+    several shared topics), and this is the rule that collapses them.
+    """
+    out: dict[str, bool] = {}
+    for query, confidence_columns in _EXPANSION_QUERIES.items():
+        for row in client.read("read.gq", query, {"slug": slug}):
+            asserted = all(
+                (row.get(column) or _EDGE_CONFIDENCE_DEFAULT) == "asserted"
+                for column in confidence_columns
+            )
+            out[row["slug"]] = out.get(row["slug"], False) or asserted
+    out.pop(slug, None)
     return out
 
 
@@ -7048,7 +7268,16 @@ def recall(
     (default 1, capped at 2) along AppliesTo/RelatedTo edges, topic siblings, and
     provenance siblings; prunes superseded memories (unless
     ``include_superseded``); flags Contradicts pairs; and re-ranks with the
-    composite score minus a per-hop distance penalty so seeds outrank neighbours.
+    composite score minus a distance penalty so seeds outrank neighbours.
+
+    Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
+    edge — today that means a Tagged edge promoted from a free-string tag,
+    rather than a link someone named — costs ``w_inferred_edge`` extra
+    distance, so a shared tag no longer pulls as hard as an asserted
+    ``related_to``. A neighbour reachable both ways is scored at its best
+    route. Edges written before edge properties existed are unstamped and score
+    as asserted, so this reweights the graph as it is rewritten rather than all
+    at once; ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
 
     With no edges in the graph the result equals ``memory_search`` — expansion is
     additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
@@ -7083,7 +7312,9 @@ def recall(
         edges, topic siblings, and provenance siblings. Clamped to 0–2. ``0``
         disables expansion and returns the seeds alone; ``1`` (the default) is
         almost always right, since each extra hop widens results faster than it
-        deepens them.
+        deepens them. Counts HOPS, not the fractional distance the inferred-edge
+        surcharge produces — the surcharge only reranks, it never truncates the
+        walk.
     limit:
         Maximum memories to return after re-ranking.
     include_superseded:
@@ -7097,7 +7328,11 @@ def recall(
     # ── Seed ──────────────────────────────────────────────────────
     seed_rank: dict[str, int] = {}  # query-seed BM25 position (norm proxy)
     seeds: dict[str, list[str]] = {"query": [], "symbol": [], "task": [], "topic": []}
-    candidates: dict[str, int] = {}  # slug → min hop distance
+    # slug → cheapest distance from a seed. FRACTIONAL, not the hop count: an
+    # inferred edge costs `w_inferred_edge` extra, so a neighbour reached only
+    # by a guessed link sits further out than one reached by an asserted link
+    # at the same hop. Seeds are always 0.
+    candidates: dict[str, float] = {}
 
     def add_seed(slug: str, bucket: str) -> None:
         seeds[bucket].append(slug)
@@ -7126,14 +7361,26 @@ def recall(
                 add_seed(m["slug"], "topic")
 
     # ── Expand ────────────────────────────────────────────────────
+    # BFS by hop, but the distance recorded is fractional: reaching a neighbour
+    # over an `inferred` edge costs an extra `w_inferred_edge`. So the surcharge
+    # is a RANKING penalty, not a pruning one — an inferred neighbour is still
+    # expanded from, and still returned, just further down. Set the knob to 0 to
+    # get the old uniform-hop behaviour back.
+    #
+    # `min` rather than the old first-wins: within one hop two frontier
+    # memories can now reach the same neighbour at different costs, so which
+    # arrived first is not the same question as which route is cheapest.
     frontier = set(candidates)
     for distance in range(1, hops + 1):
         nxt: set[str] = set()
         for slug in frontier:
-            for neighbor in _expand_neighbors(slug):
+            for neighbor, asserted in _expand_neighbors(slug).items():
+                cost = distance + (0.0 if asserted else rank_cfg.w_inferred_edge)
                 if neighbor not in candidates:
-                    candidates[neighbor] = distance
                     nxt.add(neighbor)
+                    candidates[neighbor] = cost
+                else:
+                    candidates[neighbor] = min(candidates[neighbor], cost)
         frontier = nxt
         if not frontier:
             break

@@ -50,6 +50,28 @@ relate to each other, and five edge kinds carry those relationships:
 | `contradicts` | These two disagree | **Both** surface, flagged for a human |
 | `tagged` | This memory is about that topic | Topic siblings expand together |
 
+### An edge knows how it got there
+
+An edge is not just a connection; it carries four properties of its own —
+`confidence`, `role`, `author`, `created_at`. `memory_neighbors` returns them
+alongside each neighbour, so "why are these two linked" has an answer that the
+edge kind alone cannot give: `related_to` says *some* relation exists, and
+`role` says it is "both configure the Vault sidecar".
+
+`confidence` is the one that changes reads. It separates a link somebody
+**asserted** — a `memory_link` call naming both ends — from one witan
+**inferred**, which today means a `tagged` edge promoted out of a memory's
+free-string tags. `recall` charges an inferred hop extra distance
+([`WITAN_RANK_W_INFERRED_EDGE`](../reference/environment.md#recall-ranking),
+0.35), so a shared tag no longer pulls as hard as a link someone meant. The
+surcharge only re-ranks: an inferred neighbour is still expanded from and still
+returned, just further down.
+
+Edges written before these properties existed have them all null, and nothing
+backfills them. A null `confidence` scores as `asserted` — the weight those
+edges already had — so the graph re-weights as it is rewritten rather than
+shifting under every reader at once.
+
 ### Superseding is not deleting
 
 This is the design decision that everything else about reads follows from.
@@ -106,10 +128,12 @@ have to remember to run them in order.
    about this task" a single call.
 2. **Expand** one hop — capped at two — across `applies_to` / `related_to`
    edges, topic siblings, and provenance siblings (memories produced by the same
-   session or project).
+   session or project). Each hop costs its edge's confidence: an inferred route
+   is further away than an asserted one, and a neighbour reachable both ways is
+   scored at its best route.
 3. **Prune** superseded memories.
 4. **Flag** contradiction pairs.
-5. **Re-rank** by a composite score, minus a per-hop distance penalty so seeds
+5. **Re-rank** by a composite score, minus that distance penalty so seeds
    outrank the neighbours they pulled in.
 
 The composite is BM25 relevance, recency (90-day half-life), corroboration, and

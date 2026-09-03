@@ -73,6 +73,15 @@ class RankConfig(BaseModel):
     w_hop: float = 0.5
     """Per-hop distance penalty in graph-aware recall — seeds (hop 0) outrank
     expanded neighbours (hop ≥ 1)."""
+    w_inferred_edge: float = Field(default=0.35, ge=0.0)
+    """Extra distance charged for reaching a neighbour over an ``inferred``
+    edge rather than an ``asserted`` one (schema.pg § Memory edge properties).
+
+    Deliberately smaller than ``w_hop``: a guessed link at one hop should still
+    outrank anything at two. ``0`` restores the uniform-hop behaviour recall had
+    before edges carried confidence. Only edges written since then are stamped —
+    an unstamped edge scores as ``asserted``, so this knob's effect grows as the
+    graph is rewritten rather than landing all at once."""
 
 
 _RANK_FIELDS = {
@@ -85,6 +94,7 @@ _RANK_FIELDS = {
     "penalty_superseded": "WITAN_RANK_PEN_SUPERSEDED",
     "penalty_contradicted": "WITAN_RANK_PEN_CONTRADICTED",
     "w_hop": "WITAN_RANK_W_HOP",
+    "w_inferred_edge": "WITAN_RANK_W_INFERRED_EDGE",
 }
 
 
@@ -564,6 +574,7 @@ def default_config_toml() -> str:
 # penalty_superseded = {rank.penalty_superseded}
 # penalty_contradicted = {rank.penalty_contradicted}
 # w_hop = {rank.w_hop}
+# w_inferred_edge = {rank.w_inferred_edge}
 
 # ── [scan] — write-path secret/PII scanning (ADR 0001) ──────────────────────
 # Enabled by default (opt-out) — set enabled = false below to turn it off.

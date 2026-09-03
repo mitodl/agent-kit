@@ -6,6 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.33.0] - 2026-09-03
+
+### Added
+
+- **Memory edges carry properties, and reads project them.** The five
+  memory↔memory edges and `Tagged` gained `confidence`
+  (`asserted` | `inferred`), `role`, `author`, and `created_at`. omnigraph 0.9.0
+  introduced the bound traversal (`$m $w:supersedes $other`), which binds the
+  matched edge row and makes those columns projectable, filterable, and
+  orderable; before it, a traversal could only assert an edge existed. That is
+  why the graph had never recorded who made a link, when, or why.
+
+  - `memory_link` takes `role` (free text: *why* these two are linked, which
+    the edge kind alone does not say) and `confidence`, stamps `author` and
+    `created_at`, and returns the stamped `edge`.
+  - `memory_neighbors` and `memory_get(include_topics=True)` return an `edge`
+    dict per neighbour/topic.
+  - `Tagged` edges auto-derived from a memory's free-string `tags` are stamped
+    `inferred`; a `memory_link(kind="tagged")` naming the topic is `asserted`.
+  - `recall` expansion is confidence-weighted: an inferred hop costs an extra
+    `WITAN_RANK_W_INFERRED_EDGE` (default 0.35) of distance, and a neighbour
+    reachable both ways is scored at its best route. It re-ranks only — an
+    inferred neighbour is still expanded from and still returned. Set the knob
+    to `0` for the previous uniform-hop behaviour.
+
+  **Requires a schema apply.** The properties are an additive migration
+  (`omnigraph schema plan` reports `supported: yes`) — no format change, no
+  rebuild, existing edges keep their rows with the new properties null. A local
+  store picks it up automatically when `schema.pg`'s mtime moves; a **deployed
+  graph must have the schema applied before this release serves traffic**, or
+  every memory read and write that touches an edge property fails with
+  `edge \`X\` has no property \`confidence\``. That error now carries the fix
+  (`witan migrate schema`) rather than only the engine's wording.
+
+  **Nothing backfills existing edges**, and a null `confidence` deliberately
+  scores as `asserted` — the weight those edges already had. Reading null as
+  `inferred` would look more accurate and would silently re-rank every existing
+  graph on the day this shipped.
+
+### Fixed
+
+- **`bin/gen_docs.py` no longer glues a section preamble onto the next edge.**
+  A comment block that resumes after a blank line is a new block, so prose
+  describing a whole section stops landing in one edge's Meaning cell. The
+  generated edge table also gained a Properties column.
+
 ## [0.32.0] - 2026-09-03
 
 ### Added

@@ -323,6 +323,10 @@ desc = "Weight of the author-set confidence score."
 default = "0.5"
 desc = "Per-hop distance penalty in graph-aware recall, so direct hits (hop 0) outrank expanded neighbours (hop ≥ 1)."
 
+[section.vars.WITAN_RANK_W_INFERRED_EDGE]
+default = "0.35"
+desc = "Extra distance charged when recall reaches a neighbour over an `inferred` edge (one witan derived, such as a Tagged edge promoted from a free-string tag) rather than an `asserted` one a caller named. Set to 0 for the uniform-hop behaviour recall had before edges carried confidence."
+
 [section.vars.WITAN_RANK_HALFLIFE_DAYS]
 default = "90.0"
 desc = "Half-life of the recency decay, in days. Must be greater than zero."

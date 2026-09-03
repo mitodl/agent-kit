@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.32.0"
+version = "0.33.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -213,7 +213,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.32.0"
+current_version = "0.33.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]
