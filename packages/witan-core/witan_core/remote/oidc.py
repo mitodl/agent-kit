@@ -52,10 +52,12 @@ _MAX_DEVICE_CODE_ATTEMPTS = 3
 _LOGIN_SCOPE = "openid offline_access"
 _FALLBACK_LOGIN_SCOPE = "openid"
 
-# The only status on which a scope refusal is retried. RFC 6749 §5.2 puts
-# `invalid_scope` at 400; anything else carrying that body is a different
-# failure and must propagate.
-_SCOPE_REJECTED_STATUS = 400
+# The status RFC 6749 §5.2 puts every OAuth token/device error at — 400, not
+# whatever an outage happens to answer with. Both `invalid_scope` and
+# `expired_token` are only trusted at this status; either error body arriving
+# on something else (a proxy's 500, say) is a different failure wearing a
+# known error's clothes, and must propagate rather than be handled quietly.
+_OAUTH_ERROR_STATUS = 400
 
 # How much life a cached access token must have left to be handed to a caller.
 #
@@ -562,7 +564,7 @@ class DeviceAuth:
         # would contradict the guarantee stated above and bury the original
         # failure behind an identical second one.
         if (
-            resp.status_code == _SCOPE_REJECTED_STATUS
+            resp.status_code == _OAUTH_ERROR_STATUS
             and _json_safe(resp).get("error") == "invalid_scope"
         ):
             resp = client.post(
@@ -619,7 +621,15 @@ class DeviceAuth:
                     if err == "slow_down":
                         interval += 5
                         continue
-                    if err != _DEVICE_CODE_EXPIRED_ERROR:
+                    # `expired_token` is only trusted at its RFC 6749 §5.2
+                    # status (400), same guard as `invalid_scope` above — a
+                    # 500 that happens to carry that body is an outage, and
+                    # retrying it would bury the real failure behind a
+                    # misleading "expired before approval" instead.
+                    if not (
+                        tok.status_code == _OAUTH_ERROR_STATUS
+                        and err == _DEVICE_CODE_EXPIRED_ERROR
+                    ):
                         raise RemoteAuthError(
                             f"Device authorization failed: {err or tok.text!r}"
                         )
