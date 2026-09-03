@@ -394,7 +394,34 @@ _GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
 # `$slug` don't collide.
 _QUERY_DECL_RE = re.compile(r"\bquery\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTILINE)
 _PARAM_REF_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
-_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
+
+def _strip_line_comments(source: str) -> str:
+    """Remove ``//`` line comments, without disturbing a ``//`` inside a string.
+
+    A plain regex substitution can't tell a comment from a URL in a quoted
+    value (`"https://example.com"`) and truncates the query body there instead
+    of just losing a comment. String-skipping mirrors :func:`_match_delimited`
+    exactly, so both stay in step if the `.gq` string-literal syntax ever
+    grows an escape this doesn't handle yet.
+    """
+    out: list[str] = []
+    i, n = 0, len(source)
+    while i < n:
+        if source[i] == '"':
+            j = i + 1
+            while j < n and source[j] != '"':
+                j += 2 if source[j] == "\\" else 1
+            j = min(j + 1, n)
+            out.append(source[i:j])
+            i = j
+        elif source.startswith("//", i):
+            nl = source.find("\n", i)
+            i = n if nl == -1 else nl
+        else:
+            out.append(source[i])
+            i += 1
+    return "".join(out)
 
 
 def _match_delimited(text: str, start: int, open_ch: str, close_ch: str) -> int:
@@ -430,7 +457,7 @@ def parse_query(source: str, name: str) -> tuple[str, str]:
     are stripped first: a `//` line inside a body would otherwise swallow the
     statements that follow it once everything is joined onto fewer lines.
     """
-    source = _LINE_COMMENT_RE.sub("", source)
+    source = _strip_line_comments(source)
     for match in _QUERY_DECL_RE.finditer(source):
         if match.group(1) != name:
             continue
@@ -440,6 +467,13 @@ def parse_query(source: str, name: str) -> tuple[str, str]:
         body_end = _match_delimited(source, body_start, "{", "}")
         return params.strip(), source[body_start + 1 : body_end - 1].strip()
     raise KeyError(f"query {name!r} not found in source")
+
+
+def _declared_params(raw_decls: str) -> set[str]:
+    """Parameter names a query's declaration list requires."""
+    return {
+        m.group(1) for d in _split_decls(raw_decls) if (m := _PARAM_REF_RE.search(d))
+    }
 
 
 def compose_batch(
@@ -469,12 +503,7 @@ def compose_batch(
     for index, (query_file, name, params) in enumerate(steps):
         prefix = f"s{index}_"
         raw_decls, body = parse_query(read_source(query_file), name)
-        declared = {
-            m.group(1)
-            for d in _split_decls(raw_decls)
-            if (m := _PARAM_REF_RE.search(d))
-        }
-        if missing := declared - set(params):
+        if missing := _declared_params(raw_decls) - set(params):
             raise KeyError(f"{name} missing parameter(s): {', '.join(sorted(missing))}")
 
         def rename(match: re.Match, prefix: str = prefix) -> str:
@@ -803,6 +832,22 @@ def _cached_query_text(path: Path, query_name: str) -> str:
         text = extract_query(path.read_text(), query_name)
         _QUERY_TEXT_CACHE[key] = text
     return text
+
+
+# Same mtime-keyed cache shape as `_QUERY_TEXT_CACHE`, for the declared-vs-
+# supplied check `_read_rows` runs on every call — see `_cached_query_text`
+# for why an mtime check rather than a plain memoise.
+_QUERY_DECLS_CACHE: dict[tuple[str, str, float], set[str]] = {}
+
+
+def _cached_declared_params(path: Path, query_name: str) -> set[str]:
+    key = (str(path), query_name, path.stat().st_mtime)
+    declared = _QUERY_DECLS_CACHE.get(key)
+    if declared is None:
+        raw_decls, _ = parse_query(path.read_text(), query_name)
+        declared = _declared_params(raw_decls)
+        _QUERY_DECLS_CACHE[key] = declared
+    return declared
 
 
 def _split_decls(raw: str) -> list[str]:
@@ -1273,7 +1318,18 @@ class OmnigraphClient:
         0.7.0-envelope handling below are exactly the kind of parsing that
         drifts when it is copied, and a drift here would show up as a read that
         works on one path and silently returns different keys on the other.
+
+        Checks declared-vs-supplied params up front, mirroring the check
+        ``compose_batch`` already runs on the write path: a caller omitting a
+        declared parameter must get a named ``KeyError`` here rather than
+        whatever the engine does with an unbound query variable — on an
+        engine predating omnigraph #569 that was a silent, over-broad scan
+        rather than an error.
         """
+        declared = _cached_declared_params(self.queries_dir / query_file, query_name)
+        if missing := declared - set(params):
+            msg = f"{query_name} missing parameter(s): {', '.join(sorted(missing))}"
+            raise KeyError(msg)
         transport = self._http_transport()
         if transport is not None:
             # The server answers with the same JSON body the CLI prints on

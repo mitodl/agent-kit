@@ -73,6 +73,22 @@ def test_parse_query_raises_on_an_unknown_name():
         og.parse_query(_SOURCE, "nope")
 
 
+def test_parse_query_does_not_treat_a_url_literal_as_a_comment():
+    # a `//` INSIDE a quoted string is not a comment — stripping to end-of-line
+    # there truncates the body and unbalances its braces, raising ValueError
+    # before the query is ever run rather than merely losing a real comment
+    source = """\
+    query by_url($url: String) {
+        match (m: Memory) where m.url == "https://example.com/x" // trailing
+        return m.slug
+    }
+    """
+    params, body = og.parse_query(source, "by_url")
+    assert params == "$url: String"
+    assert '"https://example.com/x"' in body
+    assert "trailing" not in body
+
+
 # ── composing the batch ────────────────────────────────────────────
 
 

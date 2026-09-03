@@ -23,9 +23,23 @@ from witan_core.omnigraph import OmnigraphClient, OmnigraphConflict
 # ── store addressing: local --store vs remote --server/--graph ─────
 
 
-def _built_client(monkeypatch, uri, **kwargs):
+# `some_query`/`q` cover every no-params `.read(...)` call below — the CLI
+# tests here exercise argv/env construction, not query content, so neither
+# declares a parameter.
+_READ_GQ = """
+query some_query() {
+    match (m: Memory) return m.slug
+}
+
+query q() {
+    match (m: Memory) return m.slug
+}
+"""
+
+
+def _built_client(monkeypatch, uri, *, queries_dir=None, **kwargs):
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
-    return OmnigraphClient(uri, Path("/queries"), **kwargs)
+    return OmnigraphClient(uri, queries_dir or Path("/queries"), **kwargs)
 
 
 def _force_cli(monkeypatch):
@@ -148,9 +162,12 @@ def test_remote_rejects_underscore_graph_id(monkeypatch):
         OmnigraphClient("http://host:8080", Path("/queries"), graph_id="code_repo")
 
 
-def test_remote_run_builds_server_graph_command(monkeypatch):
+def test_remote_run_builds_server_graph_command(monkeypatch, tmp_path):
     _force_cli(monkeypatch)
-    client = _built_client(monkeypatch, "http://host:8080", graph_id="council")
+    (tmp_path / "read.gq").write_text(_READ_GQ)
+    client = _built_client(
+        monkeypatch, "http://host:8080", queries_dir=tmp_path, graph_id="council"
+    )
     captured = {}
 
     def fake_run(cmd, **kwargs):
@@ -179,10 +196,17 @@ def test_remote_run_builds_server_graph_command(monkeypatch):
 # Nothing caught it because nothing asserted WHICH variable was set.
 
 
-def test_token_is_delivered_in_the_env_var_the_cli_actually_reads(monkeypatch):
+def test_token_is_delivered_in_the_env_var_the_cli_actually_reads(
+    monkeypatch, tmp_path
+):
     _force_cli(monkeypatch)
+    (tmp_path / "read.gq").write_text(_READ_GQ)
     client = _built_client(
-        monkeypatch, "http://host:8080", graph_id="council", token="t"
+        monkeypatch,
+        "http://host:8080",
+        queries_dir=tmp_path,
+        graph_id="council",
+        token="t",
     )
     captured = {}
 
@@ -200,14 +224,17 @@ def test_token_is_delivered_in_the_env_var_the_cli_actually_reads(monkeypatch):
     assert "OMNIGRAPH_SERVER_BEARER_TOKEN" not in captured["env"]
 
 
-def _token_seen_by_subprocess(monkeypatch, uri, *, token=None, ambient=None):
+def _token_seen_by_subprocess(monkeypatch, uri, tmp_path, *, token=None, ambient=None):
     """What the CLI subprocess would see in the token var for this address."""
     _force_cli(monkeypatch)
     if ambient is None:
         monkeypatch.delenv("OMNIGRAPH_BEARER_TOKEN", raising=False)
     else:
         monkeypatch.setenv("OMNIGRAPH_BEARER_TOKEN", ambient)
-    client = _built_client(monkeypatch, uri, token=token, graph_id="council")
+    (tmp_path / "read.gq").write_text(_READ_GQ)
+    client = _built_client(
+        monkeypatch, uri, queries_dir=tmp_path, token=token, graph_id="council"
+    )
     captured = {}
 
     def fake_run(cmd, **kwargs):
@@ -219,48 +246,61 @@ def _token_seen_by_subprocess(monkeypatch, uri, *, token=None, ambient=None):
     return captured["env"].get("OMNIGRAPH_BEARER_TOKEN")
 
 
-def test_no_token_invents_none(monkeypatch):
-    assert _token_seen_by_subprocess(monkeypatch, "/var/lib/witan/graph.omni") is None
+def test_no_token_invents_none(monkeypatch, tmp_path):
+    assert (
+        _token_seen_by_subprocess(monkeypatch, "/var/lib/witan/graph.omni", tmp_path)
+        is None
+    )
 
 
 @pytest.mark.parametrize("uri", ["/var/lib/witan/graph.omni", "s3://bucket/graph"])
 @pytest.mark.parametrize("token", [None, "explicit"])
-def test_local_store_never_receives_a_bearer_token(monkeypatch, uri, token):
+def test_local_store_never_receives_a_bearer_token(monkeypatch, tmp_path, uri, token):
     """`env` is a copy of os.environ, so an ambient token exported for cluster
     use rode along into every local subprocess — a secret handed to a process
     that has no server to present it to. s3:// included: it authenticates with
     AWS credentials, not a bearer token."""
     assert (
         _token_seen_by_subprocess(
-            monkeypatch, uri, token=token, ambient="ambient-secret"
+            monkeypatch, uri, tmp_path, token=token, ambient="ambient-secret"
         )
         is None
     )
 
 
-def test_remote_store_keeps_an_ambient_token_when_none_is_configured(monkeypatch):
+def test_remote_store_keeps_an_ambient_token_when_none_is_configured(
+    monkeypatch, tmp_path
+):
     """The complement of the rule above, and deliberately NOT stripped:
     `export OMNIGRAPH_BEARER_TOKEN=…` with nothing in config is the CLI's own
     documented fallback, so removing it here would break a supported way of
     driving a remote graph."""
     assert (
         _token_seen_by_subprocess(
-            monkeypatch, "http://host:8080", ambient="ambient-secret"
+            monkeypatch, "http://host:8080", tmp_path, ambient="ambient-secret"
         )
         == "ambient-secret"
     )
 
 
-def test_explicit_token_overrides_an_ambient_one_on_a_remote_store(monkeypatch):
+def test_explicit_token_overrides_an_ambient_one_on_a_remote_store(
+    monkeypatch, tmp_path
+):
     assert (
         _token_seen_by_subprocess(
-            monkeypatch, "http://host:8080", token="explicit", ambient="ambient-secret"
+            monkeypatch,
+            "http://host:8080",
+            tmp_path,
+            token="explicit",
+            ambient="ambient-secret",
         )
         == "explicit"
     )
 
 
-def test_each_call_gets_its_own_env_so_per_actor_tokens_cannot_race(monkeypatch):
+def test_each_call_gets_its_own_env_so_per_actor_tokens_cannot_race(
+    monkeypatch, tmp_path
+):
     """witan resolves a different token per request (ADR-0004). The env is
     built per `_execute`, so two clients' tokens never share mutable state —
     which is why this uses the env fallback and not `omnigraph login`, whose
@@ -273,12 +313,92 @@ def test_each_call_gets_its_own_env_so_per_actor_tokens_cannot_race(monkeypatch)
 
     _force_cli(monkeypatch)
     monkeypatch.setattr(og.subprocess, "run", fake_run)
+    (tmp_path / "read.gq").write_text(_READ_GQ)
     for token in ("actor-a-token", "actor-b-token"):
         _built_client(
-            monkeypatch, "http://host:8080", graph_id="council", token=token
+            monkeypatch,
+            "http://host:8080",
+            queries_dir=tmp_path,
+            graph_id="council",
+            token=token,
         ).read("read.gq", "q", {})
 
     assert seen == ["actor-a-token", "actor-b-token"]
+
+
+# ── read path: declared-vs-supplied params ──────────────────────────
+
+
+_PARAMETERIZED_READ_GQ = """
+query by_slug($slug: String, $tags: [String]?) {
+    match (m: Memory) where m.slug = $slug return m.slug
+}
+"""
+
+
+def test_read_raises_on_a_missing_declared_parameter(monkeypatch, tmp_path):
+    """Mirrors the write side's check (test_compose_batch_names_a_missing_
+    parameter in test_batching.py): a read that omits a declared parameter
+    must fail here, naming it, rather than reach the CLI/server with an
+    unbound query variable — which on a pre-#569 omnigraph silently widened
+    the read to every row instead of erroring."""
+    _force_cli(monkeypatch)
+    (tmp_path / "read.gq").write_text(_PARAMETERIZED_READ_GQ)
+    client = _built_client(
+        monkeypatch, "http://host:8080", queries_dir=tmp_path, graph_id="council"
+    )
+    calls = []
+    monkeypatch.setattr(og.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+
+    with pytest.raises(KeyError, match="slug"):
+        client.read("read.gq", "by_slug", {"tags": None})
+
+    assert calls == []  # never reached the subprocess
+
+
+def test_read_accepts_an_explicit_none_for_an_optional_parameter(monkeypatch, tmp_path):
+    """`tags` is optional and supplied explicitly as `None` — the same
+    convention `change` already uses — so it must count as supplied, not
+    missing."""
+    _force_cli(monkeypatch)
+    (tmp_path / "read.gq").write_text(_PARAMETERIZED_READ_GQ)
+    client = _built_client(
+        monkeypatch, "http://host:8080", queries_dir=tmp_path, graph_id="council"
+    )
+    monkeypatch.setattr(
+        og.subprocess,
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr=""),
+    )
+
+    assert client.read("read.gq", "by_slug", {"slug": "x", "tags": None}) == []
+
+
+def test_read_declared_params_cache_picks_up_an_edited_query(monkeypatch, tmp_path):
+    """Same mtime-keyed cache shape as `_cached_query_text` — a query file
+    edited to require a new parameter must not be served from a stale
+    declaration set."""
+    _force_cli(monkeypatch)
+    query_path = tmp_path / "read.gq"
+    query_path.write_text("query q($a: String) { match (m: Memory) return m.slug }")
+    client = _built_client(
+        monkeypatch, "http://host:8080", queries_dir=tmp_path, graph_id="council"
+    )
+    monkeypatch.setattr(
+        og.subprocess,
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr=""),
+    )
+    assert client.read("read.gq", "q", {"a": "x"}) == []
+
+    later = query_path.stat().st_mtime + 2
+    query_path.write_text(
+        "query q($a: String, $b: String) { match (m: Memory) return m.slug }"
+    )
+    os.utime(query_path, (later, later))
+
+    with pytest.raises(KeyError, match="b"):
+        client.read("read.gq", "q", {"a": "x"})
 
 
 @pytest.mark.skipif(
