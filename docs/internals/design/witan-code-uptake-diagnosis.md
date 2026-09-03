@@ -138,8 +138,8 @@ One session (2026-08-25) genuinely tried symbol navigation. Of its 8
 `code_*` calls: three returned an omnigraph schema error (a store written
 by 0.8.x, read by 0.10.0), one returned `{"result": []}` with no
 explanation, one blew the tool-output token limit at 70,592 characters,
-and three succeeded — one of them only after the agent guessed to add
-`branch="main"` to a call that had returned nothing without it. That
+and three succeeded — the last only after the agent added `branch="main"`
+to a lookup that had failed without it earlier in the session. That
 session was working on the stale-store bug, so it is a biased sample, and
 PR #291 has since made an unreadable store say so. It still shows the
 shape of the reinforcement: the substitute never errors, never returns a
@@ -180,10 +180,14 @@ Three things do follow from the finding, in rough order of expected value:
    changes the competition rather than the advertisement: at 1 call vs.
    1 call the block's claim becomes actionable, and it is a falsifiable
    test of the substitution hypothesis rather than another rewrite.
-3. **Fix what punishes the agent that tries.** A `code_find_definition`
-   that returns `[]` on a feature branch but a hit with `branch="main"`
-   teaches exactly one lesson, and an `code_interface_search` that
-   returns 70KB is unusable in the tool loop regardless of the block.
+3. **Fix what punishes the agent that tries.** A `code_interface_search`
+   that returns 70,592 characters is unusable in the tool loop regardless
+   of what the block says. And a `code_find_definition` that answers a
+   bare `{"result": []}` is indistinguishable from "no such symbol"; the
+   one observed instance was on a feature branch minutes after a store
+   rebuild, which is worth confirming as a branch-view gap rather than a
+   coincidence — but either way an empty result needs to say which it is.
+   Worth checking against `_resolve_branch`'s fall-through to main.
 
 ## Reproducing
 
