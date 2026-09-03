@@ -37,11 +37,15 @@ part of 0.30.0 and is relabelled accordingly.
   `target add --force` was the documented way to fix a target, and it
   rebuilds the whole block from the flags it is given — a re-register
   passing only the flags the onboarding doc lists kept 5 keys and
-  silently *deleted* the other 6 a target block can carry (`author`,
-  `model`, `token`, `code_dir`, `code_token`, `index_role`, `actor`),
-  none of which `add` has a parameter for. `set` rewrites named keys
-  where they sit and carries everything else — including comments —
-  through untouched; new keys append in a fixed field order. Cross-field
+  silently *deleted* the other 7 a target block can carry (`author`,
+  `model`, `token`, `code_dir`, `code_token`, `index_role`, `actor`).
+  Six of those seven are not `add` parameters at all, so no amount of
+  re-typing recovers them; `author` *is* an `add` flag but was dropped
+  anyway because the documented re-register doesn't repeat it.
+
+  `set` rewrites named keys where they sit and carries everything else —
+  including comments — through untouched; new keys append in a fixed
+  field order. Cross-field
   rules (e.g. `--code-transport mcp` needs `remote_url`) are checked
   against the block as it will end up, and the rewritten file is parsed
   before being written. `code_store_health` and `witan code doctor`'s
@@ -127,27 +131,6 @@ part of 0.30.0 and is relabelled accordingly.
   both places.
 
 ### Changed
-
-- **`import witan.server` needing the omnigraph binary is now a decision on
-  record, not an open question.** On a fresh install the module raises
-  `RuntimeError: omnigraph binary not found`, because `_ensure_graph` creates
-  the local store at module scope. `bin/check_core_floor.py` printed that on
-  every run under `UNRELATED`, alongside genuinely unexplained failures, which
-  is how a report becomes a line people learn to ignore.
-
-  Deferring the bootstrap to first use was weighed and declined. Importing this
-  module IS a write and the CLI depends on it: `_srv` diagnoses routing before
-  importing and hands the guard the import unevaluated, so a refused write never
-  reaches the store — the #261 fix, for a `task close` that reported success
-  against a graph nobody was reading for nine days. That invariant is checkable
-  in one line (`"witan.server" not in sys.modules`); "touched on first use"
-  would not be.
-
-  `_ensure_graph`'s docstring now carries the reasoning, and the floor check
-  reports this case as EXPECTED with its reason rather than as an anomaly.
-  Entries are matched on module, exception type and a message substring
-  together, so an unrelated `RuntimeError` from the same module cannot inherit
-  an explanation that does not apply to it. No behaviour change.
 
 - **Docs stopped describing the removed ToolHive tier as current.** witan is
   served as a plain Deployment and Service behind APISIX in all three
@@ -252,6 +235,27 @@ part of 0.30.0 and is relabelled accordingly.
   inside the deployed container"; those run in the migration Job and break-glass
   pod, neither of which sets `WITAN_OIDC_ISSUER`, so they take the local branch
   and are unaffected. See the 2026-08-27 addendum to ADR-0004.
+
+- **`import witan.server` needing the omnigraph binary is now a decision on
+  record, not an open question.** On a fresh install the module raises
+  `RuntimeError: omnigraph binary not found`, because `_ensure_graph` creates
+  the local store at module scope. `bin/check_core_floor.py` printed that on
+  every run under `UNRELATED`, alongside genuinely unexplained failures, which
+  is how a report becomes a line people learn to ignore.
+
+  Deferring the bootstrap to first use was weighed and declined. Importing this
+  module IS a write and the CLI depends on it: `_srv` diagnoses routing before
+  importing and hands the guard the import unevaluated, so a refused write never
+  reaches the store — the #261 fix, for a `task close` that reported success
+  against a graph nobody was reading for nine days. That invariant is checkable
+  in one line (`"witan.server" not in sys.modules`); "touched on first use"
+  would not be.
+
+  `_ensure_graph`'s docstring now carries the reasoning, and the floor check
+  reports this case as EXPECTED with its reason rather than as an anomaly.
+  Entries are matched on module, exception type and a message substring
+  together, so an unrelated `RuntimeError` from the same module cannot inherit
+  an explanation that does not apply to it. No behaviour change.
 
 ### Fixed
 
