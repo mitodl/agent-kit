@@ -59,13 +59,24 @@ being held forever.
 ## Claim, work, close
 
 ```bash
-witan run tk-retry-logic-drops-the-last-attempt-s-e-4f9c21
+witan task run
 ```
 
-This claims the task under your author name and launches your configured agent
-with a prompt seeded from the task's title, description, and symbol refs. To see
-that prompt without doing anything: `--dry-run`. To launch without claiming:
-`--claim=false`.
+Shows an interactive picker over the same ready list `witan tasks --ready`
+prints. Pick one and it claims the task under your author name, then launches
+your configured agent with a prompt seeded from the task's title, description,
+and symbol refs. Pick several and you're offered a choice between a
+consolidated single-session prompt or a separate agent invocation per task.
+
+Already know the slug? Skip the picker:
+
+```bash
+witan task run tk-retry-logic-drops-the-last-attempt-s-e-4f9c21
+```
+
+(`witan run tk-…` is an older, single-slug-only shorthand for the same thing.)
+To see the prompt without claiming or launching: `--dry-run`. To launch
+without claiming: `--claim=false`.
 
 From inside an agent session, use the tools directly — `task_claim`, then
 `task_close` with a resolution:
@@ -120,7 +131,13 @@ is why the loop works without an explicit hand-off document.
 witan projects                    # active projects for this repo
 witan project status wp-...       # phase, sessions, last summary
 witan project tasks wp-...        # the tasks rolling up to it
+witan project run                 # picker over active projects; launches an agent session on one
 ```
+
+`witan project run` is the project-scoped counterpart to `witan task run` — for
+a discovery or spec session that isn't about a single `tk-` task yet. Same
+picker-or-slug shape, same consolidated-vs-sequential choice when you select
+more than one.
 
 `witan project complete` closes a project out and assembles a `WorkflowTrace` —
 a corpus record built from every session that contributed, kept for later

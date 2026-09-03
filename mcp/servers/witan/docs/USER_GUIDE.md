@@ -123,18 +123,24 @@ A typical session:
 2. **Claim one and start working.**
 
    ```bash
-   witan run tk-fix-flaky-retry-abc123
+   witan task run
    ```
 
-   Sets the task `in_progress` under your author name (an advisory lease,
-   not a hard lock — see `task_claim` in the
-   [CLI Reference](CLI_REFERENCE.md#run)), then launches your configured
+   Reprints the same ready-task picker from step 1 — pick one instead of
+   copying its slug. It sets the task `in_progress` under your author name
+   (an advisory lease, not a hard lock — see `task_claim` in the
+   [CLI Reference](CLI_REFERENCE.md#task-run--claim-and-launch)), then launches your configured
    agent CLI with a prompt seeded from the task's title/description/symbol
-   refs. Pass `--dry-run` to print that prompt without claiming or
-   launching, or `--claim=false` to launch without claiming.
+   refs. Select several and you're offered a choice between one consolidated
+   session covering all of them or a separate agent invocation per task.
 
-   If you're inside an already-running agent session (rather than the
-   `witan run` launcher), use the MCP tools directly: `task_claim`, and
+   Already have a slug? `witan task run tk-fix-flaky-retry-abc123` skips the
+   picker (`witan run tk-…` is an older shorthand for exactly this — single
+   slug only, no picker). Either way: `--dry-run` prints the prompt without
+   claiming or launching, `--claim=false` launches without claiming.
+
+   If you're inside an already-running agent session (rather than one of the
+   `run` launchers), use the MCP tools directly: `task_claim`, and
    `task_close` with a `resolution` when you're done. Filing follow-up work
    discovered mid-task: `task_create(discovered_from=["tk-…"], …)`.
 
@@ -188,6 +194,18 @@ A typical session:
    its next phase; `workflow_project_complete` closes it out and assembles a
    `WorkflowTrace` corpus record from every session for later pattern
    mining.
+
+   To launch a session already framed around the project rather than a
+   single task — the common case for discovery/spec work, before there's a
+   `tk-` slug to hand `task run` — use the project-scoped equivalent:
+
+   ```bash
+   witan project run
+   ```
+
+   Same shape as `witan task run`: a picker over active projects when no
+   slug is given, `witan project run wp-…` to skip it, and a
+   consolidated-vs-sequential choice if you select more than one.
 
 ### Code-branch tracking
 
