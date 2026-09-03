@@ -13,6 +13,7 @@ import multiprocessing
 import os
 import stat
 import time
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -150,6 +151,90 @@ def test_login_access_denied_raises(auth):
         auth.login(
             on_prompt=lambda _d: None, client=_client(handler), sleep=lambda _s: None
         )
+
+
+def test_login_retries_with_a_fresh_code_after_expired_token(auth):
+    """A relay-approved login that lapses once still succeeds, transparently."""
+    access = _jwt({"sub": "u"})
+    device_codes_issued = []
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            code = f"dev-{len(device_codes_issued)}"
+            device_codes_issued.append(code)
+            return httpx2.Response(
+                200, json={"device_code": code, "user_code": code.upper()}
+            )
+        # token endpoint: the first device code always looks expired; the
+        # second one succeeds immediately.
+        body = dict(urllib.parse.parse_qsl(req.content.decode()))
+        if body.get("device_code") == device_codes_issued[0]:
+            return httpx2.Response(400, json={"error": "expired_token"})
+        return httpx2.Response(200, json={"access_token": access, "expires_in": 60})
+
+    prompts = []
+    claims = auth.login(
+        on_prompt=prompts.append, client=_client(handler), sleep=lambda _s: None
+    )
+    assert claims["sub"] == "u"
+    # Prompted twice — once per device code — and it took a second code to land.
+    assert [p["user_code"] for p in prompts] == ["DEV-0", "DEV-1"]
+
+
+def test_login_gives_up_after_repeated_expired_tokens(auth):
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            return httpx2.Response(200, json={"device_code": "d", "user_code": "C"})
+        return httpx2.Response(400, json={"error": "expired_token"})
+
+    prompts = []
+    with pytest.raises(RemoteAuthError, match="after 3 attempt"):
+        auth.login(
+            on_prompt=prompts.append, client=_client(handler), sleep=lambda _s: None
+        )
+    assert len(prompts) == 3
+
+
+def test_login_requests_a_fresh_code_when_the_local_deadline_elapses(auth):
+    """The other way a code lapses: the local `expires_in` deadline passes
+    with no definitive answer yet — not every relay failure comes back as an
+    explicit `expired_token` from the IdP before the client stops polling.
+    """
+    access = _jwt({"sub": "u"})
+    device_codes_issued = []
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        if req.url.path.endswith("openid-configuration"):
+            return httpx2.Response(200, json=_META)
+        if str(req.url) == _META["device_authorization_endpoint"]:
+            code = f"dev-{len(device_codes_issued)}"
+            device_codes_issued.append(code)
+            # The first code is already-lapsed locally; the second is fine.
+            expires_in = 0 if code == "dev-0" else 300
+            return httpx2.Response(
+                200,
+                json={
+                    "device_code": code,
+                    "user_code": code.upper(),
+                    "expires_in": expires_in,
+                },
+            )
+        # Must never be polled for dev-0 — its deadline was already past
+        # before the poll loop's first `time.time()` check.
+        body = dict(urllib.parse.parse_qsl(req.content.decode()))
+        assert body.get("device_code") != device_codes_issued[0]
+        return httpx2.Response(200, json={"access_token": access, "expires_in": 60})
+
+    prompts = []
+    claims = auth.login(
+        on_prompt=prompts.append, client=_client(handler), sleep=lambda _s: None
+    )
+    assert claims["sub"] == "u"
+    assert [p["user_code"] for p in prompts] == ["DEV-0", "DEV-1"]
 
 
 def test_non_json_metadata_raises_clean_error():
