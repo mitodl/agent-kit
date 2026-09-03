@@ -36,6 +36,15 @@ _log = logging.getLogger(__name__)
 
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
+# A device code that lapses before a human approves it (RFC 8628 §3.5's
+# `expired_token`) is not a reason to fail the whole login — it is cheap to
+# ask the IdP for a fresh one and keep waiting. This is what makes approval
+# through a relay or any other slow indirection survivable: the observed
+# failure was three consecutive `expired_token` logins before a direct,
+# unrelayed approval finally beat the window (see `login`).
+_DEVICE_CODE_EXPIRED_ERROR = "expired_token"
+_MAX_DEVICE_CODE_ATTEMPTS = 3
+
 # Scopes asked for at login, and what to settle for when the realm says no.
 # `offline_access` is what decouples the refresh token's life from the
 # interactive SSO session — see `_request_device_code` for why that is needed,
@@ -573,41 +582,59 @@ class DeviceAuth:
     ) -> dict:
         """Run the device-authorization grant end to end and cache the token.
 
-        ``on_prompt`` is called once with the device-code response so the CLI
-        can tell the user where to go; ``sleep`` is injectable so tests don't
-        wait. Returns the decoded JWT claims of the freshly-minted access token.
+        ``on_prompt`` is called with each device-code response so the CLI can
+        tell the user where to go — possibly more than once. A code that
+        lapses before it is approved (the IdP's ``expired_token``, or the
+        local deadline passing with no answer yet — treated the same, since
+        both mean nobody approved it in time) is retried with a FRESH code up
+        to ``_MAX_DEVICE_CODE_ATTEMPTS`` times rather than failing the login
+        outright. ``sleep`` is injectable so tests don't wait. Returns the
+        decoded JWT claims of the freshly-minted access token.
         """
         owns = client is None
         client = client or httpx2.Client(timeout=15)
         try:
             meta = discover_endpoints(self._cfg.oidc_issuer, client=client)
-            resp = self._request_device_code(meta, client)
-            device = _json(resp, "device authorization endpoint")
-            on_prompt(device)
+            for attempt in range(1, _MAX_DEVICE_CODE_ATTEMPTS + 1):
+                resp = self._request_device_code(meta, client)
+                device = _json(resp, "device authorization endpoint")
+                on_prompt(device)
 
-            interval = float(device.get("interval", 5))
-            deadline = time.time() + float(device.get("expires_in", 300))
-            poll = {
-                **self._auth_params(),
-                "grant_type": DEVICE_GRANT,
-                "device_code": device["device_code"],
-            }
-            while time.time() < deadline:
-                sleep(interval)
-                tok = client.post(meta["token_endpoint"], data=poll)
-                if tok.status_code == 200:
-                    entry = self._store_token(_json(tok, "token endpoint"))
-                    return decode_claims(entry["access_token"])
-                err = _json_safe(tok).get("error", "")
-                if err == "authorization_pending":
-                    continue
-                if err == "slow_down":
-                    interval += 5
-                    continue
-                raise RemoteAuthError(
-                    f"Device authorization failed: {err or tok.text!r}"
-                )
-            raise RemoteAuthError("Device code expired before it was approved.")
+                interval = float(device.get("interval", 5))
+                deadline = time.time() + float(device.get("expires_in", 300))
+                poll = {
+                    **self._auth_params(),
+                    "grant_type": DEVICE_GRANT,
+                    "device_code": device["device_code"],
+                }
+                while time.time() < deadline:
+                    sleep(interval)
+                    tok = client.post(meta["token_endpoint"], data=poll)
+                    if tok.status_code == 200:
+                        entry = self._store_token(_json(tok, "token endpoint"))
+                        return decode_claims(entry["access_token"])
+                    err = _json_safe(tok).get("error", "")
+                    if err == "authorization_pending":
+                        continue
+                    if err == "slow_down":
+                        interval += 5
+                        continue
+                    if err != _DEVICE_CODE_EXPIRED_ERROR:
+                        raise RemoteAuthError(
+                            f"Device authorization failed: {err or tok.text!r}"
+                        )
+                    break  # expired_token — fall through to a fresh code
+                if attempt < _MAX_DEVICE_CODE_ATTEMPTS:
+                    _log.info(
+                        "device code expired before approval (attempt %d/%d); "
+                        "requesting a new one",
+                        attempt,
+                        _MAX_DEVICE_CODE_ATTEMPTS,
+                    )
+            raise RemoteAuthError(
+                "Device code expired before it was approved, after "
+                f"{_MAX_DEVICE_CODE_ATTEMPTS} attempt(s)."
+            )
         except httpx2.HTTPError as exc:
             raise RemoteAuthError(
                 f"Device authorization request failed: {exc}"
