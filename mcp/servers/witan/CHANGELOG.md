@@ -20,16 +20,20 @@ a MINOR bump may include breaking changes).
 
   - `memory_link` takes `role` (free text: *why* these two are linked, which
     the edge kind alone does not say) and `confidence`, stamps `author` and
-    `created_at`, and returns the stamped `edge`.
+    `created_at`, and returns the stamped `edge` — the three machine-set
+    properties only. `role` is scanned on the write path and may be redacted
+    before it lands, so reporting the caller's own value back would state a
+    value that is not in the graph; read it back with `memory_neighbors`.
   - `memory_neighbors` and `memory_get(include_topics=True)` return an `edge`
     dict per neighbour/topic.
   - `Tagged` edges auto-derived from a memory's free-string `tags` are stamped
     `inferred`; a `memory_link(kind="tagged")` naming the topic is `asserted`.
   - `recall` expansion is confidence-weighted: an inferred hop costs an extra
-    `WITAN_RANK_W_INFERRED_EDGE` (default 0.35) of distance, and a neighbour
-    reachable both ways is scored at its best route. It re-ranks only — an
-    inferred neighbour is still expanded from and still returned. Set the knob
-    to `0` for the previous uniform-hop behaviour.
+    `WITAN_RANK_W_INFERRED_EDGE` (default 0.35) of distance, accumulated along
+    the path so an inferred edge keeps its penalty when the route is extended;
+    a neighbour reachable both ways is scored at its best route. It re-ranks
+    only — an inferred neighbour is still expanded from and still returned. Set
+    the knob to `0` for the previous uniform-hop behaviour.
 
   **Requires a schema apply.** The properties are an additive migration
   (`omnigraph schema plan` reports `supported: yes`) — no format change, no
@@ -47,6 +51,14 @@ a MINOR bump may include breaking changes).
 
 ### Fixed
 
+- **`memory_update` no longer accumulates parallel `Tagged` edges.** An insert
+  is not an upsert, so re-linking a tag the memory already carried wrote a
+  second edge to the same Topic — three updates left four. Harmless while every
+  traversal had set semantics, and quadratic the moment a traversal binds the
+  edge. Now skips already-linked topics, the same check `witan migrate topics`
+  has always done. Pre-existing duplicates are still there; `topic_siblings`
+  binds only the SIBLING's edge so they cost linearly rather than as a cross
+  product (measured: 32 rows → 8, against 2 for one link apiece).
 - **`bin/gen_docs.py` no longer glues a section preamble onto the next edge.**
   A comment block that resumes after a blank line is a new block, so prose
   describing a whole section stops landing in one edge's Meaning cell. The

@@ -407,23 +407,31 @@ query addressed_memories($task_slug: String) {
 // (memory → topic → memory) instead of a per-topic fan-out. Includes $slug; the
 // server discards self.
 //
-// BOTH Tagged edges are bound, and both confidences come back, because a topic
-// sibling is only as trustworthy as the weaker of the two hops that reach it: a
-// tag-derived (`inferred`) edge on either side means witan guessed at that end.
-// The server takes the best path per sibling — one asserted route is enough —
-// so this returning one row per (topic, edge, edge) combination is what makes
-// that decidable rather than an extra cost.
+// ★ ONLY THE SIBLING'S EDGE IS BOUND, AND THE SEED'S DELIBERATELY IS NOT.
+// Binding both looks more thorough — a shared-topic hop is arguably only as
+// good as its weaker end — and it makes this query QUADRATIC in parallel
+// edges, because a bound traversal yields one row per edge and two of them
+// yield the cross product. Measured on a store with four parallel Tagged
+// edges per side (what four `memory_update` calls used to leave behind):
+// 32 rows both-bound, 8 rows sibling-only, 2 rows fully unbound. recall runs
+// this per frontier memory, so that is not a cost worth a nuance.
+//
+// The seed side stays unbound, which keeps its set semantics and collapses its
+// parallel edges to one binding. What survives is the more useful half anyway:
+// `edge_confidence` says how firmly the SIBLING is attached to the shared
+// topic, which is what decides whether to trust the sibling. The seed's own
+// attachment says something about the seed, which recall already has better
+// evidence for.
 query topic_siblings($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $tp: Topic
-        $m $wm:tagged $tp
+        $m tagged $tp
         $other: Memory
         $other $wo:tagged $tp
     }
     return {
         $other.slug,
-        $wm.confidence as seed_edge_confidence,
         $wo.confidence as edge_confidence
     }
 }

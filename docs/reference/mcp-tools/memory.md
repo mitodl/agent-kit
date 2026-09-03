@@ -24,10 +24,12 @@ Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
 edge — today that means a Tagged edge promoted from a free-string tag,
 rather than a link someone named — costs ``w_inferred_edge`` extra
 distance, so a shared tag no longer pulls as hard as an asserted
-``related_to``. A neighbour reachable both ways is scored at its best
-route. Edges written before edge properties existed are unstamped and score
-as asserted, so this reweights the graph as it is rewritten rather than all
-at once; ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
+``related_to``. The surcharge accumulates along the path, so extending an
+inferred edge with an asserted one does not wash the penalty out. A
+neighbour reachable both ways is scored at its best route. Edges written
+before edge properties existed are unstamped and score as asserted, so this
+reweights the graph as it is rewritten rather than all at once;
+``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
 
 With no edges in the graph the result equals ``memory_search`` — expansion is
 additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
@@ -202,7 +204,7 @@ link to itself. Returns ``linked: False`` in those cases rather than raising.
 | `from_slug` | str | **required** | The memory the edge points **from**. Direction is load-bearing for the<br>asymmetric kinds — for ``supersedes`` this is the *newer* memory. |
 | `to_slug` | str | **required** | The memory the edge points **to** — for ``supersedes``, the older memory<br>being replaced. For ``kind="tagged"`` this is a Topic instead: either an<br>existing ``tp-`` slug or a ``name:kind`` spec, which auto-creates it. |
 | `kind` | `supersedes` \| `refines` \| `applies_to` \| `contradicts` \| `related_to` \| `tagged` | **required** | Which edge to write: ``supersedes`` \| ``refines`` \| ``applies_to`` \|<br>``contradicts`` \| ``related_to`` \| ``tagged``. See the descriptions<br>above — ``supersedes`` is the one that changes what default reads<br>return. |
-| `role` | str? | `null` | Free text saying WHY these two are linked, stored on the edge and<br>returned by ``memory_neighbors``. The edge kind says what KIND of<br>relation it is; this says what the relation is ABOUT ("both configure<br>the Vault sidecar", "same incident"). Worth a sentence on a<br>``related_to``, where the kind alone tells a later reader nothing. |
+| `role` | str? | `null` | Free text saying WHY these two are linked, stored on the edge and<br>returned by ``memory_neighbors``. The edge kind says what KIND of<br>relation it is; this says what the relation is ABOUT ("both configure<br>the Vault sidecar", "same incident"). Worth a sentence on a<br>``related_to``, where the kind alone tells a later reader nothing.<br>Scanned on the way in like any other free text, so it can be redacted<br>before it lands. The returned ``edge`` therefore reports the three<br>machine-set properties and NOT ``role`` — read it back with<br>``memory_neighbors`` to see what was actually stored. |
 | `confidence` | `asserted` \| `inferred` | `'asserted'` | ``asserted`` (default) when you are naming both endpoints because you<br>know they belong together; ``inferred`` when the link is a guess worth<br>recording but not worth ranking on. ``recall`` expands along asserted<br>edges in preference to inferred ones, so this is the knob that decides<br>whether a speculative link pulls its neighbour into other people's<br>results. |
 
 ## `memory_neighbors`

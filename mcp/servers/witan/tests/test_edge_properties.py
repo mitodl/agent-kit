@@ -41,7 +41,8 @@ def test_link_stamps_provenance_on_the_edge(server):
     )
     assert res["linked"] is True
     assert res["edge"]["confidence"] == "asserted"
-    assert res["edge"]["role"] == "both configure the sidecar"
+    # `role` is deliberately absent from the response — see
+    # test_link_does_not_report_the_role_it_was_given. Read it back instead.
 
     edge = _only(server.memory_neighbors(a["slug"]), "related_to")["edge"]
     assert edge["confidence"] == "asserted"
@@ -155,6 +156,129 @@ def test_symmetric_union_still_dedupes_across_directions(server):
     assert _only(server.memory_neighbors(a["slug"]), "contradicts")["slug"] == b["slug"]
 
 
+@requires_omnigraph
+def test_newest_edge_wins_across_the_symmetric_union(server):
+    """Each direction's query is sorted independently, so read.gq's `order`
+    alone cannot decide newest-wins across the union: taking the first row per
+    slug surfaces the older OUT edge over a newer IN edge."""
+    a = server.memory_store(kind="pattern", title="a", content="alpha content")
+    b = server.memory_store(kind="pattern", title="b", content="beta content")
+    server.memory_link(a["slug"], b["slug"], "related_to", role="out-older")
+    server.memory_link(b["slug"], a["slug"], "related_to", role="in-newer")
+
+    row = _only(server.memory_neighbors(a["slug"]), "related_to")
+    assert row["edge"]["role"] == "in-newer"
+
+
+@requires_omnigraph
+def test_an_unstamped_edge_never_beats_a_stamped_one(server):
+    """A null `created_at` means "written before provenance existed", not
+    "written at the epoch" — so it must lose to any stamped edge, whichever
+    direction it arrives from."""
+    a = server.memory_store(kind="pattern", title="a", content="alpha content")
+    b = server.memory_store(kind="pattern", title="b", content="beta content")
+    server.client.change(
+        "mutations.gq",
+        "link_related_to",
+        {
+            "from": b["slug"],
+            "to": a["slug"],
+            "confidence": None,
+            "role": None,
+            "author": None,
+            "created_at": None,
+        },
+    )
+    server.memory_link(a["slug"], b["slug"], "related_to", role="stamped")
+
+    edge = _only(server.memory_neighbors(a["slug"]), "related_to")["edge"]
+    assert edge["role"] == "stamped"
+
+
+# ── The response must not outrun what was stored ──────────────────
+
+
+@requires_omnigraph
+def test_link_does_not_report_the_role_it_was_given(server):
+    """The write guard can redact `role` on the way in and returns a rewritten
+    params dict rather than mutating ours, so echoing the caller's `role` back
+    would state a value that is not in the graph — and re-emit the very text
+    that was redacted. The machine-set properties are never scanned."""
+    a = server.memory_store(kind="pattern", title="a", content="alpha content")
+    b = server.memory_store(kind="pattern", title="b", content="beta content")
+
+    res = server.memory_link(a["slug"], b["slug"], "related_to", role="why these two")
+    assert set(res["edge"]) == {"confidence", "author", "created_at"}
+    # …and the stored role is still readable, from the graph.
+    edge = _only(server.memory_neighbors(a["slug"]), "related_to")["edge"]
+    assert edge["role"] == "why these two"
+
+
+# ── Parallel Tagged edges ─────────────────────────────────────────
+
+
+@requires_omnigraph
+def test_updating_a_memory_does_not_relink_tags_it_already_has(server):
+    """An insert is not an upsert, so re-linking an existing tag wrote a second
+    parallel Tagged edge — three updates left four edges to one Topic.
+    Invisible under set semantics; quadratic once `topic_siblings` binds."""
+    m = server.memory_store(
+        kind="pattern", title="a", content="alpha content", tags=["shared"]
+    )
+    for i in range(3):
+        server.memory_update(m["slug"], content=f"alpha {i}", tags=["shared"])
+
+    topic = server.topic_get("shared:topic")["topic"]["slug"]
+    edges = server.client.read("read.gq", "topics_for_memory", {"slug": m["slug"]})
+    assert [e["slug"] for e in edges] == [topic]
+
+
+@requires_omnigraph
+def test_updating_a_memory_still_links_a_newly_added_tag(server):
+    """Skipping already-linked topics must not skip the new ones."""
+    m = server.memory_store(
+        kind="pattern", title="a", content="alpha content", tags=["shared"]
+    )
+    server.memory_update(m["slug"], tags=["shared", "added"])
+
+    node = server.memory_get(m["slug"], include_topics=True)
+    assert {t["name"] for t in node["topics"]} == {"shared", "added"}
+
+
+@requires_omnigraph
+def test_topic_siblings_does_not_multiply_by_parallel_edges(server):
+    """Only the sibling's Tagged edge is bound. Binding the seed's as well made
+    this the cross product of both sides' parallel edges — 32 rows for two
+    memories carrying four edges each, against 2 for one link apiece."""
+    a = server.memory_store(
+        kind="pattern", title="a", content="alpha content", tags=["shared"]
+    )
+    b = server.memory_store(
+        kind="pattern", title="b", content="beta content", tags=["shared"]
+    )
+    topic = server.topic_get("shared:topic")["topic"]["slug"]
+    # Force the parallel edges an older witan accumulated, on BOTH sides.
+    for slug in (a["slug"], b["slug"]):
+        for _ in range(3):
+            server.client.change(
+                "mutations.gq",
+                "link_tagged",
+                {
+                    "from": slug,
+                    "to": topic,
+                    "confidence": "inferred",
+                    "role": "tag",
+                    "author": "t",
+                    "created_at": "2026-09-01T00:00:00Z",
+                },
+            )
+
+    rows = server.client.read("read.gq", "topic_siblings", {"slug": a["slug"]})
+    # 4 edges on the sibling side; the seed side collapses by set semantics.
+    assert len(rows) == 8
+    assert server._expand_neighbors(a["slug"]) == {b["slug"]: False}
+
+
 # ── Confidence-weighted recall ────────────────────────────────────
 
 
@@ -214,6 +338,27 @@ def test_zero_weight_restores_uniform_hops(server, monkeypatch):
         server._module, "rank_cfg", RankConfig(w_inferred_edge=0.0), raising=True
     )
     assert server._expand_neighbors(seed["slug"]) == {inferred["slug"]: False}
+
+
+@requires_omnigraph
+def test_the_surcharge_accumulates_along_the_path(server):
+    """Cost is the parent's cost plus a hop plus this edge's surcharge. Charging
+    from the hop NUMBER instead let an inferred first edge launder itself by
+    being extended: its neighbour-of-a-neighbour landed at exactly 2.0, the
+    same as a route that was asserted the whole way."""
+    seed = server.memory_store(kind="pattern", title="seed", content="zylph anchor")
+    guessed = server.memory_store(kind="pattern", title="mid", content="unrelated one")
+    beyond = server.memory_store(kind="pattern", title="far", content="unrelated two")
+    server.memory_link(
+        seed["slug"], guessed["slug"], "related_to", confidence="inferred"
+    )
+    server.memory_link(guessed["slug"], beyond["slug"], "related_to")
+
+    cost = {seed["slug"]: 0.0}
+    server._expand_from_seeds(cost, 2)
+    assert cost[guessed["slug"]] == pytest.approx(1.35)
+    # Asserted second hop, but the first was a guess — the penalty survives it.
+    assert cost[beyond["slug"]] == pytest.approx(2.35)
 
 
 @requires_omnigraph

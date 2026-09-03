@@ -619,6 +619,25 @@ def _edge_props(
     }
 
 
+def _reported_edge(props: dict) -> dict:
+    """What ``memory_link`` may honestly say it wrote — everything but ``role``.
+
+    ★ THE OMISSION IS THE POINT. ``role`` is the one caller-supplied string
+    here, so it is the one the write guard can rewrite: with the default
+    ``pii_action="redact"`` the guard returns a REWRITTEN params dict and the
+    store gets the redacted text, while this dict still holds the original.
+    Reporting it back would state, as fact, a value that is not in the graph —
+    and would echo the very content that was redacted for containing PII.
+
+    Not solved by reading the edge back either: edges have no key, so there is
+    no "fetch exactly this edge" to read. The other three properties are
+    machine-set and never scanned, so they are safe to report. This mirrors
+    ``_store_memory``, which returns slug/kind/repo and never echoes the title
+    or content it was given.
+    """
+    return {k: v for k, v in props.items() if k != "role"}
+
+
 #: What a store says when it has never heard of the edge properties:
 #: "type error: T6: edge `RelatedTo` has no property `confidence`" on a read,
 #: T11 on a write.
@@ -3425,9 +3444,22 @@ def memory_update(
     # edges cannot be individually retracted, and deleting the Topic to drop one
     # would take out every other memory's edge to it. The string list stays
     # authoritative for what the memory claims to be tagged with.
+    #
+    # ★ SKIPPING ALREADY-LINKED TOPICS IS NOT AN OPTIMISATION. An insert is not
+    # an upsert, so re-linking a tag the memory already carries writes a second,
+    # PARALLEL Tagged edge — and a memory updated four times ended up with four
+    # edges to the same Topic. That was invisible while every traversal had set
+    # semantics, and stopped being invisible the moment `topic_siblings` bound
+    # the edge: measured 4 edges/side → 8 rows where one link gives 2. Same
+    # existing-edge check `migrate_topics` has always done, for the same reason.
+    # `_store_memory` needs no equivalent — its memory is new, so it has none.
+    linked = {
+        t["slug"] for t in client.read("read.gq", "topics_for_memory", {"slug": slug})
+    }
     steps: list[tuple[str, str, dict]] = []
     for tag in dict.fromkeys(t for t in (tags or []) if t.strip()):
-        steps += _tag_memory_steps(slug, tag, "topic")
+        if _topic_slug("topic", tag) not in linked:
+            steps += _tag_memory_steps(slug, tag, "topic")
     client.change_many(steps)
     return updated
 
@@ -3545,6 +3577,11 @@ async def memory_link(
         relation it is; this says what the relation is ABOUT ("both configure
         the Vault sidecar", "same incident"). Worth a sentence on a
         ``related_to``, where the kind alone tells a later reader nothing.
+
+        Scanned on the way in like any other free text, so it can be redacted
+        before it lands. The returned ``edge`` therefore reports the three
+        machine-set properties and NOT ``role`` — read it back with
+        ``memory_neighbors`` to see what was actually stored.
     confidence:
         ``asserted`` (default) when you are naming both endpoints because you
         know they belong together; ``inferred`` when the link is a guess worth
@@ -3599,7 +3636,7 @@ async def memory_link(
             "to": topic_slug,
             "kind": kind,
             "linked": True,
-            "edge": props,
+            "edge": _reported_edge(props),
         }
 
     endpoints = {from_slug, to_slug}
@@ -3649,7 +3686,7 @@ async def memory_link(
         "to": to_slug,
         "kind": kind,
         "linked": True,
-        "edge": props,
+        "edge": _reported_edge(props),
     }
 
 
@@ -3688,14 +3725,28 @@ def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> di
         for query_name in _MEMORY_NEIGHBOR_QUERIES[kind]:
             for row in client.read("read.gq", query_name, {"slug": slug}):
                 # ONE ROW PER EDGE now that the traversal is bound, so a pair
-                # linked twice arrives twice. `setdefault` keeps the FIRST,
-                # and read.gq orders `$w.created_at desc`, so the survivor is
-                # the newest link: re-linking a pair with a different role
-                # reads as an update instead of a second neighbour. Holding
-                # one-entry-per-neighbour is this tool's documented contract,
-                # so parallel edges must not change the count.
+                # linked twice arrives twice, and one entry per neighbour is
+                # this tool's documented contract — parallel edges must not
+                # change the count. The survivor is the NEWEST link, so
+                # re-linking a pair with a different role reads as an update
+                # rather than as a second neighbour.
+                #
+                # ★ COMPARED EXPLICITLY, NOT LEFT TO read.gq's `order`. Each
+                # query is sorted independently, and a symmetric kind unions
+                # two of them — so taking the first row per slug would let an
+                # older OUT-direction edge beat a newer IN-direction one,
+                # surfacing a stale role while claiming newest-wins. Verified:
+                # linking a↔b out-then-in surfaced the out edge's role.
+                #
+                # An unstamped edge sorts oldest (`""`), so any stamped edge
+                # beats it — which is right: a null timestamp is an edge from
+                # before provenance existed, not one written at the epoch.
                 edge = _edge_meta(row)  # pops the edge_* columns off `row`
-                merged.setdefault(row["slug"], {**row, "edge": edge})
+                previous = merged.get(row["slug"])
+                if previous is None or (edge["created_at"] or "") > (
+                    previous["edge"]["created_at"] or ""
+                ):
+                    merged[row["slug"]] = {**row, "edge": edge}
         neighbors[kind] = list(merged.values())
     return {"slug": slug, "neighbors": neighbors}
 
@@ -7207,16 +7258,17 @@ def memory_symbols(slug: str) -> dict:
 
 
 #: The expansion queries, and which edge-confidence columns each row carries.
-#: ``topic_siblings`` reports two — the seed's own Tagged edge and the
-#: sibling's — because a shared-topic hop is only as good as the weaker end.
-#: ``provenance_siblings`` traverses ``SessionProduced``, which carries no
-#: properties, so its rows report none and score as the default.
+#: ``topic_siblings`` reports the SIBLING's Tagged edge only — see read.gq for
+#: why binding the seed's as well is quadratic in parallel edges rather than
+#: merely thorough. ``provenance_siblings`` traverses ``SessionProduced``,
+#: which carries no properties, so its rows report none and score as the
+#: default.
 _EXPANSION_QUERIES: dict[str, tuple[str, ...]] = {
     "applies_to_targets": ("edge_confidence",),
     "applies_to_sources": ("edge_confidence",),
     "related_out": ("edge_confidence",),
     "related_in": ("edge_confidence",),
-    "topic_siblings": ("seed_edge_confidence", "edge_confidence"),
+    "topic_siblings": ("edge_confidence",),
     "provenance_siblings": (),
 }
 
@@ -7247,6 +7299,53 @@ def _expand_neighbors(slug: str) -> dict[str, bool]:
     return out
 
 
+def _expand_from_seeds(candidates: dict[str, float], hops: int) -> None:
+    """Walk ``hops`` out from the seeds in ``candidates``, recording distance.
+
+    Mutates ``candidates`` in place: seeds start at 0, and each neighbour ends
+    up holding the cheapest distance found to it.
+
+    The distance is FRACTIONAL, not a hop count — reaching a neighbour over an
+    ``inferred`` edge costs an extra ``w_inferred_edge``. That makes the
+    surcharge a RANKING penalty rather than a pruning one: an inferred
+    neighbour is still expanded from and still returned, just further down.
+    ``w_inferred_edge = 0`` reproduces the uniform-hop behaviour recall had
+    before edges carried confidence.
+
+    ★ COST ACCUMULATES ALONG THE PATH — the parent's cost, plus one hop, plus
+    THIS edge's surcharge. Charging from the hop number instead throws away
+    every earlier penalty: an inferred first edge followed by an asserted
+    second one put its neighbour at exactly 2.0, indistinguishable from a route
+    that was asserted the whole way, so a guess laundered itself by being
+    extended. It now lands at 2.35.
+
+    ``min`` rather than first-wins: within one hop, two frontier memories can
+    reach the same neighbour at different costs, so which arrived first is not
+    the same question as which route is cheapest. Only the first arrival joins
+    the frontier, so a later cost improvement re-ranks that neighbour without
+    re-expanding from it — an approximation, and a deliberate one while ``hops``
+    is capped at 2, where a cheaper route found late has at most one hop left to
+    propagate into.
+    """
+    frontier = set(candidates)
+    for _ in range(hops):
+        nxt: set[str] = set()
+        for slug in frontier:
+            parent_cost = candidates[slug]
+            for neighbor, asserted in _expand_neighbors(slug).items():
+                cost = (
+                    parent_cost + 1.0 + (0.0 if asserted else rank_cfg.w_inferred_edge)
+                )
+                if neighbor not in candidates:
+                    nxt.add(neighbor)
+                    candidates[neighbor] = cost
+                else:
+                    candidates[neighbor] = min(candidates[neighbor], cost)
+        frontier = nxt
+        if not frontier:
+            break
+
+
 @_tool
 def recall(
     query: str | None = None,
@@ -7274,10 +7373,12 @@ def recall(
     edge — today that means a Tagged edge promoted from a free-string tag,
     rather than a link someone named — costs ``w_inferred_edge`` extra
     distance, so a shared tag no longer pulls as hard as an asserted
-    ``related_to``. A neighbour reachable both ways is scored at its best
-    route. Edges written before edge properties existed are unstamped and score
-    as asserted, so this reweights the graph as it is rewritten rather than all
-    at once; ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
+    ``related_to``. The surcharge accumulates along the path, so extending an
+    inferred edge with an asserted one does not wash the penalty out. A
+    neighbour reachable both ways is scored at its best route. Edges written
+    before edge properties existed are unstamped and score as asserted, so this
+    reweights the graph as it is rewritten rather than all at once;
+    ``WITAN_RANK_W_INFERRED_EDGE=0`` turns it off.
 
     With no edges in the graph the result equals ``memory_search`` — expansion is
     additive, never lossy. Embeddings are deferred behind ``WITAN_EMBED_ENABLED``
@@ -7361,29 +7462,7 @@ def recall(
                 add_seed(m["slug"], "topic")
 
     # ── Expand ────────────────────────────────────────────────────
-    # BFS by hop, but the distance recorded is fractional: reaching a neighbour
-    # over an `inferred` edge costs an extra `w_inferred_edge`. So the surcharge
-    # is a RANKING penalty, not a pruning one — an inferred neighbour is still
-    # expanded from, and still returned, just further down. Set the knob to 0 to
-    # get the old uniform-hop behaviour back.
-    #
-    # `min` rather than the old first-wins: within one hop two frontier
-    # memories can now reach the same neighbour at different costs, so which
-    # arrived first is not the same question as which route is cheapest.
-    frontier = set(candidates)
-    for distance in range(1, hops + 1):
-        nxt: set[str] = set()
-        for slug in frontier:
-            for neighbor, asserted in _expand_neighbors(slug).items():
-                cost = distance + (0.0 if asserted else rank_cfg.w_inferred_edge)
-                if neighbor not in candidates:
-                    nxt.add(neighbor)
-                    candidates[neighbor] = cost
-                else:
-                    candidates[neighbor] = min(candidates[neighbor], cost)
-        frontier = nxt
-        if not frontier:
-            break
+    _expand_from_seeds(candidates, hops)
 
     # No seeds matched (and nothing to expand from) — skip the global edge scan.
     if not candidates:

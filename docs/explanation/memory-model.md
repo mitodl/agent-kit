@@ -128,9 +128,10 @@ have to remember to run them in order.
    about this task" a single call.
 2. **Expand** one hop — capped at two — across `applies_to` / `related_to`
    edges, topic siblings, and provenance siblings (memories produced by the same
-   session or project). Each hop costs its edge's confidence: an inferred route
-   is further away than an asserted one, and a neighbour reachable both ways is
-   scored at its best route.
+   session or project). Each hop costs its edge's confidence, accumulated along
+   the path: an inferred route is further away than an asserted one and stays
+   that way when extended, and a neighbour reachable both ways is scored at its
+   best route.
 3. **Prune** superseded memories.
 4. **Flag** contradiction pairs.
 5. **Re-rank** by a composite score, minus that distance penalty so seeds
