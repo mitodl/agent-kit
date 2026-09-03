@@ -394,7 +394,34 @@ _GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,64}$")
 # `$slug` don't collide.
 _QUERY_DECL_RE = re.compile(r"\bquery\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTILINE)
 _PARAM_REF_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
-_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
+
+def _strip_line_comments(source: str) -> str:
+    """Remove ``//`` line comments, without disturbing a ``//`` inside a string.
+
+    A plain regex substitution can't tell a comment from a URL in a quoted
+    value (`"https://example.com"`) and truncates the query body there instead
+    of just losing a comment. String-skipping mirrors :func:`_match_delimited`
+    exactly, so both stay in step if the `.gq` string-literal syntax ever
+    grows an escape this doesn't handle yet.
+    """
+    out: list[str] = []
+    i, n = 0, len(source)
+    while i < n:
+        if source[i] == '"':
+            j = i + 1
+            while j < n and source[j] != '"':
+                j += 2 if source[j] == "\\" else 1
+            j = min(j + 1, n)
+            out.append(source[i:j])
+            i = j
+        elif source.startswith("//", i):
+            nl = source.find("\n", i)
+            i = n if nl == -1 else nl
+        else:
+            out.append(source[i])
+            i += 1
+    return "".join(out)
 
 
 def _match_delimited(text: str, start: int, open_ch: str, close_ch: str) -> int:
@@ -430,7 +457,7 @@ def parse_query(source: str, name: str) -> tuple[str, str]:
     are stripped first: a `//` line inside a body would otherwise swallow the
     statements that follow it once everything is joined onto fewer lines.
     """
-    source = _LINE_COMMENT_RE.sub("", source)
+    source = _strip_line_comments(source)
     for match in _QUERY_DECL_RE.finditer(source):
         if match.group(1) != name:
             continue
