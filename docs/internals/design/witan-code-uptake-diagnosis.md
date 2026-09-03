@@ -3,7 +3,7 @@
 Task: `tk-diagnose-why-the-witan-code-inject-context-block-440e8d`
 (project `wp-witan-enhancements-41e474`). Measured 2026-09-03 over
 100 agent-kit sessions, 2026-08-01 → 2026-09-03 — the first window long
-enough to say anything, and entirely after PR #163.
+enough to bound the effect of PR #163, and entirely after it.
 
 ## The question
 
@@ -19,10 +19,13 @@ what actually stops it?
 
 ## Answers
 
-**The rewrite did not change session-level uptake.** Per-injection call
-volume roughly doubled, but that is two sessions using the tools more, not
-more sessions using them; the fraction of sessions that touch a `code_*`
-tool is flat at ~6%, and the attempt rate the rewrite targeted went *down*.
+**No detectable change in session-level uptake.** The fraction of sessions
+that touch a `code_*` tool is 5.9% before and 6.0% after (Fisher p = 1.0),
+and the attempt rate the rewrite targeted is 1.02% vs. 0.84% per injection
+(p = 0.79). Point estimates, not a demonstrated decrease. What the window
+*does* establish is a ceiling: the 95% interval on post-#163 adoption tops
+out at 12.5%, so whatever #163 bought, it was not the step change the
+rewrite was aimed at.
 
 **Deferral is not the binding constraint.** `code_*` and `task_*` arrive
 deferred in the same 97 of 100 sessions, at the same `ToolSearch` cost.
@@ -62,10 +65,28 @@ PR #291 (2026-08-28) added the unreadable-store branch.
 | sessions using a `code_*` tool | 3/51 (5.9%) | 0/7 | 6/100 (6.0%) |
 | `code_*` deferred | 51/51 | 7/7 | 97/100 |
 
-Calls per injection rose (5/586 → 17/951) but sessions-that-adopt did not
-(5.9% → 6.0%), and the whole rise is two sessions. Per-injection
-`ToolSearch` attempts fell (6/586 → 8/951). The line PR #163 added is
-issued about twice in a thousand injections.
+Every pre/post difference in that table is within noise, and the honest
+reading is a ceiling rather than a verdict:
+
+| comparison | pre | post | Fisher (2-sided) |
+| --- | --- | --- | --- |
+| sessions adopting a `code_*` tool | 3/51 (5.9%) | 6/100 (6.0%) | p = 1.00 |
+| `ToolSearch` for `code_` per injection | 6/586 (1.02%) | 8/951 (0.84%) | p = 0.79 |
+| `code_*` calls per injection | 5/586 (0.85%) | 17/951 (1.79%) | p = 0.18 |
+
+Calls per injection have the largest point estimate — roughly double — and
+still do not separate; the whole rise is two sessions using the tools more,
+which is why sessions-that-adopt is the metric to track and calls-per-
+injection is not. The 95% Wilson interval on post-#163 adoption is
+[2.8%, 12.5%]: a large improvement is excluded, a small one is not, and no
+decrease is supported. Either way the line PR #163 added is issued about
+twice in a thousand injections.
+
+The two findings this diagnosis actually turns on are not close calls.
+89/100 vs. 6/100 sessions loading `task_*` vs. `code_*` is p < 0.001; 674
+definition-shaped `rg` invocations against 3 `code_find_definition` calls
+needs no test at all. The pre/post comparison is the weak part of this
+document and the mechanism does not rest on it.
 
 ### Deferral costs nothing when there is no substitute
 
@@ -159,10 +180,12 @@ In-Flight Branch section outperforms because it names a specific thing
 rather than a capability. That comparison is confounded. 75 of 100
 sessions began with a prompt that already named a task slug or
 `task_claim`, and 53 of those claimed. Among the 25 sessions whose prompt
-named no task, 25 saw a Ready Tasks block and 5 acted on it — 20%, not
-59%. The task blocks look acted-on largely because the user's prompt
-independently names the same object. Specificity helps some; it is not
-the asymmetry it appeared to be.
+named no task, 25 saw a Ready Tasks block and 5 acted on it — 20%
+(95% CI [8.9%, 39.1%]), not 59%. That subgroup is small enough that the
+20% itself is loosely pinned; what it does establish is that the headline
+59% cannot be read as the block's own effect, because three quarters of
+those claims follow a prompt that already named the slug. Specificity
+helps some; it is not the asymmetry it appeared to be.
 
 ## What follows
 
