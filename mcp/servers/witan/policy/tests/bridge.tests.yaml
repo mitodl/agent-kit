@@ -123,3 +123,15 @@ cases:
     action: branch_delete
     target_branch: act-alice/mitodl-ol-django/feature-x
     expect: deny
+
+  # ── Synthetic monitoring (council-health CronJob) ──────────────────────────
+  # Same pin as code-graph.tests.yaml: witan-probe holds nothing here at all.
+  - id: probe-cannot-read-bridge
+    actor: act-svc-witan-probe
+    action: read
+    branch: main
+    expect: deny
+  - id: probe-cannot-invoke-bridge
+    actor: act-svc-witan-probe
+    action: invoke_query
+    expect: deny

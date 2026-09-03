@@ -79,3 +79,29 @@ cases:
     action: branch_delete
     target_branch: main
     expect: deny
+
+  # ── Synthetic monitoring (council-health CronJob) ──────────────────────────
+  - id: probe-reads-memory
+    actor: act-svc-witan-probe
+    action: read
+    branch: main
+    expect: allow
+  - id: probe-invokes-memory
+    actor: act-svc-witan-probe
+    action: invoke_query
+    expect: allow
+  - id: probe-cannot-write-memory
+    actor: act-svc-witan-probe
+    action: change
+    branch: main
+    expect: deny
+  - id: probe-cannot-export-memory
+    actor: act-svc-witan-probe
+    action: export
+    branch: main
+    expect: deny
+  - id: probe-cannot-schema-apply-memory
+    actor: act-svc-witan-probe
+    action: schema_apply
+    target_branch: main
+    expect: deny

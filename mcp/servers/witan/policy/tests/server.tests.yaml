@@ -19,3 +19,11 @@ cases:
     actor: act-svc-witan-admin
     action: graph_list
     expect: allow
+  # witan-probe addresses `council` directly by id — it never needs to
+  # enumerate graphs, and server.policy.yaml grants it nothing. Documented
+  # here per the file's own note above (not exercised by `policy test`, since
+  # this bundle is cluster-scoped and validated at deploy time instead).
+  - id: probe-cannot-list-graphs
+    actor: act-svc-witan-probe
+    action: graph_list
+    expect: deny

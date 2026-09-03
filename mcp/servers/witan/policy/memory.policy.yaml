@@ -20,6 +20,17 @@
 # default, service-owned operation applied on boot — not a per-user permission
 # and not the reindex pipeline. See policy/README.md § "Non-human actors".
 #
+# witan-probe (act-svc-witan-probe) is the synthetic-monitoring principal an
+# out-of-band CronJob authenticates as to prove `council` is actually
+# answering queries between pod restarts (ol-infrastructure
+# tk-an-authenticated-synthetic-probe-for-council-to--e89d8f). Deliberately its
+# own fourth identity rather than reusing one of the three above: svc-witan-ci
+# is permanently excluded from this graph by design, svc-witan-admin is
+# break-glass and should not run on a schedule, and svc-witan is the serving
+# tier's own credential, not something a monitoring job should hold or rotate
+# in lockstep with. Read-only — `read` + `invoke_query`, nothing else — so a
+# leaked probe token is worth exactly one thing: reading the graph.
+#
 # witan-admin (act-svc-witan-admin) is the break-glass maintenance principal of
 # ADR-0005 path (b) — the in-cluster Job that runs `witan migrate …`. THIS is
 # the graph its grants actually cost something on, and the cost is deliberately
@@ -43,6 +54,12 @@ groups:
   # omnigraph Pulumi stack; used only by in-cluster Jobs, never by a human's
   # laptop — an operator's own per-user actor is what `witan login` gets them.
   witan-admin: [act-svc-witan-admin]
+  # Synthetic-monitoring principal for the council-health CronJob. Optional in
+  # the deployed cluster the same way witan-admin is: an environment that has
+  # not minted a probe token simply drops this group at boot rather than
+  # failing to start (see policy/README.md § "Group membership is rendered at
+  # boot").
+  witan-probe: [act-svc-witan-probe]
 
 # Flat/single-branch, but store `main` is declared protected so schema_apply is
 # scoped to `protected` — the same uniform invariant as the code and bridge
@@ -105,3 +122,14 @@ rules:
       actors: { group: witan-admin }
       actions: [schema_apply]
       target_branch_scope: protected
+  # The whole grant: prove the graph answers a read. No export (nothing to
+  # hand a caller no human is behind), no change, no schema_apply.
+  - id: probe-read-memory
+    allow:
+      actors: { group: witan-probe }
+      actions: [read]
+      branch_scope: any
+  - id: probe-invoke-memory
+    allow:
+      actors: { group: witan-probe }
+      actions: [invoke_query]

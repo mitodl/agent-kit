@@ -240,3 +240,18 @@ cases:
     action: branch_delete
     target_branch: act-alice/feature-x
     expect: deny
+
+  # ── Synthetic monitoring (council-health CronJob) ──────────────────────────
+  # witan-probe's whole grant is read + invoke_query on the memory graph —
+  # this bundle declares no witan-probe group at all, so these pin that the
+  # boundary holds even if a later edit to memory.policy.yaml's grant were
+  # copy-pasted here by mistake.
+  - id: probe-cannot-read-code
+    actor: act-svc-witan-probe
+    action: read
+    branch: main
+    expect: deny
+  - id: probe-cannot-invoke-code
+    actor: act-svc-witan-probe
+    action: invoke_query
+    expect: deny
