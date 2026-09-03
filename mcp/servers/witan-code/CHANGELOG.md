@@ -6,6 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.18.0] - 2026-09-02
+
+### Added
+
+- **`witan --target <name> code index` reaches this package.** witan-council's
+  launcher gained an app-level `--target`, and `witan code …` mounts this
+  package's cyclopts App but *not* its meta launcher, so the value is forwarded
+  into `witan_code.selected_target` and read by `_srv()`. Before this the flag
+  was bound but never routed: `cli._srv()` called `load_remote_config()` with no
+  argument, so `witan --target ci code repos` answered from the ambient target
+  while appearing to work. Standalone `witan-code --target <name> …` works too.
+
+- **`witan code index` prints the store it wrote to, unconditionally.** The one
+  command whose entire output is about where symbols went was silent about which
+  graph received them — and memory and code graphs are routed by separate
+  settings, so a target whose memory is deployed can still index onto the
+  laptop. Printed for local and shared alike: a line that appears only in the
+  bad case is one nobody has learned to look for. Carried on `IndexStats` rather
+  than recomputed by the printer, so a *failed* run reports the same
+  destination — the run where "which graph was this?" is actually open.
+
+### Fixed
+
+- **`witan-code doctor` could not say which graph was broken under
+  `code_transport = "mcp"`.** The identifying column took `os.path.basename` of
+  the store address, which is right for a local path and wrong for an
+  MCP-routed one — those end in the endpoint URL, so all of production's
+  per-repo cluster graphs rendered as the identical string `mcp)`. `StoreRef`
+  gained a `label` that answers "which graph is this row" for all three address
+  forms, and `code_store_health` returns it alongside the full `store`.
+
+- **A failed index did not always name its destination.** `IndexStats` was built
+  *after* `ensure_branch()` and the existing-hash read, both of which are remote
+  calls, so an unreachable endpoint or a rejected token raised before the stats
+  existed and the summary had nothing to print. Stats are now built straight
+  after the store resolves, and those two setup calls are wrapped so a failure
+  arrives as `IndexFailed` carrying the destination. `check_writable` is
+  deliberately left outside: it raises `SharedGraphWriteRefused`, a clean
+  self-explanatory refusal that callers assert on by type, not the unattributed
+  failure the phases exist to annotate.
+
+- **`code_transport` is parsed off a target block.** A target registered with
+  `--remote-url` now carries `code_transport = "mcp"`, so branches indexed from
+  a checkout land on the cluster where another session — and another developer —
+  can see them, instead of in a directory on one laptop.
+
 ## [0.17.0] - 2026-09-01
 
 ### Fixed

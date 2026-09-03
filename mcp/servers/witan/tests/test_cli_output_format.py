@@ -11,6 +11,10 @@ import pytest
 from witan.cli import output as output_module
 from witan.cli._common import render_table
 
+# Imported from the module, not `witan.cli`: the package re-exports
+# `selected_target` as a FUNCTION, which shadows the submodule name.
+from witan.cli.selected_target import set_selected_target
+
 
 @pytest.fixture(autouse=True)
 def _reset_output_format():
@@ -18,6 +22,20 @@ def _reset_output_format():
     output_module.set_output_format("txt")
     yield
     output_module.set_output_format("txt")
+
+
+@pytest.fixture(autouse=True)
+def _reset_selected_target():
+    """Same, for the launcher's other piece of module-level state.
+
+    Any test that drives `_launcher` with a `target` sets it process-wide, and
+    without this the value leaks into every test that runs afterwards — which
+    is how one test here took out nine elsewhere, all of them asserting on a
+    target they never set.
+    """
+    set_selected_target(None)
+    yield
+    set_selected_target(None)
 
 
 def _rows():
@@ -122,9 +140,6 @@ def test_launcher_propagates_output_format_to_mounted_witan_code(monkeypatch):
     fake_pkg = types.ModuleType("witan_code")
     fake_output = types.ModuleType("witan_code.output")
     fake_output.set_output_format = calls.append
-    # Both fakes, because the launcher imports both in one `try`: leave
-    # `selected_target` out and the ImportError skips the forwarding entirely,
-    # and this test then passes on an empty list rather than on the behaviour.
     fake_target = types.ModuleType("witan_code.selected_target")
     fake_target.set_selected_target = lambda name: None
     monkeypatch.setitem(sys.modules, "witan_code", fake_pkg)
@@ -133,5 +148,38 @@ def test_launcher_propagates_output_format_to_mounted_witan_code(monkeypatch):
     monkeypatch.setattr(cli_module, "app", lambda tokens: None)
 
     cli_module._launcher("code", "repos", output_format="json")
+
+    assert calls == ["json"]
+
+
+def test_a_witan_code_too_old_for_target_keeps_output_format(monkeypatch):
+    """A stale witan-code must cost only the forwarding it is too old for.
+
+    `witan_code.selected_target` exists from witan-code 0.18.0; `witan_code.
+    output` has been there for many releases. witan-code is not a dependency of
+    this package — it is an optional runtime mount installed alongside — so
+    nothing constrains the pair and an upgrade of one without the other is an
+    ordinary user state.
+
+    Both forwardings used to share one `try`, so this arrangement sent BOTH down
+    `except ImportError`: upgrading witan-council alone silently disabled
+    `--output-format` for `witan code …`, with no error. Raised on the 0.31.0
+    release PR (#319).
+    """
+    import witan.cli as cli_module
+
+    calls = []
+    fake_pkg = types.ModuleType("witan_code")
+    fake_output = types.ModuleType("witan_code.output")
+    fake_output.set_output_format = calls.append
+    monkeypatch.setitem(sys.modules, "witan_code", fake_pkg)
+    monkeypatch.setitem(sys.modules, "witan_code.output", fake_output)
+    # The stale half: absent, the way it is on witan-code < 0.18.0. Set to None
+    # rather than left alone, so a real installed witan-code in the test env
+    # cannot satisfy the import and hide the regression.
+    monkeypatch.setitem(sys.modules, "witan_code.selected_target", None)
+    monkeypatch.setattr(cli_module, "app", lambda tokens: None)
+
+    cli_module._launcher("code", "repos", output_format="json", target="qa")
 
     assert calls == ["json"]

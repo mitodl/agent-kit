@@ -6,6 +6,100 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.31.0] - 2026-09-02
+
+### Changed
+
+- **BREAKING: `witan migrate merge --target <uri>` is now `--target-uri <uri>`.**
+  `--target` became an app-level option naming a configured `[targets.<name>]`
+  block (below), and `migrate merge` was the one command where the same spelling
+  meant something else — a store URI, with `--to` as its target-name flag. Left
+  alone, the launcher would have swallowed `s3://bucket/graph.omni` and resolved
+  it as a configured target while `merge` received no destination at all, on the
+  one command whose whole job is moving data between stores. Only the public
+  flag changed; `--from`/`--to` are untouched, and the internal plumbing still
+  calls it `target` because internally it genuinely is a target URI.
+
+- **`--target` is an app-level option, so every command takes it.** It used to
+  be declared per command, on seven of them, which left `witan tasks`, `witan
+  memory` and `witan code index` — the last being the command that *writes* code
+  graphs — reachable only through `WITAN_TARGET` or checkout auto-detection. It
+  is now bound by the launcher, works in either position (`witan --target ol
+  tasks` and `witan tasks --target ol` are the same), and still resolves
+  `--target` > `WITAN_TARGET` > `match_*`. The seven commands dropped their own
+  parameter: a meta-level flag is consumed by the launcher and stripped from the
+  tokens the subcommand parses, so keeping it would have left each of them
+  binding `None` and silently falling back to the ambient target.
+
+### Added
+
+- **`witan target set <name> --<key> <value>`** — amend one key on a registered
+  target. The previously documented way to do that was `target add --force`,
+  which rebuilds the block from the flags it is given and therefore DELETES
+  every key it has no parameter for: `author`, `model`, `token`, `code_dir`,
+  `code_token`, `index_role` and `actor` were all dropped by a re-register
+  replaying the four flags the onboarding doc listed. It hid because one TOML
+  block feeds two config models with different field sets, and neither declares
+  `extra`, so each silently discards the other's keys. `set` rewrites each named
+  assignment where it sits — keeping its indentation and any trailing comment —
+  parses the result before writing it, and refuses a value that spans several
+  lines rather than half-rewriting it.
+
+- **`witan target add --code-transport` / `--code-server`.** `--remote-url` now
+  implies `code_transport = "mcp"`, so a target registered for a deployment puts
+  its code graphs there too rather than on the laptop. Written as an explicit
+  key rather than by changing the global default, which keeps meaning what the
+  in-cluster writers (CI indexer, maintenance jobs) need.
+
+- **`task_comment(slug, text)`** — say something *about* a task without mutating
+  it. Every write primitive either overwrote another author's description or
+  created a node, so an agent that found a problem with someone else's in-flight
+  task had to choose between clobbering their text and inflating the work list.
+  A `TaskComment` is attributed, timestamped and append-only, and deliberately
+  leaves the task's row alone including `updated_at` — that field doubles as the
+  advisory-lease start for an `in_progress` task with no `claimed_at`, so bumping
+  it would silently renew a stranger's claim. Surfaced by `task_get` and by the
+  UserPromptSubmit hook.
+
+- **`witan whoami` reports code-graph routing.** It answered only the identity
+  half while the other half is routed by a separate setting that can, and on
+  production did, disagree with it for months with nothing saying so. An
+  unreadable code config is now reported in place of the line rather than
+  swallowed — `whoami` loads that config nowhere else, so dropping the line read
+  as "witan-code is not installed".
+
+### Fixed
+
+- **The local-code-graph warning reaches a reader.** The one runtime detection
+  that a target has memory on the deployment and code graphs on the laptop was
+  emitted only from `witan serve`, into an MCP subprocess's stderr, while the
+  person who could act on it is in a terminal. It now also fires on the CLI
+  dispatch path, throttled once per day per target
+  (`WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL`), gated on a tty so the hooks and the
+  CI indexer cannot spend the window that was meant for a human.
+
+- **`witan target add`/`set`/`remove` no longer widen the config file's
+  permissions.** `os.replace` keeps the *temp* file's mode, which is
+  `0o666 & ~umask` — commonly 0644 — so a config chmod'd to 0600 because it
+  holds a `token`/`code_token` was quietly made world-readable by any setting
+  change. Measured 0600 → 0644 before the fix.
+
+- **`witan whoami` reported a code-graph route indexing does not take.**
+  `store_for_repo` checks the MCP transport first and returns without reading
+  `code_server`, so a config setting both indexes through the endpoint; the
+  reporter checked `code_server` first and said "direct".
+
+- **A witan-code too old for `--target` no longer costs `--output-format` too.**
+  The launcher forwards both settings into the mounted `witan code …`, and they
+  have different minimum witan-code versions: `witan_code.output` has been there
+  for many releases, `witan_code.selected_target` only from witan-code 0.18.0.
+  They shared one `try`/`except ImportError`, so an older witan-code sent BOTH
+  down the except and silently disabled `--output-format` for `witan code …` —
+  a feature that had nothing to do with the newer one, lost with no error.
+  witan-code is not a dependency of this package (it is an optional runtime
+  mount installed alongside), so nothing constrains the pair and a one-sided
+  upgrade is an ordinary user state rather than a mistake.
+
 ## [0.30.0] - 2026-09-01
 
 ### Added
@@ -64,64 +158,6 @@ a MINOR bump may include breaking changes).
   carries no session state), so this is reported rather than refused. Sampling
   the deployed graph found 13 such claims across three people. An explicit
   `assignee` is exempt. See the 2026-08-27 addendum to ADR-0003.
-
-- **`task_comment` — say something *about* a task without mutating it or
-  filing work.** There was no primitive for this. Every write either changed
-  the task (`task_update`, which overwrites another author's description) or
-  created a node (`task_create`, `memory_store`), so an agent that found a
-  problem with someone else's in-flight task had to pick one. On 2026-08-27 a
-  one-paragraph correction — the task's stated mechanism could not fire on the
-  affected pipelines — cost a whole p0 task whose real content was "your
-  premise is wrong", a `parent` edge written onto someone else's claimed row to
-  buy discoverability, and a project fact to hold the evidence. The ready-work
-  list gained an item that was not work, filed p0 so it would sit next to its
-  parent, competing with real p0s; and closing it would have meant "I read
-  this", which is not what closing a task means anywhere else.
-
-  A `TaskComment` is attributed to the caller, timestamped, and append-only.
-  Flat on purpose: no threading, no editing, no deleting, no resolution — those
-  are decisions to make when something needs them, not up front. It leaves the
-  task's own row alone, `updated_at` included: that field doubles as the
-  advisory-lease start for an `in_progress` task with no `claimed_at`, so
-  bumping it would silently renew a stranger's claim every time somebody
-  commented on their task.
-
-  Surfaced at both places an executing agent actually looks. `task_get` returns
-  them oldest-first under `comments` (guarded: a deployed store provisioned
-  before `TaskComment` answers `unknown node type`, and that must cost the
-  field rather than the whole task read). And the `UserPromptSubmit` hook
-  renders **New Comments on Work You Hold** *first*, ahead of projects and
-  ready work — a correction to the task you are mid-way through is the one
-  thing in that block addressed to you specifically.
-
-  Unread state is a local record in the session state dir, not a read receipt
-  in the graph. "Read" here means "was rendered into this machine's prompt",
-  which is a fact about a client; putting it in the shared graph would make
-  every prompt a write and still answer the wrong question for any other
-  reader. Losing the file re-shows a comment, which is the harmless direction.
-  It records delivered comment *slugs* rather than a `created_at` watermark,
-  because `store_merge` reconciles `TaskComment` like any other type — a
-  comment authored earlier against another store can arrive after a later one
-  was shown, and a watermark would swallow it permanently. The block renders at
-  most five comments per task and marks only those delivered, so an append-only
-  thread cannot grow the prompt without bound; the rest lead the next block. A
-  render carrying comments is deliberately not written to the output cache,
-  since delivery is recorded at render time and re-serving it would turn
-  "interrupts once" into "interrupts for the whole TTL".
-
-  Comment bodies go through the same write-path scanning as every other
-  free-text field (`insert_task_comment` is in `scan.enforce.FIELD_MAP`), with
-  the task's repo passed along so per-repo `[scan.overlay]` policy still
-  applies to a node that has no repo of its own.
-  Also `witan task comment <slug> <text>`, and comments in `witan task <slug>`.
-
-- **`task_list(assignee="@me")` resolves to the calling identity.** The context
-  hook has to ask "which tasks do I hold?" on both transports, and a client
-  cannot spell its own holder against a deployment: the identity there comes
-  from the JWT `preferred_username`, which need not match the local
-  `cfg.author` — that mismatch is the entire subject of `claim_authorship`.
-  Resolving the sentinel server-side is the only spelling that is correct in
-  both places.
 
 ### Changed
 
