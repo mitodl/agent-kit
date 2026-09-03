@@ -111,8 +111,9 @@ Four distinct non-human identities, deliberately kept separate:
   existing health check can see that gap: omnigraph's `/healthz` is flat and
   unauthenticated by design, and witan's own probe deliberately answers from
   process state alone. Gets `read` + `invoke_query` on the **memory** graph
-  only, nothing else — no `export`, no `change`, no `schema_apply`, no access
-  to any code or bridge graph. Never held by a human; optional in the deployed
+  only, nothing else — no `export`, no `change`, no `schema_apply`, no
+  `graph_list`, no access to any code or bridge graph. Never held by a human;
+  optional in the deployed
   cluster the same way `witan-admin` is (an environment with no minted probe
   token simply drops the group at boot, per "Group membership is rendered at
   boot" below).
@@ -152,13 +153,13 @@ Four distinct non-human identities, deliberately kept separate:
 uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 export PATH="$HOME/.local/bin:$PATH"
 
-./policy/check.sh          # lint all 4 bundles, validate 3, run 76 test cases
+./policy/check.sh          # lint all 4 bundles, validate 3, run 80 test cases
 ```
 
 `check.sh` does three things: (1) `lint_bundles.py` — a structural lint of
 **every** bundle including `server.policy.yaml` (group references resolve,
 actions are known, scopes match their actions, allow-only); (2) `policy
-validate` on the three per-graph bundles; (3) `policy test` — 76 declarative
+validate` on the three per-graph bundles; (3) `policy test` — 80 declarative
 allow/deny cases. It runs in CI as the `witan (Cedar policy bundle)` job in
 `.github/workflows/witan-tests.yml`. `cluster.yaml` here is a **CI test
 harness**, not the deployed config — it wires the bundles onto three stub graphs

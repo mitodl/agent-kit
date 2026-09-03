@@ -16,11 +16,13 @@ a MINOR bump may include breaking changes).
   `council` answers a real query between pod restarts, a gap neither existing
   health check can see (omnigraph's `/healthz` is unauthenticated and flat by
   design; witan's own probe deliberately answers from process state alone).
-  Neither existing service identity fit: `svc-witan-ci` is permanently
-  excluded from the memory graph, and `svc-witan-admin` is break-glass and
-  should not run on a schedule. Optional in the deployed cluster the same way
-  `witan-admin` is — an environment with no minted probe token simply drops
-  the group at boot. See `policy/README.md` and
+  None of the three existing service identities fit: `svc-witan-ci` is
+  permanently excluded from the memory graph, `svc-witan-admin` is
+  break-glass and should not run on a schedule, and `svc-witan` is the
+  serving tier's own live credential — not something a monitoring job should
+  hold or rotate in lockstep with. Optional in the deployed cluster the same
+  way `witan-admin` is — an environment with no minted probe token simply
+  drops the group at boot. See `policy/README.md` and
   ol-infrastructure `tk-an-authenticated-synthetic-probe-for-council-to--e89d8f`.
 
 ## [0.31.0] - 2026-09-02
