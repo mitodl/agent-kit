@@ -36,7 +36,7 @@ ARG OMNIGRAPH_SHA256_ARM64=dd3ac09123a68882454db7e689da4c306c41677826237098df4e7
 ARG WITAN_VERSION=0.8.0
 
 # ── Fetch the pinned omnigraph CLI binary (checksum-verified) ─────────────────
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS omnigraph-fetch
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS omnigraph-fetch
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_SHA256_X86_64
