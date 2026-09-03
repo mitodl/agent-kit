@@ -35,6 +35,7 @@ everything.
     svc-witan-ci      -> witan-ci
     svc-witan         -> witan-service
     svc-witan-admin   -> witan-admin
+    svc-witan-probe   -> witan-probe
 
 A group named in a bundle but with no provisioned member — `svc-witan` is not
 provisioned in any environment yet — is DROPPED, along with every rule that
@@ -69,6 +70,7 @@ SERVICE_ACTOR_GROUPS = {
     "svc-witan-ci": "witan-ci",
     "svc-witan": "witan-service",
     "svc-witan-admin": "witan-admin",
+    "svc-witan-probe": "witan-probe",
 }
 
 # Every group name the bundles may declare. A bundle naming anything outside

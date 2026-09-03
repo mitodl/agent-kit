@@ -77,6 +77,10 @@ class TestClassifyActors:
         assert groups["witan-ci"] == ["svc-witan-ci"]
         assert groups["witan-admin"] == ["svc-witan-admin"]
 
+    def test_probe_service_id_lands_in_witan_probe(self):
+        groups = render_groups.classify_actors([*LIVE_TOKEN_MAP, "svc-witan-probe"])
+        assert groups["witan-probe"] == ["svc-witan-probe"]
+
     def test_humans_land_in_witan_users(self):
         groups = render_groups.classify_actors(list(LIVE_TOKEN_MAP))
         assert groups["witan-users"] == ["act-007fb23e", "act-11e9e82c"]

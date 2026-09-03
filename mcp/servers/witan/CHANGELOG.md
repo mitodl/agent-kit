@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.32.0] - 2026-09-03
+
+### Added
+
+- **`witan-probe` Cedar group for synthetic council monitoring.** A fourth
+  non-human identity (`svc-witan-probe`), granted `read` + `invoke_query` on
+  the `memory` graph only — nothing else. Lets an out-of-band CronJob prove
+  `council` answers a real query between pod restarts, a gap neither existing
+  health check can see (omnigraph's `/healthz` is unauthenticated and flat by
+  design; witan's own probe deliberately answers from process state alone).
+  Neither existing service identity fit: `svc-witan-ci` is permanently
+  excluded from the memory graph, and `svc-witan-admin` is break-glass and
+  should not run on a schedule. Optional in the deployed cluster the same way
+  `witan-admin` is — an environment with no minted probe token simply drops
+  the group at boot. See `policy/README.md` and
+  ol-infrastructure `tk-an-authenticated-synthetic-probe-for-council-to--e89d8f`.
+
 ## [0.31.0] - 2026-09-02
 
 ### Changed

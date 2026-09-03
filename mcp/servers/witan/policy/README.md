@@ -45,8 +45,8 @@ crate — the constraints that shaped this bundle:
 
 ## Actors and groups
 
-Four groups. Humans are **per-user** actors — identity is per-user, not
-per-team, per `docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md`; the three
+Five groups. Humans are **per-user** actors — identity is per-user, not
+per-team, per `docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md`; the four
 non-human actors are single service accounts:
 
 | Group           | Members                                            | Role |
@@ -55,16 +55,17 @@ non-human actors are single service accounts:
 | `witan-ci`      | `act-svc-witan-ci`                                  | code-graph **data** pipeline |
 | `witan-service` | `act-svc-witan`                                     | the MCP service's own account: **schema** owner |
 | `witan-admin`   | `act-svc-witan-admin`                               | **break-glass** in-cluster maintenance (ADR-0005 path b) |
+| `witan-probe`   | `act-svc-witan-probe`                               | **synthetic monitoring**: the council-health CronJob, `memory` graph only |
 
 The `act-*` ids committed here are **illustrative fixtures**. In the deployed
 cluster, ol-infrastructure templates the real membership from Keycloak claims
-(for `witan-users`) and Vault-provisioned service tokens (for the three service
+(for `witan-users`) and Vault-provisioned service tokens (for the four service
 accounts). Keep the group **names** identical across bundle files — only the
 membership lists are templated.
 
 ### Non-human actors
 
-Three distinct non-human identities, deliberately kept separate:
+Four distinct non-human identities, deliberately kept separate:
 
 - **`witan-ci` (`act-svc-witan-ci`) — the code-graph data pipeline.** Owns the
   canonical `main` index for each repo: reindex-on-merge (`change` any branch,
@@ -103,12 +104,24 @@ Three distinct non-human identities, deliberately kept separate:
   - Never held by a human. An operator working interactively authenticates with
     `witan login` as their own `act-<sub>` (ADR-0005 path a); the admin token
     lives only in the cluster, mounted into Jobs.
+- **`witan-probe` (`act-svc-witan-probe`) — synthetic monitoring.** The
+  principal an out-of-band CronJob authenticates as to prove `council` answers
+  a real query between pod restarts (ol-infrastructure
+  `tk-an-authenticated-synthetic-probe-for-council-to--e89d8f`) — neither
+  existing health check can see that gap: omnigraph's `/healthz` is flat and
+  unauthenticated by design, and witan's own probe deliberately answers from
+  process state alone. Gets `read` + `invoke_query` on the **memory** graph
+  only, nothing else — no `export`, no `change`, no `schema_apply`, no access
+  to any code or bridge graph. Never held by a human; optional in the deployed
+  cluster the same way `witan-admin` is (an environment with no minted probe
+  token simply drops the group at boot, per "Group membership is rendered at
+  boot" below).
 
 ## The bundles
 
 | File                     | applies_to        | Grants                                                                                       |
 | ------------------------ | ----------------- | -------------------------------------------------------------------------------------------- |
-| `memory.policy.yaml`     | `[memory]`        | users: read/export/invoke + change on the flat shared work graph. service: read/export + schema_apply. admin: read/export/invoke/change + schema_apply. (no CI)  |
+| `memory.policy.yaml`     | `[memory]`        | users: read/export/invoke + change on the flat shared work graph. service: read/export + schema_apply. admin: read/export/invoke/change + schema_apply. probe: read/invoke only. (no CI)  |
 | `code-graph.policy.yaml` | per-repo graph ids | users: read/export/invoke anywhere, change + `branch_create` on **unprotected** (WIP) branches only. CI: read/export/change + merge into protected `main` + WIP branch lifecycle incl. `branch_delete`. service: read/export + schema_apply. admin: read/export/invoke + schema_apply only. |
 | `bridge.policy.yaml`     | `[bridge]`        | users: read/export/invoke anywhere, change + `branch_create` on unprotected WIP views. CI: read/export/change any + WIP branch lifecycle. service: read/export + schema_apply. admin: read/export/invoke + schema_apply only. |
 | `server.policy.yaml`     | `[cluster]`       | graph_list, to all four groups. *(Not in the CI harness — see below.)*                        |
@@ -139,13 +152,13 @@ Three distinct non-human identities, deliberately kept separate:
 uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
 export PATH="$HOME/.local/bin:$PATH"
 
-./policy/check.sh          # lint all 4 bundles, validate 3, run 71 test cases
+./policy/check.sh          # lint all 4 bundles, validate 3, run 76 test cases
 ```
 
 `check.sh` does three things: (1) `lint_bundles.py` — a structural lint of
 **every** bundle including `server.policy.yaml` (group references resolve,
 actions are known, scopes match their actions, allow-only); (2) `policy
-validate` on the three per-graph bundles; (3) `policy test` — 71 declarative
+validate` on the three per-graph bundles; (3) `policy test` — 76 declarative
 allow/deny cases. It runs in CI as the `witan (Cedar policy bundle)` job in
 `.github/workflows/witan-tests.yml`. `cluster.yaml` here is a **CI test
 harness**, not the deployed config — it wires the bundles onto three stub graphs
@@ -244,23 +257,27 @@ rendering on that path means the token map and the policy can never disagree.
 
 **The `act-` prefix is the trap.** Humans are `act-<slug>`
 (`witan_core.identity.derive_actor_id`), but the service accounts in the token
-map are **not** prefixed — they are `svc-witan-ci` and `svc-witan-admin`. The
-ids committed here (`act-svc-witan-ci`, …) are fixtures for `policy test` and
-match nothing in a deployed cluster; applying a bundle unrendered would
-authenticate the CI and break-glass identities and then deny them everything.
-The mapping the renderer applies:
+map are **not** prefixed — they are `svc-witan-ci`, `svc-witan-admin`, and
+`svc-witan-probe`. The ids committed here (`act-svc-witan-ci`, …) are fixtures
+for `policy test` and match nothing in a deployed cluster; applying a bundle
+unrendered would authenticate the CI and break-glass identities and then deny
+them everything. The mapping the renderer applies:
 
-| token-map id      | group           |
-| ----------------- | --------------- |
-| `act-*`           | `witan-users`   |
-| `svc-witan-ci`    | `witan-ci`      |
-| `svc-witan`       | `witan-service` |
-| `svc-witan-admin` | `witan-admin`   |
+| token-map id       | group           |
+| ------------------ | --------------- |
+| `act-*`            | `witan-users`   |
+| `svc-witan-ci`     | `witan-ci`      |
+| `svc-witan`        | `witan-service` |
+| `svc-witan-admin`  | `witan-admin`   |
+| `svc-witan-probe`  | `witan-probe`   |
 
 `svc-witan` is **not provisioned in any environment yet**
 (`tk-provision-act-svc-witan-…`), so `witan-service` renders as an empty list and
 its rules grant nobody — deliberate, and logged as a warning on every boot so it
-stays visible. Adding a group to a bundle without adding it to the renderer's
+stays visible. `svc-witan-probe` is the same shape: an environment whose
+operator has not yet minted a probe token (`omnigraph/secrets.<env>.yaml` in
+ol-infrastructure) renders `witan-probe` empty rather than failing the boot.
+Adding a group to a bundle without adding it to the renderer's
 `KNOWN_GROUPS` fails the boot rather than rendering an empty group that silently
 denies its members; `../tests/test_render_groups.py` pins that against the real
 committed bundles.
