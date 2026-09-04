@@ -47,6 +47,15 @@ class RegistrationBundle:
     """What a consumer (e.g. witan) wants installed, in canonical-model terms."""
 
     mcp_servers: dict[str, McpServer] = field(default_factory=dict)
+    # Per-platform overrides, merged over ``mcp_servers`` by key for the named
+    # platform only. The right way to *launch* a server can differ per platform
+    # even when the server itself is identical: a platform whose hooks already
+    # require a CLI on PATH should point its MCP entry at that same CLI, so both
+    # surfaces run one install; a platform with no CLI of its own needs a
+    # self-contained launcher. See ``witan.setup.witan_bundle``.
+    mcp_servers_by_platform: dict[str, dict[str, McpServer]] = field(
+        default_factory=dict
+    )
     hooks: list[Hook] = field(default_factory=list)
     skills: list[SkillSource] = field(default_factory=list)
     lsp_servers: dict[str, LspServer] = field(
@@ -103,7 +112,11 @@ def apply(
     platform = registry.get_platform(platform_name)
     result = InstallResult(platform=platform_name)
 
-    if platform.mcp is not None and bundle.mcp_servers:
+    mcp_servers = {
+        **bundle.mcp_servers,
+        **bundle.mcp_servers_by_platform.get(platform_name, {}),
+    }
+    if platform.mcp is not None and mcp_servers:
         target = _resolve_target(platform.mcp, scope)
         if target is not None:
             cfg = load_json_object(target.path)
@@ -112,7 +125,7 @@ def apply(
             else:
                 container = _navigate(cfg, target.key_path)
                 serialize = platform.mcp_serialize or _default_serialize
-                for name, server in bundle.mcp_servers.items():
+                for name, server in mcp_servers.items():
                     _merge_into(
                         container, name, serialize(server), platform.mcp.merge_strategy
                     )

@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.7.0] - 2026-09-04
+
+### Added
+
+- **`RegistrationBundle.mcp_servers_by_platform` — per-platform MCP entry
+  overrides**, merged by key over `mcp_servers` for the named platform only.
+  The right way to *launch* a server can differ per platform even when the
+  server is identical: a platform whose hooks already require a CLI on `PATH`
+  should point its MCP entry at that same CLI, while a platform with no CLI of
+  its own needs a self-contained launcher (`uvx --from …`). Without this the
+  choice had to be global, which left Claude Code and Pi users running two
+  installs of the same package resolved from two different sources.
+
+  `diff()` resolves the override the same way `apply()` does — without that, an
+  overridden platform reads as permanent drift immediately after being applied.
+  `prune` records the per-platform-resolved key set too: a server introduced
+  *only* through the mapping is written by `apply()`, so recording the base map
+  alone would make it permanently unownable — never removable by a later pruned
+  apply.
+
 ## [0.6.0] - 2026-09-03
 
 ### Fixed

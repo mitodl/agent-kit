@@ -57,6 +57,14 @@ uv tool install --editable --with ./mcp/servers/witan-code mcp/servers/witan
 witan setup --agent claude   # or: pi | all
 ```
 
+On these two platforms the MCP server entry `witan setup` writes is `witan
+serve` — the same install the hooks use. The MCP-only agents below get a
+self-contained `uvx --from …` entry instead, since they have no CLI to point
+at. That difference is deliberate: registering the `uvx` form here would leave
+Claude Code and Pi running two witan installs from two different sources (the
+hooks on your PATH install, the MCP server on git `main`), which skew silently
+as those lineages diverge.
+
 **Without persistent CLI** — enough for the **MCP-only agents** (Copilot, OpenCode,
 Kilo), whose server runs via `uvx`, so no install is needed:
 

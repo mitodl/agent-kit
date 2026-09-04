@@ -28,7 +28,10 @@ def test_witan_code_bundle_registers_mcp_server_and_hooks(tmp_path, monkeypatch)
     claude_json = json.loads((tmp_path / ".claude.json").read_text())
     entry = claude_json["mcpServers"]["witan-code"]
     assert entry["type"] == "stdio"
-    assert entry["command"] == "uvx"
+    # Claude Code's hooks already require the CLI on PATH, so the MCP entry runs
+    # that same install rather than a second one resolved from git `main`.
+    assert entry["command"] == "witan-code"
+    assert entry["args"] == ["serve"]
     assert entry["env"]["WITAN_AUTHOR"] == "tester"
 
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -78,6 +81,10 @@ def test_witan_code_bundle_honors_binary_override(tmp_path):
         "witan code inject-context",
         "witan code checkpoint",
     }
+    # The CLI-form MCP entry follows `binary` too, so it points at whichever
+    # command the hooks were told to use.
+    cli_entry = bundle.mcp_servers_by_platform["claude"]["witan-code"]
+    assert (cli_entry.command, cli_entry.args) == ("witan", ["code", "serve"])
 
 
 def test_witan_code_bundle_includes_pi_extensions_as_plugin_hooks(tmp_path):

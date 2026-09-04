@@ -39,7 +39,10 @@ before witan-core 0.30.0 exists on PyPI, and the three publish workflows fire in
 parallel off the same merge commit. So when no published version satisfies the
 floor, this falls back to witan-core's locally built wheel — provided the
 workspace version is itself the floor. Both branches assert the same property;
-they differ only in where the artifact comes from.
+they differ only in where the artifact comes from. The same fallback applies to
+the OTHER workspace packages a server wheel needs (see `SIBLINGS`) — without it,
+a PR that raises the agent-config-kit floor in the same change as the API it
+names fails to install and gets reported as a stale witan-core floor.
 
 Run it as `just check-core-floor`, or one package with `--package witan-code`.
 """
@@ -68,6 +71,19 @@ SERVERS = {
 }
 
 CORE = "packages/witan-core"
+
+# Other workspace packages a server wheel depends on. They are not what this
+# check is about, but they have to RESOLVE for it to get as far as importing
+# anything — and they hit the very case the docstring's ★ paragraph describes,
+# one dependency over: a PR that adds an agent-config-kit API and raises the
+# servers' floor to it in the same change (which is the rule) names a version
+# PyPI does not have yet. Without this the install fails on the sibling and
+# reports a "stale witan-core floor" that is nothing of the kind.
+#
+# Same remedy as witan-core's, and the same precondition: fall back to the
+# locally built wheel only when the workspace version itself satisfies the
+# declared specifier.
+SIBLINGS = {"agent-config-kit": "packages/agent-config-kit"}
 
 # `witan-core[cli,remote,observability,sentry]>=0.29,<1` — extras kept, because
 # an extra that does not exist at the floor version is its own kind of stale
@@ -244,6 +260,44 @@ def workspace_version(root: Path) -> Version:
     return Version(data["project"]["version"])
 
 
+def sibling_wheels(root: Path, server: str, workdir: Path) -> list[str] | str:
+    """Locally-built wheels for any :data:`SIBLINGS` dep PyPI cannot satisfy.
+
+    Returns the wheel paths to add to the install, or a failure description.
+    Usually empty: a sibling whose floor names a published version needs
+    nothing, and the ordinary install resolves it from PyPI exactly as a user's
+    would.
+    """
+    directory, _ = SERVERS[server]
+    data = tomllib.loads((root / directory / "pyproject.toml").read_text())
+    wheels: list[str] = []
+    for requirement in data["project"]["dependencies"]:
+        name, _, rest = requirement.strip().partition(">=")
+        if name not in SIBLINGS or not rest:
+            continue
+        specifier = SpecifierSet(f">={rest}")
+        if any(v in specifier for v in published_versions(name)):
+            continue
+        sibling = tomllib.loads((root / SIBLINGS[name] / "pyproject.toml").read_text())
+        local = Version(sibling["project"]["version"])
+        if local not in specifier:
+            return (
+                f"declares {name}{specifier} and NOTHING satisfies it — no "
+                f"published version does, and the workspace is at {local}."
+            )
+        built = run(
+            ["uv", "build", "--package", name, "--wheel", "-o", str(workdir)], cwd=root
+        )
+        if built.returncode != 0:
+            return f"could not build {name} to test against:\n{built.stderr}"
+        stem = name.replace("-", "_")
+        wheel = next(iter(sorted(workdir.glob(f"{stem}-*.whl"))), None)
+        if wheel is None:
+            return f"uv build produced no {name} wheel"
+        wheels.append(str(wheel))
+    return wheels
+
+
 def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
 
@@ -294,6 +348,10 @@ def check(root: Path, floor: Floor, workdir: Path) -> str | None:
     if created.returncode != 0:
         return f"could not create a clean venv:\n{created.stderr}"
 
+    siblings = sibling_wheels(root, floor.server, workdir)
+    if isinstance(siblings, str):
+        return siblings
+
     pins = [floor.pinned(target) if core_wheel is None else str(core_wheel)]
     install = run(
         [
@@ -304,6 +362,7 @@ def check(root: Path, floor: Floor, workdir: Path) -> str | None:
             str(venv),
             "--no-cache",
             *pins,
+            *siblings,
             str(wheel),
         ],
         cwd=workdir,

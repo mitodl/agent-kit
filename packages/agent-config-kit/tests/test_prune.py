@@ -69,6 +69,61 @@ def test_apply_with_prune_removes_mcp_server_dropped_from_manifest(
     assert current_state.mcp_servers == []
 
 
+def test_prune_state_records_a_platform_only_mcp_server(tmp_path, monkeypatch):
+    """★ A server introduced ONLY through the per-platform mapping is written by
+    apply(), so prune has to record it — otherwise no later pruned apply can
+    ever remove it and it becomes permanently unownable state in the user's
+    config. The key sets are usually identical (a per-platform entry normally
+    overrides a base key), which is why this would have gone unnoticed."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(
+        mcp_servers_by_platform={
+            "claude": {"claude-only": StdioServer(command="witan", args=["serve"])}
+        }
+    )
+
+    _, state = apply_with_prune("claude", bundle, PlatformState())
+
+    assert json.loads((tmp_path / ".claude.json").read_text())["mcpServers"][
+        "claude-only"
+    ]
+    assert state.mcp_servers == ["claude-only", "witan"]
+
+
+def test_prune_state_omits_another_platforms_only_server(tmp_path, monkeypatch):
+    """The mirror: claude's state must not claim ownership of a key only pi is
+    given, or a pruned apply would delete something it never wrote."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(
+        mcp_servers_by_platform={
+            "pi": {"pi-only": StdioServer(command="witan", args=["serve"])}
+        }
+    )
+
+    _, state = apply_with_prune("claude", bundle, PlatformState())
+
+    assert state.mcp_servers == ["witan"]
+
+
+def test_a_platform_only_server_can_later_be_pruned(tmp_path, monkeypatch):
+    """The point of recording it: dropping it from the bundle removes it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(
+        mcp_servers_by_platform={
+            "claude": {"claude-only": StdioServer(command="witan", args=["serve"])}
+        }
+    )
+    _, state = apply_with_prune("claude", bundle, PlatformState())
+
+    result, _ = apply_with_prune("claude", _bundle(), state)
+
+    assert "claude-only" in result.removed
+    assert (
+        "claude-only"
+        not in json.loads((tmp_path / ".claude.json").read_text())["mcpServers"]
+    )
+
+
 def test_apply_with_prune_dry_run_reports_but_does_not_remove(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     apply("claude", _bundle())
