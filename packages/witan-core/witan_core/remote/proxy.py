@@ -55,7 +55,6 @@ from __future__ import annotations
 
 import asyncio
 import math
-import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator
@@ -338,32 +337,22 @@ async def console_elicitation_handler(
 ) -> ElicitResult:
     """Answer a deployed server's elicitation prompt from the terminal.
 
-    A person is sitting at the CLI, so an ask can simply be put to them —
-    unlike an agent-hosted client, which may accept the elicitation capability
-    with no UI to render on. Reading stdin runs off-thread so the event loop
-    driving the MCP connection keeps servicing it while the human types.
-
-    A blank answer, EOF (Ctrl-D), or an interrupt (Ctrl-C) is a decline, which
-    every witan call site maps onto the same default it uses for a client that
-    can't elicit at all. Not a stdin-backed terminal (piped input, a cron run)
-    declines without prompting rather than consuming the pipe.
+    The prompt itself is :func:`witan_core.elicit.console_prompt`, shared with
+    the in-process CLI path (``elicit.ConsoleContext``) so the two dispatch
+    paths cannot drift on what a blank answer or a non-tty means. This function
+    is the wire adapter around it: pull the field type out of the requested
+    schema, and map the answer onto an ``ElicitResult``.
     """
-    if not sys.stdin or not sys.stdin.isatty():
-        return ElicitResult(action="decline")
+    from ..elicit import console_prompt
+
     schema = getattr(params, "requested_schema", None) or {}
     field = (schema.get("properties") or {}).get("value") or {}
     boolean = field.get("type") == "boolean"
-    prompt = f"\n{message}\n{'[y/N]' if boolean else 'Answer'}: "
-    try:
-        answer = (await asyncio.to_thread(input, prompt)).strip()
-    except (EOFError, KeyboardInterrupt):
+    answer = await console_prompt(
+        message, boolean=boolean, title=field.get("title") or "Response"
+    )
+    if answer is None:
         return ElicitResult(action="decline")
-    if not answer:
-        return ElicitResult(action="decline")
-    if boolean:
-        return ElicitResult(
-            action="accept", content={"value": answer.lower() in ("y", "yes")}
-        )
     return ElicitResult(action="accept", content={"value": answer})
 
 
@@ -648,8 +637,21 @@ class RemoteMCPProxy:
         Advertising the capability is what makes a deployed tool ask at all: the
         2026-07-28 server checks for it before returning an ``input_required``
         result, and degrades to its own default when it is absent.
+
+        ★ WITH NO TERMINAL, DO NOT ADVERTISE IT. This used to advertise
+        unconditionally and then answer every ask with ``decline``, which is a
+        different thing from "nobody could be asked": a decline is a real answer
+        and lands as ``False``, so a cron run or a hook against a deployment
+        silently *aborted* the writes at every call site whose
+        ``default_when_unsupported`` is ``True`` (``memory_link --kind
+        supersedes``, ``workflow_project_advance``). Withholding the capability
+        instead puts the server on its unsupported branch, which is exactly the
+        pre-elicitation behavior those defaults name. Same distinction the
+        in-process path draws in ``elicit.with_console_ctx``.
         """
-        return console_elicitation_handler
+        from ..elicit import has_terminal
+
+        return console_elicitation_handler if has_terminal() else None
 
     def _new_client(self, token: str) -> Client:
         """Build an MCP client authenticated with the caller's JWT.

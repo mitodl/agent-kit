@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 from witan_core.cli import make_app
+from witan_core.elicit import with_console_ctx
 
 from .. import repo as repo_module
 from .output import dump_structured, get_output_format
@@ -116,14 +117,25 @@ def _fn(tool):
     Tools that gained MCP elicitation are ``async def`` (they take a
     ``ctx: Context`` FastMCP injects). The CLI calls them directly, not through
     an MCP client, so wrap a coroutine tool to run to completion via
-    ``asyncio.run`` — with no ctx it falls back to its non-interactive default,
-    which is the right behavior for a plain ``witan …`` command.
+    ``asyncio.run``.
+
+    ★ AND HAND IT A TERMINAL-BACKED ``ctx``. Passing none meant every
+    ``elicit.confirm``/``elicit.text`` in the server took its ``ctx is None``
+    branch, so for a local CLI user the prompts were unreachable *by
+    construction* — ``task_claim``'s steal offer, the supersede confirmation,
+    the repo-URI ask, all dead code that read as supported. A remote CLI user
+    has always reached them (``RemoteServerProxy`` hands its client
+    ``console_elicitation_handler``), so this makes the two dispatch paths
+    agree rather than adding a new interaction.
+
+    Still additive for automation: ``ConsoleContext`` declines without
+    prompting when stdin is not a tty, which is every hook, pipe and CI run.
     """
     fn = getattr(tool, "fn", tool)
     if inspect.iscoroutinefunction(fn):
 
         def runner(*args, **kwargs):
-            return asyncio.run(fn(*args, **kwargs))
+            return asyncio.run(fn(*args, **with_console_ctx(fn, kwargs)))
 
         return runner
     return fn
