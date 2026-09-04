@@ -176,7 +176,12 @@ dependencies = [
   # `strict` is the next one up. Re-check this line by hand on every rebase —
   # a floor left one release low here is a `witan setup` that dies with a
   # TypeError, and nothing in CI would have told you.
-  "witan-core[cli,remote,observability,sentry]>=0.32,<1",
+  #
+  # ★ >=0.34 IS AN IMPORT FLOOR, the ordinary kind: `cli/_common.py` imports
+  # `with_console_ctx` from `witan_core.elicit`, added in witan-core 0.34.0 in
+  # the same change as this caller. Caught by `just check-core-floor` on PR CI,
+  # which is exactly the case that check exists for — see the block above.
+  "witan-core[cli,remote,observability,sentry]>=0.34,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code

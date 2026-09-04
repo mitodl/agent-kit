@@ -871,9 +871,7 @@ def test_without_a_terminal_declines_without_reading_stdin(monkeypatch):
     assert result.action == "decline"
 
 
-def test_client_is_built_with_the_handler(monkeypatch):
-    # Advertising the capability is what makes a deployed tool ask at all, so a
-    # proxy that dropped the handler would silently get the defaults instead.
+def _built_handler(monkeypatch):
     # Asserted on the constructor kwarg rather than a Client attribute, which
     # is not guaranteed stable across fastmcp releases.
     built = {}
@@ -882,7 +880,25 @@ def test_client_is_built_with_the_handler(monkeypatch):
         lambda transport, **kwargs: built.update(kwargs) or object(),
     )
     _Proxy()._new_client("tok")
-    assert built["elicitation_handler"] is console_elicitation_handler
+    return built["elicitation_handler"]
+
+
+def test_client_is_built_with_the_handler_at_a_terminal(monkeypatch):
+    # Advertising the capability is what makes a deployed tool ask at all, so a
+    # proxy that dropped the handler would silently get the defaults instead.
+    monkeypatch.setattr("sys.stdin", _Tty())
+    assert _built_handler(monkeypatch) is console_elicitation_handler
+
+
+def test_no_terminal_withholds_the_capability_rather_than_declining(monkeypatch):
+    """★ Advertising it and then declining every ask is NOT the same thing as
+    not advertising it. A decline is a real answer and lands as ``False``, so a
+    cron run or hook against a deployment silently aborted the writes at every
+    call site whose ``default_when_unsupported`` is True. Withholding puts the
+    server on its unsupported branch, which is the pre-elicitation behavior
+    those defaults name."""
+    monkeypatch.setattr("sys.stdin", None)
+    assert _built_handler(monkeypatch) is None
 
 
 # ── honoring the server's cache directive ─────────────────────────────────

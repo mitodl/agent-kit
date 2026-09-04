@@ -27,6 +27,7 @@ from witan_core.cli import (
     report_install,
     resolve_author,
 )
+from witan_core.elicit import with_console_ctx
 
 from . import indexer
 from .output import OutputFormat, dump_structured, get_output_format, set_output_format
@@ -91,16 +92,18 @@ def _fn(tool):
     Tools that gained MCP elicitation are ``async def`` (they take a
     ``ctx: Context`` FastMCP injects). The CLI calls them directly, not through
     an MCP client, so wrap a coroutine tool to run to completion via
-    ``asyncio.run`` — with no ctx it falls back to its non-interactive default,
-    which is the right behavior for a plain ``witan-code …`` command. The
-    remote proxy's attributes are already plain callables, so this is a no-op
-    against it.
+    ``asyncio.run``, handing it a terminal-backed ``ctx`` so its elicitations
+    reach the person running the command — see ``witan.cli._common._fn`` for
+    why passing none made those prompts unreachable by construction, and
+    ``witan_core.elicit.ConsoleContext`` for why this stays additive under
+    automation (no tty, no prompt). The remote proxy's attributes are already
+    plain callables, so this is a no-op against it.
     """
     fn = getattr(tool, "fn", tool)
     if inspect.iscoroutinefunction(fn):
 
         def runner(*args, **kwargs):
-            return asyncio.run(fn(*args, **kwargs))
+            return asyncio.run(fn(*args, **with_console_ctx(fn, kwargs)))
 
         return runner
     return fn

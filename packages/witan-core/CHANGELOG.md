@@ -8,6 +8,34 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-09-04
+
+### Added
+
+- **`elicit.ConsoleContext` / `elicit.with_console_ctx` — the terminal as an
+  elicitation surface.** A CLI dispatches tools in-process, bypassing MCP, so
+  FastMCP injects no `Context` and every `confirm`/`text` took its `ctx is None`
+  branch: the prompts were unreachable by construction for a local CLI user, and
+  the tool source read as though they worked. `with_console_ctx` is the seam a
+  CLI's tool-unwrapper calls to hand a tool a terminal-backed context. The
+  remote path already reached those prompts through
+  `remote.proxy.console_elicitation_handler`, which is now built on the same
+  shared `console_prompt` so the two dispatch paths cannot drift.
+
+### Fixed
+
+- **"Nobody to ask" is no longer answered as "no".** A decline is a real answer
+  and lands as `False`; "there is no terminal" is a different outcome that has
+  to reach the call site as `default_when_unsupported` — the behavior it had
+  before elicitation existed. `RemoteServerProxy` advertised the elicitation
+  capability unconditionally and then declined every ask when stdin was not a
+  tty, collapsing the two, so a cron run or hook against a deployment silently
+  *aborted* the writes at every call site whose default is `True`. The new
+  `elicit.has_terminal` decides it before an ask is set up: no terminal means no
+  capability advertised and no context handed to a tool. A human who refuses at
+  a live prompt (blank, Ctrl-D, Ctrl-C) still declines — Ctrl-C at "Proceed?"
+  must never mean yes, whatever the non-interactive default is.
+
 ## [0.33.1] - 2026-09-03
 
 ### Fixed

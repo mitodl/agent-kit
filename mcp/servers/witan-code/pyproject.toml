@@ -128,7 +128,12 @@ dependencies = [
     # branches were open. Both times the pyproject line auto-merged without a
     # conflict, since both sides named the same number. Re-check it by hand on
     # every rebase; a floor one release low here is silent.
-    "witan-core[cli,remote,observability,sentry]>=0.32,<1",
+    #
+    # ★ >=0.34 IS AN IMPORT FLOOR, the ordinary kind: `cli.py` imports
+    # `with_console_ctx` from `witan_core.elicit`, added in witan-core 0.34.0 in
+    # the same change as this caller. Caught by `just check-core-floor` on PR
+    # CI, which is exactly the case that check exists for.
+    "witan-core[cli,remote,observability,sentry]>=0.34,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled

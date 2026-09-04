@@ -38,8 +38,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
+import sys
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import mcp_types
@@ -268,6 +271,119 @@ async def text(
     if isinstance(answer, str) and answer.strip():
         return answer.strip()
     return default
+
+
+# ── The terminal, as an elicitation surface ──────────────────────────────────
+
+
+def has_terminal() -> bool:
+    """Whether there is a human at stdin who could answer a prompt.
+
+    ★ THE DISTINCTION THIS DRAWS IS THE ADDITIVE CONTRACT. "Nobody to ask" must
+    reach a call site as ``default_when_unsupported`` — the behavior it had
+    before elicitation existed — while "asked, and they said no" must reach it
+    as a decline. Collapsing the two makes every hook, pipe and CI run start
+    *declining* the questions it never saw, which flips the outcome of every
+    call site whose default is ``True`` (``memory_link --kind supersedes``,
+    ``workflow_project_advance``): they would begin aborting writes they used
+    to make, silently.
+
+    So this is checked *before* an ask is wired up at all — no context is
+    handed to a tool, and no elicitation capability is advertised to a
+    deployment — rather than being answered as a decline afterwards.
+    """
+    return bool(sys.stdin) and sys.stdin.isatty()
+
+
+async def console_prompt(message: str, *, boolean: bool, title: str) -> Any | None:
+    """Put one elicitation to the person at the terminal. ``None`` = declined.
+
+    A person is sitting at the CLI, so an ask can simply be put to them —
+    unlike an agent-hosted client, which may accept the elicitation capability
+    with no UI to render on. Reading stdin runs off-thread so the event loop
+    driving the call keeps servicing it while the human types.
+
+    A blank answer, EOF (Ctrl-D), or an interrupt (Ctrl-C) is a decline —
+    ``False`` for a confirm. Note that is NOT the same as the caller's
+    ``default_when_unsupported``, and must not be: a human who hits Ctrl-C at
+    "Proceed?" has not said yes, whatever the non-interactive default is.
+
+    "Nobody to ask" is the different case, and callers must keep it different:
+    it is the one that has to fall back to ``default_when_unsupported``, or a
+    hook silently starts aborting the writes it used to make. So :func:`has_terminal`
+    is checked *before* an ask is set up — see :func:`with_console_ctx` and the
+    remote proxy's handler selection. The guard below is a second line of
+    defence for direct callers, not the one the contract rests on.
+    """
+    if not has_terminal():
+        return None
+    prompt = f"\n{message}\n{'[y/N]' if boolean else 'Answer'}: "
+    try:
+        answer = (await asyncio.to_thread(input, prompt)).strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if not answer:
+        return None
+    return answer.lower() in ("y", "yes") if boolean else answer
+
+
+class ConsoleContext:
+    """A stand-in ``Context`` that routes a tool's asks to the terminal.
+
+    WHY THIS EXISTS. A CLI dispatches tools in-process, bypassing MCP entirely,
+    so FastMCP injects no ``Context`` and every ``confirm``/``text`` above took
+    its ``ctx is None`` branch — the prompts were unreachable by construction
+    for every local CLI user, and a reader of the tool source could not tell.
+    The *remote* CLI path never had that gap: the proxy hands its client
+    ``console_elicitation_handler``, which is this same terminal prompt. So
+    this closes a difference between witan's two dispatch paths rather than
+    inventing a new interaction.
+
+    Carries no ``request_context``, so :func:`_wire_mode` reads
+    ``_BACKCHANNEL`` and the helpers call :meth:`elicit` below. That is
+    correct rather than incidental: MRTR is a *wire* mechanism — the client
+    answers by retrying the call — and there is no wire here.
+    """
+
+    async def elicit(
+        self,
+        message: str,
+        response_type: type | None = None,
+        response_title: str = "Response",
+    ) -> Any | None:
+        """Prompt, returning an ``AcceptedElicitation`` or ``None`` to decline.
+
+        ``None`` is what :func:`_ask_over_backchannel` reads as "answered no",
+        distinct from the ``_UNANSWERABLE`` it produces when this raises — so a
+        broken terminal degrades to the caller's default, while a deliberate
+        decline is honored.
+        """
+        answer = await console_prompt(
+            message, boolean=response_type is bool, title=response_title
+        )
+        return None if answer is None else AcceptedElicitation(data=answer)
+
+
+def with_console_ctx(fn: Callable, kwargs: dict) -> dict:
+    """``kwargs`` plus a terminal-backed ``ctx``, when ``fn`` takes one.
+
+    The seam a CLI's tool-unwrapper calls. Only fills a ``ctx`` parameter the
+    function actually declares and the caller left unset, so a call site that
+    passes its own context still wins.
+
+    With no terminal it supplies nothing, leaving ``ctx=None`` and every ask on
+    its ``default_when_unsupported`` branch — see :func:`has_terminal` for why
+    that has to happen here rather than as a decline at the prompt.
+    """
+    if "ctx" in kwargs or not has_terminal():
+        return kwargs
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    if "ctx" not in params:
+        return kwargs
+    return {**kwargs, "ctx": ConsoleContext()}
 
 
 def _pending_ask(exc: BaseException) -> InputRequired | None:

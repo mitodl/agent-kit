@@ -26,10 +26,12 @@ just sent, so the caller can look at their own input and judge the match in one
 step without anything sensitive crossing back over the wire.
 
 Scope: this is a report, not an override. Overriding a wrong match still means
-re-sending the content in a shape the detector does not claim — see the task
-above for why an elicitation-based "store it anyway" does not work today
-(tk-the-cli-can-never-reach-the-server-s-steal-promp-555c64: the server's
-``elicit.confirm`` never reaches a CLI user).
+re-sending the content in a shape the detector does not claim. (The reason
+originally recorded here — that ``elicit.confirm`` could never reach a CLI
+user — no longer holds: the CLI now dispatches with a terminal-backed context,
+``witan_core.elicit.ConsoleContext``. An elicitation-based "store it anyway" is
+therefore *possible* now; whether it is *wanted* for a secret detector is a
+separate question this module still answers with no.)
 """
 
 from __future__ import annotations
