@@ -1381,7 +1381,7 @@ witan-code — tree-sitter code graph + cross-repo bridge.
 ### witan code index
 
 ```console
-witan code index [ARGS]
+witan code index [OPTIONS] [ARGS]
 ```
 
 Incrementally index PATH (file or directory). Unchanged files are skipped.
@@ -1389,6 +1389,9 @@ Incrementally index PATH (file or directory). Unchanged files are skipped.
 **Parameters**:
 
 * `PATH, --path`: *[default: .]*
+* `--repo`: Canonical repo URI to key the code graph on. Required only when PATH
+    has no git remote to detect one from, where indexing is refused rather
+    than filed under a bare directory name.
 
 ### witan code reindex
 
@@ -1409,6 +1412,7 @@ Force re-index PATH, ignoring content hashes.
     nothing installed can read is just disk. Dropping the bridge costs
     every OTHER repo's cross-repo bindings until each is reindexed too. *[default: False]*
 * `--yes, --no-yes`: Skip the confirmation prompt for ``--rebuild``. *[default: False]*
+* `--repo`: Canonical repo URI to key the code graph on — see ``index``.
 
 ### witan code doctor
 

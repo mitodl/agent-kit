@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Changed
+
+- **Indexing a target with no resolvable repo key is refused, not guessed.**
+  When no `origin` remote resolved, the indexer fell back to the target's
+  directory name and wrote a permanent store into the shared per-repo store
+  directory under it. That key is neither unique — two `/tmp/*/tests` layouts
+  collide on `tests`, one silently overwriting the other's index — nor
+  recognizable next to real repo graphs; 36 such stores accumulated on one
+  machine, named `out2`, `tmp`, `data`, `sf`. Indexing something with no remote
+  is nearly always accidental (a scratch checkout, a temp repro layout), so the
+  write path now raises `repo.RepoNotDetected` naming the two opt-ins.
+  `witan code index`/`reindex` gained `--repo <uri>` alongside the existing
+  `WITAN_REPO`. **Reads are unaffected**: `repo.detect()` keeps the directory
+  fallback by default, so stores already created under a bare name stay
+  reachable. The hook paths (`session-init`, the PostToolUse reindex) already
+  swallow indexing errors, so this degrades to a no-op there rather than
+  surfacing.
+
+- **`reindex --rebuild` resolves the repo key before it deletes anything, and
+  deletes the store that key names.** `--rebuild` runs ahead of the index, and
+  it used to resolve its own key with the directory-name fallback — so
+  `--rebuild --repo <uri>` on a remoteless checkout checked and deleted the
+  legacy bare-name graph rather than the one it was told to use. Worse, the
+  refusal above lived only inside `index_path`, which runs afterwards: with
+  `--yes` skipping the confirmation prompt, a run that was about to be refused
+  could still drop the shared bridge graph first. The key is now resolved once,
+  up front, by `indexer.resolve_repo_key` and passed into the rebuild.
+
 ## [0.18.0] - 2026-09-02
 
 ### Added

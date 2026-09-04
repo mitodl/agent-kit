@@ -38,12 +38,21 @@ unchanged since the last index are skipped.
 | Argument | Type | Default | Notes |
 |---|---|---|---|
 | `PATH` / `--path` | `Path` | `.` | Positional or `--path`; file or directory |
+| `--repo` | `str` | detected | Canonical repo URI to key the code graph on |
 
 Prints a summary line: `scanned/indexed/skipped/symbols/edges/bindings/errors`.
+
+**A repo key is required.** It comes from the `origin` remote, or from `--repo`
+/ `WITAN_REPO`. When none resolves, indexing is **refused** rather than filed
+under the target's directory name — that key is not unique (two `/tmp/*/tests`
+layouts collide on `tests`) and leaves a permanent store in the shared code
+directory alongside real per-repo graphs. Reads still fall back to the
+directory name, so stores created under one before this remain reachable.
 
 ```bash
 witan-code index                  # index the whole repo, cwd
 witan-code index app/models.py    # index a single file
+witan-code index /tmp/scratch --repo https://github.com/org/name   # no origin
 ```
 
 ## `reindex [PATH]`
@@ -54,6 +63,14 @@ re-parsed and re-inserted even if unchanged.
 | Argument | Type | Default | Notes |
 |---|---|---|---|
 | `PATH` / `--path` | `Path` | `.` | Positional or `--path` |
+| `--rebuild` | `bool` | `false` | Delete unreadable stores before indexing |
+| `--yes` | `bool` | `false` | Skip `--rebuild`'s confirmation prompt |
+| `--repo` | `str` | detected | Canonical repo URI to key the code graph on |
+
+Same repo-key requirement as `index` above. The key is resolved **before**
+`--rebuild` deletes anything, and the rebuild deletes the store that key names —
+so a run that would be refused deletes nothing, and `--rebuild --repo <uri>`
+cannot drop a different graph than the one it is about to write.
 
 ```bash
 witan-code reindex   # rebuild the whole repo's store

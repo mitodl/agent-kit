@@ -85,3 +85,40 @@ def test_detect_tolerates_multivalued_fetch(tmp_path, monkeypatch):
         check=True,
     )
     assert repo.detect(start=tmp_path) == "https://github.com/mitodl/ol-data-platform"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_detect_falls_back_to_dirname_for_reads(tmp_path, monkeypatch):
+    """A store already created under a bare directory name has to stay
+    reachable, so the read default keeps the fallback."""
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    checkout = tmp_path / "scratchproj"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+
+    assert repo.detect(start=checkout) == "scratchproj"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_detect_without_dirname_fallback_returns_none(tmp_path, monkeypatch):
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    checkout = tmp_path / "scratchproj"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+
+    assert repo.detect(start=checkout, dirname_fallback=False) is None
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_dirname_fallback_does_not_override_an_explicit_repo(tmp_path, monkeypatch):
+    """The opt-in has to work on the write path: WITAN_REPO is resolved before
+    the remote lookup, so `dirname_fallback=False` never reaches it."""
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    checkout = tmp_path / "scratchproj"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+
+    assert (
+        repo.detect(start=checkout, dirname_fallback=False)
+        == "https://github.com/test/cg"
+    )

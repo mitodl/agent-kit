@@ -144,19 +144,33 @@ def _render_table(
 
 
 @app.command
-def index(path: Path = Path(".")) -> None:
-    """Incrementally index PATH (file or directory). Unchanged files are skipped."""
-    _print_summary("index", path, _index(path, force=False))
+def index(path: Path = Path("."), *, repo: str | None = None) -> None:
+    """Incrementally index PATH (file or directory). Unchanged files are skipped.
+
+    Parameters
+    ----------
+    repo:
+        Canonical repo URI to key the code graph on. Required only when PATH
+        has no git remote to detect one from, where indexing is refused rather
+        than filed under a bare directory name.
+    """
+    _print_summary("index", path, _index(path, force=False, repo=repo))
 
 
 @app.command
 def reindex(
-    path: Path = Path("."), *, rebuild: bool = False, yes: bool = False
+    path: Path = Path("."),
+    *,
+    rebuild: bool = False,
+    yes: bool = False,
+    repo: str | None = None,
 ) -> None:
     """Force re-index PATH, ignoring content hashes.
 
     Parameters
     ----------
+    repo:
+        Canonical repo URI to key the code graph on — see ``index``.
     rebuild:
         Delete this repo's code graph, and the shared bridge graph if it is
         also unreadable, before indexing — the recovery for a store the
@@ -168,12 +182,32 @@ def reindex(
     yes:
         Skip the confirmation prompt for ``--rebuild``.
     """
+    # ★ RESOLVE THE KEY BEFORE ANY DESTRUCTIVE WORK, and hand it to the rebuild.
+    # Two things go wrong when the rebuild resolves its own: it used the
+    # directory-name fallback, so `--rebuild --repo <uri>` on a remoteless
+    # checkout checked and deleted the legacy bare-name graph rather than the
+    # one it was told to use; and the refusal lived only inside `_index`, which
+    # runs afterwards, so `--rebuild --yes` there could drop the shared bridge
+    # graph and only then decline to index. A run that is going to be refused
+    # must delete nothing.
+    slug = _repo_key(path, repo)
     if rebuild:
-        _rebuild_stores(path, yes=yes)
-    _print_summary("reindex", path, _index(path, force=True))
+        _rebuild_stores(path, yes=yes, slug=slug)
+    _print_summary("reindex", path, _index(path, force=True, repo=repo))
 
 
-def _rebuild_stores(path: Path, *, yes: bool) -> None:
+def _repo_key(path: Path, repo: str | None) -> str:
+    """``indexer.resolve_repo_key``, reporting a refusal as a CLI error."""
+    from . import repo as repo_module
+
+    try:
+        return indexer.resolve_repo_key(path.resolve(), repo)
+    except repo_module.RepoNotDetected as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def _rebuild_stores(path: Path, *, yes: bool, slug: str) -> None:
     """Delete the unreadable stores this reindex would otherwise write into.
 
     Only the unreadable ones. ``--rebuild`` on a healthy store would throw away
@@ -215,12 +249,14 @@ def _rebuild_stores(path: Path, *, yes: bool) -> None:
             f"`witan-code reindex {root} --rebuild`."
         )
         raise SystemExit(1)
-    slug = repo_module.detect(start=path)
+    # `slug` comes from the caller (`reindex`), resolved with the same strict
+    # rules the index itself uses — NOT re-detected here. Detecting again would
+    # take the directory-name fallback and delete a different graph than the one
+    # about to be written, which is the whole hazard `--rebuild` carries.
+    ref = store_module.store_for_repo(slug, cfg)
     candidates = []
-    if slug is not None:
-        ref = store_module.store_for_repo(slug, cfg)
-        if ref.exists(cfg) and not store_module.store_health(ref, cfg).ok:
-            candidates.append(("this repo's code graph", ref))
+    if ref.exists(cfg) and not store_module.store_health(ref, cfg).ok:
+        candidates.append(("this repo's code graph", ref))
     bridge = store_module.bridge_store(cfg)
     if (
         bridge.exists(cfg)
@@ -329,7 +365,7 @@ def doctor() -> None:
     raise SystemExit(1)
 
 
-def _index(path: Path, *, force: bool) -> indexer.IndexStats:
+def _index(path: Path, *, force: bool, repo: str | None = None) -> indexer.IndexStats:
     """``index_path``, but a failure still prints what the run got through.
 
     The parse phase's counts are the same numbers a success prints, and they are
@@ -338,8 +374,15 @@ def _index(path: Path, *, force: bool) -> indexer.IndexStats:
     swallowed: the exception still propagates, so the exit code and the
     traceback are unchanged.
     """
+    from . import repo as repo_module
+
     try:
-        return indexer.index_path(path, force=force)
+        return indexer.index_path(path, force=force, repo_override=repo)
+    except repo_module.RepoNotDetected as exc:
+        # A refusal, not a crash: the message says what to pass, and a
+        # traceback on top of it would only bury that.
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from exc
     except indexer.IndexFailed as exc:
         _print_summary("partial", path, exc.stats)
         print(f"failed in {exc.phase}: {exc}", file=sys.stderr)

@@ -377,6 +377,41 @@ def _write_phase(phase: str, stats: IndexStats, **detail: object) -> Iterator[No
 # ── Public entry points ───────────────────────────────────────────
 
 
+def resolve_repo_key(target: Path, repo_override: str | None = None) -> str:
+    """The repo key ``target``'s code graph is written under, or refuse.
+
+    REFUSES rather than guessing. This used to fall back to the target's
+    directory name, which writes a permanent store into the SHARED per-repo
+    store directory under a key that is neither unique (two `/tmp/*/tests`
+    layouts collide on `tests`, one silently overwriting the other) nor
+    recognizable next to real repo graphs. It accumulated: 36 such stores on one
+    machine, named `out2`, `tmp`, `data`, `sf`. Indexing something with no
+    remote is nearly always accidental — a scratch checkout, a temp repro layout
+    — so the opt-in is explicit.
+
+    ★ SEPARATE FROM :func:`index_path` SO THE DESTRUCTIVE PATHS CAN ASK FIRST.
+    ``reindex --rebuild`` deletes stores *before* indexing, and it has to delete
+    the store this key names, not the one a directory-name fallback would. It
+    also must not delete anything at all on a run that is about to be refused:
+    with the refusal living only inside ``index_path``, `--rebuild --yes` on a
+    remoteless checkout could drop the shared bridge graph and only then decline
+    to index. So the key is resolved once, up front, by whoever is about to act
+    on it.
+    """
+    repo_root = repo_module.root(target if target.is_dir() else target.parent)
+    slug = repo_module.detect(
+        override=repo_override, start=repo_root or target, dirname_fallback=False
+    )
+    if slug is None:
+        raise repo_module.RepoNotDetected(
+            f"{target} has no git remote to key a code graph on, so indexing it "
+            f"would file it under a bare directory name in the shared store "
+            f"directory. Pass an explicit repo URI to index it anyway: "
+            f"`--repo <uri>` on the CLI, or WITAN_REPO=<uri> in the environment."
+        )
+    return slug
+
+
 def index_path(
     target: Path,
     *,
@@ -393,10 +428,7 @@ def index_path(
     target = target.resolve()
 
     repo_root = repo_module.root(target if target.is_dir() else target.parent)
-    slug = repo_module.detect(override=repo_override, start=repo_root or target)
-    if slug is None:
-        # No git context: use the directory name of the target.
-        slug = (target if target.is_dir() else target.parent).name
+    slug = resolve_repo_key(target, repo_override)
     base = repo_root or (target if target.is_dir() else target.parent)
 
     # Non-default git branches index onto their own omnigraph branch, forked

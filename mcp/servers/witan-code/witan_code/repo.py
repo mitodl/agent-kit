@@ -7,7 +7,23 @@ from pathlib import Path
 from witan_core.repo_key import find_git_config, normalise
 
 
-def detect(override: str | None = None, start: Path | None = None) -> str | None:
+class RepoNotDetected(RuntimeError):
+    """No stable repo key could be resolved for a path.
+
+    Raised only by callers that would otherwise CREATE something keyed on the
+    guess — see :func:`witan_code.indexer.index_path`. A directory name is not
+    a repo key: it is neither unique (two ``/tmp/*/tests`` checkouts collide on
+    ``tests``, silently overwriting each other's index) nor meaningful in a
+    listing of real per-repo graphs.
+    """
+
+
+def detect(
+    override: str | None = None,
+    start: Path | None = None,
+    *,
+    dirname_fallback: bool = True,
+) -> str | None:
     """
     Return a canonical repo key (HTTPS URI) for ``start`` (or the cwd).
 
@@ -22,8 +38,13 @@ def detect(override: str | None = None, start: Path | None = None) -> str | None
       3. ``git remote get-url origin`` (handles worktrees and multi-valued
          config keys that ``configparser`` rejects)
       4. ``origin`` remote URL parsed from the nearest ``.git/config``
-      5. directory name of the git root (fallback when no remote)
+      5. directory name of the git root — only when ``dirname_fallback``
       6. ``None`` — no repo context available
+
+    ``dirname_fallback`` is on by default because READS want it: it is how a
+    store that was already created under a bare directory name stays
+    reachable. Write paths pass ``False``, because that same guess is what
+    files a scratch directory permanently into the shared per-repo namespace.
     """
     if override is not None:
         return normalise(override) if override else None
@@ -45,7 +66,7 @@ def detect(override: str | None = None, start: Path | None = None) -> str | None
         return slug
 
     # No origin remote — fall back to the repo root directory name.
-    return git_config_path.parent.parent.name
+    return git_config_path.parent.parent.name if dirname_fallback else None
 
 
 def _git_origin(start: Path) -> str | None:
