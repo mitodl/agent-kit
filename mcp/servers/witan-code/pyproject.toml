@@ -153,7 +153,7 @@ dependencies = [
     # grammar wheels (0.24 rejects them: needs ABI 15 => ts>=0.24). Do NOT bump
     # to 0.26 until upstream fixes this. See tk-critical-indexer-segfaults and
     # https://github.com/tree-sitter/py-tree-sitter/issues/472 (upstream report).
-    "tree-sitter>=0.25,<0.26",
+    "tree-sitter>=0.26,<0.27",
     # Individual grammar wheels (not tree-sitter-language-pack): each returns a
     # standalone tree_sitter.Language usable with tree_sitter.Parser/Query. Pins
     # are tight on purpose — a grammar major can bump the ABI / binding (see the
