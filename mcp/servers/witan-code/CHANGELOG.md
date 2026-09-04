@@ -26,6 +26,16 @@ a MINOR bump may include breaking changes).
   swallow indexing errors, so this degrades to a no-op there rather than
   surfacing.
 
+- **`reindex --rebuild` resolves the repo key before it deletes anything, and
+  deletes the store that key names.** `--rebuild` runs ahead of the index, and
+  it used to resolve its own key with the directory-name fallback — so
+  `--rebuild --repo <uri>` on a remoteless checkout checked and deleted the
+  legacy bare-name graph rather than the one it was told to use. Worse, the
+  refusal above lived only inside `index_path`, which runs afterwards: with
+  `--yes` skipping the confirmation prompt, a run that was about to be refused
+  could still drop the shared bridge graph first. The key is now resolved once,
+  up front, by `indexer.resolve_repo_key` and passed into the rebuild.
+
 ## [0.18.0] - 2026-09-02
 
 ### Added

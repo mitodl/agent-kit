@@ -320,7 +320,7 @@ def test_rebuild_refuses_a_path_that_is_not_the_repo_root(
     monkeypatch.setattr(store_module, "discard_store", _boom)
 
     with pytest.raises(SystemExit):
-        cli_module._rebuild_stores(sub, yes=True)
+        cli_module._rebuild_stores(sub, yes=True, slug="https://github.com/test/cg")
 
     out = capsys.readouterr().out
     assert "not the repo root" in out
@@ -352,6 +352,6 @@ def test_rebuild_refuses_a_file_path_with_real_git(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(store_module, "discard_store", _boom)
 
     with pytest.raises(SystemExit):
-        cli_module._rebuild_stores(target, yes=True)
+        cli_module._rebuild_stores(target, yes=True, slug="https://github.com/test/cg")
 
     assert "not the repo root" in capsys.readouterr().out

@@ -182,12 +182,32 @@ def reindex(
     yes:
         Skip the confirmation prompt for ``--rebuild``.
     """
+    # ★ RESOLVE THE KEY BEFORE ANY DESTRUCTIVE WORK, and hand it to the rebuild.
+    # Two things go wrong when the rebuild resolves its own: it used the
+    # directory-name fallback, so `--rebuild --repo <uri>` on a remoteless
+    # checkout checked and deleted the legacy bare-name graph rather than the
+    # one it was told to use; and the refusal lived only inside `_index`, which
+    # runs afterwards, so `--rebuild --yes` there could drop the shared bridge
+    # graph and only then decline to index. A run that is going to be refused
+    # must delete nothing.
+    slug = _repo_key(path, repo)
     if rebuild:
-        _rebuild_stores(path, yes=yes)
+        _rebuild_stores(path, yes=yes, slug=slug)
     _print_summary("reindex", path, _index(path, force=True, repo=repo))
 
 
-def _rebuild_stores(path: Path, *, yes: bool) -> None:
+def _repo_key(path: Path, repo: str | None) -> str:
+    """``indexer.resolve_repo_key``, reporting a refusal as a CLI error."""
+    from . import repo as repo_module
+
+    try:
+        return indexer.resolve_repo_key(path.resolve(), repo)
+    except repo_module.RepoNotDetected as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def _rebuild_stores(path: Path, *, yes: bool, slug: str) -> None:
     """Delete the unreadable stores this reindex would otherwise write into.
 
     Only the unreadable ones. ``--rebuild`` on a healthy store would throw away
@@ -229,12 +249,14 @@ def _rebuild_stores(path: Path, *, yes: bool) -> None:
             f"`witan-code reindex {root} --rebuild`."
         )
         raise SystemExit(1)
-    slug = repo_module.detect(start=path)
+    # `slug` comes from the caller (`reindex`), resolved with the same strict
+    # rules the index itself uses — NOT re-detected here. Detecting again would
+    # take the directory-name fallback and delete a different graph than the one
+    # about to be written, which is the whole hazard `--rebuild` carries.
+    ref = store_module.store_for_repo(slug, cfg)
     candidates = []
-    if slug is not None:
-        ref = store_module.store_for_repo(slug, cfg)
-        if ref.exists(cfg) and not store_module.store_health(ref, cfg).ok:
-            candidates.append(("this repo's code graph", ref))
+    if ref.exists(cfg) and not store_module.store_health(ref, cfg).ok:
+        candidates.append(("this repo's code graph", ref))
     bridge = store_module.bridge_store(cfg)
     if (
         bridge.exists(cfg)
