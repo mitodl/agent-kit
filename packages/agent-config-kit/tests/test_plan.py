@@ -43,6 +43,47 @@ def test_apply_claude_registers_mcp_server_as_stdio(tmp_path, monkeypatch):
     assert entry["env"]["WITAN_AUTHOR"] == "tester"
 
 
+def test_mcp_servers_by_platform_overrides_only_the_named_platform(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".pi").mkdir()
+    bundle = _bundle(
+        mcp_servers_by_platform={
+            "claude": {"witan": StdioServer(command="witan", args=["serve"])}
+        }
+    )
+
+    apply("claude", bundle)
+    apply("pi", bundle)
+
+    claude = json.loads((tmp_path / ".claude.json").read_text())["mcpServers"]["witan"]
+    assert (claude["command"], claude["args"]) == ("witan", ["serve"])
+    pi = json.loads((tmp_path / ".pi" / "agent" / "mcp.json").read_text())
+    assert pi["mcpServers"]["witan"]["command"] == "uvx"
+
+
+def test_mcp_servers_by_platform_merges_by_key_leaving_siblings_alone(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(
+        mcp_servers={
+            "witan": StdioServer(command="uvx", args=["witan", "serve"]),
+            "other": StdioServer(command="uvx", args=["other", "serve"]),
+        },
+        mcp_servers_by_platform={
+            "claude": {"witan": StdioServer(command="witan", args=["serve"])}
+        },
+    )
+
+    apply("claude", bundle)
+
+    servers = json.loads((tmp_path / ".claude.json").read_text())["mcpServers"]
+    assert servers["witan"]["command"] == "witan"
+    assert servers["other"]["command"] == "uvx"
+
+
 def test_apply_claude_preserves_existing_claude_json(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     claude_json = tmp_path / ".claude.json"

@@ -30,6 +30,21 @@ _WITAN_ARGS = [
     "serve",
 ]
 
+# Platforms whose witan hooks shell out to the bare `witan` command, so the CLI
+# is already a hard requirement there (the setup command warns when it is
+# missing). Pointing their MCP entry at that same CLI keeps both surfaces on one
+# install: with the uvx form, the hooks run the PyPI release while the MCP server
+# runs git `main`, and the two lineages skew silently — the agent's injected
+# context and the tools it calls end up on different code with no error saying
+# so. It also drops a cold-start `uvx` resolve (~90 packages) from server
+# startup. The uvx form stays the default for MCP-only platforms, which have no
+# persistent CLI to point at.
+#
+# `witan serve` mounts witan-code's `code_*` tools in-process whenever
+# witan-code is importable, so the single entry still exposes everything the
+# `--with`-bearing uvx form does.
+_CLI_HOOK_PLATFORMS = ("claude", "pi")
+
 
 def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     skills_dir = pkg_dir / "skills"
@@ -74,6 +89,14 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
             "witan": StdioServer(
                 command="uvx", args=_WITAN_ARGS, env={"WITAN_AUTHOR": author}
             )
+        },
+        mcp_servers_by_platform={
+            name: {
+                "witan": StdioServer(
+                    command="witan", args=["serve"], env={"WITAN_AUTHOR": author}
+                )
+            }
+            for name in _CLI_HOOK_PLATFORMS
         },
         skills=skills,
         hooks=hooks,

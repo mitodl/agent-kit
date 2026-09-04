@@ -33,6 +33,20 @@ def test_diff_reports_no_drift_when_already_applied(tmp_path, monkeypatch):
     assert result.unreadable_paths == []
 
 
+def test_diff_resolves_per_platform_mcp_overrides(tmp_path, monkeypatch):
+    """diff() has to apply the same override resolution apply() does, or an
+    overridden platform reads as permanent drift right after being applied."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(
+        mcp_servers_by_platform={
+            "claude": {"witan": StdioServer(command="witan", args=["serve"])}
+        }
+    )
+    apply("claude", bundle)
+
+    assert not diff("claude", bundle).has_drift
+
+
 def test_diff_reports_missing_mcp_server(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 

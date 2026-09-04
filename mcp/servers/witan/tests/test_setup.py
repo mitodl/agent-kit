@@ -27,7 +27,10 @@ def test_witan_bundle_registers_witan_mcp_server_and_hooks(tmp_path, monkeypatch
     claude_json = json.loads((tmp_path / ".claude.json").read_text())
     entry = claude_json["mcpServers"]["witan"]
     assert entry["type"] == "stdio"
-    assert entry["command"] == "uvx"
+    # Claude Code's hooks already require `witan` on PATH, so the MCP entry runs
+    # that same install rather than a second one resolved from git `main`.
+    assert entry["command"] == "witan"
+    assert entry["args"] == ["serve"]
     assert entry["env"]["WITAN_AUTHOR"] == "tester"
 
     settings = json.loads((tmp_path / ".claude" / "settings.json").read_text())
@@ -47,6 +50,24 @@ def test_witan_bundle_registers_witan_mcp_server_and_hooks(tmp_path, monkeypatch
     # Both prompt-path hooks carry a timeout so a hung git/graph can't stall.
     assert inject[0]["timeout"] == 15
     assert checkpoint[0]["timeout"] == 15
+
+
+def test_mcp_only_platforms_keep_the_self_contained_uvx_entry(tmp_path, monkeypatch):
+    """Copilot has no witan hooks and so no CLI to point at — it still needs the
+    uvx form, which is why the CLI entry is a per-platform override rather than
+    a wholesale replacement."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    vscode_dir = tmp_path / ".config" / "Code" / "User"
+    vscode_dir.mkdir(parents=True)
+    monkeypatch.setattr("agent_config_kit.registry.vscode_user_dir", lambda: vscode_dir)
+    pkg_dir = tmp_path / "pkg"
+    pkg_dir.mkdir()
+
+    apply("copilot", setup.witan_bundle(pkg_dir, "tester"))
+
+    entry = json.loads((vscode_dir / "mcp.json").read_text())["servers"]["witan"]
+    assert entry["command"] == "uvx"
+    assert "--from" in entry["args"]
 
 
 def test_witan_bundle_includes_pi_extensions_as_plugin_hooks(tmp_path):

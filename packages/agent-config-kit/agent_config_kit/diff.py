@@ -43,12 +43,19 @@ class Drift:
 
 
 def _diff_mcp_servers(
+    platform_name: str,
     platform: registry.AgentPlatform,
     bundle: RegistrationBundle,
     scope: Scope,
     result: Drift,
 ) -> None:
-    if platform.mcp is None or not bundle.mcp_servers:
+    # Same per-platform override resolution as ``plan.apply``, or a platform
+    # that overrides its launcher would read as permanent drift.
+    mcp_servers = {
+        **bundle.mcp_servers,
+        **bundle.mcp_servers_by_platform.get(platform_name, {}),
+    }
+    if platform.mcp is None or not mcp_servers:
         return
     target = _resolve_target(platform.mcp, scope)
     if target is None:
@@ -59,7 +66,7 @@ def _diff_mcp_servers(
         return
     container = _navigate(cfg, target.key_path)
     serialize = platform.mcp_serialize or _default_serialize
-    for name, server in bundle.mcp_servers.items():
+    for name, server in mcp_servers.items():
         desired = serialize(server)
         if name not in container:
             result.missing_keys.append(f"mcp_servers:{name}")
@@ -132,7 +139,7 @@ def diff(
 ) -> Drift:
     platform = registry.get_platform(platform_name)
     result = Drift(platform=platform_name)
-    _diff_mcp_servers(platform, bundle, scope, result)
+    _diff_mcp_servers(platform_name, platform, bundle, scope, result)
     _diff_hooks(platform, bundle, scope, result)
     _diff_skills(platform, bundle, scope, result)
     return result

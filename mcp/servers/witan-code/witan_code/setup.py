@@ -27,6 +27,12 @@ _WITAN_CODE_ARGS = [
     "serve",
 ]
 
+# See ``witan.setup._CLI_HOOK_PLATFORMS`` — same reasoning, same platform set:
+# these are the platforms whose hooks already invoke ``binary`` directly, so
+# their MCP entry runs that same install instead of a second one resolved from
+# git `main`.
+_CLI_HOOK_PLATFORMS = ("claude", "pi")
+
 
 def witan_code_bundle(
     pkg_dir: Path, author: str, *, binary: str = "witan-code"
@@ -95,11 +101,22 @@ def witan_code_bundle(
             if f.suffix == ".ts"
         )
 
+    cli_command, *cli_args = binary.split()
     return RegistrationBundle(
         mcp_servers={
             "witan-code": StdioServer(
                 command="uvx", args=_WITAN_CODE_ARGS, env={"WITAN_AUTHOR": author}
             )
+        },
+        mcp_servers_by_platform={
+            name: {
+                "witan-code": StdioServer(
+                    command=cli_command,
+                    args=[*cli_args, "serve"],
+                    env={"WITAN_AUTHOR": author},
+                )
+            }
+            for name in _CLI_HOOK_PLATFORMS
         },
         skills=skills,
         hooks=hooks,
