@@ -58,7 +58,9 @@ class PlatformState:
     # _bundle_platform_state
 
 
-def _bundle_platform_state(bundle: RegistrationBundle) -> PlatformState:
+def _bundle_platform_state(
+    bundle: RegistrationBundle, platform_name: str
+) -> PlatformState:
     # Unlike mcp_servers/hooks, a skill's supporting files (scripts/,
     # references/, assets/, ...) are never enumerated in the manifest — only
     # its name and SKILL.md path are. Tracking skills by name alone would mean
@@ -72,8 +74,20 @@ def _bundle_platform_state(bundle: RegistrationBundle) -> PlatformState:
         for skill in bundle.skills
         for rel in skill_files(skill)
     ]
+    # Resolved per platform, the same way ``apply`` does. Recording only
+    # ``bundle.mcp_servers`` would omit a server introduced ONLY through the
+    # per-platform mapping: apply() writes it, prune never records it, and no
+    # later pruned apply can remove it — it becomes permanently unownable state
+    # in the user's config. The key sets are usually identical (a per-platform
+    # entry normally overrides a base key), which is exactly why this would have
+    # gone unnoticed.
     return PlatformState(
-        mcp_servers=sorted(bundle.mcp_servers),
+        mcp_servers=sorted(
+            {
+                **bundle.mcp_servers,
+                **bundle.mcp_servers_by_platform.get(platform_name, {}),
+            }
+        ),
         hooks=sorted(hook_identity(h) for h in bundle.hooks),
         skills=sorted(skill_entries),
     )
@@ -276,7 +290,7 @@ def apply_with_prune(
     to persist for this platform going forward."""
     result = apply(platform_name, bundle, scope=scope, dry_run=dry_run, force=force)
     platform = registry.get_platform(platform_name)
-    current = _bundle_platform_state(bundle)
+    current = _bundle_platform_state(bundle, platform_name)
 
     result.removed.extend(
         _remove_mcp_servers(

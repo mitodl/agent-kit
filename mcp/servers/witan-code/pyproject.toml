@@ -10,7 +10,14 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "agent-config-kit>=0.4,<1",
+    # >=0.7: witan_code/setup.py passes `mcp_servers_by_platform` to
+    # `RegistrationBundle`, a field added in agent-config-kit 0.7.0. It is a
+    # dataclass, so an external install resolving 0.4–0.6 raises TypeError on
+    # the unexpected keyword the moment `witan-code setup` builds its bundle.
+    # Same blind spot as the witan-core floors below — the workspace resolves
+    # agent-config-kit by path — except there is NO `check-core-floor`
+    # equivalent for this dependency, so this line is the only guard.
+    "agent-config-kit>=0.7,<1",
     # `remote`: the ADR-0005 client stack (OIDC device grant + MCP-client
     # proxy) behind `witan-code login` and the read commands' remote mode.
     # Costs nothing extra in practice — fastmcp is already required here and

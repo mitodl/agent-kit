@@ -19,7 +19,15 @@ dependencies = [
   "cyclopts>=4,<5",
   "rich>=13",
   "pydantic>=2,<3",
-  "agent-config-kit>=0.4,<1",
+  # >=0.7: witan/setup.py passes `mcp_servers_by_platform` to
+  # `RegistrationBundle`, a field added in agent-config-kit 0.7.0. It is a
+  # dataclass, so an external install resolving 0.4–0.6 raises TypeError on the
+  # unexpected keyword the moment `witan setup` builds its bundle. Same failure
+  # mode as the witan-core floors below and the same blind spot — the workspace
+  # resolves agent-config-kit by path, so no test run here can catch it — but
+  # note there is NO `check-core-floor` equivalent for this dependency, so this
+  # line is the only thing standing in for one.
+  "agent-config-kit>=0.7,<1",
   # >=0.13: witan/graph.py imports witan_core.omnigraph.StoreUnavailable at
   # module scope, which 0.12 does not export. A looser floor lets an external
   # install resolve a witan-core the server cannot even import — the failure
