@@ -106,5 +106,7 @@ known_provider_package confidence heuristic.
 
 Edges are directional and typed. A traversal names the edge in lowercase (`supersedes`, `blocks`), while the schema declares it in PascalCase.
 
-| Edge | From | To | Meaning |
-| --- | --- | --- | --- |
+An edge with properties exposes them only through a **bound** traversal — `$src $w:supersedes $dst` binds the matched edge row, making `$w.confidence` a column you can project, filter, and order on. The unbound form (`$src supersedes $dst`) still only asserts the edge exists. Binding also drops set semantics: one row per *edge*, so parallel edges between the same pair arrive as separate rows.
+
+| Edge | From | To | Properties | Meaning |
+| --- | --- | --- | --- | --- |

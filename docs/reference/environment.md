@@ -162,6 +162,7 @@ weight to `0` to reproduce the raw BM25 order.
 | `WITAN_RANK_W_CONF` | `0.2` | Weight of the author-set confidence score. |
 | `WITAN_RANK_W_CORROB` | `0.2` | Weight of corroboration — how much other memories back this one up. |
 | `WITAN_RANK_W_HOP` | `0.5` | Per-hop distance penalty in graph-aware recall, so direct hits (hop 0) outrank expanded neighbours (hop ≥ 1). |
+| `WITAN_RANK_W_INFERRED_EDGE` | `0.35` | Extra distance charged when recall reaches a neighbour over an `inferred` edge (one witan derived, such as a Tagged edge promoted from a free-string tag) rather than an `asserted` one a caller named. Set to 0 for the uniform-hop behaviour recall had before edges carried confidence. |
 | `WITAN_RANK_W_RECENCY` | `0.3` | Weight of the recency term, decayed by `WITAN_RANK_HALFLIFE_DAYS`. |
 
 ## Maintenance and observability

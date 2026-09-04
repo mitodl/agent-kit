@@ -25,10 +25,24 @@ logger = get_logger("witan.scan")
 # structured/enum params are intentionally out of scope for now. Branch names
 # (insert_code_branch) are deliberately excluded — witan never sanitises them.
 # Keep this aligned with queries/mutations.gq when free-text fields are added.
+#
+# The ``link_*`` entries are EDGE types, not nodes — the second slot is only a
+# label handed to the detectors, so an edge fits the same map. Their ``role``
+# is caller-supplied prose reaching the store the same way a memory's
+# ``content`` does; leaving it out would make "put the secret in the role"
+# the one write path that skips the scanner. The other three edge properties
+# are machine-set (an enum, the resolved author, a timestamp) and are out of
+# scope for the same reason every other structured param is.
 FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
     "insert_memory": ("Memory", ("title", "content")),
     "update_memory": ("Memory", ("title", "content")),
     "insert_topic": ("Topic", ("name",)),
+    "link_supersedes": ("Supersedes", ("role",)),
+    "link_applies_to": ("AppliesTo", ("role",)),
+    "link_refines": ("Refines", ("role",)),
+    "link_contradicts": ("Contradicts", ("role",)),
+    "link_related_to": ("RelatedTo", ("role",)),
+    "link_tagged": ("Tagged", ("role",)),
     "insert_workflow_project": ("WorkflowProject", ("title", "description")),
     "update_workflow_project_description": ("WorkflowProject", ("description",)),
     "insert_workflow_session": ("WorkflowSession", ("summary",)),
@@ -40,6 +54,10 @@ FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
+#: NOTE: a ``RuntimeError`` subclass, so anything catching ``RuntimeError``
+#: broadly on the write path has to be sure it is not swallowing a refusal —
+#: see ``server._edge_property_errors``, which matches the engine's typecheck
+#: prefix rather than a loose substring for exactly this reason.
 class WriteBlocked(RuntimeError):
     """Raised to reject a write whose content a scanner flagged for blocking.
 

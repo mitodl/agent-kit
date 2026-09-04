@@ -71,8 +71,9 @@ def test_factory_builds_guard_when_enabled():
 
 def test_unmapped_query_is_untouched():
     guard = _guard([MatchScanner("s", "secret", "SECRET")])
-    params = {"from": "a", "to": "SECRET"}
-    assert guard("link_tagged", params) is params
+    params = {"branch": "SECRET", "repo": "r"}
+    # Branch names are deliberately out of FIELD_MAP — witan never sanitises them.
+    assert guard("insert_code_branch", params) is params
 
 
 def test_only_mapped_fields_are_scanned():
@@ -80,6 +81,26 @@ def test_only_mapped_fields_are_scanned():
     guard = _guard([MatchScanner("s", "secret", "SECRET")])
     params = {"title": "ok", "content": "clean", "repo": "SECRET"}
     assert guard("insert_memory", params) == params
+
+
+def test_edge_role_is_scanned():
+    """An edge's `role` is caller-supplied prose like any node's, so it must not
+    be the one write path that skips the scanner."""
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIASECRET")])
+    with pytest.raises(WriteBlocked) as exc:
+        guard(
+            "link_related_to",
+            {"from": "a", "to": "b", "role": "because AKIASECRET", "confidence": None},
+        )
+    assert exc.value.query_name == "link_related_to"
+
+
+def test_edge_endpoints_are_not_scanned():
+    """Only `role` is free text. The slugs and the machine-set properties are
+    structured params, out of scope like every other."""
+    guard = _guard([MatchScanner("s", "secret", "SECRET")])
+    params = {"from": "SECRET", "to": "b", "role": None, "author": "SECRET"}
+    assert guard("link_related_to", params) == params
 
 
 # ── block ───────────────────────────────────────────────────────────────────────

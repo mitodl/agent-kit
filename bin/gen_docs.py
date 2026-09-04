@@ -487,7 +487,7 @@ def gen_cli() -> None:
 
 _DIVIDER_RE = re.compile(r"[─\-=_]{3,}.*|.*[─\-=]{6,}\s*")
 _NODE_RE = re.compile(r"^node\s+(\w+)\s*\{")
-_EDGE_RE = re.compile(r"^edge\s+(\w+)\s*:\s*(\w+)\s*->\s*(\w+)")
+_EDGE_RE = re.compile(r"^edge\s+(\w+)\s*:\s*(\w+)\s*->\s*(\w+)\s*(\{)?")
 _FIELD_RE = re.compile(r"^\s*(\w+)\s*:\s*(.+?)\s*(?://\s*(.*))?$")
 
 
@@ -502,12 +502,21 @@ def parse_pg(path: Path) -> tuple[list[dict], list[dict]]:
     edges: list[dict] = []
     pending: list[str] = []
     current: dict | None = None
+    detached = False
 
     for raw in path.read_text().splitlines():
         line = raw.rstrip()
         stripped = line.strip()
 
         if stripped.startswith("//"):
+            # A comment block that resumes after a real blank line is a NEW
+            # block, and the one before it documented nothing. That is what
+            # keeps a section preamble — schema.pg's "§ Memory edge
+            # properties", which describes six edges at once — out of the
+            # Meaning cell of whichever edge happens to follow it.
+            if detached:
+                pending = []
+                detached = False
             text = stripped[2:].strip()
             # Section dividers (`── Workflow Tracking ──`) are layout, not
             # documentation, and would otherwise open every node's description.
@@ -515,17 +524,20 @@ def parse_pg(path: Path) -> tuple[list[dict], list[dict]]:
                 pending.append(text)
             continue
         if not stripped:
-            # A blank line does NOT break the comment→declaration association.
-            # Every doc block in these schema files is separated from the thing
-            # it documents by exactly one blank line, so treating a blank as a
-            # reset silently drops the documentation for every node and edge —
-            # which is what the first version of this parser did.
+            # A blank line does NOT break the comment→declaration association:
+            # most doc blocks in these schema files sit exactly one blank line
+            # above the thing they document, so treating a blank as a reset
+            # silently drops the documentation for every node and edge — which
+            # is what the first version of this parser did. It breaks the
+            # association only when a further comment block follows, above.
+            detached = bool(pending)
             continue
 
         if current is not None:
             if stripped.startswith("}"):
                 current = None
                 pending = []
+                detached = False
                 continue
             match = _FIELD_RE.match(line)
             if match:
@@ -543,15 +555,23 @@ def parse_pg(path: Path) -> tuple[list[dict], list[dict]]:
             current = {"name": match.group(1), "doc": pending, "fields": []}
             nodes.append(current)
             pending = []
+            detached = False
             continue
 
         if match := _EDGE_RE.match(stripped):
-            name, src, dst = match.groups()
-            edges.append({"name": name, "from": src, "to": dst, "doc": pending})
+            name, src, dst, brace = match.groups()
+            edge = {"name": name, "from": src, "to": dst, "doc": pending, "fields": []}
+            edges.append(edge)
+            # An edge with a property block reuses the node field-collector:
+            # the body syntax is identical, and the collector only ever touches
+            # `fields`.
+            current = edge if brace else None
             pending = []
+            detached = False
             continue
 
         pending = []
+        detached = False
 
     return nodes, edges
 
@@ -592,13 +612,22 @@ def _render_schema(title: str, intro: str, source: Path) -> str:
     body.append("## Edges\n")
     body.append(
         "Edges are directional and typed. A traversal names the edge in lowercase "
-        "(`supersedes`, `blocks`), while the schema declares it in PascalCase.\n"
+        "(`supersedes`, `blocks`), while the schema declares it in PascalCase.\n\n"
+        "An edge with properties exposes them only through a **bound** traversal — "
+        "`$src $w:supersedes $dst` binds the matched edge row, making `$w.confidence` "
+        "a column you can project, filter, and order on. The unbound form "
+        "(`$src supersedes $dst`) still only asserts the edge exists. Binding also "
+        "drops set semantics: one row per *edge*, so parallel edges between the same "
+        "pair arrive as separate rows.\n"
     )
-    body.append("| Edge | From | To | Meaning |")
-    body.append("| --- | --- | --- | --- |")
+    body.append("| Edge | From | To | Properties | Meaning |")
+    body.append("| --- | --- | --- | --- | --- |")
     for edge in edges:
         doc = _schema_doc(edge["doc"]).replace("\n", " ")
-        body.append(f"| `{edge['name']}` | `{edge['from']}` | `{edge['to']}` | {doc} |")
+        props = ", ".join(f"`{f['name']}: {f['type']}`" for f in edge["fields"]) or "—"
+        body.append(
+            f"| `{edge['name']}` | `{edge['from']}` | `{edge['to']}` | {props} | {doc} |"
+        )
     body.append("")
     return "\n".join(body)
 

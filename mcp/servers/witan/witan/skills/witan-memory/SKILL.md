@@ -209,6 +209,19 @@ memories sharing a tag are one hop apart. Explore the graph with
 `memory_neighbors(slug)` (a memory's links by kind) and `topic_get("uv:topic")`
 (everything tagged to a topic, across repos).
 
+**Pass `role=` whenever the kind alone does not say why.** The edge carries it,
+and `memory_neighbors` hands it back, so a later reader sees "both configure the
+Vault sidecar" instead of guessing from a bare `related_to`. Add
+`confidence="inferred"` when the link is a hunch worth recording but not worth
+ranking on — `recall` prefers asserted edges when it expands, so an unmarked
+guess pulls its neighbour into everyone else's results:
+
+```python
+memory_link(a, b, kind="related_to", role="both configure the Vault sidecar")
+memory_link(a, c, kind="related_to", role="might share a root cause",
+            confidence="inferred")
+```
+
 ## Updating an Existing Memory
 
 To correct a simply-wrong memory, `memory_store` the fixed version. To replace an

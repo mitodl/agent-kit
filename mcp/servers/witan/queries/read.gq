@@ -251,68 +251,121 @@ query get_memory($slug: String) {
 // side of a traversal to be a bound node, see code_read.gq). Directional edges
 // expose one query; symmetric edges (contradicts, related_to) expose an out- and
 // an in-direction query that the server unions.
+//
+// ★ THE `$w:` PREFIX IS A BOUND TRAVERSAL and it changes the row semantics, not
+// just the projection. `$m $w:supersedes $other` binds the matched EDGE row, so
+// schema.pg's edge properties become projectable columns — which is the only
+// way to read them at all. It also drops set semantics: the unbound form yields
+// one row per matched (src, dst) pair, the bound form one row PER EDGE, so two
+// parallel edges between the same pair are two rows. `memory_neighbors`
+// de-duplicates on the neighbour slug to hold its documented contract; the
+// `order { $w.created_at desc }` below is what makes the survivor the newest
+// link rather than an arbitrary one.
+//
+// ★ AND THE `as` ALIASES ARE LOAD-BEARING. The client strips a column's alias
+// prefix at the first dot ("other.slug" → "slug"), so projecting both
+// `$other.created_at` and `$w.created_at` would collapse to one `created_at`
+// key with the edge silently winning. `as edge_created_at` is what keeps the
+// node's timestamp and the edge's from being the same dict key. Same for
+// `$w.author`, and `$w.confidence` would collide with `Memory.confidence` the
+// moment anyone projected it here.
 
 query supersedes_targets($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $other: Memory
-        $m supersedes $other
+        $m $w:supersedes $other
     }
-    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+    return {
+        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
 }
 
 query refines_targets($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $other: Memory
-        $m refines $other
+        $m $w:refines $other
     }
-    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+    return {
+        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
 }
 
 query applies_to_targets($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $other: Memory
-        $m appliesto $other
+        $m $w:appliesto $other
     }
-    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+    return {
+        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
 }
 
 query related_out($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $other: Memory
-        $m relatedto $other
+        $m $w:relatedto $other
     }
-    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+    return {
+        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
 }
 
 query related_in($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $other: Memory
-        $other relatedto $m
+        $other $w:relatedto $m
     }
-    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+    return {
+        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
 }
 
 query contradicts_out($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $other: Memory
-        $m contradicts $other
+        $m $w:contradicts $other
     }
-    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+    return {
+        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
 }
 
 query contradicts_in($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $other: Memory
-        $other contradicts $m
+        $other $w:contradicts $m
     }
-    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+    return {
+        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
 }
 
 // Memories that AppliesTo $slug (in-direction; pairs with applies_to_targets).
@@ -320,9 +373,14 @@ query applies_to_sources($slug: String) {
     match {
         $other: Memory
         $m: Memory { slug: $slug }
-        $other appliesto $m
+        $other $w:appliesto $m
     }
-    return { $other.slug, $other.kind, $other.title, $other.repo, $other.created_at }
+    return {
+        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
 }
 
 // Sessions that produced $slug (for provenance-sibling expansion in recall).
@@ -348,15 +406,34 @@ query addressed_memories($task_slug: String) {
 // Recall expansion: all memories sharing any Topic with $slug, in one query
 // (memory → topic → memory) instead of a per-topic fan-out. Includes $slug; the
 // server discards self.
+//
+// ★ ONLY THE SIBLING'S EDGE IS BOUND, AND THE SEED'S DELIBERATELY IS NOT.
+// Binding both looks more thorough — a shared-topic hop is arguably only as
+// good as its weaker end — and it makes this query QUADRATIC in parallel
+// edges, because a bound traversal yields one row per edge and two of them
+// yield the cross product. Measured on a store with four parallel Tagged
+// edges per side (what four `memory_update` calls used to leave behind):
+// 32 rows both-bound, 8 rows sibling-only, 2 rows fully unbound. recall runs
+// this per frontier memory, so that is not a cost worth a nuance.
+//
+// The seed side stays unbound, which keeps its set semantics and collapses its
+// parallel edges to one binding. What survives is the more useful half anyway:
+// `edge_confidence` says how firmly the SIBLING is attached to the shared
+// topic, which is what decides whether to trust the sibling. The seed's own
+// attachment says something about the seed, which recall already has better
+// evidence for.
 query topic_siblings($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $tp: Topic
         $m tagged $tp
         $other: Memory
-        $other tagged $tp
+        $other $wo:tagged $tp
     }
-    return { $other.slug }
+    return {
+        $other.slug,
+        $wo.confidence as edge_confidence
+    }
 }
 
 // Recall expansion: all memories produced by any session that produced $slug, in
@@ -461,13 +538,24 @@ query memories_for_topic($topic_slug: String) {
 }
 
 // Topics a memory is tagged with (for expand + display).
+//
+// Bound, so a reader can tell an `asserted` topic — someone called
+// memory_link(kind="tagged") and named it — from an `inferred` one promoted
+// from a free string in the memory's `tags`. Aliased for the same reason as
+// the traversals above: unaliased, `$w.kind`/`$w.slug` would collide with the
+// Topic's own columns once anyone projected them.
 query topics_for_memory($slug: String) {
     match {
         $m: Memory { slug: $slug }
         $tp: Topic
-        $m tagged $tp
+        $m $w:tagged $tp
     }
-    return { $tp.slug, $tp.name, $tp.kind }
+    return {
+        $tp.slug, $tp.name, $tp.kind,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
 }
 
 // ── Project facts ─────────────────────────────────────────────────
