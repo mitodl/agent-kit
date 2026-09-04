@@ -393,10 +393,24 @@ def index_path(
     target = target.resolve()
 
     repo_root = repo_module.root(target if target.is_dir() else target.parent)
-    slug = repo_module.detect(override=repo_override, start=repo_root or target)
+    slug = repo_module.detect(
+        override=repo_override, start=repo_root or target, dirname_fallback=False
+    )
     if slug is None:
-        # No git context: use the directory name of the target.
-        slug = (target if target.is_dir() else target.parent).name
+        # REFUSE rather than guess. This used to fall back to the target's
+        # directory name, which writes a permanent store into the SHARED
+        # per-repo store directory under a key that is neither unique (two
+        # `/tmp/*/tests` layouts collide on `tests`, one silently overwriting
+        # the other) nor recognizable next to real repo graphs. It accumulated:
+        # 36 such stores on one machine, named `out2`, `tmp`, `data`, `sf`.
+        # Indexing something with no remote is nearly always accidental — a
+        # scratch checkout, a temp repro layout — so the opt-in is explicit.
+        raise repo_module.RepoNotDetected(
+            f"{target} has no git remote to key a code graph on, so indexing it "
+            f"would file it under a bare directory name in the shared store "
+            f"directory. Pass an explicit repo URI to index it anyway: "
+            f"`--repo <uri>` on the CLI, or WITAN_REPO=<uri> in the environment."
+        )
     base = repo_root or (target if target.is_dir() else target.parent)
 
     # Non-default git branches index onto their own omnigraph branch, forked

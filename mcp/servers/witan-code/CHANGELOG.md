@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Changed
+
+- **Indexing a target with no resolvable repo key is refused, not guessed.**
+  When no `origin` remote resolved, the indexer fell back to the target's
+  directory name and wrote a permanent store into the shared per-repo store
+  directory under it. That key is neither unique — two `/tmp/*/tests` layouts
+  collide on `tests`, one silently overwriting the other's index — nor
+  recognizable next to real repo graphs; 36 such stores accumulated on one
+  machine, named `out2`, `tmp`, `data`, `sf`. Indexing something with no remote
+  is nearly always accidental (a scratch checkout, a temp repro layout), so the
+  write path now raises `repo.RepoNotDetected` naming the two opt-ins.
+  `witan code index`/`reindex` gained `--repo <uri>` alongside the existing
+  `WITAN_REPO`. **Reads are unaffected**: `repo.detect()` keeps the directory
+  fallback by default, so stores already created under a bare name stay
+  reachable. The hook paths (`session-init`, the PostToolUse reindex) already
+  swallow indexing errors, so this degrades to a no-op there rather than
+  surfacing.
+
 ## [0.18.0] - 2026-09-02
 
 ### Added
