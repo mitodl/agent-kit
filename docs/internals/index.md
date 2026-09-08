@@ -31,6 +31,7 @@ about to propose it again.
 | [Workflow UX (P1)](design/witan-workflow-ux-p1-spec.md) | The project/session tracking experience |
 | [Workflow hooks & elicitation](design/witan-workflow-hooks-elicitation-evaluation.md) | Evaluating hook-driven vs. elicited session linking |
 | [Remote call overhead spike](design/omnigraph-remote-call-overhead-spike.md) | Measuring what a remote graph call actually costs |
+| [witan-code uptake diagnosis](design/witan-code-uptake-diagnosis.md) | Why an inject-context block loses to `rg` |
 | [agent-config-kit](design/agent-config-kit-spec.md) · [CLI](design/agent-config-kit-cli-spec.md) · [profiles](design/agent-config-kit-profiles-composition-spec.md) | The installer that registers witan with each agent platform |
 
 ## Contributing to the docs
