@@ -477,3 +477,44 @@ to delegate to, so that trade no longer exists to be revisited.
 
 Read every ToolHive and vMCP mention above this line as describing the
 deployment as it was, not as it is.
+
+## Addendum (2026-09-10) — `RemoteAuthProvider` replaces the bare `JWTVerifier`
+
+D1's `JWTVerifier` validates a token witan is handed; it never told a client
+where to get one. A client that already holds a valid Keycloak JWT for the
+right audience works fine. A client starting the OAuth flow cold — Claude
+Desktop's MCP connector, configured with witan's own URL as the server and a
+pre-registered `witan-desktop` Keycloak client — has nothing to discover the
+real authorization endpoint from, and was observed building
+`https://witan.<env>.ol.mit.edu/authorize` (witan's own origin) instead of
+Keycloak's, which 404s: witan has never served that path.
+
+Root cause, not itself a defect in D1: `JWTVerifier` alone serves no OAuth
+discovery metadata. fastmcp 4.0.0 (pinned here) ships `RemoteAuthProvider`
+specifically for a resource server that verifies tokens from a *known*,
+separate authorization server — it wraps a `TokenVerifier` (unchanged:
+`JWTVerifier` is a subclass) with `authorization_servers` and `base_url`, and
+in return serves RFC 9728 protected-resource metadata
+(`.well-known/oauth-protected-resource/mcp`) and a
+`WWW-Authenticate: Bearer resource_metadata="..."` header on a 401. `server.py`
+now builds `_auth = RemoteAuthProvider(token_verifier=JWTVerifier(...),
+authorization_servers=[identity_cfg.oidc_issuer], base_url=identity_cfg.oidc_resource_url)`
+in place of the bare verifier. Verified against a real import with the four
+`WITAN_OIDC_*`/`WITAN_ACTOR_TOKENS_FILE` env vars set: the metadata route
+returns `{"resource": "<base_url>/mcp", "authorization_servers":
+["<oidc_issuer>"], ...}`, and an unauthenticated `POST /mcp` returns 401 with
+`WWW-Authenticate: Bearer resource_metadata="<base_url>/.well-known/oauth-protected-resource/mcp"`.
+
+New required config: `WITAN_OIDC_RESOURCE_URL` — witan's own public base URL
+(e.g. `https://witan.ol.mit.edu`, no path), joined with `oidc_audience` in the
+same all-or-nothing check `load_identity_config` already applied to
+`oidc_issuer`/`actor_tokens_file`, for the same reason: a half-configured
+deployment should fail loudly at startup, not silently advertise the wrong
+resource or advertise none at all. ol-infrastructure's `applications/witan`
+stack sets it alongside the existing `WITAN_OIDC_ISSUER`/`_AUDIENCE` env vars.
+
+This still does not make witan an authorization server — no DCR, no
+`/authorize`, no `/token`, nothing brokered. It only makes witan tell an MCP
+client where the real one is, which is the gap that broke Claude Desktop's
+connector flow and would break any other client that does the same
+same-origin-guessing.

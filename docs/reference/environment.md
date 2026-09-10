@@ -70,9 +70,9 @@ token; both `witan` and `witan code` share one cache, so you log in once.
 Deployment and operations config for a shared, network-facing witan. A local
 stdio install needs none of it.
 
-`WITAN_OIDC_ISSUER`, `WITAN_OIDC_AUDIENCE`, and `WITAN_ACTOR_TOKENS_FILE` must be
-set **together** — witan refuses to start with a partial identity configuration
-rather than serving unauthenticated.
+`WITAN_OIDC_ISSUER`, `WITAN_OIDC_AUDIENCE`, `WITAN_OIDC_RESOURCE_URL`, and
+`WITAN_ACTOR_TOKENS_FILE` must be set **together** — witan refuses to start
+with a partial identity configuration rather than serving unauthenticated.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -83,6 +83,7 @@ rather than serving unauthenticated.
 | `WITAN_MCP_PORT` | `8000` | Port to bind for HTTP transports. |
 | `WITAN_MCP_SHUTDOWN_GRACE_SECONDS` | `120.0` | How long uvicorn waits for in-flight requests after `SIGTERM`. **FastMCP's own default is 2 seconds**, which silently truncates any rollout — a witan write has been measured at 27s under load, and a severed write is an indeterminate outcome the caller cannot safely retry. Set this to the deployment's termination grace period. |
 | `WITAN_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` for local per-user use, or `streamable-http` (alias `http`) to bind a network listener. The legacy HTTP+SSE transport is deliberately not offered. |
+| `WITAN_OIDC_RESOURCE_URL` | — | witan's own public base URL (no path), e.g. `https://witan.ol.mit.edu`. What `RemoteAuthProvider` advertises as the protected resource in its RFC 9728 metadata (`.well-known/oauth-protected-resource`) and in the `WWW-Authenticate` header on a 401, so an MCP client can discover `WITAN_OIDC_ISSUER`'s real authorization endpoint instead of guessing one on witan's own origin. |
 | `WITAN_OMNIGRAPH_HTTP` | `1` | Use the direct HTTP transport for reads against a deployed omnigraph-server instead of shelling out to the `omnigraph` binary. Set to `0`/`false`/`no`/`off` to revert. Kept as a one-variable revert so a transport-specific production problem is an env change rather than an image rebuild — the CLI path beneath it stays fully maintained and is still the only way to reach `load`, `branch`, and `optimize`. |
 
 ## Code graph (`witan code`)
