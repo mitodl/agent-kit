@@ -69,6 +69,65 @@ def test_apply_with_prune_removes_mcp_server_dropped_from_manifest(
     assert current_state.mcp_servers == []
 
 
+def test_apply_with_prune_diff_shows_a_removal_only_run(tmp_path, monkeypatch):
+    """A run that only removes entries (bundle has none left to add) must
+    still surface a diff — apply()'s own merge step sees no change here, so
+    the diff has to come from the whole apply-then-prune lifecycle."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    apply("claude", _bundle())
+    previous = PlatformState(mcp_servers=["witan"])
+
+    result, _ = apply_with_prune("claude", _bundle(mcp_servers={}), previous)
+
+    [(path, diff)] = result.diffs
+    assert path == tmp_path / ".claude.json"
+    assert '-    "witan"' in diff
+
+
+def test_apply_with_prune_dry_run_diff_reflects_removal_without_writing(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    apply("claude", _bundle())
+    previous = PlatformState(mcp_servers=["witan"])
+
+    result, _ = apply_with_prune(
+        "claude", _bundle(mcp_servers={}), previous, dry_run=True
+    )
+
+    [(_, diff)] = result.diffs
+    assert '-    "witan"' in diff
+    cfg = json.loads((tmp_path / ".claude.json").read_text())
+    assert "witan" in cfg["mcpServers"]  # dry_run: nothing actually written
+
+
+def test_apply_with_prune_diff_final_state_omits_pruned_entry(tmp_path, monkeypatch):
+    """A mixed add+remove run's diff must reflect the file's true final
+    content, not an intermediate state from the merge step alone — the
+    removed server must not appear in the diff's `after` half."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    apply("claude", _bundle())
+    previous = PlatformState(mcp_servers=["witan"])
+
+    result, _ = apply_with_prune(
+        "claude",
+        _bundle(mcp_servers={"other": StdioServer(command="uvx", args=["other"])}),
+        previous,
+    )
+
+    [(_, diff)] = result.diffs
+    lines = diff.splitlines()
+    added = [
+        line for line in lines if line.startswith("+") and not line.startswith("+++")
+    ]
+    removed_lines = [
+        line for line in lines if line.startswith("-") and not line.startswith("---")
+    ]
+    assert not any("witan" in line for line in added)
+    assert any("witan" in line for line in removed_lines)
+    assert any("other" in line for line in added)
+
+
 def test_prune_state_records_a_platform_only_mcp_server(tmp_path, monkeypatch):
     """★ A server introduced ONLY through the per-platform mapping is written by
     apply(), so prune has to record it — otherwise no later pruned apply can

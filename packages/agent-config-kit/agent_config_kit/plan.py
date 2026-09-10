@@ -116,7 +116,15 @@ def apply(
     scope: Scope = Scope.GLOBAL,
     dry_run: bool = False,
     force: bool = False,
+    _json_state: dict[Path, tuple[dict, dict]] | None = None,
 ) -> InstallResult:
+    """``_json_state``, if given, is populated with ``{path: (before, after)}``
+    for each JSON target this call touches (the same before/after diffed into
+    ``result.diffs``). It exists so ``prune.apply_with_prune`` can seed its own
+    removal step from this call's in-memory ``after`` — rather than re-reading
+    the file from disk, which under ``dry_run`` would still be this run's
+    stale pre-merge content — and then rebuild the diff from the *whole*
+    apply-then-prune lifecycle instead of just this merge step."""
     platform = registry.get_platform(platform_name)
     result = InstallResult(platform=platform_name)
 
@@ -142,6 +150,8 @@ def apply(
                 diff = json_diff(before, cfg)
                 if diff:
                     result.diffs.append((target.path, diff))
+                if _json_state is not None:
+                    _json_state[target.path] = (before, cfg)
                 write_json(target.path, cfg, dry_run)
                 if not dry_run:
                     result.written.append(target.path)
@@ -165,6 +175,8 @@ def apply(
                     diff = json_diff(before, cfg)
                     if diff:
                         result.diffs.append((target.path, diff))
+                    if _json_state is not None:
+                        _json_state[target.path] = (before, cfg)
                     write_json(target.path, cfg, dry_run)
                     if not dry_run:
                         result.written.append(target.path)

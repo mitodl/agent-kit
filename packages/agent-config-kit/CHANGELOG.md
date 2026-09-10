@@ -17,6 +17,13 @@ a MINOR bump may include breaking changes).
   as for a real write since the diff is computed from the in-memory merge,
   before `write_json` is ever called.
 
+  Under `apply --prune`, the diff reflects the whole apply-then-prune
+  lifecycle rather than just the merge step: a removal-only run now shows
+  the removed entries (previously showed nothing, since `apply()`'s own
+  merge step saw no change), and a mixed add+remove run's `after` reflects
+  the file's true final content rather than an intermediate state that
+  still contained entries pruning went on to delete.
+
 ## [0.7.0] - 2026-09-04
 
 ### Added
