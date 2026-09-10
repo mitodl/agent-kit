@@ -1795,6 +1795,38 @@ def test_claim_authorship_makes_a_migrated_memory_deletable(server, monkeypatch)
 
 
 @requires_omnigraph
+def test_claim_authorship_makes_a_migrated_trace_match_its_author_filter(
+    server, monkeypatch
+):
+    """The read-side twin of the delete case: `workflow_trace_list(author=…)`
+    exact-matches, so a trace merged under a local identity is missing from its
+    own author's filter until repaired."""
+    from witan import server as srv
+
+    p = server.workflow_project_create(title="migrated trace", description="d")
+    server.workflow_project_complete(
+        p["slug"], outcome="Delivered the migration with tests and docs."
+    )
+    trace_slug = f"wt-{p['slug']}"
+    srv.client.change(
+        "mutations.gq",
+        "set_workflow_trace_author",
+        {"slug": trace_slug, "author": "Old Local Name"},
+    )
+    monkeypatch.setattr(srv, "_current_author", lambda: "me@example.org")
+
+    def mine() -> set[str]:
+        traces = server.workflow_trace_list(repo="", author="me@example.org")
+        return {t["slug"] for t in traces}
+
+    assert trace_slug not in mine()
+
+    srv.claim_authorship(was="Old Local Name", apply=True)
+
+    assert trace_slug in mine()
+
+
+@requires_omnigraph
 def test_claim_authorship_refuses_to_run_against_your_own_identity(server, monkeypatch):
     from witan import server as srv
 
