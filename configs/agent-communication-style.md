@@ -69,11 +69,13 @@ one place to update instead of re-deriving it per skill or per repo.
 
 ## Related
 
-- `skills/process/create-ol-pull-request/SKILL.md`, `create-ol-github-issue`,
-  `create-ol-rfc-discussion` — format-level writing-style rules scoped to
-  each artifact type (length budgets, required sections, filler-adjective
-  list). This fragment is upstream of those: it's the voice; they're the
-  shape.
-- `skills/process/address-pr-feedback/SKILL.md` — reply style for review
-  threads ("one or two sentences... never resolve a thread by silently
-  ignoring it, and never reply with a content-free 'noted'").
+- [`create-ol-pull-request`](../skills/process/create-ol-pull-request/SKILL.md),
+  [`create-ol-github-issue`](../skills/process/create-ol-github-issue/SKILL.md),
+  [`create-ol-rfc-discussion`](../skills/process/create-ol-rfc-discussion/SKILL.md)
+  — format-level writing-style rules scoped to each artifact type (length
+  budgets, required sections, filler-adjective list). This fragment is
+  upstream of those: it's the voice; they're the shape.
+- [`address-pr-feedback`](../skills/process/address-pr-feedback/SKILL.md) —
+  reply style for review threads ("one or two sentences... never resolve a
+  thread by silently ignoring it, and never reply with a content-free
+  'noted'").
