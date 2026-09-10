@@ -6,7 +6,12 @@ of the silent-fallback defect (agent-kit#261), this one covers the CLI's.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
+
+CLI_DIR = Path(__file__).resolve().parent.parent / "witan" / "cli"
 
 DEPLOYED = """
 [targets.production]
@@ -297,24 +302,80 @@ def test_writes_the_cli_dispatches_are_all_refused(
 # ── the two defects Copilot found on #269 ────────────────────────────────────
 
 
-def test_read_commands_reaching_past_the_tool_surface_still_work(
+def test_the_client_facade_passes_the_store_path_and_refuses_read(
     config_file, unmatched_cwd, fresh_srv, monkeypatch, tmp_path
 ):
-    """`session list`, `trace show` and `project show` call `s.client.read(...)`.
+    """`migrate storage` reads `s.client.graph_uri`; nothing may read `client.read`.
 
-    They go around the tool layer entirely, so an allowlist keyed on tool names
-    does not cover them. Refusing `client` wholesale broke three working read
-    commands with a message about writes.
+    Refusing `client` wholesale once broke three working read commands with a
+    message about writes, so the facade has to pass what the CLI uses. `read`
+    is not among it: the commands that used it failed on every deployed target
+    (fixed in agent-kit#272). See `CLIENT_READ_ATTRS`.
     """
     from witan.cli._common import _srv
 
     config_file.write_text(DEPLOYED.format(matched=tmp_path / "code"))
-    _stderr(monkeypatch)
+    recorder = _stderr(monkeypatch)
 
     server = _srv()
 
-    assert callable(server.client.read)
     assert isinstance(server.client.graph_uri, str)
+    with pytest.raises(SystemExit):
+        getattr(server.client, "read")  # noqa: B009
+    assert "client.read" in recorder.export_text()
+
+
+def _client_attrs(tree: ast.AST) -> list[tuple[int, str]]:
+    """Every `<expr>.client.<attr>` access in `tree`, as `(line, attr)`.
+
+    An AST walk rather than a grep: `local_dispatch` and this module both
+    discuss `s.client.read` in prose.
+    """
+    return [
+        (node.lineno, node.attr)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "client"
+    ]
+
+
+def test_the_cli_reaches_past_the_tool_surface_only_through_the_allowlist():
+    """A CLI read that goes through `s.client` works locally and fails deployed.
+
+    `RemoteServerProxy` has no `client`, so a test run against the in-process
+    server cannot catch it. This is how `session list`, `trace show` and
+    `project show` all shipped broken (fixed in agent-kit#272).
+    """
+    from witan.cli.local_dispatch import CLIENT_READ_ATTRS
+
+    offenders = [
+        f"  {path.name}:{line}  .client.{attr}"
+        for path in sorted(CLI_DIR.glob("*.py"))
+        for line, attr in _client_attrs(ast.parse(path.read_text()))
+        if attr not in CLIENT_READ_ATTRS
+    ]
+    assert not offenders, "\n".join(
+        [
+            (
+                "These reach past the tool surface and will fail against a "
+                "deployed target. Call a tool instead, or argue for the "
+                "attribute in CLIENT_READ_ATTRS:"
+            ),
+            *offenders,
+        ]
+    )
+
+
+def test_the_client_attr_walk_detects_a_read_and_ignores_prose():
+    """A structural test over a clean tree cannot tell "clean" from "blind"."""
+    tree = ast.parse(
+        "def show(s):\n"
+        "    '''Used to call s.client.read directly.'''\n"
+        "    # s.client.read would break remotely\n"
+        "    return s.client.read('read.gq', 'q', {})\n"
+    )
+    assert _client_attrs(tree) == [(4, "read")]
 
 
 def test_the_client_facade_does_not_hand_back_a_writable_client(
