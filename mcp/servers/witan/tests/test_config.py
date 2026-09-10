@@ -737,9 +737,11 @@ def test_load_identity_config_defaults_disabled(monkeypatch):
 
     monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
     monkeypatch.delenv("WITAN_OIDC_AUDIENCE", raising=False)
+    monkeypatch.delenv("WITAN_OIDC_RESOURCE_URL", raising=False)
     monkeypatch.delenv("WITAN_ACTOR_TOKENS_FILE", raising=False)
     identity = load_identity_config()
     assert identity.oidc_issuer is None
+    assert identity.oidc_resource_url is None
     assert identity.actor_tokens_file is None
 
 
@@ -748,10 +750,12 @@ def test_load_identity_config_from_env(monkeypatch):
 
     monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/witan")
     monkeypatch.setenv("WITAN_OIDC_AUDIENCE", "witan")
+    monkeypatch.setenv("WITAN_OIDC_RESOURCE_URL", "https://witan.example.org")
     monkeypatch.setenv("WITAN_ACTOR_TOKENS_FILE", "/etc/witan/actor-tokens.json")
     identity = load_identity_config()
     assert identity.oidc_issuer == "https://sso.example.org/realms/witan"
     assert identity.oidc_audience == "witan"
+    assert identity.oidc_resource_url == "https://witan.example.org"
     assert identity.actor_tokens_file == "/etc/witan/actor-tokens.json"
 
 
@@ -760,6 +764,7 @@ def test_load_identity_config_issuer_without_tokens_file_raises(monkeypatch):
 
     monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/witan")
     monkeypatch.setenv("WITAN_OIDC_AUDIENCE", "witan")
+    monkeypatch.setenv("WITAN_OIDC_RESOURCE_URL", "https://witan.example.org")
     monkeypatch.delenv("WITAN_ACTOR_TOKENS_FILE", raising=False)
     with pytest.raises(ValueError, match="must be set together"):
         load_identity_config()
@@ -770,6 +775,7 @@ def test_load_identity_config_tokens_file_without_issuer_raises(monkeypatch):
 
     monkeypatch.delenv("WITAN_OIDC_ISSUER", raising=False)
     monkeypatch.delenv("WITAN_OIDC_AUDIENCE", raising=False)
+    monkeypatch.delenv("WITAN_OIDC_RESOURCE_URL", raising=False)
     monkeypatch.setenv("WITAN_ACTOR_TOKENS_FILE", "/etc/witan/actor-tokens.json")
     with pytest.raises(ValueError, match="must be set together"):
         load_identity_config()
@@ -782,6 +788,22 @@ def test_load_identity_config_issuer_without_audience_raises(monkeypatch):
 
     monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/witan")
     monkeypatch.delenv("WITAN_OIDC_AUDIENCE", raising=False)
+    monkeypatch.setenv("WITAN_OIDC_RESOURCE_URL", "https://witan.example.org")
+    monkeypatch.setenv("WITAN_ACTOR_TOKENS_FILE", "/etc/witan/actor-tokens.json")
+    with pytest.raises(ValueError, match="must be set together"):
+        load_identity_config()
+
+
+def test_load_identity_config_issuer_without_resource_url_raises(monkeypatch):
+    """A missing resource URL means RemoteAuthProvider has no base_url to
+    advertise — the same discovery gap this field exists to close, so it is
+    required together with issuer/audience/tokens_file rather than silently
+    falling back to a bare token verifier."""
+    from witan.config import load_identity_config
+
+    monkeypatch.setenv("WITAN_OIDC_ISSUER", "https://sso.example.org/realms/witan")
+    monkeypatch.setenv("WITAN_OIDC_AUDIENCE", "witan")
+    monkeypatch.delenv("WITAN_OIDC_RESOURCE_URL", raising=False)
     monkeypatch.setenv("WITAN_ACTOR_TOKENS_FILE", "/etc/witan/actor-tokens.json")
     with pytest.raises(ValueError, match="must be set together"):
         load_identity_config()

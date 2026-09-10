@@ -169,6 +169,15 @@ class IdentityConfig(BaseModel):
     oidc_issuer is set — an unchecked audience would accept a token minted
     for a different client."""
 
+    oidc_resource_url: str | None = None
+    """Public base URL this witan deployment is reachable at (e.g.
+    https://witan.ol.mit.edu — no path). Required when oidc_issuer is set:
+    it is what RemoteAuthProvider advertises as the protected resource in
+    its RFC 9728 metadata (.well-known/oauth-protected-resource) and in the
+    WWW-Authenticate header on a 401, so an MCP client can discover
+    oidc_issuer's real authorization endpoint instead of guessing one on
+    witan's own origin."""
+
     actor_tokens_file: str | None = None
     """Path to the {actor_id: token} JSON map — same artifact omnigraph-server
     reads via OMNIGRAPH_SERVER_BEARER_TOKENS_FILE. Required when oidc_issuer
@@ -176,9 +185,9 @@ class IdentityConfig(BaseModel):
 
 
 def load_identity_config() -> IdentityConfig:
-    """Resolve IdentityConfig from WITAN_OIDC_ISSUER / _AUDIENCE / WITAN_ACTOR_TOKENS_FILE.
+    """Resolve IdentityConfig from the WITAN_OIDC_* / WITAN_ACTOR_TOKENS_FILE env vars.
 
-    Raises ValueError unless all three are set together, or none are — a
+    Raises ValueError unless all four are set together, or none are — a
     half-configured deployment should fail loudly at startup rather than
     silently leave every request unauthenticated or unresolvable.
     ``oidc_audience`` is not optional here even though JWTVerifier itself
@@ -189,17 +198,20 @@ def load_identity_config() -> IdentityConfig:
     """
     issuer = os.environ.get("WITAN_OIDC_ISSUER")
     audience = os.environ.get("WITAN_OIDC_AUDIENCE")
+    resource_url = os.environ.get("WITAN_OIDC_RESOURCE_URL")
     tokens_file = os.environ.get("WITAN_ACTOR_TOKENS_FILE")
-    if not (bool(issuer) == bool(audience) == bool(tokens_file)):
+    if not (bool(issuer) == bool(audience) == bool(resource_url) == bool(tokens_file)):
         raise ValueError(
-            "WITAN_OIDC_ISSUER, WITAN_OIDC_AUDIENCE, and WITAN_ACTOR_TOKENS_FILE "
-            "must be set together: "
+            "WITAN_OIDC_ISSUER, WITAN_OIDC_AUDIENCE, WITAN_OIDC_RESOURCE_URL, "
+            "and WITAN_ACTOR_TOKENS_FILE must be set together: "
             f"WITAN_OIDC_ISSUER={issuer!r}, WITAN_OIDC_AUDIENCE={audience!r}, "
+            f"WITAN_OIDC_RESOURCE_URL={resource_url!r}, "
             f"WITAN_ACTOR_TOKENS_FILE={tokens_file!r}."
         )
     return IdentityConfig(
         oidc_issuer=issuer,
         oidc_audience=audience,
+        oidc_resource_url=resource_url,
         actor_tokens_file=tokens_file,
     )
 

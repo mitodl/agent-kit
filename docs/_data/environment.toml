@@ -129,9 +129,9 @@ blurb = """
 Deployment and operations config for a shared, network-facing witan. A local
 stdio install needs none of it.
 
-`WITAN_OIDC_ISSUER`, `WITAN_OIDC_AUDIENCE`, and `WITAN_ACTOR_TOKENS_FILE` must be
-set **together** — witan refuses to start with a partial identity configuration
-rather than serving unauthenticated.
+`WITAN_OIDC_ISSUER`, `WITAN_OIDC_AUDIENCE`, `WITAN_OIDC_RESOURCE_URL`, and
+`WITAN_ACTOR_TOKENS_FILE` must be set **together** — witan refuses to start
+with a partial identity configuration rather than serving unauthenticated.
 """
 
 [section.vars.WITAN_MCP_TRANSPORT]
@@ -153,6 +153,9 @@ desc = "URL path the MCP endpoint is served on. HTTP transports only."
 [section.vars.WITAN_MCP_SHUTDOWN_GRACE_SECONDS]
 default = "120.0"
 desc = "How long uvicorn waits for in-flight requests after `SIGTERM`. **FastMCP's own default is 2 seconds**, which silently truncates any rollout — a witan write has been measured at 27s under load, and a severed write is an indeterminate outcome the caller cannot safely retry. Set this to the deployment's termination grace period."
+
+[section.vars.WITAN_OIDC_RESOURCE_URL]
+desc = "witan's own public base URL (no path), e.g. `https://witan.ol.mit.edu`. What `RemoteAuthProvider` advertises as the protected resource in its RFC 9728 metadata (`.well-known/oauth-protected-resource`) and in the `WWW-Authenticate` header on a 401, so an MCP client can discover `WITAN_OIDC_ISSUER`'s real authorization endpoint instead of guessing one on witan's own origin."
 
 [section.vars.WITAN_ACTOR_TOKENS_FILE]
 desc = "Path to a mounted `{actor_id: token}` map. The server-side half of identity: it maps an authenticated caller to the actor recorded on the nodes they write."
