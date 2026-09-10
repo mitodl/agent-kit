@@ -75,26 +75,33 @@ is merely refused, and says so. New tools therefore default to refusing, and
 the set cannot drift into naming something that no longer exists.
 """
 
-CLIENT_READ_ATTRS = frozenset({"read", "graph_uri"})
+CLIENT_READ_ATTRS = frozenset({"graph_uri"})
 """What ``s.client.<attr>`` may reach on a fallback store.
 
-Some commands go around the tool surface and query the client directly rather
-than calling a tool — ``witan migrate storage`` (``migrate.py``) prints the
-store path via ``s.client.graph_uri``. ``witan session list``, ``witan trace
-show`` and ``witan project show`` used to reach ``s.client.read(...)`` too,
-which only works in-process (a deployed target has no client to reach past —
-see agent-kit#270); they now go through
-``workflow_session_list``/``workflow_trace_get``/``workflow_project_get_blockers``
-instead, which dispatch correctly either way. ``read`` stays in this allowlist
-as a narrow escape hatch for the next command that needs it, not because
-anything still calls it.
+``witan migrate storage`` (``migrate.py``) prints the store path via
+``s.client.graph_uri``, and ``witan migrate merge`` keys its watermark on it
+for a local destination. That is the only thing the CLI still reaches past the
+tool surface for.
+
+``read`` is deliberately absent. ``witan session list``, ``witan trace show``
+and ``witan project show`` used to call ``s.client.read(...)``, which exists
+only on the in-process server. ``RemoteServerProxy`` mirrors the tool surface,
+so all three raised ``AttributeError`` against every deployed target while
+passing every test and working on the author's laptop (fixed in agent-kit#272).
+They now go through
+``workflow_session_list``/``workflow_trace_get``/``workflow_project_get_blockers``,
+which dispatch correctly either way. Keeping ``read`` here as an escape hatch
+would let the next command ship the same way, and again fail only on a
+deployment. One rule instead: CLI reads go through tools.
+``test_local_dispatch.py`` walks ``witan/cli`` and fails on any
+``.client.<attr>`` not named here, so a command that needs the raw query
+surface has to argue for it by editing this set.
 
 Handing back the real client instead would be worse: it also carries
 ``change``/``change_many``/``load``, so the guard would be trivially
 side-steppable by the one code path that already bypasses the tool layer.
-Hence a facade over exactly the two members a caller might reach for — the
-query call, and the store path. Anything else on the client refuses like any
-other write.
+Hence a facade over exactly the members named here. Anything else on the
+client refuses like any other write.
 """
 
 
@@ -165,7 +172,7 @@ def _import_server():
 
 
 class _ReadOnlyClient:
-    """``s.client`` narrowed to the query surface the read commands use.
+    """``s.client`` narrowed to what CLI commands may read off it.
 
     See :data:`CLIENT_READ_ATTRS`. Delegates the load/announce/refuse decisions
     back to the guard so a client read counts as the guard's first use and
