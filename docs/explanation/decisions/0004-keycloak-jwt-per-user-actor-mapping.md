@@ -516,5 +516,5 @@ stack sets it alongside the existing `WITAN_OIDC_ISSUER`/`_AUDIENCE` env vars.
 This still does not make witan an authorization server — no DCR, no
 `/authorize`, no `/token`, nothing brokered. It only makes witan tell an MCP
 client where the real one is, which is the gap that broke Claude Desktop's
-connector flow and would break any other client that does the same
-same-origin-guessing.
+connector flow and would break any other client that does the same-origin
+guessing.

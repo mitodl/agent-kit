@@ -12,6 +12,7 @@ Three properties, each of which has a matching production failure if it breaks:
 
 import pytest
 from fastmcp import FastMCP
+from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.testclient import TestClient
 
@@ -69,6 +70,53 @@ def test_the_exemption_is_the_route_and_not_the_auth_provider():
                 headers={"Accept": "application/json, text/event-stream"},
             ).status_code
             == 401
+        )
+
+
+def test_remote_auth_provider_advertises_the_real_authorization_server():
+    """The central discovery contract `_auth` exists to restore.
+
+    A bare `JWTVerifier` (the pre-2026-09-10 shape, still what `test_the_
+    exemption_is_the_route_and_not_the_auth_provider` above uses to probe
+    guarding, since the contract under test here is orthogonal to that one)
+    validates a token but tells a client nothing about where to get one — see
+    the ADR 0004 2026-09-10 addendum. `RemoteAuthProvider` is what closes that
+    gap, so this pins the two things an MCP client actually reads: the RFC
+    9728 protected-resource document, and the `WWW-Authenticate` challenge on
+    a 401 pointing at it. A regression here reproduces exactly the Claude
+    Desktop 404 the addendum documents.
+    """
+    guarded = FastMCP(
+        "witan-remote-auth-provider-probe",
+        auth=RemoteAuthProvider(
+            token_verifier=JWTVerifier(
+                jwks_uri="https://example.invalid/jwks",
+                issuer="https://example.invalid/realm",
+                audience="witan",
+            ),
+            authorization_servers=["https://example.invalid/realm"],
+            base_url="https://witan.example.invalid",
+        ),
+    )
+
+    with TestClient(guarded.http_app(path="/mcp")) as client:
+        metadata = client.get("/.well-known/oauth-protected-resource/mcp")
+        assert metadata.status_code == 200
+        body = metadata.json()
+        assert body["resource"] == "https://witan.example.invalid/mcp"
+        assert body["authorization_servers"] == ["https://example.invalid/realm"]
+
+        challenge = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+        assert challenge.status_code == 401
+        www_authenticate = challenge.headers["www-authenticate"]
+        assert "Bearer" in www_authenticate
+        assert (
+            'resource_metadata="https://witan.example.invalid'
+            '/.well-known/oauth-protected-resource/mcp"' in www_authenticate
         )
 
 
