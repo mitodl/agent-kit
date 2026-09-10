@@ -37,8 +37,9 @@ def test_health_answers_without_a_bearer_token(http_client):
 def test_the_exemption_is_the_route_and_not_the_auth_provider():
     """`/health` is open BECAUSE it is a custom route, not because auth is off.
 
-    witan builds `_jwt_verifier` from `WITAN_OIDC_ISSUER`, which is unset under
-    test — so the `http_client` fixture's server has no auth provider at all,
+    witan builds `_auth` (a `RemoteAuthProvider` wrapping a `JWTVerifier`) from
+    `WITAN_OIDC_ISSUER`, which is unset under test — so the `http_client`
+    fixture's server has no auth provider at all,
     and asserting anything about `/mcp` there proves nothing. (An earlier
     version of this test did exactly that and "passed" against a 400.)
 

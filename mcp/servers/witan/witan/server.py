@@ -23,8 +23,10 @@ from typing import Literal
 
 import anyio.to_thread
 from fastmcp import Context, FastMCP
+from fastmcp.server.auth import RemoteAuthProvider
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
+from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from witan_core import caching, chunking, normalise, now_iso
@@ -169,11 +171,23 @@ actor_token_resolver = (
     if identity_cfg.actor_tokens_file
     else None
 )
-_jwt_verifier = (
-    JWTVerifier(
-        jwks_uri=f"{identity_cfg.oidc_issuer.rstrip('/')}/protocol/openid-connect/certs",
-        issuer=identity_cfg.oidc_issuer,
-        audience=identity_cfg.oidc_audience,
+# RemoteAuthProvider wraps the JWTVerifier with witan's own base URL and
+# Keycloak's issuer so FastMCP serves RFC 9728 protected-resource metadata
+# (.well-known/oauth-protected-resource) and a WWW-Authenticate header on a
+# 401 pointing at it. Without this, witan is a pure token verifier with no
+# discovery surface: an MCP client has nothing to learn oidc_issuer's real
+# authorization endpoint from, and some clients fall back to guessing
+# "<witan's own origin>/authorize" — a route witan has never served, which
+# 404s (ADR 0004 addendum, 2026-09-10).
+_auth = (
+    RemoteAuthProvider(
+        token_verifier=JWTVerifier(
+            jwks_uri=f"{identity_cfg.oidc_issuer.rstrip('/')}/protocol/openid-connect/certs",
+            issuer=identity_cfg.oidc_issuer,
+            audience=identity_cfg.oidc_audience,
+        ),
+        authorization_servers=[AnyHttpUrl(identity_cfg.oidc_issuer)],
+        base_url=identity_cfg.oidc_resource_url,
     )
     if identity_cfg.oidc_issuer
     else None
@@ -192,7 +206,7 @@ def _resolve_client() -> OmnigraphClient:
 
     In deployed streamable-http mode, a validated JWT is required to reach
     any tool handler (FastMCP itself rejects unauthenticated requests via
-    ``_jwt_verifier``), so ``get_access_token()`` returning ``None`` here
+    ``_auth``), so ``get_access_token()`` returning ``None`` here
     means this call is *not* a tool request, and there is no caller to
     authenticate as. It refuses rather than borrowing ``_default_client``.
 
@@ -346,7 +360,7 @@ def _topic_schema_present() -> bool:
 
 mcp = FastMCP(
     "witan",
-    auth=_jwt_verifier,
+    auth=_auth,
     instructions=(
         "Team-wide, shared, persistent memory and work-coordination graph. PREFER "
         "storing durable, shareable knowledge here — project facts, patterns, "
