@@ -533,7 +533,9 @@ def _default_prune_state_path(manifest_path: Path, scope: Scope) -> Path:
     return default_state_path(manifest_path)
 
 
-def _report(results: dict[str, InstallResult], *, dry_run: bool) -> bool:
+def _report(
+    results: dict[str, InstallResult], *, dry_run: bool, show_diff: bool = False
+) -> bool:
     """Print a rich table of each platform's result. Returns True if any
     platform had a skipped entry."""
     table = Table("platform", "planned" if dry_run else "written", "skipped", "removed")
@@ -549,7 +551,28 @@ def _report(results: dict[str, InstallResult], *, dry_run: bool) -> bool:
             "\n".join(str(r) for r in result.removed) or "-",
         )
     console.print(table)
+    if show_diff:
+        _print_diffs(results)
     return had_skipped
+
+
+def _print_diffs(results: dict[str, InstallResult]) -> None:
+    """Print each platform's per-target unified diffs. Diff lines are printed
+    with ``markup=False`` — JSON content routinely contains ``[``/``]``
+    (arrays, e.g. ``args``), which Rich would otherwise parse as markup tags."""
+    for name, result in results.items():
+        for path, diff in result.diffs:
+            console.print(f"\n[bold]{name}[/bold] — {path}")
+            for line in diff.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    style = "green"
+                elif line.startswith("-") and not line.startswith("---"):
+                    style = "red"
+                elif line.startswith("@@"):
+                    style = "cyan"
+                else:
+                    style = None
+                console.print(line, style=style, markup=False, highlight=False)
 
 
 @app.command(name="apply")
@@ -560,6 +583,7 @@ def apply_command(
     platform: list[str] | None = None,
     profile: list[str] | None = None,
     dry_run: bool = False,
+    diff: bool = False,
     prune: bool = False,
     force: bool = False,
     state_file: Path | None = None,
@@ -595,6 +619,12 @@ def apply_command(
         manifest (profiles are opt-in filters, not gates).
     dry_run
         Report what would be written/removed without writing anything.
+    diff
+        Also print a unified diff of each JSON target's before/after content
+        (MCP server and declarative-hook merges only — a skill/plugin-file
+        copy has no in-place diff to show). Works the same under
+        ``--dry-run``, since the diff is computed from the merge itself, not
+        from the write.
     prune
         Also remove entries that a previous ``apply --prune`` of this
         manifest wrote but that are no longer present in it. Opt-in only —
@@ -687,7 +717,7 @@ def apply_command(
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
 
-    if _report(results, dry_run=dry_run):
+    if _report(results, dry_run=dry_run, show_diff=diff):
         raise SystemExit(1)
 
 

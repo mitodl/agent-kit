@@ -1,6 +1,6 @@
 import json
 
-from agent_config_kit.jsonio import load_json_object, write_json
+from agent_config_kit.jsonio import json_diff, load_json_object, write_json
 
 
 def test_load_json_object_missing_file_returns_empty_dict(tmp_path):
@@ -48,3 +48,21 @@ def test_write_json_creates_parents_and_writes(tmp_path):
     path = tmp_path / "sub" / "out.json"
     write_json(path, {"a": 1}, dry_run=False)
     assert json.loads(path.read_text()) == {"a": 1}
+
+
+def test_json_diff_empty_when_equal():
+    assert json_diff({"a": 1}, {"a": 1}) == ""
+
+
+def test_json_diff_shows_added_key():
+    diff = json_diff({}, {"mcpServers": {"witan": {"command": "uvx"}}})
+    assert diff.startswith("--- before")
+    assert "+++ after" in diff
+    assert '+  "mcpServers"' in diff
+    assert '+      "command": "uvx"' in diff
+
+
+def test_json_diff_shows_changed_value():
+    diff = json_diff({"a": {"command": "old"}}, {"a": {"command": "new"}})
+    assert '-    "command": "old"' in diff
+    assert '+    "command": "new"' in diff
