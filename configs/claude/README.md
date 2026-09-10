@@ -6,7 +6,7 @@ Ready-to-use configuration snippets for Claude Code and Claude Desktop.
 
 | File | Purpose |
 |------|---------|
-| *(none yet)* | |
+| [`../agent-communication-style.md`](../agent-communication-style.md) | `CLAUDE.md` fragment for PR/issue/RFC/review tone (platform-agnostic, also used by Copilot) |
 
 ## Useful Snippets
 

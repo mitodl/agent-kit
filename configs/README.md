@@ -17,4 +17,4 @@ configs/
 
 | Config | Platform | Description |
 |--------|----------|-------------|
-| *(none yet)* | | |
+| [`agent-communication-style.md`](./agent-communication-style.md) | Any (`AGENTS.md` / `CLAUDE.md`) | Drop-in style fragment for agent-written PRs, issues, RFCs, and review replies — cuts the robotic/corporate tone that makes teammates disengage |
