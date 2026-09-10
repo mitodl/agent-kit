@@ -43,6 +43,56 @@ def test_apply_claude_registers_mcp_server_as_stdio(tmp_path, monkeypatch):
     assert entry["env"]["WITAN_AUTHOR"] == "tester"
 
 
+def test_apply_records_diff_for_a_newly_added_mcp_server(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    result = apply("claude", _bundle())
+
+    [(path, diff)] = result.diffs
+    assert path == tmp_path / ".claude.json"
+    assert diff.startswith("--- before")
+    assert '+    "witan"' in diff
+
+
+def test_apply_dry_run_still_records_the_diff(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    result = apply("claude", _bundle(), dry_run=True)
+
+    assert not (tmp_path / ".claude.json").exists()
+    assert len(result.diffs) == 1
+
+
+def test_apply_records_no_diff_when_reapplying_unchanged_bundle(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle()
+    apply("claude", bundle)
+
+    result = apply("claude", bundle)
+
+    assert result.diffs == []
+
+
+def test_apply_records_diff_for_a_changed_mcp_server_value(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    apply("claude", _bundle())
+
+    result = apply(
+        "claude",
+        _bundle(
+            mcp_servers={
+                "witan": StdioServer(
+                    command="uvx", args=["witan", "serve", "--verbose"]
+                )
+            }
+        ),
+    )
+
+    [(_, diff)] = result.diffs
+    assert '-    "args"' not in diff  # unified diff shows changed lines, not headers
+    assert "--verbose" in diff
+
+
 def test_mcp_servers_by_platform_overrides_only_the_named_platform(
     tmp_path, monkeypatch
 ):
@@ -118,6 +168,26 @@ def test_apply_claude_skips_non_object_claude_json(tmp_path, monkeypatch):
 
     assert json.loads(claude_json.read_text()) == [1, 2, 3]
     assert result.skipped
+
+
+def test_apply_records_diff_for_a_newly_merged_declarative_hook(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    bundle = _bundle(
+        mcp_servers={},
+        hooks=[
+            DeclarativeHook(
+                event=HookEvent.USER_PROMPT_SUBMIT, command="witan inject-context"
+            )
+        ],
+    )
+
+    result = apply("claude", bundle)
+    rerun = apply("claude", bundle)  # re-applying must not duplicate entries
+
+    [(path, diff)] = result.diffs
+    assert path == tmp_path / ".claude" / "settings.json"
+    assert "witan inject-context" in diff
+    assert rerun.diffs == []
 
 
 def test_apply_claude_merges_declarative_hooks_deduped_by_command(

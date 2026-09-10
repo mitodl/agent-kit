@@ -11,6 +11,7 @@ the full design.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from . import registry
 from .installers import skill_files
-from .jsonio import load_json_object, write_json
+from .jsonio import json_diff, load_json_object, write_json
 from .models import (
     SKILL_NAME_PATTERN,
     DeclarativeHook,
@@ -151,22 +152,39 @@ def write_state(
 
 
 def _remove_mcp_servers(
-    platform: registry.AgentPlatform, names: set[str], *, scope: Scope, dry_run: bool
+    platform: registry.AgentPlatform,
+    names: set[str],
+    *,
+    scope: Scope,
+    dry_run: bool,
+    _json_state: dict[Path, tuple[dict, dict]] | None = None,
 ) -> list[str]:
+    """``_json_state``, if given and already seeded for this target (by a
+    prior ``plan.apply()`` call in the same ``apply_with_prune`` run), removes
+    against that in-memory ``after`` instead of re-reading the file — under
+    ``dry_run`` the file was never written, so re-reading would silently
+    revert to pre-merge content. Either way, the entry is left updated with
+    the post-removal ``cfg`` so the caller can diff the true final state."""
     if not names or platform.mcp is None:
         return []
     target = _resolve_target(platform.mcp, scope)
     if target is None:
         return []
-    cfg = load_json_object(target.path)
-    if cfg is None:
-        return []
+    if _json_state is not None and target.path in _json_state:
+        before, cfg = _json_state[target.path]
+    else:
+        cfg = load_json_object(target.path)
+        if cfg is None:
+            return []
+        before = copy.deepcopy(cfg)
     container = _navigate(cfg, target.key_path)
     removed = [name for name in sorted(names) if name in container]
     for name in removed:
         del container[name]
     if removed:
         write_json(target.path, cfg, dry_run)
+    if _json_state is not None:
+        _json_state[target.path] = (before, cfg)
     return removed
 
 
@@ -176,6 +194,7 @@ def _remove_hooks(
     *,
     scope: Scope,
     dry_run: bool,
+    _json_state: dict[Path, tuple[dict, dict]] | None = None,
 ) -> list[str]:
     if not identities or platform.hooks is None:
         return []
@@ -189,7 +208,11 @@ def _remove_hooks(
     if declarative and platform.hooks_remove is not None:
         target = _resolve_target(platform.hooks, scope)
         if target is not None:
-            cfg = load_json_object(target.path)
+            if _json_state is not None and target.path in _json_state:
+                before, cfg = _json_state[target.path]
+            else:
+                cfg = load_json_object(target.path)
+                before = copy.deepcopy(cfg) if cfg is not None else None
             if cfg is not None:
                 changed = False
                 for identity, hook in declarative:
@@ -198,6 +221,8 @@ def _remove_hooks(
                         changed = True
                 if changed:
                     write_json(target.path, cfg, dry_run)
+                if _json_state is not None:
+                    _json_state[target.path] = (before, cfg)
 
     if plugins and platform.hooks_merge is None:
         target = _resolve_target(platform.hooks, scope)
@@ -287,8 +312,22 @@ def apply_with_prune(
     """Apply the manifest, then remove exactly the entries ``previous``
     recorded that are no longer in ``bundle``. Returns the usual
     ``InstallResult`` (with ``removed`` populated) plus the ``PlatformState``
-    to persist for this platform going forward."""
-    result = apply(platform_name, bundle, scope=scope, dry_run=dry_run, force=force)
+    to persist for this platform going forward.
+
+    ``result.diffs`` is rebuilt from the whole apply-then-prune lifecycle
+    (via the ``_json_state`` seed threaded through both steps), not just
+    ``apply()``'s own merge — otherwise a removal-only run would show no
+    diff at all, and a mixed add+remove run would show a stale ``after`` that
+    still contained entries the prune step went on to delete."""
+    json_state: dict[Path, tuple[dict, dict]] = {}
+    result = apply(
+        platform_name,
+        bundle,
+        scope=scope,
+        dry_run=dry_run,
+        force=force,
+        _json_state=json_state,
+    )
     platform = registry.get_platform(platform_name)
     current = _bundle_platform_state(bundle, platform_name)
 
@@ -298,6 +337,7 @@ def apply_with_prune(
             set(previous.mcp_servers) - set(current.mcp_servers),
             scope=scope,
             dry_run=dry_run,
+            _json_state=json_state,
         )
     )
     result.removed.extend(
@@ -306,6 +346,7 @@ def apply_with_prune(
             set(previous.hooks) - set(current.hooks),
             scope=scope,
             dry_run=dry_run,
+            _json_state=json_state,
         )
     )
     result.removed.extend(
@@ -316,4 +357,9 @@ def apply_with_prune(
             dry_run=dry_run,
         )
     )
+    result.diffs = [
+        (path, diff)
+        for path, (before, after) in json_state.items()
+        if (diff := json_diff(before, after))
+    ]
     return result, current

@@ -115,6 +115,71 @@ def test_apply_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
     assert "planned" in capsys.readouterr().out.lower()
 
 
+def test_apply_diff_flag_prints_unified_diff_of_changed_mcp_server(
+    tmp_path, monkeypatch, capsys
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        args = ["witan", "serve"]
+        """,
+    )
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--diff"])
+
+    out = capsys.readouterr().out
+    assert "--- before" in out
+    assert "+++ after" in out
+    assert "witan" in out
+
+
+def test_apply_without_diff_flag_omits_diff_output(tmp_path, monkeypatch, capsys):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude"])
+
+    assert "--- before" not in capsys.readouterr().out
+
+
+def test_apply_diff_flag_dry_run_shows_diff_without_writing(
+    tmp_path, monkeypatch, capsys
+):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+
+    _run_ok(
+        app, ["apply", str(manifest), "--platform", "claude", "--dry-run", "--diff"]
+    )
+
+    assert not (tmp_path / ".claude.json").exists()
+    assert "--- before" in capsys.readouterr().out
+
+
 def test_apply_exits_2_on_dangling_symlink_at_skill_dest(tmp_path, monkeypatch, capsys):
     """A stale (e.g. from an older symlink-based install) dangling symlink
     occupying a skill's destination directory must surface as a clear

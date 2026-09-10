@@ -5,6 +5,7 @@ Moved verbatim from ``witan/setup.py``'s ``_load_json_object``/``_write_json``.
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from pathlib import Path
@@ -43,3 +44,19 @@ def write_json(path: Path, data: dict, dry_run: bool) -> None:
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def json_diff(before: dict, after: dict) -> str:
+    """Unified diff between two JSON objects' serialized forms, empty string
+    if they're equal. ``sort_keys`` makes the diff stable across runs that
+    don't otherwise change key order (e.g. dict insertion order varying by
+    merge path)."""
+    if before == after:
+        return ""
+    before_lines = json.dumps(before, indent=2, sort_keys=True).splitlines()
+    after_lines = json.dumps(after, indent=2, sort_keys=True).splitlines()
+    return "\n".join(
+        difflib.unified_diff(
+            before_lines, after_lines, fromfile="before", tofile="after", lineterm=""
+        )
+    )

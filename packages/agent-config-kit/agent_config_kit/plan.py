@@ -6,13 +6,14 @@ platforms. Generalizes ``witan/setup.py``'s ``install_<agent>()`` functions
 
 from __future__ import annotations
 
+import copy
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
 from .installers import _ensure_dest_dir, install_skills
-from .jsonio import load_json_object, write_json
+from .jsonio import json_diff, load_json_object, write_json
 from .models import (
     CapabilityScope,
     DeclarativeHook,
@@ -40,6 +41,13 @@ class InstallResult:
     removed: list[Path | str] = field(
         default_factory=list
     )  # entries pruned by `apply --prune` (see prune.py); always empty otherwise
+    diffs: list[tuple[Path, str]] = field(default_factory=list)
+    # (path, unified diff) for each JSON target actually changed by this run —
+    # computed from the before/after in-memory dicts before `write_json` is
+    # called, so it's populated the same way under `dry_run` as for a real
+    # write. Only JSON-merge targets (MCP servers, declarative hooks) produce
+    # one; skill/plugin-file copies are reported via `planned`/`written`
+    # instead, since a copied file has no meaningful in-place diff.
 
 
 @dataclass
@@ -108,7 +116,15 @@ def apply(
     scope: Scope = Scope.GLOBAL,
     dry_run: bool = False,
     force: bool = False,
+    _json_state: dict[Path, tuple[dict, dict]] | None = None,
 ) -> InstallResult:
+    """``_json_state``, if given, is populated with ``{path: (before, after)}``
+    for each JSON target this call touches (the same before/after diffed into
+    ``result.diffs``). It exists so ``prune.apply_with_prune`` can seed its own
+    removal step from this call's in-memory ``after`` — rather than re-reading
+    the file from disk, which under ``dry_run`` would still be this run's
+    stale pre-merge content — and then rebuild the diff from the *whole*
+    apply-then-prune lifecycle instead of just this merge step."""
     platform = registry.get_platform(platform_name)
     result = InstallResult(platform=platform_name)
 
@@ -123,6 +139,7 @@ def apply(
             if cfg is None:
                 result.skipped.append((target.path, "could not parse as a JSON object"))
             else:
+                before = copy.deepcopy(cfg)
                 container = _navigate(cfg, target.key_path)
                 serialize = platform.mcp_serialize or _default_serialize
                 for name, server in mcp_servers.items():
@@ -130,6 +147,11 @@ def apply(
                         container, name, serialize(server), platform.mcp.merge_strategy
                     )
                 result.planned.append(target.path)
+                diff = json_diff(before, cfg)
+                if diff:
+                    result.diffs.append((target.path, diff))
+                if _json_state is not None:
+                    _json_state[target.path] = (before, cfg)
                 write_json(target.path, cfg, dry_run)
                 if not dry_run:
                     result.written.append(target.path)
@@ -147,8 +169,14 @@ def apply(
                         (target.path, "could not parse as a JSON object")
                     )
                 else:
+                    before = copy.deepcopy(cfg)
                     platform.hooks_merge(cfg, declarative)
                     result.planned.append(target.path)
+                    diff = json_diff(before, cfg)
+                    if diff:
+                        result.diffs.append((target.path, diff))
+                    if _json_state is not None:
+                        _json_state[target.path] = (before, cfg)
                     write_json(target.path, cfg, dry_run)
                     if not dry_run:
                         result.written.append(target.path)

@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.8.0] - 2026-09-10
+
+### Added
+
+- **`agent-kit apply --diff`** prints a unified before/after diff of each
+  JSON target actually changed by the run (MCP server and declarative-hook
+  merges) instead of only reporting which files were touched. `InstallResult`
+  gained a `diffs` field for this, populated the same way under `--dry-run`
+  as for a real write since the diff is computed from the in-memory merge,
+  before `write_json` is ever called.
+
+  Under `apply --prune`, the diff reflects the whole apply-then-prune
+  lifecycle rather than just the merge step: a removal-only run now shows
+  the removed entries (previously showed nothing, since `apply()`'s own
+  merge step saw no change), and a mixed add+remove run's `after` reflects
+  the file's true final content rather than an intermediate state that
+  still contained entries pruning went on to delete.
+
 ## [0.7.0] - 2026-09-04
 
 ### Added
