@@ -144,18 +144,25 @@ rules (D4) and is tested against the same fixture shape.
 
 ## D3. Consumer compatibility
 
-Suite breakage against 0.11 is **not yet measured**
-(tk-run-the-witan-witan-code-and-witan-core-suites-a-bfbe54). Known changes to
-expect, each checked on the binary:
+Measured: all three suites pass against the 0.11.0 binary — witan-core 633
+passed (3 skipped), witan 1169 passed (1 skipped), witan-code 607 passed.
 
-- Query rows omit null-valued fields.
-- Export omits null optionals, and DateTime is a naive ISO string with no `Z`.
+What 0.11 changed and what it took:
+
+- **Query rows omit null-valued fields**, which was the one real production
+  break: eight task-tool tests raised `KeyError` on `assignee`, `blocked_by` or
+  `parent_slug`. `OmnigraphClient._read_rows` restores the absent columns as
+  `None` from the response's `columns`, so the 0.10 row shape holds for both
+  transports and every caller.
+- **DateTime comes back naive**, with no `Z` and no fractional part when zero.
+  Comparisons against an offset-aware `now_iso()` value raise, so the session
+  idempotency check compares instants via `_parse_ts` instead. Lease and
+  staleness parsers already treated naive as UTC.
+- Export omits null optionals, and `test_export_keeps_an_unset_optional_as_an_explicit_null`
+  is replaced by a per-format `export_null_optional` contract.
 - bm25-ordered results tie-break on secondary keys then entity id, and
-  unordered traversal `limit`s may return a different valid subset.
-- `test_binary_contract.py`: 4 errors from `internal-schema 9 is not in
-  _CONTRACTS`; `test_the_binary_on_path_is_the_declared_format` fails until the
-  pin bump; `test_export_keeps_an_unset_optional_as_an_explicit_null` fails
-  because the key is gone.
+  unordered traversal `limit`s may return a different valid subset. Nothing in
+  the suites pinned an order that moved.
 - Opening a format-6 store still yields the two substrings the classifier
   matches (`witan_core/omnigraph.py:171`). The message now also offers an
   in-place `omnigraph upgrade --to-format 8` route; it cannot add edge keys,
@@ -163,11 +170,17 @@ expect, each checked on the binary:
 - `commit list` reports `graph_branch` and microsecond `created_at`,
   `branch list` returns bare strings, `snapshot` prints `entities=N` per table.
 
-`test_binary_contract.py` additions: a format-9 row
-`9: {"export_datetime": "iso-string", "keyed_row_cap": 8192}`, plus two new
-contract keys with tests: `export_null_optional` (`explicit-null` for 4/6,
-`omitted` for 9) and `export_id` (`data` / `top-level`), since the D2 helper
-depends on the latter.
+`test_binary_contract.py` now carries a format-9 row
+`9: {"export_datetime": "iso-string", "keyed_row_cap": 8192}`, the contract
+keys `export_null_optional` (`explicit-null` for 4/6, `omitted` for 9) and
+`export_id` (`data` / `top-level`), and keyed-edge contracts: the exported id
+is the `[src, dst]` pair, a mismatched explicit id is refused, and a duplicate
+pair in one load is refused.
+
+One artefact worth recognising rather than fixing:
+`test_pre_upgrade_candidates_exclude_the_current_binary` fails when a second
+`omnigraph` is reachable on PATH, which is what running a suite against a
+candidate binary does. It passes with the real `~/.local/bin` off PATH.
 
 Test harness trap: `testsupport/hermetic.py:225-227` puts `$HOME/.local/bin`
 first on PATH, so overriding PATH alone silently runs the installed binary.
@@ -249,9 +262,10 @@ blocked on the pin bump or the cutover.
 1. Before the cutover, in any order: D5 (ol-infra); D1 schema and workaround
    removal, D2 helper, D3 fixes (agent-kit); D4 Job patch plus its CI dry run
    (ol-infra).
-2. Pin and format bump (agent-kit), last code step: tag, x86_64 and arm64
-   digests, `_OMNIGRAPH_INTERNAL_SCHEMA = 9`, format-9 contract row. The arm64
-   digest is not yet fetched.
+2. Pin and format bump (agent-kit), last code step: tag, all three digests
+   (linux-x86_64, linux-arm64, macos-arm64, each hashed from a complete
+   download and matched against its published `.sha256`),
+   `_OMNIGRAPH_INTERNAL_SCHEMA = 9`, format-9 contract row.
 3. Cutover per environment, CI then QA then Production: suspend
    omnigraph-optimize, omnigraph-cleanup, witan-ci-indexer and
    witan-view-reaper; scale to zero; back up graph roots and `__cluster`; run
