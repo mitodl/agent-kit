@@ -22,15 +22,15 @@ ARG PYTHON_VERSION=3.14
 # and docker/omnigraph-server.Dockerfile's — see that file for why a split
 # version is an outage. Renovate covers all three; `just check-omnigraph-pins`
 # is the CI backstop.
-ARG OMNIGRAPH_VERSION=0.10.0
+ARG OMNIGRAPH_VERSION=0.11.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
 # witan_core/omnigraph_install.py :: _OMNIGRAPH_RELEASE_TAG, which also records
 # why this is a release tag again and what Lance 11 asks of an existing graph.
-ARG OMNIGRAPH_RELEASE_TAG=v0.10.0
-ARG OMNIGRAPH_SHA256_X86_64=05d3ce4ec0ab51a876befd89b643c3e7f2d5489be0398a38cef6fb3a0d257fc1
-ARG OMNIGRAPH_SHA256_ARM64=dd3ac09123a68882454db7e689da4c306c41677826237098df4e76b0f73d8d5e
+ARG OMNIGRAPH_RELEASE_TAG=v0.11.0
+ARG OMNIGRAPH_SHA256_X86_64=da192e1a050875a93ee642b9df485203a00d8c0d44ca39204439463ad41a766d
+ARG OMNIGRAPH_SHA256_ARM64=af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca33915a8f4bb
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
 ARG WITAN_VERSION=0.8.0
