@@ -1851,7 +1851,7 @@ def test_claim_authorship_covers_every_authored_node_type(server):
         if stripped.startswith("node "):
             current = stripped.split()[1].rstrip("{").strip()
         # Edges carry an `author:` too (schema.pg § Memory edge properties) and
-        # it is NOT repairable authorship — edges have no key, so there is no
+        # it is NOT repairable authorship — edges have no slug, so there is no
         # row for `claim_authorship` to address. Clearing `current` is what
         # stops the block being read as a continuation of the node above it.
         elif stripped.startswith("edge "):
