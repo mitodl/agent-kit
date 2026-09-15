@@ -10,6 +10,11 @@ a MINOR bump may include breaking changes).
 
 ### Changed
 
+- **`ClusterGraphMissing` and `IngestRefused` are logged at WARNING, not
+  reported to Sentry.** Both are now `witan_core.refusal.Refusal`s, so fastmcp
+  logs them at WARNING with no traceback and the client receives the message
+  unchanged. Both are still `RuntimeError`s. Requires witan-core 0.35.
+
 - **Indexing a target with no resolvable repo key is refused, not guessed.**
   When no `origin` remote resolved, the indexer fell back to the target's
   directory name and wrote a permanent store into the shared per-repo store

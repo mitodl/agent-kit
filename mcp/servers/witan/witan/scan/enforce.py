@@ -10,6 +10,7 @@ that turns detector findings into policy, for every node type.
 from __future__ import annotations
 
 from witan_core.observability import get_logger
+from witan_core.refusal import Refusal
 
 from ..config import ScanAction, ScanConfig
 from . import audit, notice
@@ -58,7 +59,7 @@ FIELD_MAP: dict[str, tuple[str, tuple[str, ...]]] = {
 #: broadly on the write path has to be sure it is not swallowing a refusal —
 #: see ``server._edge_property_errors``, which matches the engine's typecheck
 #: prefix rather than a loose substring for exactly this reason.
-class WriteBlocked(RuntimeError):
+class WriteBlocked(RuntimeError, Refusal):
     """Raised to reject a write whose content a scanner flagged for blocking.
 
     The message is **secret-free** — field name, detector id, and a masked

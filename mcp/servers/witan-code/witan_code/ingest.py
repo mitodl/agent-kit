@@ -68,6 +68,7 @@ import re
 from dataclasses import replace
 
 from witan_core.identity import ActorTokenResolver, derive_actor_id
+from witan_core.refusal import Refusal
 
 from . import config as cfg_module
 from . import identity as identity_module
@@ -117,7 +118,7 @@ _DEPLOYMENT_ENV_VAR = "WITAN_OIDC_ISSUER"
 _QUERY_FILE_RE = re.compile(r"^[a-z_]+\.gq$")
 
 
-class IngestRefused(RuntimeError):
+class IngestRefused(RuntimeError, Refusal):
     """A store operation was refused before it reached the graph.
 
     Unauthenticated, unauthorized, or addressed at something this server does

@@ -345,6 +345,22 @@ def test_the_graph_listing_names_repos_not_ids(sample_repo):
     assert ingest.graphs() == [REPO]
 
 
+def test_store_refusals_are_warning_level_refusals():
+    """Refusing a caller is the tier working, so neither reaches Sentry as an
+    error. Both stay RuntimeErrors for the callers that catch them as one."""
+    import logging
+
+    from witan_core.refusal import Refusal
+
+    from witan_code import store as store_module
+
+    for cls in (ingest.IngestRefused, store_module.ClusterGraphMissing):
+        exc = cls("refused")
+        assert isinstance(exc, Refusal)
+        assert isinstance(exc, RuntimeError)
+        assert exc.log_level == logging.WARNING
+
+
 def test_a_graph_the_cluster_does_not_declare_fails_on_the_first_call(monkeypatch):
     """Not on the thousandth record. A client cannot create a cluster graph —
     provisioning declares them — so a run that continues writes nowhere."""

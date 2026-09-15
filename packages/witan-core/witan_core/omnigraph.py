@@ -67,6 +67,7 @@ from pathlib import Path
 from typing import NamedTuple, TypeVar
 
 from witan_core import omnigraph_http as _http
+from witan_core.refusal import Refusal
 
 _log = logging.getLogger(__name__)
 T = TypeVar("T", int, float)
@@ -1138,7 +1139,7 @@ class OmnigraphConflict(RuntimeError):
     can re-read and decide (see ``task_claim``)."""
 
 
-class WriteIndeterminate(RuntimeError):
+class WriteIndeterminate(RuntimeError, Refusal):
     """A write whose outcome CANNOT BE DETERMINED from the response.
 
     Raised for `recovery_required` on a write. The store is telling us a
@@ -1174,7 +1175,7 @@ class WriteIndeterminate(RuntimeError):
     """
 
 
-class WriteQueueFull(RuntimeError):
+class WriteQueueFull(RuntimeError, Refusal):
     """This process already has as many writes in flight against one graph as the
     graph can serve inside the caller's deadline, and the wait for a slot expired.
 
@@ -1189,6 +1190,10 @@ class WriteQueueFull(RuntimeError):
     it as one red line, and its own type so a caller that wants to queue and
     retry can recognise it without matching on prose.
     """
+
+
+class AdmissionCapExceeded(RuntimeError, Refusal):
+    """The server's per-actor admission cap refused this write. Nothing was written."""
 
 
 def _is_storage_version_mismatch(msg: str) -> bool:
@@ -2090,7 +2095,7 @@ class OmnigraphClient:
                             if hint is not None
                             else "and the backoff before another attempt"
                         )
-                        raise RuntimeError(
+                        raise AdmissionCapExceeded(
                             f"omnigraph {label} was refused by the server's "
                             f"admission cap, {asked} — longer than the "
                             f"{max(remaining, 0.0):.1f}s this call has left. "
@@ -2100,7 +2105,7 @@ class OmnigraphClient:
                     if admission_cap_attempt < _ADMISSION_CAP_MAX_ATTEMPTS:
                         time.sleep(delay)
                         continue
-                    raise RuntimeError(
+                    raise AdmissionCapExceeded(
                         f"omnigraph {label} failed after "
                         f"{_ADMISSION_CAP_MAX_ATTEMPTS} attempts (actor "
                         f"admission cap exceeded):\n{err.strip()}"
