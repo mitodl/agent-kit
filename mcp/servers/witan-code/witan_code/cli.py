@@ -461,12 +461,19 @@ def symbols(
     """
     from rich.console import Console
 
+    from . import repo as repo_module
     from . import store as store_module
 
     console = Console()
     # Resolved here, not server-side: a deployment has no checkout to detect
-    # from, and the table title names the repo either way.
-    repo = repo or store_module.detect_repo()
+    # from, and the table title names the repo either way. A remote dispatch
+    # reads deployed graphs, none keyed by a directory name, even when this
+    # machine's own code store is local (a target with only `remote_url`).
+    repo = repo or (
+        repo_module.detect(dirname_fallback=False)
+        if _is_remote()
+        else store_module.detect_repo()
+    )
     if not repo:
         console.print("No repo detected — pass --repo <canonical URI>.")
         return

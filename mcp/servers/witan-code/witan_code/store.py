@@ -393,7 +393,7 @@ def detect_repo(config: cfg_module.Config | None = None) -> str | None:
     ``code-memory`` were most of Sentry WITAN-G.
     """
     cfg = config or cfg_module.load()
-    return repo_module.detect(dirname_fallback=not (_via_mcp(cfg) or cfg.code_server))
+    return repo_module.detect(dirname_fallback=not cfg.is_cluster)
 
 
 def store_for_repo(slug: str, config: cfg_module.Config | None = None) -> StoreRef:
