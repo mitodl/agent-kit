@@ -113,6 +113,12 @@ Three transforms, applied in this order to every exported row before any
 Collapse works on the full row set, so it cannot be applied one record at a
 time, and duplicates can span load batches.
 
+Measured on real stores (2026-09-15, copies of two local format-6 memory
+stores): duplicates are real but rare. The work store held 3,455 `Tagged` rows
+for 3,437 distinct pairs and 552 `ParentOf` for 551; the personal store 1,220
+`Tagged` for 1,211. Both rebuilt through `witan migrate storage` with every
+node count unchanged and every edge table equal to its distinct-pair count.
+
 Not needed (verified on both 0.10 and 0.11): filling omitted optionals with
 explicit nulls. An absent key under `load --mode merge` nulls the column for
 nodes, lists and edges alike, the same as an explicit `null`, so 0.11's
