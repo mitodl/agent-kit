@@ -21,8 +21,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from witan_core.refusal import Refusal
+
 __all__ = [
     "ACTOR_PREFIX",
+    "ActorTokenMissing",
     "ActorTokenResolver",
     "derive_actor_handle",
     "derive_actor_id",
@@ -87,6 +90,10 @@ def derive_actor_handle(claims: Mapping[str, Any]) -> str | None:
     return None
 
 
+class ActorTokenMissing(LookupError, Refusal):
+    """No omnigraph bearer token is provisioned for this actor yet."""
+
+
 class ActorTokenResolver:
     """Resolves ``act-<sub>`` → omnigraph bearer token from a provisioned map.
 
@@ -116,7 +123,7 @@ class ActorTokenResolver:
     def resolve(self, actor_id: str) -> str:
         """Return the bearer token provisioned for ``actor_id``.
 
-        Raises ``LookupError`` if no token exists for this actor even after a
+        Raises ``ActorTokenMissing`` if no token exists for this actor even after a
         reload — the provisioning pipeline hasn't caught up, or this identity
         is not one the pipeline provisions for. Never falls back to a default
         identity.
@@ -134,7 +141,7 @@ class ActorTokenResolver:
             # are that contract's three ways of not being satisfied — a service
             # account is enabled and present, so omitting it would make this
             # message actively misleading for the one caller it fits.
-            raise LookupError(
+            raise ActorTokenMissing(
                 f"No omnigraph bearer token provisioned for actor {actor_id!r} "
                 f"in {self.path}. The Keycloak→token provisioning pipeline may "
                 "not have caught up yet, or this account is disabled, absent "

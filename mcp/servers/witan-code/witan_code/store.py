@@ -38,6 +38,7 @@ from witan_core.omnigraph import (
     schema_stamp_path,
     shared_transport,
 )
+from witan_core.refusal import Refusal
 
 from . import config as cfg_module
 from .graph import OmnigraphClient, is_stale_schema
@@ -73,7 +74,7 @@ def _cache_key(server_url: str, token: str | None) -> _GraphsCacheKey:
     return (server_url, digest)
 
 
-class ClusterGraphMissing(RuntimeError):
+class ClusterGraphMissing(RuntimeError, Refusal):
     """A cluster graph witan-code needs is not served by the server."""
 
 

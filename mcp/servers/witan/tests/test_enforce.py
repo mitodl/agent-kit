@@ -1,6 +1,9 @@
 """Tests for write-path enforcement: WriteGuard block/redact/warn + graph wiring."""
 
+import logging
+
 import pytest
+from witan_core.refusal import Refusal
 
 from witan.config import ScanConfig
 from witan.graph import OmnigraphClient
@@ -121,6 +124,17 @@ def test_block_message_is_secret_free():
     assert "AKIASECRETVALUE" not in msg
     assert "aws_key" in msg
     assert "description" in msg
+
+
+def test_a_block_is_a_warning_level_refusal():
+    """A block is the scanner working. It must not reach Sentry as an error, and
+    it must stay a RuntimeError for the callers that catch it as one."""
+    guard = _guard([MatchScanner("aws_key", "secret", "AKIASECRET")])
+    with pytest.raises(WriteBlocked) as exc:
+        guard("insert_memory", {"title": "t", "content": "here AKIASECRET x"})
+    assert isinstance(exc.value, Refusal)
+    assert isinstance(exc.value, RuntimeError)
+    assert exc.value.log_level == logging.WARNING
 
 
 def test_block_wins_over_redact_across_fields():

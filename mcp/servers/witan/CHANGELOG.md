@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [Unreleased]
+
+### Changed
+
+- **A scanner block is logged at WARNING, not reported to Sentry.**
+  `scan.WriteBlocked` is now a `witan_core.refusal.Refusal`, so fastmcp logs it
+  at WARNING with no traceback and the client receives the block message
+  unchanged. It is still a `RuntimeError`. Requires witan-core 0.35.
+
 ## [0.33.0] - 2026-09-03
 
 ### Added

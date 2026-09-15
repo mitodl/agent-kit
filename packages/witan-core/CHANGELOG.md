@@ -8,6 +8,31 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-09-15
+
+### Added
+
+- **`refusal.Refusal`: a designed refusal logs at WARNING and never becomes a
+  Sentry issue.** fastmcp logs an ordinary exception out of a tool with
+  `logger.exception`, and `configure_sentry`'s `LoggingIntegration`
+  (`event_level=ERROR`) sent every admission-control refusal, scanner block and
+  unprovisioned-identity lookup to Sentry as an error with a stack trace.
+  `Refusal` is a fastmcp `ToolError` whose `log_level` is WARNING, so fastmcp
+  logs it without a traceback at that level and the client still receives the
+  exception's own message. It is mixed into each refusal type rather than
+  converted at the tool boundary, because the CLI calls tool functions directly
+  and catches these by their builtin types.
+
+### Changed
+
+- `omnigraph.WriteQueueFull` and `omnigraph.WriteIndeterminate` are refusals.
+  Both are still `RuntimeError`s.
+- The two admission-cap failures in the retry loop raise the new
+  `omnigraph.AdmissionCapExceeded`, a `RuntimeError` refusal, instead of a bare
+  `RuntimeError`. The messages are unchanged.
+- `ActorTokenResolver.resolve` raises the new `identity.ActorTokenMissing`, a
+  `LookupError` refusal, instead of a bare `LookupError`.
+
 ## [0.34.0] - 2026-09-04
 
 ### Added
