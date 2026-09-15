@@ -107,6 +107,17 @@ check-omnigraph-pins:
         echo "  docker/witan.Dockerfile:                             $mcp_tag" >&2
         exit 1
     fi
+    # Agreement across tiers is not enough: Renovate rewrites only the version
+    # lines, so a bump leaves all three tags (and digests) on the old release,
+    # and every check above still passes while CI downloads the old binary under
+    # the new label (agent-kit#342). `edge` is exempt because on a moving tag the
+    # version and tag legitimately differ.
+    if [[ "$installer_tag" != "edge" && "$installer_tag" != "v$installer" ]]; then
+        echo "omnigraph release tag $installer_tag does not match version $installer." >&2
+        echo "Move _OMNIGRAPH_RELEASE_TAG, both Dockerfiles' OMNIGRAPH_RELEASE_TAG, and" >&2
+        echo "the asset digests to v$installer together (or use \`edge\` deliberately)." >&2
+        exit 1
+    fi
     if [[ "$installer_sha" != "$server_sha" || "$installer_sha" != "$mcp_sha" ]]; then
         echo "omnigraph linux/x86_64 digest pins have drifted — the tiers would" >&2
         echo "install DIFFERENT builds even though the version and tag agree:" >&2
