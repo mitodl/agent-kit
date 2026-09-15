@@ -327,10 +327,10 @@ def _report_accounting(result: dict, *, incomplete_reason: str | None = None) ->
     # than the four numbers it was computed from.
     working = (
         f"{b['added']} added + {b['updated']} updated + {b['kept_target']} kept"
-        f" + {b['passthrough']} edge/unkeyed"
+        f" + {b['passthrough']} unkeyed"
     )
     if b["duplicate_slugs"]:
-        working += f" + {b['duplicate_slugs']} duplicate slug(s)"
+        working += f" + {b['duplicate_slugs']} duplicate(s)"
 
     if check["complete"] and not incomplete_reason:
         verb = "would be accounted for" if check["dry_run"] else "accounted for"

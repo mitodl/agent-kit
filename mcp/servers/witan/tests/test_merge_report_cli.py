@@ -91,7 +91,7 @@ def test_a_complete_merge_prints_the_arithmetic_it_was_verified_from(
     verdict = [line for line in printed if "Verified" in line]
     assert verdict, printed
     assert "all 6 source row(s) accounted for" in verdict[0]
-    assert "2 added + 1 updated + 1 kept + 2 edge/unkeyed" in verdict[0]
+    assert "2 added + 1 updated + 1 kept + 2 unkeyed" in verdict[0]
 
 
 def test_an_interrupted_merge_is_reported_as_incomplete(monkeypatch, stub_source):

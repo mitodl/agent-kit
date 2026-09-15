@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable
 
 from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records, describe_budget
+from witan_core.export_rows import normalize_export
 from witan_core.omnigraph import store_cli_args, store_subprocess_env
 from witan_core.remote.proxy import (
     RemoteCredentialRejected,
@@ -437,9 +438,9 @@ class RemoteServerProxy(RemoteMCPProxy):
             # Summed from the server's per-batch reports rather than counted
             # here, even though this side holds the rows: `passthrough` and
             # `duplicate_slugs` are what the server's classifier DID with the
-            # batch, and duplicate collapsing happens per batch. Re-deriving
-            # them client-side would be a second implementation of the rule
-            # `_classify_rows` exists to be the only copy of.
+            # batch. The one exception is duplicate edges collapsed before
+            # batching, added below from the same `normalize_export` the
+            # server runs rather than from a second copy of the rule.
             "passthrough": 0,
             "duplicate_slugs": 0,
         }
@@ -462,6 +463,11 @@ class RemoteServerProxy(RemoteMCPProxy):
             # Totalling the server's own per-batch counts instead would make it
             # agree with itself by construction.
             source_rows = len(rows)
+            # Collapsed HERE, before chunking, because the server can only
+            # collapse duplicates within one batch: an edge pair split across
+            # two batches would reach a keyed graph twice.
+            rows, collapsed = normalize_export(rows)
+            totals["duplicate_slugs"] += collapsed
             # MCP_LOAD_MAX_BYTES, not the default: these rows ride as a JSON
             # tool parameter, so the binding ceiling is the MCP session's 4 MiB
             # body cap, not omnigraph's much larger buffered-body one.
