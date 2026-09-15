@@ -31,6 +31,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from witan_core import caching, chunking, normalise, now_iso
 from witan_core import omnigraph_install
+from witan_core.export_rows import (
+    edge_key,
+    edge_rank,
+    is_edge,
+    normalize_export,
+    parse_export_ts,
+)
 from witan_core.observability import get_logger
 from witan_core.observability.middleware import ObservabilityMiddleware
 from witan_core.omnigraph import (
@@ -1631,14 +1638,37 @@ def _acquire_store_lock(store: str):
     return acquire_store_flock(store)
 
 
+def _rewrite_export_for_load(exported: Path, data_file: Path) -> int:
+    """Write ``exported`` to ``data_file`` in the shape a keyed format-9 load
+    accepts, returning how many duplicate edge rows were collapsed.
+
+    Materialised rather than streamed: collapsing duplicate edges has to see
+    every row of a pair before choosing one, and a local store's export fits
+    in memory comfortably.
+    """
+    with open(exported, encoding="utf-8") as f:
+        rows, collapsed = normalize_export(
+            json.loads(line) for line in f if line.strip()
+        )
+    with open(data_file, "w", encoding="utf-8") as f:
+        f.writelines(json.dumps(row) + "\n" for row in rows)
+    return collapsed
+
+
 def migrate_storage_format(old_binary: str | None = None) -> dict:
     """Rebuild the configured local store when the current omnigraph binary
     refuses to open it because it was written by an older, incompatible
     on-disk format (a strict single-version storage bump, e.g. 0.7 → 0.8).
 
-    Replays the rebuild omnigraph's upgrade docs prescribe: ``schema show``
-    + ``export`` with the *old* binary, ``init`` + ``load --mode overwrite``
-    with the *new* one, into a scratch store. Verifies the rebuilt store
+    Replays the rebuild omnigraph's upgrade docs prescribe: ``export`` with the
+    *old* binary, ``init`` + ``load --mode overwrite`` with the *new* one, into
+    a scratch store. The rebuilt store is initialised from the bundled
+    ``schema.pg``, not the old binary's ``schema show``: from format 9 every
+    edge type is keyed on its endpoints, and a key can only be declared when
+    a type is created, so a store rebuilt from its own old schema could never
+    gain one. The export is rewritten for that schema on the way
+    (:func:`witan_core.export_rows.normalize_export`), which collapses the
+    duplicate edge rows an unkeyed store accumulates. Verifies the rebuilt store
     opens, then swaps it in and renames the original aside as
     ``<store>.pre-migrate`` rather than deleting it. Node/edge rows, vectors,
     and blobs survive; commit history and branches do not.
@@ -1720,24 +1750,19 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
             dir=store_path.parent, prefix=".witan-migrate-"
         ) as tmp:
             tmp_path = Path(tmp)
-            schema_file = tmp_path / "schema.pg"
+            exported = tmp_path / "export.jsonl"
             data_file = tmp_path / "graph.jsonl"
             rebuilt = tmp_path / "rebuilt.omni"
 
-            schema_file.write_text(
-                _run_omnigraph(
-                    [old, "schema", "show", "--store", store],
-                    label="schema show (old binary)",
-                )
-            )
-            with open(data_file, "w", encoding="utf-8") as f:
+            with open(exported, "w", encoding="utf-8") as f:
                 _run_omnigraph(
                     [old, "export", "--store", store],
                     label="export (old binary)",
                     stdout=f,
                 )
+            edges_collapsed = _rewrite_export_for_load(exported, data_file)
             _run_omnigraph(
-                [new_binary, "init", "--schema", str(schema_file), str(rebuilt)],
+                [new_binary, "init", "--schema", str(_SCHEMA_FILE), str(rebuilt)],
                 label="init (new binary)",
             )
             _run_omnigraph(
@@ -1782,6 +1807,7 @@ def migrate_storage_format(old_binary: str | None = None) -> dict:
         "backup": str(backup_path),
         "old_binary": old,
         "new_binary": new_binary,
+        "edges_collapsed": edges_collapsed,
         "verify": verify_out.strip(),
     }
 
@@ -1821,57 +1847,10 @@ def _reconcile_timestamp(row_type: str, data: dict) -> str | int | float | None:
     return None
 
 
-#: omnigraph >= 0.9 exports a ``DateTime`` as integer milliseconds since the
-#: Unix epoch, UTC. NOT microseconds — ``commit list --json`` uses microseconds
-#: for its own ``created_at`` (see ``witan_code.graph.branch_last_write``, which
-#: divides by 1_000_000), and the two surfaces genuinely disagree. Getting this
-#: scale wrong does not raise; it silently dates every row to January 1970 and
-#: quietly inverts merge decisions. Measured on 0.9.0:
-#: ``"2026-01-01T00:00:00Z"`` exports as ``1767225600000``.
-_EXPORT_TS_PER_SECOND = 1_000
-
-
-def _parse_ts(value: str | int | float | None) -> datetime | None:
-    """Parse an exported timestamp for comparison, or ``None`` if absent/unusable.
-
-    TWO REPRESENTATIONS, because a merge routinely spans omnigraph versions —
-    that is the whole point of the command. A store exported by 0.8.x yields
-    naive ISO-8601 strings; 0.9.0 onward yields integer epoch milliseconds
-    (``_EXPORT_TS_PER_SECOND``). ``witan migrate merge`` accepts a ``.jsonl``
-    export taken on another machine, so a 0.8.x export can arrive long after
-    every live store has moved to 0.9.x, and both forms have to keep working
-    for as long as anyone holds an old export file.
-
-    Everything normalizes to naive UTC so any two values are comparable —
-    ``datetime`` raises on comparing an aware value against a naive one. The
-    string form needs this because two stores' text isn't guaranteed to share a
-    format (``Z`` vs. ``+00:00``, or genuinely different offsets), and
-    comparing raw strings sorts wrong across those: ``"...T23:30:00-05:00"``,
-    later in UTC, sorts *before* ``"...T00:00:00Z"`` the next calendar day.
-
-    An unusable value degrades to ``None`` (treated as "no usable timestamp")
-    rather than raising, since a malformed value shouldn't crash a merge — it
-    just can't win a comparison. ``bool`` is excluded deliberately: it is an
-    ``int`` subclass, and ``True`` would otherwise read as 1ms past the epoch.
-    """
-    if not value:
-        return None
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        try:
-            return datetime.fromtimestamp(
-                value / _EXPORT_TS_PER_SECOND, timezone.utc
-            ).replace(tzinfo=None)
-        except (OverflowError, OSError, ValueError):
-            return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except (ValueError, TypeError):
-        return None
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-    return parsed
+#: Kept under its old name for the many call sites below. It lives in
+#: ``witan_core.export_rows`` beside the edge ranking that also compares
+#: exported timestamps, so the two cannot drift apart.
+_parse_ts = parse_export_ts
 
 
 #: The node types carrying an ``author`` (schema.pg). Authorship repair walks
@@ -1928,16 +1907,23 @@ def _claim_authorship(
 
 def _classify_rows(
     rows: Iterable[dict], source: str
-) -> tuple[dict[tuple[str, str], dict], list[dict], int]:
-    """Split ``omnigraph export`` records into reconcilable nodes and pass-through rows.
+) -> tuple[
+    dict[tuple[str, str], dict], dict[tuple[str, str, str], dict], list[dict], int
+]:
+    """Split ``omnigraph export`` records into reconcilable nodes and edges.
 
     An export holds two record shapes, and they do not share a discriminator:
     a node is ``{"type": <Node>, "data": {…}}`` while an edge is
     ``{"edge": <Edge>, "from": …, "to": …, "data": {…}}`` — an edge carries no
-    ``"type"`` at all. Only nodes are reconciled, keyed ``(type, slug)``;
-    everything else passes through the merge exactly as exported, because
-    reconciliation needs a slug to match on and an edge has none. A ``type``
-    row without a slug lands in the pass-through list for the same reason.
+    ``"type"`` at all. Nodes are keyed ``(type, slug)`` and edges
+    ``(edge, from, to)``, the identity a keyed format-9 edge has. A ``type`` row
+    without a slug has nothing to reconcile on and lands in the pass-through
+    list, loaded as it is.
+
+    The rows are first rewritten for a format-9 load
+    (:func:`witan_core.export_rows.normalize_export`): node ids move to the top
+    level, edge ids are dropped, and duplicate edge rows for one pair collapse
+    to one. Doing it here is what makes both transports get it.
 
     This is the single classifier for both merge transports — ``_parse_export``
     (a file, in-process) and ``store_merge`` (a batch, over the wire). They had
@@ -1946,20 +1932,21 @@ def _classify_rows(
     from or targeting any graph with edges failed outright. ``source`` names
     what is being classified so the surviving error still points at a file.
 
-    The third element is how many rows were DISPLACED by the keying above. The
-    dict assignment means a later row sharing an earlier one's ``(type, slug)``
+    The fourth element is how many rows were DISPLACED. For nodes the dict
+    assignment means a later row sharing an earlier one's ``(type, slug)``
     overwrites it, so **the last such row in ``rows`` is the one kept and
-    reconciled** and each earlier one is counted here — worth knowing for a
-    hand-assembled source, since which of the two is reconciled follows from
-    their order. Zero for a real export, where slug is the key. Returned rather
-    than dropped so that such a source still balances against
-    :func:`witan.merge_report.accounting`'s identity instead of reading as
-    rows that went missing.
+    reconciled** and each earlier one is counted here — zero for a real export,
+    where slug is the key, and worth knowing for a hand-assembled source. For
+    edges it is every row the collapse dropped, which a graph written before
+    edges were keyed really does hold. Returned rather than dropped so that such
+    a source still balances against :func:`witan.merge_report.accounting`'s
+    identity instead of reading as rows that went missing.
     """
+    normalized, duplicates = normalize_export(rows)
     nodes: dict[tuple[str, str], dict] = {}
+    edges: dict[tuple[str, str, str], dict] = {}
     passthrough: list[dict] = []
-    duplicates = 0
-    for row in rows:
+    for row in normalized:
         # A JSONL line is only *conventionally* an object: `[]`, `null`, `3`
         # and `"…"` all parse fine and would reach `.get` as an AttributeError,
         # which is the raw fault this boundary exists to convert into a
@@ -1968,15 +1955,15 @@ def _classify_rows(
         # deployment's guarantee, not this function's.
         if not isinstance(row, dict):
             raise RuntimeError(f"{source}: export row is not a JSON object: {row!r}")
+        if is_edge(row):
+            edges[edge_key(row)] = row
+            continue
         row_type = row.get("type")
         if not row_type:
-            if not row.get("edge"):
-                raise RuntimeError(
-                    f"{source}: export row is neither a node (no 'type') nor an "
-                    f"edge (no 'edge'): {row!r}"
-                )
-            passthrough.append(row)
-            continue
+            raise RuntimeError(
+                f"{source}: export row is neither a node (no 'type') nor an "
+                f"edge (no 'edge'): {row!r}"
+            )
         slug = (row.get("data") or {}).get("slug")
         if slug:
             if (row_type, slug) in nodes:
@@ -1984,10 +1971,14 @@ def _classify_rows(
             nodes[(row_type, slug)] = row
         else:
             passthrough.append(row)
-    return nodes, passthrough, duplicates
+    return nodes, edges, passthrough, duplicates
 
 
-def _parse_export(path: Path) -> tuple[dict[tuple[str, str], dict], list[dict], int]:
+def _parse_export(
+    path: Path,
+) -> tuple[
+    dict[tuple[str, str], dict], dict[tuple[str, str, str], dict], list[dict], int
+]:
     """Read an ``omnigraph export`` JSONL file into ``_classify_rows``'s split.
 
     An export is an external boundary (another process's output, not
@@ -2080,6 +2071,54 @@ def _reconcile_nodes(
     return decisions, winners
 
 
+def _reconcile_edges(
+    source_edges: dict[tuple[str, str, str], dict],
+    target_edges: dict[tuple[str, str, str], dict],
+) -> tuple[list[dict], list[dict]]:
+    """Reconcile edges on their keyed identity: ``(decisions, rows to write)``.
+
+    From format 9 every witan edge type is keyed on ``(@src, @dst)``, so a
+    loaded edge REPLACES the target's row for that pair, properties and all.
+    Passing source edges through untouched, as merges did while edges only ever
+    appended, would let an older source edge — or a 0.10 one with every
+    property null — erase the target's ``role``, ``author`` and ``created_at``.
+
+    The rule is the one duplicate edges collapse by
+    (:func:`witan_core.export_rows.edge_rank`: confidence, then ``created_at``),
+    with one difference: a tie keeps the TARGET, so re-running a merge loads
+    nothing, the same repeatability ``_reconcile_nodes`` gives nodes.
+
+    A decision carries ``type`` (the edge type) and ``slug``
+    (``"<from> -> <to>"``) alongside ``edge``/``from``/``to``, so everything
+    that renders a node decision renders this one — including a CLI released
+    before edges were reconciled, reading a deployment's dry run.
+    """
+    decisions: list[dict] = []
+    winners: list[dict] = []
+    for key, row in source_edges.items():
+        edge, src, dst = key
+        existing = target_edges.get(key)
+        if existing is None:
+            outcome = "added"
+        elif edge_rank(row) > edge_rank(existing):
+            outcome = "updated"
+        else:
+            outcome = "kept-target"
+        decisions.append(
+            {
+                "type": edge,
+                "slug": f"{src} -> {dst}",
+                "decision": outcome,
+                "edge": edge,
+                "from": src,
+                "to": dst,
+            }
+        )
+        if outcome != "kept-target":
+            winners.append(row)
+    return decisions, winners
+
+
 def _newest(values: Iterable[str | int | float | None]) -> str | int | float | None:
     """The latest of some exported timestamps, returned as exported.
 
@@ -2158,6 +2197,22 @@ def _decision_counts(decisions: list[dict]) -> dict:
         # divergence is resolved as an update or a kept-target like any other
         # collision, and what the count adds is that somebody's edit lost.
         "diverged": sum(1 for d in decisions if d.get("diverged")),
+    }
+
+
+def _merge_accounting(
+    nodes: dict, edges: dict, passthrough: list[dict], duplicates: int
+) -> dict:
+    """A merge's share of the identity :mod:`witan.merge_report` checks.
+
+    Every source record is a node decision, an edge decision, a pass-through,
+    or a collapsed duplicate. Counted from the classifier's own output rather
+    than by re-reading the export, so the total and the buckets cannot disagree.
+    """
+    return {
+        "source_rows": len(nodes) + len(edges) + len(passthrough) + duplicates,
+        "passthrough": len(passthrough),
+        "duplicate_slugs": duplicates,
     }
 
 
@@ -2262,8 +2317,8 @@ def merge_store(
     timestamp (``_RECONCILE_TS_FIELDS``) instead of relying on
     ``omnigraph load --mode merge``'s raw last-loaded-wins overwrite, which
     ignores content entirely. Rows only in ``source`` are always added; rows
-    only in the target are left untouched. Edge rows have no slug and are not
-    reconciled — they pass through unchanged in the same load.
+    only in the target are left untouched. Edges are reconciled the same way on
+    their keyed identity ``(edge, from, to)`` (see ``_reconcile_edges``).
 
     Repeatable by construction: re-running against the same source and an
     already-merged target loads nothing new (every source row loses
@@ -2368,22 +2423,19 @@ def merge_store(
                 _store_client(source).export_to(source_file, label="export (source)")
             target_client.export_to(target_file, label="export (target)")
 
-            source_nodes, source_edges, source_dupes = _parse_export(source_file)
-            target_nodes, _, _ = _parse_export(target_file)
+            source_nodes, source_edges, source_passthrough, source_dupes = (
+                _parse_export(source_file)
+            )
+            target_nodes, target_edges, _, _ = _parse_export(target_file)
 
             decisions, winners = _reconcile_nodes(source_nodes, target_nodes, since)
-            counts = _decision_counts(decisions)
+            edge_decisions, edge_winners = _reconcile_edges(source_edges, target_edges)
             watermark = _next_watermark(None, source_nodes, target_nodes, winners)
-            # The accounting identity `witan.merge_report` checks against, in
-            # the terms this side of the merge knows: every source record is a
-            # decision, a pass-through, or a collapsed duplicate. Counted from
-            # the classifier's own output rather than by re-reading the export,
-            # so the total and the buckets cannot disagree.
-            accounting = {
-                "source_rows": len(source_nodes) + len(source_edges) + source_dupes,
-                "passthrough": len(source_edges),
-                "duplicate_slugs": source_dupes,
-            }
+            decisions += edge_decisions
+            counts = _decision_counts(decisions)
+            accounting = _merge_accounting(
+                source_nodes, source_edges, source_passthrough, source_dupes
+            )
 
             if dry_run:
                 return {
@@ -2395,7 +2447,7 @@ def merge_store(
                     **counts,
                 }
 
-            to_load = winners + source_edges
+            to_load = winners + edge_winners + source_passthrough
             if not to_load:
                 return {
                     "merged": True,
@@ -2416,9 +2468,9 @@ def merge_store(
             # here exactly as it would be over HTTP.
             #
             # `chunk_records` also emits every node before any edge, which
-            # matters more here than the row bound does: `to_load` is
-            # `winners + source_edges` and an edge whose endpoint lost
-            # reconciliation resolves against the copy already in the target.
+            # matters more here than the row bound does: an edge winner whose
+            # endpoint lost reconciliation resolves against the copy already in
+            # the target.
             #
             # ATOMICITY IS TRADED AWAY. Batches commit independently, so a
             # failure part-way leaves the earlier ones applied. That is
@@ -2527,7 +2579,7 @@ def store_merge(
     ``merge_store``'s own export parsing produces. Nodes are reconciled
     newest-record-wins per ``(type, slug)`` against what this graph already
     holds, by the *same* ``_reconcile_nodes`` the in-process path uses. Edges
-    carry no slug and pass through additively, exactly as they do there.
+    are reconciled on ``(edge, from, to)`` by the same ``_reconcile_edges``.
 
     Parameters
     ----------
@@ -2577,10 +2629,10 @@ def store_merge(
     computed and nothing is written.
 
     Also returns this batch's ``source_rows`` (records received),
-    ``passthrough`` (edge rows and any typed row with no slug — loaded
-    additively, never reconciled) and ``duplicate_slugs`` (records displaced by
-    a LATER record sharing their ``(type, slug)``; the last one in the batch is
-    the one reconciled). Summing them across
+    ``passthrough`` (typed rows with no slug — loaded as they are, never
+    reconciled) and ``duplicate_slugs`` (records displaced by a LATER record
+    sharing their ``(type, slug)``, plus duplicate edge rows collapsed per
+    ``(edge, from, to)``; see ``_classify_rows``). Summing them across
     the batches of one merge is what lets a client confirm every source row was
     accounted for — the caller cannot export the deployed graph to check by
     hand, which is the whole reason these are reported. See
@@ -2598,15 +2650,15 @@ def store_merge(
             **_decision_counts([]),
         }
 
-    source_nodes, source_edges, source_dupes = _classify_rows(rows, "merge batch")
+    source_nodes, source_edges, source_passthrough, source_dupes = _classify_rows(
+        rows, "merge batch"
+    )
     # This batch's share of the accounting identity — see
     # `witan.merge_report`. Summed across batches by the client, which is the
     # only side that knows how many batches one merge became.
-    accounting = {
-        "source_rows": len(source_nodes) + len(source_edges) + source_dupes,
-        "passthrough": len(source_edges),
-        "duplicate_slugs": source_dupes,
-    }
+    accounting = _merge_accounting(
+        source_nodes, source_edges, source_passthrough, source_dupes
+    )
 
     # Before reconciliation, not after: reconciliation compares timestamps, so
     # the restamp cannot change who wins, and applying it here means the winner
@@ -2625,11 +2677,13 @@ def store_merge(
         target_file = Path(tmp) / "target.jsonl"
         with _data_tier_outage_reads_as_retryable():
             client.export_to(target_file, label="export (deployed graph)")
-        target_nodes, _, _ = _parse_export(target_file)
+        target_nodes, target_edges, _, _ = _parse_export(target_file)
 
     decisions, winners = _reconcile_nodes(source_nodes, target_nodes, since)
-    counts = _decision_counts(decisions)
+    edge_decisions, edge_winners = _reconcile_edges(source_edges, target_edges)
     next_watermark = _next_watermark(watermark, source_nodes, target_nodes, winners)
+    decisions += edge_decisions
+    counts = _decision_counts(decisions)
 
     # Intersected with the WINNERS, not reported straight off the rewrite. A
     # stamped row that loses reconciliation is discarded with its new author,
@@ -2652,9 +2706,10 @@ def store_merge(
             **counts,
         }
 
-    to_load = winners + source_edges
-    with _data_tier_outage_reads_as_retryable():
-        client.load_batch(to_load, "merge")
+    to_load = winners + edge_winners + source_passthrough
+    if to_load:
+        with _data_tier_outage_reads_as_retryable():
+            client.load_batch(to_load, "merge")
     return {
         "dry_run": False,
         "decisions": decisions,

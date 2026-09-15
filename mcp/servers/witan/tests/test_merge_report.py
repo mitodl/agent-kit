@@ -185,10 +185,10 @@ def test_partial_of_an_untouched_exception_is_none():
 
 
 def _memory_with_a_topic_edge(client, slug):
-    """A node plus an edge, so `passthrough` is exercised rather than assumed.
+    """A node plus an edge, so edge decisions are exercised rather than assumed.
 
-    An export with no edge rows balances even if `passthrough` were dropped
-    entirely, which is exactly the bug this accounting exists to catch.
+    An export with no edge rows balances even if edges were dropped entirely,
+    which is exactly the bug this accounting exists to catch.
     """
     _insert_memory(
         client, slug=slug, content="has topics", updated_at="2026-01-01T00:00:00Z"
@@ -227,9 +227,9 @@ def test_an_in_process_merge_accounts_for_every_source_row(server, tmp_path):
     check = merge_report.accounting(result)
     assert check is not None, "the in-process path must report accounting too"
     assert check["complete"] is True, check
-    # The source really did carry unreconcilable rows, so `passthrough` is
-    # load-bearing in that sum rather than a zero that happens to balance.
-    assert check["breakdown"]["passthrough"] > 0
+    # The source really did carry an edge, so edge decisions are part of
+    # that sum rather than a zero that happens to balance.
+    assert any(d.get("edge") == "Tagged" for d in result["decisions"])
     assert check["source_rows"] == check["decided"]
 
 
@@ -251,7 +251,7 @@ def test_a_remote_merge_accounts_for_every_source_row(proxy, server, tmp_path):
     check = merge_report.accounting(result)
     assert check is not None
     assert check["complete"] is True, check
-    assert check["breakdown"]["passthrough"] > 0
+    assert any(d.get("edge") == "Tagged" for d in result["decisions"])
     assert result["batches"] == result["batches_applied"]
 
 
@@ -373,20 +373,34 @@ def test_the_classifier_counts_rows_it_collapses(tmp_path):
     export = tmp_path / "export.jsonl"
     export.write_text("".join(json.dumps(r) + "\n" for r in rows))
 
-    nodes, passthrough, duplicates = srv._classify_rows(rows, "merge batch")
+    nodes, edges, passthrough, duplicates = srv._classify_rows(rows, "merge batch")
 
-    assert (len(nodes), len(passthrough), duplicates) == (1, 1, 1)
+    assert (len(nodes), len(edges), len(passthrough), duplicates) == (1, 1, 0, 1)
     # WHICH row survives is documented, so it is asserted: the dict assignment
     # means the LAST row wins and the earlier one is what the count counts.
     # The docs said this backwards until review caught it, and a
     # hand-assembled source's author needs to know which record reconciles.
     assert nodes[("Memory", "mem-dup-aaaaaa")]["data"]["content"] == "second"
     # Still the single classifier for both transports: the wire path and the
-    # file path must agree on all three values, not just the first two.
+    # file path must agree on every value, not just the first.
     assert srv._classify_rows(rows, "merge batch") == srv._parse_export(export)
-    # And the three sum back to what was handed in, which is the identity the
+    # And they sum back to what was handed in, which is the identity the
     # whole report rests on.
-    assert len(nodes) + len(passthrough) + duplicates == len(rows)
+    assert len(nodes) + len(edges) + len(passthrough) + duplicates == len(rows)
+
+
+def test_the_classifier_counts_duplicate_edges_it_collapses():
+    """A graph written before edges were keyed holds several rows per pair;
+    each one the collapse drops has to land in a bucket or the merge reads as
+    short."""
+    from witan import server as srv
+
+    edge = {"edge": "Tagged", "from": "mem-dup-aaaaaa", "to": "tp-x", "data": {}}
+    rows = [edge, dict(edge), dict(edge)]
+
+    nodes, edges, passthrough, duplicates = srv._classify_rows(rows, "merge batch")
+
+    assert (len(nodes), len(edges), len(passthrough), duplicates) == (0, 1, 0, 2)
 
 
 def test_store_merge_reports_its_batch_share_of_the_accounting(server):
@@ -406,7 +420,9 @@ def test_store_merge_reports_its_batch_share_of_the_accounting(server):
     )
 
     assert result["source_rows"] == 2
-    assert result["passthrough"] == 1
+    # The node and the edge are both decisions now; nothing passes through.
+    assert result["added"] == 2
+    assert result["passthrough"] == 0
     assert result["duplicate_slugs"] == 0
 
 
