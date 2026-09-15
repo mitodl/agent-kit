@@ -32,6 +32,17 @@ except ImportError:  # pragma: no cover - requires the `mcp` extra
 class Refusal(_Base):  # type: ignore[misc,valid-type]
     """A tool call declined on purpose. Logged at WARNING, never as an error."""
 
+    # ★ BOTH THIS AND ``__init__`` ARE NEEDED. Subclasses list the builtin first
+    # (``class WriteQueueFull(RuntimeError, Refusal)``), and on CPython 3.12
+    # ``super().__init__`` from there stops at the builtin, so neither
+    # ``FastMCPError.__init__`` nor ours runs and only this class attribute
+    # supplies the level. On 3.14 the chain does reach ``FastMCPError.__init__``,
+    # which sets the instance attribute to ERROR, and ``__init__`` below puts
+    # it back. Without this attribute fastmcp's error path raises
+    # AttributeError on 3.12; without ``__init__`` a refusal logs at ERROR on
+    # 3.14.
+    log_level = logging.WARNING
+
     def __init__(self, *args: object) -> None:
         super().__init__(*args)
         self.log_level = logging.WARNING
