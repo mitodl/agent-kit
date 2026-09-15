@@ -41,10 +41,12 @@ def detect(
       5. directory name of the git root — only when ``dirname_fallback``
       6. ``None`` — no repo context available
 
-    ``dirname_fallback`` is on by default because READS want it: it is how a
-    store that was already created under a bare directory name stays
-    reachable. Write paths pass ``False``, because that same guess is what
-    files a scratch directory permanently into the shared per-repo namespace.
+    ``dirname_fallback`` is on by default because reads of a LOCAL store want
+    it: it is how a store that was already created under a bare directory name
+    stays reachable. Write paths pass ``False``, because that same guess is
+    what files a scratch directory permanently into the shared per-repo
+    namespace. Reads that may target a cluster go through
+    :func:`witan_code.store.detect_repo`, which also passes ``False`` there.
     """
     if override is not None:
         return normalise(override) if override else None

@@ -128,7 +128,7 @@ def _cached_git(key: str, fn) -> str | None:
 
 
 def _cached_detect() -> str | None:
-    return _cached_git("detect", repo_module.detect)
+    return _cached_git("detect", lambda: store_module.detect_repo(cfg))
 
 
 def _cached_store_branch() -> str | None:

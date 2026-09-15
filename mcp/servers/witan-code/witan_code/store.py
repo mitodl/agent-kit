@@ -41,6 +41,7 @@ from witan_core.omnigraph import (
 from witan_core.refusal import Refusal
 
 from . import config as cfg_module
+from . import repo as repo_module
 from .graph import OmnigraphClient, is_stale_schema
 from .visualize import short_repo
 
@@ -380,6 +381,19 @@ def mcp_session(config: cfg_module.Config | None = None):
 
 def _via_mcp(cfg: cfg_module.Config) -> bool:
     return cfg.code_transport == cfg_module.CODE_TRANSPORT_MCP
+
+
+def detect_repo(config: cfg_module.Config | None = None) -> str | None:
+    """The current checkout's repo key, for a read against ``config``'s stores.
+
+    The directory-name fallback exists so a LOCAL store created under a bare
+    directory name stays reachable. No cluster graph is keyed that way, so on
+    a cluster the fallback only ever names a graph that cannot exist, and every
+    read that follows probes it: ``code-scratchpad``, ``code-tmp`` and
+    ``code-memory`` were most of Sentry WITAN-G.
+    """
+    cfg = config or cfg_module.load()
+    return repo_module.detect(dirname_fallback=not cfg.is_cluster)
 
 
 def store_for_repo(slug: str, config: cfg_module.Config | None = None) -> StoreRef:

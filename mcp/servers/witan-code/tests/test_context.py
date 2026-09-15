@@ -6,8 +6,12 @@ check, store-exists branching), not the underlying query.
 """
 
 import os
+import shutil
+import subprocess
 import time
 from pathlib import Path
+
+import pytest
 
 from witan_code import context
 
@@ -43,6 +47,32 @@ def test_inject_context_empty_without_repo(tmp_path, monkeypatch):
     monkeypatch.delenv("WITAN_REPO", raising=False)
     monkeypatch.chdir(tmp_path)  # no .git anywhere above a tmp dir
     assert context.inject_context() == ""
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+def test_inject_context_does_not_probe_a_dirname_graph_on_a_cluster(
+    tmp_path, monkeypatch
+):
+    """A checkout with no origin has no repo key when the store is a cluster.
+
+    Every prompt in a scratch directory used to probe ``code-scratchpad``,
+    which no provisioning ever declares (Sentry WITAN-G).
+    """
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.example")
+    checkout = tmp_path / "scratchpad"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    monkeypatch.chdir(checkout)
+    probed = []
+    monkeypatch.setattr(
+        context.store_module.StoreRef,
+        "exists",
+        lambda self, config=None: probed.append(self) or False,
+    )
+
+    assert context.inject_context() == ""
+    assert probed == []
 
 
 def test_inject_context_empty_when_no_store_and_no_lock(tmp_path, monkeypatch):

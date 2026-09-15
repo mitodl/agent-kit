@@ -34,7 +34,6 @@ import time
 from pathlib import Path
 
 from . import config as cfg_module
-from . import repo as repo_module
 from . import store as store_module
 
 # Matches the lock directory hooks.session_init() creates around a background
@@ -186,7 +185,7 @@ def inject_context() -> str:
     to report), so this hook adds no noise for repos that don't use witan-code.
     """
     cfg = cfg_module.load()
-    slug = repo_module.detect()
+    slug = store_module.detect_repo(cfg)
     if slug is None:
         return ""
 

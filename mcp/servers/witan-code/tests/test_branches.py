@@ -380,7 +380,7 @@ def test_cached_git_amortizes_repeated_calls_within_ttl(monkeypatch):
     monkeypatch.setattr(
         srv.repo_module,
         "detect",
-        lambda: calls.__setitem__("detect", calls["detect"] + 1) or "r",
+        lambda **_kw: calls.__setitem__("detect", calls["detect"] + 1) or "r",
     )
     monkeypatch.setattr(
         srv.repo_module,
@@ -400,7 +400,7 @@ def test_cached_git_refreshes_after_ttl(monkeypatch):
 
     srv._git_context.clear()
     values = iter(["a", "b"])
-    monkeypatch.setattr(srv.repo_module, "detect", lambda: next(values))
+    monkeypatch.setattr(srv.repo_module, "detect", lambda **_kw: next(values))
 
     assert srv._cached_detect() == "a"
     srv._git_context["detect"] = (
@@ -425,7 +425,7 @@ def test_git_context_survives_within_a_test(monkeypatch):
     from witan_code import server as srv
 
     srv._git_context.clear()
-    monkeypatch.setattr(srv.repo_module, "detect", lambda: LEAKED_REPO)
+    monkeypatch.setattr(srv.repo_module, "detect", lambda **_kw: LEAKED_REPO)
     assert srv._cached_detect() == LEAKED_REPO
     assert srv._git_context["detect"][1] == LEAKED_REPO
 

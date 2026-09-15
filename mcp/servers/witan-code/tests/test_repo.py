@@ -100,6 +100,34 @@ def test_detect_falls_back_to_dirname_for_reads(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({}, "scratchproj"),
+        ({"WITAN_CODE_SERVER": "https://omnigraph.example"}, None),
+        ({"WITAN_CODE_TRANSPORT": "mcp"}, None),
+    ],
+)
+def test_detect_repo_only_falls_back_to_dirname_for_a_local_store(
+    tmp_path, monkeypatch, env, expected
+):
+    """No cluster graph is keyed by a directory name, so a cluster read gets
+    no repo rather than a probe of a graph that cannot exist."""
+    from witan_code import store
+
+    monkeypatch.delenv("WITAN_REPO", raising=False)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    checkout = tmp_path / "scratchproj"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    monkeypatch.chdir(checkout)
+
+    assert store.detect_repo() == expected
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 def test_detect_without_dirname_fallback_returns_none(tmp_path, monkeypatch):
     monkeypatch.delenv("WITAN_REPO", raising=False)
     checkout = tmp_path / "scratchproj"

@@ -90,6 +90,38 @@ def test_symbols_resolves_the_repo_client_side(monkeypatch):
     assert srv.calls[0][1]["repo"] == "https://github.com/test/detected"
 
 
+@pytest.mark.parametrize(("remote", "fallback"), [(True, False), (False, True)])
+def test_symbols_never_sends_a_directory_name_to_a_deployment(
+    monkeypatch, remote, fallback
+):
+    """A target with only `remote_url` keeps a local code store, so the store
+    config alone would allow the fallback; the remote dispatch must not."""
+    monkeypatch.delenv("WITAN_CODE_SERVER", raising=False)
+    monkeypatch.delenv("WITAN_CODE_TRANSPORT", raising=False)
+    srv = _stub(code_repo_symbols=[])
+    monkeypatch.setattr(cli_module, "_srv", lambda: srv)
+    monkeypatch.setattr(cli_module, "_is_remote", lambda: remote)
+    seen = []
+
+    def _detect(*_a, dirname_fallback=True, **_kw):
+        seen.append(dirname_fallback)
+        return "scratchproj" if dirname_fallback else None
+
+    monkeypatch.setattr("witan_code.repo.detect", _detect)
+
+    cli_module.symbols()
+
+    # Last, not only: the local path loads config, whose target match detects too.
+    assert seen[-1] is fallback
+    assert srv.calls == (
+        []
+        if remote
+        else [
+            ("code_repo_symbols", {"repo": "scratchproj", "role": None, "scheme": None})
+        ]
+    )
+
+
 def test_stitch_dispatches_to_precise_edges(monkeypatch, capsys):
     srv = _stub(
         code_precise_edges=[
