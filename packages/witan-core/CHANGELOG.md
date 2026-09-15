@@ -8,6 +8,21 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **omnigraph is pinned to v0.11.0, which reads storage format 9.**
+  `_OMNIGRAPH_INTERNAL_SCHEMA` moves 6 -> 9, and 0.11 opens only formats 8 and
+  9, so a format-6 graph has to be rebuilt before this client can open it.
+  Images built from this release cannot serve a format-6 data tier. The
+  migration is in `docs/internals/design/omnigraph-0-11-upgrade-spec.md`.
+
+### Fixed
+
+- **Read rows carry every projected field again.** omnigraph 0.11 drops
+  null-valued fields from query rows. `OmnigraphClient.read` restores them as
+  `None` from the response's `columns`, so `row["assignee"]` on an unassigned
+  task no longer raises `KeyError`.
+
 ## [0.35.0] - 2026-09-15
 
 ### Added

@@ -683,6 +683,28 @@ def test_read_parses_rows_and_strips_alias_prefixes(
     assert rows == [{"slug": "a", "title": "A"}]
 
 
+def test_read_restores_null_fields_omnigraph_0_11_omits(
+    monkeypatch, queries_dir, _fake_http
+):
+    """0.11 drops null-valued fields from a row but still lists every projection
+    in `columns`; callers index rows by field, so the absent ones come back as
+    None rather than as a KeyError."""
+    _fake_http.script = [
+        ok(
+            {
+                "rows": [{"m.slug": "a"}],
+                "columns": ["m.slug", "m.title", "m.repo"],
+                "row_count": 1,
+            }
+        )
+    ]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    rows = client.read("read.gq", "find_memory", {"slug": "a"})
+
+    assert rows == [{"slug": "a", "title": None, "repo": None}]
+
+
 def test_read_sends_only_the_named_query(monkeypatch, tmp_path, _fake_http):
     """The HTTP body has no query-name field, so it must carry exactly the one
     query being run — otherwise which query executes depends on how the server

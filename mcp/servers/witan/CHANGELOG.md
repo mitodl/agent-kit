@@ -10,6 +10,13 @@ a MINOR bump may include breaking changes).
 
 ### Changed
 
+- **Every edge type is keyed on `(@src, @dst)`.** Re-linking an existing pair
+  upserts one row instead of appending a parallel edge, and the upsert replaces
+  all of that edge's properties. Needs omnigraph 0.11 and a graph built from
+  this schema: a key cannot be added to an existing edge type, so deployed and
+  local graphs are rebuilt in the format-9 cutover. The WorksOn/ForProject
+  existence reads stay, because they save a write on every lease renewal.
+
 - **A scanner block is logged at WARNING, not reported to Sentry.**
   `scan.WriteBlocked` is now a `witan_core.refusal.Refusal`, so fastmcp logs it
   at WARNING with no traceback and the client receives the block message

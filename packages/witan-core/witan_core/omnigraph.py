@@ -1368,6 +1368,11 @@ class OmnigraphClient:
         # v0.7.0 wraps results in {rows: [...], columns: [...], ...}
         envelope = parsed if isinstance(parsed, dict) else None
         rows = parsed.get("rows", parsed) if isinstance(parsed, dict) else parsed
+        # omnigraph 0.11 omits null-valued fields from each row, but `columns`
+        # still names every projection. Restoring them as None keeps `row["x"]`
+        # meaning what it meant on 0.10 for every caller on both transports.
+        if columns := (envelope or {}).get("columns"):
+            rows = [{c: None for c in columns} | row for row in rows]
         # strip alias prefixes: "p.slug" → "slug"
         stripped = [{k.split(".", 1)[-1]: v for k, v in row.items()} for row in rows]
         return stripped, envelope

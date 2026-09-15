@@ -1,7 +1,6 @@
 """End-to-end tests for workflow project/session/trace tracking."""
 
 import uuid
-from datetime import datetime
 
 import pytest
 
@@ -772,9 +771,9 @@ def test_session_start_is_idempotent_while_the_session_is_open(server, tmp_state
     # The retry reports the session's real start, not its own arrival time. It
     # comes back as the store spells it, so compare against the stored row.
     assert second["started_at"] == rows[0]["started_at"]
-    assert datetime.fromisoformat(second["started_at"]) <= datetime.fromisoformat(
-        first["started_at"]
-    )
+    # The stored spelling is naive UTC on omnigraph 0.11, while `first` carries
+    # now_iso()'s offset, so compare as instants.
+    assert srv._parse_ts(second["started_at"]) <= srv._parse_ts(first["started_at"])
 
 
 @requires_omnigraph
