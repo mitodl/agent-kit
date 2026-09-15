@@ -69,7 +69,8 @@ Workarounds, re-read against keyed semantics:
 
 | Workaround | After keying |
 |---|---|
-| `_works_on_step` / `_for_project_step` existence reads (`server.py:3854-3877`, `read.gq:1303-1320`) and the branch-migration existence reads (`server.py:1480-1500`) | Remove |
+| `_works_on_step` / `_for_project_step` existence reads (`server.py:3854-3877`, `read.gq:1303-1320`) | Keep (changed in implementation): no longer needed for correctness, but they skip a write on every lease renewal and keep a re-entrant `workflow_session_start` at one commit |
+| Branch-migration existence reads in `migrate_repo_keys` (`server.py:1480-1500`) | Remove |
 | Newest-wins dedupe in `memory_neighbors` (`server.py:3739-3757`) | Keep: RelatedTo/Contradicts are stored one direction and read both ways, and a→b and b→a are different keys |
 | Re-tag check (`server.py:3462-3474`) and `migrate_topics` (`server.py:1107-1112`) | Keep: without it an auto-derived `inferred` Tagged upsert would overwrite an `asserted` one |
 | Indexer `_dedupe` (`indexer.py:663`, `bridge.py:450`) | Keep: a duplicate key in one load now fails the batch instead of appending |

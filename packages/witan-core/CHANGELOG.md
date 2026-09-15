@@ -8,6 +8,19 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-09-15
+
+### Added
+
+- **`export_rows.normalize_export`: prepares an exported row set for a keyed
+  format-9 load.** Node rows move `data.id` to a top-level `id`; edge rows lose
+  their id, which 0.11 refuses on a keyed edge and derives from the key; and
+  duplicate edges collapse per `(edge, from, to)` to one whole row, ranked by
+  confidence (asserted over inferred), then `created_at`, then position. It
+  works on the whole set because a duplicate pair anywhere in one load fails
+  that load. `parse_export_ts` (moved from witan) reads 0.8 strings, 0.9/0.10
+  epoch milliseconds and 0.11 naive strings.
+
 ### Changed
 
 - **omnigraph is pinned to v0.11.0, which reads storage format 9.**

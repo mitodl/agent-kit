@@ -314,7 +314,7 @@ for a node, ``{"edge": Edge, "from": …, "to": …}`` for an edge — the shape
 ``merge_store``'s own export parsing produces. Nodes are reconciled
 newest-record-wins per ``(type, slug)`` against what this graph already
 holds, by the *same* ``_reconcile_nodes`` the in-process path uses. Edges
-carry no slug and pass through additively, exactly as they do there.
+are reconciled on ``(edge, from, to)`` by the same ``_reconcile_edges``.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |

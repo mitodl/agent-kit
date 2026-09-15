@@ -16,6 +16,18 @@ a MINOR bump may include breaking changes).
   this schema: a key cannot be added to an existing edge type, so deployed and
   local graphs are rebuilt in the format-9 cutover. The WorksOn/ForProject
   existence reads stay, because they save a write on every lease renewal.
+- **`witan migrate storage` rebuilds from the bundled schema and normalizes
+  the old export.** The old binary's `schema show` has no edge keys, and a key
+  can only be declared when a type is created. The export goes through
+  `witan_core.export_rows.normalize_export` before the load, and the result
+  reports `edges_collapsed`.
+- **`store_merge` / `witan migrate merge` reconcile edges instead of passing
+  them through.** On a keyed target a merged edge replaces the target's row, so
+  an older or property-less source edge would have erased the target's `role`,
+  `author` and `created_at`. Source edges are ranked against the target on
+  `(edge, from, to)` with the same rule as the export collapse and load only
+  when they win; a re-run loads nothing. The report's passthrough label is now
+  "unkeyed".
 
 - **A scanner block is logged at WARNING, not reported to Sentry.**
   `scan.WriteBlocked` is now a `witan_core.refusal.Refusal`, so fastmcp logs it
