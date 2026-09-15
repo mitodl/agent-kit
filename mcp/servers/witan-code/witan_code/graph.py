@@ -234,7 +234,17 @@ class OmnigraphClient(_BaseOmnigraphClient):
         """
         if self.branch is None or self.branch in self.list_branches():
             return
-        self._run("branch", "create", self.branch, "--from", "main")
+        try:
+            self._run("branch", "create", self.branch, "--from", "main")
+        except RuntimeError as exc:
+            # Two concurrent `code_store_open` calls for one view both see it
+            # missing, and the second create fails. The branch exists either
+            # way, which is all this method promises. Re-listing confirms that
+            # rather than trusting the message alone.
+            if "already exists" not in str(exc) or self.branch not in (
+                self.list_branches()
+            ):
+                raise
 
     def delete_branch(self, name: str) -> None:
         self._run("branch", "delete", name, "--yes")

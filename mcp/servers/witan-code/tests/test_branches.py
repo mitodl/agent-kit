@@ -4,6 +4,8 @@ import asyncio
 import inspect
 import subprocess
 
+import pytest
+
 from witan_code import repo as repo_module
 
 from .conftest import SAMPLE, requires_stack
@@ -153,6 +155,74 @@ def test_feature_branch_indexes_to_own_branch(tmp_path, monkeypatch):
         "code_read.gq", "find_by_name", {"name": "branch_only_symbol"}
     )
     assert not on_main, "main view must not see in-flight branch symbols"
+
+
+@requires_stack
+def test_a_view_opened_by_two_callers_at_once_is_not_an_error(tmp_path, monkeypatch):
+    """Two concurrent `code_store_open` calls for one view both list branches
+    before either creates it, so the second create fails with "already exists"
+    (Sentry WITAN-4). The view exists, which is what both callers asked for."""
+    from witan_code import config as cfg_module
+    from witan_code import indexer
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_REPO", REPO)
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    cfg = cfg_module.load()
+    base = _git_repo(tmp_path / "r")
+    (base / "svc.py").write_text(SAMPLE)
+    indexer.index_path(base, config=cfg)
+    store = str(cfg_module.store_path(REPO, cfg.code_dir))
+
+    winner = OmnigraphClient(store, cfg.queries_dir, branch="feature_race")
+    loser = OmnigraphClient(store, cfg.queries_dir, branch="feature_race")
+    stale = loser.list_branches()
+    winner.ensure_branch()
+
+    real_list = loser.list_branches
+    listings = []
+
+    def list_branches():
+        listings.append(None)
+        return stale if len(listings) == 1 else real_list()
+
+    monkeypatch.setattr(loser, "list_branches", list_branches)
+    loser.ensure_branch()
+    assert len(listings) == 2, "the loser should have tried to create, then re-listed"
+    assert "feature_race" in real_list()
+
+
+@requires_stack
+@pytest.mark.parametrize(
+    ("error", "listed"),
+    [
+        ("omnigraph branch failed (exit 1):\npermission denied", ["main"]),
+        # The message alone is not trusted: the branch has to actually be there.
+        (
+            "omnigraph branch failed (exit 1):\nbranch 'feature_race' already exists",
+            ["main"],
+        ),
+    ],
+)
+def test_a_create_failure_that_is_not_the_race_still_raises(
+    tmp_path, monkeypatch, error, listed
+):
+    from witan_code import config as cfg_module
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    client = OmnigraphClient(
+        str(tmp_path / "store"), cfg_module.load().queries_dir, branch="feature_race"
+    )
+    monkeypatch.setattr(client, "list_branches", lambda: listed)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError(error)
+
+    monkeypatch.setattr(client, "_run", fail)
+    with pytest.raises(RuntimeError) as excinfo:
+        client.ensure_branch()
+    assert str(excinfo.value) == error
 
 
 @requires_stack
