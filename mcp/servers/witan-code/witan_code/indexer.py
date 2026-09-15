@@ -666,6 +666,8 @@ def _dedupe(records: list[dict]) -> list[dict]:
     Real code yields occasional duplicate qualified names (overloads, a def named
     after its file). Omnigraph's load rejects the whole batch on a single
     ``@unique`` violation, so keep the first occurrence of each node slug and edge.
+    Keyed edges do not retire the edge half: two rows for one (from, to) in a
+    single load are exactly such a violation.
     """
     seen_nodes: set[str] = set()
     seen_edges: set[tuple[str, str, str]] = set()

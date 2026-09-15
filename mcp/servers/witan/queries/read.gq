@@ -1300,8 +1300,10 @@ query project_blocks_to_slugs($from: String) {
     return { $b.slug }
 }
 
-// Existence checks so repeated workflow_session_start/task_claim calls for
-// the same branch don't pile up duplicate edges.
+// Existence checks so a lease renewal or a re-entrant workflow_session_start
+// does not rewrite an edge it already has. WorksOn/ForProject are keyed, so
+// these no longer prevent duplicates (a lost race upserts one row); they save
+// the hot path a write to a table that has not changed.
 query code_branch_works_on_edge($branch_slug: String, $task_slug: String) {
     match {
         $b: CodeBranch { slug: $branch_slug }

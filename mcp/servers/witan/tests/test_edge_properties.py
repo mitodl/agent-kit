@@ -3,8 +3,10 @@ traversals, and what recall does with the confidence.
 
 The whole feature rests on the BOUND traversal form (``$m $w:relatedto $o``),
 which binds the matched edge row so its properties are projectable. That also
-drops set semantics — one row per EDGE, not per pair — so the parallel-edge
-tests here are not edge cases, they are the contract.
+drops set semantics — one row per EDGE, not per pair. Every edge type is now
+keyed on (from, to), so re-linking upserts one row instead of adding a parallel
+edge; the re-link tests here count rows from `omnigraph export` to prove it,
+because a traversal that de-duplicates would hide the multiplicity.
 """
 
 import pytest
@@ -12,7 +14,7 @@ import pytest
 from witan.config import RankConfig
 from witan.scan import WriteBlocked
 
-from .conftest import requires_omnigraph
+from .conftest import edge_rows, requires_omnigraph
 
 
 def _only(neighbors, kind):
@@ -124,20 +126,19 @@ def test_explicit_tagged_link_is_asserted(server):
     assert _topic_edge(server, m["slug"], res["to"])["confidence"] == "asserted"
 
 
-# ── Parallel edges ────────────────────────────────────────────────
+# ── Re-linking ────────────────────────────────────────────────────
 
 
 @requires_omnigraph
 def test_relinking_does_not_duplicate_a_neighbour(server):
-    """An insert is not an upsert — a second link writes a PARALLEL edge, which
-    the bound traversal reports as a second row. memory_neighbors must still
-    report one entry per neighbour, or its contract changes under every caller
-    that ever re-linked a pair."""
+    """RelatedTo is keyed on (from, to): a second link upserts the one edge, and
+    the newer role replaces the older one rather than sitting beside it."""
     a = server.memory_store(kind="pattern", title="a", content="alpha content")
     b = server.memory_store(kind="pattern", title="b", content="beta content")
     server.memory_link(a["slug"], b["slug"], "related_to", role="first")
     server.memory_link(a["slug"], b["slug"], "related_to", role="second")
 
+    assert len(edge_rows(server.client, "RelatedTo", a["slug"], b["slug"])) == 1
     assert (
         _only(server.memory_neighbors(a["slug"]), "related_to")["edge"]["role"]
         == "second"
@@ -214,14 +215,14 @@ def test_link_does_not_report_the_role_it_was_given(server):
     assert edge["role"] == "why these two"
 
 
-# ── Parallel Tagged edges ─────────────────────────────────────────
+# ── Tagged re-links ───────────────────────────────────────────────
 
 
 @requires_omnigraph
 def test_updating_a_memory_does_not_relink_tags_it_already_has(server):
-    """An insert is not an upsert, so re-linking an existing tag wrote a second
-    parallel Tagged edge — three updates left four edges to one Topic.
-    Invisible under set semantics; quadratic once `topic_siblings` binds."""
+    """Before Tagged was keyed, three updates re-linking an existing tag left
+    four parallel edges to one Topic. Counted from the export, not a traversal,
+    because a traversal with set semantics would read one either way."""
     m = server.memory_store(
         kind="pattern", title="a", content="alpha content", tags=["shared"]
     )
@@ -229,8 +230,35 @@ def test_updating_a_memory_does_not_relink_tags_it_already_has(server):
         server.memory_update(m["slug"], content=f"alpha {i}", tags=["shared"])
 
     topic = server.topic_get("shared:topic")["topic"]["slug"]
-    edges = server.client.read("read.gq", "topics_for_memory", {"slug": m["slug"]})
-    assert [e["slug"] for e in edges] == [topic]
+    assert len(edge_rows(server.client, "Tagged", m["slug"], topic)) == 1
+
+
+@requires_omnigraph
+def test_updating_a_memory_keeps_an_asserted_tag_asserted(server):
+    """A keyed insert replaces the whole row, so the re-tag skip is what keeps a
+    tag-derived `inferred` write from overwriting a link a caller asserted."""
+    m = server.memory_store(kind="pattern", title="a", content="alpha content")
+    res = server.memory_link(m["slug"], "shared:topic", "tagged", role="named")
+    server.memory_update(m["slug"], content="alpha 1", tags=["shared"])
+
+    assert len(edge_rows(server.client, "Tagged", m["slug"], res["to"])) == 1
+    edge = _topic_edge(server, m["slug"], res["to"])
+    assert edge["confidence"] == "asserted"
+    assert edge["role"] == "named"
+
+
+@requires_omnigraph
+def test_explicit_tagged_link_upgrades_a_tag_derived_edge(server):
+    """The other direction is the upsert doing its job: naming a topic the
+    memory was already tagged with replaces the inferred row with the asserted
+    one, still a single edge."""
+    m = server.memory_store(
+        kind="pattern", title="a", content="alpha content", tags=["shared"]
+    )
+    res = server.memory_link(m["slug"], "shared:topic", "tagged", role="named")
+
+    assert len(edge_rows(server.client, "Tagged", m["slug"], res["to"])) == 1
+    assert _topic_edge(server, m["slug"], res["to"])["confidence"] == "asserted"
 
 
 @requires_omnigraph
@@ -246,10 +274,12 @@ def test_updating_a_memory_still_links_a_newly_added_tag(server):
 
 
 @requires_omnigraph
-def test_topic_siblings_does_not_multiply_by_parallel_edges(server):
+def test_topic_siblings_does_not_multiply_by_repeated_links(server):
     """Only the sibling's Tagged edge is bound. Binding the seed's as well made
     this the cross product of both sides' parallel edges — 32 rows for two
-    memories carrying four edges each, against 2 for one link apiece."""
+    memories carrying four edges each, against 2 for one link apiece. Keyed
+    Tagged edges mean repeated links now leave one edge per side, so the same
+    writes give 2 rows."""
     a = server.memory_store(
         kind="pattern", title="a", content="alpha content", tags=["shared"]
     )
@@ -257,7 +287,8 @@ def test_topic_siblings_does_not_multiply_by_parallel_edges(server):
         kind="pattern", title="b", content="beta content", tags=["shared"]
     )
     topic = server.topic_get("shared:topic")["topic"]["slug"]
-    # Force the parallel edges an older witan accumulated, on BOTH sides.
+    # Repeat the links an older witan accumulated as parallel edges, on BOTH
+    # sides; keyed, each repeat upserts the one existing edge.
     for slug in (a["slug"], b["slug"]):
         for _ in range(3):
             server.client.change(
@@ -274,8 +305,8 @@ def test_topic_siblings_does_not_multiply_by_parallel_edges(server):
             )
 
     rows = server.client.read("read.gq", "topic_siblings", {"slug": a["slug"]})
-    # 4 edges on the sibling side; the seed side collapses by set semantics.
-    assert len(rows) == 8
+    # One edge per side: a and b each appear once as the sibling.
+    assert len(rows) == 2
     assert server._expand_neighbors(a["slug"]) == {b["slug"]: False}
 
 

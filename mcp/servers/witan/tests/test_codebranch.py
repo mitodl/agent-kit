@@ -4,7 +4,7 @@
 import subprocess
 import uuid
 
-from .conftest import requires_omnigraph
+from .conftest import edge_rows, requires_omnigraph
 
 REPO = "https://github.com/test/repo"
 
@@ -83,6 +83,9 @@ def test_task_claim_renewal_does_not_duplicate_works_on_edge(
     assert len(linked_tasks) == 1, (
         "renewing a claim must not duplicate the WorksOn edge"
     )
+    # The traversal above has set semantics and would read one row even over
+    # parallel edges, so count the edge rows themselves.
+    assert len(edge_rows(srv.client, "WorksOn", branch_slug, task["slug"])) == 1
 
 
 @requires_omnigraph

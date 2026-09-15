@@ -1083,7 +1083,9 @@ def migrate_topics() -> dict:
     ``Topic{kind:"topic"}`` + ``Tagged`` edge.
 
     Safe to re-run — topic upsert is keyed on slug and the existing-edge check
-    skips already-linked (memory, topic) pairs. Returns counts for reporting.
+    skips already-linked (memory, topic) pairs. Tagged being keyed does not make
+    that check redundant: re-inserting would replace an ``asserted`` link with
+    this backfill's ``inferred`` row. Returns counts for reporting.
     """
     # Slim read: only slug + tags, not full memory content.
     rows = client.read("read.gq", "list_memory_tags", {})
@@ -1476,32 +1478,25 @@ def migrate_repo_keys() -> dict:
                     "updated_at": now,
                 },
             )
+        # No existence read before re-linking: WorksOn and ForProject are keyed
+        # on their endpoints, so an edge the canonical branch already carries
+        # upserts in place instead of gaining a parallel copy.
         for task in client.read(
             "read.gq", "code_branch_tasks", {"branch_slug": row["slug"]}
         ):
-            if not client.read(
-                "read.gq",
-                "code_branch_works_on_edge",
-                {"branch_slug": new_slug, "task_slug": task["slug"]},
-            ):
-                client.change(
-                    "mutations.gq",
-                    "link_works_on",
-                    {"from": new_slug, "to": task["slug"]},
-                )
+            client.change(
+                "mutations.gq",
+                "link_works_on",
+                {"from": new_slug, "to": task["slug"]},
+            )
         for project in client.read(
             "read.gq", "code_branch_projects", {"branch_slug": row["slug"]}
         ):
-            if not client.read(
-                "read.gq",
-                "code_branch_for_project_edge",
-                {"branch_slug": new_slug, "project_slug": project["slug"]},
-            ):
-                client.change(
-                    "mutations.gq",
-                    "link_for_project",
-                    {"from": new_slug, "to": project["slug"]},
-                )
+            client.change(
+                "mutations.gq",
+                "link_for_project",
+                {"from": new_slug, "to": project["slug"]},
+            )
         client.change(
             "mutations.gq",
             "touch_code_branch",
@@ -3459,13 +3454,13 @@ def memory_update(
     # would take out every other memory's edge to it. The string list stays
     # authoritative for what the memory claims to be tagged with.
     #
-    # ★ SKIPPING ALREADY-LINKED TOPICS IS NOT AN OPTIMISATION. An insert is not
-    # an upsert, so re-linking a tag the memory already carries writes a second,
-    # PARALLEL Tagged edge — and a memory updated four times ended up with four
-    # edges to the same Topic. That was invisible while every traversal had set
-    # semantics, and stopped being invisible the moment `topic_siblings` bound
-    # the edge: measured 4 edges/side → 8 rows where one link gives 2. Same
-    # existing-edge check `migrate_topics` has always done, for the same reason.
+    # ★ SKIPPING ALREADY-LINKED TOPICS IS NOT AN OPTIMISATION. Before Tagged was
+    # keyed, re-linking a tag the memory already carried wrote a second, PARALLEL
+    # edge (a memory updated four times had four edges to one Topic). The key
+    # ended that, but it did not make this check redundant: a keyed insert
+    # REPLACES the whole row, so re-deriving an `inferred` tag edge would
+    # overwrite an `asserted` link a caller made through `memory_link`. Same
+    # existing-edge check `migrate_topics` does, for the same reason.
     # `_store_memory` needs no equivalent — its memory is new, so it has none.
     linked = {
         t["slug"] for t in client.read("read.gq", "topics_for_memory", {"slug": slug})
@@ -3738,11 +3733,12 @@ def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> di
         merged: dict[str, dict] = {}
         for query_name in _MEMORY_NEIGHBOR_QUERIES[kind]:
             for row in client.read("read.gq", query_name, {"slug": slug}):
-                # ONE ROW PER EDGE now that the traversal is bound, so a pair
-                # linked twice arrives twice, and one entry per neighbour is
-                # this tool's documented contract — parallel edges must not
-                # change the count. The survivor is the NEWEST link, so
-                # re-linking a pair with a different role reads as an update
+                # ONE ROW PER EDGE now that the traversal is bound. Keyed edges
+                # hold at most one row per direction, but a symmetric kind
+                # unions both directions and a→b, b→a are different keys, so a
+                # neighbour can still arrive twice. One entry per neighbour is
+                # this tool's documented contract: the survivor is the NEWEST
+                # link, so re-linking a pair the other way reads as an update
                 # rather than as a second neighbour.
                 #
                 # ★ COMPARED EXPLICITLY, NOT LEFT TO read.gq's `order`. Each
@@ -3852,9 +3848,14 @@ def _upsert_code_branch_step(repo: str, branch: str) -> _Step:
 
 
 def _works_on_step(branch_slug: str, task_slug: str) -> _Step | None:
-    """Idempotent WorksOn edge — task_claim re-calls (lease renewal) must not
-    pile up duplicate edges between the same branch and task. ``None`` when the
-    edge already exists."""
+    """The WorksOn edge for a claim, or ``None`` when the edge already exists.
+
+    WorksOn is keyed on (branch, task), so re-inserting would upsert one row
+    rather than add a parallel edge, and a claim that loses the read race to a
+    concurrent one is harmless. The read stays because a lease renewal is the
+    hot path: skipping an edge that is already there keeps the renewal's commit
+    to the tables that actually changed instead of rewriting the WorksOn table
+    on every call."""
     if client.read(
         "read.gq",
         "code_branch_works_on_edge",
@@ -3865,7 +3866,8 @@ def _works_on_step(branch_slug: str, task_slug: str) -> _Step | None:
 
 
 def _for_project_step(branch_slug: str, project_slug: str) -> _Step | None:
-    """Idempotent ForProject edge — see :func:`_works_on_step`."""
+    """The ForProject edge, or ``None`` when it exists — see :func:`_works_on_step`;
+    here the hot path is a re-entrant ``workflow_session_start``."""
     if client.read(
         "read.gq",
         "code_branch_for_project_edge",
@@ -7273,10 +7275,10 @@ def memory_symbols(slug: str) -> dict:
 
 #: The expansion queries, and which edge-confidence columns each row carries.
 #: ``topic_siblings`` reports the SIBLING's Tagged edge only — see read.gq for
-#: why binding the seed's as well is quadratic in parallel edges rather than
-#: merely thorough. ``provenance_siblings`` traverses ``SessionProduced``,
-#: which carries no properties, so its rows report none and score as the
-#: default.
+#: why binding the seed's as well was quadratic in parallel edges rather than
+#: merely thorough (a store rebuilt with keyed edges has none).
+#: ``provenance_siblings`` traverses ``SessionProduced``, which carries no
+#: properties, so its rows report none and score as the default.
 _EXPANSION_QUERIES: dict[str, tuple[str, ...]] = {
     "applies_to_targets": ("edge_confidence",),
     "applies_to_sources": ("edge_confidence",),
@@ -7298,8 +7300,9 @@ def _expand_neighbors(slug: str) -> dict[str, bool]:
     BEST PATH WINS. A neighbour reachable by both an asserted and an inferred
     route is asserted: the inferred route is extra evidence for a link we
     already trust, not a reason to trust it less. Since the queries are bound
-    traversals now, one neighbour can arrive on many rows (parallel edges,
-    several shared topics), and this is the rule that collapses them.
+    traversals now, one neighbour can arrive on many rows (several shared
+    topics, both directions of a symmetric link), and this is the rule that
+    collapses them.
     """
     out: dict[str, bool] = {}
     for query, confidence_columns in _EXPANSION_QUERIES.items():

@@ -39,18 +39,23 @@ node Symbol {
     indexed_at: DateTime
 }
 
+// Every edge is keyed `@key(@src, @dst)` (omnigraph 0.11): one row per pair,
+// so the indexer's `load --mode merge` upserts an edge instead of appending a
+// parallel copy. A key cannot be added to an existing edge type; changing one
+// means rebuilding the graph, which for a code graph is a reindex.
+
 // Defines: a file defines a symbol (top-level or nested).
-edge Defines: CodeFile -> Symbol
+edge Defines: CodeFile -> Symbol { @key(@src, @dst) }
 
 // Contains: lexical nesting (class Contains method, module Contains class).
-edge Contains: Symbol -> Symbol
+edge Contains: Symbol -> Symbol { @key(@src, @dst) }
 
 // Calls / References: HEURISTIC name-resolved usage edges (best-effort).
-edge Calls: Symbol -> Symbol
-edge References: Symbol -> Symbol
+edge Calls: Symbol -> Symbol { @key(@src, @dst) }
+edge References: Symbol -> Symbol { @key(@src, @dst) }
 
 // Imports: a file imports a symbol (best-effort module/name resolution).
-edge Imports: CodeFile -> Symbol
+edge Imports: CodeFile -> Symbol { @key(@src, @dst) }
 
 // Inherits: a class inherits from a base class (best-effort resolution).
-edge Inherits: Symbol -> Symbol
+edge Inherits: Symbol -> Symbol { @key(@src, @dst) }

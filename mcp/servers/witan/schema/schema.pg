@@ -58,10 +58,17 @@ node Memory {
 // existing rows, so readers must treat null as "unknown" rather than as
 // `inferred`. Scoring a null as inferred would silently re-rank the whole
 // existing graph on the day this shipped.
+//
+// EVERY EDGE TYPE IN THIS FILE IS KEYED `@key(@src, @dst)` (omnigraph 0.11).
+// One row per (from, to): a repeat insert or `load --mode merge` upserts, and
+// the upsert REPLACES THE WHOLE ROW, so a re-link that omits a property nulls
+// it. A key can only be declared when the type is created (`schema plan`
+// refuses adding one), so changing an edge's key means rebuilding the graph.
 
 // Supersedes: a newer memory replaces an older one.
 // Link new → old when updating a pattern or lesson that has changed.
 edge Supersedes: Memory -> Memory {
+    @key(@src, @dst)
     confidence: enum(asserted, inferred)? @index
     role:       String?
     author:     String?
@@ -71,6 +78,7 @@ edge Supersedes: Memory -> Memory {
 // AppliesTo: links a pattern or lesson to a project fact that provides context.
 // e.g. a pattern "always use uv" AppliesTo project fact "ol-django uses uv".
 edge AppliesTo: Memory -> Memory {
+    @key(@src, @dst)
     confidence: enum(asserted, inferred)? @index
     role:       String?
     author:     String?
@@ -79,6 +87,7 @@ edge AppliesTo: Memory -> Memory {
 
 // Refines: a newer memory sharpens/extends an older one without replacing it.
 edge Refines: Memory -> Memory {
+    @key(@src, @dst)
     confidence: enum(asserted, inferred)? @index
     role:       String?
     author:     String?
@@ -88,6 +97,7 @@ edge Refines: Memory -> Memory {
 // Contradicts: two memories conflict. Symmetric in meaning; stored one
 // direction and traversed both ways. Never hidden — surfaced for review.
 edge Contradicts: Memory -> Memory {
+    @key(@src, @dst)
     confidence: enum(asserted, inferred)? @index
     role:       String?
     author:     String?
@@ -96,6 +106,7 @@ edge Contradicts: Memory -> Memory {
 
 // RelatedTo: soft associative link. Symmetric; stored one direction.
 edge RelatedTo: Memory -> Memory {
+    @key(@src, @dst)
     confidence: enum(asserted, inferred)? @index
     role:       String?
     author:     String?
@@ -122,6 +133,7 @@ node Topic {
 // memory_link(kind="tagged"). recall's topic-sibling expansion is the widest
 // and noisiest hop it takes, so this is where the weighting earns its keep.
 edge Tagged: Memory -> Topic {
+    @key(@src, @dst)
     confidence: enum(asserted, inferred)? @index
     role:       String?
     author:     String?
@@ -210,22 +222,22 @@ node WorkflowTrace {
 }
 
 // BelongsTo: links each WorkflowSession to its WorkflowProject.
-edge BelongsTo: WorkflowSession -> WorkflowProject
+edge BelongsTo: WorkflowSession -> WorkflowProject { @key(@src, @dst) }
 
 // Produced: links a completed WorkflowProject to its WorkflowTrace (one-to-one).
-edge Produced: WorkflowProject -> WorkflowTrace
+edge Produced: WorkflowProject -> WorkflowTrace { @key(@src, @dst) }
 
 // Informed: links a WorkflowProject to Memory nodes consulted or created
 // during the project (patterns, lessons, agent_context, project_facts).
-edge Informed: WorkflowProject -> Memory
+edge Informed: WorkflowProject -> Memory { @key(@src, @dst) }
 
 // SessionProduced: a WorkflowSession created or substantively updated a Memory.
 // Session-grain provenance (Informed is project-grain). The bare name `Produced`
 // is taken (WorkflowProject -> WorkflowTrace), hence the qualified name.
-edge SessionProduced: WorkflowSession -> Memory
+edge SessionProduced: WorkflowSession -> Memory { @key(@src, @dst) }
 
 // ProjectBlocks: a blocking project must complete before the blocked project is "ready".
-edge ProjectBlocks: WorkflowProject -> WorkflowProject
+edge ProjectBlocks: WorkflowProject -> WorkflowProject { @key(@src, @dst) }
 
 // ── Task Tracking ─────────────────────────────────────────────────
 //
@@ -264,22 +276,22 @@ node Task {
 }
 
 // Blocks: a blocker task must close before the blocked task is "ready".
-edge Blocks: Task -> Task
+edge Blocks: Task -> Task { @key(@src, @dst) }
 
 // ParentOf: hierarchy — an epic (or parent task) contains child tasks.
-edge ParentOf: Task -> Task
+edge ParentOf: Task -> Task { @key(@src, @dst) }
 
 // DiscoveredFrom: provenance — a task surfaced while working another task.
-edge DiscoveredFrom: Task -> Task
+edge DiscoveredFrom: Task -> Task { @key(@src, @dst) }
 
 // TaskBelongsTo: a task rolls up to a WorkflowProject.
-edge TaskBelongsTo: Task -> WorkflowProject
+edge TaskBelongsTo: Task -> WorkflowProject { @key(@src, @dst) }
 
 // Addresses: a task is motivated by a Memory node (lesson, project fact).
-edge Addresses: Task -> Memory
+edge Addresses: Task -> Memory { @key(@src, @dst) }
 
 // Closes: a WorkflowSession executed/closed a task.
-edge Closes: WorkflowSession -> Task
+edge Closes: WorkflowSession -> Task { @key(@src, @dst) }
 
 // TaskComment: attributed, append-only feedback *about* a task, held outside
 // the task's own text. Before this existed, an agent that found a problem with
@@ -327,7 +339,7 @@ node CodeBranch {
 }
 
 // WorksOn: a CodeBranch is carrying out a Task.
-edge WorksOn: CodeBranch -> Task
+edge WorksOn: CodeBranch -> Task { @key(@src, @dst) }
 
 // ForProject: a CodeBranch belongs to a WorkflowProject.
-edge ForProject: CodeBranch -> WorkflowProject
+edge ForProject: CodeBranch -> WorkflowProject { @key(@src, @dst) }
