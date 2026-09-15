@@ -46,7 +46,7 @@ from pathlib import Path
 #: stand here said the pin should go back to 0.9.0/v0.9.0 if the experiment had
 #: concluded, and pinning the released 0.10.0 is that same instruction answered
 #: forwards rather than backwards. The write-ceiling task holds the measurement.
-_OMNIGRAPH_VERSION = "0.10.0"
+_OMNIGRAPH_VERSION = "0.11.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which

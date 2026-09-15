@@ -30,7 +30,7 @@
 # exists because this file went a full release cycle claiming the manager
 # covered it when it did not, and a partial bump is silent until deploy.
 
-ARG OMNIGRAPH_VERSION=0.10.0
+ARG OMNIGRAPH_VERSION=0.11.0
 # Upstream tag to fetch from. A real release is `v${OMNIGRAPH_VERSION}`; `edge`
 # is the rolling build of upstream main, republished on every push there.
 # Kept separate because on a moving tag the two differ — see
