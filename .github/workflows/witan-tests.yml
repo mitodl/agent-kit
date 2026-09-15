@@ -58,7 +58,8 @@ jobs:
     # A separate, plainly-named check rather than a step inside a test job:
     # its whole purpose is to be legible on a Renovate bump PR, where the
     # question "does this rebuild every graph?" needs answering before anyone
-    # reads the diff. Renovate has automerge enabled for this dependency.
+    # reads the diff. Omnigraph bumps do not automerge (renovate.json), so the
+    # reviewer approving one is who this check is for.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 

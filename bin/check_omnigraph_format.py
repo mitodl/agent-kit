@@ -7,10 +7,12 @@ written under a different on-disk format, in both directions, and there is no
 downgrade. A release that moves that format therefore invalidates every local
 store and every deployed graph at once — 0.8.1 → 0.9.0 moved it from 4 to 6.
 
-Renovate bumps ``_OMNIGRAPH_VERSION`` and knows nothing about any of that. It
-has automerge enabled for this dependency. What stopped 0.9.0 from merging
-itself was a minimum-release-age timer and an unrelated red job — neither of
-which is a control.
+Renovate bumps ``_OMNIGRAPH_VERSION`` and knows nothing about any of that.
+Omnigraph bumps do not automerge (renovate.json), so every one waits for a
+reviewer, and this check is how that reviewer learns the bump rebuilds every
+graph. It only reads the right binary if the release tag moved with the
+version, which ``just check-omnigraph-pins`` enforces (agent-kit#342 ran this
+check against the old binary and passed).
 
 So the repo DECLARES the format it expects (``_OMNIGRAPH_INTERNAL_SCHEMA``) and
 this check asserts the binary agrees. A version bump that moves the format
