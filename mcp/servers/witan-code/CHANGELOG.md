@@ -36,6 +36,15 @@ a MINOR bump may include breaking changes).
   could still drop the shared bridge graph first. The key is now resolved once,
   up front, by `indexer.resolve_repo_key` and passed into the rebuild.
 
+### Fixed
+
+- **Two concurrent `code_store_open` calls for one view no longer fail the
+  second.** `ensure_branch` listed branches and then ran `branch create`, so two
+  callers could both see the view missing, and the loser failed with `branch
+  '<view>' already exists`. A create that fails that way now counts as success,
+  once a fresh listing confirms the branch is there. Any other create failure
+  still raises.
+
 ## [0.18.0] - 2026-09-02
 
 ### Added
