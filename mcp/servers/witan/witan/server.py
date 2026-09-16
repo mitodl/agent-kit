@@ -47,6 +47,7 @@ from witan_core.omnigraph import (
     schema_apply_if_changed,
     store_cli_args,
 )
+from witan_core.refusal import Refusal
 
 from . import config as cfg_module
 from . import elicit, merge_report, readiness, scan, session_state
@@ -561,6 +562,10 @@ def _tool(fn):
     enumerate-the-paths approach this docstring already records failing four
     times.
 
+    ``_missing_endpoint_errors`` is the same argument again: every tool that
+    writes an edge to a caller-supplied slug can be handed one that does not
+    exist.
+
     ``functools.wraps`` copies ``__wrapped__``, so ``inspect.signature`` — and
     therefore FastMCP's schema generation — still sees the real parameters.
     """
@@ -568,13 +573,13 @@ def _tool(fn):
 
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
-            with _edge_property_errors():
+            with _edge_property_errors(), _missing_endpoint_errors(fn.__name__):
                 return scan.annotate(await fn(*args, **kwargs))
     else:
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            with _edge_property_errors():
+            with _edge_property_errors(), _missing_endpoint_errors(fn.__name__):
                 return scan.annotate(fn(*args, **kwargs))
 
     return mcp.tool(wrapper)
@@ -700,6 +705,57 @@ def _edge_property_errors() -> Iterator[None]:
         if not _NO_EDGE_PROPS.search(str(exc)):
             raise
         raise RuntimeError(f"{exc}\n\n{_EDGE_PROPS_HINT}") from exc
+
+
+#: The engine refusing an edge whose endpoint does not exist. Over HTTP:
+#: "src 'tk-x' not found in Task (HTTP 400, bad_request)"; from the local CLI,
+#: ANSI-coloured and with a ``__`` prefix: "__dst 'wp-x' not found in
+#: WorkflowProject".
+_MISSING_ENDPOINT = re.compile(r"\b_*(?:src|dst) '([^']+)' not found in ([A-Z]\w*)")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class MissingReference(LookupError, Refusal):
+    """A write named a slug that is not in the graph."""
+
+    def __init__(self, tool: str, node_type: str, slug: str) -> None:
+        self.node_type = node_type
+        self.slug = slug
+        super().__init__(f"{tool}: no {node_type} with slug '{slug}'")
+
+
+@contextmanager
+def _missing_endpoint_errors(tool: str) -> Iterator[None]:
+    """Re-raise the engine's missing-endpoint failure as a ``MissingReference``.
+
+    Callers pass template placeholders and typo'd slugs (WITAN-6, WITAN-V), and
+    they got back "omnigraph mutate failed" with a Rust error report, logged as
+    an error and filed in Sentry. It is a bad argument, so it is a refusal.
+
+    Translated after the fact rather than checked up front: the check would be
+    a read per referenced slug on ``task_create`` and ``workflow_session_start``,
+    the hottest write paths, to catch a mistake the engine already catches.
+    Nothing is lost by waiting for it, since each ``change`` or ``change_many``
+    commits whole, so the failed batch left no node without its edges.
+
+    Only an error the store client raised is searched, following ``__cause__``
+    through the ``change_many`` chunk wrapper. Other errors quote caller input
+    (``store_merge`` puts a malformed row in its message, ``WriteBlocked`` a
+    preview of flagged content), and that input could contain the pattern.
+    """
+    try:
+        yield
+    except RuntimeError as exc:
+        cause: BaseException | None = exc
+        while cause is not None:
+            text = _ANSI.sub("", str(cause))
+            if text.startswith("omnigraph ") and (
+                match := _MISSING_ENDPOINT.search(text)
+            ):
+                slug, node_type = match.groups()
+                raise MissingReference(tool, node_type, slug) from exc
+            cause = cause.__cause__
+        raise
 
 
 def _edge_meta(row: dict) -> dict:
@@ -6987,13 +7043,17 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
         # Edge + `parent_slug` sync are one logical edit, always both — the
         # same `extra_steps` mechanism `_update_task`'s own `parent_slug`
         # writes already use for their CodeBranch edges.
-        _update_task(
+        # `_update_task` reads the child first and writes nothing when it is
+        # absent, so the engine never sees the edge and cannot refuse it.
+        updated, _ = _update_task(
             to_slug,
             {"parent_slug": from_slug},
             extra_steps=[
                 ("mutations.gq", "link_parent_of", {"from": from_slug, "to": to_slug})
             ],
         )
+        if updated is None:
+            raise MissingReference("task_link", "Task", to_slug)
     elif kind == "discovered_from":
         client.change(
             "mutations.gq", "link_discovered_from", {"from": from_slug, "to": to_slug}

@@ -8,6 +8,22 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A write naming a slug that does not exist is refused by name.**
+  `task_create` with a placeholder blocker, or `workflow_session_start` with a
+  mistyped project, used to fail as "omnigraph mutate failed" with the engine's
+  error report and land in Sentry (WITAN-6, WITAN-V). When the engine rejects
+  an edge for a missing endpoint, the `_tool` wrapper now raises
+  `MissingReference` ("task_create: no Task with slug 'tk-…'"), a `Refusal`
+  logged at WARNING, so no tool pays an existence read up front.
+  `task_link(kind="parent")` to a missing child, which never reached the engine
+  and reported success, raises it too. `memory_link` keeps returning
+  `linked: false` with the missing slugs.
+- **The local CLI prints a `Refusal` as one line.** `main()` only caught the
+  remote error types, so a refusal raised by a directly-called tool function
+  (`MissingReference`, `WriteBlocked`) escaped as a traceback.
+
 ## [0.34.0] - 2026-09-16
 
 ### Changed

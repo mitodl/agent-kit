@@ -366,6 +366,8 @@ def _warn_about_routing(tokens: tuple[str, ...]) -> None:
 
 
 def main() -> None:
+    from witan_core.refusal import Refusal
+
     from ..remote.oidc import RemoteAuthError
     from ..remote.proxy import (
         RemoteCredentialRejected,
@@ -400,6 +402,9 @@ def main() -> None:
         RemoteToolUnavailable,
         RemoteUnreachable,
         RemoteWriteIndeterminate,
+        # A local CLI calls the tool function directly, so a refusal arrives
+        # as itself rather than as RemoteToolFailed.
+        Refusal,
     ) as exc:
         # markup=False: these messages name config keys, and a target block is
         # written `[qa]` — which rich parses as a style tag and swallows, so
