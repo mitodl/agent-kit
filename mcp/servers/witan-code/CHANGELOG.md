@@ -25,9 +25,10 @@ a MINOR bump may include breaking changes).
   is nearly always accidental (a scratch checkout, a temp repro layout), so the
   write path now raises `repo.RepoNotDetected` naming the two opt-ins.
   `witan code index`/`reindex` gained `--repo <uri>` alongside the existing
-  `WITAN_REPO`. **Reads are unaffected**: `repo.detect()` keeps the directory
-  fallback by default, so stores already created under a bare name stay
-  reachable. The hook paths (`session-init`, the PostToolUse reindex) already
+  `WITAN_REPO`. **Reads of a local store are unaffected**: `repo.detect()` keeps
+  the directory fallback by default, so local stores already created under a
+  bare name stay reachable. Reads against a cluster drop it (see Fixed). The
+  hook paths (`session-init`, the PostToolUse reindex) already
   swallow indexing errors, so this degrades to a no-op there rather than
   surfacing.
 
@@ -42,6 +43,18 @@ a MINOR bump may include breaking changes).
   up front, by `indexer.resolve_repo_key` and passed into the rebuild.
 
 ### Fixed
+
+- **Reads against a cluster no longer probe a graph named after the checkout's
+  directory.** In a checkout with no `origin` remote, `repo.detect()` falls back
+  to the directory name, and reads used that key against shared graphs too,
+  where no graph is keyed that way. Every prompt in a scratch directory sent
+  `code_store_views` for a graph like `code-scratchpad`, `code-tmp` or
+  `code-memory`, which made up most `ClusterGraphMissing` events in Sentry.
+  `store.detect_repo(cfg)` turns the fallback off when `cfg.is_cluster`. The
+  server's read path, the `inject-context` hook and `symbols` use it, and
+  `symbols` also turns it off whenever it dispatches to a deployment, which a
+  target with only `remote_url` does while keeping a local code store. Local
+  stores keep the fallback.
 
 - **Two concurrent `code_store_open` calls for one view no longer fail the
   second.** `ensure_branch` listed branches and then ran `branch create`, so two
