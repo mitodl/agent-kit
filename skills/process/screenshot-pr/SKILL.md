@@ -1,12 +1,14 @@
 ---
 name: screenshot-pr
 description: >
-  Take screenshots of UI changes for a pull request using shot-scraper. Use
-  this skill when asked to screenshot, capture, or document UI changes in a
-  PR — discovers the local dev base URL, establishes auth (defaulting to the
-  admin@odl.local Keycloak/APISIX test user), proposes a screenshot plan at
-  desktop/tablet/mobile viewports, asks for confirmation, then runs
-  shot-scraper multi to produce the images.
+  Capture UI changes for a pull request as screenshots with a re-runnable
+  Playwright script. Use when asked to screenshot, capture, document or re-shoot
+  UI for a PR, at desktop, tablet or mobile width. Every shot asserts on page
+  content, so a gateway 5xx, an expired login, a stale dev-server build or the
+  wrong user's data fails the run instead of being saved as an image. Covers
+  Keycloak/APISIX logins (including stacks with more than one session),
+  clicking through to a state, cropping portalled popovers, and re-shooting a
+  named subset.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -14,350 +16,97 @@ metadata:
 
 # Screenshot PR Changes
 
-Capture UI changes for a pull request across three standard viewports using
-[shot-scraper](https://shot-scraper.datasette.io/en/stable/).
+A screenshot tool will photograph a gateway error page, a logged-out page or last week's build, exit `0`, and hand you a plausible PNG. The job is knowing the picture shows what you think it shows.
 
-**Requires:** `shot-scraper` available on `PATH` (it is a system-level utility, not a per-project dependency — do not install it with `uv` or `pip` inside the project).
-
-Check it is present before proceeding:
+**Requires** `uv`. Both scripts pin Playwright in a PEP 723 header, so `uv run` builds their environment. A machine that has never run them needs the pinned Chromium once:
 
 ```bash
-which shot-scraper && shot-scraper --version
+uv run --with "playwright==1.61.0" playwright install chromium
 ```
 
-If the command is missing, ask the user to install it globally (e.g. `uv tool install shot-scraper --global`, `pipx install shot-scraper`, or their preferred method) and confirm Chromium is available (`shot-scraper install`). Do not install it yourself.
+The scripts live in `scripts/` beside this `SKILL.md`, wherever it was installed. Resolve that literal path now and use it for `<skill_dir>` below — your working directory is the project being screenshotted, and a shell variable does not survive between tool calls.
 
----
+## The rule: every shot asserts
 
-## Step 0 — Discover the base URL
+Each shot names text that must be **present** inside the region under review. That one check catches:
 
-Run these checks in order and stop at the first hit:
+| Failure | What you'd otherwise get |
+|---|---|
+| Gateway 5xx or app error page | A picture of the error, exit `0` |
+| Expired or partial login | The anonymous page, which often looks like a valid one |
+| Stale dev-server build | Yesterday's UI |
+| Wrong fixture, user or flag | The right layout with the wrong content |
 
-**a) Check `.env` (or `.env.local`) in the repo root:**
+Asserting on copy the branch adds makes the run a deploy check too.
 
-```bash
-grep -E "(BASE_URL|SITE_URL|APP_URL)" .env .env.local 2>/dev/null | head -10
-```
+Text that must be **absent** is optional. Use it only when two states in the set look alike — "no discount" and "logged out" can render the same card, told apart only by `Sign in` in the header. If you can't name the wrong page that would also pass your `expect`, leave `absent` empty; a check you had to invent reads as coverage without being any.
 
-Look for vars like `MITX_ONLINE_BASE_URL`, `SITE_URL`, `NEXT_PUBLIC_BASE_URL`.
+## Step 1 — Find the base URL
 
-**b) Check `docker-compose.yml` for env defaults:**
+Stop at the first hit:
 
-```bash
-grep -E "(BASE_URL|APISIX_PORT|_PORT)" docker-compose.yml 2>/dev/null | head -20
-```
+1. **Ingress hostnames** — for a k3d/Tilt or Kubernetes stack, check the `Tiltfile`, ingress YAML, or `kubectl -n <ns> get ingress`. These route through the gateway that holds the session.
+2. **`.env` / `.env.local`** — `grep -E "(BASE_URL|SITE_URL|APP_URL)" .env .env.local 2>/dev/null`
+3. **`docker-compose.yml`** — use the gateway port (`APISIX_PORT`, often `9080`), never the raw app port, or the session cookie isn't presented.
+4. **Probe** — `for port in 9080 3000 5173 8000 8013; do curl -s -o /dev/null -w "%{http_code} localhost:$port\n" --max-time 1 "http://localhost:$port/"; done`
 
-Pay attention to `APISIX_PORT` (default `9080`) — screenshots of authenticated
-pages must go through the APISIX port, **not** the raw app port, so session
-cookies work. If the app hostname is `api.open.odl.local` and APISIX is at
-`8065`, the base URL for screenshots is `http://api.open.odl.local:8065`.
+Confirm it answers (`curl -sk -o /dev/null -w "%{http_code}\n" "<base_url>/"`), and note the `login_url` — usually `<base_url>/login`. If nothing turns up, ask.
 
-**c) Probe common ports for a live server:**
+## Step 2 — Check auth
 
-```bash
-for port in 9080 3000 5173 8000 8013; do
-  curl -s -o /dev/null -w "%{http_code} localhost:$port\n" --max-time 1 "http://localhost:$port/" 2>/dev/null
-done
-```
+`capture.py` mints a fresh login per user on every run. It's built for local stacks and their test accounts: on a shared stack, use a dedicated low-privilege test account rather than a real one, and keep the copied script somewhere git doesn't track.
 
-**d) Check the README or session context** for any URLs mentioned.
-
-Record two values: `base_url` (used for all screenshot URLs) and `login_url`
-(`<base_url>/login`, used for auth). If nothing is found, ask the user.
-
----
-
-## Step 1 — Establish an auth context
-
-Authentication in this dev stack flows through **APISIX → Keycloak**. The
-`shot-scraper --auth` flag takes a Playwright storage-state JSON file; this
-step generates or reuses one.
-
-### 1a — Check for an existing context
+Run the helper by hand once to check the stack before you plan:
 
 ```bash
-test -f /tmp/screenshot-auth.json && echo "exists"
-```
-
-If the file exists and is less than 8 hours old, reuse it and skip to Step 2.
-
-```bash
-find /tmp/screenshot-auth.json -mmin -480 2>/dev/null
-```
-
-### 1b — Try automated login
-
-Use the helper script with the **default dev credentials** (`admin@odl.local` /
-`admin`):
-
-```bash
-"$(dirname $(which shot-scraper))/python3" \
-  skills/process/screenshot-pr/scripts/get-auth-context.py \
+uv run <skill_dir>/scripts/get-auth-context.py \
   "<login_url>" /tmp/screenshot-auth.json \
-  --username admin@odl.local \
-  --password admin
+  --username admin@odl.local --password localdev123 \
+  --verify "<base_url>/api/v0/users/me/"
 ```
 
-Using `dirname $(which shot-scraper)` guarantees the script runs under the same
-Python — and therefore the same Playwright install — as shot-scraper itself,
-regardless of what `python3` resolves to on the host.
+`--verify` takes a URL that returns the current user, and fails unless it names the user who signed in — landing somewhere other than `/login` proves nothing. Try `/api/v0/users/me/`, `/api/users/me/`, `/api/user/`, `/accounts/session/`. Repeat `--verify` once per session the pages depend on: a frontend proxying another service's API through its own host holds a separate session per upstream, and a context missing one renders that data as the anonymous state rather than an error.
 
-If the script exits `0`, auth context is ready — proceed to Step 2.
+`--verify` is mandatory and has no bypass. If nothing on the stack answers with the current user as JSON, signed-in shots can't be captured — say so and ask which URL to use. Signed-out shots can go ahead.
 
-### 1c — Fallback: prompt for credentials
+Form selectors default to Keycloak's; for another IdP pass `--username-selector`, `--password-selector` and `--submit-selector`. If login still fails, ask once for credentials and re-run.
 
-If automated login fails (non-ODL project, different Keycloak realm, or
-credentials rejected), use a **single `ask_user` call**:
+> **Never mint a context in a headed browser.** Headed Chrome sends a different User-Agent from the headless captures, and a stack that binds sessions to the User-Agent silently swaps in an anonymous one.
 
-```json
-{
-  "username": {
-    "type": "string",
-    "title": "Username / email",
-    "description": "Leave blank to skip authentication entirely."
-  },
-  "password": {
-    "type": "string",
-    "title": "Password",
-    "description": "Leave blank to skip authentication entirely."
-  },
-  "auth_file": {
-    "type": "string",
-    "title": "Existing auth context file (optional)",
-    "description": "Path to an existing Playwright storage-state JSON if you have one. Leave blank to use credentials above or skip auth."
-  }
-}
-```
+## Step 3 — Propose a plan and confirm
 
-**If credentials supplied:** re-run the helper script with those values. Report
-the error clearly if it fails again — do not retry indefinitely.
+Put the plan to the user in one message and wait: base URL, one line per shot (`<name> <path> [selector]`), any clicks needed first, viewports, and an output directory (`screenshots/<branch-or-pr-slug>/` is a fine default). Re-show it after each revision.
 
-**If an existing auth file path supplied:** use that file directly; skip the
-helper script.
+Keep every image in **one flat directory** with descriptive names; the next step is a drag-and-drop into a GitHub comment.
 
-**If all fields blank:** set `auth_file=""` and proceed without authentication.
+| Viewport | Width × height |
+|---|---|
+| desktop | 1440 × 1100 |
+| tablet | 768 × 1024 |
+| mobile | 390 × 844 |
 
-### 1d — Last resort: manual interactive login
+Shoot a width only where the diff changes its layout, and say which you skipped.
 
-If no credentials are available and no auth file exists, the user can log in
-via a real browser window:
+## Step 4 — Capture
+
+Copy **both** `scripts/capture.py` and `scripts/get-auth-context.py` into the project's scratch or feature-work directory (the first calls the second as a sibling). Fill in the marked block and the `SHOTS` list; each `Shot` field is documented where it's declared.
+
+Choose `TARGET` by looking at the page. It is both the crop and the scope of every presence check, so a wrong value crops to the wrong element while every assertion still passes.
 
 ```bash
-shot-scraper auth "<login_url>" /tmp/screenshot-auth.json
+uv run capture.py                # everything
+uv run capture.py --only hero    # re-shoot a subset under the same assertions
+uv run capture.py --list         # the plan, no browser
 ```
 
-> ⚠️ **User-Agent mismatch warning.** On stacks that bind the session to the
-> User-Agent (e.g. Keycloak/APISIX), this fallback can silently produce
-> logged-out screenshots. `shot-scraper auth` opens a headed browser whose UA
-> is `Chrome/<major>.0.0.0`; `shot-scraper multi` captures with a headless
-> browser whose UA is `HeadlessChrome/<full-build>`. The server rejects the
-> mismatched session and silently issues an anonymous one — no error, just
-> logged-out shots. Passing `--user-agent` to `shot-scraper auth` does not
-> help; the command ignores it. The `get-auth-context.py` path avoids this
-> because both ends run headless.
+The script retries only until the app answers — a refused connection, a navigation timeout or a 5xx (a watch-mode dev server gets OOM-killed mid-run and takes a minute to recompile). Anything after that, a 4xx, a failed assertion or a missing selector, fails at once. Output is staged and only replaces the previous set once the app has answered: a stack that's down leaves the old images alone, and a shot that failed leaves none.
 
-After establishing any auth context (any path), confirm it is actually
-authenticated before proceeding: load a known login-required page and verify
-the response looks authenticated, not an anonymous or redirect response.
+## Step 5 — Look at every image
 
----
+Open each PNG before reporting. The assertions cover what you thought to check; your eyes cover the rest — collapsed layout, truncated text, a skeleton that never resolved, the wrong breakpoint.
 
-## Step 2 — Gather context
+## Step 6 — Report
 
-With the base URL confirmed and auth established, review what you already know:
+Give the absolute directory path and each file with its size, and say plainly which shots failed and why, which viewports you skipped, and any state no available fixture could produce (and what fixture would).
 
-- **PR description and title** — what features or pages are changing?
-- **Diff summary** — which routes, templates, components, or CSS files are
-  touched? Look for URL path patterns, view names, or named URL patterns.
-- **Session context** — any page names or paths mentioned during this session.
-
-Build a list of paths to capture. For each one, construct the full URL as
-`<base_url><path>`.
-
----
-
-## Step 3 — Propose a screenshot plan and confirm
-
-Present the plan clearly and ask for confirmation with a **single `ask_user`
-call** (allow any number of edit rounds before proceeding):
-
-```json
-{
-  "base_url": {
-    "type": "string",
-    "title": "Base URL",
-    "description": "Root URL for all screenshots (must go through APISIX if auth is needed). Discovered: <discovered_value_or_'not_detected'>."
-  },
-  "shots": {
-    "type": "string",
-    "title": "Screenshot plan",
-    "description": "One shot per line: <label> <path> [css-selector]. Labels become filenames. Example:\n  homepage /\n  dashboard /dashboard\n  course-detail /courses/1 .course-hero",
-    "default": "<generated list, one per line>"
-  },
-  "interactions": {
-    "type": "string",
-    "title": "Interactions before screenshot (optional)",
-    "description": "Describe in plain English what needs to happen on the page before the shot is taken. The agent will translate this into JavaScript. One instruction per shot (reference the label). Examples:\n  dashboard: scroll to the My Learning section\n  dashboard: click the 'Show all' button, then scroll to the bottom of the list\n  course-detail: expand the accordion labelled 'Upcoming runs'\nLeave blank to screenshot the page as it loads."
-  },
-  "output_dir": {
-    "type": "string",
-    "title": "Output directory",
-    "description": "Where to save screenshots.",
-    "default": "screenshots/<pr-slug-or-branch>"
-  }
-}
-```
-
-Re-display the updated plan after each revision. Do not proceed until the user
-explicitly confirms.
-
----
-
-## Step 4 — Build the shot-scraper YAML
-
-Write a temp file (e.g. `/tmp/screenshot-pr-<branch>.yml`). For every
-confirmed shot, emit three entries — one per viewport:
-
-**Standard viewports:**
-
-| Name | Width | Height | Device reference |
-|------|-------|--------|------------------|
-| desktop | 2560 | 1440 | 1440p monitor |
-| tablet | 768 | 1024 | iPad (standard) |
-| mobile | 390 | 844 | iPhone 14 |
-
-Always set both `width` and `height` to get a viewport-sized screenshot, not a full-page capture.
-
-**`wait` guidance:** `shot-scraper` stops at `networkidle`, which fires on the
-initial HTML shell — before client-side frameworks (Next.js, React Query, etc.)
-have hydrated and fetched their data. Always add `wait: 5000` unless you have
-confirmed the page is fully server-rendered. Reduce it only if you have verified
-the content is present sooner.
-
-**Translating interactions to JavaScript (`javascript` key):**
-
-If the user described interactions in Step 3, translate each one into a
-`javascript` value for the relevant shots. The JS runs after `wait` completes,
-so the page is fully loaded. Use `await` freely — shot-scraper evaluates the
-value as an async function body.
-
-Common patterns:
-
-| User says | JavaScript |
-|-----------|------------|
-| scroll to the My Learning section | `document.querySelector('#my-learning')?.scrollIntoView({block:'start'})` |
-| scroll to element with text "Upcoming" | `[...document.querySelectorAll('*')].find(el => el.childElementCount === 0 && el.textContent.trim() === 'Upcoming')?.scrollIntoView({block:'start'})` |
-| click the button labelled "Show all" | `[...document.querySelectorAll('button, a')].find(el => el.textContent.trim() === 'Show all')?.click()` |
-| expand the accordion | `document.querySelector('[aria-expanded="false"]')?.click()` |
-| scroll to bottom of page | `window.scrollTo(0, document.body.scrollHeight)` |
-| wait for an element to appear | `await new Promise(r => { const i = setInterval(() => { if (document.querySelector('.target')) { clearInterval(i); r(); } }, 100); setTimeout(() => { clearInterval(i); r(); }, 5000); })` |
-
-**Important:** shot-scraper runs `javascript` via `page.evaluate()`, which does
-not accept top-level `await`. Wrap any async code in an immediately-invoked
-async function (IIFE):
-
-```javascript
-(async () => {
-  document.querySelector('#my-learning')?.scrollIntoView({block: 'start'});
-  await new Promise(r => setTimeout(r, 500));
-})()
-```
-
-For purely synchronous interactions (scroll, click with no network trigger) the
-IIFE wrapper is optional — a plain expression works fine:
-
-```javascript
-document.querySelector('#my-learning')?.scrollIntoView({block: 'start'})
-```
-
-When a click triggers a network request or animation, always use the IIFE and
-wait before the screenshot resolves. Suggested minimums:
-- Simple scroll: 500ms
-- CSS expand/collapse animation (e.g. MUI Accordion): 2000ms
-- Click that triggers a network request: 2000ms+
-
-If the same interaction applies to all three viewport shots for a label, repeat
-the `javascript` value on all three entries.
-
-```yaml
-- url: "<base_url><path>"
-  output: "<output_dir>/desktop/<label>.png"
-  width: 2560
-  height: 1440
-  wait: 5000
-  # selector: "<selector>"   # include only when set
-
-- url: "<base_url><path>"
-  output: "<output_dir>/tablet/<label>.png"
-  width: 768
-  height: 1024
-  wait: 5000
-
-- url: "<base_url><path>"
-  output: "<output_dir>/mobile/<label>.png"
-  width: 390
-  height: 844
-  wait: 5000
-```
-
-Create output directories:
-
-```bash
-mkdir -p <output_dir>/{desktop,tablet,mobile}
-```
-
----
-
-## Step 5 — Run shot-scraper
-
-**Prefer sequential `shot` calls over `multi` when any shot uses `wait: 5000`
-or a `javascript` interaction.** `shot-scraper multi` runs all entries in
-parallel; with heavy JS pages and long waits this will time out. Instead, run
-one `shot-scraper shot` per viewport:
-
-```bash
-SHOT_SCRAPER_AUTH="${auth_file:+--auth \"$auth_file\"}"
-JS="<javascript expression>"
-
-shot-scraper shot "<url>" $SHOT_SCRAPER_AUTH --browser chromium \
-  --width 2560 --height 1440 --wait 5000 --javascript "$JS" \
-  -o "<output_dir>/desktop/<label>.png"
-
-shot-scraper shot "<url>" $SHOT_SCRAPER_AUTH --browser chromium \
-  --width 768 --height 1024 --wait 5000 --javascript "$JS" \
-  -o "<output_dir>/tablet/<label>.png"
-
-shot-scraper shot "<url>" $SHOT_SCRAPER_AUTH --browser chromium \
-  --width 390 --height 844 --wait 5000 --javascript "$JS" \
-  -o "<output_dir>/mobile/<label>.png"
-```
-
-`shot-scraper multi` is fine for simple pages with no `javascript` and a short
-`wait` (≤1000ms). If any shot fails, note which ones and continue.
-
----
-
-## Step 6 — Report results
-
-List created files by viewport:
-
-```
-desktop/  (N files)   tablet/  (N files)   mobile/  (N files)
-  homepage.png          homepage.png          homepage.png
-  dashboard.png         dashboard.png         dashboard.png
-```
-
-If any shots failed, list them with the HTTP status or error.
-
-Suggest next steps if relevant:
-- Add screenshots to the PR description: `gh pr edit --body-file -`.
-- Re-run with `--no-clobber` to skip already-captured shots on retry.
-- If auth expired, delete `/tmp/screenshot-auth.json` and re-run from Step 1.
-- For pages requiring state that's hard to automate (e.g. mid-checkout flows),
-  use `shot-scraper shot -i <url> --auth /tmp/screenshot-auth.json` to open
-  an interactive browser with the session pre-loaded.
-
----
-
-See [get-auth-context.py](scripts/get-auth-context.py) for the Playwright
-login helper.
+Attaching the images is the user's step — GitHub has no upload API — so hand over the directory.
