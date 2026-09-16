@@ -738,19 +738,24 @@ def _missing_endpoint_errors(tool: str) -> Iterator[None]:
     Nothing is lost by waiting for it, since each ``change`` or ``change_many``
     commits whole, so the failed batch left no node without its edges.
 
-    A ``Refusal`` passes through untouched: ``WriteBlocked`` quotes a preview of
-    the caller's content, which could contain the pattern.
+    Only an error the store client raised is searched, following ``__cause__``
+    through the ``change_many`` chunk wrapper. Other errors quote caller input
+    (``store_merge`` puts a malformed row in its message, ``WriteBlocked`` a
+    preview of flagged content), and that input could contain the pattern.
     """
     try:
         yield
     except RuntimeError as exc:
-        if isinstance(exc, Refusal):
-            raise
-        match = _MISSING_ENDPOINT.search(_ANSI.sub("", str(exc)))
-        if not match:
-            raise
-        slug, node_type = match.groups()
-        raise MissingReference(tool, node_type, slug) from exc
+        cause: BaseException | None = exc
+        while cause is not None:
+            text = _ANSI.sub("", str(cause))
+            if text.startswith("omnigraph ") and (
+                match := _MISSING_ENDPOINT.search(text)
+            ):
+                slug, node_type = match.groups()
+                raise MissingReference(tool, node_type, slug) from exc
+            cause = cause.__cause__
+        raise
 
 
 def _edge_meta(row: dict) -> dict:
@@ -7038,13 +7043,17 @@ def task_link(from_slug: str, to_slug: str, kind: TaskLinkKind) -> dict:
         # Edge + `parent_slug` sync are one logical edit, always both — the
         # same `extra_steps` mechanism `_update_task`'s own `parent_slug`
         # writes already use for their CodeBranch edges.
-        _update_task(
+        # `_update_task` reads the child first and writes nothing when it is
+        # absent, so the engine never sees the edge and cannot refuse it.
+        updated, _ = _update_task(
             to_slug,
             {"parent_slug": from_slug},
             extra_steps=[
                 ("mutations.gq", "link_parent_of", {"from": from_slug, "to": to_slug})
             ],
         )
+        if updated is None:
+            raise MissingReference("task_link", "Task", to_slug)
     elif kind == "discovered_from":
         client.change(
             "mutations.gq", "link_discovered_from", {"from": from_slug, "to": to_slug}
