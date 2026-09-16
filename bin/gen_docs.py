@@ -564,8 +564,11 @@ def parse_pg(path: Path) -> tuple[list[dict], list[dict]]:
             edges.append(edge)
             # An edge with a property block reuses the node field-collector:
             # the body syntax is identical, and the collector only ever touches
-            # `fields`.
-            current = edge if brace else None
+            # `fields`. A block that closes on its own line
+            # (`edge X: A -> B { @key(@src, @dst) }`) has no properties to
+            # collect, and opening the collector on it would swallow every
+            # declaration after it looking for a `}` that already went by.
+            current = edge if brace and not stripped.endswith("}") else None
             pending = []
             detached = False
             continue
@@ -616,9 +619,10 @@ def _render_schema(title: str, intro: str, source: Path) -> str:
         "An edge with properties exposes them only through a **bound** traversal — "
         "`$src $w:supersedes $dst` binds the matched edge row, making `$w.confidence` "
         "a column you can project, filter, and order on. The unbound form "
-        "(`$src supersedes $dst`) still only asserts the edge exists. Binding also "
-        "drops set semantics: one row per *edge*, so parallel edges between the same "
-        "pair arrive as separate rows.\n"
+        "(`$src supersedes $dst`) still only asserts the edge exists.\n\n"
+        "Every edge type is keyed `@key(@src, @dst)`, so there is at most one edge "
+        "per (from, to) pair. Inserting an existing pair upserts it and replaces the "
+        "whole row, so a re-link that omits a property clears it.\n"
     )
     body.append("| Edge | From | To | Properties | Meaning |")
     body.append("| --- | --- | --- | --- | --- |")

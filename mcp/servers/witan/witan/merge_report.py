@@ -19,18 +19,19 @@ verdict would hide whichever failure the other's arithmetic happens to absorb.
     source_rows = added + updated + kept_target + passthrough + duplicate_slugs
 
 ``added``/``updated``/``kept_target``
-    one per distinct ``(type, slug)`` node — the reconciliation decision.
+    one per distinct ``(type, slug)`` node and one per distinct
+    ``(edge, from, to)`` edge — the reconciliation decision.
 ``passthrough``
-    rows with no slug to reconcile on: edge rows, and any typed row exported
-    without a slug. Loaded additively, never reconciled.
+    typed rows exported without a slug. Loaded as they are, never reconciled.
 ``duplicate_slugs``
-    rows displaced by a LATER row sharing their ``(type, slug)``. The
-    classifier keys a dict, so the last such row in the source is the one
-    kept and reconciled, and each earlier one counts here. Zero for a real
-    ``omnigraph export`` (slug is the key), non-zero only for a
-    hand-assembled source — and counted rather than ignored precisely so that
-    case does not read as a shortfall. A check that cries wolf on a legitimate
-    source is worse than no check.
+    rows displaced by a LATER row sharing their ``(type, slug)``, plus edge
+    rows collapsed onto another row for the same ``(edge, from, to)``. For
+    nodes the classifier keys a dict, so the last such row in the source is
+    the one kept and reconciled, and each earlier one counts here — zero for a
+    real ``omnigraph export``, where slug is the key. Edges are another
+    matter: a graph written before edges were keyed holds duplicate pairs.
+    Counted rather than ignored so that neither case reads as a shortfall. A
+    check that cries wolf on a legitimate source is worse than no check.
 
 ★ WRITTEN — every row a decision called for was loaded::
 

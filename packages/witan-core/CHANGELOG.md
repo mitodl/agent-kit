@@ -8,6 +8,34 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-09-15
+
+### Added
+
+- **`export_rows.normalize_export`: prepares an exported row set for a keyed
+  format-9 load.** Node rows move `data.id` to a top-level `id`; edge rows lose
+  their id, which 0.11 refuses on a keyed edge and derives from the key; and
+  duplicate edges collapse per `(edge, from, to)` to one whole row, ranked by
+  confidence (asserted over inferred), then `created_at`, then position. It
+  works on the whole set because a duplicate pair anywhere in one load fails
+  that load. `parse_export_ts` (moved from witan) reads 0.8 strings, 0.9/0.10
+  epoch milliseconds and 0.11 naive strings.
+
+### Changed
+
+- **omnigraph is pinned to v0.11.0, which reads storage format 9.**
+  `_OMNIGRAPH_INTERNAL_SCHEMA` moves 6 -> 9, and 0.11 opens only formats 8 and
+  9, so a format-6 graph has to be rebuilt before this client can open it.
+  Images built from this release cannot serve a format-6 data tier. The
+  migration is in `docs/internals/design/omnigraph-0-11-upgrade-spec.md`.
+
+### Fixed
+
+- **Read rows carry every projected field again.** omnigraph 0.11 drops
+  null-valued fields from query rows. `OmnigraphClient.read` restores them as
+  `None` from the response's `columns`, so `row["assignee"]` on an unassigned
+  task no longer raises `KeyError`.
+
 ## [0.35.0] - 2026-09-15
 
 ### Added

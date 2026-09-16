@@ -320,12 +320,19 @@ _REMOTE_WRITE_QUEUE_WAIT = 10.0
 #     container started -> Ready                21-30s   boot + readiness probe
 #     TOTAL UNREACHABLE                         52s, 61s
 #
-# The 30s termination is the full grace period every time, exactly, because the
-# server does not exit on SIGTERM and is SIGKILLed at the deadline. The boot
-# half is the binary opening its S3-backed graphs — the port is still unbound
-# ~19s in. Neither half is going to get dramatically faster, so the deadline is
-# set well above the observed worst case rather than hugged to it: a slower
-# node, a cold image pull, or a larger graph all push the real number up.
+# That 30s termination half is out of date. It read as "the server ignores
+# SIGTERM and is SIGKILLed at the deadline", but a 2026-08-24 CI re-measurement
+# already saw the pod go within the second (ol-infrastructure data_tier.py).
+# omnigraph 0.11 makes shutdown explicit: the listener closes at SIGTERM, so
+# new connections get "tcp connect error" and are retried here, and in-flight
+# requests run until OMNIGRAPH_SHUTDOWN_GRACE_SECONDS (30 on the data tier,
+# pod grace 35). An idle server exits at once; a request still running at the
+# deadline fails mid-flight and is correctly NOT retried. So the drain half is
+# now "longest in-flight request, capped at 30s". The boot half is the binary
+# opening its S3-backed graphs — the port is still unbound ~19s in. Neither
+# half is going to get dramatically faster, so the deadline is set well above
+# the observed worst case rather than hugged to it: a slower node, a cold
+# image pull, or a larger graph all push the real number up.
 _UNAVAILABLE_MARKERS = ("tcp connect error", "dns error")
 _UNAVAILABLE_MAX_WAIT = 150.0
 _UNAVAILABLE_BASE_DELAY = 0.5
@@ -1368,6 +1375,11 @@ class OmnigraphClient:
         # v0.7.0 wraps results in {rows: [...], columns: [...], ...}
         envelope = parsed if isinstance(parsed, dict) else None
         rows = parsed.get("rows", parsed) if isinstance(parsed, dict) else parsed
+        # omnigraph 0.11 omits null-valued fields from each row, but `columns`
+        # still names every projection. Restoring them as None keeps `row["x"]`
+        # meaning what it meant on 0.10 for every caller on both transports.
+        if columns := (envelope or {}).get("columns"):
+            rows = [{c: None for c in columns} | row for row in rows]
         # strip alias prefixes: "p.slug" → "slug"
         stripped = [{k.split(".", 1)[-1]: v for k, v in row.items()} for row in rows]
         return stripped, envelope

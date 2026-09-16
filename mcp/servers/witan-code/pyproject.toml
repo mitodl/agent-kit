@@ -136,7 +136,13 @@ dependencies = [
     #
     # ★ >=0.35 IS AN IMPORT FLOOR too: `store.py` and `ingest.py` import
     # `witan_core.refusal`, added in witan-core 0.35.0 in the same change.
-    "witan-core[cli,remote,observability,sentry]>=0.35,<1",
+    #
+    # ★ >=0.36 IS A FORMAT FLOOR, and the silent kind: nothing new is imported,
+    # but 0.36.0 is the release that installs omnigraph 0.11, the only binary
+    # that parses the keyed `code-schema.pg`, and restores the null fields 0.11
+    # drops from query rows. An older witan-core imports fine and then fails
+    # on the first schema init.
+    "witan-core[cli,remote,observability,sentry]>=0.36,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled

@@ -91,13 +91,10 @@ query delete_memory($slug: String) {
 // declared-vs-supplied params and raises on a missing one, so omitting `role`
 // is an error, not a default.
 //
-// ★ INSERT IS NOT AN UPSERT. Two inserts of the same (from, to) make two
-// PARALLEL edges, which the old unbound traversals collapsed to one row and
-// the new bound ones do not. `memory_neighbors` is what keeps that from
-// showing as a duplicate: it de-duplicates on the neighbour slug, newest edge
-// first. Nothing here deduplicates on write — edges have no key, and
-// `delete <Edge> where ...` takes a single condition, so there is no
-// "delete just this (from, to)" to build an upsert out of.
+// ★ AN INSERT OF AN EXISTING (from, to) IS AN UPSERT THAT REPLACES THE WHOLE
+// ROW. Every edge type is keyed `@key(@src, @dst)` (schema.pg), so a repeat
+// insert no longer adds a parallel edge, but any property it omits or passes
+// as null overwrites what was stored. Send the full intended row on a re-link.
 
 query link_supersedes(
     $from: String,

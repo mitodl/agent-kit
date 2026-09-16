@@ -46,7 +46,11 @@ from pathlib import Path
 #: stand here said the pin should go back to 0.9.0/v0.9.0 if the experiment had
 #: concluded, and pinning the released 0.10.0 is that same instruction answered
 #: forwards rather than backwards. The write-ceiling task holds the measurement.
-_OMNIGRAPH_VERSION = "0.10.0"
+#:
+#: 0.11.0 (2026-09-15) moves the storage format to 9, which rebuilds every graph.
+#: See ``_OMNIGRAPH_INTERNAL_SCHEMA`` and
+#: docs/internals/design/omnigraph-0-11-upgrade-spec.md.
+_OMNIGRAPH_VERSION = "0.11.0"
 
 #: WHICH UPSTREAM TAG THE BINARY IS FETCHED FROM. Normally ``v`` + the version
 #: above; ``edge`` selects the rolling build of upstream ``main``, which
@@ -78,11 +82,17 @@ _OMNIGRAPH_VERSION = "0.10.0"
 #: a real ``v<version>``, a Renovate bump here IS meaningful — it must move this
 #: tag, the three digests, and both Dockerfiles together, which is what
 #: ``just check-omnigraph-pins`` enforces.
-_OMNIGRAPH_RELEASE_TAG = "v0.10.0"
+_OMNIGRAPH_RELEASE_TAG = "v0.11.0"
 
 #: The on-disk storage format ``_OMNIGRAPH_VERSION`` is expected to read, as
 #: reported by ``omnigraph version``'s ``internal-schema`` line. 0.8.x reads 4;
-#: 0.9.x reads 6.
+#: 0.9.x and 0.10.x read 6; 0.11.x reads 9 (and opens 8, which we never wrote).
+#:
+#: 6 -> 9 is planned: every deployed graph is exported with 0.10 and rebuilt
+#: under a keyed schema (``omnigraph upgrade`` refuses cluster-managed roots),
+#: and local stores go through ``witan migrate storage``. The PR carrying this
+#: line merges only in the cutover window, because merging it ships 0.11
+#: images.
 #:
 #: THIS IS A DECLARATION, NOT A CACHE. Renovate bumps the version pin above and
 #: cannot know about this line, so a release that moves the storage format
@@ -95,7 +105,7 @@ _OMNIGRAPH_RELEASE_TAG = "v0.10.0"
 #: migration, not the first: every local store and every deployed graph written
 #: under the old number has to be rebuilt, and a 0.8.x binary refuses a 0.9.x
 #: graph in both directions, so there is no gradual path and no downgrade.
-_OMNIGRAPH_INTERNAL_SCHEMA = 6
+_OMNIGRAPH_INTERNAL_SCHEMA = 9
 
 _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
     ("linux", "x86_64"): "omnigraph-linux-x86_64.tar.gz",
@@ -477,15 +487,40 @@ _OMNIGRAPH_ASSETS: dict[tuple[str, str], str] = {
 #:     linux-x86_64  6a0fba8842a2071c558abf2c1a399ce5e11d359dff78b6ae6ff3676617f95680
 #:     linux-arm64   dd40fa4169a89af41cddbdeb8fe441b714438633297e153876b4889ec0af3a86
 #:     macos-arm64   990fcab686922f885f959a0f6204f61d0770ef7af6f058bac9df14cc587a2248
+#:
+#: ★★ 2026-09-15, v0.10.0 -> v0.11.0, AND THIS ONE REBUILDS EVERY GRAPH.
+#: `omnigraph version` on this binary reads 0.11.0 and internal-schema 9, so
+#: `_OMNIGRAPH_INTERNAL_SCHEMA` moves 6 -> 9 in the same commit (0.11 opens
+#: only 8 and 9). The migration, the keyed-edge schema that rides it, and the
+#: export transforms a 0.10 export needs are in
+#: docs/internals/design/omnigraph-0-11-upgrade-spec.md.
+#:
+#: CHECKS RUN:
+#:   * Digests — all three tarballs downloaded, `gzip -t` clean, hashed locally
+#:     and matched against each published `.sha256` and the release API digest.
+#:   * Format — `bin/check_omnigraph_format.py` reads "omnigraph 0.11.0 reads
+#:     storage format 9, as declared."
+#:   * Vocabulary — tree-wide `git grep -c` at both tags for every
+#:     `_RETRYABLE`/`_NEEDS_REPAIR`/`_PRECONDITION_FAILED`/`_RECOVERY_REQUIRED`/
+#:     `_FULL_TEXT_REBUILD_REQUIRED`/`_STORAGE_VERSION_MISMATCH_MARKERS`
+#:     substring. Three counts DROPPED, each read file by file:
+#:     `stale view` 13 -> 12 (a skills doc), `expected published dataset
+#:     version` 8 -> 7 (a failpoint test), `refresh and retry` 10 -> 7 (a
+#:     failpoint test, a doc comment, and table_ops.rs's orphaned-fork
+#:     "could not verify whether branch ... still owns" manifest conflict,
+#:     whose code path is gone: 0.11 moved fork reclaim into `cleanup`,
+#:     optimize.rs). The stale-view error itself (error.rs) still prints all
+#:     three markers. `manifest table version` is 0 at both tags, assembled at
+#:     runtime as recorded above. Everything else is unchanged or grew.
 _OMNIGRAPH_ASSET_SHA256: dict[str, str] = {
     "omnigraph-linux-x86_64.tar.gz": (
-        "05d3ce4ec0ab51a876befd89b643c3e7f2d5489be0398a38cef6fb3a0d257fc1"
+        "da192e1a050875a93ee642b9df485203a00d8c0d44ca39204439463ad41a766d"
     ),
     "omnigraph-linux-arm64.tar.gz": (
-        "dd3ac09123a68882454db7e689da4c306c41677826237098df4e76b0f73d8d5e"
+        "af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca33915a8f4bb"
     ),
     "omnigraph-macos-arm64.tar.gz": (
-        "7c3b8fadbe590486a192c734d8c3d38cce0e4da1f02940e6ac306c1ada67f171"
+        "64ed446169e01d2aceb9e8635b73a593681d71414e73dc0d67b0f6700048e4c0"
     ),
 }
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")

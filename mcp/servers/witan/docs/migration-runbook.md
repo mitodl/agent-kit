@@ -202,7 +202,7 @@ Preview with `--dry-run` first. The merge then verifies itself:
 
 ```
 Merged … into …: 2 added, 1 updated, 1 kept (target already newer-or-equal), 5 rows loaded.
-Verified: all 6 source row(s) accounted for (2 added + 1 updated + 1 kept + 2 edge/unkeyed).
+Verified: all 6 source row(s) accounted for (2 added + 1 updated + 1 kept + 2 unkeyed).
 ```
 
 Every source record lands in exactly one of those buckets, so a total that
@@ -254,8 +254,16 @@ Notes:
 - Merging is **repeatable**. A re-run against an already-merged target loads
   nothing, because every source row loses reconciliation to its own applied
   copy. Safe on a schedule.
-- Reconciliation covers nodes only. Edge rows (`Tagged`, `ParentOf`, …) have no
-  slug and pass through unreconciled, same as raw `--mode merge`.
+- Edges are reconciled too, on `(edge, from, to)` rather than on a slug, using
+  the same rule as the format-9 export collapse: an `asserted` link beats an
+  `inferred` one, then the newer `created_at`, then the later row. Only winners
+  are loaded, so a re-run loads nothing. This matters on a format-9 target,
+  where an edge write REPLACES the whole row: passing an older or
+  property-less source edge through would erase the target's `role`, `author`
+  and `created_at`. Duplicate source edges for one pair collapse before the
+  rows are batched, because a keyed load refuses two rows with the same key.
+- Rows that carry no slug and are not edges pass through unreconciled, same as
+  raw `--mode merge`; those are the `unkeyed` bucket in the verification line.
 
 ## Divergence
 

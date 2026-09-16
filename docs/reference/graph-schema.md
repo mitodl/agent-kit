@@ -225,7 +225,9 @@ Slug convention: "&lt;repo URI&gt;|&lt;git branch&gt;"
 
 Edges are directional and typed. A traversal names the edge in lowercase (`supersedes`, `blocks`), while the schema declares it in PascalCase.
 
-An edge with properties exposes them only through a **bound** traversal — `$src $w:supersedes $dst` binds the matched edge row, making `$w.confidence` a column you can project, filter, and order on. The unbound form (`$src supersedes $dst`) still only asserts the edge exists. Binding also drops set semantics: one row per *edge*, so parallel edges between the same pair arrive as separate rows.
+An edge with properties exposes them only through a **bound** traversal — `$src $w:supersedes $dst` binds the matched edge row, making `$w.confidence` a column you can project, filter, and order on. The unbound form (`$src supersedes $dst`) still only asserts the edge exists.
+
+Every edge type is keyed `@key(@src, @dst)`, so there is at most one edge per (from, to) pair. Inserting an existing pair upserts it and replaces the whole row, so a re-link that omits a property clears it.
 
 | Edge | From | To | Properties | Meaning |
 | --- | --- | --- | --- | --- |

@@ -1140,3 +1140,62 @@ def test_a_deployment_that_reports_no_watermark_yields_none(
     result = proxy.merge_store(str(export))
 
     assert result["watermark"] is None
+
+
+def test_duplicate_edges_collapse_before_the_rows_are_batched(
+    proxy, tmp_path, monkeypatch
+):
+    """Placement, not the collapse itself: `normalize_export` has to run on the
+    WHOLE source before `chunk_records`.
+
+    The server collapses only within the batch it is given, so a pair split
+    across two batches reaches a keyed graph twice — which a keyed load refuses
+    (`@unique violation`). Batching one row per call here puts the duplicates in
+    separate batches if the collapse is moved after it, so this fails on that
+    reordering rather than on the rule the helper's own tests already cover.
+    """
+    from witan.remote import proxy as proxy_mod
+
+    export = tmp_path / "dupes.jsonl"
+    export.write_text(
+        '{"type": "Memory", "data": {"slug": "mem-one", "updated_at": 1}}\n'
+        '{"edge": "Tagged", "from": "mem-one", "to": "tp-topic-uv",'
+        ' "data": {"id": "01A", "confidence": "inferred", "role": "dropped"}}\n'
+        '{"edge": "Tagged", "from": "mem-one", "to": "tp-topic-uv",'
+        ' "data": {"id": "01B", "confidence": "asserted", "role": "kept"}}\n'
+    )
+
+    sent: list[dict] = []
+
+    def _one_row_per_batch(records, max_bytes=None, *args, **kwargs):
+        return [[row] for row in records]
+
+    def _fake_store_merge(*, rows, dry_run, claim_from_author, since, watermark):
+        sent.extend(rows)
+        return {
+            "decisions": [],
+            "added": len(rows),
+            "updated": 0,
+            "kept_target": 0,
+            "diverged": 0,
+            "rows_loaded": len(rows),
+            # A real deployment reports this per batch, and it is needed here:
+            # one batch answering without it marks the whole merge unaccounted,
+            # and `source_rows` comes back None instead of the source's count.
+            "source_rows": len(rows),
+        }
+
+    monkeypatch.setattr(proxy_mod, "chunk_records", _one_row_per_batch)
+    monkeypatch.setattr(proxy, "store_merge", _fake_store_merge)
+    result = proxy.merge_store(str(export))
+
+    edges = [row for row in sent if row.get("edge") == "Tagged"]
+    assert len(edges) == 1
+    # The asserted row wins, so this also pins WHICH duplicate survived.
+    assert edges[0]["data"]["role"] == "kept"
+    assert "id" not in edges[0]
+    assert result["batches"] == 2
+    # Accounting is unchanged: the source is still counted before the collapse,
+    # and the dropped row is reported rather than silently missing.
+    assert result["source_rows"] == 3
+    assert result["duplicate_slugs"] == 1

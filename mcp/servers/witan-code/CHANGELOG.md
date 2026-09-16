@@ -10,6 +10,12 @@ a MINOR bump may include breaking changes).
 
 ### Changed
 
+- **Every code-graph edge type is keyed on `(@src, @dst)`.** A repeated
+  `Calls`/`References`/`Imports` pair upserts instead of appending. Needs
+  omnigraph 0.11; code graphs are rebuilt by reindexing. The indexer's
+  `_dedupe` stays, because a duplicate pair inside one load now fails the whole
+  batch.
+
 - **`ClusterGraphMissing` and `IngestRefused` are logged at WARNING, not
   reported to Sentry.** Both are now `witan_core.refusal.Refusal`s, so fastmcp
   logs them at WARNING with no traceback and the client receives the message

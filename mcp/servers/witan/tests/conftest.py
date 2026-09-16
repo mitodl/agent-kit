@@ -23,6 +23,27 @@ requires_omnigraph = pytest.mark.skipif(
 )
 
 
+def edge_rows(client, edge, src, dst) -> list[dict]:
+    """Rows of one edge type between one pair, counted from `omnigraph export`.
+
+    For asserting multiplicity: a traversal with set semantics reads one row
+    whether the store holds one edge or several, so it cannot prove a re-link
+    upserted rather than appended.
+    """
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "export.jsonl"
+        client.export_to(out, label="test export")
+        rows = [json.loads(line) for line in out.read_text().splitlines() if line]
+    return [
+        r
+        for r in rows
+        if r.get("edge") == edge and r.get("from") == src and r.get("to") == dst
+    ]
+
+
 def _unwrap(tool):
     """Return the underlying function for a FastMCP-decorated tool."""
     return getattr(tool, "fn", tool)

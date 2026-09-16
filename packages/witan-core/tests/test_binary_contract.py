@@ -85,8 +85,15 @@ _CONTRACTS: dict[int, dict] = {
         "export_datetime": "iso-string",
         # No per-table row cap on a keyed load.
         "keyed_row_cap": None,
+        # An unset optional is exported as an explicit `null`.
+        "export_null_optional": "explicit-null",
+        # Record identity rides inside `data` (the 0.8.1 edge fixture in
+        # witan's test_migrate carries `data.id`).
+        "export_id": "data",
+        # `@key(@src, @dst)` on an edge type does not parse.
+        "keyed_edges": False,
     },
-    # omnigraph 0.9.x
+    # omnigraph 0.9.x and 0.10.x
     6: {
         # `export` renders DateTime as integer epoch MILLISECONDS:
         # 1767225600000. Not microseconds — `commit list` uses those, and the
@@ -96,6 +103,29 @@ _CONTRACTS: dict[int, dict] = {
         # many rows per table. Bounds `witan_core.chunking.LOAD_MAX_ROWS`.
         # `--mode overwrite` is exempt.
         "keyed_row_cap": 8192,
+        "export_null_optional": "explicit-null",
+        # `{"type": "Doc", "data": {"id": "doc-a", ...}}`, and an edge's ULID
+        # in `data.id` too. Measured on 0.10.0.
+        "export_id": "data",
+        "keyed_edges": False,
+    },
+    # omnigraph 0.11.x. Measured on 0.11.0.
+    9: {
+        # Back to a naive ISO-8601 string, with no trailing `Z` and no
+        # fractional part when it is zero: "2026-01-01T00:00:00".
+        "export_datetime": "iso-string",
+        "keyed_row_cap": 8192,
+        # An unset optional is OMITTED. `store_merge` round-trips exported rows
+        # through `load --mode merge`, which is only safe because an absent key
+        # nulls the column exactly like an explicit null (measured on 0.10.0
+        # and 0.11.0, nodes, lists and edges alike).
+        "export_null_optional": "omitted",
+        # `{"type": "Doc", "id": "doc-a", "data": {...}}`, and load REFUSES
+        # `data.id`. `witan_core.export_rows.normalize_export` depends on this.
+        "export_id": "top-level",
+        # `edge E: A -> B { @key(@src, @dst) }` parses, and the edge id is its
+        # endpoint pair.
+        "keyed_edges": True,
     },
 }
 
@@ -393,13 +423,123 @@ def test_export_epoch_datetimes_are_milliseconds_not_microseconds(store, contrac
     )
 
 
-def test_export_keeps_an_unset_optional_as_an_explicit_null(store):
-    """`store_merge` round-trips whole exported rows back through `load`, so a
-    key silently vanishing would drop data rather than merely read as None."""
+def test_export_renders_an_unset_optional_as_this_format_does(store, contract):
+    """`store_merge` round-trips whole exported rows back through `load`. An
+    omitted key is safe there only because `load --mode merge` nulls an absent
+    column the same as an explicit null; a format that changed either half
+    needs that rechecked."""
     doc = _export_node(store, "doc-a")
+    expected = contract["export_null_optional"]
 
-    assert "note" in doc["data"], "unset optional dropped its key entirely"
-    assert doc["data"]["note"] is None
+    if expected == "explicit-null":
+        assert "note" in doc["data"], "unset optional dropped its key entirely"
+        assert doc["data"]["note"] is None
+    elif expected == "omitted":
+        assert "note" not in doc["data"], (
+            f"unset optional is exported as {doc['data'].get('note', '<absent>')!r}; "
+            "this format is recorded as omitting it"
+        )
+    else:  # pragma: no cover - guards a typo'd _CONTRACTS entry
+        pytest.fail(f"unknown export_null_optional contract {expected!r}")
+
+
+def test_export_carries_record_identity_where_this_format_puts_it(store, contract):
+    """`witan_core.export_rows.normalize_export` moves `data.id` to the top level
+    for a format-9 load. If an export put identity somewhere else again, that
+    rewrite would silently stop applying."""
+    records = _export_records(store)
+    expected = contract["export_id"]
+
+    for record in records:
+        if expected == "data":
+            assert "id" in record["data"] and "id" not in record, record
+        elif expected == "top-level":
+            assert "id" in record and "id" not in record["data"], record
+        else:  # pragma: no cover - guards a typo'd _CONTRACTS entry
+            pytest.fail(f"unknown export_id contract {expected!r}")
+
+
+# ── keyed edges ───────────────────────────────────────────────────────────
+#
+# Every witan edge type is keyed on its endpoints from format 9. Parsed by
+# `witan_core.export_rows.normalize_export`, which drops an exported edge id
+# and collapses duplicate pairs before a load.
+
+_KEYED_SCHEMA = """
+node Doc {
+    slug: String @key
+    title: String @index
+    note: String? @index
+    created_at: DateTime @index
+    updated_at: DateTime
+}
+
+edge Cites: Doc -> Doc { @key(@src, @dst) }
+"""
+
+
+@pytest.fixture
+def keyed_store(tmp_path, contract) -> str:
+    if not contract["keyed_edges"]:
+        pytest.skip("this format has no keyed edges")
+    schema = tmp_path / "keyed.pg"
+    schema.write_text(_KEYED_SCHEMA)
+    path = str(tmp_path / "keyed.omni")
+    _run("init", "--schema", str(schema), path)
+    docs = tmp_path / "docs.jsonl"
+    docs.write_text(json.dumps(_doc("doc-a")) + "\n" + json.dumps(_doc("doc-b")) + "\n")
+    _run("load", "--store", path, "--data", str(docs), "--mode", "merge")
+    return path
+
+
+def _load_edges(store: str, edges: list[dict], expect_ok: bool = True):
+    data = f"{store}.edges.jsonl"
+    with open(data, "w") as fh:
+        fh.writelines(json.dumps(e) + "\n" for e in edges)
+    return _run(
+        "load", "--store", store, "--data", data, "--mode", "merge", expect_ok=expect_ok
+    )
+
+
+def test_a_keyed_edges_exported_id_is_its_endpoint_pair(keyed_store):
+    """Why `normalize_export` can drop an edge id instead of carrying it: the
+    engine derives it, so nothing is lost."""
+    _load_edges(keyed_store, [{"edge": "Cites", "from": "doc-a", "to": "doc-b"}])
+
+    (edge,) = [r for r in _export_records(keyed_store) if "type" not in r]
+
+    assert isinstance(edge["id"], str)
+    assert json.loads(edge["id"]) == ["doc-a", "doc-b"]
+
+
+def test_a_keyed_edge_refuses_an_explicit_id_that_is_not_its_key(keyed_store):
+    """What a 0.10 export's edge ULID meets on a format-9 load, and why
+    `normalize_export` drops it rather than relocating it."""
+    result = _load_edges(
+        keyed_store,
+        [
+            {
+                "edge": "Cites",
+                "id": "01M2KBRXAHRB1D0AH4NNNYE8E8",
+                "from": "doc-a",
+                "to": "doc-b",
+            }
+        ],
+        expect_ok=False,
+    )
+
+    assert result.returncode != 0
+    assert "canonical @key id" in result.stderr, result.stderr
+
+
+def test_a_keyed_load_refuses_a_duplicate_pair_in_one_file(keyed_store):
+    """Why `normalize_export` collapses duplicate pairs over the whole export:
+    one duplicate fails the entire load, not just its own row."""
+    edge = {"edge": "Cites", "from": "doc-a", "to": "doc-b"}
+    result = _load_edges(keyed_store, [edge, edge], expect_ok=False)
+
+    assert result.returncode != 0
+    assert "@unique violation" in result.stderr, result.stderr
 
 
 def test_export_is_jsonl_one_record_per_line(store):

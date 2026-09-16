@@ -702,7 +702,7 @@ def test_merge_carries_edges_across_from_a_store_that_has_them(server, tmp_path)
 
     export = tmp_path / "source.jsonl"
     source_store.export_to(export, label="export (test source)")
-    _, edges, _ = srv._parse_export(export)
+    _, edges, _, _ = srv._parse_export(export)
     assert edges, "fixture must produce edge rows or it does not guard anything"
 
     result = srv.merge_store(source_store.graph_uri)
@@ -746,17 +746,19 @@ def test_parse_export_reads_real_edge_rows_as_edges(tmp_path):
         '"data": {"id": "01KZEH5Z994JBHHB4BHHTVH2YY"}}\n'
     )
 
-    nodes, edges, _ = srv._parse_export(export)
+    nodes, edges, _, _ = srv._parse_export(export)
 
     assert set(nodes) == {("Memory", "mem-x-aaaaaa")}
-    assert edges == [
-        {
+    # Keyed on the pair a format-9 edge is identified by, with the exported
+    # ULID dropped: 0.11 refuses it on a keyed edge and derives the id itself.
+    assert edges == {
+        ("Tagged", "mem-x-aaaaaa", "tp-topic-witan"): {
             "edge": "Tagged",
             "from": "mem-x-aaaaaa",
             "to": "tp-topic-witan",
-            "data": {"id": "01KZEH5Z994JBHHB4BHHTVH2YY"},
+            "data": {},
         }
-    ]
+    }
 
 
 @pytest.mark.parametrize("payload", ["[]", "null", '"a string"', "3"])
@@ -1851,7 +1853,7 @@ def test_claim_authorship_covers_every_authored_node_type(server):
         if stripped.startswith("node "):
             current = stripped.split()[1].rstrip("{").strip()
         # Edges carry an `author:` too (schema.pg § Memory edge properties) and
-        # it is NOT repairable authorship — edges have no key, so there is no
+        # it is NOT repairable authorship — edges have no slug, so there is no
         # row for `claim_authorship` to address. Clearing `current` is what
         # stops the block being read as a continuation of the node above it.
         elif stripped.startswith("edge "):
