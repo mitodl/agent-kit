@@ -8,6 +8,16 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A write naming a slug that does not exist is refused by name.**
+  `task_create` with a placeholder blocker, or `workflow_session_start` with a
+  mistyped project, used to fail as "omnigraph mutate failed" with the engine's
+  error report and land in Sentry (WITAN-6, WITAN-V). Every tool now raises
+  `MissingReference` ("task_create: no Task with slug 'tk-…'"), a `Refusal`
+  logged at WARNING. The engine's own rejection is translated in the `_tool`
+  wrapper, so no tool pays an existence read up front.
+
 ## [0.34.0] - 2026-09-16
 
 ### Changed
