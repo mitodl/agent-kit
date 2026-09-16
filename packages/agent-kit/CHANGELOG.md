@@ -16,6 +16,15 @@ So an entry here means a floor was raised — because a member gained something
 this meta-package's users are expected to have — and the substance of what
 changed is in that member's own changelog.
 
+## [0.1.4] - 2026-09-16
+
+- Floors raised to `witan-council>=0.34.0` and `witan-code>=0.19.0`. Both
+  releases key every edge type on `(@src, @dst)`, which needs an omnigraph 0.11
+  binary and graphs rebuilt in the format-9 cutover. One environment holds a
+  single omnigraph binary for both servers, so a fresh install that took the
+  cutover release of one and a pre-cutover release of the other would run one of
+  them against a binary it does not expect.
+
 ## [0.1.3] - 2026-08-03
 
 This file starts here. Releases 0.1.0 through 0.1.3 predate it and are

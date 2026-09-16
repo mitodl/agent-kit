@@ -8,6 +8,8 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-09-16
+
 ### Changed
 
 - **Every edge type is keyed on `(@src, @dst)`.** Re-linking an existing pair

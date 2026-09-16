@@ -8,6 +8,8 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-16
+
 ### Changed
 
 - **Every code-graph edge type is keyed on `(@src, @dst)`.** A repeated
