@@ -46,17 +46,55 @@ def write_json(path: Path, data: dict, dry_run: bool) -> None:
         path.write_text(json.dumps(data, indent=2) + "\n")
 
 
+_SENSITIVE_KEYS = frozenset({"env", "headers", "oauth"})
+_REDACTED = "<redacted>"
+
+
+def _redact(value: object) -> object:
+    """Recursively replace every scalar leaf with a placeholder, preserving
+    keys/list length so a diff can still show a field was added or removed
+    without ever printing its value."""
+    if isinstance(value, dict):
+        return {k: _redact(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact(v) for v in value]
+    return _REDACTED
+
+
+def redact_sensitive(value: object) -> object:
+    """Recursively blank known-sensitive fields — MCP/LSP ``env``,
+    ``headers``, ``oauth`` (``StdioServer``/``RemoteServer``/``LspServer`` in
+    ``models.py``) — wherever they appear, however deep. These routinely
+    carry API keys, bearer tokens, and OAuth client secrets, and
+    ``json_diff``'s output is printed straight to a terminal or CI log by
+    default (``apply --diff``), so it must never include the real values."""
+    if isinstance(value, dict):
+        return {
+            k: _redact(v) if k in _SENSITIVE_KEYS else redact_sensitive(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_sensitive(v) for v in value]
+    return value
+
+
 def json_diff(before: dict, after: dict) -> str:
     """Unified diff between two JSON objects' serialized forms, empty string
-    if they're equal. ``sort_keys`` makes the diff stable across runs that
-    don't otherwise change key order (e.g. dict insertion order varying by
-    merge path)."""
+    if they're equal. Sensitive fields (see ``redact_sensitive``) are
+    blanked before serialization — the equality check above still runs
+    against the real values, so a change that's entirely inside a redacted
+    field is still detected, just not shown line-by-line. ``sort_keys``
+    makes the diff stable across runs that don't otherwise change key order
+    (e.g. dict insertion order varying by merge path)."""
     if before == after:
         return ""
-    before_lines = json.dumps(before, indent=2, sort_keys=True).splitlines()
-    after_lines = json.dumps(after, indent=2, sort_keys=True).splitlines()
-    return "\n".join(
+    before_redacted = redact_sensitive(before)
+    after_redacted = redact_sensitive(after)
+    before_lines = json.dumps(before_redacted, indent=2, sort_keys=True).splitlines()
+    after_lines = json.dumps(after_redacted, indent=2, sort_keys=True).splitlines()
+    diff = "\n".join(
         difflib.unified_diff(
             before_lines, after_lines, fromfile="before", tofile="after", lineterm=""
         )
     )
+    return diff or "(only redacted fields changed)"

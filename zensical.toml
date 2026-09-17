@@ -112,6 +112,7 @@ nav = [
       { "agent-config-kit" = "internals/design/agent-config-kit-spec.md" },
       { "agent-config-kit CLI" = "internals/design/agent-config-kit-cli-spec.md" },
       { "agent-config-kit profiles" = "internals/design/agent-config-kit-profiles-composition-spec.md" },
+      { "agent-config-kit config overlays & staleness" = "internals/design/agent-config-kit-config-overlay-spec.md" },
     ] },
   ] },
 ]
