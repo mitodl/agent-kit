@@ -218,10 +218,12 @@ The PR body exists to get a reviewer oriented in under a minute:
   PR does.
 - Link to the issue, the doc, or the line of code instead of paraphrasing it.
 - Drop an optional section rather than filling it with "N/A"-grade prose.
-- Testing notes say how the change is observed in practice: the environment it
-  was applied to (CI/QA/RC), the command a reviewer runs (`pulumi preview`,
-  `dagster dev`, a local `docker compose up`), and what to look for. If it can
-  only be validated after merge, say that.
+- Testing notes say how the change is observed in practice, using whichever of
+  these apply: the environment it was applied to (CI/QA/RC), a command a
+  reviewer can run (`pulumi preview`, `dagster dev`, a local `docker compose
+  up`), a manual check to repeat, and what to look for. Only list steps that
+  were actually run or that a reviewer can run; if it can only be validated
+  after merge, say that.
 
 A five-bullet description that a reviewer can act on beats a wall of narrative.
 If the diff is self-explanatory, a two-line description is the correct length.

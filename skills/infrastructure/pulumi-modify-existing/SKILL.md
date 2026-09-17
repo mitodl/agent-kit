@@ -25,9 +25,15 @@ Regardless of repo, these hold:
 - **Environment values come from stack config**, not literals in `__main__.py`.
   A value that differs between CI, QA, and Production belongs in
   `Pulumi.<project>.<Env>.yaml`, read with `Config(...).require()` when it's
-  required.
+  required and not secret.
 - **Secrets never land in plaintext**: use the repo's SOPS files, Vault, or
-  `pulumi config set --secret` (`secure:` values).
+  `pulumi config set --secret` (`secure:` values). When a secret config value
+  goes straight into a resource input or an export, read it with
+  `require_secret()` / `get_secret()`: `require()` / `get()` return a plain
+  `str` with no secret marking (and no warning), so anything built from it isn't
+  tracked as a secret. Component config models that take a pydantic `SecretStr`
+  (ol-infrastructure's `OLDBConfig.password`) need the plain value, so those
+  call sites use `require()` and the component unwraps it.
 - **Pinned versions live where the repo centralizes them** (ol-infrastructure:
   `src/bridge/lib/versions.py`, which Renovate updates), not inline.
 - **Reuse existing components and helpers** (`parse_stack()`, `OL*` component
