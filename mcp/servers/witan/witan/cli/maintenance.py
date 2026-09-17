@@ -38,7 +38,12 @@ def _resolve_store(store: str | None) -> str | None:
 def _client(graph_uri: str) -> OmnigraphClient:
     cfg = cfg_module.load()
     return OmnigraphClient(
-        graph_uri, cfg.queries_dir, cfg.graph_token, graph_id=cfg.graph_name
+        graph_uri,
+        cfg.queries_dir,
+        cfg.graph_token,
+        graph_id=cfg.graph_name,
+        s3_profile=cfg.s3_profile,
+        s3_region=cfg.s3_region,
     )
 
 

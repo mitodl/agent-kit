@@ -170,6 +170,8 @@ _default_client = OmnigraphClient(
     cfg.graph_token,
     guard=_write_guard,
     graph_id=cfg.graph_name,
+    s3_profile=cfg.s3_profile,
+    s3_region=cfg.s3_region,
 )
 
 # Per-user actor/token mapping for the deployed streamable-http service (ADR
@@ -267,6 +269,8 @@ def _resolve_client() -> OmnigraphClient:
                 bearer,
                 guard=_write_guard,
                 graph_id=cfg.graph_name,
+                s3_profile=cfg.s3_profile,
+                s3_region=cfg.s3_region,
             )
     return _actor_clients[actor_id]
 
@@ -2310,7 +2314,13 @@ def _store_client(uri: str) -> OmnigraphClient:
     configured = store_cli_args(client.graph_uri, client.graph_id)
     token = client.token if args == configured else None
     return OmnigraphClient(
-        uri, cfg.queries_dir, token, guard=_write_guard, graph_id=fallback
+        uri,
+        cfg.queries_dir,
+        token,
+        guard=_write_guard,
+        graph_id=fallback,
+        s3_profile=cfg.s3_profile,
+        s3_region=cfg.s3_region,
     )
 
 

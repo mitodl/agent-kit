@@ -8,6 +8,15 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **S3 graph targets can select their AWS CLI profile and region in
+  `config.toml`.** Set `s3_profile` and optionally `s3_region` globally or on a
+  `[targets.<name>]` block (environment overrides: `WITAN_S3_PROFILE` and
+  `WITAN_S3_REGION`). Witan exports short-lived credentials before each
+  omnigraph subprocess, removing the need for a credential wrapper script.
+  Requires `witan-core>=0.37`.
+
 ## [0.34.1] - 2026-09-16
 
 ### Fixed

@@ -1014,21 +1014,101 @@ def store_cli_args(graph_uri: str, graph_id: str | None = None) -> list[str]:
     return ["--store", graph_uri]
 
 
-def store_subprocess_env(graph_uri: str, token: str | None = None) -> dict:
+def _aws_profile_env(profile: str) -> dict[str, str]:
+    """Resolve one AWS CLI profile into the environment omnigraph understands.
+
+    omnigraph's S3 backend accepts the standard AWS credential environment but
+    does not resolve named profiles itself. ``aws configure export-credentials``
+    deliberately sits at that boundary: it supports static profiles, SSO,
+    ``credential_process``, role assumption, and future AWS CLI providers
+    without witan learning or persisting any credential format of its own.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "aws",
+                "configure",
+                "export-credentials",
+                "--profile",
+                profile,
+                "--format",
+                "process",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"S3 profile {profile!r} requires the AWS CLI, but `aws` was not found."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"Could not resolve credentials for S3 profile {profile!r} "
+            f"(`aws configure export-credentials` exited {exc.returncode})."
+        ) from exc
+
+    try:
+        exported = json.loads(result.stdout)
+        access_key = exported["AccessKeyId"]
+        secret_key = exported["SecretAccessKey"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise RuntimeError(
+            f"AWS CLI returned invalid credentials for S3 profile {profile!r}."
+        ) from exc
+    if not isinstance(access_key, str) or not isinstance(secret_key, str):
+        raise RuntimeError(
+            f"AWS CLI returned invalid credentials for S3 profile {profile!r}."
+        )
+
+    env = {
+        "AWS_ACCESS_KEY_ID": access_key,
+        "AWS_SECRET_ACCESS_KEY": secret_key,
+        "AWS_PROFILE": profile,
+        # Explicit credentials should fail as themselves, not pause while the
+        # SDK tries an instance-metadata fallback after a profile problem.
+        "AWS_EC2_METADATA_DISABLED": "true",
+    }
+    session_token = exported.get("SessionToken")
+    if isinstance(session_token, str) and session_token:
+        env["AWS_SESSION_TOKEN"] = session_token
+    return env
+
+
+def store_subprocess_env(
+    graph_uri: str,
+    token: str | None = None,
+    *,
+    s3_profile: str | None = None,
+    s3_region: str | None = None,
+) -> dict:
     """The subprocess environment for an omnigraph CLI call against ``graph_uri``.
 
-    The free-function form of :meth:`OmnigraphClient._subprocess_env`, with the
-    same two rules: a local path or ``s3://`` root has no server to authenticate
-    to, so an ambient bearer token is *stripped* rather than merely unset (it
-    would otherwise leak into a subprocess with no use for it); a remote store
-    takes ``token`` when given and otherwise inherits whatever the environment
-    already carries, which is the CLI's own documented fallback.
+    A local path or ``s3://`` root has no bearer-token server, so an ambient
+    token is stripped. For an S3 root with ``s3_profile``, the named AWS CLI
+    profile is exported to short-lived environment credentials on every
+    subprocess call; this keeps SSO/role credentials refreshable without a
+    wrapper script or plaintext credentials in witan's config. ``s3_region``
+    supplies both standard AWS region spellings. Local and http(s) stores ignore
+    both S3 settings. A remote store takes ``token`` when given and otherwise
+    inherits the CLI's documented ambient fallback.
     """
     env = dict(os.environ)
     if not graph_uri.startswith(_SERVER_SCHEMES):
         env.pop(BEARER_TOKEN_ENV_VAR, None)
     elif token:
         env[BEARER_TOKEN_ENV_VAR] = token
+
+    if graph_uri.startswith("s3://") and s3_profile:
+        # Do not combine a freshly exported access/secret pair with an ambient
+        # session token from another identity. _aws_profile_env adds the token
+        # back when the selected profile actually has one.
+        env.pop("AWS_SESSION_TOKEN", None)
+        env.pop("AWS_SECURITY_TOKEN", None)
+        env.update(_aws_profile_env(s3_profile))
+        if s3_region:
+            env["AWS_REGION"] = s3_region
+            env["AWS_DEFAULT_REGION"] = s3_region
     return env
 
 
@@ -1258,11 +1338,15 @@ class OmnigraphClient:
         guard: Callable[[str, dict], dict] | None = None,
         graph_id: str | None = None,
         connect_retry: bool = True,
+        s3_profile: str | None = None,
+        s3_region: str | None = None,
     ) -> None:
         self.graph_uri = graph_uri
         self.queries_dir = queries_dir
         self.token = token
         self.guard = guard
+        self.s3_profile = s3_profile
+        self.s3_region = s3_region
         # Whether a remote call rides out an unreachable server for the full
         # _UNAVAILABLE_MAX_WAIT budget. On by default: that budget exists so an
         # ordinary call survives a server restart instead of failing the whole
@@ -1917,7 +2001,12 @@ class OmnigraphClient:
         # documented fallback (see BEARER_TOKEN_ENV_VAR), and `export
         # OMNIGRAPH_BEARER_TOKEN=…` with no token in config is a supported way
         # to drive it. Both rules live in `store_subprocess_env`.
-        return store_subprocess_env(self.graph_uri, self.token)
+        return store_subprocess_env(
+            self.graph_uri,
+            self.token,
+            s3_profile=self.s3_profile,
+            s3_region=self.s3_region,
+        )
 
     def _with_retry_policy(
         self,

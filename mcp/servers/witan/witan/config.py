@@ -35,6 +35,12 @@ class Config(BaseModel):
     graph_token: str | None
     """Bearer token. Required when graph_uri is http(s)://. Unused for local/S3."""
 
+    s3_profile: str | None
+    """AWS CLI profile exported for an s3:// graph store."""
+
+    s3_region: str | None
+    """AWS region passed to omnigraph for an s3:// graph store."""
+
     author: str
     """Attribution string written to Memory.author on every insert."""
 
@@ -524,6 +530,14 @@ def default_config_toml() -> str:
 # Env: WITAN_MEMORY_TOKEN
 # token = "..."
 
+# AWS CLI profile and optional region used only for an s3:// graph store.
+# Witan runs `aws configure export-credentials` for the profile before each
+# omnigraph subprocess, so SSO, role, credential_process, and static profiles
+# work without a wrapper script or credentials stored in this file.
+# Env: WITAN_S3_PROFILE / WITAN_S3_REGION
+# s3_profile = "personal"
+# s3_region = "us-east-1"
+
 # Default coding agent CLI for `witan run`: claude | pi | copilot | opencode | kilo
 # Env: WITAN_AGENT
 # agent = "claude"
@@ -559,6 +573,8 @@ def default_config_toml() -> str:
 # server = "http://witan.internal:8080"
 # graph = "council"
 # token = "..."
+# s3_profile = "personal"     # used only when server starts with s3://
+# s3_region = "us-east-1"
 # author = "Your Name <you@corp.com>"
 # agent = "claude"
 # match_orgs = ["myorg"]
@@ -618,6 +634,8 @@ class _Target(BaseModel):
     server: str | None = None
     graph: str | None = None
     token: str | None = None
+    s3_profile: str | None = None
+    s3_region: str | None = None
     author: str | None = None
     agent: str | None = None
     model: str | None = None
@@ -801,7 +819,8 @@ def load(target: str | None = None) -> Config:
     4. Hardcoded defaults
 
     Each target section in config.toml can override ``server``, ``graph``,
-    ``token``, ``author``, ``agent``, and ``model`` — plus, for the CLI's
+    ``token``, ``s3_profile``, ``s3_region``, ``author``, ``agent``, and
+    ``model`` — plus, for the CLI's
     remote MCP-client mode, ``remote_url``/``oidc_issuer``/``oidc_client_id``/
     ``oidc_audience`` (see ``RemoteConfig``/``load_remote_config()``, which
     resolves those the same way). Targets are matched against the current
@@ -820,6 +839,8 @@ def load(target: str | None = None) -> Config:
         server = "http://witan.internal:8080"
         graph = "council"
         token = "..."
+        s3_profile = "work"
+        s3_region = "us-east-1"
         author = "Alice <alice@corp.com>"
         agent = "claude"
         model = "claude-opus-4-8"
@@ -861,6 +882,16 @@ def load(target: str | None = None) -> Config:
             os.environ.get("WITAN_MEMORY_TOKEN"),
             selected.token if selected else None,
             file_cfg.get("token"),
+        ),
+        s3_profile=_first(
+            os.environ.get("WITAN_S3_PROFILE"),
+            selected.s3_profile if selected else None,
+            file_cfg.get("s3_profile"),
+        ),
+        s3_region=_first(
+            os.environ.get("WITAN_S3_REGION"),
+            selected.s3_region if selected else None,
+            file_cfg.get("s3_region"),
         ),
         author=_first(
             os.environ.get("WITAN_AUTHOR"),

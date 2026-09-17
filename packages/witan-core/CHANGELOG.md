@@ -8,6 +8,16 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-09-17
+
+### Added
+
+- **`OmnigraphClient` can export an AWS CLI profile for `s3://` stores.**
+  `s3_profile` resolves through `aws configure export-credentials` before each
+  omnigraph subprocess, supporting static, SSO, assumed-role, and
+  `credential_process` profiles without persisting credentials. `s3_region`
+  supplies both standard AWS region variables. Non-S3 stores ignore both.
+
 ## [0.36.0] - 2026-09-15
 
 ### Added

@@ -97,12 +97,33 @@ export WITAN_AUTHOR="Your Name"
 |---|---|---|---|
 | `WITAN_MEMORY_URI` | No | `~/.local/share/witan/graph.omni` | Graph URI — local path, `s3://`, or `http://` |
 | `WITAN_MEMORY_TOKEN` | Only for `http://` | — | Bearer token for remote server auth |
+| `WITAN_S3_PROFILE` | No | — | AWS CLI profile exported for credentials when the graph URI is `s3://` |
+| `WITAN_S3_REGION` | No | ambient AWS config | Region passed to omnigraph with a configured S3 profile |
 | `WITAN_AUTHOR` | No | `$USER` | Attribution on every insert. Local stdio only — a deployed server attributes each write to the calling user's JWT instead (see [ADR-0004](docs/adr/0004-keycloak-jwt-per-user-actor-mapping.md)) |
 | `WITAN_REPO` | No | — | Repo slug override (bypasses git detection) |
 | `WITAN_SCAN_ENABLED` | No | `true` | Write-path secret/PII scanning; set to `false` to opt out — see [Write-path content scanning](docs/write-path-scanning.md) |
 | `WITAN_OPTIMIZE_INTERVAL` | No | `86400` | Throttle window (seconds) for the Stop hook's opportunistic background store compaction; `0` disables it |
 | `WITAN_REMOTE_WRITE_MAX_INFLIGHT` | No | `4` | Concurrent writes this process will send to one graph on a **remote** server before refusing. Sized from the measured write rate against the deployment's 30s deadline; `0` refuses every remote write |
 | `WITAN_REMOTE_WRITE_QUEUE_SECONDS` | No | `10` | How long a write waits for one of those slots before it is refused outright rather than admitted into a queue it cannot clear in time |
+
+For an S3-backed personal target, put the profile selection next to the store
+instead of wrapping `witan` in a credential-export shell script:
+
+```toml
+[targets.personal]
+server = "s3://personal-witan/graph.omni"
+s3_profile = "personal"
+s3_region = "us-east-1"
+match_paths = ["~/src/personal"]
+```
+
+Before each omnigraph subprocess, witan runs `aws configure
+export-credentials --profile personal --format process` and supplies the
+resulting access key, secret, and optional session token only in that child
+process's environment. The profile can therefore use static keys, SSO, role
+assumption, or `credential_process`; credentials are never written into
+`config.toml`. The AWS CLI must be installed when `s3_profile` is configured.
+Local and HTTP graph stores ignore these settings.
 
 ## MCP Tools
 

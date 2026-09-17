@@ -90,6 +90,8 @@ def inject_context(*, debug: bool = False) -> None:
         debug=debug,
         graph_id=cfg.graph_name,
         author=cfg.author,
+        s3_profile=cfg.s3_profile,
+        s3_region=cfg.s3_region,
     )
     if text:
         print(text)
