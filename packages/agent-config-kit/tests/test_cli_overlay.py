@@ -332,3 +332,74 @@ def test_validate_folds_overlay_entries_into_the_reported_bundle(tmp_path, monke
         app(["validate", str(manifest), "--platform", "claude"])
 
     assert exc_info.value.code == 1
+
+
+def test_apply_explicit_manifest_invalid_config_toml_exits_cleanly(
+    tmp_path, monkeypatch, capsys
+):
+    """With overlays on by default, an explicit MANIFEST now loads
+    config.toml too — an invalid config.toml must fail the same clean,
+    non-traceback way an invalid manifest already does, not escape as an
+    uncaught ConfigError."""
+    _hermetic(monkeypatch, tmp_path)
+    config_dir = tmp_path / ".config" / "agent-config-kit"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text("this is not [valid toml")
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["apply", str(manifest), "--platform", "claude"])
+
+    assert exc_info.value.code == 2
+    assert "invalid TOML" in capsys.readouterr().out
+
+
+def test_apply_zero_arg_invalid_config_toml_exits_cleanly(tmp_path, monkeypatch):
+    """Same ConfigError-must-not-escape guarantee for zero-arg resolution,
+    which already loaded config.toml before this feature and had the same
+    gap."""
+    _hermetic(monkeypatch, tmp_path)
+    config_dir = tmp_path / ".config" / "agent-config-kit"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text("this is not [valid toml")
+    cwd = tmp_path / "somewhere"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["apply", "--platform", "claude"])
+
+    assert exc_info.value.code == 2
+
+
+def test_apply_explicit_manifest_overlay_instructions_rejected_cleanly(
+    tmp_path, monkeypatch
+):
+    _hermetic(monkeypatch, tmp_path)
+    _write_config(
+        tmp_path,
+        """
+        [overlay]
+        instructions = "See AGENTS.md"
+        """,
+    )
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        """,
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        app(["apply", str(manifest), "--platform", "claude"])
+
+    assert exc_info.value.code == 2

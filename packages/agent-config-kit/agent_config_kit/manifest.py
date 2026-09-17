@@ -299,15 +299,21 @@ def _process_profile_includes(
                     selection.append(identity)
 
 
-def _validate_raw_shapes(data: dict, path: Path) -> None:
-    """The include-merge machinery (``_merge_manifest_data``/
+def validate_raw_shapes(data: dict, path: Path) -> None:
+    """The include-merge machinery (``merge_manifest_data``/
     ``_raw_hook_identity``) assumes ``mcp_servers``/``lsp_servers``/
     ``profiles`` are tables and ``hooks`` is a list of tables, and isn't
     itself defensive about it — a malformed manifest must fail with a
     clean ``ManifestError`` right here, before any merging touches it, not
     a raw ``TypeError``/``ValueError``/``AttributeError`` from deep inside
     the merge. (``skills`` is validated separately, in
-    ``_resolve_relative_paths``, which already runs right after this.)"""
+    ``_resolve_relative_paths``, which already runs right after this.)
+
+    Public — ``resolve.resolve_overlay`` validates each raw config-overlay
+    fragment's shape with this before combining them, for the same reason:
+    ``merge_manifest_data`` isn't defensive about shape either, and a
+    malformed overlay layer must fail cleanly before the merge, not deep
+    inside it."""
     for key in ("mcp_servers", "lsp_servers", "profiles"):
         value = data.get(key)
         if value is not None and not isinstance(value, dict):
@@ -351,7 +357,7 @@ def _load_raw_manifest(path: Path, cache_dir: Path, chain: list[str]) -> dict:
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"{path}: invalid TOML: {exc}") from exc
 
-    _validate_raw_shapes(data, path)
+    validate_raw_shapes(data, path)
     manifest_dir = path.parent
     _resolve_relative_paths(data, manifest_dir, path, cache_dir)
     _process_profile_includes(data, manifest_dir, cache_dir, chain, path)
@@ -619,7 +625,7 @@ def load_overlay_bundle(
     the same overlay entry resolve differently, or silently fail, run to
     run."""
     data = copy.deepcopy(overlay)
-    _validate_raw_shapes(data, config_path)
+    validate_raw_shapes(data, config_path)
     resolved_cache_dir = (
         cache_dir if cache_dir is not None else default_cache_dir(config_path)
     )
@@ -628,6 +634,17 @@ def load_overlay_bundle(
         bundle_model = ManifestBundle.model_validate(data)
     except ValidationError as exc:
         raise ManifestError(_format_validation_error(exc, config_path)) from exc
+    if bundle_model.instructions is not None:
+        # ManifestBundle accepts `instructions` (a manifest's own field),
+        # but the overlay schema (I2) is deliberately scoped to
+        # mcp_servers/skills/hooks/lsp_servers only — nothing here reads
+        # RegistrationBundle.instructions back out, so silently accepting
+        # it would validate cleanly and have zero effect, which is worse
+        # than a clear error naming the unsupported field.
+        raise ManifestError(
+            f"{config_path}: [overlay] instructions is not supported "
+            "(overlay entries are mcp_servers/skills/hooks/lsp_servers only)"
+        )
     return RegistrationBundle(
         mcp_servers=bundle_model.mcp_servers,
         hooks=bundle_model.hooks,

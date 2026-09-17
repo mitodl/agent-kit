@@ -346,6 +346,27 @@ def test_load_global_config_expands_tilde_in_overlay_plugin_hook_entry_path(
     )
 
 
+def test_load_global_config_tolerates_non_list_overlay_hooks_shape(tmp_path):
+    """`overlay` is intentionally unvalidated raw data at this layer (real
+    shape validation happens downstream, via
+    manifest.load_overlay_bundle) — a malformed `hooks` value (here, an
+    int instead of a list) must not raise a raw TypeError while expanding
+    `~` in it; it's the downstream validator's job to report the bad
+    shape, not this parsing layer's."""
+    config_path = _write(
+        tmp_path,
+        "config.toml",
+        """
+        [overlay]
+        hooks = 1
+        """,
+    )
+
+    result = load_global_config(config_path)
+
+    assert result.overlay["hooks"] == 1
+
+
 def test_load_global_config_overlay_string_skill_shorthand_expands_tilde(
     tmp_path, monkeypatch
 ):

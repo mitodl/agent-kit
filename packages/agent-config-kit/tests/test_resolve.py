@@ -1,7 +1,10 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from agent_config_kit.config import GlobalConfig, OrgConfig, ScopeConfig
+from agent_config_kit.manifest import ManifestError
 from agent_config_kit.models import Scope
 from agent_config_kit.resolve import (
     find_repo_root,
@@ -185,6 +188,28 @@ def test_resolve_overlay_global_wins_key_collision_against_org_match(tmp_path):
 
     assert overlay["mcp_servers"]["witan"]["command"] == "global"
     assert source == "org 'mitodl' + global"
+
+
+def test_resolve_overlay_raises_manifest_error_on_malformed_matched_layer(tmp_path):
+    """merge_manifest_data isn't defensive about shape any more than the
+    include-merge machinery it's shared with is — a malformed hooks value
+    must fail with a clean ManifestError here, before the merge touches
+    it, not a raw TypeError from deep inside _merge_hooks."""
+    config = GlobalConfig(overlay={"mcp_servers": {"memory": {"kind": "stdio"}}})
+    org_match = OrgConfig(name="mitodl", manifest="x", overlay={"hooks": 1})
+
+    with pytest.raises(ManifestError):
+        resolve_overlay(config, tmp_path / "config.toml", org_match=org_match)
+
+
+def test_resolve_overlay_raises_manifest_error_on_malformed_global_layer(tmp_path):
+    config = GlobalConfig(overlay={"hooks": 1})
+    org_match = OrgConfig(
+        name="mitodl", manifest="x", overlay={"mcp_servers": {"memory": {}}}
+    )
+
+    with pytest.raises(ManifestError):
+        resolve_overlay(config, tmp_path / "config.toml", org_match=org_match)
 
 
 def test_resolve_overlay_org_and_global_union_non_colliding_keys(tmp_path):

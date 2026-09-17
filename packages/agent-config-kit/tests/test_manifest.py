@@ -536,6 +536,17 @@ def test_load_overlay_bundle_invalid_shape_raises_manifest_error_naming_config_t
         load_overlay_bundle({"mcp_servers": "not-a-table"}, config_path)
 
 
+def test_load_overlay_bundle_rejects_instructions(tmp_path):
+    """ManifestBundle accepts `instructions` (a manifest's own field), but
+    nothing reads RegistrationBundle.instructions back out of an overlay —
+    silently accepting it would validate cleanly and have zero effect,
+    which is worse than a clear error naming the unsupported field."""
+    config_path = tmp_path / "config.toml"
+
+    with pytest.raises(ManifestError, match="instructions"):
+        load_overlay_bundle({"instructions": "See AGENTS.md"}, config_path)
+
+
 def test_load_overlay_bundle_invalid_mcp_server_kind_raises_manifest_error(tmp_path):
     config_path = tmp_path / "config.toml"
 

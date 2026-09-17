@@ -25,7 +25,7 @@ from pathlib import Path
 
 from .config import GlobalConfig, OrgConfig, ScopeConfig
 from .fetch import fetch_remote, is_remote_uri
-from .manifest import merge_manifest_data
+from .manifest import merge_manifest_data, validate_raw_shapes
 from .models import Scope
 
 _GITHUB_OWNER_RE = re.compile(r"github\.com[:/]([^/]+)/")
@@ -158,6 +158,15 @@ def resolve_overlay(
     parts = [p for p in (matched_label, "global" if config.overlay else None) if p]
     if not parts:
         return {}, ""
+    # merge_manifest_data isn't defensive about shape any more than the
+    # include-merge machinery it's shared with is — a malformed layer (e.g.
+    # `hooks` not a list) must fail with a clean ManifestError here, before
+    # the merge touches it, not a raw TypeError/AttributeError from deep
+    # inside `_merge_hooks`.
+    if matched:
+        validate_raw_shapes(matched, config_path)
+    if config.overlay:
+        validate_raw_shapes(config.overlay, config_path)
     if matched and config.overlay:
         combined = merge_manifest_data(matched, config.overlay, config_path)
     else:

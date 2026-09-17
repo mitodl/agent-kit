@@ -121,13 +121,22 @@ def _expand_overlay_paths(overlay: object) -> None:
                 skills[name] = _expand_path_like(value)
             elif isinstance(value, dict) and "skill_md_path" in value:
                 value["skill_md_path"] = _expand_path_like(value["skill_md_path"])
-    for hook in overlay.get("hooks") or []:
-        if (
-            isinstance(hook, dict)
-            and hook.get("kind") == "plugin"
-            and "entry_path" in hook
-        ):
-            hook["entry_path"] = _expand_path_like(hook["entry_path"])
+    hooks = overlay.get("hooks")
+    # `overlay` is intentionally left as an unvalidated raw dict here (real
+    # shape validation happens downstream, in
+    # manifest.load_overlay_bundle, so a malformed entry raises the same
+    # clean ManifestError a malformed manifest entry would) — so `hooks`
+    # could be anything, e.g. `hooks = 1`. Only walk it here if it's
+    # actually a list; a wrong shape is that downstream validator's job to
+    # report, not a raw TypeError from iterating a non-iterable here.
+    if isinstance(hooks, list):
+        for hook in hooks:
+            if (
+                isinstance(hook, dict)
+                and hook.get("kind") == "plugin"
+                and "entry_path" in hook
+            ):
+                hook["entry_path"] = _expand_path_like(hook["entry_path"])
 
 
 def _expand_config_paths(data: dict) -> None:

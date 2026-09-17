@@ -29,7 +29,7 @@ except ImportError as exc:
     )
     raise SystemExit(1) from exc
 
-from .config import load_global_config, resolve_config_path
+from .config import ConfigError, load_global_config, resolve_config_path
 from .diff import Drift
 from .diff import diff as diff_bundle
 from .fetch import FetchError, fetch_remote, is_remote_uri
@@ -757,11 +757,13 @@ def apply_command(
         pass ``--no-overlay`` for a run that uses only this manifest's own
         entries.
     """
-    resolution = _resolve_manifest_arg(manifest, cache_dir=cache_dir, overlay=overlay)
-    manifest_path = resolution.path
-    source_profiles = resolution.profiles
-    source_write_scope = resolution.write_scope
     try:
+        resolution = _resolve_manifest_arg(
+            manifest, cache_dir=cache_dir, overlay=overlay
+        )
+        manifest_path = resolution.path
+        source_profiles = resolution.profiles
+        source_write_scope = resolution.write_scope
         loaded = load_manifest(manifest_path, cache_dir=cache_dir)
         bundle = resolve_profile(
             loaded,
@@ -770,7 +772,7 @@ def apply_command(
             ),
         )
         bundle = _apply_overlay_to_bundle(bundle, resolution, cache_dir=cache_dir)
-    except ManifestError as exc:
+    except (ManifestError, ConfigError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
 
@@ -888,11 +890,13 @@ def validate_command(
         Same as ``apply --overlay``/``--no-overlay`` — fold config.toml's
         overlay into the bundle drift is checked against. On by default.
     """
-    resolution = _resolve_manifest_arg(manifest, cache_dir=cache_dir, overlay=overlay)
-    manifest_path = resolution.path
-    source_profiles = resolution.profiles
-    source_write_scope = resolution.write_scope
     try:
+        resolution = _resolve_manifest_arg(
+            manifest, cache_dir=cache_dir, overlay=overlay
+        )
+        manifest_path = resolution.path
+        source_profiles = resolution.profiles
+        source_write_scope = resolution.write_scope
         loaded = load_manifest(manifest_path, cache_dir=cache_dir)
         bundle = resolve_profile(
             loaded,
@@ -901,7 +905,7 @@ def validate_command(
             ),
         )
         bundle = _apply_overlay_to_bundle(bundle, resolution, cache_dir=cache_dir)
-    except ManifestError as exc:
+    except (ManifestError, ConfigError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
 
