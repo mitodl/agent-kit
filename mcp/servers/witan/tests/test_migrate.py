@@ -585,6 +585,52 @@ def test_store_client_matches_the_configured_graph_across_spellings(monkeypatch)
         assert env.get("OMNIGRAPH_BEARER_TOKEN") != "svc-witan-admin-token"
 
 
+@requires_omnigraph
+def test_store_client_applies_the_ambient_s3_profile_only_to_its_own_store(
+    monkeypatch,
+):
+    """Same rule as the bearer token above, and for a stronger reason: another
+    `s3://` URI is a different bucket that may belong to a different profile,
+    so handing it this machine's credentials is a guess. Merge callers pass the
+    credentials belonging to the store they resolved."""
+    from witan import config as cfg_mod
+    from witan import server as srv
+
+    configured = "s3://personal-witan/graph.omni"
+    monkeypatch.setattr(
+        srv,
+        "client",
+        type(
+            "C",
+            (),
+            {
+                "graph_uri": configured,
+                "server_url": None,
+                "graph_id": None,
+                "token": None,
+                "is_remote": False,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        srv, "cfg", srv.cfg.model_copy(update={"s3_profile": "personal"})
+    )
+
+    own = srv._store_client(configured)
+    assert (own.s3_profile, own.s3_region) == ("personal", None)
+
+    # A different bucket gets nothing rather than "personal" …
+    other = srv._store_client("s3://archive-witan/graph.omni")
+    assert other.s3_profile is None
+
+    # … unless whoever resolved that store says which profile it takes.
+    named = srv._store_client(
+        "s3://archive-witan/graph.omni",
+        cfg_mod.S3Credentials("archive", "us-west-2"),
+    )
+    assert (named.s3_profile, named.s3_region) == ("archive", "us-west-2")
+
+
 def test_merge_into_a_bare_server_url_reports_the_missing_graph_id(server, tmp_path):
     """A remote target with no graph id is a caller error, not a crash.
 
@@ -1584,6 +1630,108 @@ def test_merge_to_an_s3_target_is_left_alone(targets_config):
     assert target == "s3://bucket/graph.omni"
 
 
+# ── per-end S3 credentials ─────────────────────────────────────────────
+#
+# A merge drives two stores at once and either can be an s3:// bucket under its
+# own profile — which the ambient configuration cannot express, since it holds
+# exactly one. `_target_store_uri` reduces a named target to a bare URI, so
+# these travel beside it (the shape `author` already uses) rather than in it.
+
+
+def test_s3_credentials_come_from_each_named_target(targets_config):
+    from witan import config as cfg_mod
+    from witan.cli import migrate as cli_migrate
+
+    targets_config(
+        "[targets.personal]\n"
+        'server = "s3://personal-witan/graph.omni"\n'
+        's3_profile = "personal"\n'
+        's3_region = "us-east-1"\n'
+        "\n"
+        "[targets.archive]\n"
+        'server = "s3://archive-witan/graph.omni"\n'
+        's3_profile = "archive"\n'
+    )
+
+    assert cli_migrate._merge_source_s3("personal") == cfg_mod.S3Credentials(
+        "personal", "us-east-1"
+    )
+    assert cli_migrate._merge_destination_s3("archive") == cfg_mod.S3Credentials(
+        "archive", None
+    )
+
+
+def test_a_bare_source_uri_carries_no_s3_credentials(targets_config):
+    """Deliberately None, not the ambient profile: `_store_client` applies that
+    only when the URI IS the configured store, exactly as it does for a token.
+    Passing it here would hand another bucket this machine's credentials."""
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('s3_profile = "ambient"\n')
+
+    assert cli_migrate._merge_source_s3(None) is None
+    assert cli_migrate._merge_destination_s3(None) is None
+
+
+def test_a_target_without_s3_settings_carries_none(targets_config):
+    from witan.cli import migrate as cli_migrate
+
+    targets_config('[targets.work]\nserver = "/tmp/work.omni"\n')
+
+    assert cli_migrate._merge_source_s3("work") is None
+    assert cli_migrate._merge_destination_s3("work") is None
+
+
+def test_a_deployment_destination_carries_no_s3_credentials(targets_config):
+    """The rows go over MCP and the deployment addresses its own data tier with
+    its own credentials — `RemoteServerProxy.merge_store` refuses a target_s3."""
+    from witan.cli import migrate as cli_migrate
+
+    targets_config(
+        "[targets.production]\n"
+        'remote_url = "https://witan.example.org/mcp"\n'
+        'oidc_issuer = "https://sso.example.org/realms/ol"\n'
+        's3_profile = "should-not-travel"\n'
+    )
+
+    assert cli_migrate._merge_destination_s3("production") is None
+
+
+def test_merge_threads_each_end_s_credentials_to_the_provider(
+    tmp_path, targets_config, monkeypatch
+):
+    """The wiring, not just the resolvers: two S3 targets under two profiles
+    must reach `merge_store` as two separate pairs."""
+    from witan import config as cfg_mod
+    from witan.cli import migrate as cli_migrate
+
+    monkeypatch.setenv("WITAN_MERGE_WATERMARKS", str(tmp_path / "marks.json"))
+    targets_config(
+        "[targets.personal]\n"
+        'server = "s3://personal-witan/graph.omni"\n'
+        's3_profile = "personal"\n'
+        "\n"
+        "[targets.cold]\n"
+        'server = "s3://archive-witan/graph.omni"\n'
+        's3_profile = "archive"\n'
+        's3_region = "us-west-2"\n'
+    )
+    provider = _FakeMergeProvider()
+    monkeypatch.setattr(
+        cli_migrate,
+        "_merge_destination",
+        lambda to, t: (provider, "s3://archive-witan/graph.omni"),
+    )
+    monkeypatch.setattr(cli_migrate, "_merge_source_author", lambda f: "pytest")
+
+    cli_migrate._merge(None, None, True, from_target="personal", to_target="cold")
+
+    assert provider.s3_seen == (
+        cfg_mod.S3Credentials("personal", None),
+        cfg_mod.S3Credentials("archive", "us-west-2"),
+    )
+
+
 @requires_omnigraph
 def test_merge_from_and_to_reconciles_two_named_local_stores(
     server, tmp_path, targets_config, capsys
@@ -2394,8 +2542,19 @@ class _FakeMergeProvider:
     def __init__(self):
         self.since_seen = []
 
-    def merge_store(self, source, *, target, dry_run, source_author, since):
+    def merge_store(
+        self,
+        source,
+        *,
+        target,
+        dry_run,
+        source_author,
+        since,
+        source_s3=None,
+        target_s3=None,
+    ):
         self.since_seen.append(since)
+        self.s3_seen = (source_s3, target_s3)
         return {
             "target": self.remote_url,
             # `kept_target: 1` with an empty decision list is a shape a real
@@ -2578,7 +2737,7 @@ def test_a_partial_merge_leaves_no_mark_rather_than_a_stale_one(tmp_path, monkey
     class _Exploding:
         remote_url = "/t.omni"
 
-        def merge_store(self, source, *, target, dry_run, source_author, since):
+        def merge_store(self, source, **_kwargs):
             # Stands in for a merge that commits some batches and then dies.
             raise RuntimeError("data tier went away mid-merge")
 

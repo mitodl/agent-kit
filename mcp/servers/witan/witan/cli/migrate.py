@@ -99,6 +99,12 @@ def _target_store_uri(name: str, block) -> str:
       ``OMNIGRAPH_BEARER_TOKEN`` for any other remote store. Authenticating to
       somebody's server with whatever token happens to be exported is worse
       than refusing, so this refuses.
+    - ``s3_profile``/``s3_region`` are NOT folded in and are not lost either:
+      they travel beside the URI as an :class:`~witan.config.S3Credentials`
+      pair, resolved by :func:`_merge_source_s3` / :func:`_merge_destination_s3`
+      — the same shape ``author`` already uses (:func:`_merge_source_author`).
+      An S3 store URI has nowhere to put them, and unlike ``token`` the merge
+      path can carry them per end, so there is nothing to refuse.
 
     ``file://`` is stripped here rather than left to ``config._resolve_path``,
     whose ``Path()`` round-trip collapses the ``//`` and yields a relative path
@@ -141,6 +147,44 @@ def _merge_source_author(from_target: str | None) -> str | None:
         if block.author:
             return block.author
     return cfg_module.load().author
+
+
+def _merge_source_s3(from_target: str | None):
+    """The AWS profile/region the SOURCE store is addressed with.
+
+    ``None`` for a bare source URI, which is deliberate rather than a gap:
+    ``_store_client`` then applies the ambient config's credentials if that URI
+    *is* the configured store and none at all otherwise, which is the same rule
+    it uses for a bearer token. Naming a target (``--from <name>``) is how a
+    caller says "this S3 store, with these credentials" — the ambient
+    configuration cannot express two buckets under two profiles.
+    """
+    from .. import config as cfg_module
+
+    if not from_target:
+        return None
+    block = _named_target(from_target)
+    if not (block.s3_profile or block.s3_region):
+        return None
+    return cfg_module.S3Credentials(block.s3_profile, block.s3_region)
+
+
+def _merge_destination_s3(to_target: str | None):
+    """The same for the DESTINATION store, when ``--to <name>`` chose it.
+
+    ``None`` without ``--to``, and ``None`` for a target whose destination is a
+    deployment: there the rows go over MCP and the deployment addresses its own
+    data tier with its own credentials — ``RemoteServerProxy.merge_store``
+    refuses a ``target_s3`` for that reason.
+    """
+    from .. import config as cfg_module
+
+    if not to_target:
+        return None
+    block = _named_target(to_target)
+    if block.remote_url or not (block.s3_profile or block.s3_region):
+        return None
+    return cfg_module.S3Credentials(block.s3_profile, block.s3_region)
 
 
 def _merge_source(source: str | None, from_target: str | None) -> str:
@@ -429,6 +473,8 @@ def _merge(
             target=target,
             dry_run=dry_run,
             source_author=_merge_source_author(from_target),
+            source_s3=_merge_source_s3(from_target),
+            target_s3=_merge_destination_s3(to_target),
             # The two marks only. The stored entry also carries which pair it
             # describes and when it was taken, which is this machine's business
             # — a merge sends the deployment its rows, not the local path they

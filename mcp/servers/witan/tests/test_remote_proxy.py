@@ -554,7 +554,7 @@ def test_merge_store_wraps_a_batch_refusal_with_that_context(proxy, monkeypatch)
     from witan.remote import proxy as proxy_mod
 
     monkeypatch.setattr(
-        proxy_mod, "_source_export", lambda _s: _fake_export(["a", "b"])
+        proxy_mod, "_source_export", lambda _s, _s3=None: _fake_export(["a", "b"])
     )
     monkeypatch.setattr(
         proxy_mod, "_read_export", lambda _p: [{"type": "T", "id": "1"}]
@@ -576,6 +576,54 @@ def test_merge_store_wraps_a_batch_refusal_with_that_context(proxy, monkeypatch)
 @contextmanager
 def _fake_export(_rows):
     yield Path("/tmp/does-not-matter.jsonl")
+
+
+def test_the_source_export_subprocess_gets_the_source_s_s3_profile(monkeypatch):
+    """An `s3://` source is exported HERE, by an omnigraph subprocess, and
+    omnigraph resolves no named AWS profile of its own — so the credentials the
+    caller resolved for that store have to reach this env or the export fails
+    where the shim used to supply them."""
+    import subprocess
+
+    from witan_core import omnigraph as og
+
+    from witan.config import S3Credentials
+    from witan.graph import OmnigraphClient
+    from witan.remote import proxy as proxy_mod
+
+    monkeypatch.setattr(
+        OmnigraphClient, "_find_binary", staticmethod(lambda: "omnigraph")
+    )
+
+    captured = {}
+
+    # One fake for both calls: `proxy.subprocess` and `omnigraph.subprocess`
+    # are the same stdlib module object, so patching them separately would
+    # just have the second patch win.
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "aws":
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout='{"Version":1,"AccessKeyId":"ak","SecretAccessKey":"sk"}',
+                stderr="",
+            )
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(cmd, 0, stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+
+    with proxy_mod._source_export(
+        "s3://personal-witan/graph.omni", S3Credentials("personal", "us-east-1")
+    ):
+        pass
+
+    assert captured["cmd"][:2] == ["omnigraph", "export"]
+
+    assert captured["env"]["AWS_PROFILE"] == "personal"
+    assert captured["env"]["AWS_ACCESS_KEY_ID"] == "ak"
+    assert captured["env"]["AWS_REGION"] == "us-east-1"
 
 
 # ── which of witan's tools write ──────────────────────────────────────────
@@ -760,7 +808,7 @@ def test_merge_store_wraps_an_indeterminate_batch_with_that_context(proxy, monke
     from witan.remote import proxy as proxy_mod
 
     monkeypatch.setattr(
-        proxy_mod, "_source_export", lambda _s: _fake_export(["a", "b"])
+        proxy_mod, "_source_export", lambda _s, _s3=None: _fake_export(["a", "b"])
     )
     monkeypatch.setattr(
         proxy_mod, "_read_export", lambda _p: [{"type": "T", "id": "1"}]

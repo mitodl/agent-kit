@@ -125,6 +125,12 @@ assumption, or `credential_process`; credentials are never written into
 `config.toml`. The AWS CLI must be installed when `s3_profile` is configured.
 Local and HTTP graph stores ignore these settings.
 
+`witan migrate merge --from <name> --to <name>` carries each named target's own
+profile for its end of the merge, so two buckets under two profiles work in one
+command. A bare store URI on either end gets the ambient profile only when it
+*is* the configured store; otherwise it inherits whatever AWS credentials the
+environment already has, so name a target when the bucket needs its own.
+
 ## MCP Tools
 
 > **witan memory vs. your agent's built-in/session memory.** witan is the

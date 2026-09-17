@@ -37,7 +37,7 @@ from witan_core.remote.proxy import (
 from .. import merge_report
 from .. import repo as repo_module
 from .. import session_state
-from ..config import RemoteConfig
+from ..config import RemoteConfig, S3Credentials
 
 __all__ = [
     "RemoteCredentialRejected",
@@ -51,7 +51,7 @@ __all__ = [
 
 
 @contextmanager
-def _source_export(source: str) -> Iterator[Path]:
+def _source_export(source: str, s3: S3Credentials | None = None) -> Iterator[Path]:
     """Yield a path to ``source``'s export, without buffering it in memory.
 
     Accepts the same two shapes ``witan.server.merge_store`` does: a store URI,
@@ -67,6 +67,12 @@ def _source_export(source: str) -> Iterator[Path]:
     Unlike the in-process merge this does *not* export a target: the deployment
     reconciles against its own graph, which it already holds a client on. Only
     source rows cross the wire.
+
+    ``s3`` is the source's own AWS profile/region, needed here for the same
+    reason the in-process path needs it: exporting an ``s3://`` store shells out
+    to omnigraph, and omnigraph resolves no named profile of its own. Only this
+    end takes one — the destination is the deployment, which holds its own
+    credentials.
     """
     if source.startswith("file://"):
         source = source[len("file://") :]
@@ -99,7 +105,11 @@ def _source_export(source: str) -> Iterator[Path]:
                 stdout=fh,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=store_subprocess_env(source),
+                env=store_subprocess_env(
+                    source,
+                    s3_profile=s3.profile if s3 else None,
+                    s3_region=s3.region if s3 else None,
+                ),
             )
         if result.returncode != 0:
             raise RemoteToolUnavailable(
@@ -391,6 +401,8 @@ class RemoteServerProxy(RemoteMCPProxy):
         dry_run: bool = False,
         source_author: str | None = None,
         since: dict | None = None,
+        source_s3: S3Credentials | None = None,
+        target_s3: S3Credentials | None = None,
     ) -> dict:
         """Merge a local store into the deployment, as the logged-in user.
 
@@ -404,7 +416,13 @@ class RemoteServerProxy(RemoteMCPProxy):
         chooses; over a deployment it is that deployment's own graph, and the
         server resolves it from its own configuration — a client never names a
         store address, the same rule ADR-0005 (c) applies to witan-code's
-        writes. Passing one is refused rather than ignored.
+        writes. Passing one is refused rather than ignored. ``target_s3`` is
+        refused with it: credentials for a store this caller does not name are
+        meaningless, and the deployment holds its data tier's own.
+
+        ``source_s3`` *is* used — the source is exported here, on this machine,
+        so an ``s3://`` source needs its profile exactly as the in-process path
+        does.
 
         ``since`` is the previous merge's watermark for this pair of stores; it
         goes out unchanged on every batch, and the running mark the batches
@@ -420,7 +438,7 @@ class RemoteServerProxy(RemoteMCPProxy):
         exception instead of losing them, so an incomplete merge reports as
         incomplete rather than only as failed.
         """
-        if target is not None:
+        if target is not None or target_s3 is not None:
             raise RemoteToolUnavailable(
                 "`--target` is not accepted against a deployed witan: the "
                 "target is that deployment's own graph, resolved server-side. "
@@ -454,7 +472,7 @@ class RemoteServerProxy(RemoteMCPProxy):
         # is reported as "cannot tell" rather than as a shortfall, which is
         # what defaulting the missing counts to zero would have looked like.
         accounted = True
-        with _source_export(source) as export:
+        with _source_export(source, source_s3) as export:
             rows = _read_export(export)
             # Counted on THIS side and before the first batch is sent, which is
             # the only place it can be counted: the number exists to be

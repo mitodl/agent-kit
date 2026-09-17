@@ -1,7 +1,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from witan_core.config_file import load_toml as _load_toml_shared
@@ -19,6 +19,20 @@ from . import repo as repo_module
 _QUERIES_DIR = Path(__file__).parent.parent / "queries"
 _DEFAULT_GRAPH_URI = Path.home() / ".local" / "share" / "witan" / "graph.omni"
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "witan" / "config.toml"
+
+
+class S3Credentials(NamedTuple):
+    """The AWS profile/region ONE ``s3://`` store is addressed with.
+
+    A pair rather than two loose arguments because a merge drives two stores at
+    once, either of which may be a different bucket under a different profile
+    — so "which credentials" is only ever meaningful attached to "which store".
+    Empty means "whatever the environment already carries", the behaviour every
+    non-S3 store has.
+    """
+
+    profile: str | None = None
+    region: str | None = None
 
 
 class Config(BaseModel):
@@ -40,6 +54,11 @@ class Config(BaseModel):
 
     s3_region: str | None
     """AWS region passed to omnigraph for an s3:// graph store."""
+
+    @property
+    def s3(self) -> S3Credentials:
+        """This config's S3 credentials as the pair every store call takes."""
+        return S3Credentials(self.s3_profile, self.s3_region)
 
     author: str
     """Attribution string written to Memory.author on every insert."""
