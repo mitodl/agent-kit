@@ -200,9 +200,15 @@ def test_apply_zero_arg_org_match_merges_in_org_and_global_overlay(
     assert set(cfg["mcpServers"]) == {"witan", "memory", "grafana"}
 
 
-def test_apply_overlay_resolved_manifest_wins_key_collision(tmp_path, monkeypatch):
+def test_apply_overlay_resolved_manifest_wins_key_collision(
+    tmp_path, monkeypatch, capsys
+):
     """I4: the resolved manifest's own entry wins over an overlay entry of
-    the same name, not the other way around."""
+    the same name, not the other way around. The visibility line must
+    reflect this too — an overlay entry that lost the collision
+    contributed nothing, so it must not be counted as an addition (a prior
+    bug counted the overlay's raw size instead of its effective
+    contribution)."""
     _hermetic(monkeypatch, tmp_path)
     _write_config(
         tmp_path,
@@ -225,6 +231,44 @@ def test_apply_overlay_resolved_manifest_wins_key_collision(tmp_path, monkeypatc
 
     cfg = json.loads((tmp_path / ".claude.json").read_text())
     assert cfg["mcpServers"]["witan"]["command"] == "from-manifest"
+    out = capsys.readouterr().out
+    assert "+ 0 inline entries from config.toml (global)" in out
+
+
+def test_apply_overlay_visibility_line_counts_only_effective_additions(
+    tmp_path, monkeypatch, capsys
+):
+    """A mixed run (one overlay entry collides and loses, one is new) must
+    count only the new one, not the overlay's raw size of two."""
+    _hermetic(monkeypatch, tmp_path)
+    _write_config(
+        tmp_path,
+        """
+        [overlay.mcp_servers.witan]
+        kind = "stdio"
+        command = "from-overlay"
+
+        [overlay.mcp_servers.memory]
+        kind = "stdio"
+        command = "npx"
+        """,
+    )
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "from-manifest"
+        """,
+    )
+
+    _run_ok(["apply", str(manifest), "--platform", "claude"])
+
+    out = capsys.readouterr().out
+    assert "+ 1 inline entry from config.toml (global)" in out
+    cfg = json.loads((tmp_path / ".claude.json").read_text())
+    assert cfg["mcpServers"]["witan"]["command"] == "from-manifest"
+    assert cfg["mcpServers"]["memory"]["command"] == "npx"
 
 
 def test_apply_overlay_entry_survives_profile_filter(tmp_path, monkeypatch):

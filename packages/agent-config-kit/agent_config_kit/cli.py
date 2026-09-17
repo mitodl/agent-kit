@@ -49,6 +49,7 @@ from .prune import (
     PlatformState,
     apply_with_prune,
     default_state_path,
+    hook_identity,
     load_state,
     write_state,
 )
@@ -644,17 +645,29 @@ def _apply_overlay_to_bundle(
     profile resolution, not before), printing the I5 visibility line.
     A no-op (returns ``bundle`` unchanged, prints nothing) when
     ``resolution.overlay`` is empty — either nothing matched, or
-    ``--no-overlay`` was given."""
+    ``--no-overlay`` was given.
+
+    The printed count is the overlay's *effective* contribution — entries
+    it introduces that ``bundle`` doesn't already have — not its raw size.
+    ``apply_overlay`` has ``bundle`` win every same-keyed collision (I4),
+    so counting ``overlay_bundle``'s own size would overstate the line
+    whenever an overlay entry loses to one already in ``bundle``: it would
+    claim N entries were added when some (or all) of them were silently
+    no-ops, undercutting the whole point of a legibility line."""
     if not resolution.overlay or resolution.overlay_config_path is None:
         return bundle
     overlay_bundle = load_overlay_bundle(
         resolution.overlay, resolution.overlay_config_path, cache_dir=cache_dir
     )
+    existing_mcp_servers = set(bundle.mcp_servers)
+    existing_skills = {s.name for s in bundle.skills}
+    existing_hooks = {hook_identity(h) for h in bundle.hooks}
+    existing_lsp_servers = set(bundle.lsp_servers)
     count = (
-        len(overlay_bundle.mcp_servers)
-        + len(overlay_bundle.skills)
-        + len(overlay_bundle.hooks)
-        + len(overlay_bundle.lsp_servers)
+        sum(1 for k in overlay_bundle.mcp_servers if k not in existing_mcp_servers)
+        + sum(1 for s in overlay_bundle.skills if s.name not in existing_skills)
+        + sum(1 for h in overlay_bundle.hooks if hook_identity(h) not in existing_hooks)
+        + sum(1 for k in overlay_bundle.lsp_servers if k not in existing_lsp_servers)
     )
     entry_word = "entry" if count == 1 else "entries"
     console.print(
