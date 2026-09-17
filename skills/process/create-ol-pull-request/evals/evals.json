@@ -1,0 +1,18 @@
+{
+	"skill_name": "create-ol-pull-request",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "Open a PR for this branch. It sets an explicit 30 second TTL on instructor-uploaded files in the edX CDN config because updated files kept serving stale content. I applied it to MITx Online QA and checked that a re-uploaded file showed up within 30 seconds.",
+			"expected_output": "A PR body in the mitodl template whose description opens with the stale-content problem, then what the PR does, and whose testing section names the QA environment and the re-upload check. No report-style headers, bold-label bullets, or status emoji.",
+			"files": [],
+			"expectations": [
+				"The description opens with the stale-content context before describing the TTL change",
+				"The testing section names MITx Online QA and the re-upload-within-30-seconds check, and claims nothing that wasn't run",
+				"The body contains no ## Summary, ## Problem, ## Root Cause, or ## Key Changes headers",
+				"The body contains no bold-label bullets and no ✅/⚠️ markers",
+				"Empty optional sections (Screenshots, Additional Context, Checklist) are removed"
+			]
+		}
+	]
+}

@@ -97,7 +97,7 @@ and confirm before creating the PR.
 <summary><b>Implementation details</b></summary>
 <br>
 
-<!-- agent notes on implementation technical details, ask user if they want to omit this --> 
+<!-- agent notes on implementation technical details, ask user if they want to omit this -->
 </details>
 
 ### Screenshots (if appropriate):
@@ -209,11 +209,24 @@ The PR body exists to get a reviewer oriented in under a minute:
 - Say it once. The description should not restate the title, and the testing
   section should not re-describe the change.
 - No filler adjectives ("comprehensive", "robust", "significant"), no emoji.
+- No report scaffolding inside the template sections or the details block:
+  `## Summary`, `## Problem`, `## Root Cause`, `## Key Changes` headers,
+  bold-label bullets (`- **Thing**: ...`), or ✅/⚠️ markers. The template's own
+  headers are the structure.
+- When the why isn't obvious from the title, open the description with one
+  sentence of context (what was broken or what needed to change), then what the
+  PR does.
 - Link to the issue, the doc, or the line of code instead of paraphrasing it.
 - Drop an optional section rather than filling it with "N/A"-grade prose.
+- Testing notes say how the change is observed in practice: the environment it
+  was applied to (CI/QA/RC), the command a reviewer runs (`pulumi preview`,
+  `dagster dev`, a local `docker compose up`), and what to look for. If it can
+  only be validated after merge, say that.
 
 A five-bullet description that a reviewer can act on beats a wall of narrative.
 If the diff is self-explanatory, a two-line description is the correct length.
+Description length doesn't need to track diff size: a large PR gets a short list
+of its main pieces, not more prose.
 
 ## Tips
 
@@ -228,7 +241,7 @@ If the diff is self-explanatory, a two-line description is the correct length.
   explicit pre-merge steps (e.g. Vault secret updates, migration runs). Leave
   it out otherwise.
 - **Technical Details**: this is where a detailed explanation of the technical
-  approach should go instead of the "Description" section. The complexity of 
+  approach should go instead of the "Description" section. The complexity of
   this explanation should be proportional to the complexity and/or risk of the change.
 - **Draft PRs**: suggest `--draft` if the branch is a work-in-progress or the
   user mentions it isn't ready for review.

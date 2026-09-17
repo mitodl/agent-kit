@@ -12,6 +12,28 @@ metadata:
 
 # Pulumi: Modify Existing Files
 
+## Read the repo's conventions first
+
+Before editing, read the repository's own `AGENTS.md` and any guides it points
+to (in `mitodl/ol-infrastructure`: `docs/context/03-pulumi-workflows.md`,
+`05-secrets-management.md`, `06-code-style-conventions.md`). They own stack
+naming, component rules, helpers, and secrets layout, and they change; don't
+restate them from memory.
+
+Regardless of repo, these hold:
+
+- **Environment values come from stack config**, not literals in `__main__.py`.
+  A value that differs between CI, QA, and Production belongs in
+  `Pulumi.<project>.<Env>.yaml`, read with `Config(...).require()` when it's
+  required.
+- **Secrets never land in plaintext**: use the repo's SOPS files, Vault, or
+  `pulumi config set --secret` (`secure:` values).
+- **Pinned versions live where the repo centralizes them** (ol-infrastructure:
+  `src/bridge/lib/versions.py`, which Renovate updates), not inline.
+- **Reuse existing components and helpers** (`parse_stack()`, `OL*` component
+  resources, stack outputs such as shared security groups) instead of building
+  raw resources that duplicate them.
+
 ## Always modify, never create
 
 Infrastructure changes belong in the **existing** entrypoint for the stack
@@ -41,5 +63,8 @@ pulumi preview --stack <stack-name>
 
 Review the output carefully:
 - Unexpected resource **replacements** or **deletions** are bugs, not acceptable
-  side effects.
+  side effects. The common cause is a changed logical resource name, Helm release
+  name, or component name on something that already exists. Keep the original
+  name, or add `opts=ResourceOptions(aliases=[...])` so Pulumi treats it as the
+  same resource.
 - "0 changes" is only correct if you genuinely expected no changes.

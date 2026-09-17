@@ -1,0 +1,29 @@
+{
+	"skill_name": "code-review",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "Review this diff to src/ol_infrastructure/applications/example/__main__.py in mitodl/ol-infrastructure:\n\n+ bucket_policy_arn = \"arn:aws:iam::123456789012:policy/example-qa-bucket\"\n+ db_password = example_config.get(\"db_password\")\n+ app_image = \"ghcr.io/mitodl/example:1.4.2\"",
+			"expected_output": "Findings for a hardcoded QA-specific ARN that will be wrong in Production, required config read with .get() that silently becomes None, and a version pinned inline instead of in versions.py, each with a concrete failure or cost. No findings about formatting.",
+			"files": [],
+			"expectations": [
+				"The hardcoded ARN is reported with the environment it would be wrong in",
+				"The .get() on a required secret is reported with the None failure mode, and the fix names config.require() or a secret source",
+				"The inline image version is reported as a reuse or centralization issue, citing versions.py only if it was actually located",
+				"The review consults references/ol-conventions.md because the repo is under mitodl",
+				"No finding is raised about formatting or import order"
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "Review my branch: it renames the Pulumi resource `aws.s3.Bucket(\"mitxonline-media-bucket\", ...)` to `aws.s3.Bucket(\"mitxonline-media-storage\", ...)` in mitodl/ol-infrastructure for readability.",
+			"expected_output": "A correctness finding that changing the logical name makes Pulumi delete and recreate the live bucket, recommending keeping the name or adding aliases.",
+			"files": [],
+			"expectations": [
+				"The rename is reported as a correctness finding, not a style note",
+				"The failure scenario names the delete/replace of the existing bucket",
+				"The fix offers keeping the original name or ResourceOptions(aliases=...)"
+			]
+		}
+	]
+}
