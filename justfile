@@ -144,15 +144,27 @@ check-omnigraph-pins:
     # ol-infrastructure treats as non-fatal and skips, so the gate this whole
     # mechanism exists to install would be off with nothing failing anywhere.
     # Both lines that actually emit the label are therefore checked for.
+    #
+    # Scoped to the `runtime` stage, not the whole file: an ARG declared in any
+    # OTHER stage does nothing for the image that ships, so a file-wide grep
+    # would go green on exactly the arrangement it exists to reject.
     for dockerfile in docker/omnigraph-server.Dockerfile docker/witan.Dockerfile; do
-        if ! grep -q '^ARG OMNIGRAPH_INTERNAL_SCHEMA$' "$dockerfile"; then
+        runtime=$(awk '/^FROM .* AS runtime$/{f=1;next} /^FROM /{f=0} f' "$dockerfile")
+        if [[ -z "$runtime" ]]; then
+            echo "$dockerfile has no 'FROM ... AS runtime' stage, so there is no" >&2
+            echo "stage to check the internal-schema label against." >&2
+            exit 1
+        fi
+        if ! grep -q '^ARG OMNIGRAPH_INTERNAL_SCHEMA$' <<<"$runtime"; then
             echo "$dockerfile declares OMNIGRAPH_INTERNAL_SCHEMA but its runtime" >&2
             echo "stage never re-declares it, so the label would build EMPTY." >&2
+            echo "(An ARG in any other stage does not carry into runtime.)" >&2
             echo "Add a bare 'ARG OMNIGRAPH_INTERNAL_SCHEMA' before the LABEL." >&2
             exit 1
         fi
-        if ! grep -q 'edu.mit.ol.omnigraph.internal-schema="\${OMNIGRAPH_INTERNAL_SCHEMA}"' "$dockerfile"; then
-            echo "$dockerfile does not emit edu.mit.ol.omnigraph.internal-schema" >&2
+        if ! grep -q 'edu.mit.ol.omnigraph.internal-schema="\${OMNIGRAPH_INTERNAL_SCHEMA}"' <<<"$runtime"; then
+            echo "$dockerfile's runtime stage does not emit" >&2
+            echo "edu.mit.ol.omnigraph.internal-schema" >&2
             echo "from \${OMNIGRAPH_INTERNAL_SCHEMA}. ol-infrastructure reads that" >&2
             echo "label to refuse a preview whose image reads the wrong format;" >&2
             echo "without it the check silently degrades to skipped." >&2
