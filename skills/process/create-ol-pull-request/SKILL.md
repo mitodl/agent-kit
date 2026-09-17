@@ -171,17 +171,24 @@ along with the updated description and testing notes before Step 7. The
 user confirmed a body in Step 4, not code written after it. Don't paste
 the findings table into the PR body.
 
-Only a diff that touches nothing but comments or documentation skips this
-step; say so when skipping. A rename does not qualify: renaming a setting,
-env var, config key, or public identifier can change behavior silently. Dependency
-bumps, including lockfile-only ones, always get reviewed, since a new
-transitive package or source is exactly what the security dimension
-checks.
+Only a diff that touches nothing but prose documentation, which no tool
+runs and no agent follows, skips this step; say so when skipping. These
+never qualify:
+
+- A rename of a setting, env var, config key, or public identifier, which
+  can change behavior silently.
+- Agent instructions (skills, agent definitions, prompts, context files
+  like `AGENTS.md`), which are the behavior in repos that ship them.
+- Comments that tooling acts on: `# nosec`, `# noqa`, `# type: ignore`,
+  `# pragma: allowlist secret`, `gitleaks:allow`, and similar suppressions.
+- Dependency bumps, including lockfile-only ones, since a new transitive
+  package or source is exactly what the security dimension checks.
 
 ## Step 6 — Audit factual claims
 
-Before creating the PR, re-read the drafted body for factual or behavioral
-claims — anything an "evidence" question would apply to: "prod never showed
+Before creating the PR, re-read the drafted body and the messages of every
+commit on the branch (`git log origin/<base>..HEAD`, including fix commits
+from Step 5) for factual or behavioral claims — anything an "evidence" question would apply to: "prod never showed
 this", "this fixes the leak", "the library defaults to X", "this improved
 latency", a specific number or timestamp. A change that's purely mechanical
 (a rename, a dependency bump with no behavioral claim, a two-line
@@ -199,13 +206,19 @@ available evidence rather than memory or "it should be fine":
 | "This fixes bug X" | A test that failed before the fix and passes after, if one exists or is cheap to add |
 | "Tested" / "adds a test for X" | Read the test: it must exercise the case the body names, not a neighboring branch. Run it |
 
-Mark each claim VERIFIED, UNVERIFIABLE, or CONTRADICTED. Rewrite the body
-before moving on: drop UNVERIFIABLE claims rather than shipping them
+Mark each claim VERIFIED, UNVERIFIABLE, or CONTRADICTED. Rewrite the body,
+and reword unpushed commit messages (with the user's OK, since that
+rewrites history), before moving on: drop UNVERIFIABLE claims rather than shipping them
 hedged, and correct — don't soften — anything CONTRADICTED. A claim that
 can't be checked before the PR opens doesn't get to ship as fact and get
 walked back after a reviewer catches it.
 
 ## Step 7 — Create the PR
+
+Push the branch only now, after Steps 5 and 6. A branch pushed earlier puts
+unreviewed code and unaudited commit messages in public before the checks
+run. If it was already pushed, run Steps 5 and 6 anyway and push the
+corrections.
 
 ```bash
 gh pr create \

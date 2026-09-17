@@ -178,7 +178,7 @@ the way already stops it. A sink with no reachable untrusted source is not
 a finding. The exception is an exposure the diff creates by itself, with
 no attacker input involved: a committed credential, or a secret written to
 a log, error, or trace. Verify those by confirming the value is a real
-credential (not a placeholder, test fixture, or public identifier such as a
+credential by inspection, never by using it against a service (not a placeholder, test fixture, or public identifier such as a
 client-side Sentry DSN) and that it lands in the committed file or
 reachable sink. For infrastructure, check what the resource actually exposes
 (which CIDR, which principal, which action), not what the attribute name
