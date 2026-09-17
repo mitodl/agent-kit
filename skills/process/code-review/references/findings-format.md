@@ -24,7 +24,11 @@ simplification finding combined.
   input or state that produces the wrong output or crash. For goal
   alignment: the goal number and the case the diff doesn't meet. For
   security: who the attacker is, what they send, the route it takes, and
-  what they get. For simplification/efficiency/reuse: what it costs (the extra query, the
+  what they get. For an exposure-only security finding (a committed
+  credential, a secret written to a log or trace): what is exposed, where
+  it lands, and who can read it there, e.g. "a live Stripe secret key in
+  `settings/prod.py:14`, readable by anyone with read access to the repo
+  and its forks". For simplification/efficiency/reuse: what it costs (the extra query, the
   maintenance burden, the drift risk of duplicated logic) — same column,
   reframed rather than left blank.
 

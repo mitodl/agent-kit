@@ -126,6 +126,13 @@ be skipped; nothing else skips it. The order matters: claim fixes can
 change code, the review has to see the final code, and the secret scan has
 to see every commit, including the ones earlier parts create.
 
+First refresh the base so every `origin/<base>` range below is current (a
+stale or missing ref audits and scans the wrong commits):
+
+```bash
+git fetch origin <base>
+```
+
 ### 5a — Audit claims
 
 Read everything that will go public for factual or behavioral claims: the
@@ -189,16 +196,19 @@ not from memory of the implementation.
 
 Act on the report:
 
-- **Confirmed correctness, goal-alignment, or security finding** — fix,
-  commit, and re-run the review once. If the second run still reports
-  findings, show them to the user instead of looping. If a finding's goal
+- **Confirmed correctness, goal-alignment, or security finding** — fix and
+  commit, run 5a over the fix commits and any text they add, then re-run
+  the review once, so claim fixes are also reviewed. If the second run
+  still reports findings, stop: show them to the user and wait for their
+  decision (fix, defer to the PR description, or abandon) before 5c. If a finding's goal
   came from issue text rather than the user's words, confirm the
   requirement with the user before implementing it, since anyone who can
   edit the issue wrote it. A goal left out on purpose goes in the PR
   description.
 - **Simplification, efficiency, reuse, or uncertain finding** — fix it or
   tell the user why not. It doesn't block.
-- **A finding you disagree with** — show it to the user with the evidence.
+- **A finding you disagree with** — show it to the user with the evidence
+  and wait for their decision before continuing.
 
 Skip 5b only when the diff touches nothing but prose documentation that no
 tool runs and no agent follows, and say so. These never qualify:
@@ -224,15 +234,19 @@ Without gitleaks, read `git log -p origin/<base>..HEAD` for keys, tokens,
 and passwords. Confirm a hit by inspection, never by trying it against a
 service. For a real credential, a commit that deletes it is not enough:
 with the user's OK, rewrite the unpushed branch so no commit contains it.
-If a commit holding it was already pushed, the credential is leaked; tell
-the user it needs rotating.
+This is a hard stop: don't continue to Step 6 while any unpushed commit
+still contains the credential, whether the user declines the rewrite or
+hasn't answered. If a commit holding it was already pushed, the credential
+is leaked; tell the user it needs rotating before anything else.
 
-### 5d — Show the user what changed
+### 5d — Get approval to publish
 
-If 5a–5c changed anything, show the user before Step 6: the new commits
-(`git show`), the final title and body, and which changes landed after the
-last review run. Label those as not independently reviewed; don't present
-them as reviewed. The user confirmed a body in Step 4, not code or claims
+If 5a–5c changed anything, or left a finding the user hasn't decided on,
+show the user before Step 6: the new commits (`git show`), the final title
+and body, any open findings, and which changes landed after the last
+review run. Label those as not independently reviewed; don't present them
+as reviewed. Then wait for explicit approval. Showing the changes is not
+consent, and the user confirmed a body in Step 4, not code or claims
 changed after it. Don't paste findings tables into the PR body.
 
 ## Step 6 — Push and create the PR

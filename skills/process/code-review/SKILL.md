@@ -81,9 +81,13 @@ was actually in scope.
 
 The goal-alignment dimension needs something to align against. Goals
 passed in with the request are the complete list; don't add to them. Only
-when none are passed, collect them from the PR body (`gh pr view <number>
---json body`) and the issues it links or closes, and fall back to commit
-messages on the branch only if those state no goal. Fetch issues with an explicit repo (`gh issue
+when none are passed, collect them from the PR body and the issues it
+links or closes: `gh pr view <number> --json body` for a PR target, `gh pr
+view <branch> --json body` for a branch that has an open PR. A path or
+working-tree target, or a branch with no PR, has no PR body; ask the user
+for the goals if they're available to ask, and otherwise fall back to
+commit messages on the branch. Use commit messages only if nothing else
+states a goal. Fetch issues with an explicit repo (`gh issue
 view <n> --repo <owner>/<repo>`): a PR often closes an issue in another
 repo, such as `mitodl/hq#123`, and a bare `#123` resolves against the
 current repo. Tag goals taken from commit messages as such, since they
@@ -182,9 +186,10 @@ the way already stops it. A sink with no reachable untrusted source is not
 a finding. The exception is an exposure the diff creates by itself, with
 no attacker input involved: a committed credential, or a secret written to
 a log, error, or trace. Verify those by confirming the value is a real
-credential by inspection, never by using it against a service (not a placeholder, test fixture, or public identifier such as a
-client-side Sentry DSN) and that it lands in the committed file or
-reachable sink. For infrastructure, check what the resource actually exposes
+credential (not a placeholder, test fixture, or public identifier such as
+a client-side Sentry DSN) and that it lands in the committed file or
+reachable sink. Confirm by inspection, never by using the value against a
+service. For infrastructure, check what the resource actually exposes
 (which CIDR, which principal, which action), not what the attribute name
 suggests.
 
@@ -205,7 +210,9 @@ that produce a wrong output or crash. A row that can't state one is a
 suspicion, not a finding, and gets dropped in the verification pass above.
 For goal alignment, it is the goal number and the case where the diff
 doesn't meet it. For security, it is the attacker, what they send, the
-route it takes, and what they get. For simplification/efficiency/reuse
+route it takes, and what they get; for an exposure with no attacker input
+(a committed credential, a secret written to a log), it is what is exposed,
+where it lands, and who can read it there. For simplification/efficiency/reuse
 findings, `Failure scenario` becomes "what it costs" (the maintenance
 burden, the extra query, the duplicated logic's drift risk) rather than a
 crash.
