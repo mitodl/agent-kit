@@ -165,7 +165,12 @@ Then act on the report:
   uncertain** — fix it, or tell the user why not. It doesn't block the PR.
 - **A finding you disagree with** — show it to the user with the evidence
   instead of dropping it silently.
-- **A committed credential** — a fix commit that deletes it is not enough,
+- **A committed credential** — the review sees only the branch's net
+  change, so a secret added and deleted within the branch never shows up
+  in it. Before Step 7, scan every commit's content as well: `gitleaks git
+  --log-opts="origin/<base>..HEAD"` (exit 1 means leaks), or, without
+  gitleaks, read `git log -p origin/<base>..HEAD` for keys, tokens, and
+  passwords. A fix commit that deletes a credential is not enough,
   because the review diffs the branch's net change and the push still
   carries the commit that added it. With the user's OK, rewrite the
   unpushed branch so no commit contains the secret. If any commit holding
@@ -196,13 +201,14 @@ never qualify:
 
 ## Step 6 — Audit factual claims
 
-Before creating the PR, re-read the drafted body and the messages of every
+Before creating the PR, re-read the drafted body, the messages of every
 commit on the branch (`git log origin/<base>..HEAD`, including fix commits
-from Step 5) for factual or behavioral claims — anything an "evidence"
+from Step 5), and the comments, docstrings, and Markdown the diff adds for
+factual or behavioral claims — anything an "evidence"
 question would apply to: "prod never showed this", "this fixes the leak",
 "the library defaults to X", "this improved latency", "no behavior
 change", a specific number or timestamp. A change with no such claim
-anywhere in the body or commit messages has nothing to audit — skip this step rather than
+anywhere in the body, commit messages, or added text has nothing to audit — skip this step rather than
 padding the body with an audit table it doesn't need.
 
 When there are claims to check, verify each one against its strongest
@@ -214,6 +220,7 @@ available evidence rather than memory or "it should be fine":
 | Library/framework default behavior | The actual library source or its docs — not memory |
 | Infra/config state ("this is deployed", "the value is X in prod") | The deployed state, not the manifest — see the `deploy-verification` skill if the claim is about a live rollout |
 | "This fixes bug X" | A test that failed before the fix and passes after, if one exists or is cheap to add |
+| Tool or API behavior stated in added comments, docstrings, or skill text ("`gh pr create` pushes the branch") | The tool's source, `--help`, or docs, the same as a library default |
 | "Tested" / "adds a test for X" | Read the test: it must exercise the case the body names, not a neighboring branch. Run it |
 
 Mark each claim VERIFIED, UNVERIFIABLE, or CONTRADICTED. Rewrite the body,

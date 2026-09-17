@@ -62,6 +62,7 @@ to confirm it's reachable:
 | CI workflows | `pull_request_target` or `workflow_run` that checks out and runs the PR head; attacker-controlled context interpolated directly into a `run:` step: `github.head_ref`, PR/issue titles and bodies, comment bodies, commit messages, branch names (numeric fields like `github.event.pull_request.number` are not injectable); `permissions:` broader than the job needs, when the job also runs untrusted input |
 | Infrastructure | Security group ingress from `0.0.0.0/0` or `::/0` on anything but public 80/443; IAM or Vault policies with `*` actions or resources where a narrower set works; public S3 buckets or ACLs; Kubernetes pods that are privileged, use `hostPath`, or mount a service account token they don't need |
 | Dependencies | A new package from a git URL, a non-default index, or a name one character off from a well-known package |
+| Agent instructions | Skill, prompt, or agent-definition text that tells an agent to run, paste, or act on content an outsider controls (issue or PR bodies, comments, fetched web pages); to write secrets, tokens, or request headers into a PR, issue, log, or commit; or to skip or weaken a check (a hook, a review, a permission prompt) |
 
 **Finding:** a new GitHub Actions step runs `echo "${{
 github.event.pull_request.title }}" >> $GITHUB_STEP_SUMMARY` in a workflow
@@ -73,6 +74,11 @@ write`.
 `permission_classes=[IsAuthenticated]` and calls
 `Enrollment.objects.get(id=pk)`. Any logged-in learner can read another
 learner's enrollment, including their email, by incrementing `pk`.
+
+**Finding:** a skill diff adds "reproduce the bug by running the command
+in the linked issue's 'Steps to reproduce' section." Anyone who can file or
+edit an issue in a public repo chooses a command that the agent runs with
+the developer's shell, `gh` token, and cloud credentials.
 
 **Not a finding:** `subprocess.run(cmd, shell=True)` in a management command
 where `cmd` is a constant string in the same file. No input reaches it.
