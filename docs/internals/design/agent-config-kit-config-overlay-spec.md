@@ -71,6 +71,7 @@ it onto the resolved manifest the same way an `include` ref would be.
 | I5 | Apply-output visibility | `agent-kit apply` must print which overlay(s) fired, e.g. `+ 2 inline entries from config.toml (global)`, mirroring the existing `resolved manifest from org 'mitodl'` legibility line (spec `agent-config-kit-profiles-composition-spec.md` §7.2). |
 | I6 | `config init --wizard` support | Deferred to a follow-up. Overlay entries are hand-edited TOML in v1, same as manifest content itself isn't wizard-scaffolded today. |
 | I7 | Applies with an explicit `MANIFEST` arg? | **Open.** Does the overlay still merge in when `agent-kit apply some/other.toml` is run directly (O2 step 1, not zero-arg)? Leaning yes — the "always-on personal tools" motivation doesn't stop mattering just because a manifest was named explicitly — but this is the second highest-risk-of-surprise decision here, since it means `config.toml` can silently affect a fully-explicit invocation. |
+| I8 | Relative-path resolution inside an overlay | **Decided:** relative to `config.toml`'s own directory, never to whichever manifest happened to resolve. The existing loader resolves a manifest's own `skill_md_path`/`entry_path` relative to *that manifest's* directory (`manifest.py:95-118`, `manifest_dir = path.parent`) — an overlay entry has no such natural anchor, since the manifest it merges onto varies by which O2 branch fired (a local repo path, or a fetched `git+`/`https://` cache dir under `~/.cache/agent-config-kit/manifests/<hash>/`). Anchoring to the *resolved manifest's* directory instead would make the same overlay entry in the same `config.toml` resolve to a different file — or silently fail — depending on which org/scope won this invocation, which is not something an overlay author can reasonably predict or test for. Anchoring to `config.toml`'s own directory is stable regardless of which manifest resolves, matching how the rest of `config.toml` already treats its own paths (`default_manifest`, `[[org]].manifest`, `[[scope]].manifest` all resolve — or are expected as absolute/`~`-expanded — independent of CWD or any other manifest). |
 
 ## 4. Schema
 
@@ -106,6 +107,13 @@ command = "my-local-proxy"
 `[overlay]` at the top level is the global layer (I3). `[org.overlay]` /
 `[scope.overlay]` nest inside their respective `[[org]]`/`[[scope]]` entry
 and only apply when that specific entry resolves.
+
+Per I8, a relative `skill_md_path`/`entry_path` inside any `[overlay]`
+table (global, org, or scope) resolves against `config.toml`'s own
+directory — never against whatever manifest this overlay ends up merged
+onto. The example above uses absolute/`~`-expanded paths throughout to
+sidestep the question entirely; a relative path is also valid, but always
+means "relative to `config.toml`."
 
 ## 5. Merge order (most-wins-last, extends spec §5.3)
 
@@ -161,12 +169,26 @@ pending that decision.
   `overlay: dict | None` field, populated from `config.overlay` merged with
   the matched org/scope's own `overlay` (I3), following the exact pattern
   `profiles`/`write_scope` already use on that dataclass.
-- `cli.py` `apply_command`/`validate_command`: after `load_manifest`, if the
-  resolved source carries a non-empty `overlay`, merge it into the loaded
-  manifest's raw bundle via `manifest._merge_manifest_data` before
-  `resolve_profile` runs — same call `_load_raw_manifest` makes for each
-  `include` ref (`manifest.py:356-364`) — then print the visibility line
-  from I5.
+- `manifest.py`: `load_manifest()` gains an `overlay: dict | None = None`
+  keyword parameter. **Corrected from an earlier draft of this sketch**,
+  which had the merge happening "after `load_manifest`" against a "raw
+  bundle" that doesn't exist by that point: `load_manifest()` returns a
+  validated `Manifest` dataclass (`manifest.py:88-92`), not a dict, and
+  `_merge_manifest_data` only operates on the still-raw dict
+  `_load_raw_manifest` produces (`manifest.py:204-239`) — there is nothing
+  left to merge into once validation has already run. The merge has to
+  happen *inside* `load_manifest`, between `_load_raw_manifest()` resolving
+  the `include` chain and `ManifestBundle.model_validate`/`_parse_profiles`
+  consuming the result: `data = _merge_manifest_data(data, overlay, path)`
+  (overlay as the `overlay` argument, the resolved+included manifest as
+  `base`, so I4's precedence decision controls the direction) right after
+  `data = _load_raw_manifest(path, resolved_cache_dir, [])` in
+  `manifest.py:546`, before `options_data = data.pop("options", {})`.
+- `cli.py` `apply_command`/`validate_command`: build the resolved overlay
+  dict (I3's global ∪ matched org/scope) before calling `load_manifest`, and
+  pass it straight through as `load_manifest(manifest_path,
+  cache_dir=cache_dir, overlay=resolved_overlay)`. Print the I5 visibility
+  line once that call returns.
 
 # Part B — staleness detection for skills/plugin hooks
 
