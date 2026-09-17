@@ -157,17 +157,27 @@ Then act on the report:
   commit, and re-run the review once on the new diff. A goal-alignment
   finding whose goal came from issue text rather than the user's own words
   is the exception: confirm the requirement with the user before
-  implementing it, since anyone who can edit the issue wrote that goal. If findings still
-  come back from that second run, stop and show them to the user rather
-  than looping. If a goal is deliberately out of scope, say so in the PR
+  implementing it, since anyone who can edit the issue wrote that goal. If
+  findings still come back from that second run, stop and show them to
+  the user rather than looping. If a goal is deliberately out of scope, say so in the PR
   description instead of leaving it for the reviewer to discover.
 - **Simplification, efficiency, or reuse finding, or any row labeled
   uncertain** — fix it, or tell the user why not. It doesn't block the PR.
 - **A finding you disagree with** — show it to the user with the evidence
   instead of dropping it silently.
+- **A committed credential** — a fix commit that deletes it is not enough,
+  because the review diffs the branch's net change and the push still
+  carries the commit that added it. With the user's OK, rewrite the
+  unpushed branch so no commit contains the secret. If any commit holding
+  it was already pushed, treat the credential as leaked: tell the user it
+  needs rotating, and don't treat the history rewrite as a fix.
 
 If fixes changed the code, show the user the fix commits (`git show`)
-along with the updated description and testing notes before Step 7. The
+along with the updated description and testing notes before Step 7. Code
+changed after the last review run, including fixes for non-blocking
+findings or for findings the user asked to fix, has had no independent
+review; say so explicitly when showing it rather than presenting it as
+reviewed. The
 user confirmed a body in Step 4, not code written after it. Don't paste
 the findings table into the PR body.
 
@@ -188,11 +198,11 @@ never qualify:
 
 Before creating the PR, re-read the drafted body and the messages of every
 commit on the branch (`git log origin/<base>..HEAD`, including fix commits
-from Step 5) for factual or behavioral claims — anything an "evidence" question would apply to: "prod never showed
-this", "this fixes the leak", "the library defaults to X", "this improved
-latency", a specific number or timestamp. A change that's purely mechanical
-(a rename, a dependency bump with no behavioral claim, a two-line
-self-evident diff) has nothing to audit — skip this step rather than
+from Step 5) for factual or behavioral claims — anything an "evidence"
+question would apply to: "prod never showed this", "this fixes the leak",
+"the library defaults to X", "this improved latency", "no behavior
+change", a specific number or timestamp. A change with no such claim
+anywhere in the body or commit messages has nothing to audit — skip this step rather than
 padding the body with an audit table it doesn't need.
 
 When there are claims to check, verify each one against its strongest
@@ -208,8 +218,10 @@ available evidence rather than memory or "it should be fine":
 
 Mark each claim VERIFIED, UNVERIFIABLE, or CONTRADICTED. Rewrite the body,
 and reword unpushed commit messages (with the user's OK, since that
-rewrites history), before moving on: drop UNVERIFIABLE claims rather than shipping them
-hedged, and correct — don't soften — anything CONTRADICTED. A claim that
+rewrites history), before moving on: drop UNVERIFIABLE claims rather than
+shipping them hedged, and correct — don't soften — anything CONTRADICTED.
+For a claim in a commit that's already pushed, correct it in the PR body
+and don't force-push unless the user asks. A claim that
 can't be checked before the PR opens doesn't get to ship as fact and get
 walked back after a reviewer catches it.
 
@@ -218,7 +230,7 @@ walked back after a reviewer catches it.
 Push the branch only now, after Steps 5 and 6. A branch pushed earlier puts
 unreviewed code and unaudited commit messages in public before the checks
 run. If it was already pushed, run Steps 5 and 6 anyway and push the
-corrections.
+corrections as new commits.
 
 ```bash
 gh pr create \
