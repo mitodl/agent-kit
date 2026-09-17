@@ -1,0 +1,47 @@
+{
+	"skill_name": "extract-style-profile",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "I want a longitudinal analysis of my own coding and communication style from my GitHub history (login octocat), focusing on work before 2025 so AI tools don't skew it. I want to use the result to write my CLAUDE.md.",
+			"expected_output": "A person-mode run: subject.json with the login and discovered git identities, eras chosen from activity data, an ai_cutoff confirmed from the AI-marker timeline, corpora, per-dimension findings with dated evidence, a spot-check, and a REPORT.md with a stable core, drift table, observed-but-don't-encode table, and a paste-ready instruction block.",
+			"files": [],
+			"expectations": [
+				"subject.json uses mode person and includes author_patterns taken from activity/identities.md rather than guessed",
+				"The AI cutoff is chosen after reading stats/ai_markers.md, and the user is asked to confirm it",
+				"Rules in the paste-ready section come only from baseline-era evidence",
+				"Each findings file cites dated quotes or commits and gives counts or percentages",
+				"At least one claim per findings file is spot-checked against the source before the report is written",
+				"The user's CLAUDE.md is not edited; the report is handed over instead",
+				"Clones are removed with the cleanup command, leaving linked local checkouts intact"
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "Can you figure out what code review and PR conventions our platform team actually follows? Members are alice, bob, and carol in the acme org. I'd like something we can turn into team AGENTS.md guidance.",
+			"expected_output": "A team-mode run whose output reports conventions with agreement levels and enforced-vs-emergent labels, includes a conventions-enforcement pass, and avoids per-person rankings or quotes that single out individuals.",
+			"files": [],
+			"expectations": [
+				"subject.json uses mode team with one members entry per login and orgs set to acme",
+				"The skill confirms the team is aware of the analysis before collecting data",
+				"The dimension list includes reviews, pull-requests, and conventions-enforcement",
+				"Findings express conventions as agreement levels (for example N of M members) rather than per-person scores",
+				"Rules are labelled enforced (tooling, templates, CI) or emergent",
+				"The report has no per-person tables or rankings"
+			]
+		},
+		{
+			"id": 3,
+			"prompt": "Derive a style guide for the acme/payments repo from its history over the last three years so our coding agents match the existing code.",
+			"expected_output": "A repo-mode run scoped to acme/payments that skips discovery, fetches PRs with nested reviews and comments, samples diffs by language, and produces code-language and infra-tooling findings plus a paste-ready AGENTS.md block.",
+			"files": [],
+			"expectations": [
+				"subject.json uses mode repo with repos set and no members",
+				"discover.py is skipped or reports that repo mode needs no discovery",
+				"A code-<language> dimension is run for each language with enough diff samples in corpus/INDEX.md",
+				"Formatter or codemod commits are attributed to tool adoption, not to a change in style",
+				"The paste-ready block is scoped to the repository, not to a person"
+			]
+		}
+	]
+}
