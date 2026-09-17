@@ -139,7 +139,29 @@ def test_apply_diff_flag_prints_unified_diff_of_changed_mcp_server(
     assert "witan" in out
 
 
-def test_apply_without_diff_flag_omits_diff_output(tmp_path, monkeypatch, capsys):
+def test_apply_defaults_to_showing_diff(tmp_path, monkeypatch, capsys):
+    from agent_config_kit.cli import app
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = _write_manifest(
+        tmp_path,
+        """
+        [mcp_servers.witan]
+        kind = "stdio"
+        command = "uvx"
+        args = ["witan", "serve"]
+        """,
+    )
+
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude"])
+
+    out = capsys.readouterr().out
+    assert "--- before" in out
+    assert "+++ after" in out
+    assert "witan" in out
+
+
+def test_apply_no_diff_flag_omits_diff_output(tmp_path, monkeypatch, capsys):
     from agent_config_kit.cli import app
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -152,7 +174,7 @@ def test_apply_without_diff_flag_omits_diff_output(tmp_path, monkeypatch, capsys
         """,
     )
 
-    _run_ok(app, ["apply", str(manifest), "--platform", "claude"])
+    _run_ok(app, ["apply", str(manifest), "--platform", "claude", "--no-diff"])
 
     assert "--- before" not in capsys.readouterr().out
 

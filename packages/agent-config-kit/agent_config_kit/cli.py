@@ -583,7 +583,7 @@ def apply_command(
     platform: list[str] | None = None,
     profile: list[str] | None = None,
     dry_run: bool = False,
-    diff: bool = False,
+    diff: bool = True,
     prune: bool = False,
     force: bool = False,
     state_file: Path | None = None,
@@ -620,11 +620,11 @@ def apply_command(
     dry_run
         Report what would be written/removed without writing anything.
     diff
-        Also print a unified diff of each JSON target's before/after content
-        (MCP server and declarative-hook merges only — a skill/plugin-file
-        copy has no in-place diff to show). Works the same under
-        ``--dry-run``, since the diff is computed from the merge itself, not
-        from the write.
+        Print a unified diff of each JSON target's before/after content (MCP
+        server and declarative-hook merges only — a skill/plugin-file copy
+        has no in-place diff to show). On by default; pass ``--no-diff`` to
+        suppress it. Works the same under ``--dry-run``, since the diff is
+        computed from the merge itself, not from the write.
     prune
         Also remove entries that a previous ``apply --prune`` of this
         manifest wrote but that are no longer present in it. Opt-in only —
