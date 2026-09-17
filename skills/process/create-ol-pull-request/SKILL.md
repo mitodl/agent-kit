@@ -140,8 +140,9 @@ platforms with subagents, start a fresh one with no inherited context (in
 Claude Code, the `Agent` tool with a non-fork agent type; a `fork`
 inherits the whole conversation and defeats the point). Give it only the
 repo path, the branch, the base branch, and the numbered goals, and tell
-it not to edit files; use a read-only agent type where the platform has
-one. Don't pass
+it not to edit files. Use a general-purpose agent, not a search or
+planning type (Claude Code's `Explore` reads excerpts to locate code and
+is not built to trace a finding end to end). Don't pass
 the implementation reasoning, the drafted PR body, or a summary of what
 the diff "does." Tell it to review adversarially: for each goal, look for
 the case where the diff fails it, and for each new input path, look for
@@ -170,8 +171,9 @@ along with the updated description and testing notes before Step 7. The
 user confirmed a body in Step 4, not code written after it. Don't paste
 the findings table into the PR body.
 
-Only a diff with no behavior change and no dependency change (a rename, a
-comment or docs typo) skips this step; say so when skipping. Dependency
+Only a diff that touches nothing but comments or documentation skips this
+step; say so when skipping. A rename does not qualify: renaming a setting,
+env var, config key, or public identifier can change behavior silently. Dependency
 bumps, including lockfile-only ones, always get reviewed, since a new
 transitive package or source is exactly what the security dimension
 checks.
