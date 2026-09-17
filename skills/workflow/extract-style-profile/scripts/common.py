@@ -5,6 +5,8 @@ import re
 import subprocess
 import sys
 import time
+from datetime import date
+from itertools import pairwise
 from pathlib import Path
 
 BOT_AUTHOR = re.compile(
@@ -31,13 +33,53 @@ def load_subject(workdir: Path) -> dict:
     subject.setdefault("full_clone_min_commits", 20)
     if subject["mode"] not in {"person", "team", "repo"}:
         raise ValueError(f"mode must be person, team or repo, not {subject['mode']!r}")
+    if subject["mode"] == "repo" and not subject["repos"]:
+        raise ValueError("repo mode needs at least one owner/name in repos")
     if subject["mode"] != "repo" and not subject["members"]:
         raise ValueError("person and team modes need at least one entry in members")
-    if not subject.get("eras"):
+    for member in subject["members"]:
+        # An empty pattern matches every author and would pull coworkers' commits
+        # into a personal profile.
+        if not [p for p in member.get("author_patterns", []) if p.strip()]:
+            raise ValueError(
+                f"member {member.get('login')!r} needs at least one non-empty author_pattern"
+            )
+    _validate_eras(subject)
+    return subject
+
+
+def _validate_eras(subject: dict) -> None:
+    """Eras must tile since..until exactly, with ai_cutoff on a boundary.
+
+    A gap makes era_of return None, and build_corpora drops those records silently.
+    """
+    for key in ("since", "until", "ai_cutoff"):
+        date.fromisoformat(subject[key])
+    eras = sorted(subject.get("eras") or [], key=lambda era: era["start"])
+    if not eras:
         raise ValueError(
             "define eras in subject.json (see references/subject-schema.md)"
         )
-    return subject
+    if eras[0]["start"] != subject["since"] or eras[-1]["end"] != subject["until"]:
+        raise ValueError(
+            f"eras must start at since ({subject['since']}) and end at until ({subject['until']}), "
+            f"got {eras[0]['start']}..{eras[-1]['end']}"
+        )
+    for previous, current in pairwise(eras):
+        if previous["end"] != current["start"]:
+            raise ValueError(
+                f"eras {previous['name']} and {current['name']} leave a gap or overlap "
+                f"({previous['end']} vs {current['start']})"
+            )
+    for era in eras:
+        if not era["start"] < era["end"]:
+            raise ValueError(f"era {era['name']} is empty or reversed")
+    boundaries = {era["start"] for era in eras} | {subject["until"]}
+    if subject["ai_cutoff"] not in boundaries:
+        raise ValueError(
+            f"ai_cutoff {subject['ai_cutoff']} must fall on an era boundary: {sorted(boundaries)}"
+        )
+    subject["eras"] = eras
 
 
 def era_of(subject: dict, iso_date: str) -> str | None:

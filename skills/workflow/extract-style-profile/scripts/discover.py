@@ -76,10 +76,17 @@ def discover(workdir: Path) -> None:
     for member in subject["members"]:
         login = member["login"]
         for year in range(start_year, end_year + 1):
+            # Clamp to since/until so a partial first or last year doesn't pull
+            # out-of-range repos into the clone set.
+            window_start = max(f"{year}-01-01", subject["since"])
+            window_end = min(f"{year + 1}-01-01", subject["until"])
             data = graphql(
                 CONTRIBUTIONS,
                 login=login,
-                **{"from": f"{year}-01-01T00:00:00Z", "to": f"{year}-12-31T23:59:59Z"},
+                **{
+                    "from": f"{window_start}T00:00:00Z",
+                    "to": f"{window_end}T00:00:00Z",
+                },
             )
             coll = data["user"]["contributionsCollection"]
             (out / f"contrib_{login}_{year}.json").write_text(json.dumps(coll))

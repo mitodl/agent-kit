@@ -153,15 +153,11 @@ def stats(workdir: Path) -> None:
             months[row["date"][:7]]["commit trailers/authors"] += 1
         if re.match(r"^[a-z]+\([^)]+\): [a-z]", row["msg"]):
             months[row["date"][:7]]["scoped lowercase commits"] += 1
-    for name in (
-        "prs",
-        "issues",
-        "comments",
-        "reviews",
-        "discussions",
-        "discussion_comments",
-    ):
-        for row in read_jsonl(data / f"{name}.jsonl"):
+    for path in sorted(data.glob("*.jsonl")):
+        name = path.stem
+        if name == "commits":
+            continue
+        for row in read_jsonl(path):
             months[row["createdAt"][:7]]["items"] += 1
             inline = [c.get("body") or "" for c in row.get("comments") or []]
             text = "\n".join([row.get("title") or "", row.get("body") or "", *inline])

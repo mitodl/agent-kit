@@ -4,14 +4,15 @@
 # ///
 """Fetch PRs, issues, comments, reviews and discussions into data/*.jsonl.
 
-Every kind writes its own file atomically at the end, so running several kinds in
-separate processes is safe. Running the *same* kind twice at once is not: two
-writers on one file corrupted the PR dump in the original run.
+Each kind writes its own files atomically, so running different kinds in separate
+processes is safe. Running the *same* kind twice at once is not: two writers on
+one file corrupted the PR dump in the original run. In repo mode, `prs`,
+`reviews` and `comments` all run the PR query, so they count as the same kind.
 """
 
 import re
 import sys
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -26,18 +27,30 @@ SEARCH = """
 query($q:String!,$c:String,$n:Int!){search(query:$q,type:ISSUE,first:$n,after:$c){
   issueCount pageInfo{hasNextPage endCursor}
   nodes{__typename
-    ... on PullRequest{url title body createdAt additions deletions changedFiles merged
+    ... on PullRequest{id url title body createdAt additions deletions changedFiles merged
       author{login} repository{nameWithOwner} commits{totalCount} %(pr_extra)s}
-    ... on Issue{url title body createdAt author{login} repository{nameWithOwner} %(issue_extra)s}}}}
+    ... on Issue{id url title body createdAt author{login} repository{nameWithOwner} %(issue_extra)s}}}}
 """
-REPO_PR_EXTRA = """
-  reviews(first:30){nodes{author{login} body state createdAt url comments(first:30){nodes{body path diffHunk}}}}
-  comments(first:50){nodes{author{login} body createdAt url}}"""
-REPO_ISSUE_EXTRA = "comments(first:50){nodes{author{login} body createdAt url}}"
+PAGE_INFO = "pageInfo{hasNextPage endCursor}"
+INLINE_COMMENT_FIELDS = "body path diffHunk"
+COMMENT_FIELDS = "author{login} body createdAt url"
+REVIEW_FIELDS = (
+    "id author{login} body state createdAt url "
+    f"comments(first:30){{{PAGE_INFO} nodes{{{INLINE_COMMENT_FIELDS}}}}}"
+)
+REPO_PR_EXTRA = (
+    f"reviews(first:30){{{PAGE_INFO} nodes{{{REVIEW_FIELDS}}}}} "
+    f"comments(first:50){{{PAGE_INFO} nodes{{{COMMENT_FIELDS}}}}}"
+)
+REPO_ISSUE_EXTRA = f"comments(first:50){{{PAGE_INFO} nodes{{{COMMENT_FIELDS}}}}}"
+# Continues a nested connection past its first page, from the parent's node id.
+NODE_CONNECTION = """
+query($id:ID!,$c:String){node(id:$id){... on %(type)s{
+  %(field)s(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{%(fields)s}}}}}
+"""
 
 USER_COMMENTS = """
 query($login:String!,$c:String){user(login:$login){issueComments(first:100,after:$c,orderBy:{field:UPDATED_AT,direction:DESC}){
-
   pageInfo{hasNextPage endCursor}
   nodes{url body createdAt updatedAt repository{nameWithOwner}
     issue{title author{login}} pullRequest{title author{login}}}}}}
@@ -46,12 +59,12 @@ USER_REVIEWS = """
 query($login:String!,$from:DateTime!,$to:DateTime!,$c:String){user(login:$login){
   contributionsCollection(from:$from,to:$to){pullRequestReviewContributions(first:100,after:$c){
     pageInfo{hasNextPage endCursor}
-    nodes{pullRequestReview{url body state createdAt repository{nameWithOwner}
-      pullRequest{title author{login}} comments(first:50){nodes{body path diffHunk}}}}}}}}
+    nodes{pullRequestReview{id url body state createdAt repository{nameWithOwner}
+      pullRequest{title author{login}}
+      comments(first:50){pageInfo{hasNextPage endCursor} nodes{body path diffHunk}}}}}}}}
 """
 USER_DISCUSSIONS = """
 query($login:String!,$c:String){user(login:$login){repositoryDiscussions(first:100,after:$c,orderBy:{field:CREATED_AT,direction:DESC}){
-
   pageInfo{hasNextPage endCursor}
   nodes{url title body createdAt repository{nameWithOwner} category{name}}}}}
 """
@@ -67,8 +80,8 @@ DISCUSSION_URL = re.compile(r"github\.com/([^/]+)/([^/]+)/discussions/(\d+)")
 REPO_DISCUSSIONS = """
 query($owner:String!,$name:String!,$c:String){repository(owner:$owner,name:$name){discussions(first:50,after:$c){
   pageInfo{hasNextPage endCursor}
-  nodes{url title body createdAt author{login} category{name}
-    comments(first:50){nodes{url body createdAt author{login}}}}}}}
+  nodes{id url title body createdAt author{login} category{name}
+    comments(first:50){pageInfo{hasNextPage endCursor} nodes{url body createdAt author{login}}}}}}}
 """
 
 
@@ -76,9 +89,9 @@ def _login(node: dict | None) -> str | None:
     return (node or {}).get("login")
 
 
-def _paginate(query: str, path: list[str], stop=None, **variables):
+def _paginate(query: str, path: list[str], stop=None, after=None, **variables):
     """Yield nodes page by page. `stop(node)` ends pagination early on date-ordered connections."""
-    cursor, pages, label = None, 0, path[-1]
+    cursor, pages, label = after, 0, path[-1]
     while True:
         data = graphql(query, c=cursor, **variables)
         for key in path:
@@ -94,8 +107,55 @@ def _paginate(query: str, path: list[str], stop=None, **variables):
         cursor = data["pageInfo"]["endCursor"]
 
 
-def _search(qualifiers: str, since: str, until: str, extras: dict, page: int = 100):
-    """Search one created-date range, bisecting until each slice is under GitHub's 1,000 result cap."""
+def _all_nodes(parent: dict, type_name: str, field: str, fields: str) -> list[dict]:
+    """Every node of a nested connection, fetching pages beyond the first one inline.
+
+    Nested connections are capped (first:30/50) to keep the parent query cheap;
+    without this, a busy PR's later reviews and comments silently vanish.
+    """
+    connection = parent[field]
+    nodes = list(connection["nodes"])
+    if connection["pageInfo"]["hasNextPage"]:
+        nodes += _paginate(
+            NODE_CONNECTION % {"type": type_name, "field": field, "fields": fields},
+            ["node", field],
+            after=connection["pageInfo"]["endCursor"],
+            id=parent["id"],
+        )
+    return nodes
+
+
+def _review_row(
+    review: dict,
+    repo: str,
+    pr_title: str,
+    pr_author: str | None,
+    login: str | None = None,
+) -> dict:
+    return {
+        "login": login or _login(review.get("author")),
+        "repo": repo,
+        "url": review["url"],
+        "createdAt": review["createdAt"],
+        "state": review["state"],
+        "body": review["body"],
+        "pr_title": pr_title,
+        "pr_author": pr_author,
+        "comments": _all_nodes(
+            review, "PullRequestReview", "comments", INLINE_COMMENT_FIELDS
+        ),
+    }
+
+
+def _search(
+    qualifiers: str,
+    since: str,
+    until: str,
+    extras: dict,
+    page: int = 100,
+    field: str = "created",
+):
+    """Search one date range on `field`, bisecting until each slice is under GitHub's 1,000 result cap."""
     query = SEARCH % extras
     start, end = (
         date.fromisoformat(since),
@@ -103,18 +163,18 @@ def _search(qualifiers: str, since: str, until: str, extras: dict, page: int = 1
     )
     if start > end:
         return
-    probe = graphql(query, q=f"{qualifiers} created:{start}..{end}", n=1)
+    probe = graphql(query, q=f"{qualifiers} {field}:{start}..{end}", n=1)
     if probe["search"]["issueCount"] > 1000 and start < end:
         mid = start + (end - start) / 2
         yield from _search(
-            qualifiers, str(start), str(mid + timedelta(days=1)), extras, page
+            qualifiers, str(start), str(mid + timedelta(days=1)), extras, page, field
         )
         yield from _search(
-            qualifiers, str(mid + timedelta(days=1)), until, extras, page
+            qualifiers, str(mid + timedelta(days=1)), until, extras, page, field
         )
         return
     yield from _paginate(
-        query, ["search"], q=f"{qualifiers} created:{start}..{end}", n=page
+        query, ["search"], q=f"{qualifiers} {field}:{start}..{end}", n=page
     )
 
 
@@ -214,17 +274,13 @@ def _fetch_person(subject: dict, kind: str) -> dict[str, list[dict]]:
                     ):
                         r = n["pullRequestReview"]
                         out.setdefault("reviews", []).append(
-                            {
-                                "login": login,
-                                "repo": r["repository"]["nameWithOwner"],
-                                "url": r["url"],
-                                "createdAt": r["createdAt"],
-                                "state": r["state"],
-                                "body": r["body"],
-                                "pr_title": r["pullRequest"]["title"],
-                                "pr_author": _login(r["pullRequest"]["author"]),
-                                "comments": r["comments"]["nodes"],
-                            }
+                            _review_row(
+                                r,
+                                r["repository"]["nameWithOwner"],
+                                r["pullRequest"]["title"],
+                                _login(r["pullRequest"]["author"]),
+                                login=login,
+                            )
                         )
                 year += 1
         elif kind == "discussions":
@@ -282,71 +338,67 @@ def _fetch_person(subject: dict, kind: str) -> dict[str, list[dict]]:
     return out
 
 
+def _comment_row(c: dict, repo: str, kind: str, title: str, author: str | None) -> dict:
+    return {
+        "login": _login(c["author"]),
+        "repo": repo,
+        "url": c["url"],
+        "createdAt": c["createdAt"],
+        "body": c["body"],
+        "parent_kind": kind,
+        "parent_title": title,
+        "parent_author": author,
+    }
+
+
 def _fetch_repo(subject: dict, kind: str) -> dict[str, list[dict]]:
-    """Repo mode: everyone's activity in the listed repos, with reviews/comments nested under their parent."""
+    """Repo mode: everyone's activity in the listed repos, with reviews/comments nested under their parent.
+
+    Parents are searched by `updated` from `since` onward, not by `created` in the
+    interval: a review or comment written in the interval on an older PR or issue
+    bumps its parent's updatedAt, so this finds it. `_in_scope` then keeps each
+    row by its own createdAt. PR and issue comments go to separate files so the
+    `prs` and `issues` kinds can run in parallel without overwriting each other.
+    """
     out: dict[str, list[dict]] = {}
+    search_until = str(datetime.now(UTC).date() + timedelta(days=2))
     for repo in subject["repos"]:
         if kind == "prs":
             for n in _search(
                 f"repo:{repo} is:pr",
                 subject["since"],
-                subject["until"],
+                search_until,
                 {"pr_extra": REPO_PR_EXTRA, "issue_extra": ""},
                 page=25,
+                field="updated",
             ):
                 if n["__typename"] != "PullRequest":
                     continue
+                pr_author = _login(n["author"])
                 out.setdefault("prs", []).append(_pr_row(n))
-                for r in n["reviews"]["nodes"]:
+                for r in _all_nodes(n, "PullRequest", "reviews", REVIEW_FIELDS):
                     out.setdefault("reviews", []).append(
-                        {
-                            "login": _login(r["author"]),
-                            "repo": repo,
-                            "url": r["url"],
-                            "createdAt": r["createdAt"],
-                            "state": r["state"],
-                            "body": r["body"],
-                            "pr_title": n["title"],
-                            "pr_author": _login(n["author"]),
-                            "comments": r["comments"]["nodes"],
-                        }
+                        _review_row(r, repo, n["title"], pr_author)
                     )
-                for c in n["comments"]["nodes"]:
-                    out.setdefault("comments", []).append(
-                        {
-                            "login": _login(c["author"]),
-                            "repo": repo,
-                            "url": c["url"],
-                            "createdAt": c["createdAt"],
-                            "body": c["body"],
-                            "parent_kind": "pr",
-                            "parent_title": n["title"],
-                            "parent_author": _login(n["author"]),
-                        }
+                for c in _all_nodes(n, "PullRequest", "comments", COMMENT_FIELDS):
+                    out.setdefault("comments_pr", []).append(
+                        _comment_row(c, repo, "pr", n["title"], pr_author)
                     )
         elif kind == "issues":
             for n in _search(
                 f"repo:{repo} is:issue",
                 subject["since"],
-                subject["until"],
+                search_until,
                 {"pr_extra": "", "issue_extra": REPO_ISSUE_EXTRA},
                 page=50,
+                field="updated",
             ):
                 if n["__typename"] != "Issue":
                     continue
                 out.setdefault("issues", []).append(_issue_row(n))
-                for c in n["comments"]["nodes"]:
-                    out.setdefault("comments", []).append(
-                        {
-                            "login": _login(c["author"]),
-                            "repo": repo,
-                            "url": c["url"],
-                            "createdAt": c["createdAt"],
-                            "body": c["body"],
-                            "parent_kind": "issue",
-                            "parent_title": n["title"],
-                            "parent_author": _login(n["author"]),
-                        }
+                for c in _all_nodes(n, "Issue", "comments", COMMENT_FIELDS):
+                    out.setdefault("comments_issue", []).append(
+                        _comment_row(c, repo, "issue", n["title"], _login(n["author"]))
                     )
         elif kind == "discussions":
             owner, name = repo.split("/")
@@ -364,7 +416,9 @@ def _fetch_repo(subject: dict, kind: str) -> dict[str, list[dict]]:
                         "category": n["category"]["name"],
                     }
                 )
-                for c in n["comments"]["nodes"]:
+                for c in _all_nodes(
+                    n, "Discussion", "comments", "url body createdAt author{login}"
+                ):
                     out.setdefault("discussion_comments", []).append(
                         {
                             "login": _login(c["author"]),
@@ -385,8 +439,10 @@ def fetch(
 ) -> None:
     """Fetch the requested kinds for every member (person/team) or repo (repo mode).
 
-    In repo mode, `prs` also yields reviews and PR comments, and `issues` also
-    yields issue comments, because they are nested in the same query.
+    In repo mode, `prs` also yields reviews and PR comments (`comments_pr.jsonl`),
+    and `issues` also yields issue comments (`comments_issue.jsonl`), because they
+    are nested in the same query. Run `prs`, `reviews` and `comments` in one
+    process there; they all resolve to the PR query.
     """
     kinds = kinds or ["prs", "issues", "comments", "reviews", "discussions"]
     subject = load_subject(workdir)

@@ -11,9 +11,9 @@ Every script reads `<workdir>/subject.json`. Write it before running anything.
 | `repos` | repo mode | `["owner/name", ...]`. In person/team mode, extra repos to include beyond discovery |
 | `exclude_repo_patterns` | no | Regexes on `owner/name`. Default `["-ghsa-"]` (private security-advisory forks duplicate their parent) |
 | `local_roots` | no | Directories to scan for existing checkouts, e.g. `["~/code"]`. Found checkouts are symlinked, never cloned or modified |
-| `since` / `until` | yes | ISO dates. `until` is exclusive. Nothing on or after `until` is collected |
+| `since` / `until` | yes | ISO dates. `until` is exclusive. Every collected record is filtered by its own creation date, so a review written in range on an older PR is kept and the older PR itself is not |
 | `ai_cutoff` | yes | ISO date. Data before it is **baseline**; data on or after it is **comparison only**. See "Choosing ai_cutoff" |
-| `eras` | yes | `[{"name": "E2_2016-2019", "start": "2016-01-01", "end": "2020-01-01"}, ...]`, contiguous, covering `since`..`until`. Put `ai_cutoff` on an era boundary |
+| `eras` | yes | `[{"name": "E2_2016-2019", "start": "2016-01-01", "end": "2020-01-01"}, ...]`, contiguous, covering `since`..`until` exactly. `ai_cutoff` must be an era boundary (or equal `until`). The scripts refuse a subject that breaks either rule |
 | `min_commits` | no | Skip repos with fewer discovered commits (default 3) |
 | `full_clone_min_commits` | no | Repos below this are cloned blobless: messages only, no diffs (default 20) |
 

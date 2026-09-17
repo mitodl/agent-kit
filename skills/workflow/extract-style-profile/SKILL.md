@@ -102,7 +102,8 @@ uv run scripts/profile_stats.py <workdir>
 
 `fetch_github.py` accepts `--kinds prs issues comments reviews discussions`. Running
 different kinds in separate background processes is safe and faster. Running the
-same kind twice at once corrupts its output file.
+same kind twice at once corrupts its output file. In repo mode, `prs`, `reviews`
+and `comments` all run the PR query, so treat them as one kind there.
 
 Then read `stats/commit_stats.md` and `stats/ai_markers.md`, and:
 

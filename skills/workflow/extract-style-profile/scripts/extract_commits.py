@@ -73,9 +73,15 @@ def extract(workdir: Path) -> None:
         ]
         if not entry["partial"]:
             cmd.append("--shortstat")
-        out = subprocess.run(
+        result = subprocess.run(
             cmd, capture_output=True, text=True, errors="replace", check=False
-        ).stdout
+        )
+        # A failed log (bad regex, broken checkout) must not read as an empty history.
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"git log failed for {entry['repo']}: {result.stderr.strip()[:500]}"
+            )
+        out = result.stdout
         for record in out.split(RECORD)[1:]:
             sha, date, name, email, committer, parents, body, tail = record.split(FIELD)
             if sha in seen:

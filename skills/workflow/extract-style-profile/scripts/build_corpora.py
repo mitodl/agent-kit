@@ -139,7 +139,11 @@ def build(
             parts[0] += " (no text)"
         add("reviews", r["createdAt"], "\n".join(parts))
 
-    for r in read_jsonl(data / "comments.jsonl"):
+    # Person/team mode writes comments.jsonl; repo mode splits comments_pr/comments_issue.
+    comment_rows = [
+        r for path in sorted(data.glob("comments*.jsonl")) for r in read_jsonl(path)
+    ]
+    for r in comment_rows:
         if _human(r["login"]) and (r["body"] or "").strip():
             add(
                 "conversation",
