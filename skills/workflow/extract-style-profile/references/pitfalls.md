@@ -16,7 +16,7 @@ need to watch for the rest.
 - **GitHub search caps at 1,000 results per query and rate-limits bursts.**
   `fetch_github.py` bisects date ranges above the cap and retries with backoff; it
   raises rather than silently returning an empty page, because a silent failure
-  once truncated four years of PRs without any error.
+  once truncated four years of PRs without any error (the cause was most likely a secondary rate limit, but that was never confirmed).
 - **Two writers on one file corrupt it.** Run different kinds in parallel processes
   if you want, never the same kind twice at once. Writes are atomic per kind.
 - **`contributionsCollection` is partial.** It lists at most 100 repos per year,
