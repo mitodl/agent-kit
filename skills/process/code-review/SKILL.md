@@ -1,16 +1,18 @@
 ---
 name: code-review
 description: >
-  Review a diff, branch, path, or PR for correctness bugs and
+  Review a diff, branch, path, or PR for correctness bugs, gaps against the
+  change's stated goals, security vulnerabilities, and
   reuse/simplification/efficiency cleanups, using a verify-before-reporting
   pass so findings are checked against the actual code rather than
   pattern-matched. Portable across agent platforms (Claude Code, pi,
   Copilot, OpenCode) — needs only `git diff` and a rubric, no MCP or witan
   dependency. Use this skill when asked to "review this diff", "review my
   branch", "code review PR #N", "review the changes", "check this for
-  bugs", or to review staged/unstaged changes before opening a PR. Report-only
-  by default; only edits code when the request explicitly says to fix the
-  findings too.
+  bugs", "security review this", "does this actually do what the ticket
+  asks", or to review staged/unstaged changes before opening a PR.
+  Report-only by default; only edits code when the request explicitly says
+  to fix the findings too.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -18,12 +20,13 @@ metadata:
 
 # Code Review
 
-Reviews a diff against four dimensions — correctness, simplification,
-efficiency, reuse — and reports findings as a severity-ordered table. Every
-finding is re-checked against the actual code before it ships, so the
-report doesn't carry a pattern-matched guess dressed up as a bug.
+Reviews a diff against six dimensions (correctness, goal alignment,
+security, simplification, efficiency, reuse) and reports findings as a
+severity-ordered table. Every finding is re-checked against the actual code
+before it ships, so the report doesn't carry a pattern-matched guess
+dressed up as a bug.
 
-See [references/dimensions.md](references/dimensions.md) for the four
+See [references/dimensions.md](references/dimensions.md) for the six
 dimensions with worked examples of a real finding vs. a non-finding. See
 [references/findings-format.md](references/findings-format.md) for the
 table schema and a full worked example.
@@ -52,7 +55,10 @@ Resolve what to review from the request, in this order:
    otherwise ask the user which branch to diff against rather than
    guessing `main` or `master`. However the default branch was found, find
    the merge base (`git merge-base <default> <branch>`), then `git diff
-   <merge-base>...<branch>`.
+   <merge-base>...<branch>`. If the request names a base branch too (a PR
+   targeting a release branch), use that instead of the default branch.
+   A request that names a base but no branch means the current branch
+   (`git branch --show-current`) against that base, not rule 1.
 3. **A path** — `git diff HEAD -- <path>` (covers staged and unstaged
    changes to the path in one call — plain `git diff -- <path>` shows only
    unstaged, so a fully-staged change at that path would otherwise look
@@ -65,6 +71,24 @@ Resolve what to review from the request, in this order:
 State which of these applied before reporting findings — "reviewing the
 diff between `main` and `feature-x`" — so the reader isn't guessing what
 was actually in scope.
+
+## Stated goals
+
+The goal-alignment dimension needs something to align against. Collect the
+change's goals from, in order: goals passed in with the request, the PR
+body (`gh pr view <number> --json body`), issues it links or closes, then
+commit messages on the branch. Fetch issues with an explicit repo (`gh issue
+view <n> --repo <owner>/<repo>`): a PR often closes an issue in another
+repo, such as `mitodl/hq#123`, and a bare `#123` resolves against the
+current repo. Tag goals taken from commit messages as such, since they
+describe what the author did rather than what was asked. Write them out as a
+numbered list at the top of the report, each tagged with where it came
+from, so the reader can see what the diff was held to.
+
+Record goals as the source states them. Don't infer extra goals from the
+diff itself, since that makes every diff trivially aligned with its own
+behavior. If no source states a goal, say "no stated goals found; goal
+alignment not reviewed" and skip that dimension rather than inventing one.
 
 ## Depth
 
@@ -88,15 +112,27 @@ The drop-if-unreproduced rule is a default-depth rule, not a universal one.
 
 ## Dimensions
 
-Four dimensions, most severe first when findings are reported:
+Six dimensions, most severe first when findings are reported:
 
 1. **Correctness** — a bug: wrong output, a crash, or a concrete input that
    fails.
-2. **Simplification** — unneeded complexity: premature abstraction, dead
+2. **Goal alignment** — the diff doesn't do what its [stated
+   goals](#stated-goals) say: a goal only partly implemented, implemented
+   for the happy path but not the case the ticket describes, or claimed as
+   tested without a test that exercises it. For each goal, look for the
+   input, environment, or config where the diff fails it. Only report a
+   gap you found and verified; changes unrelated to any goal are not a
+   finding here.
+3. **Security** — a path from input an attacker controls, or from an
+   exposure the diff creates, to a concrete impact: injection, missing
+   authorization, leaked secrets, SSRF, unsafe deserialization, a CI
+   workflow that runs untrusted input, or infrastructure opened wider than
+   the change needs.
+4. **Simplification** — unneeded complexity: premature abstraction, dead
    branches, a helper that exists for one caller.
-3. **Efficiency** — avoidable extra work: N+1 queries, redundant
+5. **Efficiency** — avoidable extra work: N+1 queries, redundant
    recomputation, an unnecessary full scan where an indexed lookup exists.
-4. **Reuse** — logic in this diff that duplicates something already in the
+6. **Reuse** — logic in this diff that duplicates something already in the
    repo, that should call the existing implementation instead.
 
 Full rubric with worked examples: [references/dimensions.md](references/dimensions.md).
@@ -127,6 +163,19 @@ For a **reuse** finding specifically, verifying means actually locating the
 existing implementation (file:line) — "this probably exists elsewhere" is
 not verified; grep for it and cite where.
 
+For a **security** finding, verifying means tracing the path end to end:
+where the attacker-controlled value enters, every hop to the sink, and
+that no validation, escaping, permission check, or network boundary along
+the way already stops it. A sink with no reachable untrusted source is not
+a finding. For infrastructure, check what the resource actually exposes
+(which CIDR, which principal, which action), not what the attribute name
+suggests.
+
+For a **goal-alignment** finding, verifying means naming the goal by its
+number and the specific case the diff fails, then confirming that case
+isn't handled elsewhere: an unchanged file, config, or a follow-up commit
+on the branch.
+
 ## Findings format
 
 Flat, severity-ordered markdown table:
@@ -137,16 +186,19 @@ Flat, severity-ordered markdown table:
 `Failure scenario` is mandatory and concrete — concrete inputs or state
 that produce a wrong output or crash. A row that can't state one is a
 suspicion, not a finding, and gets dropped in the verification pass above.
-For simplification/efficiency/reuse findings, `Failure scenario` becomes
-"what it costs" (the maintenance burden, the extra query, the duplicated
-logic's drift risk) rather than a crash.
+For goal alignment, it is the goal number and the case where the diff
+doesn't meet it. For security, it is the attacker, what they send, the
+route it takes, and what they get. For simplification/efficiency/reuse
+findings, `Failure scenario` becomes "what it costs" (the maintenance
+burden, the extra query, the duplicated logic's drift risk) rather than a
+crash.
 
 No inline fixes in the table — those belong to fix mode only, below, so a
 plain review never mutates anything by accident. Full schema and a worked
 example: [references/findings-format.md](references/findings-format.md).
 
 If nothing survives the verification pass, say so plainly ("no
-high-confidence findings across the four dimensions") rather than padding
+high-confidence findings across the six dimensions") rather than padding
 the report with low-confidence guesses to have something to show.
 
 ## Fix mode
@@ -159,7 +211,7 @@ pass are never applied.
 
 ## Environment
 
-Needs `git` (always) and, for PR-number targets, `gh` authenticated against
-the target repo. No MCP server, no witan dependency, no repo-specific
+Needs `git` (always) and, for PR-number targets or fetching goals from
+linked issues, `gh` authenticated against those repos. No MCP server, no witan dependency, no repo-specific
 tooling beyond that — the scope-resolution rules above work from any
 checkout.

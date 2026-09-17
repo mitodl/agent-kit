@@ -3,9 +3,10 @@ name: create-ol-pull-request
 description: >
   Create a pull request in the mitodl organization using their standard PR template.
   Use this skill when asked to create a PR, open a pull request, or submit changes
-  for review. Guides branch inspection, title/body population, a pre-submit audit
-  of factual/behavioral claims in the PR body against live evidence, and
-  gh pr create.
+  for review. Guides branch inspection, title/body population, an independent
+  pre-submit review of the diff against its stated goals and for security
+  issues, an audit of factual/behavioral claims in the PR body against live
+  evidence, and gh pr create.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -97,7 +98,7 @@ and confirm before creating the PR.
 <summary><b>Implementation details</b></summary>
 <br>
 
-<!-- agent notes on implementation technical details, ask user if they want to omit this --> 
+<!-- agent notes on implementation technical details, ask user if they want to omit this -->
 </details>
 
 ### Screenshots (if appropriate):
@@ -117,7 +118,59 @@ Checklist section (uncomment and populate **only** if there are pre-merge steps)
 - [ ] <step>
 ```
 
-## Step 5 — Audit factual claims
+## Step 5 — Review the code against its goals
+
+Before the PR opens, run the [`code-review`](../code-review/SKILL.md) skill
+on the branch against the base branch from Step 2, with numbered goals
+passed in explicitly. All six dimensions apply, but goal alignment and
+security are the reason this step exists. Those are the gaps a Copilot or
+human reviewer otherwise finds after the PR is public.
+
+**Goals** come from sources the authoring session didn't write: the linked
+tickets from Step 3 as fully qualified refs (`mitodl/hq#123`, not `#123`,
+since many mitodl PRs close issues in another repo), and the description
+in the user's own words. Leave out a description that was summarised from
+commits. If there are no tickets and no user-supplied description, ask the
+user for a one-line statement of what the PR is for rather than letting
+the reviewer fall back to commit messages the same session wrote.
+
+**Run the review somewhere that didn't write the code.** The session that
+wrote the diff has already persuaded itself the diff is right. On
+platforms with subagents, start a fresh one with no inherited context (in
+Claude Code, the `Agent` tool with a non-fork agent type; a `fork`
+inherits the whole conversation and defeats the point). Give it only the
+repo path, the branch, the base branch, and the numbered goals. Don't pass
+the implementation reasoning, the drafted PR body, or a summary of what
+the diff "does." Tell it to review adversarially: for each goal, look for
+the case where the diff fails it, and for each new input path, look for
+the attacker who can reach it. Adversarial describes where to look, not a
+lower bar; the skill's default depth and verification pass still decide
+what gets reported. Without subagents, run the skill inline, and take each
+goal from the ticket text rather than from memory of the implementation.
+
+Then act on the report:
+
+- **Confirmed correctness, goal-alignment, or security finding** — fix it,
+  commit, and re-run the review once on the new diff. If findings still
+  come back from that second run, stop and show them to the user rather
+  than looping. If a goal is deliberately out of scope, say so in the PR
+  description instead of leaving it for the reviewer to discover.
+- **Simplification, efficiency, or reuse finding, or any row labeled
+  uncertain** — fix it, or tell the user why not. It doesn't block the PR.
+- **A finding you disagree with** — show it to the user with the evidence
+  instead of dropping it silently.
+
+If fixes changed the code, update the description and testing notes to
+match and show the user the revised body again before Step 7. Don't paste
+the findings table into the PR body.
+
+Only a diff with no behavior change and no dependency change (a rename, a
+comment or docs typo) skips this step; say so when skipping. Dependency
+bumps, including lockfile-only ones, always get reviewed, since a new
+transitive package or source is exactly what the security dimension
+checks.
+
+## Step 6 — Audit factual claims
 
 Before creating the PR, re-read the drafted body for factual or behavioral
 claims — anything an "evidence" question would apply to: "prod never showed
@@ -136,6 +189,7 @@ available evidence rather than memory or "it should be fine":
 | Library/framework default behavior | The actual library source or its docs — not memory |
 | Infra/config state ("this is deployed", "the value is X in prod") | The deployed state, not the manifest — see the `deploy-verification` skill if the claim is about a live rollout |
 | "This fixes bug X" | A test that failed before the fix and passes after, if one exists or is cheap to add |
+| "Tested" / "adds a test for X" | Read the test: it must exercise the case the body names, not a neighboring branch. Run it |
 
 Mark each claim VERIFIED, UNVERIFIABLE, or CONTRADICTED. Rewrite the body
 before moving on: drop UNVERIFIABLE claims rather than shipping them
@@ -143,7 +197,7 @@ hedged, and correct — don't soften — anything CONTRADICTED. A claim that
 can't be checked before the PR opens doesn't get to ship as fact and get
 walked back after a reviewer catches it.
 
-## Step 6 — Create the PR
+## Step 7 — Create the PR
 
 ```bash
 gh pr create \
@@ -228,7 +282,7 @@ If the diff is self-explanatory, a two-line description is the correct length.
   explicit pre-merge steps (e.g. Vault secret updates, migration runs). Leave
   it out otherwise.
 - **Technical Details**: this is where a detailed explanation of the technical
-  approach should go instead of the "Description" section. The complexity of 
+  approach should go instead of the "Description" section. The complexity of
   this explanation should be proportional to the complexity and/or risk of the change.
 - **Draft PRs**: suggest `--draft` if the branch is a work-in-progress or the
   user mentions it isn't ready for review.
