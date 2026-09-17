@@ -8,6 +8,8 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-09-16
+
 ### Fixed
 
 - **A write naming a slug that does not exist is refused by name.**
