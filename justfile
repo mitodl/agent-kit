@@ -83,11 +83,21 @@ check-omnigraph-pins:
     installer_sha=$(awk '/^_OMNIGRAPH_ASSET_SHA256/{f=1} f && /omnigraph-linux-x86_64/{getline; gsub(/[^0-9a-f]/,""); print; exit}' packages/witan-core/witan_core/omnigraph_install.py)
     server_sha=$(awk -F= '/^ARG OMNIGRAPH_SHA256_X86_64=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
     mcp_sha=$(awk -F= '/^ARG OMNIGRAPH_SHA256_X86_64=/{print $2; exit}' docker/witan.Dockerfile)
+    # ★ AND THE STORAGE FORMAT, which the two images now carry as an OCI label
+    # (edu.mit.ol.omnigraph.internal-schema) so ol-infrastructure can refuse a
+    # preview whose deploying image reads a different format than the cluster
+    # serves. A label that drifts from the installer declaration is worse than
+    # no label: the Pulumi check would compare the stack against a number this
+    # repo does not believe, and pass.
+    installer_schema=$(awk '/^_OMNIGRAPH_INTERNAL_SCHEMA = /{print $3; exit}' packages/witan-core/witan_core/omnigraph_install.py)
+    server_schema=$(awk -F= '/^ARG OMNIGRAPH_INTERNAL_SCHEMA=/{print $2; exit}' docker/omnigraph-server.Dockerfile)
+    mcp_schema=$(awk -F= '/^ARG OMNIGRAPH_INTERNAL_SCHEMA=/{print $2; exit}' docker/witan.Dockerfile)
     # An empty capture means the line moved or was renamed, not that the pins
     # agree — three empty strings would otherwise compare equal and pass.
     for pair in "installer:$installer" "server:$server" "mcp:$mcp" \
                 "installer_tag:$installer_tag" "server_tag:$server_tag" "mcp_tag:$mcp_tag" \
-                "installer_sha:$installer_sha" "server_sha:$server_sha" "mcp_sha:$mcp_sha"; do
+                "installer_sha:$installer_sha" "server_sha:$server_sha" "mcp_sha:$mcp_sha" \
+                "installer_schema:$installer_schema" "server_schema:$server_schema" "mcp_schema:$mcp_schema"; do
         if [[ -z "${pair#*:}" ]]; then
             echo "could not read the omnigraph pin for '${pair%%:*}' — the declaration moved or was renamed" >&2
             exit 1
@@ -126,7 +136,15 @@ check-omnigraph-pins:
         echo "  docker/witan.Dockerfile:                             $mcp_sha" >&2
         exit 1
     fi
-    echo "omnigraph pins agree: $installer (tag $installer_tag, sha ${installer_sha:0:12}…)"
+    if [[ "$installer_schema" != "$server_schema" || "$installer_schema" != "$mcp_schema" ]]; then
+        echo "omnigraph internal-schema declarations have drifted — the images" >&2
+        echo "would advertise a storage format this repo does not declare:" >&2
+        echo "  packages/witan-core/witan_core/omnigraph_install.py: $installer_schema" >&2
+        echo "  docker/omnigraph-server.Dockerfile:                  $server_schema" >&2
+        echo "  docker/witan.Dockerfile:                             $mcp_schema" >&2
+        exit 1
+    fi
+    echo "omnigraph pins agree: $installer (tag $installer_tag, sha ${installer_sha:0:12}…, format $installer_schema)"
 
 # Fail if the pinned omnigraph binary reads a storage format this repo does not
 # declare — i.e. if a version bump is secretly a rebuild-every-graph event.

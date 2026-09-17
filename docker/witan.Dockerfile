@@ -31,6 +31,21 @@ ARG OMNIGRAPH_VERSION=0.11.0
 ARG OMNIGRAPH_RELEASE_TAG=v0.11.0
 ARG OMNIGRAPH_SHA256_X86_64=da192e1a050875a93ee642b9df485203a00d8c0d44ca39204439463ad41a766d
 ARG OMNIGRAPH_SHA256_ARM64=af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca33915a8f4bb
+# The on-disk storage format the pinned binary reads, mirrored from witan_core's
+# declaration (packages/witan-core/witan_core/omnigraph_install.py ::
+# _OMNIGRAPH_INTERNAL_SCHEMA) and stamped onto the image as a label below.
+#
+# WHY THE IMAGE HAS TO CARRY IT: ol-infrastructure deploys this image by digest
+# and has no access to this repo, so the format it reads was opaque to the
+# Pulumi program. Merging a format-bumping image into a cluster still serving
+# the old root therefore surfaced as a cluster-apply Job dying mid-deploy
+# (CI 2026-09-16, builds 187/188/189) rather than as a refused preview. With
+# the label, `validate_image_internal_schema` in that repo's
+# applications/omnigraph/storage.py can compare the deploying image against
+# the stack's committed `omnigraph:internal_schema_version`.
+#
+# `just check-omnigraph-pins` compares this against the installer declaration.
+ARG OMNIGRAPH_INTERNAL_SCHEMA=9
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
 ARG WITAN_VERSION=0.8.0
@@ -108,10 +123,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ── Runtime ───────────────────────────────────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim-trixie AS runtime
 ARG WITAN_VERSION
+ARG OMNIGRAPH_INTERNAL_SCHEMA
 LABEL org.opencontainers.image.title="witan" \
       org.opencontainers.image.description="witan MCP server — agent memory, task, and code graph" \
       org.opencontainers.image.source="https://github.com/mitodl/agent-kit" \
-      org.opencontainers.image.version="${WITAN_VERSION}"
+      org.opencontainers.image.version="${WITAN_VERSION}" \
+      edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}"
 
 RUN useradd --uid 1000 --user-group --create-home witan
 
