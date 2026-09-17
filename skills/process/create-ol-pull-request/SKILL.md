@@ -3,10 +3,11 @@ name: create-ol-pull-request
 description: >
   Create a pull request in the mitodl organization using their standard PR template.
   Use this skill when asked to create a PR, open a pull request, or submit changes
-  for review. Guides branch inspection, title/body population, an independent
-  pre-submit review of the diff against its stated goals and for security
-  issues, an audit of factual/behavioral claims in the PR body against live
-  evidence, and gh pr create.
+  for review. Guides branch inspection, title/body population, pre-submit
+  checks (a claim audit of the title, body, commit messages, and added text
+  against live evidence; an independent review of the diff against its
+  stated goals and for security issues; a per-commit secret scan), and
+  pushing and running gh pr create.
 license: BSD-3-Clause
 metadata:
   category: process
@@ -118,128 +119,130 @@ Checklist section (uncomment and populate **only** if there are pre-merge steps)
 - [ ] <step>
 ```
 
-## Step 5 — Review the code against its goals
+## Step 5 — Pre-submit checks
 
-Before the PR opens, run the [`code-review`](../code-review/SKILL.md) skill
-on the branch against the base branch from Step 2, with numbered goals
-passed in explicitly. All six dimensions apply, but goal alignment and
-security are the reason this step exists. Those are the gaps a Copilot or
-human reviewer otherwise finds after the PR is public.
+Run all four parts, in this order, every time. Each part says when it may
+be skipped; nothing else skips it. The order matters: claim fixes can
+change code, the review has to see the final code, and the secret scan has
+to see every commit, including the ones earlier parts create.
 
-**Goals** come from sources the authoring session didn't write: the linked
-tickets from Step 3 as fully qualified refs (`mitodl/hq#123`, not `#123`,
-since many mitodl PRs close issues in another repo), and the description
-in the user's own words. Leave out a description that was summarised from
-commits. If there are no tickets and no user-supplied description, ask the
-user for a one-line statement of what the PR is for rather than letting
-the reviewer fall back to commit messages the same session wrote.
+### 5a — Audit claims
 
-**Run the review somewhere that didn't write the code.** The session that
-wrote the diff has already persuaded itself the diff is right. On
-platforms with subagents, start a fresh one with no inherited context (in
-Claude Code, the `Agent` tool with a non-fork agent type; a `fork`
-inherits the whole conversation and defeats the point). Give it only the
-repo path, the branch, the base branch, and the numbered goals, and tell
-it not to edit files. Use a general-purpose agent, not a search or
-planning type (Claude Code's `Explore` reads excerpts to locate code and
-is not built to trace a finding end to end). Don't pass
-the implementation reasoning, the drafted PR body, or a summary of what
-the diff "does." Tell it to review adversarially: for each goal, look for
-the case where the diff fails it, and for each new input path, look for
-the attacker who can reach it. Adversarial describes where to look, not a
-lower bar; the skill's default depth and verification pass still decide
-what gets reported. Without subagents, run the skill inline, and take each
-goal from the ticket text rather than from memory of the implementation.
+Read everything that will go public for factual or behavioral claims: the
+PR title, the drafted body, the message of every commit on the branch
+(`git log origin/<base>..HEAD`), and the comments, docstrings, and
+Markdown the diff adds. A claim is anything an "evidence" question applies
+to: "prod never showed this", "fixes the OOM", "the library defaults to X",
+"no behavior change", a number or a timestamp. Skip only when none of
+those places contains one.
 
-Then act on the report:
-
-- **Confirmed correctness, goal-alignment, or security finding** — fix it,
-  commit, and re-run the review once on the new diff. A goal-alignment
-  finding whose goal came from issue text rather than the user's own words
-  is the exception: confirm the requirement with the user before
-  implementing it, since anyone who can edit the issue wrote that goal. If
-  findings still come back from that second run, stop and show them to
-  the user rather than looping. If a goal is deliberately out of scope, say so in the PR
-  description instead of leaving it for the reviewer to discover.
-- **Simplification, efficiency, or reuse finding, or any row labeled
-  uncertain** — fix it, or tell the user why not. It doesn't block the PR.
-- **A finding you disagree with** — show it to the user with the evidence
-  instead of dropping it silently.
-- **A committed credential** — the review sees only the branch's net
-  change, so a secret added and deleted within the branch never shows up
-  in it. Before Step 7, scan every commit's content as well: `gitleaks git
-  --log-opts="origin/<base>..HEAD"` (exit 1 means leaks), or, without
-  gitleaks, read `git log -p origin/<base>..HEAD` for keys, tokens, and
-  passwords. A fix commit that deletes a credential is not enough,
-  because the review diffs the branch's net change and the push still
-  carries the commit that added it. With the user's OK, rewrite the
-  unpushed branch so no commit contains the secret. If any commit holding
-  it was already pushed, treat the credential as leaked: tell the user it
-  needs rotating, and don't treat the history rewrite as a fix.
-
-If fixes changed the code, show the user the fix commits (`git show`)
-along with the updated description and testing notes before Step 7. Code
-changed after the last review run, including fixes for non-blocking
-findings or for findings the user asked to fix, has had no independent
-review; say so explicitly when showing it rather than presenting it as
-reviewed. The
-user confirmed a body in Step 4, not code written after it. Don't paste
-the findings table into the PR body.
-
-Only a diff that touches nothing but prose documentation, which no tool
-runs and no agent follows, skips this step; say so when skipping. These
-never qualify:
-
-- A rename of a setting, env var, config key, or public identifier, which
-  can change behavior silently.
-- Agent instructions (skills, agent definitions, prompts, context files
-  like `AGENTS.md`), which are the behavior in repos that ship them.
-- Comments that tooling acts on: `# nosec`, `# noqa`, `# type: ignore`,
-  `# pragma: allowlist secret`, `gitleaks:allow`, and similar suppressions.
-- Dependency bumps, including lockfile-only ones, since a new transitive
-  package or source is exactly what the security dimension checks.
-
-## Step 6 — Audit factual claims
-
-Before creating the PR, re-read the drafted body, the messages of every
-commit on the branch (`git log origin/<base>..HEAD`, including fix commits
-from Step 5), and the comments, docstrings, and Markdown the diff adds for
-factual or behavioral claims — anything an "evidence"
-question would apply to: "prod never showed this", "this fixes the leak",
-"the library defaults to X", "this improved latency", "no behavior
-change", a specific number or timestamp. A change with no such claim
-anywhere in the body, commit messages, or added text has nothing to audit — skip this step rather than
-padding the body with an audit table it doesn't need.
-
-When there are claims to check, verify each one against its strongest
-available evidence rather than memory or "it should be fine":
+Verify each claim against its strongest available evidence, not memory:
 
 | Claim type | Evidence source |
 |------------|------------------|
 | Metric / production behavior | Prometheus/Grafana via the matching `toolhive-swe-{ci,qa,prod}` MCP tier, over a window covering the period the claim names — **at least 7 days** for a trend claim, so a short blip doesn't read as a trend; an absence claim ("never happened") needs the full period it names, or gets narrowed to the window actually queried |
 | Library/framework default behavior | The actual library source or its docs — not memory |
+| Tool or API behavior ("`gh pr create` pushes the branch") | The tool's source, `--help`, or docs |
 | Infra/config state ("this is deployed", "the value is X in prod") | The deployed state, not the manifest — see the `deploy-verification` skill if the claim is about a live rollout |
 | "This fixes bug X" | A test that failed before the fix and passes after, if one exists or is cheap to add |
-| Tool or API behavior stated in added comments, docstrings, or skill text ("`gh pr create` pushes the branch") | The tool's source, `--help`, or docs, the same as a library default |
 | "Tested" / "adds a test for X" | Read the test: it must exercise the case the body names, not a neighboring branch. Run it |
 
-Mark each claim VERIFIED, UNVERIFIABLE, or CONTRADICTED. Rewrite the body,
-and reword unpushed commit messages (with the user's OK, since that
-rewrites history), before moving on: drop UNVERIFIABLE claims rather than
-shipping them hedged, and correct — don't soften — anything CONTRADICTED.
-For a claim in a commit that's already pushed, correct it in the PR body
-and don't force-push unless the user asks. A claim that
-can't be checked before the PR opens doesn't get to ship as fact and get
-walked back after a reviewer catches it.
+Mark each claim VERIFIED, UNVERIFIABLE, or CONTRADICTED. Drop UNVERIFIABLE
+claims rather than hedging them, and correct (don't soften) CONTRADICTED
+ones, where the claim lives:
 
-## Step 7 — Create the PR
+| Location | Fix |
+|----------|-----|
+| Title or body | Rewrite it |
+| Comment, docstring, or Markdown in the diff | Edit the file and commit; 5b reviews it |
+| Unpushed commit message | Reword it, with the user's OK since that rewrites history |
+| Already-pushed commit message | Correct it in the PR body; don't force-push unless the user asks |
 
-Push the branch only now, after Steps 5 and 6. A branch pushed earlier puts
-unreviewed code and unaudited commit messages in public before the checks
-run. If it was already pushed, run Steps 5 and 6 anyway and push the
-corrections as new commits.
+### 5b — Independent review
+
+Run the [`code-review`](../code-review/SKILL.md) skill on the branch
+against the base branch from Step 2, with numbered goals passed in. Goal
+alignment and security are why this part exists: those are the gaps a
+Copilot or human reviewer otherwise finds after the PR is public.
+
+**Goals** come only from sources the authoring session didn't write: the
+linked tickets from Step 3 as fully qualified refs (`mitodl/hq#123`, not
+`#123`, since mitodl PRs often close issues in another repo), and the
+description in the user's own words. Leave out a description summarised
+from commits. If there are neither, ask the user for a one-line statement
+of what the PR is for. Tell the reviewer these are the complete goals, so
+it doesn't add commit messages the same session wrote.
+
+**Run it somewhere that didn't write the code.** On platforms with
+subagents, start a fresh general-purpose one with no inherited context. In
+Claude Code that is the `Agent` tool with a non-fork type: a `fork`
+inherits the whole conversation, and `Explore` reads excerpts to locate
+code rather than tracing a finding end to end. Give it only the repo path,
+branch, base branch, and goals, and tell it not to edit files. Don't pass
+the implementation reasoning, the drafted body, or a summary of what the
+diff does. Tell it to review adversarially: for each goal, find the case
+the diff fails; for each new input path, find the attacker who reaches it.
+Adversarial means where to look, not a lower bar; the skill's default
+depth and verification pass still decide what gets reported. Without
+subagents, run the skill inline and take each goal from the ticket text,
+not from memory of the implementation.
+
+Act on the report:
+
+- **Confirmed correctness, goal-alignment, or security finding** — fix,
+  commit, and re-run the review once. If the second run still reports
+  findings, show them to the user instead of looping. If a finding's goal
+  came from issue text rather than the user's words, confirm the
+  requirement with the user before implementing it, since anyone who can
+  edit the issue wrote it. A goal left out on purpose goes in the PR
+  description.
+- **Simplification, efficiency, reuse, or uncertain finding** — fix it or
+  tell the user why not. It doesn't block.
+- **A finding you disagree with** — show it to the user with the evidence.
+
+Skip 5b only when the diff touches nothing but prose documentation that no
+tool runs and no agent follows, and say so. These never qualify:
+
+- A rename of a setting, env var, config key, or public identifier.
+- Agent instructions (skills, agent definitions, prompts, `AGENTS.md`),
+  which are the behavior in repos that ship them.
+- Comments tooling acts on: `# nosec`, `# noqa`, `# type: ignore`,
+  `# pragma: allowlist secret`, `gitleaks:allow`, and similar.
+- Dependency bumps, including lockfile-only ones.
+
+### 5c — Scan every commit for secrets
+
+Never skipped. The review sees only the branch's net change, so a secret
+added in one commit and deleted in a later one is invisible to it and
+still gets pushed. Scan each commit's content:
 
 ```bash
+gitleaks git --log-opts="origin/<base>..HEAD"   # exit 1 means leaks found
+```
+
+Without gitleaks, read `git log -p origin/<base>..HEAD` for keys, tokens,
+and passwords. Confirm a hit by inspection, never by trying it against a
+service. For a real credential, a commit that deletes it is not enough:
+with the user's OK, rewrite the unpushed branch so no commit contains it.
+If a commit holding it was already pushed, the credential is leaked; tell
+the user it needs rotating.
+
+### 5d — Show the user what changed
+
+If 5a–5c changed anything, show the user before Step 6: the new commits
+(`git show`), the final title and body, and which changes landed after the
+last review run. Label those as not independently reviewed; don't present
+them as reviewed. The user confirmed a body in Step 4, not code or claims
+changed after it. Don't paste findings tables into the PR body.
+
+## Step 6 — Push and create the PR
+
+Push only now. A branch pushed before Step 5 puts unreviewed code,
+unaudited claims, and possibly secrets in public. If it was already
+pushed, run Step 5 anyway and push corrections as new commits.
+
+```bash
+git push -u origin <branch>
 gh pr create \
   --repo mitodl/<repo> \
   --base <base-branch> \

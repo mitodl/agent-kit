@@ -79,10 +79,11 @@ was actually in scope.
 
 ## Stated goals
 
-The goal-alignment dimension needs something to align against. Collect the
-change's goals from, in order: goals passed in with the request, the PR
-body (`gh pr view <number> --json body`), issues it links or closes, then
-commit messages on the branch. Fetch issues with an explicit repo (`gh issue
+The goal-alignment dimension needs something to align against. Goals
+passed in with the request are the complete list; don't add to them. Only
+when none are passed, collect them from the PR body (`gh pr view <number>
+--json body`) and the issues it links or closes, and fall back to commit
+messages on the branch only if those state no goal. Fetch issues with an explicit repo (`gh issue
 view <n> --repo <owner>/<repo>`): a PR often closes an issue in another
 repo, such as `mitodl/hq#123`, and a bare `#123` resolves against the
 current repo. Tag goals taken from commit messages as such, since they
