@@ -1,4 +1,4 @@
-# agent-config-kit — inline config-level overlays — Spec
+# agent-config-kit — config overlays & staleness detection — Spec
 
 Status: design only — nothing here is implemented yet.
 
@@ -6,7 +6,20 @@ Builds on the shipped profiles/composition/scoping layer described in
 [`agent-config-kit-profiles-composition-spec.md`](./agent-config-kit-profiles-composition-spec.md)
 (manifests, `include`, `[[org]]`/`[[scope]]` routing, the global
 `config.toml`). That spec's O2 zero-arg resolution order is the starting
-point here; this spec doesn't change it, it adds a layer on top.
+point here; neither feature below changes it.
+
+Two independent features, each usable without the other:
+
+1. **Inline config-level overlays** (§1-8) — let `config.toml` declare
+   capability entries that merge onto whatever manifest resolves, so
+   "always-on" personal tools don't get silently skipped by O2's
+   first-hit-wins resolution.
+2. **Staleness detection for skills/plugin hooks** (§9) — let `validate`/
+   `apply` notice when an installed skill's or plugin hook's content no
+   longer matches what the manifest's current source would install, not
+   just whether it's present.
+
+# Part A — inline config-level overlays
 
 ## 1. Motivation
 
@@ -154,3 +167,130 @@ pending that decision.
   `resolve_profile` runs — same call `_load_raw_manifest` makes for each
   `include` ref (`manifest.py:356-364`) — then print the visibility line
   from I5.
+
+# Part B — staleness detection for skills/plugin hooks
+
+## 9. Staleness detection
+
+### 9.1 Motivation
+
+`validate`'s drift detection is presence/absence only, never content.
+`_diff_skills` (`diff.py:117-134`) checks exactly one thing per skill —
+`dest.exists()` — and reports nothing else. A skill's `SKILL.md` (or a
+supporting file under `scripts/`/`references/`/`assets/`) can change
+upstream — a newer commit on a `git+` ref, a new tag, a local repo edit —
+and `agent-kit validate` reports zero drift as long as the installed copy
+is still *there*. `fetch.py`'s own module docstring already names this as a
+known limitation: "content-level drift is never actionable, only
+presence/absence is."
+
+The prune lock file already records a `manifest_hash` — a SHA-256 of the
+manifest file's own raw bytes (`prune.py:97-98`, written at `prune.py:138`)
+— but nothing ever reads it back: a repo-wide grep for `manifest_hash`
+turns up only its own definition and the one write site, zero comparisons
+anywhere. It's dead weight today, and even wired up it wouldn't close this
+gap: it hashes the manifest *file's own bytes*, not the content at the
+paths that file merely points to, so a `[skills]` entry whose path is
+unchanged but whose target content changed leaves `manifest_hash` unchanged
+too.
+
+### 9.2 Goal
+
+Let `agent-kit validate` report when an installed skill's or plugin hook's
+on-disk content no longer matches what the manifest's currently-resolved
+source would install — a new **stale** category, distinct from *missing*
+— and let a plain `agent-kit apply` print a short warning for the same
+condition before it does its normal (already-idempotent, always-overwrites)
+merge. No `--prune` required.
+
+### 9.3 Decisions (draft — for review)
+
+| # | Question | Proposed decision |
+|---|---|---|
+| S1 | What gets hashed | Per skill: the sorted concatenation of every file `skill_files()` (`installers.py`) already walks for that skill — the exact tree `install_skills` copies, so the hash is precisely "would this copy differ." Per plugin hook: the `entry_path` file's own bytes. Inline manifest content (`mcp_servers`, declarative hooks, `options`) is a separate, already-recorded (if unused) concern — see S6. |
+| S2 | Where hashes live | A **new** state file, sibling to the existing prune lock file, written unconditionally on every `apply` — not gated on `--prune`. Reusing `<manifest>.lock.json` directly was considered and rejected: that file's mere existence today signals "this manifest has prune ownership tracking" (its entries are what a later `--prune` is allowed to remove); making a plain `apply` always write it would silently opt every manifest into prune bookkeeping nobody asked for. |
+| S3 | Comparison direction | At `validate`/`apply` time, recompute each skill/hook's hash from the manifest's *currently resolved* source — already fetched via the normal `load_manifest()` path, no extra network round trip — and compare against the last-recorded hash. A resolved skill with no recorded hash (first-ever apply) is new, not stale. |
+| S4 | `apply` behavior on staleness | Print a warning (`⚠ 2 skill(s) changed upstream since last apply: commit, webapp-testing`) before the merge, then proceed with the normal apply. Never blocking — `apply` already re-copies every skill on every run regardless of whether it changed, so the "stale" condition is corrected as a side effect of the very `apply` that reported it. |
+| S5 | `validate` behavior on staleness | New `Drift.stale_keys` field, parallel to `missing_keys`/`mismatched_keys`, participating in `has_drift` (and thus `validate`'s exit code 1) the same as the existing categories — so a CI-style `validate` run catches upstream skill changes, not just missing installs. |
+| S6 | Inline manifest-content staleness | Out of scope for v1. Wiring up the existing (currently dead) `manifest_hash` for a manifest's own inline content is a smaller, separate follow-up; this spec closes the skill/plugin-hook content gap specifically, since that one has *zero* coverage today versus `manifest_hash`'s "recorded but unused." |
+
+### 9.4 Schema
+
+New sibling file, `<manifest>.applied.json` (parallel to the existing
+`<manifest>.lock.json`), keyed by platform:
+
+```json
+{
+  "manifest_hash": "sha256:...",
+  "platforms": {
+    "claude": {
+      "skills": {
+        "commit": "sha256:...",
+        "webapp-testing": "sha256:..."
+      },
+      "hooks": {
+        "plugin:witan.ts": "sha256:..."
+      }
+    }
+  }
+}
+```
+
+Deliberately narrower than `PlatformState` (`prune.py:52-59`) — no
+`mcp_servers` entry, since S1 scopes this file to content the manifest only
+*points at*, not content the manifest inlines directly.
+
+### 9.5 Interaction with `--prune`
+
+A manifest can have neither, either, or both sibling files, independently:
+
+- `<manifest>.applied.json` alone — staleness detection on plain
+  `apply`/`validate`, no prune ownership.
+- `<manifest>.lock.json` alone (today's behavior, unchanged) — prune
+  ownership, no staleness detection.
+- Both — a manifest that's also been `--prune`d at some point. No shared
+  fields; each file is read/written independently, so neither feature's
+  bug can corrupt the other's state.
+
+### 9.6 Open questions
+
+- **O-STALE-SCOPE** (S6) — extend to inline manifest content (finally
+  wiring up `manifest_hash` itself) in v1, or defer? Leaning defer, but
+  flagging since it's the more complete fix and touches the same
+  machinery.
+- **O-STALE-WRITE-COST** — writing `<manifest>.applied.json` on every
+  `apply` (S2) costs one file read per skill/hook (to hash current
+  content) plus one write, even when nothing changed. Negligible for a
+  handful of skills; open whether a very large catalog warrants skipping
+  the write when the computed content is unchanged from what's recorded.
+- **O-STALE-REMOTE-COST** — hashing "current" content for a `git+`-sourced
+  skill piggybacks on the shallow clone `fetch_remote` already performs on
+  every `load_manifest()` call (`fetch.py:20-30`) — no additional network
+  cost, but worth stating explicitly since it's easy to assume otherwise.
+
+### 9.7 Non-goals (v1)
+
+- No semantic diff of *what* changed in a skill — changed-or-not only,
+  matching the "presence/absence, never content-level detail" posture
+  `fetch.py` already documents for the analogous remote-source case.
+- No staleness detection for inline manifest content (S6/O-STALE-SCOPE).
+- No new re-apply trigger — `apply` already re-copies every skill on every
+  run; this only adds visibility into what changed, not a new action.
+
+### 9.8 Implementation sketch (once §9.3's open questions are resolved)
+
+- `installers.py`: add a `skill_content_hash(skill: SkillSource) -> str`
+  next to the existing `skill_files()` — same walk, hashes bytes instead of
+  listing relative paths.
+- `prune.py`: new `AppliedState`/`load_applied_state`/`write_applied_state`
+  mirroring `PlatformState`/`load_state`/`write_state` (`prune.py:52-151`)
+  but for the narrower S4 schema, written unconditionally from
+  `plan.apply()`/`apply_all()` — unlike `PlatformState`, never gated on the
+  `--prune` flag.
+- `diff.py`: `_diff_skills` (`diff.py:117-134`) gains a hash comparison
+  alongside its existing `dest.exists()` check, populating the new
+  `Drift.stale_keys` (S5).
+- `cli.py`: `apply_command` prints the S4 warning after `load_manifest`,
+  before calling `apply`/`apply_all`/`apply_with_prune`; `validate_command`'s
+  `_report_drift` gains a "stale" column alongside its existing
+  missing/mismatched/missing-paths/unreadable ones.
