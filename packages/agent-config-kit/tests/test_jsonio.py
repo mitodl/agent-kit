@@ -66,3 +66,53 @@ def test_json_diff_shows_changed_value():
     diff = json_diff({"a": {"command": "old"}}, {"a": {"command": "new"}})
     assert '-    "command": "old"' in diff
     assert '+    "command": "new"' in diff
+
+
+def test_json_diff_redacts_mcp_server_env_values():
+    """`env` routinely carries API keys/tokens (StdioServer.env in
+    models.py) — a diff must never print the actual value, in either
+    direction, however deeply nested under a platform's own JSON shape."""
+    before = {"mcpServers": {"witan": {"env": {}}}}
+    after = {"mcpServers": {"witan": {"env": {"API_KEY": "sk-super-secret-123"}}}}
+    diff = json_diff(before, after)
+    assert "sk-super-secret-123" not in diff
+    assert "API_KEY" in diff  # key name is fine to show, just not the value
+    assert "<redacted>" in diff
+
+
+def test_json_diff_redacts_remote_server_headers_and_oauth():
+    before = {
+        "grafana": {
+            "headers": {"Authorization": "Bearer old-token"},
+            "oauth": {"clientSecret": "old-secret"},
+        }
+    }
+    after = {
+        "grafana": {
+            "headers": {"Authorization": "Bearer new-token"},
+            "oauth": {"clientSecret": "new-secret"},
+        }
+    }
+    diff = json_diff(before, after)
+    assert "old-token" not in diff
+    assert "new-token" not in diff
+    assert "old-secret" not in diff
+    assert "new-secret" not in diff
+
+
+def test_json_diff_still_detects_a_change_entirely_inside_a_redacted_field():
+    """A change that's only in a sensitive field's value must still be
+    reported as *something* changed, even though the redacted lines
+    themselves are identical before/after — never silently claim no diff."""
+    before = {"witan": {"env": {"TOKEN": "old"}}}
+    after = {"witan": {"env": {"TOKEN": "new"}}}
+    assert json_diff(before, after) != ""
+
+
+def test_json_diff_unaffected_when_only_non_sensitive_fields_change():
+    diff = json_diff(
+        {"witan": {"command": "old", "env": {"TOKEN": "x"}}},
+        {"witan": {"command": "new", "env": {"TOKEN": "x"}}},
+    )
+    assert '-    "command": "old"' in diff
+    assert '+    "command": "new"' in diff
