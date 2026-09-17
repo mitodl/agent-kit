@@ -82,7 +82,7 @@ def test_resolve_matches_org_from_git_remote(tmp_path):
         default_manifest=str(tmp_path / "dotfiles" / "agent-config.toml"),
     )
 
-    resolved = resolve_zero_arg_manifest(repo, config)
+    resolved = resolve_zero_arg_manifest(repo, config, tmp_path / "config.toml")
 
     assert resolved is not None
     assert resolved.path == tmp_path / "org.toml"
@@ -99,7 +99,7 @@ def test_resolve_org_match_is_case_insensitive(tmp_path):
         org=[OrgConfig(name="mitodl", manifest=str(tmp_path / "org.toml"))]
     )
 
-    resolved = resolve_zero_arg_manifest(repo, config)
+    resolved = resolve_zero_arg_manifest(repo, config, tmp_path / "config.toml")
 
     assert resolved is not None
     assert resolved.path == tmp_path / "org.toml"
@@ -116,7 +116,7 @@ def test_resolve_prefers_repo_local_manifest_over_org_match(tmp_path):
         org=[OrgConfig(name="mitodl", manifest=str(tmp_path / "org.toml"))]
     )
 
-    resolved = resolve_zero_arg_manifest(repo, config)
+    resolved = resolve_zero_arg_manifest(repo, config, tmp_path / "config.toml")
 
     assert resolved is not None
     assert resolved.path == local_manifest
@@ -137,7 +137,7 @@ def test_resolve_org_match_wins_over_scope_prefix(tmp_path):
         ],
     )
 
-    resolved = resolve_zero_arg_manifest(repo, config)
+    resolved = resolve_zero_arg_manifest(repo, config, tmp_path / "config.toml")
 
     assert resolved is not None
     assert resolved.path == tmp_path / "org.toml"
@@ -158,7 +158,7 @@ def test_resolve_falls_through_to_scope_prefix_when_org_does_not_match(tmp_path)
         ],
     )
 
-    resolved = resolve_zero_arg_manifest(repo, config)
+    resolved = resolve_zero_arg_manifest(repo, config, tmp_path / "config.toml")
 
     assert resolved is not None
     assert resolved.path == tmp_path / "scope.toml"

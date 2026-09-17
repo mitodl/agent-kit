@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 try:
@@ -33,9 +34,15 @@ from .diff import Drift
 from .diff import diff as diff_bundle
 from .fetch import FetchError, fetch_remote, is_remote_uri
 from .installers import ConflictingPathError
-from .manifest import ManifestError, load_manifest, resolve_profile
+from .manifest import (
+    ManifestError,
+    apply_overlay,
+    load_manifest,
+    load_overlay_bundle,
+    resolve_profile,
+)
 from .models import SKILL_NAME_PATTERN, Scope
-from .plan import InstallResult
+from .plan import InstallResult, RegistrationBundle
 from .plan import apply as apply_bundle
 from .plan import apply_all as apply_all_bundle
 from .prune import (
@@ -49,6 +56,7 @@ from .registry import detect_installed_platforms, known_platforms
 from .resolve import (
     default_manifest_cache_dir,
     find_repo_root,
+    resolve_overlay,
     resolve_zero_arg_manifest,
 )
 from .version import resolve_version
@@ -481,20 +489,58 @@ def _materialize_manifest_arg(value: str, *, cache_dir: Path | None) -> Path:
     return Path(value).expanduser()
 
 
+@dataclass
+class _ManifestResolution:
+    path: Path
+    profiles: list[str] | None
+    write_scope: Scope | None
+    # See "Part A" of agent-config-kit-config-overlay-spec.md. `overlay` is
+    # the combined, still-raw config-overlay fragment for this invocation
+    # (empty when there's nothing, or when `--no-overlay` was given);
+    # `overlay_source` names which layer(s) contributed, for the I5
+    # apply-output visibility line; `overlay_config_path` is config.toml's
+    # own path, needed by `manifest.load_overlay_bundle` for I8's
+    # relative-path anchor.
+    overlay: dict
+    overlay_source: str
+    overlay_config_path: Path | None
+
+
 def _resolve_manifest_arg(
-    manifest: str | None, *, cache_dir: Path | None
-) -> tuple[Path, list[str] | None, Scope | None]:
+    manifest: str | None, *, cache_dir: Path | None, overlay: bool
+) -> _ManifestResolution:
     """``MANIFEST`` given explicitly -> materialize it (fetching a remote
     URI if that's what it is) with no profile/scope override from this
     step. Otherwise resolve it from the global config per O2
     (``resolve.py``), printing which source won so the "magic" a zero-arg
-    apply performs is legible (spec §7.2)."""
-    if manifest is not None:
-        return _materialize_manifest_arg(manifest, cache_dir=cache_dir), None, None
+    apply performs is legible (spec §7.2).
 
-    config = load_global_config()
+    ``overlay`` is the ``--overlay``/``--no-overlay`` flag (I7, decided: on
+    by default). ``False`` skips config-overlay computation entirely — not
+    even loading ``config.toml`` for an explicit ``MANIFEST`` — matching a
+    fully-explicit invocation's "just this manifest" expectation exactly
+    when asked to. When ``True``, config.toml's global ``[overlay]``
+    applies even to an explicit ``MANIFEST``; only zero-arg resolution can
+    also pick up a matched ``[[org]]``/``[[scope]]`` entry's own overlay,
+    since an explicit ``MANIFEST`` bypasses O2 (and thus any org/scope
+    match) entirely."""
+    if manifest is not None:
+        path = _materialize_manifest_arg(manifest, cache_dir=cache_dir)
+        if not overlay:
+            return _ManifestResolution(path, None, None, {}, "", None)
+        config_path = resolve_config_path(None)
+        config = load_global_config(config_path)
+        overlay_data, overlay_source = resolve_overlay(config, config_path)
+        return _ManifestResolution(
+            path, None, None, overlay_data, overlay_source, config_path
+        )
+
+    config_path = resolve_config_path(None)
+    config = load_global_config(config_path)
     try:
-        resolved = resolve_zero_arg_manifest(Path.cwd(), config, cache_dir=cache_dir)
+        resolved = resolve_zero_arg_manifest(
+            Path.cwd(), config, config_path, cache_dir=cache_dir
+        )
     except FetchError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
@@ -507,7 +553,18 @@ def _resolve_manifest_arg(
         )
         raise SystemExit(2)
     console.print(f"resolved manifest from {resolved.source}")
-    return resolved.path, resolved.profiles, resolved.write_scope
+    if not overlay:
+        return _ManifestResolution(
+            resolved.path, resolved.profiles, resolved.write_scope, {}, "", None
+        )
+    return _ManifestResolution(
+        resolved.path,
+        resolved.profiles,
+        resolved.write_scope,
+        resolved.overlay,
+        resolved.overlay_source,
+        config_path,
+    )
 
 
 def _default_prune_state_path(manifest_path: Path, scope: Scope) -> Path:
@@ -575,6 +632,37 @@ def _print_diffs(results: dict[str, InstallResult]) -> None:
                 console.print(line, style=style, markup=False, highlight=False)
 
 
+def _apply_overlay_to_bundle(
+    bundle: RegistrationBundle,
+    resolution: _ManifestResolution,
+    *,
+    cache_dir: Path | None,
+) -> RegistrationBundle:
+    """Build+apply the resolved config-overlay fragment (if any) onto an
+    already profile-resolved bundle (O-OVERLAY-PROFILES — see
+    ``manifest.apply_overlay``'s own docstring for why this must run after
+    profile resolution, not before), printing the I5 visibility line.
+    A no-op (returns ``bundle`` unchanged, prints nothing) when
+    ``resolution.overlay`` is empty — either nothing matched, or
+    ``--no-overlay`` was given."""
+    if not resolution.overlay or resolution.overlay_config_path is None:
+        return bundle
+    overlay_bundle = load_overlay_bundle(
+        resolution.overlay, resolution.overlay_config_path, cache_dir=cache_dir
+    )
+    count = (
+        len(overlay_bundle.mcp_servers)
+        + len(overlay_bundle.skills)
+        + len(overlay_bundle.hooks)
+        + len(overlay_bundle.lsp_servers)
+    )
+    entry_word = "entry" if count == 1 else "entries"
+    console.print(
+        f"+ {count} inline {entry_word} from config.toml ({resolution.overlay_source})"
+    )
+    return apply_overlay(bundle, overlay_bundle)
+
+
 @app.command(name="apply")
 def apply_command(
     manifest: str | None = None,
@@ -588,6 +676,7 @@ def apply_command(
     force: bool = False,
     state_file: Path | None = None,
     cache_dir: Path | None = None,
+    overlay: bool = True,
 ) -> None:
     """Apply a manifest's MCP servers, hooks, and skills to one or more
     coding-agent platforms.
@@ -647,10 +736,18 @@ def apply_command(
         manifest to sit "next to" yet) defaults to the same
         ``~/.cache/agent-config-kit/manifests`` location a zero-arg
         resolution uses.
+    overlay
+        Merge config.toml's global ``[overlay]`` (and, for zero-arg
+        resolution, a matched ``[[org]]``/``[[scope]]`` entry's own
+        overlay) onto the manifest — see
+        ``agent-config-kit-config-overlay-spec.md``. On by default (I7);
+        pass ``--no-overlay`` for a run that uses only this manifest's own
+        entries.
     """
-    manifest_path, source_profiles, source_write_scope = _resolve_manifest_arg(
-        manifest, cache_dir=cache_dir
-    )
+    resolution = _resolve_manifest_arg(manifest, cache_dir=cache_dir, overlay=overlay)
+    manifest_path = resolution.path
+    source_profiles = resolution.profiles
+    source_write_scope = resolution.write_scope
     try:
         loaded = load_manifest(manifest_path, cache_dir=cache_dir)
         bundle = resolve_profile(
@@ -659,6 +756,7 @@ def apply_command(
                 loaded.options.default_profiles, profile, source_profiles
             ),
         )
+        bundle = _apply_overlay_to_bundle(bundle, resolution, cache_dir=cache_dir)
     except ManifestError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
@@ -749,6 +847,7 @@ def validate_command(
     platform: list[str] | None = None,
     profile: list[str] | None = None,
     cache_dir: Path | None = None,
+    overlay: bool = True,
 ) -> None:
     """Report drift between a manifest and each platform's on-disk config,
     without writing anything.
@@ -772,10 +871,14 @@ def validate_command(
         Where remote (``https://``/``git+``) skill/hook sources are fetched
         and cached. Defaults to ``.agent-config-kit-cache`` next to the
         manifest.
+    overlay
+        Same as ``apply --overlay``/``--no-overlay`` — fold config.toml's
+        overlay into the bundle drift is checked against. On by default.
     """
-    manifest_path, source_profiles, source_write_scope = _resolve_manifest_arg(
-        manifest, cache_dir=cache_dir
-    )
+    resolution = _resolve_manifest_arg(manifest, cache_dir=cache_dir, overlay=overlay)
+    manifest_path = resolution.path
+    source_profiles = resolution.profiles
+    source_write_scope = resolution.write_scope
     try:
         loaded = load_manifest(manifest_path, cache_dir=cache_dir)
         bundle = resolve_profile(
@@ -784,6 +887,7 @@ def validate_command(
                 loaded.options.default_profiles, profile, source_profiles
             ),
         )
+        bundle = _apply_overlay_to_bundle(bundle, resolution, cache_dir=cache_dir)
     except ManifestError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
