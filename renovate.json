@@ -8,7 +8,7 @@
 			"automerge": false
 		},
 		{
-			"description": "The custom manager below rewrites only the omnigraph VERSION lines. It leaves the release tag and asset digests on the old release, so CI tests the old binary under the new label (agent-kit#342). A release can also move the storage format, which means rebuilding every deployed graph (0.11.0 moved it from 6 to 9). A bump always needs a human to move the tag, digests and _OMNIGRAPH_INTERNAL_SCHEMA, and to plan any rebuild.",
+			"description": "The custom manager below rewrites only the omnigraph VERSION lines. It leaves the release tag and asset digests on the old release, so CI tests the old binary under the new label (agent-kit#342). A release can also move the storage format, which means rebuilding every deployed graph (0.11.0 moved it from 6 to 9). A bump always needs a human to move the tag, the digests and all three _OMNIGRAPH_INTERNAL_SCHEMA declarations (witan-core's plus the OMNIGRAPH_INTERNAL_SCHEMA build arg in each Dockerfile, which the images advertise as a label), and to plan any rebuild.",
 			"matchDepNames": ["ModernRelay/omnigraph"],
 			"automerge": false
 		}

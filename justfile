@@ -136,6 +136,29 @@ check-omnigraph-pins:
         echo "  docker/witan.Dockerfile:                             $mcp_sha" >&2
         exit 1
     fi
+    # The global ARG agreeing is not enough to produce the label. Docker scopes
+    # a global ARG out of every stage, so a runtime stage that does not
+    # re-declare it expands ${OMNIGRAPH_INTERNAL_SCHEMA} to the EMPTY STRING —
+    # and the build still succeeds, shipping an image that advertises no
+    # format. Downstream that reads as "image predates the label", which
+    # ol-infrastructure treats as non-fatal and skips, so the gate this whole
+    # mechanism exists to install would be off with nothing failing anywhere.
+    # Both lines that actually emit the label are therefore checked for.
+    for dockerfile in docker/omnigraph-server.Dockerfile docker/witan.Dockerfile; do
+        if ! grep -q '^ARG OMNIGRAPH_INTERNAL_SCHEMA$' "$dockerfile"; then
+            echo "$dockerfile declares OMNIGRAPH_INTERNAL_SCHEMA but its runtime" >&2
+            echo "stage never re-declares it, so the label would build EMPTY." >&2
+            echo "Add a bare 'ARG OMNIGRAPH_INTERNAL_SCHEMA' before the LABEL." >&2
+            exit 1
+        fi
+        if ! grep -q 'edu.mit.ol.omnigraph.internal-schema="\${OMNIGRAPH_INTERNAL_SCHEMA}"' "$dockerfile"; then
+            echo "$dockerfile does not emit edu.mit.ol.omnigraph.internal-schema" >&2
+            echo "from \${OMNIGRAPH_INTERNAL_SCHEMA}. ol-infrastructure reads that" >&2
+            echo "label to refuse a preview whose image reads the wrong format;" >&2
+            echo "without it the check silently degrades to skipped." >&2
+            exit 1
+        fi
+    done
     if [[ "$installer_schema" != "$server_schema" || "$installer_schema" != "$mcp_schema" ]]; then
         echo "omnigraph internal-schema declarations have drifted — the images" >&2
         echo "would advertise a storage format this repo does not declare:" >&2

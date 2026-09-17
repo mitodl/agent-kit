@@ -41,18 +41,24 @@ ARG OMNIGRAPH_SHA256_X86_64=da192e1a050875a93ee642b9df485203a00d8c0d44ca39204439
 ARG OMNIGRAPH_SHA256_ARM64=af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca33915a8f4bb
 # The on-disk storage format the pinned binary reads, mirrored from witan_core's
 # declaration (packages/witan-core/witan_core/omnigraph_install.py ::
-# _OMNIGRAPH_INTERNAL_SCHEMA) and stamped onto the image as a label below.
+# _OMNIGRAPH_INTERNAL_SCHEMA) and stamped onto the image below as
+# `edu.mit.ol.omnigraph.internal-schema`.
 #
 # WHY THE IMAGE HAS TO CARRY IT: ol-infrastructure deploys this image by digest
-# and has no access to this repo, so the format it reads was opaque to the
-# Pulumi program. Merging a format-bumping image into a cluster still serving
-# the old root therefore surfaced as a cluster-apply Job dying mid-deploy
-# (CI 2026-09-16, builds 187/188/189) rather than as a refused preview. With
-# the label, `validate_image_internal_schema` in that repo's
-# applications/omnigraph/storage.py can compare the deploying image against
-# the stack's committed `omnigraph:internal_schema_version`.
+# and has no access to this repo, so the format it reads is opaque to the
+# Pulumi program — its own preview check says it "does NOT verify either value
+# against the image actually being deployed". Merging a format-bumping image
+# into a cluster still serving the old root therefore surfaced as a
+# cluster-apply Job dying mid-deploy (CI 2026-09-16, builds 187/188/189) rather
+# than as a refused preview. Reading this label back out of ECR is what lets
+# that preview compare the deploying image against the stack's committed
+# `omnigraph:internal_schema_version`.
 #
-# `just check-omnigraph-pins` compares this against the installer declaration.
+# The label name is a cross-repo contract: renaming it on either side turns the
+# check off silently. `just check-omnigraph-pins` covers this value, the
+# runtime stage's re-declaration of it, and the LABEL line that emits it — an
+# ARG not re-declared in the stage expands to empty, which builds a clean image
+# advertising no format at all.
 ARG OMNIGRAPH_INTERNAL_SCHEMA=9
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
