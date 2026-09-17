@@ -31,6 +31,13 @@ ARG OMNIGRAPH_VERSION=0.11.0
 ARG OMNIGRAPH_RELEASE_TAG=v0.11.0
 ARG OMNIGRAPH_SHA256_X86_64=da192e1a050875a93ee642b9df485203a00d8c0d44ca39204439463ad41a766d
 ARG OMNIGRAPH_SHA256_ARM64=af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca33915a8f4bb
+# The storage format the pinned binary reads, stamped onto the image as
+# `edu.mit.ol.omnigraph.internal-schema` for ol-infrastructure's preview check.
+# See docker/omnigraph-server.Dockerfile for why the image has to carry it and
+# what `just check-omnigraph-pins` covers; mirrored from
+# packages/witan-core/witan_core/omnigraph_install.py ::
+# _OMNIGRAPH_INTERNAL_SCHEMA.
+ARG OMNIGRAPH_INTERNAL_SCHEMA=9
 # Keep in lockstep with witan-council's version (mcp/servers/witan/pyproject.toml
 # [project].version / [tool.bumpversion]); it labels the built image.
 ARG WITAN_VERSION=0.8.0
@@ -108,10 +115,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ── Runtime ───────────────────────────────────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim-trixie AS runtime
 ARG WITAN_VERSION
+ARG OMNIGRAPH_INTERNAL_SCHEMA
 LABEL org.opencontainers.image.title="witan" \
       org.opencontainers.image.description="witan MCP server — agent memory, task, and code graph" \
       org.opencontainers.image.source="https://github.com/mitodl/agent-kit" \
-      org.opencontainers.image.version="${WITAN_VERSION}"
+      org.opencontainers.image.version="${WITAN_VERSION}" \
+      edu.mit.ol.omnigraph.internal-schema="${OMNIGRAPH_INTERNAL_SCHEMA}"
 
 RUN useradd --uid 1000 --user-group --create-home witan
 
