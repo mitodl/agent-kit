@@ -200,6 +200,24 @@ def test_read_from_an_unmatched_directory_is_allowed_but_announced(
     assert "production" in text
 
 
+def test_search_reads_from_an_unmatched_directory_are_allowed(
+    config_file, unmatched_cwd, fresh_srv, monkeypatch, tmp_path
+):
+    """`witan tasks QUERY` / `witan projects QUERY` read through the search tools.
+
+    Missing from READ_TOOLS, the guard refused them as if they were writes and
+    the search exited instead of reading the fallback store.
+    """
+    from witan.cli._common import _srv
+
+    config_file.write_text(DEPLOYED.format(matched=tmp_path / "code"))
+    _stderr(monkeypatch)
+    server = _srv()
+
+    for name in ("task_search", "workflow_project_search"):
+        assert getattr(server, name) is not None
+
+
 def test_deliberate_local_target_dispatches_and_names_the_store(
     config_file, fresh_srv, monkeypatch, tmp_path
 ):
