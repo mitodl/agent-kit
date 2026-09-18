@@ -6,7 +6,7 @@ Workflow skills for interacting with external services and developer processes
 | Skill | Description |
 |-------|-------------|
 | [`create-ol-github-issue`](./create-ol-github-issue/SKILL.md) | Create mitodl GitHub issues using org standard templates |
-| [`create-ol-pull-request`](./create-ol-pull-request/SKILL.md) | Create mitodl pull requests using the org's standard PR template |
+| [`create-ol-pull-request`](./create-ol-pull-request/SKILL.md) | Create mitodl pull requests using the org's standard PR template, after an independent goal/security review and a claim audit |
 | [`create-ol-rfc-discussion`](./create-ol-rfc-discussion/SKILL.md) | Write and post a structured RFC as a GitHub Discussion in mitodl/hq under the RFC category |
 | [`generate-standup`](./generate-standup/SKILL.md) | Generate and post a daily standup from GitHub activity to the mitodl/hq Check-ins discussion |
 | [`screenshot-pr`](./screenshot-pr/SKILL.md) | Capture UI changes for a PR with shot-scraper at desktop, tablet, and mobile viewports |
@@ -15,6 +15,6 @@ Workflow skills for interacting with external services and developer processes
 | [`github-issue-triage`](./github-issue-triage/SKILL.md) | Audit open GitHub issues to identify stale, completed, or superseded items using parallel codebase cross-referencing |
 | [`github-pr-triage`](./github-pr-triage/SKILL.md) | Categorize open PRs across an org by required action (needs first-pass review, has feedback, approved & ready to merge) and optionally act on them |
 | [`address-pr-feedback`](./address-pr-feedback/SKILL.md) | Fetch, categorize, address, and resolve GitHub PR review feedback, with pagination for large/long-running PRs |
-| [`code-review`](./code-review/SKILL.md) | Review a diff, branch, path, or PR for correctness bugs and reuse/simplification/efficiency cleanups, with a verify-before-reporting pass |
+| [`code-review`](./code-review/SKILL.md) | Review a diff, branch, path, or PR for correctness bugs, gaps against stated goals, security issues, and reuse/simplification/efficiency cleanups, with a verify-before-reporting pass |
 | [`renovate-security-triage`](./renovate-security-triage/SKILL.md) | Rank open Renovate PRs in your active repos by security urgency using advisory severity, CVSS, and EPSS (read-only) |
 | [`deploy-verification`](./deploy-verification/SKILL.md) | Verify a merged config/infra change actually took effect — CD pipeline, pod rollout, running config, before/after metrics, and unintended-environment scope |
