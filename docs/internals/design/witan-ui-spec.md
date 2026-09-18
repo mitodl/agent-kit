@@ -1,4 +1,4 @@
-# Witan UI — spec
+# Witan UI spec
 
 Status: spec (proposed)
 Project: `wp-cross-platform-witan-gui-11c03d`
@@ -600,35 +600,42 @@ A reader gets exactly what their agents get: per-actor scoping in
 `_resolve_client()` (`server.py:210-275`) and the Cedar bundle apply unchanged,
 because the request is the same bearer-authenticated `/mcp` call.
 
-## 9. Tauri shell (deferred)
+## 9. Deferred
 
-Scope item 5 stays optional and is not scheduled. When it is, it wraps the same
-bundle and points it at a `witan ui` it spawns or at a deployed origin. The
-constraint that matters is already met by the design: the read layer has no
-Node or browser-only transport, so the shell adds no second one.
+- Tauri shell (scope item 5): stays optional and unscheduled, tracked at p3 as
+  `tk-optional-tauri-desktop-shell-wrapping-the-web-ap-e5330f`. When it is
+  picked up it wraps the same bundle and points it at a `witan ui` it spawns or
+  at a deployed origin. The read layer has no Node or browser-only transport,
+  so the shell adds no second one.
+- Cross-repo dependency bridge explorer
+  (`tk-cross-repo-dependency-bridge-explorer-shown-only-64ca2d`): reads through
+  `code_*` tools, which are outside ADR 0011's bound set, and two of them elicit
+  (ADR 0011, Consequences). Picking it up starts with amending the ADR.
 
 ## 10. Implementation tasks
 
-Under the epic, in dependency order. "→" is `blocked_by`.
+Under the epic `tk-witan-ui-epic-shared-read-layer-web-app-gantt-an-462f7c`,
+in dependency order. Discovery had already filed most of the views; they are
+reused here, retitled where the spec changed their premise, with a comment on
+each recording the change.
 
-1. Host/Origin validation on witan's HTTP transport (§2). p1.
-2. Server read gaps (§3.1–3.4): `task_list(limit)`, `created_at`/`closed_at` on
-   list rows, `task_get` edges, `lease_expired` on in-progress rows. p1.
-3. Frontend package, build and packaging pipeline (§5.1, §5.4): scaffold,
-   CI workflow, wheel artifacts, Dockerfile stage. p1.
-4. `witan ui` and the `/ui/` routes (§5.2, §5.3) → 1, 3. p1.
-5. Read layer (§4), retitling `tk-build-the-witan-ui-read-layer-over-queries-read--825c85`
-   → 1, 3. p1.
-6. Shell, projects, rollup and task detail (§6.1–6.3) → 2, 4, 5. p1.
-7. Board (§6.4) → 6. p1.
-8. `memory_contradictions` tool and the ADR 0011 amendment (§3.5). p2.
-9. Memory and contradictions view (§6.7) → 6, 8. p2.
-10. `first_claimed_at` on `Task` (§3.6), schema first. p2.
-11. Dependency waves and the graph tab (§6.5, §6.8) → 6. p2.
-12. Retrospective timeline (§6.6) → 6, 10. p2.
-13. Deployed mount: Keycloak client, deployment env, SPA login (§8) → 4, 5. p2.
-14. MCP Apps widgets (§7) → 4, 6, 7. p2.
+| # | Task | Spec | Blocked by | Priority |
+|---|---|---|---|---|
+| 1 | `tk-turn-on-fastmcp-s-host-origin-guard-for-witan-s--e9cb9f` | §2 | | p1 |
+| 2 | `tk-close-the-read-gaps-the-witan-ui-views-need-task-e6d786` | §3.1 to 3.4 | | p1 |
+| 3 | `tk-scaffold-the-witan-ui-frontend-package-and-its-b-0d4cbe` | §5.1, §5.4 | | p1 |
+| 4 | `tk-witan-ui-serve-the-app-shell-locally-and-mount-i-f47561` | §5.2, §5.3 | 1, 3 | p1 |
+| 5 | `tk-build-the-witan-ui-read-layer-over-queries-read--825c85` | §4 | 1, 3 | p1 |
+| 6 | `tk-drill-down-view-target-to-project-to-task-with-a-b05e5f` (shell, projects, rollup, detail) | §6.1 to 6.3 | 2, 4, 5 | p1 |
+| 7 | `tk-board-view-driven-by-task-ready-with-claim-lease-fbe5d7` | §6.4 | 6 | p1 |
+| 8 | `tk-add-a-read-only-memory-contradictions-tool-and-a-44e4a1` | §3.5 | | p2 |
+| 9 | `tk-memory-view-with-a-contradictions-inbox-160698` | §6.7 | 6, 8 | p2 |
+| 10 | `tk-record-first-claimed-at-on-task-so-the-retrospec-da730d` | §3.6 | | p2 |
+| 11 | `tk-dependency-wave-chart-critical-path-through-the--91f179` | §6.5 | 6 | p2 |
+| 12 | `tk-fold-the-witan-graph-vis-network-html-in-as-a-ta-254599` | §6.8 | 6 | p3 |
+| 13 | `tk-retrospective-gantt-from-claimed-at-closed-at-an-260eac` | §6.6 | 6, 10 | p2 |
+| 14 | `tk-mount-the-witan-ui-on-the-deployment-witan-ui-ke-0cac57` | §8 | 4, 5 | p2 |
+| 15 | `tk-mcp-apps-ui-widgets-so-claude-desktop-renders-th-d1de23` | §7 | 4, 6, 7 | p2 |
 
-The Tauri shell is not filed (§9).
 `tk-close-the-cli-json-gaps-the-gui-discovery-found--28dad2` stays where ADR
 0011 put it: p2, not a UI prerequisite, blocking nothing here.
