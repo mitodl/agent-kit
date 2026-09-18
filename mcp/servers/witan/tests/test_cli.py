@@ -452,6 +452,89 @@ def test_tasks_elides_closed_by_default(server, monkeypatch):
 
 
 @requires_omnigraph
+def test_tasks_query_searches_and_keeps_list_filters(server, monkeypatch):
+    """`witan tasks QUERY` ranks by search but still elides closed tasks."""
+    from witan.cli import _common
+    from witan.cli._common import _fn
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common, "_server", server)
+    captured = []
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: captured.append(a[0]))
+
+    hit = _fn(server.task_create)(
+        title="grafana dashboard for gravitino", description="d"
+    )
+    miss = _fn(server.task_create)(title="rotate vault token", description="d")
+    closed = _fn(server.task_create)(title="old grafana dashboard", description="d")
+    _fn(server.task_close)(closed["slug"])
+
+    tasks("grafana dashboard", all_repos=True)
+    table = next(c for c in captured if hasattr(c, "columns"))
+    slugs = _table_column(table, "slug")
+    assert slugs == [hit["slug"]]
+    assert miss["slug"] not in slugs
+
+    captured.clear()
+    tasks("grafana dashboard", all_repos=True, status="closed")
+    table = next(c for c in captured if hasattr(c, "columns"))
+    assert _table_column(table, "slug") == [closed["slug"]]
+
+    captured.clear()
+    tasks("nonexistent zzyzx", all_repos=True)
+    assert any("No tasks match" in str(c) for c in captured)
+
+
+@requires_omnigraph
+def test_tasks_query_finds_tasks_older_than_the_recent_window(server, monkeypatch):
+    """An all-repos search reaches past the 50 most recently updated tasks.
+
+    The unfiltered all-repos listing is capped at 50 rows, so a search that
+    intersected with it dropped every older match.
+    """
+    from witan.cli import _common
+    from witan.cli._common import _fn
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common, "_server", server)
+    captured = []
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: captured.append(a[0]))
+
+    old = _fn(server.task_create)(title="starrocks grafana dashboard", description="d")
+    for i in range(51):
+        _fn(server.task_create)(title=f"filler {i}", description="unrelated")
+
+    tasks("grafana dashboard", all_repos=True)
+    table = next(c for c in captured if hasattr(c, "columns"))
+    assert _table_column(table, "slug") == [old["slug"]]
+
+
+@requires_omnigraph
+def test_projects_query_searches(server, monkeypatch):
+    """`witan projects QUERY` returns only matching projects."""
+    from witan.cli import _common
+    from witan.cli._common import _fn
+    from witan.cli.projects import projects
+
+    monkeypatch.setattr(_common, "_server", server)
+    captured = []
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: captured.append(a[0]))
+
+    hit = _fn(server.workflow_project_create)(
+        title="gravitino catalog rollout", description="d"
+    )
+    miss = _fn(server.workflow_project_create)(
+        title="keycloak login fix-up", description="d"
+    )
+
+    projects("gravitino", all_repos=True)
+    table = next(c for c in captured if hasattr(c, "columns"))
+    slugs = _table_column(table, "slug")
+    assert hit["slug"] in slugs
+    assert miss["slug"] not in slugs
+
+
+@requires_omnigraph
 def test_graph_command_rich_output(server, monkeypatch):
     """witan graph prints projects and tasks without requiring HTML output."""
     from witan import server as srv

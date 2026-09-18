@@ -8,6 +8,17 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **`witan projects` and `witan tasks` take an optional free-text query.**
+  `witan tasks 'grafana dashboard'` or `witan projects gravitino` ranks
+  results with the server's existing `task_search` /
+  `workflow_project_search` BM25 search, capped at 20 hits. The other flags
+  still apply. Task hits are filtered on their own status and project fields,
+  and `--ready` / `--assignee` are checked against the server's listing.
+  Search results omit the `blocked_by` column because search rows don't carry
+  it.
+
 ## [0.35.0] - 2026-09-18
 
 ### Added
