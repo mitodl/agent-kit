@@ -17,10 +17,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
-from .installers import install_skills
+from .installers import hook_content_hash, install_skills, skill_content_hash
 from .jsonio import load_json_object
 from .models import DeclarativeHook, PluginRegistration, Scope
 from .plan import RegistrationBundle, _default_serialize, _navigate, _resolve_target
+from .prune import AppliedState, hook_identity, stale_names
 
 
 @dataclass
@@ -36,10 +37,22 @@ class Drift:
     unreadable_paths: list[Path] = field(
         default_factory=list
     )  # JSON targets that failed to parse — reported distinctly, not drift
+    stale_keys: list[str] = field(default_factory=list)
+    # "skills:<name>"/"hooks:<identity>" whose currently-resolved source
+    # content no longer matches the hash recorded at the last apply
+    # (staleness-detection spec S1/S5) — distinct from missing_keys: the
+    # entry IS installed, its upstream source just changed since. Empty
+    # when no `previous` AppliedState was given to `diff()` (nothing
+    # recorded yet to compare against).
 
     @property
     def has_drift(self) -> bool:
-        return bool(self.missing_keys or self.mismatched_keys or self.missing_paths)
+        return bool(
+            self.missing_keys
+            or self.mismatched_keys
+            or self.missing_paths
+            or self.stale_keys
+        )
 
 
 def _diff_mcp_servers(
@@ -79,6 +92,7 @@ def _diff_hooks(
     bundle: RegistrationBundle,
     scope: Scope,
     result: Drift,
+    previous: AppliedState | None,
 ) -> None:
     if platform.hooks is None or not bundle.hooks:
         return
@@ -112,6 +126,15 @@ def _diff_hooks(
                 dest = target.path / plugin.entry_path.name
                 if not dest.exists():
                     result.missing_paths.append(dest)
+            if previous is not None:
+                current_hooks = {
+                    hook_identity(plugin): hook_content_hash(plugin.entry_path)
+                    for plugin in plugins
+                }
+                result.stale_keys.extend(
+                    f"hooks:{ident}"
+                    for ident in stale_names(current_hooks, previous.hooks)
+                )
 
 
 def _diff_skills(
@@ -119,6 +142,7 @@ def _diff_skills(
     bundle: RegistrationBundle,
     scope: Scope,
     result: Drift,
+    previous: AppliedState | None,
 ) -> None:
     if platform.skills is None or not bundle.skills:
         return
@@ -133,13 +157,29 @@ def _diff_skills(
     dests = install_skills(bundle.skills, dest_dirs, dry_run=True)
     result.missing_paths.extend(dest for dest in dests if not dest.exists())
 
+    if previous is not None:
+        current_skills = {
+            skill.name: skill_content_hash(skill) for skill in bundle.skills
+        }
+        result.stale_keys.extend(
+            f"skills:{name}" for name in stale_names(current_skills, previous.skills)
+        )
+
 
 def diff(
-    platform_name: str, bundle: RegistrationBundle, *, scope: Scope = Scope.GLOBAL
+    platform_name: str,
+    bundle: RegistrationBundle,
+    *,
+    scope: Scope = Scope.GLOBAL,
+    previous: AppliedState | None = None,
 ) -> Drift:
+    """``previous`` is the platform's last-recorded ``AppliedState``
+    (``prune.load_applied_state``), if any — omit it (or pass ``None``) to
+    skip staleness checking entirely and get presence/absence drift only,
+    same as before the staleness-detection feature existed."""
     platform = registry.get_platform(platform_name)
     result = Drift(platform=platform_name)
     _diff_mcp_servers(platform_name, platform, bundle, scope, result)
-    _diff_hooks(platform, bundle, scope, result)
-    _diff_skills(platform, bundle, scope, result)
+    _diff_hooks(platform, bundle, scope, result, previous)
+    _diff_skills(platform, bundle, scope, result, previous)
     return result

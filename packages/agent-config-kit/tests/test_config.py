@@ -238,3 +238,150 @@ def test_load_global_config_unreadable_file_raises_config_error(tmp_path, monkey
 
     with pytest.raises(ConfigError, match="could not read"):
         load_global_config(config_path)
+
+
+def test_load_global_config_parses_global_org_and_scope_overlay_tables(tmp_path):
+    config_path = _write(
+        tmp_path,
+        "config.toml",
+        """
+        [overlay.mcp_servers.memory]
+        kind = "stdio"
+        command = "npx"
+
+        [[org]]
+        name     = "mitodl"
+        manifest = "https://cfg.mitodl.org/agent-config.toml"
+
+        [org.overlay.skills.personal-notes]
+        skill_md_path = "./skills/personal-notes/SKILL.md"
+
+        [[scope]]
+        match_prefix = "~/code/mit"
+        manifest     = "~/dotfiles/agent-config.toml"
+
+        [scope.overlay.mcp_servers.local-proxy]
+        kind    = "stdio"
+        command = "my-local-proxy"
+        """,
+    )
+
+    result = load_global_config(config_path)
+
+    assert result.overlay == {
+        "mcp_servers": {"memory": {"kind": "stdio", "command": "npx"}}
+    }
+    # Relative (no ~) — `_expand_path_like` still normalizes it through
+    # `Path(...)` (dropping the leading `./`, same as `default_manifest`/
+    # `org.manifest` already do) but doesn't anchor it anywhere. Resolving
+    # it against config.toml's own directory is I8's job, done later by
+    # manifest.load_overlay_bundle, not at this parsing layer.
+    assert result.org[0].overlay == {
+        "skills": {
+            "personal-notes": {
+                "skill_md_path": "skills/personal-notes/SKILL.md",
+            }
+        }
+    }
+    assert result.scope[0].overlay == {
+        "mcp_servers": {"local-proxy": {"kind": "stdio", "command": "my-local-proxy"}}
+    }
+
+
+def test_load_global_config_defaults_overlay_to_empty_dict_when_absent(tmp_path):
+    config_path = _write(
+        tmp_path,
+        "config.toml",
+        """
+        [[org]]
+        name     = "mitodl"
+        manifest = "~/dotfiles/agent-config.toml"
+        """,
+    )
+
+    result = load_global_config(config_path)
+
+    assert result.overlay == {}
+    assert result.org[0].overlay == {}
+
+
+def test_load_global_config_expands_tilde_in_overlay_skill_md_path(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = _write(
+        tmp_path,
+        "config.toml",
+        """
+        [overlay.skills.commit]
+        skill_md_path = "~/dotfiles/skills/commit/SKILL.md"
+        """,
+    )
+
+    result = load_global_config(config_path)
+
+    assert result.overlay["skills"]["commit"]["skill_md_path"] == str(
+        tmp_path / "dotfiles" / "skills" / "commit" / "SKILL.md"
+    )
+
+
+def test_load_global_config_expands_tilde_in_overlay_plugin_hook_entry_path(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = _write(
+        tmp_path,
+        "config.toml",
+        """
+        [[overlay.hooks]]
+        kind = "plugin"
+        entry_path = "~/dotfiles/extensions/pi/witan.ts"
+        """,
+    )
+
+    result = load_global_config(config_path)
+
+    assert result.overlay["hooks"][0]["entry_path"] == str(
+        tmp_path / "dotfiles" / "extensions" / "pi" / "witan.ts"
+    )
+
+
+def test_load_global_config_tolerates_non_list_overlay_hooks_shape(tmp_path):
+    """`overlay` is intentionally unvalidated raw data at this layer (real
+    shape validation happens downstream, via
+    manifest.load_overlay_bundle) — a malformed `hooks` value (here, an
+    int instead of a list) must not raise a raw TypeError while expanding
+    `~` in it; it's the downstream validator's job to report the bad
+    shape, not this parsing layer's."""
+    config_path = _write(
+        tmp_path,
+        "config.toml",
+        """
+        [overlay]
+        hooks = 1
+        """,
+    )
+
+    result = load_global_config(config_path)
+
+    assert result.overlay["hooks"] == 1
+
+
+def test_load_global_config_overlay_string_skill_shorthand_expands_tilde(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = _write(
+        tmp_path,
+        "config.toml",
+        """
+        [overlay.skills]
+        commit = "~/dotfiles/skills/commit/SKILL.md"
+        """,
+    )
+
+    result = load_global_config(config_path)
+
+    assert result.overlay["skills"]["commit"] == str(
+        tmp_path / "dotfiles" / "skills" / "commit" / "SKILL.md"
+    )

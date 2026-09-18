@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 try:
@@ -28,27 +29,41 @@ except ImportError as exc:
     )
     raise SystemExit(1) from exc
 
-from .config import load_global_config, resolve_config_path
+from .config import ConfigError, load_global_config, resolve_config_path
 from .diff import Drift
 from .diff import diff as diff_bundle
 from .fetch import FetchError, fetch_remote, is_remote_uri
 from .installers import ConflictingPathError
-from .manifest import ManifestError, load_manifest, resolve_profile
+from .manifest import (
+    ManifestError,
+    apply_overlay,
+    load_manifest,
+    load_overlay_bundle,
+    resolve_profile,
+)
 from .models import SKILL_NAME_PATTERN, Scope
-from .plan import InstallResult
+from .plan import InstallResult, RegistrationBundle
 from .plan import apply as apply_bundle
 from .plan import apply_all as apply_all_bundle
 from .prune import (
+    AppliedState,
     PlatformState,
     apply_with_prune,
+    bundle_applied_state,
+    default_applied_state_path,
     default_state_path,
+    hook_identity,
+    load_applied_state,
     load_state,
+    stale_names,
+    write_applied_state,
     write_state,
 )
 from .registry import detect_installed_platforms, known_platforms
 from .resolve import (
     default_manifest_cache_dir,
     find_repo_root,
+    resolve_overlay,
     resolve_zero_arg_manifest,
 )
 from .version import resolve_version
@@ -481,20 +496,58 @@ def _materialize_manifest_arg(value: str, *, cache_dir: Path | None) -> Path:
     return Path(value).expanduser()
 
 
+@dataclass
+class _ManifestResolution:
+    path: Path
+    profiles: list[str] | None
+    write_scope: Scope | None
+    # See "Part A" of agent-config-kit-config-overlay-spec.md. `overlay` is
+    # the combined, still-raw config-overlay fragment for this invocation
+    # (empty when there's nothing, or when `--no-overlay` was given);
+    # `overlay_source` names which layer(s) contributed, for the I5
+    # apply-output visibility line; `overlay_config_path` is config.toml's
+    # own path, needed by `manifest.load_overlay_bundle` for I8's
+    # relative-path anchor.
+    overlay: dict
+    overlay_source: str
+    overlay_config_path: Path | None
+
+
 def _resolve_manifest_arg(
-    manifest: str | None, *, cache_dir: Path | None
-) -> tuple[Path, list[str] | None, Scope | None]:
+    manifest: str | None, *, cache_dir: Path | None, overlay: bool
+) -> _ManifestResolution:
     """``MANIFEST`` given explicitly -> materialize it (fetching a remote
     URI if that's what it is) with no profile/scope override from this
     step. Otherwise resolve it from the global config per O2
     (``resolve.py``), printing which source won so the "magic" a zero-arg
-    apply performs is legible (spec §7.2)."""
-    if manifest is not None:
-        return _materialize_manifest_arg(manifest, cache_dir=cache_dir), None, None
+    apply performs is legible (spec §7.2).
 
-    config = load_global_config()
+    ``overlay`` is the ``--overlay``/``--no-overlay`` flag (I7, decided: on
+    by default). ``False`` skips config-overlay computation entirely — not
+    even loading ``config.toml`` for an explicit ``MANIFEST`` — matching a
+    fully-explicit invocation's "just this manifest" expectation exactly
+    when asked to. When ``True``, config.toml's global ``[overlay]``
+    applies even to an explicit ``MANIFEST``; only zero-arg resolution can
+    also pick up a matched ``[[org]]``/``[[scope]]`` entry's own overlay,
+    since an explicit ``MANIFEST`` bypasses O2 (and thus any org/scope
+    match) entirely."""
+    if manifest is not None:
+        path = _materialize_manifest_arg(manifest, cache_dir=cache_dir)
+        if not overlay:
+            return _ManifestResolution(path, None, None, {}, "", None)
+        config_path = resolve_config_path(None)
+        config = load_global_config(config_path)
+        overlay_data, overlay_source = resolve_overlay(config, config_path)
+        return _ManifestResolution(
+            path, None, None, overlay_data, overlay_source, config_path
+        )
+
+    config_path = resolve_config_path(None)
+    config = load_global_config(config_path)
     try:
-        resolved = resolve_zero_arg_manifest(Path.cwd(), config, cache_dir=cache_dir)
+        resolved = resolve_zero_arg_manifest(
+            Path.cwd(), config, config_path, cache_dir=cache_dir
+        )
     except FetchError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
@@ -507,30 +560,68 @@ def _resolve_manifest_arg(
         )
         raise SystemExit(2)
     console.print(f"resolved manifest from {resolved.source}")
-    return resolved.path, resolved.profiles, resolved.write_scope
+    if not overlay:
+        return _ManifestResolution(
+            resolved.path, resolved.profiles, resolved.write_scope, {}, "", None
+        )
+    return _ManifestResolution(
+        resolved.path,
+        resolved.profiles,
+        resolved.write_scope,
+        resolved.overlay,
+        resolved.overlay_source,
+        config_path,
+    )
 
 
-def _default_prune_state_path(manifest_path: Path, scope: Scope) -> Path:
+def _redirect_project_scope_state_path(
+    manifest_path: Path, scope: Scope, *, default_path: Path, redirect_filename: str
+) -> Path:
     """O-STATE (spec §9): a manifest resolved via ``[[org]]``/``[[scope]]``/
     ``default_manifest`` typically lives OUTSIDE the repo it's being
     applied into — that's the point, a shared bundle referenced from many
-    repos. ``default_state_path``'s usual manifest-adjacent
-    ``<manifest>.lock.json`` would then be a single state file shared (and
+    repos. A manifest-adjacent state file (``<manifest>.lock.json``,
+    ``<manifest>.applied.json``) would then be a single file shared (and
     clobbered) across every repo applying that same manifest, corrupting
-    what ``--prune`` believes it safely wrote to each repo's own
-    project-scope targets. Redirect to a repo-scoped state file whenever
-    the effective write scope is ``project`` and the manifest isn't
-    already inside the repo being applied into — a manifest that already
-    lives in the repo (an explicit local path, or the repo-local zero-arg
-    case) keeps the original, unaffected default. A ``global``-scope
-    apply's target is the same single location regardless of which repo
-    you ran it from, so its state should stay shared too — this
-    redirection is intentionally ``project``-only."""
+    what each repo's own project-scope apply believes it wrote. Redirect
+    to a repo-scoped state file whenever the effective write scope is
+    ``project`` and the manifest isn't already inside the repo being
+    applied into — a manifest that already lives in the repo (an explicit
+    local path, or the repo-local zero-arg case) keeps the original,
+    unaffected default. A ``global``-scope apply's target is the same
+    single location regardless of which repo you ran it from, so its
+    state should stay shared too — this redirection is intentionally
+    ``project``-only.
+
+    Shared by both the prune lock file and the staleness-detection
+    applied-state file (``agent-config-kit-config-overlay-spec.md`` S2) —
+    both are manifest-adjacent state with the same cross-repo clobbering
+    risk, so both need the same redirect, just to a different filename
+    (each kind of state is independent — see S2/§9.5 — so they can't share
+    one redirected file either)."""
     if scope == Scope.PROJECT:
         repo_root = find_repo_root(Path.cwd())
         if repo_root is not None and repo_root not in manifest_path.resolve().parents:
-            return repo_root / ".agent-config-kit-state.json"
-    return default_state_path(manifest_path)
+            return repo_root / redirect_filename
+    return default_path
+
+
+def _default_prune_state_path(manifest_path: Path, scope: Scope) -> Path:
+    return _redirect_project_scope_state_path(
+        manifest_path,
+        scope,
+        default_path=default_state_path(manifest_path),
+        redirect_filename=".agent-config-kit-state.json",
+    )
+
+
+def _default_applied_state_path(manifest_path: Path, scope: Scope) -> Path:
+    return _redirect_project_scope_state_path(
+        manifest_path,
+        scope,
+        default_path=default_applied_state_path(manifest_path),
+        redirect_filename=".agent-config-kit-applied-state.json",
+    )
 
 
 def _report(
@@ -575,6 +666,49 @@ def _print_diffs(results: dict[str, InstallResult]) -> None:
                 console.print(line, style=style, markup=False, highlight=False)
 
 
+def _apply_overlay_to_bundle(
+    bundle: RegistrationBundle,
+    resolution: _ManifestResolution,
+    *,
+    cache_dir: Path | None,
+) -> RegistrationBundle:
+    """Build+apply the resolved config-overlay fragment (if any) onto an
+    already profile-resolved bundle (O-OVERLAY-PROFILES — see
+    ``manifest.apply_overlay``'s own docstring for why this must run after
+    profile resolution, not before), printing the I5 visibility line.
+    A no-op (returns ``bundle`` unchanged, prints nothing) when
+    ``resolution.overlay`` is empty — either nothing matched, or
+    ``--no-overlay`` was given.
+
+    The printed count is the overlay's *effective* contribution — entries
+    it introduces that ``bundle`` doesn't already have — not its raw size.
+    ``apply_overlay`` has ``bundle`` win every same-keyed collision (I4),
+    so counting ``overlay_bundle``'s own size would overstate the line
+    whenever an overlay entry loses to one already in ``bundle``: it would
+    claim N entries were added when some (or all) of them were silently
+    no-ops, undercutting the whole point of a legibility line."""
+    if not resolution.overlay or resolution.overlay_config_path is None:
+        return bundle
+    overlay_bundle = load_overlay_bundle(
+        resolution.overlay, resolution.overlay_config_path, cache_dir=cache_dir
+    )
+    existing_mcp_servers = set(bundle.mcp_servers)
+    existing_skills = {s.name for s in bundle.skills}
+    existing_hooks = {hook_identity(h) for h in bundle.hooks}
+    existing_lsp_servers = set(bundle.lsp_servers)
+    count = (
+        sum(1 for k in overlay_bundle.mcp_servers if k not in existing_mcp_servers)
+        + sum(1 for s in overlay_bundle.skills if s.name not in existing_skills)
+        + sum(1 for h in overlay_bundle.hooks if hook_identity(h) not in existing_hooks)
+        + sum(1 for k in overlay_bundle.lsp_servers if k not in existing_lsp_servers)
+    )
+    entry_word = "entry" if count == 1 else "entries"
+    console.print(
+        f"+ {count} inline {entry_word} from config.toml ({resolution.overlay_source})"
+    )
+    return apply_overlay(bundle, overlay_bundle)
+
+
 @app.command(name="apply")
 def apply_command(
     manifest: str | None = None,
@@ -588,6 +722,7 @@ def apply_command(
     force: bool = False,
     state_file: Path | None = None,
     cache_dir: Path | None = None,
+    overlay: bool = True,
 ) -> None:
     """Apply a manifest's MCP servers, hooks, and skills to one or more
     coding-agent platforms.
@@ -647,11 +782,21 @@ def apply_command(
         manifest to sit "next to" yet) defaults to the same
         ``~/.cache/agent-config-kit/manifests`` location a zero-arg
         resolution uses.
+    overlay
+        Merge config.toml's global ``[overlay]`` (and, for zero-arg
+        resolution, a matched ``[[org]]``/``[[scope]]`` entry's own
+        overlay) onto the manifest — see
+        ``agent-config-kit-config-overlay-spec.md``. On by default (I7);
+        pass ``--no-overlay`` for a run that uses only this manifest's own
+        entries.
     """
-    manifest_path, source_profiles, source_write_scope = _resolve_manifest_arg(
-        manifest, cache_dir=cache_dir
-    )
     try:
+        resolution = _resolve_manifest_arg(
+            manifest, cache_dir=cache_dir, overlay=overlay
+        )
+        manifest_path = resolution.path
+        source_profiles = resolution.profiles
+        source_write_scope = resolution.write_scope
         loaded = load_manifest(manifest_path, cache_dir=cache_dir)
         bundle = resolve_profile(
             loaded,
@@ -659,7 +804,8 @@ def apply_command(
                 loaded.options.default_profiles, profile, source_profiles
             ),
         )
-    except ManifestError as exc:
+        bundle = _apply_overlay_to_bundle(bundle, resolution, cache_dir=cache_dir)
+    except (ManifestError, ConfigError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
 
@@ -669,12 +815,34 @@ def apply_command(
     if resolved_scope is None:
         resolved_scope = loaded.options.scope
     platforms = _resolve_platforms(loaded.options.platforms, platform)
+    target_platforms = (
+        platforms if platforms is not None else detect_installed_platforms()
+    )
+
+    # Staleness detection (spec Part B, S4) — unconditional, never gated on
+    # --prune, and never blocking: apply() already re-copies every
+    # skill/plugin-hook on every run regardless of whether it changed, so
+    # this warning is purely informational, corrected as a side effect of
+    # the very apply that reports it.
+    applied_state_path = _default_applied_state_path(manifest_path, resolved_scope)
+    applied_states = load_applied_state(applied_state_path)
+    current_applied_state = bundle_applied_state(bundle)
+    stale_skills: set[str] = set()
+    stale_hooks: set[str] = set()
+    for name in target_platforms:
+        previous = applied_states.get(name, AppliedState())
+        stale_skills.update(stale_names(current_applied_state.skills, previous.skills))
+        stale_hooks.update(stale_names(current_applied_state.hooks, previous.hooks))
+    if stale_skills or stale_hooks:
+        changed = sorted(stale_skills) + sorted(stale_hooks)
+        entry_word = "entry" if len(changed) == 1 else "entries"
+        console.print(
+            f"[yellow]⚠ {len(changed)} {entry_word} changed upstream since "
+            f"last apply: {', '.join(changed)}[/yellow]"
+        )
 
     try:
         if prune:
-            target_platforms = (
-                platforms if platforms is not None else detect_installed_platforms()
-            )
             state_path = (
                 state_file
                 if state_file is not None
@@ -717,6 +885,17 @@ def apply_command(
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
 
+    # Same "skipped means nothing actually written" reasoning as the prune
+    # state update above — unconditional here (S2: never gated on --prune),
+    # but still merged into whatever was already recorded (load-then-write)
+    # so a single-platform run doesn't erase every other platform's
+    # previously recorded hashes.
+    if not dry_run:
+        for name, result in results.items():
+            if not result.skipped:
+                applied_states[name] = current_applied_state
+        write_applied_state(applied_state_path, manifest_path, applied_states)
+
     if _report(results, dry_run=dry_run, show_diff=diff):
         raise SystemExit(1)
 
@@ -725,7 +904,9 @@ def _report_drift(drifts: dict[str, Drift]) -> bool:
     """Print a rich table of each platform's drift. Returns True if any
     platform has drift or an unreadable target (the latter isn't drift per
     se, but must not exit 0 silently)."""
-    table = Table("platform", "missing", "mismatched", "missing paths", "unreadable")
+    table = Table(
+        "platform", "missing", "mismatched", "missing paths", "stale", "unreadable"
+    )
     had_issue = False
     for name, drift in drifts.items():
         if drift.has_drift or drift.unreadable_paths:
@@ -735,6 +916,7 @@ def _report_drift(drifts: dict[str, Drift]) -> bool:
             "\n".join(drift.missing_keys) or "-",
             "\n".join(drift.mismatched_keys) or "-",
             "\n".join(str(p) for p in drift.missing_paths) or "-",
+            "\n".join(drift.stale_keys) or "-",
             "\n".join(str(p) for p in drift.unreadable_paths) or "-",
         )
     console.print(table)
@@ -749,6 +931,7 @@ def validate_command(
     platform: list[str] | None = None,
     profile: list[str] | None = None,
     cache_dir: Path | None = None,
+    overlay: bool = True,
 ) -> None:
     """Report drift between a manifest and each platform's on-disk config,
     without writing anything.
@@ -772,11 +955,17 @@ def validate_command(
         Where remote (``https://``/``git+``) skill/hook sources are fetched
         and cached. Defaults to ``.agent-config-kit-cache`` next to the
         manifest.
+    overlay
+        Same as ``apply --overlay``/``--no-overlay`` — fold config.toml's
+        overlay into the bundle drift is checked against. On by default.
     """
-    manifest_path, source_profiles, source_write_scope = _resolve_manifest_arg(
-        manifest, cache_dir=cache_dir
-    )
     try:
+        resolution = _resolve_manifest_arg(
+            manifest, cache_dir=cache_dir, overlay=overlay
+        )
+        manifest_path = resolution.path
+        source_profiles = resolution.profiles
+        source_write_scope = resolution.write_scope
         loaded = load_manifest(manifest_path, cache_dir=cache_dir)
         bundle = resolve_profile(
             loaded,
@@ -784,7 +973,8 @@ def validate_command(
                 loaded.options.default_profiles, profile, source_profiles
             ),
         )
-    except ManifestError as exc:
+        bundle = _apply_overlay_to_bundle(bundle, resolution, cache_dir=cache_dir)
+    except (ManifestError, ConfigError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(2) from exc
 
@@ -797,8 +987,16 @@ def validate_command(
     if platforms is None:
         platforms = detect_installed_platforms()
 
+    applied_state_path = _default_applied_state_path(manifest_path, resolved_scope)
+    applied_states = load_applied_state(applied_state_path)
     drifts = {
-        name: diff_bundle(name, bundle, scope=resolved_scope) for name in platforms
+        name: diff_bundle(
+            name,
+            bundle,
+            scope=resolved_scope,
+            previous=applied_states.get(name),
+        )
+        for name in platforms
     }
 
     if _report_drift(drifts):

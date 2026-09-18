@@ -1,14 +1,22 @@
+import re
 from pathlib import Path
 
 import pytest
 
-from agent_config_kit.manifest import ManifestError, load_manifest
+from agent_config_kit.manifest import (
+    ManifestError,
+    apply_overlay,
+    load_manifest,
+    load_overlay_bundle,
+)
 from agent_config_kit.models import (
     DeclarativeHook,
     PluginRegistration,
     Scope,
+    SkillSource,
     StdioServer,
 )
+from agent_config_kit.plan import RegistrationBundle
 
 
 def _write(tmp_path: Path, name: str, text: str) -> Path:
@@ -472,3 +480,137 @@ def test_instructions_after_table_is_absorbed_into_it_not_top_level(tmp_path):
     result = load_manifest(manifest)
 
     assert result.bundle.instructions is None
+
+
+def _write_skill(tmp_path: Path, rel_path: str) -> Path:
+    skill_md = tmp_path / rel_path
+    skill_md.parent.mkdir(parents=True, exist_ok=True)
+    skill_md.write_text("---\nname: personal-notes\n---\nBody.\n")
+    return skill_md
+
+
+def test_load_overlay_bundle_builds_mcp_servers_and_skills(tmp_path):
+    config_path = tmp_path / "config.toml"
+    overlay = {
+        "mcp_servers": {"memory": {"kind": "stdio", "command": "npx"}},
+        "skills": {"commit": "skills/commit/SKILL.md"},
+    }
+    _write_skill(tmp_path, "skills/commit/SKILL.md")
+
+    bundle = load_overlay_bundle(overlay, config_path)
+
+    assert bundle.mcp_servers["memory"] == StdioServer(command="npx")
+    assert bundle.skills == [
+        SkillSource(name="commit", skill_md_path=tmp_path / "skills/commit/SKILL.md")
+    ]
+
+
+def test_load_overlay_bundle_resolves_relative_skill_path_against_config_dir_not_cwd(
+    tmp_path, monkeypatch
+):
+    """I8: a relative skill_md_path resolves against config_path's own
+    directory, regardless of the process CWD or any other manifest's
+    directory — proven here by chdir-ing somewhere else entirely."""
+    config_dir = tmp_path / "config-home"
+    config_dir.mkdir()
+    config_path = config_dir / "config.toml"
+    _write_skill(config_dir, "skills/commit/SKILL.md")
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    bundle = load_overlay_bundle(
+        {"skills": {"commit": "skills/commit/SKILL.md"}}, config_path
+    )
+
+    assert bundle.skills[0].skill_md_path == config_dir / "skills/commit/SKILL.md"
+
+
+def test_load_overlay_bundle_invalid_shape_raises_manifest_error_naming_config_toml(
+    tmp_path,
+):
+    config_path = tmp_path / "config.toml"
+
+    with pytest.raises(ManifestError, match=re.escape(str(config_path))):
+        load_overlay_bundle({"mcp_servers": "not-a-table"}, config_path)
+
+
+def test_load_overlay_bundle_rejects_instructions(tmp_path):
+    """ManifestBundle accepts `instructions` (a manifest's own field), but
+    nothing reads RegistrationBundle.instructions back out of an overlay —
+    silently accepting it would validate cleanly and have zero effect,
+    which is worse than a clear error naming the unsupported field."""
+    config_path = tmp_path / "config.toml"
+
+    with pytest.raises(ManifestError, match="instructions"):
+        load_overlay_bundle({"instructions": "See AGENTS.md"}, config_path)
+
+
+def test_load_overlay_bundle_invalid_mcp_server_kind_raises_manifest_error(tmp_path):
+    config_path = tmp_path / "config.toml"
+
+    with pytest.raises(ManifestError):
+        load_overlay_bundle(
+            {"mcp_servers": {"bad": {"kind": "not-a-real-kind"}}}, config_path
+        )
+
+
+def test_apply_overlay_resolved_bundle_wins_on_key_collision():
+    """I4: the resolved manifest, not the overlay, wins a same-keyed
+    collision."""
+    bundle = RegistrationBundle(
+        mcp_servers={"witan": StdioServer(command="from-manifest")}
+    )
+    overlay = RegistrationBundle(
+        mcp_servers={"witan": StdioServer(command="from-overlay")}
+    )
+
+    result = apply_overlay(bundle, overlay)
+
+    assert result.mcp_servers["witan"].command == "from-manifest"
+
+
+def test_apply_overlay_unions_non_colliding_mcp_servers_and_skills():
+    bundle = RegistrationBundle(
+        mcp_servers={"witan": StdioServer(command="witan")},
+        skills=[SkillSource(name="commit", skill_md_path=Path("commit/SKILL.md"))],
+    )
+    overlay = RegistrationBundle(
+        mcp_servers={"memory": StdioServer(command="memory")},
+        skills=[
+            SkillSource(name="personal-notes", skill_md_path=Path("notes/SKILL.md"))
+        ],
+    )
+
+    result = apply_overlay(bundle, overlay)
+
+    assert set(result.mcp_servers) == {"witan", "memory"}
+    assert {s.name for s in result.skills} == {"commit", "personal-notes"}
+
+
+def test_apply_overlay_unions_hooks_and_lsp_servers():
+    bundle_hook = DeclarativeHook(event="stop", command="from-manifest")
+    overlay_hook = DeclarativeHook(event="stop", command="from-overlay")
+    bundle = RegistrationBundle(hooks=[bundle_hook])
+    overlay = RegistrationBundle(hooks=[overlay_hook])
+
+    result = apply_overlay(bundle, overlay)
+
+    assert len(result.hooks) == 2
+    assert bundle_hook in result.hooks
+    assert overlay_hook in result.hooks
+
+
+def test_apply_overlay_preserves_bundle_instructions_and_platform_overrides():
+    bundle = RegistrationBundle(
+        instructions="See AGENTS.md",
+        mcp_servers_by_platform={"claude": {"witan": StdioServer(command="witan")}},
+    )
+
+    result = apply_overlay(bundle, RegistrationBundle())
+
+    assert result.instructions == "See AGENTS.md"
+    assert result.mcp_servers_by_platform == {
+        "claude": {"witan": StdioServer(command="witan")}
+    }

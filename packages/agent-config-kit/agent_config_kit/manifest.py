@@ -9,6 +9,7 @@ a manifest without pulling in ``cyclopts``/``rich``. See
 
 from __future__ import annotations
 
+import copy
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -201,11 +202,17 @@ def _merge_hooks(base_hooks: list, overlay_hooks: list, path: Path) -> list[dict
 _MERGE_TABLE_KEYS = ("mcp_servers", "lsp_servers", "skills", "profiles")
 
 
-def _merge_manifest_data(base: dict, overlay: dict, path: Path) -> dict:
+def merge_manifest_data(base: dict, overlay: dict, path: Path) -> dict:
     """Merge ``overlay``'s tables on top of ``base``'s — C2, local/overlay
-    wins on key collision (spec §5.1 step 3, §5.3). Used both to fold
-    ``include`` refs left-to-right into an accumulator and to merge that
-    accumulator with the including manifest's own tables last.
+    wins on key collision (spec §5.1 step 3, §5.3). Used to fold ``include``
+    refs left-to-right into an accumulator and to merge that accumulator
+    with the including manifest's own tables last (both within this
+    module); public because ``resolve.py``'s config-level overlay feature
+    (``agent-config-kit-config-overlay-spec.md``) reuses it too, to combine
+    a global ``[overlay]`` with a matched ``[[org]]``/``[[scope]]``
+    entry's own overlay before ``load_overlay_bundle`` validates the
+    result — same "second argument wins" semantics, just a different pair
+    of dicts.
 
     ``profiles`` merges exactly like the other dict-of-tables keys: an
     overlay profile of the same name replaces the base's *wholesale*, it is
@@ -292,15 +299,21 @@ def _process_profile_includes(
                     selection.append(identity)
 
 
-def _validate_raw_shapes(data: dict, path: Path) -> None:
-    """The include-merge machinery (``_merge_manifest_data``/
+def validate_raw_shapes(data: dict, path: Path) -> None:
+    """The include-merge machinery (``merge_manifest_data``/
     ``_raw_hook_identity``) assumes ``mcp_servers``/``lsp_servers``/
     ``profiles`` are tables and ``hooks`` is a list of tables, and isn't
     itself defensive about it — a malformed manifest must fail with a
     clean ``ManifestError`` right here, before any merging touches it, not
     a raw ``TypeError``/``ValueError``/``AttributeError`` from deep inside
     the merge. (``skills`` is validated separately, in
-    ``_resolve_relative_paths``, which already runs right after this.)"""
+    ``_resolve_relative_paths``, which already runs right after this.)
+
+    Public — ``resolve.resolve_overlay`` validates each raw config-overlay
+    fragment's shape with this before combining them, for the same reason:
+    ``merge_manifest_data`` isn't defensive about shape either, and a
+    malformed overlay layer must fail cleanly before the merge, not deep
+    inside it."""
     for key in ("mcp_servers", "lsp_servers", "profiles"):
         value = data.get(key)
         if value is not None and not isinstance(value, dict):
@@ -344,7 +357,7 @@ def _load_raw_manifest(path: Path, cache_dir: Path, chain: list[str]) -> dict:
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"{path}: invalid TOML: {exc}") from exc
 
-    _validate_raw_shapes(data, path)
+    validate_raw_shapes(data, path)
     manifest_dir = path.parent
     _resolve_relative_paths(data, manifest_dir, path, cache_dir)
     _process_profile_includes(data, manifest_dir, cache_dir, chain, path)
@@ -359,9 +372,9 @@ def _load_raw_manifest(path: Path, cache_dir: Path, chain: list[str]) -> dict:
             raise ManifestError(f"{path}: include entries must be strings, got {ref!r}")
         included_path = _materialize_ref(ref, manifest_dir, cache_dir)
         included_data = _load_raw_manifest(included_path, cache_dir, chain)
-        merged = _merge_manifest_data(merged, included_data, path)
+        merged = merge_manifest_data(merged, included_data, path)
 
-    merged = _merge_manifest_data(merged, data, path)
+    merged = merge_manifest_data(merged, data, path)
     merged["options"] = data.get("options", {})
     return merged
 
@@ -592,3 +605,78 @@ def load_manifest(path: Path, *, cache_dir: Path | None = None) -> Manifest:
         default_profiles=options_model.default_profiles,
     )
     return Manifest(bundle=bundle, options=options, path=path, profiles=profiles)
+
+
+def load_overlay_bundle(
+    overlay: dict, config_path: Path, *, cache_dir: Path | None = None
+) -> RegistrationBundle:
+    """Validate and resolve a ``config.toml`` overlay fragment (the global
+    ``[overlay]``, or a matched ``[[org]]``/``[[scope]]`` entry's own
+    ``overlay`` table, already combined via ``merge_manifest_data`` if both
+    apply) into a ``RegistrationBundle`` — the same pipeline
+    ``load_manifest`` runs on a manifest's own tables, since I2 (spec)
+    deliberately reuses ``ManifestBundle``'s shape verbatim.
+
+    Per I8, a relative ``skill_md_path``/``entry_path`` resolves against
+    ``config_path``'s own directory, never against whatever manifest this
+    overlay is later applied onto via ``apply_overlay`` — the target
+    manifest varies by which O2 branch resolved (a local repo path vs. a
+    fetched ``git+``/``https://`` cache dir), so anchoring to it would make
+    the same overlay entry resolve differently, or silently fail, run to
+    run."""
+    data = copy.deepcopy(overlay)
+    validate_raw_shapes(data, config_path)
+    resolved_cache_dir = (
+        cache_dir if cache_dir is not None else default_cache_dir(config_path)
+    )
+    _resolve_relative_paths(data, config_path.parent, config_path, resolved_cache_dir)
+    try:
+        bundle_model = ManifestBundle.model_validate(data)
+    except ValidationError as exc:
+        raise ManifestError(_format_validation_error(exc, config_path)) from exc
+    if bundle_model.instructions is not None:
+        # ManifestBundle accepts `instructions` (a manifest's own field),
+        # but the overlay schema (I2) is deliberately scoped to
+        # mcp_servers/skills/hooks/lsp_servers only — nothing here reads
+        # RegistrationBundle.instructions back out, so silently accepting
+        # it would validate cleanly and have zero effect, which is worse
+        # than a clear error naming the unsupported field.
+        raise ManifestError(
+            f"{config_path}: [overlay] instructions is not supported "
+            "(overlay entries are mcp_servers/skills/hooks/lsp_servers only)"
+        )
+    return RegistrationBundle(
+        mcp_servers=bundle_model.mcp_servers,
+        hooks=bundle_model.hooks,
+        skills=_build_skill_sources(bundle_model.skills, config_path),
+        lsp_servers=bundle_model.lsp_servers,
+    )
+
+
+def apply_overlay(
+    bundle: RegistrationBundle, overlay: RegistrationBundle
+) -> RegistrationBundle:
+    """Union ``overlay`` (config.toml's inline entries) onto ``bundle`` (the
+    target manifest's own, already profile-resolved bundle) — ``bundle``
+    wins a same-keyed collision (I4: the resolved manifest, not the
+    overlay, wins).
+
+    Deliberately runs AFTER ``resolve_profile``, not folded into
+    ``load_manifest`` before it — an overlay entry has no ``[profiles]``
+    membership of its own to be filtered by, so merging it into the raw
+    manifest data before profile resolution would make it vanish under any
+    ``--profile`` selection that doesn't happen to reference its key by
+    coincidence (O-OVERLAY-PROFILES: overlay entries always apply,
+    regardless of ``--profile``)."""
+    skills_by_name = {s.name: s for s in overlay.skills}
+    skills_by_name.update({s.name: s for s in bundle.skills})
+    hooks_by_id = {hook_identity(h): h for h in overlay.hooks}
+    hooks_by_id.update({hook_identity(h): h for h in bundle.hooks})
+    return RegistrationBundle(
+        mcp_servers={**overlay.mcp_servers, **bundle.mcp_servers},
+        mcp_servers_by_platform=bundle.mcp_servers_by_platform,
+        hooks=list(hooks_by_id.values()),
+        skills=list(skills_by_name.values()),
+        lsp_servers={**overlay.lsp_servers, **bundle.lsp_servers},
+        instructions=bundle.instructions,
+    )

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from agent_config_kit.diff import diff
+from agent_config_kit.installers import hook_content_hash, skill_content_hash
 from agent_config_kit.models import (
     DeclarativeHook,
     HookEvent,
@@ -10,6 +11,7 @@ from agent_config_kit.models import (
     StdioServer,
 )
 from agent_config_kit.plan import RegistrationBundle, apply
+from agent_config_kit.prune import AppliedState
 
 
 def _bundle(**overrides) -> RegistrationBundle:
@@ -180,3 +182,88 @@ def test_diff_reports_missing_supporting_file_as_drift(tmp_path, monkeypatch):
     assert result.missing_paths == [
         tmp_path / ".claude" / "skills" / "my-skill" / "scripts" / "run.sh"
     ]
+
+
+def test_diff_no_previous_state_means_no_staleness_check(tmp_path, monkeypatch):
+    """Omitting `previous` (the default) skips staleness checking entirely
+    -- presence/absence drift only, same as before the feature existed."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    skill_md = tmp_path / "src" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("# skill v1")
+    skill = SkillSource(name="my-skill", skill_md_path=skill_md)
+    bundle = _bundle(skills=[skill])
+    apply("claude", bundle)
+    skill_md.write_text("# skill v2, changed upstream")
+
+    result = diff("claude", bundle)
+
+    assert result.stale_keys == []
+    assert not result.has_drift
+
+
+def test_diff_reports_stale_skill_when_source_content_changed(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    skill_md = tmp_path / "src" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("# skill v1")
+    skill = SkillSource(name="my-skill", skill_md_path=skill_md)
+    bundle = _bundle(skills=[skill])
+    apply("claude", bundle)
+    previous = AppliedState(skills={"my-skill": skill_content_hash(skill)})
+    skill_md.write_text("# skill v2, changed upstream")
+
+    result = diff("claude", bundle, previous=previous)
+
+    assert result.has_drift
+    assert result.stale_keys == ["skills:my-skill"]
+    # Presence/absence is unaffected -- the file IS installed, just stale.
+    assert result.missing_paths == []
+
+
+def test_diff_new_skill_with_no_recorded_hash_is_not_stale(tmp_path, monkeypatch):
+    """S3: a skill with no recorded hash (first-ever apply, or a platform
+    the manifest wasn't previously applied to) is new, not stale."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    skill_md = tmp_path / "src" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("# skill")
+    skill = SkillSource(name="my-skill", skill_md_path=skill_md)
+    bundle = _bundle(skills=[skill])
+    apply("claude", bundle)
+
+    result = diff("claude", bundle, previous=AppliedState())
+
+    assert result.stale_keys == []
+
+
+def test_diff_reports_stale_plugin_hook_when_entry_path_content_changed(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    entry_path = tmp_path / "witan.ts"
+    entry_path.write_text("console.log('v1')")
+    hook = PluginRegistration(entry_path=entry_path)
+    bundle = _bundle(mcp_servers={}, hooks=[hook])
+    apply("pi", bundle)
+    previous = AppliedState(hooks={"plugin:witan.ts": hook_content_hash(entry_path)})
+    entry_path.write_text("console.log('v2, changed upstream')")
+
+    result = diff("pi", bundle, previous=previous)
+
+    assert result.has_drift
+    assert result.stale_keys == ["hooks:plugin:witan.ts"]
+
+
+def test_diff_declarative_hook_is_never_reported_as_stale(tmp_path, monkeypatch):
+    """S6: a declarative hook's content lives inline in the manifest, out
+    of scope for content-hash staleness -- only plugin hooks get one."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hook = DeclarativeHook(event=HookEvent.STOP, command="witan checkpoint")
+    bundle = _bundle(hooks=[hook])
+    apply("claude", bundle)
+    previous = AppliedState(hooks={"declarative:stop:witan checkpoint": "sha256:stale"})
+
+    result = diff("claude", bundle, previous=previous)
+
+    assert result.stale_keys == []

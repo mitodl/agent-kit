@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/) (pre-1.0:
 a MINOR bump may include breaking changes).
 
+## [0.9.0] - 2026-09-18
+
+### Added
+
+- **Inline config-level overlays.** `config.toml` can now declare
+  `mcp_servers`/`skills`/`hooks`/`lsp_servers` directly — a global
+  `[overlay]` table, or per-`[[org]]`/`[[scope]]` entry — that merge onto
+  whatever manifest `apply`/`validate` resolves. Zero-arg resolution is
+  first-hit-wins, so `default_manifest`'s "always-on" personal tools
+  previously never applied inside a matched `[[org]]` repo; the overlay
+  closes that gap. The resolved manifest wins a same-keyed collision
+  against the overlay, not the other way around. On by default for both
+  zero-arg resolution and an explicit `MANIFEST` argument (only the global
+  layer applies to the latter, since it bypasses org/scope matching
+  entirely); `--overlay`/`--no-overlay` on `apply` and `validate` toggles
+  it. See `docs/internals/design/agent-config-kit-config-overlay-spec.md`
+  ("Part A") for the full design.
+
+- **Staleness detection for skills and plugin hooks.** `apply`/`validate`
+  previously only detected a *missing* skill or plugin-hook file — content
+  that changed upstream (a newer commit on a `git+` source, a local edit)
+  was invisible as long as the installed copy was still present. `apply`
+  now prints a warning when a skill's or hook's currently-resolved source
+  no longer matches the content hash recorded at the last apply (never
+  blocking — `apply` already re-copies everything every run regardless);
+  `validate` reports the same as a new "stale" drift category,
+  contributing to its exit code. Recorded in a new sibling state file,
+  `<manifest>.applied.json`, written on every plain `apply` independently
+  of `--prune`'s own `<manifest>.lock.json`. See the same design doc
+  ("Part B") for the full design.
+
+### Changed
+
+- **`apply --diff` is now on by default.** Pass `--no-diff` for a run that
+  reports only which files were written, without the unified diff.
+  `json_diff()` also now redacts `env`/`headers`/`oauth` values before
+  printing — those routinely carry secrets, and the diff defaulting on
+  meant they could land in a terminal or CI log by default rather than
+  only when explicitly requested.
+
 ## [0.8.0] - 2026-09-10
 
 ### Added
