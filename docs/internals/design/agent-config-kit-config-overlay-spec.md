@@ -1,7 +1,7 @@
 # agent-config-kit — config overlays & staleness detection — Spec
 
-Status: Part A (inline config-level overlays) implemented. Part B
-(staleness detection) still design only.
+Status: both parts implemented — Part A (inline config-level overlays) and
+Part B (staleness detection).
 
 Builds on the shipped profiles/composition/scoping layer described in
 [`agent-config-kit-profiles-composition-spec.md`](./agent-config-kit-profiles-composition-spec.md)
@@ -248,14 +248,14 @@ source would install — a new **stale** category, distinct from *missing*
 condition before it does its normal (already-idempotent, always-overwrites)
 merge. No `--prune` required.
 
-### 9.3 Decisions (draft — for review)
+### 9.3 Decisions
 
-| # | Question | Proposed decision |
+| # | Question | Decision |
 |---|---|---|
-| S1 | What gets hashed | Per skill: the sorted concatenation of every file `skill_files()` (`installers.py`) already walks for that skill — the exact tree `install_skills` copies, so the hash is precisely "would this copy differ." Per plugin hook: the `entry_path` file's own bytes. Inline manifest content (`mcp_servers`, declarative hooks, `options`) is a separate, already-recorded (if unused) concern — see S6. |
+| S1 | What gets hashed | Per skill: every file `skill_files()` (`installers.py`) already walks for that skill, folded into one SHA-256 alongside each file's relative path (not just its bytes — two skills whose content is identical but split across files differently must not hash the same) — the exact tree `install_skills` copies, so the hash is precisely "would this copy differ" (`installers.skill_content_hash`). Per plugin hook: the `entry_path` file's own bytes (`installers.hook_content_hash`). Inline manifest content (`mcp_servers`, declarative hooks, `options`) is a separate, already-recorded (if unused) concern — see S6. |
 | S2 | Where hashes live | A **new** state file, sibling to the existing prune lock file, written unconditionally on every `apply` — not gated on `--prune`. Reusing `<manifest>.lock.json` directly was considered and rejected: that file's mere existence today signals "this manifest has prune ownership tracking" (its entries are what a later `--prune` is allowed to remove); making a plain `apply` always write it would silently opt every manifest into prune bookkeeping nobody asked for. |
-| S3 | Comparison direction | At `validate`/`apply` time, recompute each skill/hook's hash from the manifest's *currently resolved* source — already fetched via the normal `load_manifest()` path, no extra network round trip — and compare against the last-recorded hash. A resolved skill with no recorded hash (first-ever apply) is new, not stale. |
-| S4 | `apply` behavior on staleness | Print a warning (`⚠ 2 skill(s) changed upstream since last apply: commit, webapp-testing`) before the merge, then proceed with the normal apply. Never blocking — `apply` already re-copies every skill on every run regardless of whether it changed, so the "stale" condition is corrected as a side effect of the very `apply` that reported it. |
+| S3 | Comparison direction | At `validate`/`apply` time, recompute each skill/hook's hash from the manifest's *currently resolved* source — already fetched via the normal `load_manifest()` path, no extra network round trip — and compare against the last-recorded hash. A resolved skill with no recorded hash (first-ever apply, or a platform the manifest wasn't previously applied to) is new, not stale (`prune.stale_names`). |
+| S4 | `apply` behavior on staleness | Print a warning (`⚠ N entry/entries changed upstream since last apply: <names>`) before the install step, then proceed with the normal apply. Never blocking — `apply` already re-copies every skill on every run regardless of whether it changed, so the "stale" condition is corrected as a side effect of the very `apply` that reported it. Skipped under `--dry-run`, same as the state write itself (S2). |
 | S5 | `validate` behavior on staleness | New `Drift.stale_keys` field, parallel to `missing_keys`/`mismatched_keys`, participating in `has_drift` (and thus `validate`'s exit code 1) the same as the existing categories — so a CI-style `validate` run catches upstream skill changes, not just missing installs. |
 | S6 | Inline manifest-content staleness | Out of scope for v1. Wiring up the existing (currently dead) `manifest_hash` for a manifest's own inline content is a smaller, separate follow-up; this spec closes the skill/plugin-hook content gap specifically, since that one has *zero* coverage today versus `manifest_hash`'s "recorded but unused." |
 
@@ -299,19 +299,19 @@ A manifest can have neither, either, or both sibling files, independently:
 
 ### 9.6 Open questions
 
-- **O-STALE-SCOPE** (S6) — extend to inline manifest content (finally
-  wiring up `manifest_hash` itself) in v1, or defer? Leaning defer, but
-  flagging since it's the more complete fix and touches the same
-  machinery.
-- **O-STALE-WRITE-COST** — writing `<manifest>.applied.json` on every
-  `apply` (S2) costs one file read per skill/hook (to hash current
-  content) plus one write, even when nothing changed. Negligible for a
-  handful of skills; open whether a very large catalog warrants skipping
-  the write when the computed content is unchanged from what's recorded.
-- **O-STALE-REMOTE-COST** — hashing "current" content for a `git+`-sourced
-  skill piggybacks on the shallow clone `fetch_remote` already performs on
-  every `load_manifest()` call (`fetch.py:20-30`) — no additional network
-  cost, but worth stating explicitly since it's easy to assume otherwise.
+- **O-STALE-SCOPE** (S6) — *resolved: deferred.* Extending to inline
+  manifest content (finally wiring up `manifest_hash` itself) stays a
+  separate follow-up; not implemented here.
+- **O-STALE-WRITE-COST** — *resolved: always write, no skip-if-unchanged
+  optimization.* Writing `<manifest>.applied.json` on every `apply` costs
+  one read per skill/hook (to hash current content) plus one write, even
+  when nothing changed — negligible for the catalog sizes seen so far. Revisit
+  if a large-catalog manifest makes this measurable.
+- **O-STALE-REMOTE-COST** — *resolved, as stated:* hashing "current"
+  content for a `git+`-sourced skill piggybacks on the shallow clone
+  `fetch_remote` already performs on every `load_manifest()` call
+  (`fetch.py:20-30`) — no additional network cost. No code change needed;
+  this was a documentation note, not a decision.
 
 ### 9.7 Non-goals (v1)
 
@@ -322,20 +322,39 @@ A manifest can have neither, either, or both sibling files, independently:
 - No new re-apply trigger — `apply` already re-copies every skill on every
   run; this only adds visibility into what changed, not a new action.
 
-### 9.8 Implementation sketch (once §9.3's open questions are resolved)
+### 9.8 Implementation
 
-- `installers.py`: add a `skill_content_hash(skill: SkillSource) -> str`
-  next to the existing `skill_files()` — same walk, hashes bytes instead of
-  listing relative paths.
-- `prune.py`: new `AppliedState`/`load_applied_state`/`write_applied_state`
-  mirroring `PlatformState`/`load_state`/`write_state` (`prune.py:52-151`)
-  but for the narrower S4 schema, written unconditionally from
-  `plan.apply()`/`apply_all()` — unlike `PlatformState`, never gated on the
-  `--prune` flag.
-- `diff.py`: `_diff_skills` (`diff.py:117-134`) gains a hash comparison
-  alongside its existing `dest.exists()` check, populating the new
-  `Drift.stale_keys` (S5).
-- `cli.py`: `apply_command` prints the S4 warning after `load_manifest`,
-  before calling `apply`/`apply_all`/`apply_with_prune`; `validate_command`'s
-  `_report_drift` gains a "stale" column alongside its existing
-  missing/mismatched/missing-paths/unreadable ones.
+- `installers.py`: `skill_content_hash(skill: SkillSource) -> str` and
+  `hook_content_hash(entry_path: Path) -> str`, next to the existing
+  `skill_files()`.
+- `prune.py`: `AppliedState` (dataclass: `skills`/`hooks` dicts, name/identity
+  → hash), `bundle_applied_state(bundle) -> AppliedState`,
+  `default_applied_state_path`/`load_applied_state`/`write_applied_state`
+  mirroring `PlatformState`/`default_state_path`/`load_state`/`write_state`
+  for the narrower S4 schema. `stale_names(current, previous) -> list[str]`
+  is the shared comparison both `diff.py` and `cli.py` use (S3).
+- `diff.py`: `_diff_skills`/`_diff_hooks` gain a `previous: AppliedState |
+  None` parameter; `diff()` too, defaulting to `None` (skip staleness
+  checking entirely — presence/absence drift only, unchanged from before
+  this feature). Populates the new `Drift.stale_keys` (S5).
+- `cli.py`: **corrected from the original sketch**, which said the state
+  write happens "unconditionally from `plan.apply()`/`apply_all()`" —
+  `plan.py` is deliberately manifest-path-agnostic (shared by other
+  consumers, e.g. witan, that have no `<manifest>` file at all), so it has
+  no path to name `<manifest>.applied.json` after. The existing prune lock
+  file has exactly the same constraint and for the same reason lives
+  outside `plan.py`: `write_state` is already called from `cli.py`'s
+  `apply_command`, not from `plan.apply()`/`apply_all()`. The applied-state
+  write follows the identical pattern: computed and printed (S4's warning)
+  before the install step, written (unconditionally, skipped under
+  `--dry-run`) after it, merged into whatever `load_applied_state` already
+  returned so a single-`--platform` run doesn't erase every other
+  platform's recorded state — same read-merge-write contract `write_state`
+  already documents. The cross-repo path redirect `_default_prune_state_path`
+  already has (O-STATE, spec `agent-config-kit-profiles-composition-spec.md`
+  §9) is shared via a new `_redirect_project_scope_state_path` helper, used
+  by both `_default_prune_state_path` and the new
+  `_default_applied_state_path` — same clobbering risk, same fix, different
+  filename (each state kind still gets its own file — S2/§9.5). `validate_command`
+  loads `<manifest>.applied.json` and passes each platform's recorded
+  `AppliedState` into `diff_bundle`; `_report_drift` gains a "stale" column.

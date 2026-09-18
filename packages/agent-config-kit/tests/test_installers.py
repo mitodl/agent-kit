@@ -2,8 +2,10 @@ import pytest
 
 from agent_config_kit.installers import (
     ConflictingPathError,
+    hook_content_hash,
     install_files,
     install_skills,
+    skill_content_hash,
     skill_files,
 )
 from agent_config_kit.models import SkillSource
@@ -154,3 +156,57 @@ def test_skill_files_rejects_unsafe_name_even_if_constructed_bypassing_validatio
 
     with pytest.raises(ValueError, match="unsafe or invalid skill name"):
         skill_files(skill)
+
+
+def test_skill_content_hash_stable_across_calls(tmp_path):
+    skill = _skill_with_supporting_files(tmp_path / "src")
+
+    assert skill_content_hash(skill) == skill_content_hash(skill)
+
+
+def test_skill_content_hash_changes_when_a_file_changes(tmp_path):
+    skill = _skill_with_supporting_files(tmp_path / "src")
+    before = skill_content_hash(skill)
+
+    (tmp_path / "src" / "scripts" / "run.sh").write_text("#!/bin/sh\necho changed\n")
+
+    assert skill_content_hash(skill) != before
+
+
+def test_skill_content_hash_changes_when_a_supporting_file_is_added(tmp_path):
+    skill = _skill_with_supporting_files(tmp_path / "src")
+    before = skill_content_hash(skill)
+
+    (tmp_path / "src" / "scripts" / "new.sh").write_text("#!/bin/sh\necho new\n")
+
+    assert skill_content_hash(skill) != before
+
+
+def test_skill_content_hash_distinguishes_content_moved_between_files(tmp_path):
+    """Two skills whose *concatenated* bytes are identical but split across
+    files differently must not hash the same — proves the hash folds in
+    each file's relative path, not just its bytes."""
+    skill_a_dir = tmp_path / "a"
+    skill_a_dir.mkdir()
+    (skill_a_dir / "SKILL.md").write_text("AB")
+    skill_a = SkillSource(name="a", skill_md_path=skill_a_dir / "SKILL.md")
+
+    skill_b_dir = tmp_path / "b"
+    skill_b_dir.mkdir()
+    (skill_b_dir / "SKILL.md").write_text("A")
+    (skill_b_dir / "extra.txt").write_text("B")
+    skill_b = SkillSource(name="b", skill_md_path=skill_b_dir / "SKILL.md")
+
+    assert skill_content_hash(skill_a) != skill_content_hash(skill_b)
+
+
+def test_hook_content_hash_stable_and_sensitive_to_content(tmp_path):
+    entry_path = tmp_path / "witan.ts"
+    entry_path.write_text("console.log('v1')")
+    before = hook_content_hash(entry_path)
+
+    assert hook_content_hash(entry_path) == before
+
+    entry_path.write_text("console.log('v2')")
+
+    assert hook_content_hash(entry_path) != before

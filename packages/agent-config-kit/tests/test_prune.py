@@ -11,11 +11,17 @@ from agent_config_kit.models import (
 )
 from agent_config_kit.plan import RegistrationBundle, apply
 from agent_config_kit.prune import (
+    AppliedState,
     PlatformState,
     apply_with_prune,
+    bundle_applied_state,
+    default_applied_state_path,
     default_state_path,
     hook_identity,
+    load_applied_state,
     load_state,
+    stale_names,
+    write_applied_state,
     write_state,
 )
 
@@ -454,3 +460,90 @@ def test_hook_identity_distinguishes_declarative_and_plugin():
 
     assert declarative == "declarative:stop:witan session-checkpoint"
     assert plugin == "plugin:witan.ts"
+
+
+def _skill(tmp_path: Path, name: str, body: str = "body") -> SkillSource:
+    skill_dir = tmp_path / name
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(body)
+    return SkillSource(name=name, skill_md_path=skill_dir / "SKILL.md")
+
+
+def test_bundle_applied_state_hashes_skills_and_plugin_hooks_only(tmp_path):
+    skill = _skill(tmp_path, "commit")
+    entry = tmp_path / "witan.ts"
+    entry.write_text("console.log('hi')")
+    bundle = RegistrationBundle(
+        mcp_servers={},
+        skills=[skill],
+        hooks=[
+            PluginRegistration(entry_path=entry),
+            DeclarativeHook(event=HookEvent.STOP, command="witan checkpoint"),
+        ],
+    )
+
+    state = bundle_applied_state(bundle)
+
+    assert set(state.skills) == {"commit"}
+    assert set(state.hooks) == {"plugin:witan.ts"}  # declarative hook excluded (S6)
+
+
+def test_stale_names_only_flags_keys_present_in_both_with_a_different_hash():
+    current = {"a": "hash-a-new", "b": "hash-b-same", "d": "hash-d-new-only"}
+    previous = {"a": "hash-a-old", "b": "hash-b-same", "c": "hash-c-dropped-only"}
+
+    assert stale_names(current, previous) == ["a"]
+
+
+def test_write_applied_state_then_load_applied_state_round_trips(tmp_path):
+    manifest = tmp_path / "agent-config.toml"
+    manifest.write_text("")
+    path = default_applied_state_path(manifest)
+    state = AppliedState(
+        skills={"commit": "sha256:abc"}, hooks={"plugin:x.ts": "sha256:def"}
+    )
+
+    write_applied_state(path, manifest, {"claude": state})
+    result = load_applied_state(path)
+
+    assert result == {"claude": state}
+
+
+def test_load_applied_state_missing_file_returns_empty_dict(tmp_path):
+    assert load_applied_state(tmp_path / "does-not-exist.applied.json") == {}
+
+
+def test_write_applied_state_preserves_other_platforms_not_in_this_write(tmp_path):
+    """Same read-merge-write contract write_state already has: a caller
+    that only updates one platform's entry, after first loading the
+    existing file, must not erase every other platform's recorded state."""
+    manifest = tmp_path / "agent-config.toml"
+    manifest.write_text("")
+    path = default_applied_state_path(manifest)
+    write_applied_state(
+        path,
+        manifest,
+        {
+            "claude": AppliedState(skills={"commit": "sha256:aaa"}),
+            "pi": AppliedState(skills={"commit": "sha256:bbb"}),
+        },
+    )
+
+    existing = load_applied_state(path)
+    existing["claude"] = AppliedState(skills={"commit": "sha256:ccc"})
+    write_applied_state(path, manifest, existing)
+
+    result = load_applied_state(path)
+    assert result["claude"].skills == {"commit": "sha256:ccc"}
+    assert result["pi"].skills == {"commit": "sha256:bbb"}
+
+
+def test_write_applied_state_leaves_no_tmp_file_behind_after_success(tmp_path):
+    manifest = tmp_path / "agent-config.toml"
+    manifest.write_text("")
+    path = default_applied_state_path(manifest)
+
+    write_applied_state(path, manifest, {"claude": AppliedState()})
+
+    assert path.exists()
+    assert not path.with_name(path.name + ".tmp").exists()

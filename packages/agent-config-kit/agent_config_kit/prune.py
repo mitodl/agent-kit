@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
-from .installers import skill_files
+from .installers import hook_content_hash, skill_content_hash, skill_files
 from .jsonio import json_diff, load_json_object, write_json
 from .models import (
     SKILL_NAME_PATTERN,
@@ -142,6 +142,93 @@ def write_state(
                 "hooks": state.hooks,
                 "skills": state.skills,
             }
+            for name, state in platforms.items()
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(json.dumps(data, indent=2) + "\n")
+    tmp_path.replace(path)
+
+
+@dataclass
+class AppliedState:
+    """Per-skill/plugin-hook content hashes recorded at apply time —
+    ``<manifest>.applied.json`` (staleness-detection spec S1/S4), a
+    sibling to ``PlatformState``'s own ``<manifest>.lock.json`` but
+    deliberately narrower: no ``mcp_servers`` entry, since this file only
+    tracks content the manifest merely *points at* (a skill's files, a
+    plugin hook's script), not content the manifest inlines directly
+    (S6, out of scope for v1)."""
+
+    skills: dict[str, str] = field(default_factory=dict)  # skill name -> hash
+    hooks: dict[str, str] = field(default_factory=dict)  # hook identity -> hash
+
+
+def bundle_applied_state(bundle: RegistrationBundle) -> AppliedState:
+    """Content hashes for ``bundle``'s current skills/plugin-hooks, freshly
+    computed from the manifest's currently-resolved source — what a
+    staleness check compares the last-recorded ``AppliedState`` against
+    (S3). Declarative hooks have no external file to hash (their content
+    lives inline in the manifest itself — S6's separate, deferred
+    concern), so only ``PluginRegistration`` hooks get an entry."""
+    return AppliedState(
+        skills={skill.name: skill_content_hash(skill) for skill in bundle.skills},
+        hooks={
+            hook_identity(hook): hook_content_hash(hook.entry_path)
+            for hook in bundle.hooks
+            if isinstance(hook, PluginRegistration)
+        },
+    )
+
+
+def stale_names(current: dict[str, str], previous: dict[str, str]) -> list[str]:
+    """Keys present in both ``current`` and ``previous`` with a different
+    hash — a key only in ``current`` (never recorded) is new, not stale
+    (S3); a key only in ``previous`` (dropped from the manifest, or from a
+    platform this run doesn't touch) is prune's concern, not staleness's.
+    Shared by ``diff.py`` (per-platform ``Drift.stale_keys``) and
+    ``cli.py`` (the ``apply`` S4 warning) so both compare the same way."""
+    return sorted(k for k, h in current.items() if k in previous and previous[k] != h)
+
+
+def default_applied_state_path(manifest_path: Path) -> Path:
+    return manifest_path.with_name(manifest_path.name + ".applied.json")
+
+
+def load_applied_state(path: Path) -> dict[str, AppliedState]:
+    """Return ``{platform_name: AppliedState}`` describing what a prior
+    ``apply`` recorded for each platform. A missing file means no prior
+    state for any platform — every current skill/hook is then new, not
+    stale (S3), the same way ``load_state``'s missing-file case means
+    "nothing to prune yet" rather than an error."""
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text())
+    return {
+        name: AppliedState(
+            skills=dict(platform_data.get("skills", {})),
+            hooks=dict(platform_data.get("hooks", {})),
+        )
+        for name, platform_data in data.get("platforms", {}).items()
+    }
+
+
+def write_applied_state(
+    path: Path, manifest_path: Path, platforms: dict[str, AppliedState]
+) -> None:
+    """Write the full per-platform applied state back — unconditional on
+    every plain ``apply`` (S2), not gated on ``--prune`` the way
+    ``write_state`` is. Callers must merge freshly-applied platforms into
+    a dict already loaded via ``load_applied_state`` rather than starting
+    from ``{}``, for the same reason ``write_state`` documents: a
+    single-platform run would otherwise erase every other platform's
+    previously recorded state. Same atomic temp-file-then-rename write as
+    ``write_state``, for the same crash-safety reason."""
+    data = {
+        "manifest_hash": manifest_hash(manifest_path),
+        "platforms": {
+            name: {"skills": state.skills, "hooks": state.hooks}
             for name, state in platforms.items()
         },
     }
