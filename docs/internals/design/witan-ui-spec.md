@@ -1,0 +1,575 @@
+# Witan UI — spec
+
+Status: spec (proposed)
+Project: `wp-cross-platform-witan-gui-11c03d`
+Repos: agent-kit, ol-infrastructure
+Basis: ADR 0011, `mcp/servers/witan/docs/adr/0011-witan-ui-read-transport.md`
+(the read transport, decided in discovery;
+[PR #359](https://github.com/mitodl/agent-kit/pull/359)).
+
+Source anchors are against `origin/main` @ `426f4e7` unless noted. Library
+anchors are against the versions `uv.lock` resolves: fastmcp 4.0.3, mcp 2.2.0,
+starlette 1.6.0. ol-infrastructure anchors are against its `origin/main` @
+`04167e970` (2026-09-18).
+
+ADR 0011 settled _how_ the UI reads: it is an MCP client speaking
+streamable-http to a witan server on its own origin, bound to an enumerated set
+of fourteen read tools. This spec settles _what_ gets built on that: the
+server changes, the frontend package, how the bundle is served and shipped, the
+views and the reads behind each, and the task breakdown for implementation.
+
+Building it out surfaced five places where the scope as written cannot be met by
+the tools as they are today (§3). Each gets a decision here rather than a
+workaround in the browser.
+
+## 1. Goal and non-goals
+
+Done when a person can open one URL and see what is ready, what is blocked, who
+is holding a stale claim, where the last two weeks went, and which memories
+contradict each other; and a Claude Desktop session renders the board and the
+project rollup inline (epic `tk-witan-ui-epic-shared-read-layer-web-app-gantt-an-462f7c`).
+
+Not in this round:
+
+- Writes. No claim, close, comment or inline edit from the UI. Doing them
+  through the read layer would duplicate the tools' validation, and doing them
+  through the tools widens ADR 0011's bound set to mutations. A later decision.
+- Push updates. beads-ui keeps its views live by watching the SQLite file and
+  pushing over a websocket. Witan has no change feed and the stateless protocol
+  era (ADR 0009) has no server→client channel, so views poll (§6.1).
+- A targets view. `witan target list` reads the caller's
+  `~/.config/witan/config.toml` (`witan/cli/targets.py:873`) and no MCP tool
+  exposes it. A page served by one witan process shows that process's graph;
+  choosing a graph is choosing a URL (§5.3).
+- Calendar planning. Decided on the epic 2026-09-17: the charts plot elapsed time
+  and dependency depth, never estimates.
+
+## 2. Server prerequisite: Host/Origin validation on `/mcp`
+
+ADR 0011 made this the first code change: the local endpoint is
+unauthenticated, so the moment `witan ui` serves a bundle, any page the user
+visits can POST tool calls to `127.0.0.1`.
+
+The guard already exists in fastmcp and is off. `HostOriginGuardMiddleware`
+(`fastmcp/server/http.py:227-339`) returns 421 on a Host outside the allowlist
+and 403 on a foreign Origin. `create_streamable_http_app` installs it only when
+`host_origin_protection` is not `False` (`http.py:648-661`), and the setting
+defaults to `False` "for compatibility" (`fastmcp/settings.py:280`). `witan
+serve` passes none of `host_origin_protection`, `allowed_hosts` or
+`allowed_origins` to `mcp.run` (`witan/cli/__init__.py:210-221`), and nothing in
+the repo sets `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION`. The mcp SDK's own
+`TransportSecuritySettings` check is explicitly disabled by fastmcp in favour of
+this middleware (`http.py:675-681`), so there is no second layer to fall back
+on.
+
+Decision: `witan serve` passes `host_origin_protection="auto"` on every HTTP
+transport, plus `allowed_hosts`/`allowed_origins` from two new options
+(`--allowed-host`, `--allowed-origin`, repeatable; env `WITAN_MCP_ALLOWED_HOSTS`,
+`WITAN_MCP_ALLOWED_ORIGINS`, comma-separated).
+
+What `"auto"` does, read from the middleware:
+
+- Bound to loopback (`witan ui`, local `serve`): Host must be `127.0.0.1`,
+  `localhost` or `::1` (`DEFAULT_HOSTS`, `http.py:38`), which closes DNS
+  rebinding. A request carrying an `Origin` must be same-origin or loopback
+  (`http.py:322-339`), which closes the cross-site POST. Requests with no
+  `Origin` (the CLI, curl, agents) pass, as they should.
+- Bound to `0.0.0.0` (the deployment) with no allowlist: it validates nothing
+  (`_should_validate_host`, `http.py:281-286`). That is today's behaviour, and
+  deployed `/mcp` is behind bearer auth regardless. With an explicit
+  `allowed_hosts`, Host validation turns on; the deployment should pass
+  `witan.<env>.ol.mit.edu` through `WITAN_MCP_ALLOWED_HOSTS` once the UI is
+  mounted there (§8).
+
+One hazard to test before the deployment sets an allowlist: the middleware is
+app-wide, so it also covers `/health`, which the kubelet probes by pod IP
+(ol-infrastructure `applications/witan/deployment.py:853-919`). The middleware
+adds the socket's local address to the allowed hosts unless it is unspecified
+(`http.py:314-318`), which should admit a `Host: <pod-ip>:8000` probe. Unverified
+against a running pod; the task that sets the deployed allowlist verifies it
+with a probe-shaped request in a test and a rollout in CI before anything else.
+
+The loopback same-origin fallback also admits any other page served from a
+loopback origin (e.g. a dev server on `localhost:3000`). Accepted: code already
+running on the user's machine does not need the browser to reach the store.
+
+Tests (`mcp/servers/witan/tests/`, through the hermetic conftest): a loopback
+app rejects `Host: evil.example` with 421 and `Origin: https://evil.example`
+with 403, accepts a same-origin POST, and accepts a POST with no `Origin`.
+
+## 3. Gaps between the scope and the tools
+
+Every view reads through ADR 0011's fourteen tools. These are the places where
+those tools, as they are, cannot produce what a view needs. Each fix is made in
+the tool so agents and the UI keep reading the same thing.
+
+### 3.1 `task_list` truncates unscoped reads at 50 rows
+
+`list_all_tasks` and `list_tasks_by_status` end in `limit 50`
+(`queries/read.gq:1044,1057`), and they are what `task_list` uses when no repo
+and no project is given. The by-repo, by-project and by-parent queries have no
+limit. So "all repos" on the board, and `witan graph --all-repos`, silently show
+the 50 most recently updated tasks. No tool in the bound set has an offset or
+cursor.
+
+Decision: add `limit: int = 50` to `task_list`, passed through to the two
+unscoped queries as a parameter, so the default an agent sees does not change
+and the UI asks for what it needs. No cursor in this round: a cursor over `updated_at desc` would skip rows
+that change mid-page, and one bounded read per view is enough until a graph
+outgrows it.
+
+### 3.2 Task list rows carry no `created_at` or `closed_at`
+
+The list projections (`read.gq:1015-1017` and siblings) return `slug, title,
+repo, type, status, priority, project_slug, parent_slug, blocked_by, assignee,
+external_uri, tags, updated_at, claimed_at`. Only `get_task` (`read.gq:996-1008`)
+returns `created_at` and `closed_at`. The Gantt and the board's closed column
+would each need one `task_get` per task.
+
+Decision: add `created_at` and `closed_at` to every `list_tasks_*` projection.
+Two scalar columns per row; the agent-facing cost is small and the rows are
+already table-shaped.
+
+### 3.3 Task detail is missing its edges
+
+`task_get` returns the node plus `comments` (`witan/server.py:6009-6027`). The
+drill-down also needs the tasks this one blocks, its children, and the
+`CodeBranch`es working it. The queries exist: `blocks_to_slugs`
+(`read.gq:1222`), `list_tasks_by_parent` (`read.gq:1102`) and
+`task_code_branches` (`read.gq:1198`). No Python code calls the last one
+today; it is declared and unused.
+
+Decision: `task_get` adds `blocks: [slug]`, `children: [{slug, title, status}]`
+and `branches: [{slug, repo, branch, status, updated_at}]`, each read the way
+`_task_comments` is (`server.py:6050`): isolated, degrading to `[]` if the store
+cannot answer, so a detail read never fails on an auxiliary edge.
+`DiscoveredFrom` has no read query at all; it is left out until someone needs
+it.
+
+### 3.4 No tool lists contradictions without a seed
+
+`recall` reports `contradictions: [{a, b}]` only for pairs where _both_
+memories are in its returned, limited set (`server.py:7669-7682`).
+`memory_neighbors(slug, kinds=["contradicts"])` is per slug. The graph-wide
+edge reads (`contradicts_edges_from`/`_to`, `read.gq:494-501`) feed only the
+private `_edge_index`. An inbox of "which memories contradict each other" has
+no read that returns it.
+
+Decision: add a read-only tool `memory_contradictions(repo: str | None = None)
+-> list[dict]`, returning one row per `Contradicts` edge with both endpoints'
+`slug, title, kind, repo, author, updated_at` and the edge's `confidence, role,
+author, created_at`, ordered newest edge first. It is a fifteenth tool in ADR
+0011 §3's bound set, which that section says requires amending the ADR; the
+amendment rides the same PR as the tool. A new tool rather than a `recall` mode,
+because `recall` is a ranked, seeded read and this is an unranked enumeration.
+
+### 3.5 The retrospective Gantt's data does not exist
+
+The scope plots "claimed_at/closed_at plus session spans". `claimed_at` cannot
+carry that:
+
+- `task_claim` writes `claimed_at = now` on every call, including a renewal by
+  the same holder (`server.py:6638`), and the lease is 60 minutes
+  (`readiness.py:42`). Any task worked for more than an hour has lost its first
+  claim time.
+- `task_update(status="in_progress")` overwrites it too (`server.py:6450`).
+- `task_release` nulls it (`server.py:6907`).
+- There is no status history: `TaskComment` holds author, body and timestamp
+  (`schema.pg:309-315`), and the `Closes: WorkflowSession -> Task` edge
+  (`schema.pg:294`) is declared but no code writes it.
+
+What does hold: `created_at` and `closed_at` (once §3.2 lands) are reliable, and
+sessions carry `started_at`/`ended_at` per project (`read.gq:747-757`).
+
+Decision, in two parts:
+
+1. Add a nullable `first_claimed_at: DateTime?` to `Task`, set by `task_claim`
+   and `task_update(status="in_progress")` only when it is null, and never
+   cleared. It is an additive nullable property, the same kind of schema change
+   as agent-kit#326, so it carries #326's ordering constraint: omnigraph's
+   schema apply lands before the witan image that writes it
+   (`les-a-witan-schema-image-ordering-violation-fails-cl-a16abf`). It has no
+   backfill. Tasks claimed before it ships have no first-claim time, and the
+   chart says so rather than guessing.
+2. The Gantt draws what is true for each task: a `created_at → closed_at` span
+   (lead time) as the bar, a `first_claimed_at → closed_at` segment inside it
+   where that exists (work time), and project session spans as a separate lane.
+   `claimed_at` is shown only as "current lease since", on open tasks.
+
+Rejected: reconstructing claim history from omnigraph commits. witan has no
+as-of read and exposes no commit history through any tool, so it would be a
+second read surface of exactly the kind ADR 0011 rules out.
+
+## 4. The read layer
+
+This replaces the premise of `tk-build-the-witan-ui-read-layer-over-queries-read--825c85`,
+which is retitled to match (§10).
+
+### 4.1 Transport
+
+`POST /mcp` with a JSON-RPC `tools/call`. The client code is one module,
+`src/mcp.ts`, and nothing else in the frontend knows it is talking MCP.
+
+ADR 0011 left open which browser client speaks the 2026-07-28 stateless
+envelope. Checked 2026-09-18: `@modelcontextprotocol/sdk` 1.30.0, the v1 line,
+does not; its release notes list no 2026-07-28 support. The v2 split packages
+do: `@modelcontextprotocol/client` 2.0.0's changelog describes it as the first
+release supporting the 2026-07-28 revision, its root entry is runtime-neutral
+and runs in browsers, and `StreamableHTTPClientTransport` uses `fetch`.
+
+Decision: `@modelcontextprotocol/client` 2.x with
+`versionNegotiation: { pin: "2026-07-28" }`. Pinned rather than `auto`, because
+`auto` probes `server/discover` first and falls back to the `initialize`
+handshake on any probe failure, so a misconfiguration would quietly downgrade
+the era instead of failing. `@modelcontextprotocol/ext-apps` 2.x (§7) has the
+v2 packages as peer dependencies, so the page and the widgets share one client
+line.
+
+The SDK is doing real work here. witan sets neither `json_response` nor
+`stateless_http` (`witan/cli/__init__.py:210-221`), so a single `tools/call`
+may come back as JSON or as SSE: the modern handler commits to
+`text/event-stream` if the tool emits a notification or runs past 15 seconds
+(`mcp/server/_streamable_http_modern.py:146`). A raw `fetch` client would own
+that parsing, the `Mcp-Method`/`Mcp-Name` headers that must match the body
+(`mcp/shared/inbound.py:448-470`), and the `params._meta` envelope. That
+remains the fallback if the v2 client proves unusable, and `src/mcp.ts` is the
+only file that would change. The page sends `clientInfo` in the envelope even
+though it is optional: fastmcp's `client_supports_extension` reads
+`client_params`, which the server builds only when `clientInfo` is present
+(`mcp/server/connection.py:243-257`).
+
+### 4.2 Unwrapping results
+
+Every tool is registered through `@_tool` with no `output_schema=`
+(`server.py:535-589`), so fastmcp derives the output schema from the return
+annotation (`fastmcp/tools/function_parsing.py:430-500`):
+
+- `-> dict` (`recall`, `memory_neighbors`): `structuredContent` is the dict.
+- `-> list[dict]` and `-> dict | None` (the other twelve): the value is wrapped,
+  `structuredContent = {"result": value}`, and the schema carries
+  `x-fastmcp-wrap-result: true`. A `None` result also produces an empty
+  `content` list, so a client that reads the text block sees nothing at all.
+
+The read layer unwraps in one function, keyed on each tool's
+`x-fastmcp-wrap-result` flag, never on a guess from its return shape. The flags
+are recorded per bound tool at build time from the fixtures (§4.3), because a
+widget (§7) is handed a result with no `tools/list` to consult. The page also
+reads `tools/list` once per load and fails loudly if a live flag disagrees with
+the recorded one. `task_get` of a missing slug is `{"result": null}` and becomes
+`null`, not an error. That empty/not-found distinction is the case discovery
+found the CLI getting wrong, so it gets its own tests.
+
+### 4.3 Types
+
+The output schemas are `{"type": "object", "additionalProperties": true}` and
+say nothing about fields, so there is nothing to generate types from. Types are
+hand-written in `src/types.ts`, one per tool result, and kept honest by
+fixtures: a Python test calls each bound tool against a seeded hermetic store
+and writes the `structuredContent` to `ui/fixtures/<tool>.json`; the frontend
+tests parse every fixture through the unwrapper and the types' runtime guards.
+A server change that renames a field then fails the frontend suite in the same
+PR. `just ui-fixtures` regenerates them, and CI fails if they are stale, the
+same way `just docs-check` gates generated docs.
+
+### 4.4 Bound tools
+
+Exactly ADR 0011 §3's list plus `memory_contradictions` (§3.4). `src/mcp.ts`
+exports one typed function per tool and no generic `call(name, args)`, so a
+fifteenth read is a visible diff to that file rather than a string somewhere.
+
+## 5. Serving and shipping the bundle
+
+### 5.1 Frontend package
+
+`mcp/servers/witan/ui/`, a TypeScript package built with Vite. It sits beside
+the server rather than under `packages/` because it is not independently
+versioned: it ships inside the witan wheel and moves with the tools it reads.
+
+- Rendering: lit-html, as beads-ui uses, over Preact or React. Views are
+  mostly tables and SVG; there is no component state worth a framework, and
+  lit-html has no virtual DOM to reconcile against a vendored vis-network.
+- Charts: hand-written SVG for the Gantt and the wave chart. vis-network is an
+  npm dependency bundled into the graph tab, not the unpkg `<script>` that
+  `witan/visualize.py:308` loads today; a CDN script would need a CSP exception
+  on the deployed page and breaks offline.
+- Tooling: `tsc --noEmit`, vitest, and biome, which `prek.toml` already runs for
+  TypeScript (`prek.toml:138-141`). Node version pinned in `ui/.node-version`,
+  `package-lock.json` committed.
+
+### 5.2 Routes on the witan process
+
+The bundle is served from `/ui/`, which collides with nothing witan already
+serves (`/mcp`, `/health`, `/.well-known/oauth-protected-resource`):
+
+- `GET /ui/{path:path}` via `@mcp.custom_route`, the public API `/health` already
+  uses (`server.py:446`). It resolves `path` inside the bundle directory,
+  refuses anything that resolves outside it, and falls back to `index.html` so
+  client-side routes survive a reload. fastmcp's `http_app` takes no `routes=`
+  (`fastmcp/server/mixins/transport.py:372-385`), and the alternatives are a
+  private attribute (`_additional_http_routes`) or replacing `mcp.run` with our
+  own uvicorn; a path-parameter custom route needs neither.
+- `GET /ui/config.json`: `{"auth": null}` when `identity_cfg.oidc_issuer` is
+  unset, otherwise `{"auth": {"issuer", "client_id", "audience"}}`. The SPA reads
+  this first, so one bundle serves both modes with no build-time configuration.
+  `client_id` comes from a new `WITAN_UI_OIDC_CLIENT_ID`; with OIDC on and it
+  unset, `/ui/` answers 503 naming the variable rather than serving a page that
+  cannot log in.
+- Every `/ui/` response sets `Content-Security-Policy: default-src 'self';
+  connect-src 'self' <issuer origin>; frame-ancestors 'none'` and
+  `X-Content-Type-Options: nosniff`.
+
+These routes are unauthenticated, as `/health` is: fastmcp wraps only the `/mcp`
+route in `RequireAuthMiddleware` (`fastmcp/server/http.py:620-631`). That is
+correct here. The bundle and `config.json` hold no graph data, and every read
+still goes through `/mcp`.
+
+The routes register only when the bundle directory exists, so a source checkout
+that never ran the frontend build serves `/mcp` exactly as today.
+
+### 5.3 `witan ui`
+
+`witan/cli/ui.py`, registered like `graph` (`witan/cli/graph.py:10`):
+
+- Local target (the default): runs the same server `witan serve` does, on
+  `streamable-http`, bound to `127.0.0.1` on a free port (`--port` to fix one),
+  with §2's guard on, and opens `http://127.0.0.1:<port>/ui/` unless
+  `--no-browser`. It fails loudly if the bundle is missing, naming the build
+  command, rather than starting a server with nothing to show.
+- Remote target: `witan serve` refuses to re-serve a remote target over HTTP by
+  design (`witan/cli/__init__.py:121-123`), and `witan ui` keeps that boundary.
+  It opens `<target server>/ui/` in the browser and exits. The deployed page does
+  its own login (§8).
+
+### 5.4 Packaging
+
+The bundle is a build output, not committed. Vite writes it to
+`mcp/servers/witan/witan/ui_dist/` (gitignored), and the wheel picks it up
+through hatch's `artifacts` setting, which includes gitignored files that
+`packages = ["witan"]` would skip (`mcp/servers/witan/pyproject.toml:219-232`).
+
+- `publish-witan.yml` runs `npm ci && npm run build` in `ui/` before `uv build`,
+  and asserts `ui_dist/index.html` is in the wheel, so a release can never ship
+  without the UI silently.
+- `docker/witan.Dockerfile` gains a node build stage whose output is copied into
+  the source tree before `uv sync` (`Dockerfile:106-113`). There is no node
+  stage today.
+- A new `witan-ui.yml` workflow runs typecheck, lint, vitest and the build on
+  PRs touching `mcp/servers/witan/ui/**`. No workflow sets up node today.
+
+## 6. Views
+
+### 6.1 Shell
+
+A top bar with repo and project filters, tabs for each view, and a detail panel
+that opens over any view on a task or memory slug. Each view re-reads on an
+interval (30s default) and on window focus, and shows the read time; a failed
+read keeps the last good data on screen and marks it stale rather than blanking
+it. The URL carries view, filters and the open slug, so a link to a stale claim
+can be pasted to whoever holds it.
+
+Repo scoping follows the tools: every call passes `repo` explicitly (`""` for
+all repos), so the result never depends on the server's working directory.
+
+### 6.2 Projects and project rollup
+
+- List: `workflow_project_list(repo, status, phase)`.
+- Rollup for one project: `workflow_project_get` (description, `blocked_by`,
+  `blocks`), `workflow_project_status` (ready tasks, last session, counts),
+  `task_list(project_slug=…)` for every task, and
+  `workflow_session_list(project_slug=…)` for the session history with
+  summaries.
+
+### 6.3 Task detail
+
+`task_get(slug)`, with §3.3's edges. Every field it returns is shown, including
+`resolution`, `external_uri`, `symbol_refs` and the comment thread, which is
+where corrections to a task's premise live. Blocker and dependent slugs link to
+their own detail.
+
+### 6.4 Board
+
+Columns and where each comes from:
+
+- Ready: `task_ready(repo, project_slug, limit=…)`. This is `task_ready`'s own
+  rule (`readiness.is_ready` with the out-of-set blocker resolver plus
+  `status_pickable`, `server.py:6961-6971`), not a re-implementation.
+- In progress: `task_list(status="in_progress")`. Each card shows its holder
+  and lease age (`now - claimed_at`). A card that _also_ appears in the Ready
+  result is a stale claim: its lease has expired by the server's own rule, and
+  it is marked as such. The UI never compares lease age to a constant of its
+  own, so `CLAIM_LEASE_SECONDS` changing on the server cannot make the board
+  disagree with `task_ready`.
+- Blocked: open and `blocked` tasks from `task_list` that are not in the Ready
+  result, with each card listing its open blockers.
+- Closed: `task_list(status="closed")`, newest `closed_at` first (§3.2).
+
+`readiness.filter_ready` is not used in any form. It treats a blocker missing
+from its in-memory set as closed, which is wrong for a view scoped to one
+project or repo.
+
+### 6.5 Dependency waves
+
+Over `task_list(project_slug=…)`: the x axis is depth in the `Blocks` DAG
+(a task with no open in-project blockers is wave 0), rows are tasks, arrows are
+`blocked_by`. Blockers outside the project are drawn as external stubs from one
+`task_get` each. A cycle is drawn and flagged rather than failing the layout.
+This is presentation over one read, so it lives in the frontend.
+
+### 6.6 Retrospective timeline (Gantt)
+
+Per §3.5: lead-time bars, work-time segments where `first_claimed_at` exists,
+current-lease marks on open tasks, and the project's session spans in their own
+lane, over a selectable window (two weeks by default). Tasks with no
+`first_claimed_at` are drawn with a hatched lead-time bar and a legend line
+saying the first-claim time predates tracking.
+
+### 6.7 Memory and contradictions
+
+- Search: `recall(query, repo, kind)`, which carries superseded-pruning and
+  re-ranking. The flat `memory_search`/`memory_list` stay available as a
+  "plain" toggle.
+- Detail: `memory_get` plus `memory_neighbors`, grouped by edge kind.
+- Contradictions inbox: `memory_contradictions` (§3.4), each pair side by side.
+- Topics: `topic_get` from any tag on a memory.
+
+### 6.8 Graph tab
+
+The `witan graph` view, ported. `witan/visualize.py`'s `build_graph` (lines
+59-155) is a pure transform from `workflow_project_list` + `task_list` rows to
+nodes and edges, so the tab re-implements that transform in TypeScript over the
+same two reads and renders it with the bundled vis-network. The CLI keeps its
+Python renderer. The duplication is a presentation transform, not a read, so it
+does not fall under ADR 0011's rule against a second read surface.
+
+## 7. MCP Apps widgets
+
+MCP Apps is an official MCP extension (`io.modelcontextprotocol/ui`), stable as
+of its 2026-01-26 revision. A tool names its view in `_meta.ui.resourceUri`; the
+view is a `ui://` resource of type `text/html;profile=mcp-app`; the host renders
+it in a sandboxed iframe and hands it the tool's `content` and
+`structuredContent` over `postMessage` (`ui/notifications/tool-result`).
+Sources: https://modelcontextprotocol.io/docs/extensions/apps and
+https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp.
+
+fastmcp 4.0.3 already implements the server half. `@mcp.tool(app=...)` takes an
+`AppConfig` and writes it into `meta["ui"]` (`fastmcp/server/server.py:1823,
+1920-1926`), `@mcp.resource` defaults a `ui://` URI to the MCP Apps MIME type
+(`server.py:2048`), and the server always advertises the extension
+(`fastmcp/server/low_level.py:565-574`). No library upgrade is needed.
+
+### 7.1 Bound tools
+
+Four widgets, one per tool:
+
+- `task_ready`: the ready column, with priority and project.
+- `workflow_project_status`: the project rollup (phase, ready tasks, last
+  session, blockers, counts).
+- `recall`: ranked memories with contradiction pairs flagged.
+- `task_list`: the task table, grouped by status.
+
+The scope named `workflow_project_get` for the rollup. It is replaced by
+`workflow_project_status`, because a widget sees only its own tool's result and
+`workflow_project_get` returns the project node without its tasks or sessions,
+so a widget bound to it could not render a rollup.
+
+### 7.2 Constraints
+
+- A widget renders the result it is handed and calls nothing back. The spec
+  allows `tools/call` through the host, but many of our sessions are Claude Code,
+  which renders no widgets and shows only the text result
+  (https://github.com/anthropics/claude-code/issues/95149;
+  `pf-mcp-apps-sep-1865-ui-resources-render-in-claude--7e9cd9`). So the text
+  result stays exactly what it is today, and a test asserts each bound tool's
+  `content` is byte-identical with and without its `app=` config.
+- Each widget is one self-contained HTML file, built from the same Vite package
+  with `vite-plugin-singlefile` (the build the ext-apps quickstart uses), one
+  entry per widget, importing the page's renderers, types and unwrapper. No
+  `_meta.ui.csp` is declared, so hosts apply the spec's default
+  (`connect-src 'none'`), which is what a widget that fetches nothing wants.
+- The postMessage handshake goes through `@modelcontextprotocol/ext-apps`'s
+  `App` class rather than hand-rolled messages.
+- `_tool` (`server.py:535`) registers every tool through `mcp.tool(wrapper)`
+  and has no way to pass `app=`. It gains an optional `app` parameter; nothing
+  else about the wrapper changes.
+- Widgets and their `app=` bindings register only when the bundle is present,
+  the same rule as the `/ui/` routes (§5.2), so a tool never points at a
+  resource the server cannot serve.
+
+Where they render: claude.ai and Claude Desktop through the deployed witan
+connector, and Claude Desktop against a local stdio witan in
+`claude_desktop_config.json`. There is an unverified user report that Desktop
+drops the UI for a streamable-http server added through that config file; the
+widgets task checks both local shapes before claiming either.
+
+## 8. Deployed mount
+
+Nothing in witan authenticates a browser today: APISIX routes `/*` to
+`witan-server:8000` with `plugins=[]` (ol-infrastructure
+`applications/witan/ingress.py:75-90`), and witan's auth is bearer JWT on `/mcp`
+only.
+
+Changes:
+
+- ol-infrastructure, `substructure/keycloak/ol_platform_engineering.py`: a new
+  `witan-ui` client in the `ol-platform-engineering` realm, `access_type="PUBLIC"`,
+  `standard_flow_enabled=True`, `pkce_code_challenge_method="S256"`,
+  `valid_redirect_uris=["https://<witan domain>/ui/callback"]`,
+  `web_origins=["https://<witan domain>"]`, and an audience mapper for `witan`
+  matching `witan-desktop`'s (`ol_platform_engineering.py:519-562`). The
+  `web_origins` entry is what lets the browser read Keycloak's token response;
+  the repo has no public S256 SPA client yet, so this is the first. A separate
+  client rather than reusing `witan-desktop`, whose redirect URIs are Claude's
+  and ChatGPT's, so neither can be widened without the other.
+- ol-infrastructure, `applications/witan/deployment.py`: set
+  `WITAN_UI_OIDC_CLIENT_ID=witan-ui` and `WITAN_MCP_ALLOWED_HOSTS=<witan domain>`.
+  The APISIX route needs nothing: `/*` already reaches `/ui/`. Its comment about
+  narrowing to `/mcp` later (`ingress.py:65-74`) now has to keep `/ui/` too.
+- SPA: authorization code + PKCE against the issuer from `/ui/config.json`,
+  through the v2 client's `authProvider` hook: an `OAuthClientProvider` that
+  returns the static `witan-ui` client id, so there is no dynamic registration
+  and no client metadata document. Tokens are held in memory and
+  `sessionStorage` (not `localStorage`) and refreshed with the refresh token; a
+  401 from `/mcp` restarts the login. Unverified: whether the SDK's flow
+  completes against Keycloak 26.7.2, which does not implement RFC 8707 resource
+  indicators (the reason `witan-desktop` avoids DCR,
+  `ol_platform_engineering.py:510-518`). The deployed-mount task checks this in
+  CI first; if the SDK insists on a `resource` Keycloak rejects, the login moves
+  to `oidc-client-ts` and hands the token to the transport, with nothing else in
+  the page changing.
+
+A reader gets exactly what their agents get: per-actor scoping in
+`_resolve_client()` (`server.py:210-275`) and the Cedar bundle apply unchanged,
+because the request is the same bearer-authenticated `/mcp` call.
+
+## 9. Tauri shell (deferred)
+
+Scope item 5 stays optional and is not scheduled. When it is, it wraps the same
+bundle and points it at a `witan ui` it spawns or at a deployed origin. The
+constraint that matters is already met by the design: the read layer has no
+Node or browser-only transport, so the shell adds no second one.
+
+## 10. Implementation tasks
+
+Under the epic, in dependency order. "→" is `blocked_by`.
+
+1. Host/Origin validation on witan's HTTP transport (§2). p1.
+2. Server read gaps (§3.1–3.3): `task_list(limit)`, `created_at`/`closed_at` on
+   list rows, `task_get` edges. p1.
+3. Frontend package, build and packaging pipeline (§5.1, §5.4): scaffold,
+   CI workflow, wheel artifacts, Dockerfile stage. p1.
+4. `witan ui` and the `/ui/` routes (§5.2, §5.3) → 1, 3. p1.
+5. Read layer (§4), retitling `tk-build-the-witan-ui-read-layer-over-queries-read--825c85`
+   → 1, 3. p1.
+6. Shell, projects, rollup and task detail (§6.1–6.3) → 2, 4, 5. p1.
+7. Board (§6.4) → 6. p1.
+8. `memory_contradictions` tool and the ADR 0011 amendment (§3.4). p2.
+9. Memory and contradictions view (§6.7) → 6, 8. p2.
+10. `first_claimed_at` on `Task` (§3.5), schema first. p2.
+11. Dependency waves and the graph tab (§6.5, §6.8) → 6. p2.
+12. Retrospective timeline (§6.6) → 6, 10. p2.
+13. Deployed mount: Keycloak client, deployment env, SPA login (§8) → 4, 5. p2.
+14. MCP Apps widgets (§7) → 5. p2.
+
+The Tauri shell is not filed (§9).
+`tk-close-the-cli-json-gaps-the-gui-discovery-found--28dad2` stays where ADR
+0011 put it: p2, not a UI prerequisite, blocking nothing here.
