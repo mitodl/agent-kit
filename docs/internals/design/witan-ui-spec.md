@@ -18,7 +18,7 @@ of fourteen read tools. This spec settles _what_ gets built on that: the
 server changes, the frontend package, how the bundle is served and shipped, the
 views and the reads behind each, and the task breakdown for implementation.
 
-Building it out surfaced five places where the scope as written cannot be met by
+Building it out surfaced six places where the scope as written cannot be met by
 the tools as they are today (§3). Each gets a decision here rather than a
 workaround in the browser.
 
@@ -53,8 +53,9 @@ visits can POST tool calls to `127.0.0.1`.
 The guard already exists in fastmcp and is off. `HostOriginGuardMiddleware`
 (`fastmcp/server/http.py:227-339`) returns 421 on a Host outside the allowlist
 and 403 on a foreign Origin. `create_streamable_http_app` installs it only when
-`host_origin_protection` is not `False` (`http.py:648-661`), and the setting
-defaults to `False` "for compatibility" (`fastmcp/settings.py:280`). `witan
+`host_origin_protection` is not `False` (`http.py:648-661`), which its docstring
+says "defaults to False for compatibility" (`http.py:576-579`;
+`fastmcp/settings.py:280`). `witan
 serve` passes none of `host_origin_protection`, `allowed_hosts` or
 `allowed_origins` to `mcp.run` (`witan/cli/__init__.py:210-221`), and nothing in
 the repo sets `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION`. The mcp SDK's own
@@ -63,9 +64,7 @@ this middleware (`http.py:675-681`), so there is no second layer to fall back
 on.
 
 Decision: `witan serve` passes `host_origin_protection="auto"` on every HTTP
-transport, plus `allowed_hosts`/`allowed_origins` from two new options
-(`--allowed-host`, `--allowed-origin`, repeatable; env `WITAN_MCP_ALLOWED_HOSTS`,
-`WITAN_MCP_ALLOWED_ORIGINS`, comma-separated).
+transport, with no explicit allowlist.
 
 What `"auto"` does, read from the middleware:
 
@@ -74,20 +73,24 @@ What `"auto"` does, read from the middleware:
   rebinding. A request carrying an `Origin` must be same-origin or loopback
   (`http.py:322-339`), which closes the cross-site POST. Requests with no
   `Origin` (the CLI, curl, agents) pass, as they should.
-- Bound to `0.0.0.0` (the deployment) with no allowlist: it validates nothing
-  (`_should_validate_host`, `http.py:281-286`). That is today's behaviour, and
-  deployed `/mcp` is behind bearer auth regardless. With an explicit
-  `allowed_hosts`, Host validation turns on; the deployment should pass
-  `witan.<env>.ol.mit.edu` through `WITAN_MCP_ALLOWED_HOSTS` once the UI is
-  mounted there (§8).
+- Bound to `0.0.0.0` (the deployment): Host is not validated
+  (`_should_validate_host`, `http.py:281-286`), and Origin is checked only when
+  the request's Host is itself loopback (`http.py:288-298`). That is close to
+  today's behaviour, and it is the right one there.
 
-One hazard to test before the deployment sets an allowlist: the middleware is
-app-wide, so it also covers `/health`, which the kubelet probes by pod IP
-(ol-infrastructure `applications/witan/deployment.py:853-919`). The middleware
-adds the socket's local address to the allowed hosts unless it is unspecified
-(`http.py:314-318`), which should admit a `Host: <pod-ip>:8000` probe. Unverified
-against a running pod; the task that sets the deployed allowlist verifies it
-with a probe-shaped request in a test and a rollout in CI before anything else.
+The deployment deliberately sets no allowlist. What the guard protects against
+is a browser attaching an ambient credential to a request a foreign page
+started. Deployed `/mcp` has no ambient credential: the token is a bearer
+header the page's own code adds, which a foreign page cannot make the browser
+send. And an explicit allowlist would break the page. Passing `allowed_hosts`
+also switches Origin validation on (`http.py:288-298`); APISIX terminates TLS,
+and uvicorn trusts forwarded headers only from `FORWARDED_ALLOW_IPS`
+(`127.0.0.1,::1` by default, `uvicorn/config.py:363`), so the server computes the
+request origin as `http://<host>` while the browser sends
+`Origin: https://<host>`, and every POST from the page gets 403. Reproduced
+against a live uvicorn bound to `0.0.0.0` in review. Anyone adding an allowlist
+later owns that interaction, and must pass `None` rather than `[]` for "no
+allowlist": an empty list still counts as explicit (`http.py:241`).
 
 The loopback same-origin fallback also admits any other page served from a
 loopback origin (e.g. a dev server on `localhost:3000`). Accepted: code already
@@ -95,7 +98,10 @@ running on the user's machine does not need the browser to reach the store.
 
 Tests (`mcp/servers/witan/tests/`, through the hermetic conftest): a loopback
 app rejects `Host: evil.example` with 421 and `Origin: https://evil.example`
-with 403, accepts a same-origin POST, and accepts a POST with no `Origin`.
+with 403, accepts a same-origin POST, and accepts a POST with no `Origin`; an
+app bound to `0.0.0.0` accepts `Host: witan.example` with
+`Origin: https://witan.example`, which is the deployed page's request and the
+one an allowlist would break.
 
 ## 3. Gaps between the scope and the tools
 
@@ -112,9 +118,13 @@ limit. So "all repos" on the board, and `witan graph --all-repos`, silently show
 the 50 most recently updated tasks. No tool in the bound set has an offset or
 cursor.
 
-Decision: add `limit: int = 50` to `task_list`, passed through to the two
-unscoped queries as a parameter, so the default an agent sees does not change
-and the UI asks for what it needs. No cursor in this round: a cursor over `updated_at desc` would skip rows
+Decision: add `limit: int = 50` to `task_list`, so the default an agent sees
+does not change and the UI asks for what it needs. omnigraph 0.11 cannot take
+the limit as a query parameter (`limit $limit` fails `omnigraph lint` with
+"expected integer", and no `.gq` query does it), so this follows the memory
+reads' pattern: an `_uncapped` variant of each of the two queries with a
+literal `limit 10000`, selected when `limit > 50`, and the result sliced to
+`limit` in Python. No cursor in this round: a cursor over `updated_at desc` would skip rows
 that change mid-page, and one bounded read per view is enough until a graph
 outgrows it.
 
@@ -140,13 +150,30 @@ drill-down also needs the tasks this one blocks, its children, and the
 today; it is declared and unused.
 
 Decision: `task_get` adds `blocks: [slug]`, `children: [{slug, title, status}]`
-and `branches: [{slug, repo, branch, status, updated_at}]`, each read the way
-`_task_comments` is (`server.py:6050`): isolated, degrading to `[]` if the store
-cannot answer, so a detail read never fails on an auxiliary edge.
+and `branches: [{slug, repo, branch, status, updated_at}]`. A failure in any of
+these reads propagates like any other `task_get` read failure. `_task_comments`
+(`server.py:6050`) swallows only the error for a store that predates the
+`TaskComment` type, and these three edges have no such history to tolerate.
 `DiscoveredFrom` has no read query at all; it is left out until someone needs
 it.
 
-### 3.4 No tool lists contradictions without a seed
+### 3.4 Stale claims are not visible on a task row
+
+"Who is holding a stale claim" is in the done-criterion, and the only rule for
+staleness is the server's: `lease_expired(claimed_at)` against
+`CLAIM_LEASE_SECONDS` (`readiness.py:42-65`), applied by `status_pickable`.
+A board could infer it from `task_ready` (an `in_progress` task that shows up as
+Ready has an expired lease), but that misses the case that matters most: an
+`in_progress` task whose lease expired while it also has an open blocker never
+appears in Ready, because `is_ready` requires every blocker closed
+(`readiness.py:93-106`). The UI copying the 3600-second constant is the other
+option, and it drifts the day the server's changes.
+
+Decision: every task row `task_list`, `task_ready` and `task_get` return for an
+`in_progress` task carries `lease_expired: bool`, computed by
+`readiness.lease_expired` on the server. Other statuses omit it.
+
+### 3.5 No tool lists contradictions without a seed
 
 `recall` reports `contradictions: [{a, b}]` only for pairs where _both_
 memories are in its returned, limited set (`server.py:7669-7682`).
@@ -163,7 +190,7 @@ author, created_at`, ordered newest edge first. It is a fifteenth tool in ADR
 amendment rides the same PR as the tool. A new tool rather than a `recall` mode,
 because `recall` is a ranked, seeded read and this is an unranked enumeration.
 
-### 3.5 The retrospective Gantt's data does not exist
+### 3.6 The retrospective Gantt's data does not exist
 
 The scope plots "claimed_at/closed_at plus session spans". `claimed_at` cannot
 carry that:
@@ -176,7 +203,7 @@ carry that:
 - `task_release` nulls it (`server.py:6907`).
 - There is no status history: `TaskComment` holds author, body and timestamp
   (`schema.pg:309-315`), and the `Closes: WorkflowSession -> Task` edge
-  (`schema.pg:294`) is declared but no code writes it.
+  (`schema.pg:294`) has a mutation (`mutations.gq:666`) that no code calls.
 
 What does hold: `created_at` and `closed_at` (once §3.2 lands) are reliable, and
 sessions carry `started_at`/`ended_at` per project (`read.gq:747-757`).
@@ -221,7 +248,10 @@ Decision: `@modelcontextprotocol/client` 2.x with
 `versionNegotiation: { pin: "2026-07-28" }`. Pinned rather than `auto`, because
 `auto` probes `server/discover` first and falls back to the `initialize`
 handshake on any probe failure, so a misconfiguration would quietly downgrade
-the era instead of failing. `@modelcontextprotocol/ext-apps` 2.x (§7) has the
+the era instead of failing. That departs from ADR 0011's Consequences, which
+named the handshake era as the fallback: pinning means an era mismatch is an
+error the page shows, and the fallback is a different client (below), not a
+different era. `@modelcontextprotocol/ext-apps` 2.x (§7) has the
 v2 packages as peer dependencies, so the page and the widgets share one client
 line.
 
@@ -261,11 +291,15 @@ found the CLI getting wrong, so it gets its own tests.
 
 ### 4.3 Types
 
-The output schemas are `{"type": "object", "additionalProperties": true}` and
-say nothing about fields, so there is nothing to generate types from. Types are
-hand-written in `src/types.ts`, one per tool result, and kept honest by
-fixtures: a Python test calls each bound tool against a seeded hermetic store
-and writes the `structuredContent` to `ui/fixtures/<tool>.json`; the frontend
+The output schemas say nothing about fields: `{"type": "object",
+"additionalProperties": true}` for `recall` and `memory_neighbors`, and a
+`result` wrapper around an untyped object or array for the other twelve. There
+is nothing to generate types from. Types are hand-written in `src/types.ts`, one
+per tool result, and kept honest by fixtures: a Python test calls each bound
+tool against a seeded hermetic store and writes its `structuredContent` to
+`ui/fixtures/<tool>.json`, plus one `ui/fixtures/tools-list.json` snapshot of the
+bound tools' `tools/list` entries, which is where the wrap flags (§4.2) come
+from; the frontend
 tests parse every fixture through the unwrapper and the types' runtime guards.
 A server change that renames a field then fails the frontend suite in the same
 PR. `just ui-fixtures` regenerates them, and CI fails if they are stale, the
@@ -273,7 +307,7 @@ same way `just docs-check` gates generated docs.
 
 ### 4.4 Bound tools
 
-Exactly ADR 0011 §3's list plus `memory_contradictions` (§3.4). `src/mcp.ts`
+Exactly ADR 0011 §3's list plus `memory_contradictions` (§3.5). `src/mcp.ts`
 exports one typed function per tool and no generic `call(name, args)`, so a
 fifteenth read is a visible diff to that file rather than a string somewhere.
 
@@ -302,7 +336,7 @@ The bundle is served from `/ui/`, which collides with nothing witan already
 serves (`/mcp`, `/health`, `/.well-known/oauth-protected-resource`):
 
 - `GET /ui/{path:path}` via `@mcp.custom_route`, the public API `/health` already
-  uses (`server.py:446`). It resolves `path` inside the bundle directory,
+  uses (`server.py:445`). It resolves `path` inside the bundle directory,
   refuses anything that resolves outside it, and falls back to `index.html` so
   client-side routes survive a reload. fastmcp's `http_app` takes no `routes=`
   (`fastmcp/server/mixins/transport.py:372-385`), and the alternatives are a
@@ -311,6 +345,7 @@ serves (`/mcp`, `/health`, `/.well-known/oauth-protected-resource`):
 - `GET /ui/config.json`: `{"auth": null}` when `identity_cfg.oidc_issuer` is
   unset, otherwise `{"auth": {"issuer", "client_id", "audience"}}`. The SPA reads
   this first, so one bundle serves both modes with no build-time configuration.
+  It is registered before the catch-all so the catch-all cannot shadow it.
   `client_id` comes from a new `WITAN_UI_OIDC_CLIENT_ID`; with OIDC on and it
   unset, `/ui/` answers 503 naming the variable rather than serving a page that
   cannot log in.
@@ -346,6 +381,9 @@ The bundle is a build output, not committed. Vite writes it to
 `mcp/servers/witan/witan/ui_dist/` (gitignored), and the wheel picks it up
 through hatch's `artifacts` setting, which includes gitignored files that
 `packages = ["witan"]` would skip (`mcp/servers/witan/pyproject.toml:219-232`).
+`artifacts` goes at the `[tool.hatch.build]` level, not only on the wheel
+target: `publish-witan.yml` runs `uv build -o dist` (line 74), which builds the
+wheel from the sdist, so a bundle the sdist leaves out never reaches the wheel.
 
 - `publish-witan.yml` runs `npm ci && npm run build` in `ui/` before `uv build`,
   and asserts `ui_dist/index.html` is in the wheel, so a release can never ship
@@ -393,12 +431,13 @@ Columns and where each comes from:
 - Ready: `task_ready(repo, project_slug, limit=…)`. This is `task_ready`'s own
   rule (`readiness.is_ready` with the out-of-set blocker resolver plus
   `status_pickable`, `server.py:6961-6971`), not a re-implementation.
+  `task_ready` sorts by priority and then truncates (`server.py:6972-6975`), so
+  the board passes a limit at least the size of its `task_list` read; a
+  truncated Ready column would push ready tasks into Blocked.
 - In progress: `task_list(status="in_progress")`. Each card shows its holder
-  and lease age (`now - claimed_at`). A card that _also_ appears in the Ready
-  result is a stale claim: its lease has expired by the server's own rule, and
-  it is marked as such. The UI never compares lease age to a constant of its
-  own, so `CLAIM_LEASE_SECONDS` changing on the server cannot make the board
-  disagree with `task_ready`.
+  and lease age (`now - claimed_at`), and a card whose row says
+  `lease_expired` (§3.4) is marked as a stale claim, whether or not it also
+  has open blockers. The UI never compares lease age to a constant of its own.
 - Blocked: open and `blocked` tasks from `task_list` that are not in the Ready
   result, with each card listing its open blockers.
 - Closed: `task_list(status="closed")`, newest `closed_at` first (§3.2).
@@ -417,9 +456,15 @@ This is presentation over one read, so it lives in the frontend.
 
 ### 6.6 Retrospective timeline (Gantt)
 
-Per §3.5: lead-time bars, work-time segments where `first_claimed_at` exists,
-current-lease marks on open tasks, and the project's session spans in their own
-lane, over a selectable window (two weeks by default). Tasks with no
+Per §3.6: lead-time bars, work-time segments where `first_claimed_at` exists,
+current-lease marks on open tasks, and session spans in their own lane, over a
+selectable window (two weeks by default).
+
+"Where the last two weeks went" is a cross-project question, so the default is
+every project: `workflow_session_list()` with no `project_slug` returns every
+session (`read.gq:776-785`), and tasks come from `task_list(repo="", limit=…)`
+filtered to the window client-side, grouped by project. The project filter
+narrows both reads to one project. Tasks with no
 `first_claimed_at` are drawn with a hatched lead-time bar and a legend line
 saying the first-claim time predates tracking.
 
@@ -429,7 +474,7 @@ saying the first-claim time predates tracking.
   re-ranking. The flat `memory_search`/`memory_list` stay available as a
   "plain" toggle.
 - Detail: `memory_get` plus `memory_neighbors`, grouped by edge kind.
-- Contradictions inbox: `memory_contradictions` (§3.4), each pair side by side.
+- Contradictions inbox: `memory_contradictions` (§3.5), each pair side by side.
 - Topics: `topic_get` from any tag on a memory.
 
 ### 6.8 Graph tab
@@ -521,7 +566,9 @@ Changes:
   client rather than reusing `witan-desktop`, whose redirect URIs are Claude's
   and ChatGPT's, so neither can be widened without the other.
 - ol-infrastructure, `applications/witan/deployment.py`: set
-  `WITAN_UI_OIDC_CLIENT_ID=witan-ui` and `WITAN_MCP_ALLOWED_HOSTS=<witan domain>`.
+  `WITAN_UI_OIDC_CLIENT_ID=witan-ui`, and no Host/Origin allowlist (§2 has
+  why). The witan domain is `witan.ol.mit.edu` in Production and
+  `witan.<env>.ol.mit.edu` elsewhere (`applications/witan/__main__.py:272-275`).
   The APISIX route needs nothing: `/*` already reaches `/ui/`. Its comment about
   narrowing to `/mcp` later (`ingress.py:65-74`) now has to keep `/ui/` too.
 - SPA: authorization code + PKCE against the issuer from `/ui/config.json`,
@@ -531,11 +578,23 @@ Changes:
   `sessionStorage` (not `localStorage`) and refreshed with the refresh token; a
   401 from `/mcp` restarts the login. Unverified: whether the SDK's flow
   completes against Keycloak 26.7.2, which does not implement RFC 8707 resource
-  indicators (the reason `witan-desktop` avoids DCR,
-  `ol_platform_engineering.py:510-518`). The deployed-mount task checks this in
-  CI first; if the SDK insists on a `resource` Keycloak rejects, the login moves
-  to `oidc-client-ts` and hands the token to the transport, with nothing else in
-  the page changing.
+  indicators (the reason `witan-desktop` is a static client rather than a
+  client metadata document, `ol_platform_engineering.py:510-518`). The
+  deployed-mount task checks this in CI first; if the SDK insists on a
+  `resource` Keycloak rejects, the login moves to `oidc-client-ts` and hands the
+  token to the transport, with nothing else in the page changing.
+
+This departs from ADR 0011 §2 in one respect: the ADR expected the SPA to find
+its authorization server through RFC 9728 discovery, and the page takes the
+issuer and client id from `/ui/config.json` instead. Discovery would still have
+to be told a client id, and the static client is the only kind Keycloak 26.7.2
+supports here.
+
+The `witan`-audience token authorizes every tool, writes included, not only the
+read set the page binds. So an XSS in the page is a write exposure, not a read
+one. The CSP in §5.2 (`default-src 'self'`, no inline script, no third-party
+origins) is the control, and the bundle takes no dependency that injects HTML
+from graph content without escaping it: memory and task text render as text.
 
 A reader gets exactly what their agents get: per-actor scoping in
 `_resolve_client()` (`server.py:210-275`) and the Cedar bundle apply unchanged,
@@ -553,8 +612,8 @@ Node or browser-only transport, so the shell adds no second one.
 Under the epic, in dependency order. "→" is `blocked_by`.
 
 1. Host/Origin validation on witan's HTTP transport (§2). p1.
-2. Server read gaps (§3.1–3.3): `task_list(limit)`, `created_at`/`closed_at` on
-   list rows, `task_get` edges. p1.
+2. Server read gaps (§3.1–3.4): `task_list(limit)`, `created_at`/`closed_at` on
+   list rows, `task_get` edges, `lease_expired` on in-progress rows. p1.
 3. Frontend package, build and packaging pipeline (§5.1, §5.4): scaffold,
    CI workflow, wheel artifacts, Dockerfile stage. p1.
 4. `witan ui` and the `/ui/` routes (§5.2, §5.3) → 1, 3. p1.
@@ -562,13 +621,13 @@ Under the epic, in dependency order. "→" is `blocked_by`.
    → 1, 3. p1.
 6. Shell, projects, rollup and task detail (§6.1–6.3) → 2, 4, 5. p1.
 7. Board (§6.4) → 6. p1.
-8. `memory_contradictions` tool and the ADR 0011 amendment (§3.4). p2.
+8. `memory_contradictions` tool and the ADR 0011 amendment (§3.5). p2.
 9. Memory and contradictions view (§6.7) → 6, 8. p2.
-10. `first_claimed_at` on `Task` (§3.5), schema first. p2.
+10. `first_claimed_at` on `Task` (§3.6), schema first. p2.
 11. Dependency waves and the graph tab (§6.5, §6.8) → 6. p2.
 12. Retrospective timeline (§6.6) → 6, 10. p2.
 13. Deployed mount: Keycloak client, deployment env, SPA login (§8) → 4, 5. p2.
-14. MCP Apps widgets (§7) → 5. p2.
+14. MCP Apps widgets (§7) → 4, 6, 7. p2.
 
 The Tauri shell is not filed (§9).
 `tk-close-the-cli-json-gaps-the-gui-discovery-found--28dad2` stays where ADR
