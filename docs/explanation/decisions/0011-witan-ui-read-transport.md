@@ -1,3 +1,13 @@
+<!--
+  MIRRORED FILE — DO NOT EDIT HERE.
+  Edit mcp/servers/witan/docs/adr/0011-witan-ui-read-transport.md instead; `just docs-gen` copies it into the site.
+-->
+
+!!! info "This page lives with the code"
+
+    The authoritative copy is
+    [`mcp/servers/witan/docs/adr/0011-witan-ui-read-transport.md`](https://github.com/mitodl/agent-kit/blob/main/mcp/servers/witan/docs/adr/0011-witan-ui-read-transport.md).
+
 # 11. Witan UI read transport: the UI is an MCP client, same-origin, in both modes
 
 - Status: Accepted
