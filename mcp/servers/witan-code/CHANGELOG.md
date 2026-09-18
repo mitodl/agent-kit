@@ -8,6 +8,13 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-09-18
+
+### Changed
+
+- **Require `witan-core>=0.37`.** This keeps fresh `witan-code` installs on the
+  current shared core release alongside `witan-council`.
+
 ## [0.19.0] - 2026-09-16
 
 ### Changed
