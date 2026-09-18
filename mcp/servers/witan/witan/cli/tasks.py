@@ -36,8 +36,56 @@ from .run_helpers import (
 )
 
 
+# task_ready truncates server-side. Anything filtered client-side afterwards (a
+# search intersection, --status) needs every ready task, so the cap goes out of
+# reach.
+_ALL_READY = 2**31 - 1
+
+
+def _search_tasks(
+    s,
+    query: str,
+    *,
+    repo_arg: str | None,
+    status: str | None,
+    project: str | None,
+    assignee: str | None,
+    ready: bool,
+) -> list[dict]:
+    """Search hits in relevance order, narrowed by the listing filters.
+
+    Status and project are fields on the hit rows, so they filter directly.
+    Intersecting every hit with ``task_list`` instead drops real matches: with
+    no repo in scope that list is the 50 most recently updated tasks.
+    Readiness and assignee identity (e.g. ``@me``) only resolve server-side,
+    so those two still intersect with the server's own answer.
+    """
+    # A project spans repos, so don't let the search narrow it to this one.
+    hits = _fn(s.task_search)(
+        query=query, repo="" if project else repo_arg, status=status
+    )
+    if status is None:
+        hits = [h for h in hits if h.get("status") != "closed"]
+    if project:
+        hits = [h for h in hits if h.get("project_slug") == project]
+    if ready:
+        allowed = _fn(s.task_ready)(
+            repo=repo_arg, project_slug=project, assignee=assignee, limit=_ALL_READY
+        )
+    elif assignee:
+        allowed = _fn(s.task_list)(
+            repo=repo_arg, status=status, project_slug=project, assignee=assignee
+        )
+    else:
+        return hits
+    allowed_slugs = {r["slug"] for r in allowed}
+    return [h for h in hits if h["slug"] in allowed_slugs]
+
+
 @app.command
 def tasks(
+    query: str | None = None,
+    /,
     *,
     repo: str | None = None,
     status: str | None = None,
@@ -54,14 +102,24 @@ def tasks(
 
     Parameters
     ----------
-    repo: Scope to a specific repo URI (default: the current git repo).
-    status: Filter by open | in_progress | blocked | closed. Omitted: all
+    query:
+        Free-text search over title and description, ranked by relevance.
+        The server caps a search at 20 hits before the other filters apply.
+    repo:
+        Scope to a specific repo URI (default: the current git repo).
+    status:
+        Filter by open | in_progress | blocked | closed. Omitted: all
         non-closed statuses.
-    project: Scope to a WorkflowProject (``wp-`` slug).
-    assignee: Filter by owner.
-    ready: Show only ready-to-work tasks (open, all blockers closed).
-    all_repos: Span every repo in the graph.
-    limit: Max rows.
+    project:
+        Scope to a WorkflowProject (``wp-`` slug).
+    assignee:
+        Filter by owner.
+    ready:
+        Show only ready-to-work tasks (open, all blockers closed).
+    all_repos:
+        Span every repo in the graph.
+    limit:
+        Max rows.
     """
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
@@ -69,10 +127,27 @@ def tasks(
         _detect_repo_for_display() if not all_repos and repo is None else repo
     )
 
-    if ready:
-        rows = _fn(s.task_ready)(
-            repo=repo_arg, project_slug=project, assignee=assignee, limit=limit
+    if query is not None:
+        rows = _search_tasks(
+            s,
+            query,
+            repo_arg=repo_arg,
+            status=status,
+            project=project,
+            assignee=assignee,
+            ready=ready,
         )
+    elif ready:
+        rows = _fn(s.task_ready)(
+            repo=repo_arg,
+            project_slug=project,
+            assignee=assignee,
+            limit=limit if status is None else _ALL_READY,
+        )
+        # task_ready takes no status, and "ready" spans open, blocked (all
+        # blockers closed) and lapsed in_progress tasks.
+        if status is not None:
+            rows = [r for r in rows if r.get("status") == status]
     else:
         rows = _fn(s.task_list)(
             repo=repo_arg, status=status, project_slug=project, assignee=assignee
@@ -81,10 +156,12 @@ def tasks(
         # user explicitly asks for a status (including `--status closed`).
         if status is None:
             rows = [r for r in rows if r.get("status") != "closed"]
-        rows = rows[:limit]
+    rows = rows[:limit]
 
     if not rows:
-        if detected_repo and not all_repos:
+        if query is not None:
+            console.print(f"[dim]No tasks match '{esc(query)}'.[/dim]")
+        elif detected_repo and not all_repos:
             console.print(
                 f"[dim]No tasks scoped to {_short_repo(detected_repo)}.[/dim] "
                 f"Tasks may have been created without repo context. "
@@ -101,6 +178,8 @@ def tasks(
     else:
         scope = "all repos (no git context)"
     base_title = "Ready tasks" if ready else "Tasks"
+    if query is not None:
+        base_title += f" matching '{esc(query)}'"
     rows_data = [
         {
             "priority": r.get("priority", ""),
@@ -114,18 +193,17 @@ def tasks(
         }
         for r in rows
     ]
+    columns = list(rows_data[0])
+    # Search rows don't carry blocked_by, and a blank value would read as "no
+    # blockers". The status column still flags a blocked task. Drop the key
+    # from the rows too: structured output dumps rows, not columns.
+    if query is not None:
+        columns.remove("blocked_by")
+        for row in rows_data:
+            del row["blocked_by"]
     render_table(
         title=f"{base_title} — {scope}",
-        columns=[
-            "priority",
-            "status",
-            "type",
-            "slug",
-            "title",
-            "repo",
-            "assignee",
-            "blocked_by",
-        ],
+        columns=columns,
         rows=rows_data,
         no_wrap={"priority", "status", "type"},
         styles={"priority": _PRIORITY_STYLE, "status": _STATUS_STYLE},

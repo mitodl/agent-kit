@@ -350,10 +350,15 @@ Search memory (BM25), or with no query list memories (filtered by --kind).
 ## witan projects
 
 ```console
-witan projects [OPTIONS]
+witan projects [OPTIONS] [ARGS]
 ```
 
 List workflow projects (default: active in the current repo).
+
+**Arguments**:
+
+* `QUERY`: Free-text search over title and description, ranked by relevance.
+    The server caps a search at 20 hits.
 
 **Parameters**:
 
@@ -363,10 +368,10 @@ List workflow projects (default: active in the current repo).
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--repo`:
-* `--status`: *[default: active]*
-* `--all-repos, --no-all-repos`: *[default: False]*
-* `--limit`: *[default: 50]*
+* `--repo`: Scope to a specific repo URI (default: the current git repo).
+* `--status`: Filter by active | completed | abandoned. *[default: active]*
+* `--all-repos, --no-all-repos`: Span every repo in the graph. *[default: False]*
+* `--limit`: Max rows. *[default: 50]*
 
 ## witan project
 
@@ -864,13 +869,18 @@ Delete a ``[targets.<name>]`` block from the config file.
 ## witan tasks
 
 ```console
-witan tasks [OPTIONS]
+witan tasks [OPTIONS] [ARGS]
 ```
 
 List tasks for the current repo (or filtered).
 
 Closed tasks are elided by default — the list is a working view of live work.
 Pass ``--status closed`` to see them (or any other status to filter to it).
+
+**Arguments**:
+
+* `QUERY`: Free-text search over title and description, ranked by relevance.
+    The server caps a search at 20 hits before the other filters apply.
 
 **Parameters**:
 
@@ -880,13 +890,14 @@ Pass ``--status closed`` to see them (or any other status to filter to it).
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--repo`:
-* `--status`: non-closed statuses.
-* `--project`:
-* `--assignee`:
-* `--ready, --no-ready`: *[default: False]*
-* `--all-repos, --no-all-repos`: *[default: False]*
-* `--limit`: *[default: 50]*
+* `--repo`: Scope to a specific repo URI (default: the current git repo).
+* `--status`: Filter by open | in_progress | blocked | closed. Omitted: all
+    non-closed statuses.
+* `--project`: Scope to a WorkflowProject (``wp-`` slug).
+* `--assignee`: Filter by owner.
+* `--ready, --no-ready`: Show only ready-to-work tasks (open, all blockers closed). *[default: False]*
+* `--all-repos, --no-all-repos`: Span every repo in the graph. *[default: False]*
+* `--limit`: Max rows. *[default: 50]*
 
 ## witan task
 

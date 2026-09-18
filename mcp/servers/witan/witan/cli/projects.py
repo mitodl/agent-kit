@@ -38,19 +38,40 @@ from .run_helpers import (
 
 @app.command
 def projects(
+    query: str | None = None,
+    /,
     *,
     repo: str | None = None,
     status: str | None = "active",
     all_repos: bool = False,
     limit: int = 50,
 ) -> None:
-    """List workflow projects (default: active in the current repo)."""
+    """List workflow projects (default: active in the current repo).
+
+    Parameters
+    ----------
+    query:
+        Free-text search over title and description, ranked by relevance.
+        The server caps a search at 20 hits.
+    repo:
+        Scope to a specific repo URI (default: the current git repo).
+    status:
+        Filter by active | completed | abandoned.
+    all_repos:
+        Span every repo in the graph.
+    limit:
+        Max rows.
+    """
     s = _srv()
-    rows = _fn(s.workflow_project_list)(repo=_repo_arg(repo, all_repos), status=status)[
-        :limit
-    ]
+    repo_arg = _repo_arg(repo, all_repos)
+    if query is None:
+        rows = _fn(s.workflow_project_list)(repo=repo_arg, status=status)
+    else:
+        rows = _fn(s.workflow_project_search)(query=query, repo=repo_arg, status=status)
+    rows = rows[:limit]
+    matching = "" if query is None else f" matching '{esc(query)}'"
     if not rows:
-        console.print("[dim]No projects.[/dim]")
+        console.print(f"[dim]No projects{matching}.[/dim]")
         return
     detected_repo = (
         _detect_repo_for_display() if not all_repos and repo is None else repo
@@ -72,7 +93,7 @@ def projects(
         for r in rows
     ]
     render_table(
-        title=f"Workflow projects — {scope}",
+        title=f"Workflow projects{matching} — {scope}",
         columns=["status", "phase", "slug", "title", "repos"],
         rows=rows_data,
         no_wrap={"status", "phase"},
