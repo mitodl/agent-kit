@@ -7,6 +7,7 @@ report that to a user.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 
@@ -65,6 +66,32 @@ def skill_files(skill: SkillSource) -> list[Path]:
         raise ValueError(f"unsafe or invalid skill name: {skill.name!r}")
     src_dir = skill.skill_md_path.parent
     return [p.relative_to(src_dir) for p in sorted(src_dir.rglob("*")) if p.is_file()]
+
+
+def skill_content_hash(skill: SkillSource) -> str:
+    """SHA-256 over every file ``skill_files()`` walks for this skill —
+    the exact tree ``install_skills`` copies, so this is precisely "would
+    this copy differ" (staleness-detection spec S1). Each file's relative
+    path is folded into the hash alongside its bytes, not just the
+    concatenated content, so two skills that differ only in how their
+    bytes are split across files (e.g. moving text from ``SKILL.md`` into
+    a new ``scripts/foo.sh``) don't hash identically."""
+    src_dir = skill.skill_md_path.parent
+    digest = hashlib.sha256()
+    for rel in skill_files(skill):
+        digest.update(rel.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((src_dir / rel).read_bytes())
+        digest.update(b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def hook_content_hash(entry_path: Path) -> str:
+    """SHA-256 of a plugin hook's own ``entry_path`` file — the file
+    ``apply()`` copies verbatim (``shutil.copy2``), so this answers the
+    same "would this copy differ" question ``skill_content_hash`` answers
+    for a skill (staleness-detection spec S1)."""
+    return f"sha256:{hashlib.sha256(entry_path.read_bytes()).hexdigest()}"
 
 
 def install_skills(
