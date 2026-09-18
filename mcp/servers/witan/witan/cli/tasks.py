@@ -172,11 +172,6 @@ def tasks(
     base_title = "Ready tasks" if ready else "Tasks"
     if query is not None:
         base_title += f" matching '{esc(query)}'"
-    columns = ["priority", "status", "type", "slug", "title", "repo", "assignee"]
-    # Search rows don't carry blocked_by, and a blank column would read as "no
-    # blockers". The status column still flags a blocked task.
-    if query is None:
-        columns.append("blocked_by")
     rows_data = [
         {
             "priority": r.get("priority", ""),
@@ -190,6 +185,14 @@ def tasks(
         }
         for r in rows
     ]
+    columns = list(rows_data[0])
+    # Search rows don't carry blocked_by, and a blank value would read as "no
+    # blockers". The status column still flags a blocked task. Drop the key
+    # from the rows too: structured output dumps rows, not columns.
+    if query is not None:
+        columns.remove("blocked_by")
+        for row in rows_data:
+            del row["blocked_by"]
     render_table(
         title=f"{base_title} — {scope}",
         columns=columns,

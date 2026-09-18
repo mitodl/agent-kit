@@ -510,6 +510,32 @@ def test_tasks_query_finds_tasks_older_than_the_recent_window(server, monkeypatc
 
 
 @requires_omnigraph
+def test_tasks_query_structured_output_omits_blocked_by(server, monkeypatch, capsys):
+    """Search rows don't carry blocked_by, so JSON mustn't report it as empty."""
+    import json
+
+    from witan.cli import _common, output
+    from witan.cli._common import _fn
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common, "_server", server)
+    blocker = _fn(server.task_create)(title="upstream fix", description="d")
+    _fn(server.task_create)(
+        title="grafana dashboard", description="d", blocked_by=[blocker["slug"]]
+    )
+
+    output.set_output_format("json")
+    try:
+        tasks("grafana dashboard", all_repos=True)
+    finally:
+        output.set_output_format("txt")
+
+    rows = json.loads(capsys.readouterr().out)["rows"]
+    assert rows
+    assert all("blocked_by" not in r for r in rows)
+
+
+@requires_omnigraph
 def test_projects_query_searches(server, monkeypatch):
     """`witan projects QUERY` returns only matching projects."""
     from witan.cli import _common
