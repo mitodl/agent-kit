@@ -36,8 +36,9 @@ from .run_helpers import (
 )
 
 
-# task_ready truncates server-side, and a search has to intersect against every
-# ready task, so the cap goes out of reach.
+# task_ready truncates server-side. Anything filtered client-side afterwards (a
+# search intersection, --status) needs every ready task, so the cap goes out of
+# reach.
 _ALL_READY = 2**31 - 1
 
 
@@ -138,8 +139,15 @@ def tasks(
         )
     elif ready:
         rows = _fn(s.task_ready)(
-            repo=repo_arg, project_slug=project, assignee=assignee, limit=limit
+            repo=repo_arg,
+            project_slug=project,
+            assignee=assignee,
+            limit=limit if status is None else _ALL_READY,
         )
+        # task_ready takes no status, and "ready" spans open, blocked (all
+        # blockers closed) and lapsed in_progress tasks.
+        if status is not None:
+            rows = [r for r in rows if r.get("status") == status]
     else:
         rows = _fn(s.task_list)(
             repo=repo_arg, status=status, project_slug=project, assignee=assignee

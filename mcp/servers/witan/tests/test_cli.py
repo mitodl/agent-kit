@@ -510,6 +510,33 @@ def test_tasks_query_finds_tasks_older_than_the_recent_window(server, monkeypatc
 
 
 @requires_omnigraph
+def test_tasks_ready_honours_status_with_and_without_query(server, monkeypatch):
+    """`--ready --status open` drops ready tasks in other statuses either way."""
+    from witan.cli import _common
+    from witan.cli._common import _fn
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common, "_server", server)
+    captured = []
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: captured.append(a[0]))
+
+    open_task = _fn(server.task_create)(title="grafana panel", description="d")
+    # `blocked` with no open blockers is still ready (status_pickable).
+    blocked_task = _fn(server.task_create)(title="grafana alert", description="d")
+    _fn(server.task_update)(slug=blocked_task["slug"], status="blocked")
+    ready_slugs = {r["slug"] for r in _fn(server.task_ready)(repo="", limit=100)}
+    assert blocked_task["slug"] in ready_slugs
+
+    for query in (None, "grafana"):
+        captured.clear()
+        tasks(query, all_repos=True, ready=True, status="open")
+        table = next(c for c in captured if hasattr(c, "columns"))
+        slugs = _table_column(table, "slug")
+        assert open_task["slug"] in slugs
+        assert blocked_task["slug"] not in slugs
+
+
+@requires_omnigraph
 def test_tasks_query_structured_output_omits_blocked_by(server, monkeypatch, capsys):
     """Search rows don't carry blocked_by, so JSON mustn't report it as empty."""
     import json
