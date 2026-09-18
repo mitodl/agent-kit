@@ -8,6 +8,8 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-09-18
+
 ### Added
 
 - **S3 graph targets can select their AWS CLI profile and region in
