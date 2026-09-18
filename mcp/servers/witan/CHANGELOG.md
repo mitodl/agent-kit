@@ -8,6 +8,8 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-09-18
+
 ### Added
 
 - **`witan projects` and `witan tasks` take an optional free-text query.**
