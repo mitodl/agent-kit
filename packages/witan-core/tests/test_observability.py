@@ -395,6 +395,29 @@ def test_sentry_breadcrumbs_include_debug_records(monkeypatch):
     assert any(b["message"].find("a debug breadcrumb") != -1 for b in breadcrumbs)
 
 
+@pytest.mark.parametrize(
+    ("exporter", "batch"),
+    [
+        ("opentelemetry.exporter.otlp.proto.http.trace_exporter", "span"),
+        ("opentelemetry.exporter.otlp.proto.http.metric_exporter", "metrics"),
+    ],
+)
+def test_only_a_dropped_otlp_batch_is_kept_out_of_sentry(
+    exporter, batch, sentry_events
+):
+    # The exporters' own two ERROR calls (WITAN-T, WITAN-A). A dropped batch
+    # is the collector being unreachable; a non-retryable status is witan's
+    # own endpoint or headers being wrong, and must still be reported.
+    log = logging.getLogger(exporter)
+    log.error(
+        f"Failed to export {batch} batch due to timeout, max retries or shutdown."
+    )
+    log.error(f"Failed to export {batch} batch code: %s, reason: %s", 401, "denied")
+    assert [e["logentry"]["formatted"] for e in sentry_events] == [
+        f"Failed to export {batch} batch code: 401, reason: denied"
+    ]
+
+
 # ── The configured handler must late-bind sys.stderr ────────────────────────
 
 

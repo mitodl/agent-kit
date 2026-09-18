@@ -186,6 +186,28 @@ def configure_metrics() -> Any | None:
     return provider
 
 
+# The OTLP exporters log a dropped batch ("Failed to export span batch due to
+# timeout, max retries or shutdown.") at ERROR. That is the collector being
+# unreachable, which witan can neither cause nor fix, so as a Sentry issue it
+# is noise (WITAN-A, WITAN-T). The line still reaches stderr, and so Loki.
+# Matched on the message, not the logger: the same loggers also report a
+# non-retryable response ("Failed to export span batch code: 401, ...") at
+# ERROR, which means witan's own OTLP endpoint or headers are wrong.
+_OTLP_EXPORTER_LOGGER_PREFIX = "opentelemetry.exporter.otlp."
+_OTLP_DROPPED_BATCH_SUFFIX = "due to timeout, max retries or shutdown."
+
+
+def _drop_otlp_dropped_batch(event: dict, hint: dict) -> dict | None:
+    record = hint.get("log_record")
+    if (
+        record is not None
+        and record.name.startswith(_OTLP_EXPORTER_LOGGER_PREFIX)
+        and record.getMessage().endswith(_OTLP_DROPPED_BATCH_SUFFIX)
+    ):
+        return None
+    return event
+
+
 def configure_sentry() -> Any | None:
     """Install the Sentry SDK. Returns the client in effect, or ``None``.
 
@@ -207,6 +229,9 @@ def configure_sentry() -> Any | None:
     dropped by a second, stricter threshold underneath ours — the process's
     own ``WITAN_LOG_LEVEL``/root logger level already decides what reaches a
     handler at all, and this should not gate more tightly than that.
+
+    The OTLP exporters' dropped-batch message is the one exception: see
+    ``_drop_otlp_dropped_batch``.
     """
     global _sentry_client  # noqa: PLW0603 - module-level singleton
     if _sentry_client is not None:
@@ -231,6 +256,7 @@ def configure_sentry() -> Any | None:
             integrations=[
                 LoggingIntegration(level=logging.DEBUG, event_level=logging.ERROR)
             ],
+            before_send=_drop_otlp_dropped_batch,
         )
         client = sentry_sdk.get_client()
         if not client.is_active():
