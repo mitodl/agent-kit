@@ -67,12 +67,23 @@ def deployed_mode(monkeypatch):
     built = []
 
     class _FakeOmnigraphClient:
-        def __init__(self, graph_uri, queries_dir, token, guard=None, graph_id=None):
+        def __init__(
+            self,
+            graph_uri,
+            queries_dir,
+            token,
+            guard=None,
+            graph_id=None,
+            s3_profile=None,
+            s3_region=None,
+        ):
             self.graph_uri = graph_uri
             self.graph_id = graph_id
             self.queries_dir = queries_dir
             self.token = token
             self.guard = guard
+            self.s3_profile = s3_profile
+            self.s3_region = s3_region
             built.append(self)
 
     monkeypatch.setattr(srv, "OmnigraphClient", _FakeOmnigraphClient)

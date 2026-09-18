@@ -141,6 +141,57 @@ def test_load_graph_name_env_and_target_override(monkeypatch, toml_file):
     assert load().graph_name == "council-env"
 
 
+def test_load_s3_profile_and_region_from_target(monkeypatch, toml_file):
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            [targets.personal]
+            server = "s3://personal-witan/graph.omni"
+            s3_profile = "personal"
+            s3_region = "us-east-1"
+            match_orgs = ["example"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/example/project")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_MEMORY_URI", raising=False)
+    monkeypatch.delenv("WITAN_S3_PROFILE", raising=False)
+    monkeypatch.delenv("WITAN_S3_REGION", raising=False)
+
+    cfg = load()
+    assert cfg.s3_profile == "personal"
+    assert cfg.s3_region == "us-east-1"
+
+
+def test_load_s3_environment_overrides_target_and_global(monkeypatch, toml_file):
+    monkeypatch.setenv(
+        "WITAN_CONFIG",
+        toml_file(
+            """
+            s3_profile = "global"
+            s3_region = "global-region"
+
+            [targets.personal]
+            server = "s3://personal-witan/graph.omni"
+            s3_profile = "target"
+            s3_region = "target-region"
+            match_orgs = ["example"]
+            """
+        ),
+    )
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/example/project")
+    monkeypatch.setenv("WITAN_S3_PROFILE", "environment")
+    monkeypatch.setenv("WITAN_S3_REGION", "environment-region")
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    monkeypatch.delenv("WITAN_MEMORY_URI", raising=False)
+
+    cfg = load()
+    assert cfg.s3_profile == "environment"
+    assert cfg.s3_region == "environment-region"
+
+
 def test_load_global_file_values(monkeypatch, toml_file):
     monkeypatch.setenv(
         "WITAN_CONFIG",

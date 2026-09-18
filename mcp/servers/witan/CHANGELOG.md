@@ -8,6 +8,23 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **S3 graph targets can select their AWS CLI profile and region in
+  `config.toml`.** Set `s3_profile` and optionally `s3_region` globally or on a
+  `[targets.<name>]` block (environment overrides: `WITAN_S3_PROFILE` and
+  `WITAN_S3_REGION`). Witan exports short-lived credentials before each
+  omnigraph subprocess, removing the need for a credential wrapper script.
+  Requires `witan-core>=0.37`.
+- **`witan migrate merge` carries each end's S3 credentials separately.**
+  `--from <name>` / `--to <name>` now pass that target's own
+  `s3_profile`/`s3_region` for its end of the merge, so two buckets under two
+  profiles work in one command. The ambient config's profile is applied only to
+  the configured store — the same rule `_store_client` already used for a
+  bearer token, because another `s3://` URI is a different bucket that may take
+  a different profile. A remote merge's client-side source export honors them
+  too; a deployment destination refuses them, since it holds its data tier's own.
+
 ## [0.34.1] - 2026-09-16
 
 ### Fixed

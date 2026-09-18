@@ -6,6 +6,7 @@ Each server's own test_graph.py keeps only its subclass-specific bits (the
 setup-hint message; witan-code's branch ops; witan's apply_schema).
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -266,6 +267,114 @@ def test_local_store_never_receives_a_bearer_token(monkeypatch, tmp_path, uri, t
         )
         is None
     )
+
+
+def test_s3_profile_exports_credentials_for_omnigraph(monkeypatch):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ambient-access")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "ambient-session")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps(
+                {
+                    "Version": 1,
+                    "AccessKeyId": "profile-access",
+                    "SecretAccessKey": "profile-secret",
+                    "SessionToken": "profile-session",
+                    "Expiration": "2099-01-01T00:00:00Z",
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    env = og.store_subprocess_env(
+        "s3://bucket/graph", s3_profile="personal", s3_region="us-east-1"
+    )
+
+    assert captured["cmd"] == [
+        "aws",
+        "configure",
+        "export-credentials",
+        "--profile",
+        "personal",
+        "--format",
+        "process",
+    ]
+    assert captured["kwargs"] == {
+        "check": True,
+        "capture_output": True,
+        "text": True,
+    }
+    assert env["AWS_ACCESS_KEY_ID"] == "profile-access"
+    assert env["AWS_SECRET_ACCESS_KEY"] == "profile-secret"
+    assert env["AWS_SESSION_TOKEN"] == "profile-session"
+    assert env["AWS_PROFILE"] == "personal"
+    assert env["AWS_REGION"] == "us-east-1"
+    assert env["AWS_DEFAULT_REGION"] == "us-east-1"
+    assert env["AWS_EC2_METADATA_DISABLED"] == "true"
+
+
+def test_s3_profile_without_session_token_removes_ambient_one(monkeypatch):
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "ambient-session")
+    monkeypatch.setenv("AWS_SECURITY_TOKEN", "ambient-security-token")
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps(
+                {
+                    "Version": 1,
+                    "AccessKeyId": "profile-access",
+                    "SecretAccessKey": "profile-secret",
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    env = og.store_subprocess_env("s3://bucket/graph", s3_profile="personal")
+
+    assert "AWS_SESSION_TOKEN" not in env
+    assert "AWS_SECURITY_TOKEN" not in env
+
+
+@pytest.mark.parametrize("uri", ["/tmp/graph.omni", "https://host:8080"])
+def test_non_s3_store_ignores_s3_profile(monkeypatch, uri):
+    monkeypatch.setenv("AWS_PROFILE", "ambient")
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("AWS CLI must not run for a non-S3 store")
+
+    monkeypatch.setattr(og.subprocess, "run", should_not_run)
+    env = og.store_subprocess_env(uri, s3_profile="personal", s3_region="us-east-1")
+
+    assert env["AWS_PROFILE"] == "ambient"
+
+
+def test_s3_profile_resolution_failure_is_clear(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(23, cmd, stderr="provider failed")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="S3 profile 'personal'.*exited 23"):
+        og.store_subprocess_env("s3://bucket/graph", s3_profile="personal")
+
+
+def test_s3_profile_invalid_export_is_clear(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="not-json", stderr="")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="invalid credentials.*'personal'"):
+        og.store_subprocess_env("s3://bucket/graph", s3_profile="personal")
 
 
 def test_remote_store_keeps_an_ambient_token_when_none_is_configured(

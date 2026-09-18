@@ -29,6 +29,8 @@ only settings a local, single-user install normally needs.
 | `WITAN_MEMORY_TOKEN` | — | Bearer token for an `http(s)://` store. Required for a deployed server, meaningless for a local one. |
 | `WITAN_MEMORY_URI` | `~/.local/share/witan/graph.omni` | Graph store location: a local path, an `s3://` URI, or the base URL of a deployed `omnigraph-server`. This is the single setting that decides whether you are running against your own laptop or a shared service. |
 | `WITAN_OUTPUT_FORMAT` | `txt` | Default CLI output format: `txt`, `json`, `toml`, or `yaml`. Equivalent to passing `--output-format`. |
+| `WITAN_S3_PROFILE` | — | AWS CLI profile exported into omnigraph subprocesses for an `s3://` store. Witan delegates to `aws configure export-credentials`, so credentials stay out of this config file. Ignored for local and `http(s)://` stores. |
+| `WITAN_S3_REGION` | — | Optional AWS region supplied with `WITAN_S3_PROFILE`. Sets both `AWS_REGION` and `AWS_DEFAULT_REGION` for the omnigraph subprocess. |
 
 ## Repository and target scoping
 

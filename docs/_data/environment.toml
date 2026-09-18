@@ -38,6 +38,12 @@ desc = "Which graph to address on an `http(s)://` omnigraph-server — one serve
 [section.vars.WITAN_MEMORY_TOKEN]
 desc = "Bearer token for an `http(s)://` store. Required for a deployed server, meaningless for a local one."
 
+[section.vars.WITAN_S3_PROFILE]
+desc = "AWS CLI profile exported into omnigraph subprocesses for an `s3://` store. Witan delegates to `aws configure export-credentials`, so credentials stay out of this config file. Ignored for local and `http(s)://` stores."
+
+[section.vars.WITAN_S3_REGION]
+desc = "Optional AWS region supplied with `WITAN_S3_PROFILE`. Sets both `AWS_REGION` and `AWS_DEFAULT_REGION` for the omnigraph subprocess."
+
 [section.vars.WITAN_AUTHOR]
 desc = "Attribution written to every node you create. Falls back to `git config user.name`, then `$USER`."
 

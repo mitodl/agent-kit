@@ -170,6 +170,8 @@ _default_client = OmnigraphClient(
     cfg.graph_token,
     guard=_write_guard,
     graph_id=cfg.graph_name,
+    s3_profile=cfg.s3_profile,
+    s3_region=cfg.s3_region,
 )
 
 # Per-user actor/token mapping for the deployed streamable-http service (ADR
@@ -267,6 +269,8 @@ def _resolve_client() -> OmnigraphClient:
                 bearer,
                 guard=_write_guard,
                 graph_id=cfg.graph_name,
+                s3_profile=cfg.s3_profile,
+                s3_region=cfg.s3_region,
             )
     return _actor_clients[actor_id]
 
@@ -2267,7 +2271,9 @@ def _merge_accounting(
     }
 
 
-def _store_client(uri: str) -> OmnigraphClient:
+def _store_client(
+    uri: str, s3: cfg_module.S3Credentials | None = None
+) -> OmnigraphClient:
     """An ``OmnigraphClient`` addressing ``uri`` — a store that need not be the
     configured one.
 
@@ -2297,6 +2303,15 @@ def _store_client(uri: str) -> OmnigraphClient:
     no graph id at all is a caller error, so it surfaces as a ``RuntimeError``
     (what every caller of this module, the CLI included, already handles)
     rather than the raw ``ValueError`` from the parser.
+
+    ``s3`` follows the token rule exactly, and for the same reason: the ambient
+    config's profile is applied only when ``uri`` names the configured store.
+    Any *other* ``s3://`` store is a different bucket that may well belong to a
+    different profile, so its credentials have to be passed in by whoever
+    resolved that store — ``witan migrate merge --from/--to <name>`` reads them
+    off the named target block. Left unpassed for a store that is not the
+    configured one, it inherits whatever AWS credentials the environment
+    already carries, which is what every merge did before this argument existed.
     """
     fallback = (
         client.graph_id
@@ -2308,9 +2323,18 @@ def _store_client(uri: str) -> OmnigraphClient:
     except ValueError as exc:
         raise RuntimeError(f"{uri}: {exc}") from exc
     configured = store_cli_args(client.graph_uri, client.graph_id)
-    token = client.token if args == configured else None
+    is_configured = args == configured
+    token = client.token if is_configured else None
+    if s3 is None:
+        s3 = cfg.s3 if is_configured else cfg_module.S3Credentials()
     return OmnigraphClient(
-        uri, cfg.queries_dir, token, guard=_write_guard, graph_id=fallback
+        uri,
+        cfg.queries_dir,
+        token,
+        guard=_write_guard,
+        graph_id=fallback,
+        s3_profile=s3.profile,
+        s3_region=s3.region,
     )
 
 
@@ -2358,6 +2382,8 @@ def merge_store(
     dry_run: bool = False,
     source_author: str | None = None,
     since: dict | None = None,
+    source_s3: cfg_module.S3Credentials | None = None,
+    target_s3: cfg_module.S3Credentials | None = None,
 ) -> dict:
     """Merge another store's data into this store, newest-record-wins on slug
     collisions.
@@ -2416,6 +2442,12 @@ def merge_store(
         Supplied, every collision both sides have written since then is marked
         ``diverged`` — the losing edit is still discarded, but no longer
         silently. Omitted, nothing is marked; see ``_reconcile_nodes``.
+    source_s3, target_s3:
+        The AWS profile/region each END is addressed with, when it is an
+        ``s3://`` store belonging to a named target rather than the configured
+        one. Per-end because the two stores can be different buckets under
+        different profiles — the case ambient configuration cannot express. See
+        :func:`_store_client` for what each falls back to when omitted.
 
     Returns counts (``added``/``updated``/``kept_target``/``diverged``) and the
     full per-``(type, slug)`` decision list, plus (when not a dry run)
@@ -2456,7 +2488,7 @@ def merge_store(
         )
 
     _ensure_graph(target)
-    target_client = _store_client(target)
+    target_client = _store_client(target, target_s3)
 
     # Held across export → reconcile → load, so no other writer can land
     # between the target export and the load and make the decisions stale. The
@@ -2471,7 +2503,9 @@ def merge_store(
                 source_file = Path(source)
             else:
                 source_file = tmp_path / "source.jsonl"
-                _store_client(source).export_to(source_file, label="export (source)")
+                _store_client(source, source_s3).export_to(
+                    source_file, label="export (source)"
+                )
             target_client.export_to(target_file, label="export (target)")
 
             source_nodes, source_edges, source_passthrough, source_dupes = (

@@ -82,6 +82,11 @@ _CLEARED = (
     "WITAN_ACTOR_TOKENS_FILE",
     "WITAN_MEMORY_TOKEN",
     "WITAN_MEMORY_GRAPH",
+    # An S3 store's credentials. Left set, a config test inherits the
+    # developer's profile and the subprocess env tests would shell out to
+    # their real `aws configure export-credentials`.
+    "WITAN_S3_PROFILE",
+    "WITAN_S3_REGION",
     "WITAN_CODE_TOKEN",
     "WITAN_CODE_SERVER",
     "WITAN_CODE_TRANSPORT",

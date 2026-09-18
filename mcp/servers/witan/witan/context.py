@@ -256,6 +256,8 @@ def inject_context(
     debug: bool = False,
     graph_id: str | None = None,
     author: str | None = None,
+    s3_profile: str | None = None,
+    s3_region: str | None = None,
 ) -> str:
     """Return markdown context for active projects + ready tasks, or empty string.
 
@@ -284,7 +286,14 @@ def inject_context(
             _dbg(debug, f"served from output cache ({len(cached)} chars)")
             return cached
 
-        client = OmnigraphClient(graph_uri, queries_dir, token, graph_id=graph_id)
+        client = OmnigraphClient(
+            graph_uri,
+            queries_dir,
+            token,
+            graph_id=graph_id,
+            s3_profile=s3_profile,
+            s3_region=s3_region,
+        )
 
         # The "list_unscoped_tasks" query is an all-tasks scan (capped at the
         # query's own limit 10000). Derive both the unscoped and the repo-scoped
