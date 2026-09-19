@@ -8,6 +8,15 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **`configure_sentry` no longer turns a dropped OTLP batch into a Sentry
+  issue.** The exporters log "Failed to export ... batch due to timeout, max
+  retries or shutdown." at ERROR when the collector is unreachable, which is
+  not something witan can act on. The line still goes to stderr. A
+  non-retryable export failure (e.g. a 401 from wrong OTLP headers) is still
+  reported.
+
 ## [0.37.0] - 2026-09-17
 
 ### Added
