@@ -18,7 +18,7 @@ of fourteen read tools. This spec settles _what_ gets built on that: the
 server changes, the frontend package, how the bundle is served and shipped, the
 views and the reads behind each, and the task breakdown for implementation.
 
-Building it out surfaced six places where the scope as written cannot be met by
+Building it out surfaced eight places where the scope as written cannot be met by
 the tools as they are today (§3). Each gets a decision here rather than a
 workaround in the browser.
 
@@ -118,13 +118,18 @@ limit. So "all repos" on the board, and `witan graph --all-repos`, silently show
 the 50 most recently updated tasks. No tool in the bound set has an offset or
 cursor.
 
-Decision: add `limit: int = 50` to `task_list`, so the default an agent sees
-does not change and the UI asks for what it needs. omnigraph 0.11 cannot take
-the limit as a query parameter (`limit $limit` fails `omnigraph lint` with
+Decision: add `limit: int | None = None` to `task_list`. Omitted, every branch
+behaves exactly as today (50 rows unscoped, uncapped when scoped by repo,
+project or parent), so no existing caller changes. Given, it applies to every
+branch and must be between 1 and 10,000, raising `ValueError` outside that
+range. A plain `limit: int = 50` would not work: it either caps the scoped
+branches that are uncapped today, or, applied only to unscoped reads, makes an
+explicit scoped limit indistinguishable from the default. omnigraph 0.11 cannot
+take the limit as a query parameter (`limit $limit` fails `omnigraph lint` with
 "expected integer", and no `.gq` query does it), so this follows the memory
-reads' pattern: an `_uncapped` variant of each of the two queries with a
-literal `limit 10000`, selected when `limit > 50`, and the result sliced to
-`limit` in Python. No cursor in this round: a cursor over `updated_at desc` would skip rows
+reads' pattern: an `_uncapped` variant of each of the two unscoped queries with
+a literal `limit 10000`, selected whenever `limit` is given, and the result
+sliced to `limit` in Python. No cursor in this round: a cursor over `updated_at desc` would skip rows
 that change mid-page, and one bounded read per view is enough until a graph
 outgrows it.
 
@@ -160,8 +165,11 @@ it.
 ### 3.4 Stale claims are not visible on a task row
 
 "Who is holding a stale claim" is in the done-criterion, and the only rule for
-staleness is the server's: `lease_expired(claimed_at)` against
-`CLAIM_LEASE_SECONDS` (`readiness.py:42-65`), applied by `status_pickable`.
+staleness is the server's: `status_pickable` (`readiness.py:68-90`) calls
+`lease_expired(claimed_at or updated_at)` against `CLAIM_LEASE_SECONDS`
+(`readiness.py:42`). The `updated_at` fallback is deliberate: a legacy or
+hand-edited `in_progress` row with no `claimed_at` counts as held until its last
+write is older than the lease.
 A board could infer it from `task_ready` (an `in_progress` task that shows up as
 Ready has an expired lease), but that misses the case that matters most: an
 `in_progress` task whose lease expired while it also has an open blocker never
@@ -170,8 +178,9 @@ appears in Ready, because `is_ready` requires every blocker closed
 option, and it drifts the day the server's changes.
 
 Decision: every task row `task_list`, `task_ready` and `task_get` return for an
-`in_progress` task carries `lease_expired: bool`, computed by
-`readiness.lease_expired` on the server. Other statuses omit it.
+`in_progress` task carries `lease_expired: bool`, computed as
+`readiness.status_pickable(row)`, which for `in_progress` is exactly the
+server's lease rule including the fallback. Other statuses omit it.
 
 ### 3.5 No tool lists contradictions without a seed
 
@@ -183,9 +192,14 @@ private `_edge_index`. An inbox of "which memories contradict each other" has
 no read that returns it.
 
 Decision: add a read-only tool `memory_contradictions(repo: str | None = None)
--> list[dict]`, returning one row per `Contradicts` edge with both endpoints'
-`slug, title, kind, repo, author, updated_at` and the edge's `confidence, role,
-author, created_at`, ordered newest edge first. It is a fifteenth tool in ADR
+-> list[dict]`, returning one row per unordered pair of contradicting memories
+with both endpoints' `slug, title, kind, repo, author, updated_at` and the
+edge's `confidence, role, author, created_at`, ordered newest edge first. A
+pair can be stored in both directions (the edge key allows it, and
+`tests/test_edge_properties.py:149-158` links one both ways), so rows collapse
+on the unordered pair the way `memory_neighbors` and `recall` already do; when
+both directions exist, the newer edge's metadata wins, matching
+`memory_neighbors`' newest-wins rule (`tests/test_edge_properties.py:161`). It is a fifteenth tool in ADR
 0011 §3's bound set, which that section says requires amending the ADR; the
 amendment rides the same PR as the tool. A new tool rather than a `recall` mode,
 because `recall` is a ranked, seeded read and this is an unranked enumeration.
@@ -205,12 +219,23 @@ carry that:
   (`schema.pg:309-315`), and the `Closes: WorkflowSession -> Task` edge
   (`schema.pg:294`) has a mutation (`mutations.gq:666`) that no code calls.
 
-What does hold: `created_at` and `closed_at` (once §3.2 lands) are reliable, and
-sessions carry `started_at`/`ended_at` per project (`read.gq:747-757`).
+`closed_at` is not reliable either, as the code stands. A reopen through
+`task_update` keeps the old `closed_at`, because `_update_task` merges over the
+current row and only a transition _to_ `closed` touches it
+(`server.py:6443-6450`). And `task_release` takes a `status` that may be
+`closed` (`server.py:6858`) but writes only status, assignee and `claimed_at`
+(`server.py:6907`), so it can produce a closed task with no `closed_at`.
+`created_at` holds, and sessions carry `started_at`/`ended_at`
+(`read.gq:747-757`).
 
-Decision, in two parts:
+Decision, in three parts:
 
-1. Add a nullable `first_claimed_at: DateTime?` to `Task`, set by `task_claim`
+1. Make `closed_at` an invariant of status before anything plots it: every
+   transition to `closed` stamps it (`task_release` included), and every
+   transition out of `closed` clears it. The timeline still reads `closed_at`
+   only on rows whose status is `closed`, so rows written before the fix
+   cannot draw a bar that ends on a reopened task's old close.
+2. Add a nullable `first_claimed_at: DateTime?` to `Task`, set by `task_claim`
    and `task_update(status="in_progress")` only when it is null, and never
    cleared. It is an additive nullable property, the same kind of schema change
    as agent-kit#326, so it carries #326's ordering constraint: omnigraph's
@@ -218,7 +243,7 @@ Decision, in two parts:
    (`les-a-witan-schema-image-ordering-violation-fails-cl-a16abf`). It has no
    backfill. Tasks claimed before it ships have no first-claim time, and the
    chart says so rather than guessing.
-2. The Gantt draws what is true for each task: a `created_at → closed_at` span
+3. The Gantt draws what is true for each task: a `created_at → closed_at` span
    (lead time) as the bar, a `first_claimed_at → closed_at` segment inside it
    where that exists (work time), and project session spans as a separate lane.
    `claimed_at` is shown only as "current lease since", on open tasks.
@@ -226,6 +251,33 @@ Decision, in two parts:
 Rejected: reconstructing claim history from omnigraph commits. witan has no
 as-of read and exposes no commit history through any tool, so it would be a
 second read surface of exactly the kind ADR 0011 rules out.
+
+### 3.7 Session history is read whole
+
+`workflow_session_list` with no `project_slug` reads `list_all_sessions`, which
+has no limit and is ordered oldest first (`read.gq:776-785`). A two-week
+timeline would pull every session ever recorded on each read, and the response
+grows forever while almost all of it falls outside the window.
+
+Decision: `workflow_session_list` gains `since: str | None = None`, an ISO
+timestamp; when given, only sessions whose `ended_at` is null or at or after
+`since` are returned. `read.gq` has no comparison filter on a `DateTime` today,
+so whether omnigraph 0.11 can apply this in the query is unverified; if it
+cannot, the filter runs in Python after the read. That still bounds the
+response the page receives, though not the store read. The timeline also stops
+polling on the 30-second interval (§6.1), since it plots elapsed time.
+
+### 3.8 The project rollup caps and miscounts ready work
+
+`workflow_project_status` calls `task_ready(project_slug=slug, limit=100)` and
+reports `counts.ready = len(ready)` (`server.py:4405-4418`). A project with more
+than 100 ready tasks gets a truncated list and a wrong count, and a widget
+bound to it (§7.1) cannot call another tool to find out.
+
+Decision: count before truncating. `counts.ready` is the exact number of ready
+tasks, `ready_tasks` stays capped at 100, and the result gains
+`ready_truncated: bool`. The widget and the page both show "100 of N" when it
+is set.
 
 ## 4. The read layer
 
@@ -275,7 +327,8 @@ Every tool is registered through `@_tool` with no `output_schema=`
 annotation (`fastmcp/tools/function_parsing.py:430-500`):
 
 - `-> dict` (`recall`, `memory_neighbors`): `structuredContent` is the dict.
-- `-> list[dict]` and `-> dict | None` (the other twelve): the value is wrapped,
+- `-> list[dict]` and `-> dict | None` (the other twelve, and
+  `memory_contradictions` once §3.5 adds it): the value is wrapped,
   `structuredContent = {"result": value}`, and the schema carries
   `x-fastmcp-wrap-result: true`. A `None` result also produces an empty
   `content` list, so a client that reads the text block sees nothing at all.
@@ -293,7 +346,7 @@ found the CLI getting wrong, so it gets its own tests.
 
 The output schemas say nothing about fields: `{"type": "object",
 "additionalProperties": true}` for `recall` and `memory_neighbors`, and a
-`result` wrapper around an untyped object or array for the other twelve. There
+`result` wrapper around an untyped object or array for the other thirteen. There
 is nothing to generate types from. Types are hand-written in `src/types.ts`, one
 per tool result, and kept honest by fixtures: a Python test calls each bound
 tool against a seeded hermetic store and writes its `structuredContent` to
@@ -399,11 +452,12 @@ wheel from the sdist, so a bundle the sdist leaves out never reaches the wheel.
 ### 6.1 Shell
 
 A top bar with repo and project filters, tabs for each view, and a detail panel
-that opens over any view on a task or memory slug. Each view re-reads on an
-interval (30s default) and on window focus, and shows the read time; a failed
+that opens over any view on a task or memory slug. Each live view re-reads on
+an interval (30s default) and on window focus, and shows the read time; a failed
 read keeps the last good data on screen and marks it stale rather than blanking
 it. The URL carries view, filters and the open slug, so a link to a stale claim
-can be pasted to whoever holds it.
+can be pasted to whoever holds it. The retrospective timeline (§6.6) is not a
+live view: it re-reads on focus and on a manual refresh, not on the interval.
 
 Repo scoping follows the tools: every call passes `repo` explicitly (`""` for
 all repos), so the result never depends on the server's working directory.
@@ -435,7 +489,9 @@ Columns and where each comes from:
   the board passes a limit at least the size of its `task_list` read; a
   truncated Ready column would push ready tasks into Blocked.
 - In progress: `task_list(status="in_progress")`. Each card shows its holder
-  and lease age (`now - claimed_at`), and a card whose row says
+  and lease age (`now - (claimed_at ?? updated_at)`, the same lease start
+  `status_pickable` uses, so the age and the stale mark cannot disagree on a
+  row with no `claimed_at`), and a card whose row says
   `lease_expired` (§3.4) is marked as a stale claim, whether or not it also
   has open blockers. The UI never compares lease age to a constant of its own.
 - Blocked: open and `blocked` tasks from `task_list` that are not in the Ready
@@ -458,15 +514,15 @@ This is presentation over one read, so it lives in the frontend.
 
 Per §3.6: lead-time bars, work-time segments where `first_claimed_at` exists,
 current-lease marks on open tasks, and session spans in their own lane, over a
-selectable window (two weeks by default).
+selectable window (two weeks by default). Tasks with no `first_claimed_at` are
+drawn with a hatched lead-time bar and a legend line saying the first-claim time
+predates tracking.
 
 "Where the last two weeks went" is a cross-project question, so the default is
-every project: `workflow_session_list()` with no `project_slug` returns every
-session (`read.gq:776-785`), and tasks come from `task_list(repo="", limit=…)`
-filtered to the window client-side, grouped by project. The project filter
-narrows both reads to one project. Tasks with no
-`first_claimed_at` are drawn with a hatched lead-time bar and a legend line
-saying the first-claim time predates tracking.
+every project: sessions from `workflow_session_list(since=…)` (§3.7) across all
+projects, and tasks from `task_list(repo="", limit=…)` filtered to the window
+client-side, grouped by project. The project filter narrows both reads to one
+project.
 
 ### 6.7 Memory and contradictions
 
@@ -508,7 +564,8 @@ Four widgets, one per tool:
 
 - `task_ready`: the ready column, with priority and project.
 - `workflow_project_status`: the project rollup (phase, ready tasks, last
-  session, blockers, counts).
+  session, blockers, counts), with the exact ready count and truncation flag
+  from §3.8.
 - `recall`: ranked memories with contradiction pairs flagged.
 - `task_list`: the task table, grouped by status.
 
@@ -622,7 +679,7 @@ each recording the change.
 | # | Task | Spec | Blocked by | Priority |
 |---|---|---|---|---|
 | 1 | `tk-turn-on-fastmcp-s-host-origin-guard-for-witan-s--e9cb9f` | §2 | | p1 |
-| 2 | `tk-close-the-read-gaps-the-witan-ui-views-need-task-e6d786` | §3.1 to 3.4 | | p1 |
+| 2 | `tk-close-the-read-gaps-the-witan-ui-views-need-task-e6d786` | §3.1 to 3.4, §3.7, §3.8 | | p1 |
 | 3 | `tk-scaffold-the-witan-ui-frontend-package-and-its-b-0d4cbe` | §5.1, §5.4 | | p1 |
 | 4 | `tk-witan-ui-serve-the-app-shell-locally-and-mount-i-f47561` | §5.2, §5.3 | 1, 3 | p1 |
 | 5 | `tk-build-the-witan-ui-read-layer-over-queries-read--825c85` | §4 | 1, 3 | p1 |
