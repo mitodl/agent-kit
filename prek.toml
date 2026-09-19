@@ -137,5 +137,5 @@ priority = 30
 
 [[repos]]
 repo = "https://github.com/biomejs/pre-commit"
-rev = "v2.4.16"
+rev = "v2.5.12"
 hooks = [{ id = "biome-check", priority = 20 }]
