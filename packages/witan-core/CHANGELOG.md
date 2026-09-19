@@ -8,6 +8,8 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.37.1] - 2026-09-19
+
 ### Changed
 
 - **`configure_sentry` no longer turns a dropped OTLP batch into a Sentry

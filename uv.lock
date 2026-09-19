@@ -2342,7 +2342,7 @@ test = [
 
 [[package]]
 name = "witan-core"
-version = "0.37.0"
+version = "0.37.1"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
