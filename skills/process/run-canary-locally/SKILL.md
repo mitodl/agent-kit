@@ -176,8 +176,29 @@ CANARY_USER_PASSWORD=$(sops -d --extract "$KEY"'["password"]' "$SECRETS") \
   npx playwright test specs/mit-learn/login-and-search.spec.ts --project=chromium
 ```
 
-Requires KMS access. Never `-e PASSWORD=value` into Docker — that is visible in
-the host process list; use `--env-file`.
+Requires KMS access.
+
+To get the same credential into a Docker run, **export it and forward the
+variable *name* only**:
+
+```bash
+export CANARY_USER_EMAIL=$(sops -d --extract "$KEY"'["email"]' "$SECRETS")
+export CANARY_USER_PASSWORD=$(sops -d --extract "$KEY"'["password"]' "$SECRETS")
+docker run --rm -e CANARY_USER_EMAIL -e CANARY_USER_PASSWORD ...
+```
+
+`-e NAME` with no `=` tells Docker to copy the value from your environment.
+Verified both halves of why that is the right form: the container does receive
+the value, and `ps -eo args` on the host shows only `-e CANARY_USER_PASSWORD`,
+never the password.
+
+The two forms to avoid, and why:
+
+- **`-e NAME=value`** puts the secret in the command line, where `ps` and your
+  shell history both pick it up.
+- **`--env-file`** keeps it out of `ps`, but only by writing the secret to disk
+  in plaintext — which is the thing this whole section exists to avoid, and the
+  file invariably outlives the debugging session that created it.
 
 ### The refusal marker will bite you on the second local run
 
@@ -240,12 +261,28 @@ rm -rf /tmp/canary-run && mkdir -p /tmp/canary-run
 rsync -a --exclude node_modules --exclude canary-results . /tmp/canary-run/
 docker run --rm -v /tmp/canary-run:/work -w /work \
   -e CANARY_BASE_URL=https://rc.learn.mit.edu \
+  -e CANARY_USER_EMAIL -e CANARY_USER_PASSWORD \
   "mcr.microsoft.com/playwright:$TAG" \
   bash -c "npm ci && npx playwright test specs/mit-learn --project=chromium"
 ```
 
 Copy the tree rather than mounting it in place, so the container's `npm ci`
 cannot overwrite your host `node_modules`.
+
+**`specs/mit-learn` includes the signed-in journey, so the credential variables
+have to be exported first** (see "If you genuinely need the pipeline credential"
+above) — Docker does not inherit them on its own. Without them this is not a
+reproduction of anything: `sign-in.ts` throws before the browser opens, and you
+get two credential failures instead of the pipeline failure you came to chase.
+Measured against the current spec set: 4 passed, 2 failed on
+`login-and-search.spec.ts`.
+
+If you only need an anonymous journey, name it instead of the directory and drop
+the two credential flags:
+
+```bash
+  bash -c "npm ci && npx playwright test specs/mit-learn/homepage.spec.ts --project=chromium"
+```
 
 ### About `--disable-dev-shm-usage`
 
