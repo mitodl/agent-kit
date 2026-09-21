@@ -48,8 +48,13 @@ def test_witan_bundle_registers_witan_mcp_server_and_hooks(tmp_path, monkeypatch
     ]
     assert inject and checkpoint
     # Both prompt-path hooks carry a timeout so a hung git/graph can't stall.
-    assert inject[0]["timeout"] == 15
-    assert checkpoint[0]["timeout"] == 15
+    # It has to sit ABOVE the cold-path read cost, not inside it: at 15s the
+    # hook was killed mid-read on a large graph, so the user paid the full
+    # wait and got no block (agent-kit#349).
+    assert inject[0]["timeout"] == 45
+    # Longer than the read hook: this one is a write, and a write against a
+    # deployment has been measured at up to 51s.
+    assert checkpoint[0]["timeout"] == 60
 
 
 def test_mcp_only_platforms_keep_the_self_contained_uvx_entry(tmp_path, monkeypatch):

@@ -8,6 +8,36 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`task_ready` no longer re-reads blockers it has already fetched.** Its
+  repo-scoped branch scans every Task and then narrows to the candidates, but
+  resolved blocker statuses against the narrowed set — so every blocker living
+  in another repo was unknown and fetched again, one `get_task` per blocker.
+  Measured against a deployment that was ~3.0s of a 4.2s call, on identical
+  scans to a 1.2s `task_list`.
+
+- **The context hook issues its independent reads together.** `witan
+  inject-context` against a deployment made up to ten sequential tool calls, so
+  the cold path was their sum. It now runs in two waves (the second needs the
+  first's answers), which measured 11.3s -> 6.5s on the same graph, byte-identical
+  output. Each read keeps its own failure isolation, and a machine that cannot
+  start threads falls back to running them in line.
+
+- **The context hook's ready list respects cross-repo blockers.** It offers a
+  repo-scoped slice of an all-Task scan, and an unresolvable blocker counts as
+  closed — so a task blocked by an open task in another repo was advertised as
+  ready to work. `readiness.filter_ready` now takes the wider row set, which
+  the hook already had in hand.
+
+- **The prompt and stop hooks get timeouts above what they are timing.** Both
+  were 15s. `witan inject-context` was measured at 16-23s cold on a large graph,
+  so the hook was killed mid-read and the user paid the full wait for no block;
+  it is now 45s. `witan session-checkpoint` writes, and a write has been measured
+  at up to 51s, so it is now 60s — being killed there leaves a session open with
+  no handoff summary. The pi `workflow-context` extension was tighter still at
+  5s and now matches at 45s.
+
 ## [0.36.0] - 2026-09-18
 
 ### Added
