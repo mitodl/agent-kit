@@ -789,8 +789,14 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
         # hold, anywhere.
         first: dict[str, Callable[[], object]] = {
             "ready": lambda: server.task_ready(repo=(repo or ""), limit=10000),
+            # The limit matters as much as `repo=""` does: `assignee` is
+            # applied in Python AFTER the read, and an unscoped read is capped
+            # at 50 rows in the query. So on a busy graph your own held tasks
+            # can fall entirely outside the 50 most recently updated
+            # in_progress rows, and the comment block comes back empty for a
+            # reason that has nothing to do with you.
             "held": lambda: server.task_list(
-                assignee="@me", status="in_progress", repo=""
+                assignee="@me", status="in_progress", repo="", limit=10000
             ),
         }
         if repo:

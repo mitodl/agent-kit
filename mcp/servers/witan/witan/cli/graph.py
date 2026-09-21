@@ -6,6 +6,10 @@ from pathlib import Path
 
 from ._common import _fn, _repo_arg, _srv, app, console
 
+# The server's ceiling on `task_list(limit=...)`. The graph view draws the
+# whole graph, so it wants every task rather than a page of them.
+_GRAPH_TASK_LIMIT = 10000
+
 
 @app.command
 def graph(
@@ -52,7 +56,10 @@ def graph(
     projects = _fn(s.workflow_project_list)(repo=repo_arg, status=status or None)
     project_slugs = {p["slug"] for p in projects}
 
-    tasks_raw = _fn(s.task_list)(repo=repo_arg, status=None)
+    # An explicit limit, because an unscoped `task_list` is capped at 50 in
+    # the query: `witan graph --all-repos` drew the 50 most recently updated
+    # tasks and silently omitted the rest of the graph it claims to show.
+    tasks_raw = _fn(s.task_list)(repo=repo_arg, status=None, limit=_GRAPH_TASK_LIMIT)
     if not all_tasks:
         tasks_raw = [t for t in tasks_raw if t.get("status") != "closed"]
 
