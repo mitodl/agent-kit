@@ -1,0 +1,22 @@
+{
+  "result": [
+    {
+      "author": "fixtures",
+      "category": null,
+      "confidence": null,
+      "content": "fastmcp wraps list and dict|None returns as structuredContent {'result': ...} and marks the schema with x-fastmcp-wrap-result. Guessing from the value's shape gets a bare dict return wrong.",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "kind": "pattern",
+      "language": null,
+      "repo": "https://github.com/mitodl/agent-kit",
+      "severity": null,
+      "slug": "pat-fixture-007",
+      "tags": [
+        "mcp",
+        "witan-ui"
+      ],
+      "title": "Unwrap MCP results on the wrap flag, not on the shape",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    }
+  ]
+}

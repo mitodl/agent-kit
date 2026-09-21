@@ -135,7 +135,13 @@ priority = 30
 # since the two tools operate on disjoint file types (.py vs .ts/.tsx/.json).
 # Covers TypeScript for planned pi extensions and JSON config snippets.
 
+# The witan UI fixtures are excluded: they are GENERATED
+# (`just ui-fixtures`) and byte-compared by `just ui-fixtures-check`, so
+# letting biome reformat them makes that gate fail on every commit against
+# files nobody edited.
 [[repos]]
 repo = "https://github.com/biomejs/pre-commit"
 rev = "v2.4.16"
-hooks = [{ id = "biome-check", priority = 20 }]
+hooks = [
+  { id = "biome-check", priority = 20, exclude = "^mcp/servers/witan/ui/fixtures/" },
+]

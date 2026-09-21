@@ -1,0 +1,38 @@
+{
+  "result": {
+    "assignee": null,
+    "author": "fixtures",
+    "blocked_by": null,
+    "blocks": [
+      "tk-fixture-004"
+    ],
+    "branches": [],
+    "children": [],
+    "claimed_at": null,
+    "closed_at": null,
+    "comments": [
+      {
+        "author": "fixtures",
+        "body": "Counting one past the cap is not the same as counting.",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "slug": "tc-fixture-003",
+        "task_slug": "tk-fixture-000"
+      }
+    ],
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "description": "task_list limit, list timestamps, task_get edges.",
+    "external_uri": null,
+    "parent_slug": "tk-fixture-002",
+    "priority": "p1",
+    "project_slug": "wp-fixture-001",
+    "repo": "https://github.com/mitodl/agent-kit",
+    "resolution": null,
+    "slug": "tk-fixture-000",
+    "status": "open",
+    "symbol_refs": null,
+    "tags": null,
+    "title": "Close the read gaps",
+    "type": "task",
+    "updated_at": "2026-01-01T00:00:00+00:00"
+  }
+}

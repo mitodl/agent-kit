@@ -1,0 +1,17 @@
+{
+  "result": [
+    {
+      "blocked_by": null,
+      "github_issue": null,
+      "phase": "discovery",
+      "repos": [
+        "https://github.com/mitodl/agent-kit"
+      ],
+      "slug": "wp-fixture-001",
+      "status": "active",
+      "tags": null,
+      "title": "Witan UI",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    }
+  ]
+}

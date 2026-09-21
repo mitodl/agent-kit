@@ -1,0 +1,43 @@
+{
+  "result": {
+    "blockers": [],
+    "counts": {
+      "open_tasks": 4,
+      "ready": 2
+    },
+    "last_session": {
+      "ended_at": "2026-01-01T00:00:00+00:00",
+      "open": false,
+      "phase": "implementation",
+      "slug": "ws-fixture-006",
+      "summary": "Recorded the fixtures."
+    },
+    "project": {
+      "github_pr": null,
+      "phase": "discovery",
+      "repos": [
+        "https://github.com/mitodl/agent-kit"
+      ],
+      "slug": "wp-fixture-001",
+      "status": "active",
+      "title": "Witan UI"
+    },
+    "ready_tasks": [
+      {
+        "assignee": null,
+        "priority": "p1",
+        "slug": "tk-fixture-000",
+        "status": "open",
+        "title": "Close the read gaps"
+      },
+      {
+        "assignee": null,
+        "priority": "p2",
+        "slug": "tk-fixture-002",
+        "status": "open",
+        "title": "Witan UI epic"
+      }
+    ],
+    "ready_truncated": false
+  }
+}

@@ -21,11 +21,68 @@ so its version is witan's.
 
 ```
 ui/
-  src/            The app. `shell.ts` is the frame; views land beside it.
+  src/
+    mcp.ts        The read layer. The ONLY file that knows it speaks MCP.
+    unwrap.ts     Takes a result out of its envelope, keyed on the wrap flag.
+    types.ts      Hand-written result types, kept honest by the fixtures.
+    shell.ts      The app frame; views land beside it.
+  fixtures/       GENERATED (`just ui-fixtures`). Real tool results.
   vite.config.ts  The build. Writes ../witan/ui_dist, the wheel picks it up.
   vitest.config.ts
   .node-version   The exact node pin, read by both GitHub workflows.
 ```
+
+## The read layer
+
+Every view calls a named function in `src/mcp.ts`; none of them sees a
+transport, an envelope or a tool name. That is what lets the MCP Apps widgets
+and a later Tauri shell be presentations of one read layer rather than three
+clients that drift.
+
+There is no generic `call(name, args)`, deliberately. ADR 0011 binds the UI to
+an enumerated set of read tools, and a generic entry point would make a
+fifteenth read a string somewhere instead of a visible diff to that file.
+Writes are not here at all.
+
+`unwrap.ts` keys on each tool's `x-fastmcp-wrap-result` flag rather than
+guessing from the shape of a value. fastmcp wraps a `list` or `dict | None`
+return as `{"result": ...}` and leaves a bare `dict` alone, so a wrapped list
+and an unwrapped dict with a `result` key are indistinguishable at runtime,
+and `{"result": null}` looks like an absent value rather than a present one.
+`task_get` of a slug that does not exist **is** `null`, and a page that treats
+that as an error shows a crash for a stale link.
+
+The flags are recorded at build time because an MCP Apps widget is handed a
+result with no `tools/list` to consult. `assertFlagsMatchServer` checks that
+recording against the live server once per page load, so a server whose return
+annotations have moved is a loud failure rather than a view that renders
+nothing.
+
+## Fixtures
+
+`fixtures/` holds real results from real tool calls against a seeded store,
+recorded by `just ui-fixtures`. They exist because the result types are
+hand-written and have to be: every bound tool is registered without an
+`output_schema`, so fastmcp derives `{"type": "object", "additionalProperties":
+true}` from the return annotation and there is nothing to generate from.
+
+`all-fixtures.test.ts` walks every fixture in the directory through the
+unwrapper, so one added by `just ui-fixtures` is covered the moment it lands;
+`fixtures.test.ts` asserts the specific shapes the views lean on. A server
+change that renames a field fails the frontend suite in the same PR that made
+it. `just ui-fixtures-check` is the CI gate, and it runs on server changes as
+well as frontend ones, since a server change is what makes a fixture stale.
+
+Note that the tools do **not** all return the same projection. `task_search`
+is narrower than `task_list` (no timestamps, plus `description`), and
+`workflow_project_list` is narrower than `workflow_project_get`
+(`github_issue`, no `github_pr`). `types.ts` splits those rather than
+declaring fields half the results do not carry.
+
+Slugs and timestamps are normalized to stable stand-ins when recorded.
+Without that the files would differ on every run and the gate would fail
+against files nobody touched. biome does not format them (`prek.toml` and the
+`lint` script both exclude the directory) for the same reason.
 
 ## Commands
 

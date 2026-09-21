@@ -1,0 +1,16 @@
+{
+  "result": [
+    {
+      "ended_at": "2026-01-01T00:00:00+00:00",
+      "files_changed": null,
+      "phase": "implementation",
+      "project_slug": "wp-fixture-001",
+      "session_id": "fixture-session",
+      "slug": "ws-fixture-006",
+      "started_at": "2026-01-01T00:00:00+00:00",
+      "summary": "Recorded the fixtures.",
+      "superseded_by": null,
+      "tools_used": null
+    }
+  ]
+}
