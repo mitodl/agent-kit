@@ -3019,6 +3019,15 @@ def _with_relevance(rows: list[dict], band: tuple[float, float]) -> list[dict]:
     nothing about, and for a content row it means a tie with the best
     title-only hit rather than a win.
 
+    ★ AN OMITTED SCORE IS NOT A ZERO SCORE, and conflating them inverted this.
+    Coercing ``None`` to 0.0 before taking the maximum meant a run where EVERY
+    score was omitted had a maximum of 0, took the all-zero branch below, and
+    handed every unscored row the band's CEILING — the opposite of what the
+    paragraph above promises, so an unscored content hit outranked the best
+    title hit instead of tying it. The two are now separated before the
+    maximum is taken: absent means "nothing known", which is the floor, and
+    zero means "known to be uninformative", which is the degenerate case.
+
     A pruned top hit (``memory_search`` drops superseded rows after this runs)
     leaves the survivors scaled against a maximum no longer among them. So does
     a both-fields match dropped by the union's dedupe, which still sets the
@@ -3031,10 +3040,16 @@ def _with_relevance(rows: list[dict], band: tuple[float, float]) -> list[dict]:
     lo, hi = band
     if not rows:
         return rows
-    scores = [float(r[_SCORE_COLUMN] or 0.0) for r in rows]
-    top = max(scores)
+    scores = [r[_SCORE_COLUMN] for r in rows]
+    present = [float(s) for s in scores if s is not None]
+    top = max(present) if present else 0.0
     for row, score in zip(rows, scores, strict=True):
-        row[_RELEVANCE_KEY] = hi if top <= 0 else lo + (hi - lo) * (score / top)
+        if score is None:
+            row[_RELEVANCE_KEY] = lo
+        elif top <= 0:
+            row[_RELEVANCE_KEY] = hi
+        else:
+            row[_RELEVANCE_KEY] = lo + (hi - lo) * (float(score) / top)
     return rows
 
 

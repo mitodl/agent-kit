@@ -236,6 +236,30 @@ def test_a_missing_score_is_not_fatal_to_a_search(server):
     assert [r["_relevance"] for r in rows] == [1.0, 0.5]
 
 
+@pytest.mark.parametrize(
+    "rows", [[{"score": None}], [{"score": None}, {"score": None}]]
+)
+def test_an_all_null_run_takes_the_floor_not_the_ceiling(server, rows):
+    """★ AN OMITTED SCORE IS NOT A ZERO SCORE. Coercing `None` to 0.0 before
+    taking the maximum sent an all-null run down the all-zero path, which hands
+    out the band's CEILING — so a content run the engine scored nothing for
+    came back at 1.0 and outranked the best title hit instead of tying it,
+    contradicting `_with_relevance`'s own docstring.
+
+    The singleton is the case that hid it: every other null test has a scored
+    row alongside, which keeps the maximum positive.
+    """
+    from witan import server as srv
+
+    stamped = srv._with_relevance(rows, srv._CONTENT_BAND)
+
+    assert [r["_relevance"] for r in stamped] == [0.5] * len(rows)
+    # And it still cannot be outranked by a title hit, which tops out there.
+    assert max(
+        r["_relevance"] for r in srv._with_relevance([{"score": 9.9}], srv._TITLE_BAND)
+    ) == min(r["_relevance"] for r in stamped)
+
+
 @requires_omnigraph
 def test_the_relevance_reaching_the_re_rank_comes_from_the_engine(server):
     """End-to-end: the whole chain, from the projected score in read.gq through
