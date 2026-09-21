@@ -68,6 +68,7 @@ transport = "streamable-http"
 oauth = { clientId = "toolhive-swe-cli", callbackPort = 8080 }
 
 [skills]
+add-canary-journey              = "skills/process/add-canary-journey/SKILL.md"
 address-pr-feedback             = "skills/process/address-pr-feedback/SKILL.md"
 code-review                     = "skills/process/code-review/SKILL.md"
 create-ol-github-issue          = "skills/process/create-ol-github-issue/SKILL.md"
@@ -86,6 +87,7 @@ github-issue-triage             = "skills/process/github-issue-triage/SKILL.md"
 github-pr-triage                = "skills/process/github-pr-triage/SKILL.md"
 pulumi-modify-existing          = "skills/infrastructure/pulumi-modify-existing/SKILL.md"
 renovate-security-triage        = "skills/process/renovate-security-triage/SKILL.md"
+run-canary-locally              = "skills/process/run-canary-locally/SKILL.md"
 screenshot-pr                   = "skills/process/screenshot-pr/SKILL.md"
 uv-python-workflow               = "skills/python/uv-python-workflow/SKILL.md"
 validate-before-commit          = "skills/workflow/validate-before-commit/SKILL.md"
@@ -107,7 +109,14 @@ skills = ["cyclopts-cli-scripts", "drf-api-performance", "uv-python-workflow"]
 
 [profiles.infrastructure]
 inherits = ["universal"]
-skills = ["pulumi-modify-existing", "vault-k8s-auth", "docker-uv-image-builds", "deploy-verification"]
+skills = [
+    "pulumi-modify-existing",
+    "vault-k8s-auth",
+    "docker-uv-image-builds",
+    "deploy-verification",
+    "run-canary-locally",
+    "add-canary-journey",
+]
 
 [profiles.data]
 inherits = ["universal"]
