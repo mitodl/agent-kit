@@ -36,6 +36,14 @@ a MINOR bump may include breaking changes).
   `change` that route otherwise implies. Verified against a 0.11.0 server
   running witan's own code-graph Cedar bundle.
 
+  `source` is restricted to branch statements, which is a security boundary
+  rather than a convenience. The secret/PII write `guard` is
+  `(query_name, params) -> params` and cannot scan raw GQ, so an arbitrary
+  inline mutation on a guarded client would persist its literals unscanned.
+  A branch statement's only operand is a branch name, which makes the question
+  moot instead of merely unlikely. Use `change`/`change_many` with a named
+  query for anything carrying data.
+
 ### Changed
 
 - **`PooledTransport.query`/`mutate` take `params: dict | None`.** `None` omits

@@ -1432,6 +1432,82 @@ def test_the_budget_reported_is_the_transports_own_not_the_default(
     assert "DEFAULT_TIMEOUT_SECONDS" not in error
 
 
+# ── branch statements: what `statement()` will and will not carry ───
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # The shape the finding was about: a write carrying its data inline,
+        # where witan's guard would have scanned and redacted the same value
+        # had it arrived as a named mutation's params.
+        'insert Memory { content: "sk-live-abc123" }',
+        # A branch statement the OTHER verb carries. `mutate` must not be a
+        # way to smuggle in a read either.
+        "branch list",
+        # Near-misses, so the check is on the statement and not on a prefix.
+        'branchcreate "x" from main',
+        'create branch "x" from main',
+        "",
+    ],
+)
+def test_statement_refuses_anything_that_is_not_a_branch_mutation(
+    monkeypatch, queries_dir, source
+):
+    """★ A SECURITY BOUNDARY, NOT A TYPO CHECK.
+
+    `statement` takes GQ SOURCE, and witan's secret/PII write guard is
+    `(query_name, params) -> params`: `scan.enforce.WriteGuard.__call__` looks
+    the name up in `FIELD_MAP` and rewrites free-text params. It cannot scan
+    raw source, and a statement hands it no params, so an arbitrary inline
+    mutation on a guarded client would persist its literals unscanned. Witan
+    builds every server client with that guard on by default.
+
+    Restricting the source to branch statements is what makes that moot rather
+    than merely unlikely: the only operand is a branch name.
+    """
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    with pytest.raises(ValueError, match="branch statements only"):
+        client.statement("mutate", source)
+
+
+def test_statement_refuses_a_verb_with_no_statement_form(monkeypatch, queries_dir):
+    """`_http_execute` calls a write `verb == "mutate"` while
+    `_WRITE_SUBCOMMANDS` also holds `load`/`optimize`/`cleanup`. Admitting only
+    the two verbs that have a statement form is what keeps those in step."""
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    with pytest.raises(ValueError, match="query or a mutate"):
+        client.statement("load", "branch list")
+
+
+@pytest.mark.parametrize(
+    ("verb", "source"),
+    [
+        ("query", "branch list"),
+        ("mutate", 'branch create "act-x/wip" from main'),
+        ("mutate", 'branch delete "act-x/wip"'),
+        ("mutate", 'branch merge "act-x/wip" into "main"'),
+        ("mutate", '  branch  create  "act-x/wip" from main'),
+    ],
+)
+def test_statement_carries_every_branch_form(
+    _fake_http, monkeypatch, queries_dir, verb, source
+):
+    """The other side of the refusal: narrowing must not have cost a form the
+    client actually uses, including the whitespace the callers do not emit but
+    a hand-written one might."""
+    FakeConnection.script = [ok({"rows": []})]
+    client = _client(monkeypatch, "http://host:8080", queries_dir, graph_id="council")
+
+    client.statement(verb, source)
+
+    assert json.loads(FakeConnection.created[-1].requests[-1]["body"]) == {
+        "query": source
+    }
+
+
 # ── branch statements: the params key that must not be sent ─────────
 
 

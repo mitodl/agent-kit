@@ -404,6 +404,59 @@ _QUERY_DECL_RE = re.compile(r"\bquery\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTI
 _PARAM_REF_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
+#: The inline GQ statements :meth:`OmnigraphClient.statement` will run, keyed
+#: by the verb that carries them. A CLOSED SET, not "whatever the engine would
+#: accept" — see that method for why the write path cannot be opened up.
+_BRANCH_STATEMENTS: dict[str, frozenset[str]] = {
+    "query": frozenset({"list"}),
+    "mutate": frozenset({"create", "delete", "merge"}),
+}
+
+_BRANCH_STATEMENT_RE = re.compile(r"\A\s*branch\s+([a-z]+)\b")
+
+
+def _check_branch_statement(verb: str, source: str) -> None:
+    """Raise unless ``source`` is a branch statement ``verb`` may carry.
+
+    ★ THIS IS A SECURITY BOUNDARY, NOT A TYPO CHECK. ``statement`` is a public
+    write path that takes GQ SOURCE, and witan's secret/PII ``guard`` is
+    ``(query_name, params) -> params``: it looks up the named mutation in
+    ``scan.enforce.FIELD_MAP`` and rewrites its free-text params. It has no
+    way to scan raw source, and a statement has no params to hand it. So an
+    arbitrary inline mutation on a guarded client would persist its literals
+    without ever being scanned or redacted — witan builds every server client
+    with that guard enabled by default.
+
+    Restricting the source to branch statements is what makes the question
+    moot rather than merely unlikely: a branch statement's only operand is a
+    branch name, so there is no free text for the guard to have missed.
+    Refusing only when a guard is installed would be the narrower rule and the
+    wrong one — it would leave the shape available on unguarded clients, where
+    the next caller inherits the hazard without inheriting the refusal.
+
+    Also folds in the verb check, which the two transports need: ``_http_execute``
+    calls a write ``verb == "mutate"`` while ``_WRITE_SUBCOMMANDS`` also holds
+    ``load``, ``optimize`` and ``cleanup``. Admitting only the two verbs with a
+    statement form is what keeps those definitions in step.
+    """
+    allowed = _BRANCH_STATEMENTS.get(verb)
+    if allowed is None:
+        raise ValueError(
+            f"statement() runs a query or a mutate, not {verb!r}; "
+            "the other subcommands have no inline-statement form."
+        )
+    match = _BRANCH_STATEMENT_RE.match(source)
+    if match is None or match.group(1) not in allowed:
+        wanted = ", ".join(f"branch {op}" for op in sorted(allowed))
+        raise ValueError(
+            f"statement() runs branch statements only, and {verb!r} carries "
+            f"{wanted}; got {source[:60]!r}. Arbitrary inline GQ is refused "
+            "here because witan's secret/PII write guard scans a named "
+            "mutation's params and cannot see raw source — use `change` or "
+            "`change_many` with a named query, which it can."
+        )
+
+
 def _strip_line_comments(source: str) -> str:
     """Remove ``//`` line comments, without disturbing a ``//`` inside a string.
 
@@ -1776,6 +1829,11 @@ class OmnigraphClient:
         ``omnigraph mutate failed``, where the CLI subcommand this replaces
         said ``branch``.
 
+        ★ ``source`` MUST BE A BRANCH STATEMENT, and that is a security
+        boundary rather than a convenience: this is a public write path taking
+        GQ source, and witan's secret/PII ``guard`` can only scan a named
+        mutation's params. See :func:`_check_branch_statement`.
+
         ``surface_conflict`` matters more here than it does for
         :meth:`change`, because 0.11 answers a duplicate ``branch create``
         with **HTTP 409** (verified against the 0.11.0 server: ``{"error":
@@ -1786,16 +1844,7 @@ class OmnigraphClient:
         backoff sleeps, before surfacing. The CLI path has no such trap: the
         same failure is prose that matches no marker and classifies FATAL.
         """
-        # The two paths disagree about what a write is if they are allowed to:
-        # `_http_execute` calls it `verb == "mutate"` while `_WRITE_SUBCOMMANDS`
-        # also holds `load`, `optimize` and `cleanup`. Rather than reconcile
-        # two definitions for verbs that have no statement form anyway, only
-        # the two that do are accepted, and then the definitions agree.
-        if verb not in ("query", "mutate"):
-            raise ValueError(
-                f"statement() runs a query or a mutate, not {verb!r}; "
-                "the other subcommands have no inline-statement form."
-            )
+        _check_branch_statement(verb, source)
         is_write = verb == "mutate"
         transport = self._http_transport(carries_extra_args=False)
         if transport is not None:
