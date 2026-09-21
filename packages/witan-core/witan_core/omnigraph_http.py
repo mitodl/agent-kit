@@ -134,6 +134,24 @@ FULL_TEXT_REBUILD_REQUIRED = "full_text_rebuild_required"
 #: there would be a confident wrong answer.
 RECOVERY_REQUIRED = "recovery_required"
 
+#: The store refuses to open at all: an OCC recovery sidecar is active and its
+#: recorded manifest delta does not match the original commit it names, so
+#: every read, every write and ``omnigraph repair`` itself are answered with
+#: the same error until an operator intervenes.
+#:
+#: ★ TERMINAL FOR READS TOO, WHICH IS WHAT SEPARATES IT FROM
+#: :data:`RECOVERY_REQUIRED`. That barrier clears on its own in under a second
+#: and a read is retried through it. This one does not clear: the sidecar stays
+#: active, so the retry budget buys nothing and spends the caller's deadline
+#: hiding the one message that says what is wrong.
+#:
+#: ★ AND IT IS NOT :data:`NEEDS_REPAIR`, even though repair is part of the
+#: remedy. ``_repair`` shells out to ``omnigraph repair --confirm --force``,
+#: which cannot open a graph in this state either — observed 2026-09-18 on a
+#: format-9 direct-S3 root (agent-kit#364). Classifying it as repairable turns
+#: one legible failure into a repair that fails the same way.
+STORE_QUARANTINED = "store_quarantined"
+
 #: The conditional-write precondition header (upstream #470). Sent raw and
 #: exactly once, and ONLY to the dedicated routes below — the ordinary
 #: ``/mutate`` rejects it outright rather than ignoring an unknown header,
@@ -224,6 +242,16 @@ def _statement_payload(source: str, params: dict | None) -> dict:
     return {"query": source} if params is None else {"query": source, "params": params}
 
 
+#: Both halves are required. "occ recovery sidecar" alone also appears in the
+#: ordinary, self-clearing recovery messages; the mismatch clause is what says
+#: the sidecar cannot be resolved by waiting.
+QUARANTINE_MARKERS = ("occ recovery sidecar", "manifest delta differs")
+
+
+def is_store_quarantined(lowered: str) -> bool:
+    return all(marker in lowered for marker in QUARANTINE_MARKERS)
+
+
 def classify_status(status: int, message: str) -> str:
     """Map an HTTP status + error message onto the shared classification names.
 
@@ -262,6 +290,11 @@ def classify_status(status: int, message: str) -> str:
         # unreachable server (wait for it), and the response proves the request
         # was rejected rather than applied, so it is safe for writes too.
         return UNAVAILABLE
+    # BEFORE NEEDS_REPAIR: an active sidecar blocks `omnigraph repair` as well,
+    # so classifying it as repairable would drive a repair that fails
+    # identically. See STORE_QUARANTINED.
+    if is_store_quarantined(lowered):
+        return STORE_QUARANTINED
     if any(marker in lowered for marker in ("ahead of manifest", "omnigraph repair")):
         return NEEDS_REPAIR
     if any(

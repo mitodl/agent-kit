@@ -1226,6 +1226,252 @@ def test_a_read_inside_hold_write_lock_is_unaffected(monkeypatch, tmp_path):
     assert not og._held_flocks
 
 
+# ── in-process serialisation of direct-S3 writes (agent-kit#364) ───
+
+
+def _overlap_detector(monkeypatch, hold=0.05):
+    """Stub subprocess.run so it reports the most calls ever in flight at once.
+
+    ``max_in_flight`` is the assertion every test below turns on: 1 means the
+    calls were serialised, 2 means they overlapped. The hold is what gives a
+    second caller time to arrive while the first is still inside.
+    """
+    state = {"in_flight": 0, "max_in_flight": 0, "calls": 0}
+    guard = threading.Lock()
+
+    def fake_run(cmd, **kwargs):
+        with guard:
+            state["in_flight"] += 1
+            state["calls"] += 1
+            state["max_in_flight"] = max(state["max_in_flight"], state["in_flight"])
+        time.sleep(hold)
+        with guard:
+            state["in_flight"] -= 1
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+    return state
+
+
+def _run_together(*fns):
+    """Run each callable on its own thread and re-raise whatever they raised."""
+    errors: list[BaseException] = []
+
+    def guarded(fn):
+        def run():
+            try:
+                fn()
+            except BaseException as exc:  # noqa: BLE001 — re-raised below
+                errors.append(exc)
+
+        return run
+
+    threads = [threading.Thread(target=guarded(fn), daemon=True) for fn in fns]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+        assert not thread.is_alive(), "a worker never finished — likely deadlocked"
+    if errors:
+        raise errors[0]
+
+
+def test_concurrent_writes_to_one_s3_store_do_not_overlap(monkeypatch):
+    """THE agent-kit#364 REGRESSION. Two tool calls in one `witan serve`
+    process, both writing one direct-S3 root, raced the same manifest version
+    and left an OCC recovery sidecar that quarantined the graph outright.
+
+    s3:// used to be grouped with http(s) as "unlockable", which is true of
+    flock and false of a mutex. This is the test that pins the distinction:
+    same process, same store, no overlap.
+    """
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient("s3://bucket/graph-v9.omni", Path("/queries"))
+    seen = _overlap_detector(monkeypatch)
+
+    def write():
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+
+    _run_together(write, write)
+
+    assert seen["calls"] == 2
+    assert seen["max_in_flight"] == 1
+
+
+def test_concurrent_writes_to_different_s3_stores_do_overlap(monkeypatch):
+    """The control, and it is not optional: without it the test above passes
+    just as well when the two threads happen never to meet, which would make it
+    evidence of nothing. The barrier makes overlap a requirement rather than a
+    hope — both calls must be inside simultaneously or it raises.
+
+    It also pins the lock as PER STORE. A single process-wide write mutex would
+    satisfy the test above and needlessly serialise every unrelated graph.
+    """
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    both_inside = threading.Barrier(2, timeout=10)
+
+    def fake_run(cmd, **kwargs):
+        both_inside.wait()
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+
+    def write(uri):
+        def run():
+            OmnigraphClient(uri, Path("/queries"))._execute(
+                ["omnigraph", "mutate"], "mutate", is_write=True
+            )
+
+        return run
+
+    _run_together(write("s3://bucket/one.omni"), write("s3://bucket/two.omni"))
+
+
+def test_reads_against_one_s3_store_are_not_serialised(monkeypatch):
+    """Reads take no write lock — they cannot conflict, and serialising them
+    would add latency to the one path that has none."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient("s3://bucket/graph-v9.omni", Path("/queries"))
+    both_inside = threading.Barrier(2, timeout=10)
+
+    def fake_run(cmd, **kwargs):
+        both_inside.wait()
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
+
+    def read():
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+
+    _run_together(read, read)
+
+
+def test_a_write_inside_hold_write_lock_does_not_self_deadlock_on_s3(monkeypatch):
+    """The s3 tier has to re-enter for the same reason the flock tier does:
+    `merge_store` holds the lock across export → reconcile → load, and the load
+    inside is an ordinary client write that takes the same lock.
+    """
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient("s3://bucket/graph-v9.omni", Path("/queries"))
+    calls = _recording_run(monkeypatch)
+
+    with client.hold_write_lock():
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+
+    assert len(calls) == 1
+    # And the lock is fully released, not left pinned at a depth that would
+    # silently disable serialisation for the rest of the process.
+    seen = _overlap_detector(monkeypatch)
+
+    def write():
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+
+    _run_together(write, write)
+    assert seen["max_in_flight"] == 1
+
+
+def test_a_served_store_takes_no_write_lock():
+    """http(s) writers are other processes on other hosts and the server
+    arbitrates between them. Locking here would only serialise this client
+    against itself, so the tier is deliberately a no-op."""
+    both_inside = threading.Barrier(2, timeout=10)
+
+    def hold():
+        with og.store_write_lock("https://graph.example/g"):
+            both_inside.wait()
+
+    _run_together(hold, hold)
+
+
+# ── a quarantined store (agent-kit#364) ────────────────────────────
+
+
+_SIDECAR_STDERR = (
+    "OCC recovery sidecar '01M2V544QY00SSGZA0PSRK3B9X' found original commit id "
+    "'01M2V54457QR0XB7ZW47H5V88H' but its manifest delta differs"
+)
+
+
+def test_a_quarantined_store_refuses_a_write_on_the_first_attempt(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient("s3://bucket/graph-v9.omni", Path("/queries"))
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_SIDECAR_STDERR)
+
+    with pytest.raises(og.StoreQuarantined) as raised:
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+
+    assert calls["n"] == 1
+    assert raised.value.operation_id == "01M2V544QY00SSGZA0PSRK3B9X"
+    assert "store-quarantine-runbook" in str(raised.value)
+
+
+def test_a_quarantined_store_refuses_a_read_too(monkeypatch):
+    """The one place this parts company with the recovery barrier, which is
+    retried for reads. That barrier clears in under a second; an unresolved
+    sidecar does not clear at all, so retrying a read only spends the caller's
+    deadline before reporting the same thing."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient("s3://bucket/graph-v9.omni", Path("/queries"))
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_SIDECAR_STDERR)
+
+    with pytest.raises(og.StoreQuarantined):
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+
+    assert calls["n"] == 1
+
+
+def test_a_quarantined_store_is_not_sent_to_omnigraph_repair(monkeypatch):
+    """`_repair` shells out to `omnigraph repair --confirm --force`, which
+    cannot open a graph in this state either. Classifying the sidecar as
+    repairable would turn one legible refusal into a repair that fails the same
+    way, eight times over."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient("s3://bucket/graph-v9.omni", Path("/queries"))
+    repairs = []
+    monkeypatch.setattr(
+        OmnigraphClient, "_repair", lambda self, env: repairs.append(env)
+    )
+    _stub_run(
+        monkeypatch,
+        returncode=1,
+        stderr=_SIDECAR_STDERR + "; run `omnigraph repair` to inspect",
+    )
+
+    with pytest.raises(og.StoreQuarantined):
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+
+    assert repairs == []
+
+
+def test_an_unnamed_sidecar_is_still_a_quarantine(monkeypatch):
+    """Failing to parse one detail must never turn a legible refusal back into
+    an opaque one — the operator can still list `__recovery/` by hand."""
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = OmnigraphClient("s3://bucket/graph-v9.omni", Path("/queries"))
+    _stub_run(
+        monkeypatch,
+        returncode=1,
+        stderr="OCC recovery sidecar found, but its manifest delta differs",
+    )
+
+    with pytest.raises(og.StoreQuarantined) as raised:
+        client._execute(["omnigraph", "query"], "query", is_write=False)
+
+    assert raised.value.operation_id is None
+
+
+def test_the_ordinary_recovery_barrier_is_not_read_as_a_quarantine():
+    """Both markers are required precisely so the self-clearing barrier — which
+    also says "recovery" — keeps its own, retryable classification."""
+    assert (
+        og._classify_cli_error(
+            "recovery required for operation 01ABC: pending Load recovery "
+            "operation blocks writes on branch 'main'"
+        )
+        == _http.RECOVERY_REQUIRED
+    )
+
+
 # ── export_to: streaming, under the same retry policy ──────────────
 
 

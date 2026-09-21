@@ -44,6 +44,11 @@ started](../getting-started/index.md) instead.
     Moving a store: local to shared, format upgrades, and reconciling two stores
     that both have writes.
 
+-   **[Store quarantine runbook](store-quarantine-runbook.md)**
+
+    A graph refusing every read, write and repair with the same OCC recovery
+    sidecar error: how to preserve the evidence, resolve it, and verify.
+
 </div>
 
 !!! info "These pages live with the code"
@@ -62,5 +67,6 @@ started](../getting-started/index.md) instead.
 | Route work repos and personal repos at different stores | [Named targets](witan-user-guide.md) |
 | Stop a detector flagging a false positive | [Write-path scanning](write-path-scanning.md) |
 | Run the code indexer in CI | [`WITAN_CODE_CI_REPOS`](../reference/environment.md#ci-code-graph-indexer) |
+| Recover a graph that refuses every read and write | [Store quarantine runbook](store-quarantine-runbook.md) |
 | Understand why a claim was rejected | [Coordinating work](../explanation/task-coordination.md) |
 | Tune what `recall` returns | [`WITAN_RANK_*`](../reference/environment.md#recall-ranking) |

@@ -1,0 +1,130 @@
+# Recovering a store quarantined by an OCC recovery sidecar
+
+A graph that answers every read, every write and `omnigraph repair` with the
+same error is quarantined by an unresolved OCC recovery sidecar:
+
+```
+OCC recovery sidecar '01M2V544QY00SSGZA0PSRK3B9X' found original commit id
+'01M2V54457QR0XB7ZW47H5V88H' but its manifest delta differs
+```
+
+witan reports this as `StoreQuarantined` and names the sidecar's operation id in
+the message. It is a refusal, not a transient failure: nothing clears it but an
+operator, and retrying only spends the caller's deadline.
+
+## What causes it
+
+Two writers committing against one storage root at the same manifest version,
+with no arbiter between them. The loser's recovery sidecar records a delta that
+does not match the commit that actually landed, and the store refuses to open
+rather than choose.
+
+Since agent-kit#364, `witan serve` serialises writes to one `s3://` root across
+its own threads (`witan_core.omnigraph.store_write_lock`), so two concurrent
+tool calls in one process can no longer produce this. **Separate processes still
+can.** A second `witan serve` replica, or a CLI run alongside a server, writing
+the same `s3://` root is uncoordinated. A shared root wants a served
+single-writer target (`https://…`) — direct S3 from more than one process is not
+a supported writer topology.
+
+## Recovery
+
+Observed versions: witan 0.36.0, witan-core 0.37.0, omnigraph 0.11.0, storage
+format 9. Recorded from the 2026-09-18 recovery of a direct-S3 root.
+
+**1. Stop the writers.** Every writer against this root, not just the one that
+reported the error: other `witan serve` processes, the CI indexer, the view
+reaper, any CLI session. A writer arriving mid-repair re-creates the state you
+are about to resolve.
+
+**2. Back the root up before touching anything.** The repair in step 6 rewrites
+table heads and is not reversible.
+
+```bash
+aws s3 sync s3://<bucket>/<root> s3://<bucket>/backups/quarantine-$(date -u +%Y%m%dT%H%M)/
+```
+
+Verify the copy's object count matches the source before continuing. A backup
+you did not check is not a rollback plan.
+
+**3. Preserve the evidence, separately from the backup.** The sidecar is the
+only record of what the losing writer intended, and step 5 moves it out of the
+way. Keep it where a later upstream report can reach it:
+
+```bash
+aws s3 cp s3://<bucket>/<root>/graphs/<graph>.omni/__recovery/<operation>.json \
+  ./quarantine-evidence/<operation>.json
+```
+
+Also keep the full error text. The operation id is the only handle on the
+sidecar, and a truncated log costs a listing of `__recovery/` to recover.
+
+**4. Read the sidecar before resolving it.** What matters is which tables it
+names, the expected version, the post-commit pin, and whether the original
+commit it names is present in the graph's commit history. In the 2026-09-18
+case the sidecar named four tables at expected version 2 / pin 3 with rollback
+outcomes 3→2, the original commit was present carrying exactly the intended
+entity changes, and the rollback commit it recorded did not exist. That is the
+shape that makes a forward repair safe: the committed state is the intended
+state, and only the published table heads disagree with it.
+
+**5. Quarantine the sidecar.** `omnigraph repair` cannot open the graph while it
+is active, so move it aside — do not delete it, step 3's copy is evidence, not a
+substitute:
+
+```bash
+aws s3 mv s3://<bucket>/<root>/graphs/<graph>.omni/__recovery/<operation>.json \
+  s3://<bucket>/quarantined-sidecars/<operation>.json
+```
+
+**6. Preview the repair, and read it.** Never go straight to `--confirm`:
+
+```bash
+omnigraph repair --store s3://<bucket>/<root>/graphs/<graph>.omni --json
+```
+
+Expect `suspicious` for exactly the datasets the sidecar named, each with a
+published version one behind its Lance HEAD and a `Restore` action, and
+`no_drift` for every other dataset.
+
+**Do not force a repair that reports anything else.** `--force` is warranted
+only when the drift matches the sidecar's own account: the same tables, the same
+one-version gap, and a commit history that already carries the intended changes.
+Drift on tables the sidecar never mentioned, a gap of more than one version, or
+a missing original commit all mean something other than this failure, and
+forcing through them can discard committed rows. Stop and investigate instead.
+
+**7. Repair.**
+
+```bash
+omnigraph repair --store s3://<bucket>/<root>/graphs/<graph>.omni --confirm --force
+```
+
+**8. Verify, rather than assume.** All four:
+
+```bash
+# No drift anywhere, and no sidecar left behind.
+omnigraph repair --store s3://<bucket>/<root>/graphs/<graph>.omni --json
+aws s3 ls s3://<bucket>/<root>/graphs/<graph>.omni/__recovery/
+
+# Real reads and writes through witan itself, not just the CLI.
+witan memory search --target <target> <a term you know is indexed>
+witan tasks --target <target>
+```
+
+The 2026-09-18 recovery ended with `no_drift` on all 27 datasets, zero active
+sidecars, and reads and writes succeeding.
+
+**Rollback.** If the repair leaves the graph worse, restore step 2's copy over
+the root with the writers still stopped, and start again from step 4 with the
+preserved sidecar. There is no partial undo of a forced repair.
+
+**9. Restart the writers**, one at a time, and confirm the first one's writes
+land before starting the next.
+
+## Afterwards
+
+File what you saw. Whether the mismatched manifest delta is an omnigraph defect
+rather than a consequence of uncoordinated writers is still open (agent-kit#364);
+the preserved sidecar from step 3, the commit history around the original
+commit, and the repair preview from step 6 are what an upstream report needs.
