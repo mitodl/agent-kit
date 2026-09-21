@@ -22,7 +22,11 @@ a MINOR bump may include breaking changes).
   the cold path was their sum. It now runs in two waves (the second needs the
   first's answers), which measured 11.3s -> 6.5s on the same graph, byte-identical
   output. Each read keeps its own failure isolation, and a machine that cannot
-  start threads falls back to running them in line.
+  start threads falls back to running them in line. The wave primes the proxy's
+  tool schema once first, so the fan-out does not have every worker discover it
+  (4 `tools/list` cold, against 1 for the sequential path it replaced); against
+  a `witan-core` predating `prime_tool_schema` this is skipped and the old
+  behaviour stands.
 
 - **The context hook's ready list respects cross-repo blockers.** It offers a
   repo-scoped slice of an all-Task scan, and an unresolvable blocker counts as

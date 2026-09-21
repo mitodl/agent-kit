@@ -1393,6 +1393,52 @@ def test_inject_context_remote_issues_its_independent_reads_concurrently(
     assert "## Active Workflow Projects" in text
 
 
+def test_inject_context_remote_primes_the_tool_schema_once_before_fanning_out(
+    tmp_path, monkeypatch
+):
+    """One schema resolution per wave, and only when the proxy offers one.
+
+    Without it each worker finds the param-name cache unset and lists the
+    surface itself (measured: 4 `tools/list` cold, where the sequential path
+    issued 1). The catch-all `__getattr__` case is the trap: a proxy predating
+    `prime_tool_schema` must be detected as NOT having it, rather than having
+    a bogus tool of that name called on the deployment.
+    """
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/ctx-prime")
+
+    class _Priming(_FakeRemoteServer):
+        primed = 0
+
+        def prime_tool_schema(self):
+            type(self).primed += 1
+
+    server = _Priming(projects=[], ready=[], sessions_by_project={})
+    ctx_module.inject_context_remote(server, "https://witan.example.org/mcp")
+    assert _Priming.primed == 1
+    assert not [c for c in server.calls if c[0] == "prime_tool_schema"]
+
+    # A proxy-shaped object whose __getattr__ answers for ANY name, i.e. one
+    # from a witan-core that predates the method.
+    class _CatchAll(_FakeRemoteServer):
+        def __getattr__(self, name):
+            def _tool_call(**kwargs):
+                self.calls.append((name, kwargs))
+                raise RuntimeError(f"no such tool: {name}")
+
+            return _tool_call
+
+    legacy = _CatchAll(projects=[], ready=[], sessions_by_project={})
+    ctx_module.inject_context_remote(legacy, "https://witan.example.org/mcp")
+    assert not [c for c in legacy.calls if c[0] == "prime_tool_schema"]
+
+
 def test_gather_falls_back_to_serial_when_the_pool_cannot_start(monkeypatch):
     """A machine at its thread limit still gets its answers, just slower.
 

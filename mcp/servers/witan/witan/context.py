@@ -799,6 +799,32 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
             )
         if repo and branch:
             first["branch"] = lambda: server.task_for_branch(branch=branch, repo=repo)
+
+        # Resolve the deployment's tool surface ONCE before fanning out. Each
+        # worker otherwise finds the proxy's param-name cache unset (none of
+        # them has finished listing yet) and lists it itself: measured at four
+        # `tools/list` sequences on a cold process where the sequential path
+        # issued one. The listings overlap, so this is server load rather than
+        # latency, and it is load every agent session repeats.
+        #
+        # Feature-detected ON THE CLASS, not the instance. `RemoteMCPProxy`
+        # has a catch-all `__getattr__` that turns any unknown attribute into
+        # a TOOL CALL, so an instance-level `getattr(server, ..., None)` never
+        # returns None — against a witan-core predating this method it would
+        # hand back a closure that tries to invoke a `prime_tool_schema` tool
+        # on the deployment. A class lookup is not intercepted (`__getattr__`
+        # is an instance hook), so this is absent exactly when the method is.
+        # That keeps the `witan-core>=0.37` floor honest: older cores simply
+        # skip priming and behave as they did before.
+        #
+        # Best-effort: a failure here is not worth losing the block over,
+        # since each worker resolves the schema itself anyway.
+        if getattr(type(server), "prime_tool_schema", None) is not None:
+            try:
+                server.prime_tool_schema()
+            except Exception:  # noqa: BLE001 — the workers still resolve it
+                _dbg_exc(debug, "tool-schema prime failed (workers will resolve it)")
+
         done = _gather(first)
 
         # The projects/ready pair is what the block exists to show, so a

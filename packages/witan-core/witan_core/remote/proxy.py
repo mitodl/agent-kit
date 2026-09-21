@@ -816,6 +816,65 @@ class RemoteMCPProxy:
             raise RemoteToolUnavailable(self._admin_error(name))
         return await self._invoke(name, (), kwargs)
 
+    async def ensure_tool_schema(self) -> None:
+        """Resolve the tool surface once, for a caller about to FAN OUT.
+
+        ``_invoke_once`` resolves it lazily, which is right for sequential use:
+        the first call lists, every later one reads the cache. A concurrent
+        batch defeats that, because each worker checks ``_param_names is None``
+        before any of them has finished listing, so they all list. Measured on
+        a cold proxy: a four-call wave issued four ``tools/list`` sequences
+        where the sequential shape issued one (agent-kit#372 review).
+
+        The cost is server load, not latency — the redundant listings overlap,
+        so they add roughly one listing's wall time either way. Calling this
+        first trades one extra connection for N-1 fewer listings against a
+        deployment that every agent session is hitting.
+
+        Deliberately NOT a lock inside ``_invoke_once``. The refresh happens
+        across an ``await``, and this proxy is driven both from one loop per
+        thread (the CLI/hook path) and from several coroutines on ONE shared
+        loop (``witan.remote.serve``); a ``threading.Lock`` held across that
+        await would deadlock the second case outright. Priming from the caller
+        that knows it is about to fan out needs no cross-context locking at
+        all.
+
+        Idempotent and cheap when the cache is warm: no connection is opened.
+        :meth:`prime_tool_schema` is the synchronous form, for a caller that is
+        not already in a loop — the same pairing as :meth:`dispatch` and the
+        ``__getattr__`` call wrapper.
+        """
+        if self._param_names is not None and time.monotonic() < (
+            self._param_names_expiry
+        ):
+            return
+        token = self._token_provider()
+        async with (
+            self._reclassifying("list_tools"),
+            AsyncExitStack() as stack,
+        ):
+            try:
+                client = await stack.enter_async_context(self._new_client(token))
+            except Exception as exc:  # noqa: BLE001 — see _invoke_once
+                rejected = auth_failure(exc)
+                if rejected is not None:
+                    raise RemoteCredentialRejected(
+                        self._credential_rejected_error(
+                            "list_tools", rejected.response.status_code
+                        )
+                    ) from exc
+                raise RemoteUnreachable(self._unreachable_error(exc)) from exc
+            await self._refresh_param_names(client)
+
+    def prime_tool_schema(self) -> None:
+        """Synchronous :meth:`ensure_tool_schema`, for a caller outside a loop.
+
+        Defined as a real method rather than left to ``__getattr__``, which
+        would otherwise treat the name as a TOOL and try to call one by that
+        name on the deployment.
+        """
+        asyncio.run(self.ensure_tool_schema())
+
     async def remote_tools(self) -> list[Any]:
         """The deployment's advertised tools, as listed MCP tool objects.
 
