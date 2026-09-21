@@ -961,6 +961,83 @@ def test_declared_ttl_bounds_how_long_the_list_is_held(monkeypatch):
     assert proxy.lists == 2
 
 
+def test_priming_the_schema_keeps_a_concurrent_wave_to_one_tools_list():
+    """A fan-out must not make every worker discover the surface itself.
+
+    Each worker checks ``_param_names is None`` before any of them has
+    finished listing, so without priming they all list. Measured on a cold
+    proxy against a real deployment: four ``tools/list`` for a four-call wave
+    where the sequential shape issued one (agent-kit#372 review).
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from witan_core import caching
+
+    # A server that permits caching, which is the only case priming can help:
+    # against one declaring ttlMs=0 ("do not cache") every call re-lists by
+    # design, primed or not.
+    def cacheable():
+        return _echo_server(**caching.hint_kwargs(ttl_seconds=300))
+
+    def wave(proxy):
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = [pool.submit(proxy.echo, value=str(i)) for i in range(4)]
+            return sorted(f.result() for f in futures)
+
+    class _Barriered(_CountingProxy):
+        """Holds every worker at the listing until all four have reached it.
+
+        The unprimed duplication is a RACE: against a fast in-memory server one
+        worker can finish listing before the others look, and then they read
+        its cache. Left to chance the "all four list" assertion passes or fails
+        with machine load. The barrier pins the interleaving that the real cold
+        path hits against a deployment, where the listing is a round trip.
+        """
+
+        def __init__(self, server, barrier):
+            super().__init__(server)
+            self._barrier = barrier
+
+        def _new_client(self, token):
+            client = super()._new_client(token)
+            counted = client.list_tools_mcp
+
+            async def _held(*args, **kwargs):
+                self._barrier.wait()
+                return await counted(*args, **kwargs)
+
+            client.list_tools_mcp = _held
+            return client
+
+    unprimed = _Barriered(cacheable(), threading.Barrier(4, timeout=10))
+    assert wave(unprimed) == ["0", "1", "2", "3"]
+    assert unprimed.lists == 4
+
+    primed = _CountingProxy(cacheable())
+    primed.prime_tool_schema()
+    assert primed.lists == 1
+    assert wave(primed) == ["0", "1", "2", "3"]
+    # The four workers read the primed list rather than each fetching one.
+    assert primed.lists == 1
+
+
+def test_priming_a_warm_schema_opens_no_connection():
+    """Idempotent, so a caller can prime unconditionally before every wave."""
+    from witan_core import caching
+
+    proxy = _CountingProxy(_echo_server(**caching.hint_kwargs(ttl_seconds=300)))
+    proxy.prime_tool_schema()
+    assert proxy.lists == 1
+
+    def _fail(_token):
+        raise AssertionError("prime_tool_schema opened a connection when warm")
+
+    proxy._new_client = _fail
+    proxy.prime_tool_schema()
+    assert proxy.lists == 1
+
+
 def test_a_zero_ttl_is_an_instruction_not_a_missing_value():
     # A 2026-07-28 server that sets no hint still sends ttlMs=0, which says
     # "do not cache this" — so the proxy re-reads rather than treating the

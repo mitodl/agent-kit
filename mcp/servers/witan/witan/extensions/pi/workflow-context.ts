@@ -44,9 +44,16 @@ function runInBackground(args: string[], cwd?: string): void {
 export default function workflowContextExtension(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (event: any, ctx: any) => {
 		try {
+			// 45s, matching the Claude hook `witan setup` installs. 5s cleared
+			// the warm output-cache hit (0.6-0.9s measured in agent-kit#349)
+			// but sat far below the cold path (16-23s there), so every prompt
+			// that missed the 30s cache silently contributed no block. A
+			// timeout is still wanted — a hung read must degrade to no
+			// context rather than stall the turn — but it has to sit above
+			// the cold path, not inside it.
 			const r = spawnSync("witan", ["inject-context"], {
 				encoding: "utf8",
-				timeout: 5000,
+				timeout: 45000,
 				cwd: ctx?.cwd,
 			});
 			const text = (r.stdout ?? "").trim();

@@ -106,15 +106,30 @@ def is_ready(
     return all(blocker_status(b) == "closed" for b in (task.get("blocked_by") or []))
 
 
-def filter_ready(tasks: list[dict], *, now: datetime | None = None) -> list[dict]:
+def filter_ready(
+    tasks: list[dict],
+    *,
+    blocker_rows: list[dict] | None = None,
+    now: datetime | None = None,
+) -> list[dict]:
     """Ready tasks from a self-contained list, priority-ordered (p0 first).
 
     Blocker statuses are resolved within ``tasks`` — an unknown blocker is
     treated as closed. Use this when the full candidate set is already in hand
     (the context hook); ``task_ready`` supplies its own resolver that can fetch
     blockers outside the list.
+
+    ``blocker_rows`` widens only the *lookup*, never the candidate set: a
+    caller that scanned every Task but is offering a repo-scoped slice of them
+    passes the whole scan here. Without it a blocker in another repo is
+    unknown, and unknown reads as closed — so a task whose cross-repo blocker
+    is wide open is shown as ready. That is the expensive direction to fail in
+    for a signal whose job is to stop two actors colliding, and the rows are
+    already in hand either way.
     """
-    status_by_slug = {t["slug"]: t.get("status") for t in tasks}
+    status_by_slug = {
+        t["slug"]: t.get("status") for t in (*(blocker_rows or ()), *tasks)
+    }
 
     def blocker_status(slug: str) -> str:
         return status_by_slug.get(slug) or "closed"

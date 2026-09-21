@@ -6939,6 +6939,14 @@ def task_ready(
     limit:
         Maximum tasks to return. Defaults to 20.
     """
+    # The candidate set and the blocker-status lookup are built from different
+    # row sets on purpose. A task in ANOTHER repo is never a candidate here,
+    # but it is routinely a blocker of one — and ``list_unscoped_tasks`` is an
+    # all-Task scan, so it has already been fetched. Narrowing the lookup to
+    # the candidates threw those rows away and then re-read them one blocker at
+    # a time: ~3.0s of a 4.2s ``task_ready`` against the deployed service,
+    # which is most of what blows the context hook's timeout (agent-kit#349).
+    known: list[dict] = []
     if project_slug:
         rows = client.read(
             "read.gq", "list_tasks_by_project", {"project_slug": project_slug}
@@ -6953,10 +6961,13 @@ def task_ready(
                 r for r in all_rows if not r.get("repo") and r["slug"] not in seen
             ]
             rows = repo_rows + unscoped
+            known = all_rows
         else:
             rows = client.read("read.gq", "list_unscoped_tasks", {})
 
-    status_by_slug = {r["slug"]: r.get("status") for r in rows}
+    # ``rows`` last: where a slug appears in both, the candidate row is the one
+    # the readiness decision is about, so its status wins.
+    status_by_slug = {r["slug"]: r.get("status") for r in (*known, *rows)}
 
     def blocker_status(blocker_slug: str) -> str:
         if blocker_slug in status_by_slug:

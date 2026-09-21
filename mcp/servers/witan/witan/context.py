@@ -14,6 +14,7 @@ import json
 import os
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from witan_core.observability import get_logger
@@ -249,6 +250,75 @@ def _dbg_exc(enabled: bool, msg: str) -> None:
         )
 
 
+def _dbg_exc_from(enabled: bool, exc: BaseException, msg: str) -> None:
+    """:func:`_dbg_exc` for an exception that is not the *active* one.
+
+    A read that failed inside a worker thread is caught and carried back as a
+    value, so by the time its block is skipped there is no live exception for
+    ``exc_info=True`` to resolve. Passing the object keeps the traceback in the
+    record instead of losing it to an empty ``sys.exc_info()``.
+    """
+    if enabled:
+        logger.debug("witan.context.debug", detail=msg, exc_info=exc)
+
+
+# The hook's reads are network-bound against a deployment and mostly
+# independent of one another, so issuing them one at a time made the cold path
+# the SUM of ten round trips (~11s measured) rather than the slowest of two
+# waves. Threads rather than asyncio: ``server`` is duck-typed on plain
+# attribute-style methods (``RemoteMCPProxy.__getattr__`` wraps each call in
+# its own ``asyncio.run``), and every call is I/O-bound, so a pool parallelises
+# them without changing that interface.
+_HOOK_READ_WORKERS = 6
+
+
+def _sequentially(calls: dict[str, Callable[[], object]]) -> dict[str, object]:
+    """:func:`_gather`'s contract, one call at a time."""
+    out: dict[str, object] = {}
+    for key, fn in calls.items():
+        try:
+            out[key] = fn()
+        except Exception as exc:  # noqa: BLE001 — reported to the caller as a value
+            out[key] = exc
+    return out
+
+
+def _gather(calls: dict[str, Callable[[], object]]) -> dict[str, object]:
+    """Run every thunk concurrently; map each key to its result OR its exception.
+
+    Returning failures as values rather than raising is what lets each caller
+    keep the per-read isolation the hook depends on: one read failing must cost
+    its own block and nothing else, and a shared ``gather`` that propagated the
+    first exception would take the whole prompt's context with it.
+
+    NEVER RAISES, including when the pool itself cannot be built — a machine at
+    its thread limit falls back to running the calls in line rather than taking
+    down a hook whose whole contract is that it degrades quietly. Only the
+    speed-up is optional; the answers are not.
+    """
+    if len(calls) <= 1:
+        return _sequentially(calls)
+    out: dict[str, object] = {}
+    try:
+        with ThreadPoolExecutor(
+            max_workers=min(len(calls), _HOOK_READ_WORKERS),
+            thread_name_prefix="witan-ctx",
+        ) as pool:
+            futures = {pool.submit(fn): key for key, fn in calls.items()}
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    out[key] = future.result()
+                except Exception as exc:  # noqa: BLE001 — see docstring
+                    out[key] = exc
+    except Exception:  # noqa: BLE001 — pool/thread failure, not a read failure
+        logger.debug("witan.context.gather_fell_back_to_serial", exc_info=True)
+        # Keep whatever already came back; only re-run what never answered.
+        pending = {k: fn for k, fn in calls.items() if k not in out}
+        return {**out, **_sequentially(pending)}
+    return out
+
+
 def inject_context(
     graph_uri: str,
     queries_dir: Path,
@@ -381,7 +451,10 @@ def inject_context(
 
     # Shared with ``task_ready`` so the injected list and the tool agree —
     # including the reclaim of ``in_progress`` tasks whose lease has lapsed.
-    ready = readiness.filter_ready(tasks)
+    # ``all_rows`` is the all-Task scan ``tasks`` was sliced out of, so passing
+    # it costs no read and lets a cross-repo blocker resolve to its real status
+    # instead of defaulting to closed.
+    ready = readiness.filter_ready(tasks, blocker_rows=all_rows)
     _dbg(
         debug,
         f"ready={len(ready)} open_branch_tasks={len(open_branch_tasks)} "
@@ -706,25 +779,66 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
         # list_unscoped_tasks locally). limit=10000 matches the local path's
         # list_unscoped_tasks cap so a busy graph's header count isn't
         # silently truncated by task_ready's own default limit=20.
-        projects = (
-            server.workflow_project_list(repo=repo, status="active") if repo else []
-        )
-        ready = server.task_ready(repo=(repo or ""), limit=10000)
+        #
+        # `repo=""` on the held-task read is load-bearing, not decoration. An
+        # OMITTED repo is filled in client-side by `RemoteMCPProxy._map_args`
+        # (`task_list` is in `_REPO_IS_SCOPE_OR_STAMP`), which would scope this
+        # to whichever checkout the hook fired in — while the local path
+        # answers from an all-repos `list_unscoped_tasks` scan. The sentinel
+        # makes both transports answer the same question: which tasks do I
+        # hold, anywhere.
+        first: dict[str, Callable[[], object]] = {
+            "ready": lambda: server.task_ready(repo=(repo or ""), limit=10000),
+            "held": lambda: server.task_list(
+                assignee="@me", status="in_progress", repo=""
+            ),
+        }
+        if repo:
+            first["projects"] = lambda: server.workflow_project_list(
+                repo=repo, status="active"
+            )
+        if repo and branch:
+            first["branch"] = lambda: server.task_for_branch(branch=branch, repo=repo)
+
+        # Resolve the deployment's tool surface ONCE before fanning out. Each
+        # worker otherwise finds the proxy's param-name cache unset (none of
+        # them has finished listing yet) and lists it itself: measured at four
+        # `tools/list` sequences on a cold process where the sequential path
+        # issued one. The listings overlap, so this is server load rather than
+        # latency, and it is load every agent session repeats.
+        #
+        # Feature-detected ON THE CLASS, not the instance. `RemoteMCPProxy`
+        # has a catch-all `__getattr__` that turns any unknown attribute into
+        # a TOOL CALL, so an instance-level `getattr(server, ..., None)` never
+        # returns None — against a witan-core predating this method it would
+        # hand back a closure that tries to invoke a `prime_tool_schema` tool
+        # on the deployment. A class lookup is not intercepted (`__getattr__`
+        # is an instance hook), so this is absent exactly when the method is.
+        # That keeps the `witan-core>=0.37` floor honest: older cores simply
+        # skip priming and behave as they did before.
+        #
+        # Best-effort: a failure here is not worth losing the block over,
+        # since each worker resolves the schema itself anyway.
+        if getattr(type(server), "prime_tool_schema", None) is not None:
+            try:
+                server.prime_tool_schema()
+            except Exception:  # noqa: BLE001 — the workers still resolve it
+                _dbg_exc(debug, "tool-schema prime failed (workers will resolve it)")
+
+        done = _gather(first)
+
+        # The projects/ready pair is what the block exists to show, so a
+        # failure in either still returns "" — same contract as before, just
+        # re-raised out of the worker that hit it rather than raised inline.
+        for key in ("projects", "ready"):
+            if isinstance(done.get(key), Exception):
+                raise done[key]
+        projects: list[dict] = done.get("projects") or []
+        ready: list[dict] = done["ready"]
         _dbg(debug, f"remote reads OK: projects={len(projects)} ready={len(ready)}")
     except Exception:  # noqa: BLE001
         _dbg_exc(debug, "FAILED building remote context (returning empty block)")
         return ""
-
-    sessions_by_project: dict[str, list[dict]] = {}
-    for p in projects[:3]:
-        try:
-            sessions_by_project[p["slug"]] = server.workflow_session_list(
-                project_slug=p["slug"]
-            )
-        except Exception:  # noqa: BLE001
-            _dbg_exc(
-                debug, f"sessions read failed for {p['slug']!r} (skipping resume lines)"
-            )
 
     # Isolated exactly as the local path isolates its own CodeBranch read
     # (see :func:`inject_context`): a deployment that predates
@@ -732,19 +846,16 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
     # cost the branch block only — never the projects/ready-tasks block that
     # already rendered above it.
     open_branch_tasks: list[dict] = []
-    if repo and branch:
-        try:
-            open_branch_tasks = [
-                t
-                for t in server.task_for_branch(branch=branch, repo=repo)
-                if t.get("status") != "closed"
-            ]
-        except Exception:  # noqa: BLE001
-            _dbg_exc(
-                debug,
-                "task_for_branch failed (deployment may predate it) — "
-                "no In-Flight Branch block",
-            )
+    branch_result = done.get("branch")
+    if isinstance(branch_result, Exception):
+        _dbg_exc_from(
+            debug,
+            branch_result,
+            "task_for_branch failed (deployment may predate it) — "
+            "no In-Flight Branch block",
+        )
+    elif branch_result:
+        open_branch_tasks = [t for t in branch_result if t.get("status") != "closed"]
 
     _dbg(
         debug,
@@ -754,21 +865,57 @@ def inject_context_remote(server, remote_url: str, debug: bool = False) -> str:
 
     # Isolated like the branch read above: a deployment predating `@me` or
     # `TaskComment` costs this block and nothing else.
+    held_result = done.get("held")
+    if isinstance(held_result, Exception):
+        _dbg_exc_from(debug, held_result, "held-task read failed — no comment block")
+        held: list[dict] = []
+    else:
+        held = held_result or []
+
+    # Second wave. Both sets depend on a first-wave answer — sessions on
+    # `projects`, comments on `held` — so they cannot join the batch above, but
+    # they are independent of each other and go out together.
     #
-    # `repo=""` is load-bearing, not decoration. An OMITTED repo is filled in
-    # client-side by `RemoteMCPProxy._map_args` (`task_list` is in
-    # `_REPO_IS_SCOPE_OR_STAMP`), which would scope this to whichever checkout
-    # the hook fired in — while the local path answers from an all-repos
-    # `list_unscoped_tasks` scan. The sentinel makes both transports answer the
-    # same question: which tasks do I hold, anywhere.
-    try:
-        held = server.task_list(assignee="@me", status="in_progress", repo="")
-    except Exception:  # noqa: BLE001
-        _dbg_exc(debug, "held-task read failed — no comment block")
-        held = []
+    # The comment prefetch slices `held` exactly as `_held_task_comments` does,
+    # so every fetched thread is one that function will look at and no task is
+    # read speculatively.
+    second: dict[str, Callable[[], object]] = {
+        f"sessions:{p['slug']}": (
+            lambda slug=p["slug"]: server.workflow_session_list(project_slug=slug)
+        )
+        for p in projects[:3]
+    }
+    second.update(
+        {
+            f"comments:{t['slug']}": (lambda slug=t["slug"]: server.task_get(slug=slug))
+            for t in held[:_HELD_TASK_LIMIT]
+        }
+    )
+    fetched = _gather(second)
+
+    sessions_by_project: dict[str, list[dict]] = {}
+    for p in projects[:3]:
+        result = fetched.get(f"sessions:{p['slug']}")
+        if isinstance(result, Exception):
+            _dbg_exc_from(
+                debug,
+                result,
+                f"sessions read failed for {p['slug']!r} (skipping resume lines)",
+            )
+        else:
+            sessions_by_project[p["slug"]] = result or []
 
     def comments_for(slug: str) -> list[dict]:
-        return (server.task_get(slug=slug) or {}).get("comments") or []
+        """Hand back the prefetched thread, re-raising whatever fetching it hit.
+
+        Re-raising rather than swallowing keeps ``_held_task_comments``'s own
+        per-task isolation (and its debug line) in charge of a failed read,
+        exactly as when it did the fetching itself.
+        """
+        result = fetched.get(f"comments:{slug}")
+        if isinstance(result, Exception):
+            raise result
+        return (result or {}).get("comments") or []
 
     commented = _held_task_comments(held, comments_for, remote_url, debug=debug)
 

@@ -8,6 +8,18 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **`RemoteMCPProxy.ensure_tool_schema()` / `prime_tool_schema()`**, for a
+  caller about to issue several tool calls concurrently. `_invoke_once`
+  resolves the tool surface lazily, which is right for sequential use but
+  means every worker in a fan-out lists it: measured at four `tools/list`
+  sequences for a four-call wave on a cold proxy, where the sequential shape
+  issued one. Priming first trades one connection for N-1 fewer listings.
+  Idempotent and connection-free when the cache is warm. Deliberately not a
+  lock inside `_invoke_once`, which would deadlock the shared-event-loop
+  caller (`witan.remote.serve`).
+
 ### Changed
 
 - **`configure_sentry` no longer turns a dropped OTLP batch into a Sentry

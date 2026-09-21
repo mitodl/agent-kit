@@ -62,19 +62,37 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     # These hooks run on the prompt/stop critical path and do git + graph I/O, so
     # they carry a timeout: a hung git or graph read must degrade to no context,
     # never stall the agent. The first prompt in a cache window does several
-    # full-store reads, which on a large graph can take ~10s — 15s gives that
-    # cold path headroom to finish (and populate the on-disk cache) instead of
-    # being killed, which would leave the cache empty and every prompt cold.
+    # full-store reads, which on a large graph can take ~10s — the timeout has
+    # to give that cold path headroom to finish (and populate the on-disk cache)
+    # instead of being killed, which leaves the cache empty and every prompt
+    # cold.
+    #
+    # Both were 15s, which sat INSIDE the cost distribution of the work they
+    # were timing rather than above it — so the hook was killed mid-read, the
+    # user paid the full wait, and the output was discarded (agent-kit#349).
+    # The two differ now because they are timing different things:
+    #
+    # inject-context is a read path, measured at 16-23s cold on a graph with 19
+    # active projects and 184 ready tasks. The reads behind that are fixed, so
+    # 45s is headroom for a graph bigger than the one measured, not a budget
+    # anything is expected to use.
+    #
+    # session-checkpoint is a WRITE path (`workflow_session_end`), and a single
+    # write against a deployment has been measured at up to 51s — see the
+    # credential-refresh note in `witan_core.remote.proxy._invoke`. Killing it
+    # is not a dropped block but a session left open with no handoff summary,
+    # which is invisible until someone resumes and finds nothing recorded. 60s
+    # covers that recorded worst case.
     hooks: list[Hook] = [
         DeclarativeHook(
             event=HookEvent.USER_PROMPT_SUBMIT,
             command="witan inject-context",
-            timeout_seconds=15,
+            timeout_seconds=45,
         ),
         DeclarativeHook(
             event=HookEvent.STOP,
             command="witan session-checkpoint",
-            timeout_seconds=15,
+            timeout_seconds=60,
         ),
     ]
     if pi_ext_dir.is_dir():
