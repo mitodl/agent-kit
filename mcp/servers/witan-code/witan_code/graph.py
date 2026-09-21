@@ -9,6 +9,7 @@ bulk ``load`` used to write thousands of symbol/edge records in one call.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from witan_core.omnigraph import OmnigraphClient as _BaseOmnigraphClient
@@ -36,6 +37,36 @@ is_stale_schema = _is_storage_version_mismatch
 
 class SharedGraphWriteRefused(RuntimeError):
     """A writer tried to write a view of a shared graph it does not own."""
+
+
+#: What a branch name may contain for :func:`_gq_branch_name` to be able to put
+#: it in a statement. It is the union of what every component's own sanitizer
+#: emits (:mod:`witan_code.views`) plus the ``/`` that joins them, so no name
+#: witan-code constructs is ever refused.
+_QUOTABLE_BRANCH = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
+
+
+def _gq_branch_name(name: str) -> str:
+    """``name`` as a GQ string literal, or raise.
+
+    A branch statement needs the name QUOTED — verified against the 0.11.0
+    binary, ``branch create act-x/feat_y from main`` is a parse error and
+    ``branch create "act-x/feat_y" from main`` succeeds — and 0.11 has no
+    escape for a ``"`` inside one (``"we\\"ird"`` is also a parse error). So a
+    name carrying one cannot be expressed at all, and this refuses rather than
+    emitting a statement that means something else.
+
+    Unreachable for a name this package built, which is the point: the names
+    that do not come from here are the ones ``branch list`` hands the reaper,
+    which are whatever any client ever created on the store.
+    """
+    if not _QUOTABLE_BRANCH.match(name):
+        raise ValueError(
+            f"branch name {name!r} cannot be written as an omnigraph GQ "
+            "statement: it has characters outside [A-Za-z0-9._/-], and 0.11 "
+            "has no escape for them inside a quoted branch name."
+        )
+    return f'"{name}"'
 
 
 def owns_view(
@@ -210,21 +241,33 @@ class OmnigraphClient(_BaseOmnigraphClient):
     # ── Branch operations ─────────────────────────────────────────
 
     def list_branches(self) -> list[str]:
-        """Names of all branches on this store (includes ``main``)."""
-        result = self._run("branch", "list", "--json")
+        """Names of all branches on this store (includes ``main``).
+
+        0.11's ``branch list`` GQ statement on the canonical read route
+        (upstream RFC 0055), not an ``omnigraph branch list`` subprocess, so
+        branch reads share the transport, retry policy and error
+        classification of every other read — see
+        :meth:`~witan_core.omnigraph.OmnigraphClient.statement`. Against the
+        cluster that is an HTTP POST rather than a process, including on a
+        branched client, which the named-query path still cannot use.
+
+        One row per branch, ``{"name": ...}``, under the same ``rows``
+        envelope a named read returns — verified identical on both transports
+        against the 0.11.0 binary and the 0.11.0 server.
+        """
+        result = self.statement("query", "branch list", "--format", "json")
         try:
             parsed = json.loads(result)
         except json.JSONDecodeError:
             return []
-        rows = parsed.get("branches", parsed) if isinstance(parsed, dict) else parsed
+        rows = parsed.get("rows", parsed) if isinstance(parsed, dict) else parsed
         if not isinstance(rows, list):
             return []
-        out: list[str] = []
-        for row in rows:
-            name = row.get("name") if isinstance(row, dict) else row
-            if isinstance(name, str):
-                out.append(name)
-        return out
+        return [
+            row["name"]
+            for row in rows
+            if isinstance(row, dict) and isinstance(row.get("name"), str)
+        ]
 
     def ensure_branch(self) -> None:
         """Create ``self.branch`` from main if it doesn't exist yet.
@@ -235,19 +278,34 @@ class OmnigraphClient(_BaseOmnigraphClient):
         if self.branch is None or self.branch in self.list_branches():
             return
         try:
-            self._run("branch", "create", self.branch, "--from", "main")
+            self.statement(
+                "mutate",
+                f"branch create {_gq_branch_name(self.branch)} from main",
+                surface_conflict=True,
+            )
         except RuntimeError as exc:
             # Two concurrent `code_store_open` calls for one view both see it
             # missing, and the second create fails. The branch exists either
             # way, which is all this method promises. Re-listing confirms that
             # rather than trusting the message alone.
+            #
+            # ONE CLAUSE COVERS BOTH TRANSPORTS because `OmnigraphConflict` is
+            # a `RuntimeError` and carries the engine's own message. The CLI
+            # prints "branch 'x' already exists" and classifies FATAL; the
+            # server answers 409, which `classify_status` reads as retryable,
+            # so the `surface_conflict=True` above is what turns that into this
+            # exception instead of a full retry budget spent re-racing a branch
+            # that already exists.
             if "already exists" not in str(exc) or self.branch not in (
                 self.list_branches()
             ):
                 raise
 
     def delete_branch(self, name: str) -> None:
-        self._run("branch", "delete", name, "--yes")
+        # `--yes` is for the CLI path only, where a destructive write against a
+        # non-local scope refuses without it; the HTTP route has no prompt to
+        # skip and ignores flags entirely.
+        self.statement("mutate", f"branch delete {_gq_branch_name(name)}", "--yes")
 
     def branch_last_write(self, name: str) -> float | None:
         """When ``name`` was last written, as epoch seconds, or ``None``.
@@ -305,15 +363,14 @@ class OmnigraphClient(_BaseOmnigraphClient):
     def _extra_args(self, subcommand: str) -> list[str]:
         # optimize/cleanup compact the whole store (every branch), not a single
         # one, so they never take --branch even on a branched client. `commit`
-        # and `branch` name their branch positionally or as their own flag, so
-        # injecting this client's would either duplicate the flag or silently
-        # retarget the call.
-        if self.branch is None or subcommand in (
-            "branch",
-            "commit",
-            "optimize",
-            "cleanup",
-        ):
+        # names its branch as its own flag, so injecting this client's would
+        # either duplicate it or silently retarget the call.
+        #
+        # `branch` is NOT in this list any more because nothing runs it: branch
+        # work goes through `statement`, which bypasses `_extra_args` entirely
+        # (a GQ branch statement takes no --branch). Re-adding the subcommand
+        # here would be dead code, not a safety net.
+        if self.branch is None or subcommand in ("commit", "optimize", "cleanup"):
             return []
         if subcommand == "load":
             return ["--branch", self.branch, "--from", "main"]

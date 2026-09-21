@@ -8,6 +8,27 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Changed
+
+- **Branch work goes through omnigraph 0.11 GQ statements, not the branch
+  CLI.** `list_branches`, `ensure_branch` and `delete_branch` now issue
+  `branch list` / `branch create` / `branch delete` on the same query and
+  mutate routes as every other read and write, so they share its transport,
+  retry policy and error classification. Against the cluster that removes a
+  subprocess per call, including on a branched client, which the named-query
+  path still cannot route over HTTP.
+
+  Two behaviours of 0.11 this depends on, both measured against the 0.11.0
+  binary and server: a branch name must be QUOTED in the statement (an
+  unquoted `act-x/v` is a parse error, and there is no escape for a `"` inside
+  the quotes, so a name carrying one is refused rather than interpolated), and
+  a duplicate `branch create` answers HTTP 409, which is retryable by status —
+  `ensure_branch` surfaces it instead, then re-lists to confirm, as it already
+  did for the CLI's prose.
+
+  Needs the next `witan-core` release for `OmnigraphClient.statement`; the
+  floor moves to that version when it ships.
+
 ## [0.19.1] - 2026-09-18
 
 ### Changed

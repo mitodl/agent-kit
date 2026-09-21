@@ -20,7 +20,20 @@ a MINOR bump may include breaking changes).
   lock inside `_invoke_once`, which would deadlock the shared-event-loop
   caller (`witan.remote.serve`).
 
+- **`OmnigraphClient.statement(verb, source, *cli_args)`: run one inline GQ
+  statement.** omnigraph 0.11 serves branch work as GQ over the canonical
+  routes (upstream RFC 0055) — `branch list` on `query`, `branch
+  create`/`delete`/`merge` on `mutate` — so a caller no longer needs a second
+  subprocess shape for it. A statement sends no params key at all (0.11 refuses
+  a branch statement that carries one, even an empty one), injects no
+  `_extra_args`, and may therefore use the pooled HTTP transport even on a
+  client that is otherwise pinned to the CLI by its extra args.
+
 ### Changed
+
+- **`PooledTransport.query`/`mutate` take `params: dict | None`.** `None` omits
+  the key from the request body; every existing caller keeps sending its dict,
+  empty or not.
 
 - **`configure_sentry` no longer turns a dropped OTLP batch into a Sentry
   issue.** The exporters log "Failed to export ... batch due to timeout, max

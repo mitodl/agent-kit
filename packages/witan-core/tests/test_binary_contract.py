@@ -704,15 +704,49 @@ def test_commit_list_timestamps_are_microseconds(store):
 # ── branch list ───────────────────────────────────────────────────────────
 
 
-def test_branch_list_returns_named_branch_rows(store):
-    """`witan_code.graph.list_branches` accepts either `{"branches": [...]}` or
-    a bare list, and each row as a dict with "name" or a bare string."""
-    parsed = json.loads(_run("branch", "list", "--store", store, "--json").stdout)
+def test_branch_list_is_a_query_statement_returning_name_rows(store):
+    """The exact contract `witan_code.graph.list_branches` reads: 0.11 serves
+    `branch list` as a GQ statement on the canonical read route (RFC 0055),
+    answering the same `rows` envelope a named query does, one `{"name": ...}`
+    per branch."""
+    parsed = json.loads(
+        _run("query", "--store", store, "-e", "branch list", "--format", "json").stdout
+    )
 
-    rows = parsed.get("branches", parsed) if isinstance(parsed, dict) else parsed
-    assert isinstance(rows, list)
-    names = [r.get("name") if isinstance(r, dict) else r for r in rows]
-    assert "main" in names
+    assert parsed["columns"] == ["name"]
+    assert "main" in [row["name"] for row in parsed["rows"]]
+
+
+def test_a_branch_statement_needs_its_name_quoted(store):
+    """Why `witan_code.graph._gq_branch_name` exists. An unquoted name is a
+    parse error, so interpolating one straight into the statement would fail
+    every create and delete on a view whose name carries a `/` or a `.` — which
+    every namespaced view's does."""
+    unquoted = _run(
+        "mutate",
+        "--store",
+        store,
+        "-e",
+        "branch create act-x/v from main",
+        expect_ok=False,
+    )
+    assert unquoted.returncode != 0
+
+    quoted = _run("mutate", "--store", store, "-e", 'branch create "act-x/v" from main')
+    assert "act-x/v" in quoted.stdout
+
+    # And there is no escape for a `"` inside one, which is the other half of
+    # that helper: a name carrying one cannot be expressed, so it is refused
+    # rather than turned into a statement that means something else.
+    escaped = _run(
+        "mutate",
+        "--store",
+        store,
+        "-e",
+        'branch create "we\\"ird" from main',
+        expect_ok=False,
+    )
+    assert escaped.returncode != 0
 
 
 # ── version / snapshot ────────────────────────────────────────────────────

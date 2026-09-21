@@ -1720,6 +1720,71 @@ class OmnigraphClient:
             args += ["--older-than", older_than]
         return self._run("cleanup", *args)
 
+    def statement(
+        self,
+        verb: str,
+        source: str,
+        *cli_args: str,
+        surface_conflict: bool = False,
+    ) -> str:
+        """Run one inline GQ statement — no query file, no name, no params.
+
+        omnigraph 0.11 exposes branch work as GQ over the canonical routes
+        (upstream RFC 0055): ``branch list`` is a ``query`` statement and
+        ``branch create``/``delete``/``merge`` are ``mutate`` statements, under
+        the same Cedar actions as the ``/branches`` endpoints. That is what
+        this exists for, and it is the whole reason branch work no longer needs
+        a second subprocess shape: a statement rides the same transport, the
+        same retry/admission policy and the same error classification as every
+        other read and write.
+
+        THREE THINGS DIFFER FROM A NAMED CALL, all of them load-bearing:
+
+        - **No params key on the wire.** Not an empty one — none. See
+          :meth:`~witan_core.omnigraph_http.PooledTransport.query`.
+        - **No ``_extra_args``.** A statement takes no ``--branch``, so the
+          subclass args are neither injected nor lost, which is also what lets
+          a branched client use HTTP here (``carries_extra_args=False``).
+        - **``cli_args`` reach the CLI path only.** They are the flags with no
+          body equivalent — ``--format json`` to get a parseable read,
+          ``--yes`` for a destructive write against a non-local scope — and the
+          HTTP path needs neither, since it always answers JSON and carries its
+          authorization in the token.
+
+        ``surface_conflict`` matters more here than it does for
+        :meth:`change`, because 0.11 answers a duplicate ``branch create``
+        with **HTTP 409** (verified against the 0.11.0 server: ``{"error":
+        "branch 'x' already exists", "code": "conflict"}``). ``classify_status``
+        reads a 409 as retryable on purpose, so without this an
+        already-exists — a routine outcome when two callers create the same
+        view at once — would be retried through the whole budget, with its
+        backoff sleeps, before surfacing. The CLI path has no such trap: the
+        same failure is prose that matches no marker and classifies FATAL.
+        """
+        transport = self._http_transport(carries_extra_args=False)
+        if transport is not None:
+            return self._http_execute(
+                transport,
+                verb,
+                source,
+                None,
+                verb,
+                surface_conflict=surface_conflict,
+            )
+        is_write = verb in _WRITE_SUBCOMMANDS
+        cmd = [
+            self._binary,
+            verb,
+            *self._store_args(),
+            *(["--quiet"] if is_write else []),
+            "-e",
+            source,
+            *cli_args,
+        ]
+        return self._execute(
+            cmd, verb, is_write=is_write, surface_conflict=surface_conflict
+        )
+
     # ── Internals ─────────────────────────────────────────────────
 
     def _extra_args(self, subcommand: str) -> list[str]:
@@ -1736,7 +1801,9 @@ class OmnigraphClient:
 
     # ── Pooled HTTP transport (reads/writes against a deployed server) ──
 
-    def _http_transport(self) -> _http.PooledTransport | None:
+    def _http_transport(
+        self, *, carries_extra_args: bool = True
+    ) -> _http.PooledTransport | None:
         """The pooled transport for this store, or ``None`` to use the CLI.
 
         Three conditions have to hold, and the third is the interesting one:
@@ -1757,6 +1824,15 @@ class OmnigraphClient:
            ``_extra_args`` rather than against ``branch`` so any FUTURE subclass
            arg is caught by the same guard instead of quietly being dropped.
 
+        ``carries_extra_args=False`` switches condition 3 off, and only
+        :meth:`statement` passes it. The condition exists because an injected
+        arg would be DROPPED on the HTTP body; a call that injects none has
+        nothing to drop. omnigraph 0.11's branch statements are exactly that
+        case — the CLI's own help says they take "no name, params, --branch or
+        --snapshot" — so a branched client may run one over HTTP without its
+        ``--branch`` going missing, because there was never a ``--branch`` to
+        send. Do not reuse this for anything that has a branch to target.
+
         Built lazily and cached: constructing it parses a URL and allocates a
         ``threading.local``, and witan builds a fresh client per request to keep
         per-actor tokens from racing (ADR-0004). The pooled CONNECTIONS live in
@@ -1767,7 +1843,9 @@ class OmnigraphClient:
             return None
         if os.environ.get(HTTP_TRANSPORT_ENV_VAR, "").strip().lower() in _FALSEY:
             return None
-        if self._extra_args("query") or self._extra_args("mutate"):
+        if carries_extra_args and (
+            self._extra_args("query") or self._extra_args("mutate")
+        ):
             return None
         return shared_transport(self.server_url)
 
@@ -1798,7 +1876,7 @@ class OmnigraphClient:
         transport: _http.PooledTransport,
         verb: str,
         source: str,
-        params: dict,
+        params: dict | None,
         label: str,
         *,
         surface_conflict: bool = False,

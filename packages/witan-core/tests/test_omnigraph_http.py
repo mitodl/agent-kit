@@ -639,6 +639,27 @@ def test_a_client_injecting_extra_cli_args_stays_on_the_subprocess(
     assert client._http_transport() is None
 
 
+def test_a_branched_client_does_use_http_for_a_statement(monkeypatch, queries_dir):
+    """...and the exception that proves the rule above states it correctly.
+
+    The guard exists because an injected arg would be DROPPED on the HTTP body.
+    A GQ branch statement takes no `--branch` on either transport — the CLI's
+    own help says "no name, params, --branch or --snapshot" — so there is
+    nothing to drop, and `statement` opts out. Without this, every branch
+    create and delete on the cluster would stay a subprocess purely because the
+    client happens to be branched, which is what this change removes.
+    """
+
+    class BranchedClient(OmnigraphClient):
+        def _extra_args(self, subcommand):
+            return ["--branch", "act-alice/wip"]
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    client = BranchedClient("http://host:8080", queries_dir, graph_id="council")
+
+    assert client._http_transport(carries_extra_args=False) is not None
+
+
 @pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE"])
 def test_the_escape_hatch_forces_the_subprocess(monkeypatch, queries_dir, value):
     monkeypatch.setenv(og.HTTP_TRANSPORT_ENV_VAR, value)
@@ -1396,3 +1417,40 @@ def test_the_budget_reported_is_the_transports_own_not_the_default(
     # do with this failure. Citing it alongside 7.5s would send the reader to
     # the wrong setting — the same defect this message exists to fix.
     assert "DEFAULT_TIMEOUT_SECONDS" not in error
+
+
+# ── branch statements: the params key that must not be sent ─────────
+
+
+@pytest.mark.parametrize("verb", ["query", "mutate"])
+def test_a_statement_body_omits_params_entirely(_fake_http, verb):
+    """★ ``params=None`` MUST DROP THE KEY, not send an empty one.
+
+    omnigraph 0.11 refuses a branch statement that carries ``params`` at all.
+    Measured against the 0.11.0 server: ``{"query": "branch list", "params":
+    {}}`` answers 400 ``a branch statement takes no name and no parameters``,
+    while the same body without the key succeeds. An empty dict is the obvious
+    thing to send and is exactly wrong, so it is pinned here rather than left
+    to each caller to remember.
+    """
+    FakeConnection.script = [ok({"rows": []})]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    getattr(transport, verb)("g", "branch list", None, None)
+
+    body = json.loads(FakeConnection.created[-1].requests[-1]["body"])
+    assert body == {"query": "branch list"}
+
+
+@pytest.mark.parametrize("verb", ["query", "mutate"])
+def test_a_named_call_still_sends_its_params_even_when_empty(_fake_http, verb):
+    """The other side of the same rule: only a statement omits the key. A named
+    query with nothing bound keeps sending ``{}``, which is what every caller
+    but ``statement`` does."""
+    FakeConnection.script = [ok({"rows": []})]
+    transport = ogh.PooledTransport("http://host:8080")
+
+    getattr(transport, verb)("g", "query q() { }", {}, None)
+
+    body = json.loads(FakeConnection.created[-1].requests[-1]["body"])
+    assert body == {"query": "query q() { }", "params": {}}
