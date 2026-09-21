@@ -128,3 +128,41 @@ def test_filter_ready_orders_by_priority_and_reclaims_expired():
 def test_filter_ready_unknown_blocker_treated_closed():
     tasks = [{"slug": "tk-x", "status": "open", "blocked_by": ["tk-gone"]}]
     assert [t["slug"] for t in readiness.filter_ready(tasks)] == ["tk-x"]
+
+
+def test_filter_ready_resolves_blockers_from_the_wider_row_set():
+    """A blocker outside the candidate slice holds its task back.
+
+    The context hook offers a repo-scoped slice of an all-Task scan. Without
+    the wider set the open blocker below is simply unknown, and unknown reads
+    as closed — so the task would be advertised as ready to work while the
+    thing blocking it is wide open (agent-kit#349).
+    """
+    tasks = [{"slug": "tk-x", "status": "open", "blocked_by": ["tk-other-repo"]}]
+    others = [
+        {"slug": "tk-other-repo", "status": "open", "repo": "https://example.com/b"}
+    ]
+
+    assert [t["slug"] for t in readiness.filter_ready(tasks)] == ["tk-x"]
+    assert readiness.filter_ready(tasks, blocker_rows=others) == []
+
+    others[0]["status"] = "closed"
+    assert [t["slug"] for t in readiness.filter_ready(tasks, blocker_rows=others)] == [
+        "tk-x"
+    ]
+
+
+def test_filter_ready_candidate_status_wins_over_a_stale_wider_row():
+    """Where a slug is in both sets, the candidate row decides.
+
+    ``tk-b`` is closed among the candidates and open in the wider set. Reading
+    the wider copy would hold ``tk-a`` back against data the caller has already
+    superseded. (``tk-b`` itself is absent either way — closed is not pickable.)
+    """
+    tasks = [
+        {"slug": "tk-a", "status": "open", "blocked_by": ["tk-b"]},
+        {"slug": "tk-b", "status": "closed"},
+    ]
+    stale = [{"slug": "tk-b", "status": "open"}]
+    got = [t["slug"] for t in readiness.filter_ready(tasks, blocker_rows=stale)]
+    assert got == ["tk-a"]

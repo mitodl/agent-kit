@@ -1336,3 +1336,130 @@ def test_inject_context_remote_asks_for_held_tasks_across_all_repos(
         "task_list",
         {"assignee": "@me", "status": "in_progress", "repo": ""},
     ) in server.calls
+
+
+def test_inject_context_remote_issues_its_independent_reads_concurrently(
+    tmp_path, monkeypatch
+):
+    """The cold path is the slowest read, not the sum of them.
+
+    Issued one at a time, the hook's ten round trips against a deployment took
+    ~11s measured and blew the 15s timeout it installs (agent-kit#349). Each
+    read here blocks on a barrier that only releases once every first-wave
+    call has arrived, so a sequential implementation deadlocks and times out
+    rather than quietly passing slower.
+    """
+    import threading
+
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    repo = "https://github.com/test/ctx-concurrent"
+    monkeypatch.setenv("WITAN_REPO", repo)
+    monkeypatch.setattr(ctx_module, "_current_branch", lambda: "main")
+
+    # The four first-wave reads. The second wave (sessions, comments) depends
+    # on their answers, so it is deliberately not held here.
+    first_wave = {
+        "workflow_project_list",
+        "task_ready",
+        "task_for_branch",
+        "task_list",
+    }
+    barrier = threading.Barrier(len(first_wave), timeout=10)
+
+    class _Barriered(_FakeRemoteServer):
+        def _guard(self, name):
+            if name in first_wave:
+                barrier.wait()
+            super()._guard(name)
+
+    server = _Barriered(
+        projects=[{"slug": "wp-x", "title": "X", "phase": "spec"}],
+        ready=[],
+        sessions_by_project={},
+        branch_tasks=[],
+        held=[],
+    )
+    text = ctx_module.inject_context_remote(
+        server, "https://witan.example.org/mcp", debug=True
+    )
+
+    assert barrier.broken is False
+    assert "## Active Workflow Projects" in text
+
+
+def test_gather_falls_back_to_serial_when_the_pool_cannot_start(monkeypatch):
+    """A machine at its thread limit still gets its answers, just slower.
+
+    ``_gather`` is called outside the remote path's own try/except, so raising
+    here would crash a hook whose entire contract is that it degrades quietly.
+    """
+    from witan import context as ctx_module
+
+    def _no_threads(*_args, **_kwargs):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(ctx_module, "ThreadPoolExecutor", _no_threads)
+
+    def _boom():
+        raise ValueError("read failed")
+
+    got = ctx_module._gather({"a": lambda: 1, "b": lambda: 2, "c": _boom})
+
+    assert got["a"] == 1
+    assert got["b"] == 2
+    # And a genuine read failure is still reported as a value, not raised.
+    assert isinstance(got["c"], ValueError)
+
+
+def test_gather_reports_each_failure_against_its_own_key():
+    from witan import context as ctx_module
+
+    def _boom():
+        raise ValueError("nope")
+
+    got = ctx_module._gather({"ok": lambda: "fine", "bad": _boom})
+
+    assert got["ok"] == "fine"
+    assert isinstance(got["bad"], ValueError)
+
+
+def test_inject_context_remote_one_failed_read_costs_only_its_own_block(
+    tmp_path, monkeypatch
+):
+    """Per-read isolation must survive the move into worker threads.
+
+    A read that fails inside a worker comes back as a value rather than a live
+    exception, so the block it feeds is the only thing that may disappear.
+    """
+    from witan import context as ctx_module
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("WITAN_CONTEXT_TTL", "0")
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    repo = "https://github.com/test/ctx-isolated"
+    monkeypatch.setenv("WITAN_REPO", repo)
+    monkeypatch.setattr(ctx_module, "_current_branch", lambda: "main")
+
+    server = _FakeRemoteServer(
+        projects=[{"slug": "wp-x", "title": "X", "phase": "spec"}],
+        ready=[{"slug": "tk-r", "title": "Ready one", "priority": "p1"}],
+        sessions_by_project={},
+        branch_tasks=[{"slug": "tk-b", "title": "Branch one", "status": "open"}],
+        raises=("task_for_branch",),
+    )
+    text = ctx_module.inject_context_remote(
+        server, "https://witan.example.org/mcp", debug=True
+    )
+
+    assert "## In-Flight Branch" not in text
+    assert "## Active Workflow Projects" in text
+    assert "## Ready Tasks" in text
+    assert "Ready one" in text

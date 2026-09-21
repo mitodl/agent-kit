@@ -218,6 +218,49 @@ def test_create_with_already_closed_blocker_is_open(server):
 
 
 @requires_omnigraph
+def test_ready_resolves_a_cross_repo_blocker_without_re_reading_it(server, monkeypatch):
+    """A blocker in another repo is already in the all-Task scan — use it.
+
+    ``task_ready``'s repo-scoped branch reads every Task and then narrows to
+    the candidates. Resolving blocker statuses against the NARROW set left
+    every cross-repo blocker unknown, so each one was fetched again one
+    ``get_task`` at a time: ~3.0s of a 4.2s call against the deployed service
+    and most of what blew the context hook's 15s timeout (agent-kit#349).
+    """
+    from witan import server as srv
+
+    other = "https://github.com/test/other"
+    blocker = server.task_create(title="blocker elsewhere", description="x", repo=other)
+    dependent = server.task_create(
+        title="dependent here", description="x", blocked_by=[blocker["slug"]]
+    )
+
+    reads: list[str] = []
+    real_read = srv.client.read
+
+    def counting_read(queries, name, params):
+        reads.append(name)
+        return real_read(queries, name, params)
+
+    monkeypatch.setattr(srv.client, "read", counting_read)
+    ready = {t["slug"] for t in server.task_ready(repo="https://github.com/test/repo")}
+
+    # The open blocker lives in another repo, so it is not a candidate — but it
+    # still holds its dependent back.
+    assert blocker["slug"] not in ready
+    assert dependent["slug"] not in ready
+    assert "get_task" not in reads
+
+    # And the answer is not merely "everything is excluded": closing the
+    # blocker releases the dependent, still off the same two scans.
+    server.task_close(blocker["slug"])
+    reads.clear()  # after the close, whose own reads are not what is counted
+    ready = {t["slug"] for t in server.task_ready(repo="https://github.com/test/repo")}
+    assert dependent["slug"] in ready
+    assert "get_task" not in reads
+
+
+@requires_omnigraph
 def test_update_to_closed_unblocks_dependents(server):
     a = server.task_create(title="blocker", description="x")
     b = server.task_create(title="dependent", description="x", blocked_by=[a["slug"]])
