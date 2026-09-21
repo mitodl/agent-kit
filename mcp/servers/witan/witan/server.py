@@ -50,6 +50,7 @@ from witan_core.omnigraph import (
 from witan_core.refusal import Refusal
 
 from . import config as cfg_module
+from . import ui_routes
 from . import elicit, merge_report, readiness, scan, session_state
 from . import repo as repo_module
 from .graph import (
@@ -474,6 +475,13 @@ async def health(_request: Request) -> JSONResponse:
     the response carries no graph data and no per-actor state.
     """
     return JSONResponse({"status": "ok", "service": "witan", "version": _VERSION})
+
+
+# Registered here rather than in `witan ui`, so the deployment gets the page
+# too: it runs plain `witan serve`, and a route the CLI added would exist only
+# on a laptop. Returns False and registers nothing when no bundle was built,
+# which is every source install that skipped the frontend build.
+ui_routes.register(mcp)
 
 
 async def _offload(fn, /, *args, **kwargs):

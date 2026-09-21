@@ -10,6 +10,39 @@ a MINOR bump may include breaking changes).
 
 ### Added
 
+- **`witan ui` serves the UI, and the witan process serves it too.** One
+  process serves both the page and `/mcp`, so the page's tool calls are
+  same-origin: no CORS, no preflight per call, and the Host/Origin guard
+  admits it without an allowlist.
+
+  `GET /ui/{path}` serves the bundle, resolving inside the bundle directory
+  and refusing anything that resolves outside it, and falls back to
+  `index.html` so a client-side route survives a reload. `GET /ui/config.json`
+  tells the page which mode it is in, so one bundle serves both: `{"auth":
+  null}` locally, and the issuer, client id and audience when
+  `WITAN_OIDC_ISSUER` is set. Every `/ui/` response, including the error path
+  below, carries `Content-Security-Policy: default-src 'self'; connect-src
+  'self' <issuer origin>; frame-ancestors 'none'` and
+  `X-Content-Type-Options: nosniff`. `index.html` is sent `no-cache` and the
+  content-hashed assets `immutable`, so a client cannot keep an old index that
+  points at assets a deploy has replaced.
+
+  `WITAN_OIDC_ISSUER` is validated rather than interpolated: it goes into the
+  CSP, and a value carrying `; script-src *` would otherwise emit a second
+  directive that overrides `default-src 'self'` for scripts. A non-http(s)
+  scheme, userinfo, or anything but a hostname and port is refused at
+  startup.
+
+  With OIDC on and the new `WITAN_UI_OIDC_CLIENT_ID` unset, `/ui/` answers 503
+  naming the variable rather than serving a page that renders and then cannot
+  log in. The routes register only when a bundle was built, so a source
+  install that skipped the frontend build serves `/mcp` exactly as before.
+
+  `witan ui` runs that server on loopback and opens a browser. Against a
+  remote target it opens the deployment's own page and exits, keeping the
+  boundary `witan serve` already enforces: this server has no inbound
+  authentication, so binding a remote-backed one to a socket would make it a
+  credential-sharing proxy.
 - **A web UI ships inside the wheel.** `mcp/servers/witan/ui/` is a
   TypeScript/Vite package built to `witan/ui_dist/`, which hatch carries into
   the sdist and the wheel. This release adds the package, its build and its
