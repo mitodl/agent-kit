@@ -29,13 +29,25 @@ with no arbiter between them. The loser's recovery sidecar records a delta that
 does not match the commit that actually landed, and the store refuses to open
 rather than choose.
 
+**It is an omnigraph defect, and it is already fixed upstream but not yet
+released.** [ModernRelay/omnigraph#602][602] is the same failure: a sidecar left
+`Armed` when its confirmation write is lost, blocking every read-write reopen
+store-wide. [PR #716][716] makes recovery compare the original committed
+snapshot and the Lance transaction at each planned table version and, when they
+match, record the operation as `RolledForward` and remove the sidecar by itself.
+
+That PR merged 2026-09-15, two days after the v0.11.0 tag, and no release has
+carried it yet, so the binary we pin still bricks. The whole of the manual
+procedure below exists only until a release includes #716. When one does, the
+work is to bump the pin, not to automate step 5.
+
 Since agent-kit#364, `witan serve` serialises writes to one `s3://` root across
 its own threads (`witan_core.omnigraph.store_write_lock`), so two concurrent
 tool calls in one process can no longer produce this. **Separate processes still
 can.** A second `witan serve` replica, or a CLI run alongside a server, writing
 the same `s3://` root is uncoordinated. A shared root wants a served
-single-writer target (`https://…`) — direct S3 from more than one process is not
-a supported writer topology.
+single-writer target (`https://…`). Direct S3 from more than one process is
+not a supported writer topology.
 
 ## Recovery
 
@@ -79,8 +91,8 @@ shape that makes a forward repair safe: the committed state is the intended
 state, and only the published table heads disagree with it.
 
 **5. Quarantine the sidecar.** `omnigraph repair` cannot open the graph while it
-is active, so move it aside — do not delete it, step 3's copy is evidence, not a
-substitute:
+is active, so move it aside. Do not delete it: step 3's copy is evidence, not a
+substitute.
 
 ```bash
 aws s3 mv s3://<bucket>/<root>/graphs/<graph>.omni/__recovery/<operation>.json \
@@ -134,7 +146,12 @@ land before starting the next.
 
 ## Afterwards
 
-File what you saw. Whether the mismatched manifest delta is an omnigraph defect
-rather than a consequence of uncoordinated writers is still open (agent-kit#364);
-the preserved sidecar from step 3, the commit history around the original
-commit, and the repair preview from step 6 are what an upstream report needs.
+Add what you saw to [omnigraph#602][602] if it differs from what is already
+recorded there. Our 2026-09-18 occurrence matches the production report in that
+thread in every respect except the trigger: two concurrent writers rather than a
+lost confirmation write. The preserved sidecar from step 3, the commit history
+around the original commit, and the repair preview from step 6 are what makes an
+occurrence worth adding.
+
+[602]: https://github.com/ModernRelay/omnigraph/issues/602
+[716]: https://github.com/ModernRelay/omnigraph/pull/716
