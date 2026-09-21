@@ -41,6 +41,28 @@ a MINOR bump may include breaking changes).
   at up to 51s, so it is now 60s — being killed there leaves a session open with
   no handoff summary. The pi `workflow-context` extension was tighter still at
   5s and now matches at 45s.
+### Security
+
+- **`witan serve` turns on fastmcp's Host/Origin guard on every HTTP
+  transport.** The local endpoint is unauthenticated, so once `witan ui`
+  serves a page from the same process, any other page the user has open can
+  POST tool calls to 127.0.0.1 and read the graph. `host_origin_protection`
+  ships off in fastmcp; passing `"auto"` turns it on. On a loopback bind it
+  rejects a foreign Host (421, closing DNS rebinding) and a foreign Origin
+  (403, closing the cross-site POST from a remote page). The CLI, curl and
+  agents send no Origin and are unaffected.
+
+  Two limits worth knowing. The guard still admits any other LOOPBACK origin,
+  such as a dev server on `localhost:3000`, so a page served by another
+  process on the same machine can still reach the endpoint. And the checks are
+  keyed on the bind address: `witan serve --host 0.0.0.0` on a workstation
+  gets neither. Both are accepted for now; code already running on your
+  machine does not need the browser to reach the store.
+
+  No allowlist is set, deliberately. `allowed_hosts` switches Origin
+  validation on unconditionally, and behind APISIX's TLS termination the
+  server computes the request origin as `http://<host>` while the page sends
+  `Origin: https://<host>`, so every POST from the deployed page would 403.
 
 ## [0.36.0] - 2026-09-18
 

@@ -1745,6 +1745,17 @@ witan tier runs, behind APISIX.
 The legacy HTTP+SSE transport is not offered: MCP 2026-07-28 deprecates it
 with a 12-month offramp, and witan has no deployment on it to carry over.
 
+HTTP transports run behind fastmcp's Host/Origin guard in ``"auto"`` mode.
+It validates the Host header when the server is bound to a loopback
+address, and the Origin header when either the server or the request's
+Host is loopback. A request carrying no Origin (the CLI, curl, an agent)
+always passes. A server bound to a non-loopback address, which is what the
+deployment runs, is unaffected by either check.
+
+No Host/Origin allowlist is configured, deliberately: setting one for the
+deployment would 403 every request from the browser UI. See the call to
+``run`` in this function's body for the mechanism.
+
 **Parameters**:
 
 * `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
@@ -1754,7 +1765,10 @@ with a 12-month offramp, and witan has no deployment on it to carry over.
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
 * `--transport`: ``http`` alias) binds a network listener. Env: ``WITAN_MCP_TRANSPORT``. *[choices: stdio, http, streamable-http]* *[env: WITAN_MCP_TRANSPORT]* *[default: stdio]*
-* `--host`: Env: ``WITAN_MCP_HOST``. *[env: WITAN_MCP_HOST]* *[default: 127.0.0.1]*
+* `--host`: Note that the Host/Origin guard above engages only on a LOOPBACK bind:
+    serving on ``0.0.0.0`` from a workstation to reach a browser on another
+    machine turns both checks off, and that endpoint has no authentication
+    of its own. Env: ``WITAN_MCP_HOST``. *[env: WITAN_MCP_HOST]* *[default: 127.0.0.1]*
 * `--port`: *[env: WITAN_MCP_PORT]* *[default: 8000]*
 * `--path`: Env: ``WITAN_MCP_PATH``. *[env: WITAN_MCP_PATH]* *[default: /mcp]*
 * `--shutdown-grace-seconds`: SIGTERM before dropping them. FastMCP's own default is **2 seconds**,
