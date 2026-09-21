@@ -78,12 +78,17 @@ def test_content_matches_seed_ahead_of_title_only_matches(server):
     """The two BM25 runs aren't on a comparable scale, so content hits are
     appended-to rather than interleaved-with title hits.
 
-    This pins the *seeding* order, not a guarantee about the final result: the
-    positional proxy is one weighted term in `_score`, so with recency,
-    corroboration or confidence in play a title-only hit can legitimately
-    finish higher — as it can among content hits. Both memories here are
-    fresh, unlinked and of default confidence, so position is the only signal
-    that differs and the seeding order survives to the output.
+    This pins the *seeding* order, not a guarantee about the final result:
+    each hit's within-run relevance is one weighted term in `_score`, so with
+    recency, corroboration or confidence in play a title-only hit can
+    legitimately finish higher — as it can among content hits. Both memories
+    here are fresh, unlinked and of default confidence, so relevance is the
+    only signal that differs and the seeding order survives to the output.
+
+    The union stays positional even though omnigraph 0.11 can project the
+    score, because the two runs score different fields and their scores are
+    not comparable — a short title inflates under BM25 length normalisation.
+    See `_with_relevance` for the measurement.
     """
     title_only = server.memory_store(
         kind="lesson",

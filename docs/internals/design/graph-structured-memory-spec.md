@@ -535,11 +535,30 @@ score = w_bm25   * norm_bm25
 ```
 
 - `norm_bm25` — a normalised BM25 signal over the candidate set so weights are
-  comparable. The engine can't project the raw `bm25(...)` score as a returnable
-  column (it's only valid inside `order`), so the implementation uses **rank
-  position** as the proxy: the candidate set already comes back in BM25-desc order,
-  so the top hit is `1.0` and the last is `0.0` (single candidate → `1.0`). A true
-  min-max of the raw score would be equivalent if/when the engine exposes it.
+  comparable. omnigraph 0.11 projects the raw score (`bm25(...) as score`), and
+  the implementation divides each row's score by the best score **in its own
+  search run**: the top hit is `1.0` and everything below keeps its real
+  spacing.
+
+  Until 0.11 the engine could only use `bm25(...)` inside `order`, so the
+  implementation used **rank position** as the proxy — top hit `1.0`, last hit
+  `0.0`. This spec predicted that "a true min-max of the raw score would be
+  equivalent if/when the engine exposes it". _That prediction was wrong, and
+  the way it was wrong is the reason the change was worth making._ Min-max
+  pins the worst row of every run at exactly `0.0`, which is the proxy's own
+  defect: it is what made a set of twenty near-identical weak matches spread
+  across the full range while a set with one standout match was compressed
+  into it. Measured on the 0.11.0 binary, a run scoring 0.675/0.382/0.231
+  normalises to 1.0/0.566/0.343, where both the proxy and min-max would have
+  ended at `0.0`.
+
+  Normalisation is **per run, never across runs**. The content and title
+  queries score different fields and their scores are not comparable: measured
+  on the same corpus, a memory whose title matched and whose content said
+  nothing relevant scored 0.902 on `title`, above the 0.675 of the best
+  `content` match, because a short field inflates under BM25 length
+  normalisation. So the two runs stay unioned by position (§3.5) and only the
+  within-run relevance is a real score.
 - `age_days` — from `updated_at` to now. `recall`/search receive `now` from the
   server clock at call time.
 - `corroboration` — count of supporting edges into/out of the memory:

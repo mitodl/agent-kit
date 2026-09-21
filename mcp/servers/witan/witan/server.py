@@ -2946,6 +2946,51 @@ def claim_authorship(was: str, apply: bool = False) -> dict:
 _SEARCH_LIMIT = 20
 
 
+#: Where :func:`_with_relevance` stashes each row's within-run relevance.
+#: Private, and stripped before a row reaches a caller
+#: (:func:`_without_scoring_keys`), so the tool output shape is unchanged by
+#: the engine having learned to return a score.
+_RELEVANCE_KEY = "_relevance"
+
+
+def _with_relevance(rows: list[dict]) -> list[dict]:
+    """Stamp each row of ONE BM25 run with its score relative to that run's best.
+
+    ★ RELATIVE TO ITS OWN RUN, NOT ACROSS RUNS, and that is measured rather
+    than assumed. On the 0.11.0 binary, a memory whose title matched and whose
+    content said nothing relevant scored 0.902 on `title`, above the 0.675 of
+    the strongest `content` match in the same corpus: a title is short, so
+    BM25's length normalisation inflates it. Comparing the two runs' raw scores
+    would therefore have promoted the least relevant memory of the four.
+
+    ★ DIVIDED BY THE MAX, NOT MIN-MAX SCALED. Min-max forces the worst row of
+    every run to exactly 0.0, which is the defect of the rank-position proxy
+    this replaces (see :func:`_rerank`) reintroduced with better arithmetic.
+    Dividing by the max keeps the top hit at 1.0, so the tuned
+    ``WITAN_RANK_W_BM25`` weight keeps the meaning it was tuned with, and only
+    the SPACING below it changes — which is the whole improvement. Measured on
+    the same corpus, a run scoring 0.675/0.382/0.231 becomes 1.0/0.566/0.343
+    where the proxy said 1.0/0.5/0.0.
+
+    A non-positive maximum cannot arise for rows ``search()`` matched, but if
+    it ever did every row would be equally (un)informative and they all take
+    1.0 — which is what the proxy did for a single row, so the degenerate case
+    does not change either.
+    """
+    if not rows:
+        return rows
+    scores = [float(r["score"] or 0.0) for r in rows]
+    top = max(scores)
+    for row, score in zip(rows, scores, strict=True):
+        row[_RELEVANCE_KEY] = 1.0 if top <= 0 else score / top
+    return rows
+
+
+def _without_scoring_keys(row: dict) -> dict:
+    """A result row with the engine's ``score`` and our ``_relevance`` removed."""
+    return {k: v for k, v in row.items() if k not in ("score", _RELEVANCE_KEY)}
+
+
 def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
     """BM25 candidate rows in score-desc order (the seed step for §3.5 / §8).
 
@@ -2953,11 +2998,18 @@ def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
     rather than in the query, because the engine won't ``or`` two ``search``
     predicates in one match. Content hits come first and title-only hits are
     appended: the two runs' scores are not on a comparable scale, so there is
-    no honest way to interleave them by score, and downstream ranking reads
-    *position* rather than score anyway (``_rerank``'s ``norm_bm25`` proxy).
+    no honest way to interleave them by score.
+
+    ★ THAT LAST POINT SURVIVED THE ENGINE LEARNING TO PROJECT THE SCORE, which
+    is the thing to know before trying to simplify this. omnigraph 0.11 returns
+    ``bm25(…) as score``, and each run's rows now carry their relevance WITHIN
+    that run (:func:`_with_relevance`). It still cannot say how a title hit
+    compares to a content hit — measured, not assumed; the numbers are in
+    ``_with_relevance``. So the union stays positional, and what changed is
+    that the per-run relevance is now a real score instead of a rank position.
 
     That ordering is a *seeding* order, not a guarantee about the final result.
-    It gives content matches the higher positional proxy, but the proxy is one
+    It gives content matches their own run's relevance, but that is one
     weighted term in ``_score`` alongside recency, corroboration and
     confidence — so a well-corroborated title-only hit can finish above a
     marginal content hit, exactly as it can among content hits today.
@@ -2979,11 +3031,11 @@ def _search_rows(query: str, repo: str | None, kind: str | None) -> list[dict]:
         name = "search_all"
         params = {"query": query}
 
-    rows = list(client.read("read.gq", name, params))
+    rows = _with_relevance(list(client.read("read.gq", name, params)))
     seen = {r["slug"] for r in rows}
     rows.extend(
         r
-        for r in client.read("read.gq", f"{name}_title", params)
+        for r in _with_relevance(list(client.read("read.gq", f"{name}_title", params)))
         if r["slug"] not in seen
     )
     return rows
@@ -3103,18 +3155,28 @@ def _rerank(
 ) -> list[dict]:
     """Re-order a BM25 candidate set by the composite score (spec §7.2).
 
-    The engine can't project the BM25 score, so rank position is the
-    normalised-BM25 proxy (top hit → 1.0, last → 0.0). Stable on ties via the
-    original index.
+    Relevance is the engine's own BM25 score, normalised within its run by
+    :func:`_with_relevance`. Stable on ties via the original index.
+
+    ★ IT USED TO BE RANK POSITION — ``(n - 1 - i) / (n - 1)`` — because the
+    engine could not project the score, and the reason that mattered is worth
+    keeping: position says how the hits ORDER, never how far apart they are.
+    It gave the last row of every result exactly 0.0 and the first exactly 1.0,
+    whatever the actual match quality, so a set of twenty near-identical weak
+    matches was spread across the full range and a set with one excellent match
+    was compressed into it. The composite score then weighed that fiction
+    against real recency and corroboration numbers.
+
+    The scoring keys are stripped on the way out, so a caller's rows look the
+    same as they did before the engine learned to return a score.
     """
-    n = len(rows)
     corroboration = edge_index["corroboration"]
     contradicted = edge_index["contradicted"]
     superseded = edge_index["superseded"]
     scored = []
     for i, r in enumerate(rows):
         score = _score(
-            norm_bm25=1.0 if n <= 1 else (n - 1 - i) / (n - 1),
+            norm_bm25=r[_RELEVANCE_KEY],
             age_days=_age_days(r.get("updated_at") or r.get("created_at"), now),
             corroboration=corroboration.get(r["slug"], 0),
             confidence=r.get("confidence"),
@@ -3124,7 +3186,7 @@ def _rerank(
         )
         scored.append((score, i, r))
     scored.sort(key=lambda t: (-t[0], t[1]))
-    return [r for _, _, r in scored]
+    return [_without_scoring_keys(r) for _, _, r in scored]
 
 
 # ── Tools ─────────────────────────────────────────────────────────
@@ -3148,9 +3210,10 @@ def memory_search(
     ----------
     query:
         Free-text search query. Searched against ``content`` and ``title``.
-        Content matches seed ahead of title-only matches, so they carry the
-        higher relevance proxy — but final order is the composite score, which
-        also weighs recency, corroboration and confidence.
+        Content matches seed ahead of title-only matches, because BM25 scores
+        the two fields on scales that cannot be compared — but final order is
+        the composite score, which weighs each hit's relevance within its own
+        run against recency, corroboration and confidence.
     repo:
         Repo scoping — see instructions.
     kind:
@@ -7848,7 +7911,10 @@ def recall(
     now = datetime.now(timezone.utc)
 
     # ── Seed ──────────────────────────────────────────────────────
-    seed_rank: dict[str, int] = {}  # query-seed BM25 position (norm proxy)
+    # slug → the query seed's BM25 relevance within its own search run
+    # (`_with_relevance`). Was the seed's POSITION until omnigraph 0.11
+    # learned to project the score; see `_rerank` for why that mattered.
+    seed_relevance: dict[str, float] = {}
     seeds: dict[str, list[str]] = {"query": [], "symbol": [], "task": [], "topic": []}
     # slug → cheapest distance from a seed. FRACTIONAL, not the hop count: an
     # inferred edge costs `w_inferred_edge` extra, so a neighbour reached only
@@ -7861,8 +7927,10 @@ def recall(
         candidates.setdefault(slug, 0)
 
     if query:
-        for i, r in enumerate(_search_rows(query, repo, kind)):
-            seed_rank.setdefault(r["slug"], i)
+        for r in _search_rows(query, repo, kind):
+            # setdefault, not assignment: a slug matched by BOTH runs keeps the
+            # content run's relevance, which is the run that seeded it first.
+            seed_relevance.setdefault(r["slug"], r[_RELEVANCE_KEY])
             add_seed(r["slug"], "query")
     if symbol_id:
         for m in _context_for_symbol(symbol_id)["memories"]:
@@ -7896,12 +7964,12 @@ def recall(
             s: h for s, h in candidates.items() if s not in edge_index["superseded"]
         }
 
-    n_query = len(seed_rank)
-
     def norm_bm25(slug: str) -> float:
-        if slug not in seed_rank:
-            return 0.0
-        return 1.0 if n_query <= 1 else (n_query - 1 - seed_rank[slug]) / (n_query - 1)
+        """0.0 for a candidate the query never matched — a symbol, task or topic
+        seed, or a neighbour pulled in by expansion. Those are ranked by the
+        rest of the composite score and their distance penalty, exactly as
+        before."""
+        return seed_relevance.get(slug, 0.0)
 
     scored: list[tuple[float, dict]] = []
     for slug, hop in candidates.items():
