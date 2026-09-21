@@ -174,9 +174,29 @@ def test_every_content_hit_outranks_every_title_only_hit(server):
     )
     title = srv._with_relevance([{"score": 0.90204775}], srv._TITLE_BAND)
 
+    # Strictly above, because these content rows all carry a real score. The
+    # bands touch at 0.5, so a content row the engine returned no score for
+    # would tie the best title-only hit rather than beat it.
     assert min(r["_relevance"] for r in content) > max(r["_relevance"] for r in title)
-    # The title hit outscored every content hit on the raw number.
-    assert 0.90204775 > max(0.675232, 0.3818718)
+
+
+def test_a_title_only_hit_never_outranks_a_content_hit_even_at_the_boundary(server):
+    """The bands touch, so the invariant is "never outranks" rather than
+    "always ranks below". The only way a content row reaches the boundary is a
+    score the engine omitted, and then it ties the best title-only hit."""
+    from witan import server as srv
+
+    unscored_content = srv._with_relevance(
+        [{"score": 1.0}, {"score": None}], srv._CONTENT_BAND
+    )
+    best_title = srv._with_relevance([{"score": 9.9}], srv._TITLE_BAND)
+
+    floor = min(r["_relevance"] for r in unscored_content)
+    ceiling = max(r["_relevance"] for r in best_title)
+    assert floor == ceiling == 0.5
+    assert not any(
+        t["_relevance"] > c["_relevance"] for t in best_title for c in unscored_content
+    )
 
 
 def test_tied_scores_get_equal_relevance(server):

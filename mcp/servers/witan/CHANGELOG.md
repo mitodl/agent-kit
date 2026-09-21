@@ -193,18 +193,25 @@ a MINOR bump may include breaking changes).
   min-max would pin the worst row of every run at its floor, which is the
   rank-position defect in better arithmetic.
 
-  **Content hits still outrank title-only hits on the relevance term**, and
-  that now takes saying out loud. The content and title runs score different
-  fields and their scores are not comparable: measured on 0.11.0, a memory
-  whose title matched and whose content said nothing relevant scored 0.902 on
-  `title` against 0.675 for the best `content` match, because a short field
-  inflates under BM25 length normalisation. Concatenating the runs used to make
-  content precedence true by construction; normalising each run to 0-to-1 would
-  have silently dropped it and moved title-only hits by the whole `w_bm25` term
-  (1.0 by default, against a recency term that maxes out at 0.3). So each run
-  is scaled into a band instead — content into the upper half of `[0, 1]`,
-  title-only into the lower — which keeps the old ordering as an explicit
-  policy while the engine's score does the spacing inside each band.
+  **A title-only hit still never outranks a content hit on the relevance
+  term**, and that now takes saying out loud. The content and title runs score
+  different fields and their scores are not comparable: measured on 0.11.0, a
+  memory whose title matched and whose content said nothing relevant scored
+  0.902 on `title` against 0.675 for the best `content` match, because a short
+  field inflates under BM25 length normalisation. Concatenating the runs used
+  to make content precedence true by construction; normalising each run to
+  0-to-1 would have silently dropped it. So each run is scaled into a band
+  instead — content into the upper half of `[0, 1]`, title-only into the lower
+  — which keeps the old ordering as an explicit policy while the engine's score
+  does the spacing inside each band.
+
+  **If you have tuned `WITAN_RANK_W_BM25`, double it to hold station.** A band
+  is half as wide as the old range, so the relevance term now spans
+  `0.5 * w_bm25` where rank position spanned `1.0 * w_bm25`, and recency,
+  corroboration and confidence weigh twice as heavily against BM25 spacing as
+  before. Relatedly, a query that matches only titles now caps its hits at 0.5
+  where a lone title-only hit used to score 1.0; the title band does not widen
+  because the content run came back empty.
 
   Result rows are unchanged: the score is used for ranking and stripped before
   it reaches a caller. Task and project search are untouched, because they

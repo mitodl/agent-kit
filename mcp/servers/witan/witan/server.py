@@ -2957,8 +2957,13 @@ _SCORE_COLUMN = "score"
 _RELEVANCE_KEY = "_relevance"
 
 #: The band of ``[0, 1]`` each search run's relevance is scaled into. Content
-#: hits occupy the upper half and title-only hits the lower, so every content
-#: hit outranks every title-only hit on the relevance term.
+#: hits occupy the upper half and title-only hits the lower, so a title-only
+#: hit never outranks a content hit on the relevance term.
+#:
+#: Never OUTRANKS rather than always ranks below: the bands touch. A title
+#: run's best row lands on exactly 0.5, and so does a content row whose score
+#: the engine omitted (see :func:`_with_relevance`), so those two tie. Every
+#: content row the engine actually scored is strictly above.
 #:
 #: ★ THIS IS A POLICY CONSTANT, AND IT IS REPLACING ONE THAT WAS IMPLICIT.
 #: Before 0.11 both runs were concatenated (``_search_rows``) and relevance was
@@ -2966,10 +2971,11 @@ _RELEVANCE_KEY = "_relevance"
 #: bottom BY CONSTRUCTION — a policy nobody had to choose, because there was
 #: no other way to spell it. Normalising each run against its own best would
 #: silently drop it: the top title-only hit would score 1.0, the same as the
-#: top content hit. Measured on 0.11.0, that moves a title-only hit by the
-#: whole ``w_bm25`` term (1.0 by default), more than the recency term can ever
-#: contribute (0.3), so a memory matching only in its title would tie the
-#: memory that actually discusses the subject.
+#: top content hit. For the row that sat LAST in the old concatenation that is
+#: the whole ``w_bm25`` term (1.0 by default), more than the recency term can
+#: ever contribute (0.3); an earlier title row moves by less. Measured on
+#: 0.11.0, a memory matching only in its title tied the memory that actually
+#: discusses the subject.
 _CONTENT_BAND = (0.5, 1.0)
 _TITLE_BAND = (0.0, 0.5)
 
@@ -2994,10 +3000,30 @@ def _with_relevance(rows: list[dict], band: tuple[float, float]) -> list[dict]:
     at the bottom of its band whatever it scored, which is the rank-position
     defect in better arithmetic.
 
+    ★ TWO THINGS THE BANDS COST, NEITHER OF WHICH IS A BUG BUT BOTH OF WHICH
+    SURPRISE:
+
+    * A band is half as wide as the old proxy's range, so the relevance term
+      now spans ``0.5 * w_bm25`` where rank position spanned ``1.0 * w_bm25``.
+      Recency, corroboration and confidence therefore weigh twice as heavily
+      against BM25 spacing as they did. Anyone who tuned ``WITAN_RANK_W_BM25``
+      against the old range wants to double it to hold station.
+    * A query matching only titles caps every hit at 0.5, where a lone
+      title-only hit used to score 1.0. The title band does not widen just
+      because the content run came back empty — making relevance depend on
+      whether a *different* query matched would be the worse surprise.
+
+    A row whose score the engine omitted (restored as ``None`` by
+    ``witan_core``'s column refill) lands at the band's floor. That ranks it
+    last within its run, which is the right direction for a row we know
+    nothing about, and for a content row it means a tie with the best
+    title-only hit rather than a win.
+
     A pruned top hit (``memory_search`` drops superseded rows after this runs)
-    leaves the survivors scaled against a maximum no longer among them. That is
-    deliberate: "how good is this match, against the best this query found" is
-    still true of a match whose better rival was withdrawn.
+    leaves the survivors scaled against a maximum no longer among them. So does
+    a both-fields match dropped by the union's dedupe, which still sets the
+    title run's maximum. Both are deliberate: the maximum is "the best this
+    query found", not "the best still on the list".
 
     A non-positive maximum cannot arise for rows ``search()`` matched; if it
     did, every row is equally uninformative and they all take the band's top.
@@ -3234,10 +3260,12 @@ def memory_search(
     ----------
     query:
         Free-text search query. Searched against ``content`` and ``title``.
-        Content matches seed ahead of title-only matches, because BM25 scores
-        the two fields on scales that cannot be compared — but final order is
-        the composite score, which weighs each hit's relevance within its own
-        run against recency, corroboration and confidence.
+        A title-only match never outranks a content match on relevance: BM25
+        scores the two fields on scales that cannot be compared, so which one
+        wins is a policy rather than a measurement, and this is the policy.
+        Final order is the composite score, which also weighs recency,
+        corroboration and confidence, so a well-corroborated title-only hit
+        can still finish above a marginal content hit.
     repo:
         Repo scoping — see instructions.
     kind:

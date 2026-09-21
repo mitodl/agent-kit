@@ -537,8 +537,10 @@ score = w_bm25   * norm_bm25
 - `norm_bm25` — a normalised BM25 signal over the candidate set so weights are
   comparable. omnigraph 0.11 projects the raw score (`bm25(...) as score`), and
   each search run's rows are scaled over the best score **in that run**, into a
-  band of `[0, 1]`: content hits into `(0.5, 1.0]`, title-only hits into
-  `(0, 0.5]`.
+  band of `[0, 1]`: content hits into `[0.5, 1.0]`, title-only hits into
+  `[0, 0.5]`. The bands touch, so the invariant is that a title-only hit never
+  *outranks* a content hit; the two tie only when the engine returned no score
+  for a content row, which puts it on the shared boundary.
 
   Two things the bands are doing, in order of how easy they are to get wrong:
 
@@ -556,6 +558,10 @@ score = w_bm25   * norm_bm25
      band. Min-max scaling would pin the run's worst row at the band floor
      whatever it scored, which is exactly the defect of the rank-position proxy
      this replaces (top hit `1.0`, last hit `0.0`, single candidate → `1.0`).
+
+  A band is half the old proxy's range, so the relevance term spans
+  `0.5 * w_bm25` rather than `1.0 * w_bm25` and the other three terms weigh
+  correspondingly more. `w_bm25` tuned against the old range should be doubled.
 
   An earlier revision of this spec predicted that "a true min-max of the raw
   score would be equivalent if/when the engine exposes it". It is not, for

@@ -173,7 +173,7 @@ hidden unless ``include_superseded=True``.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | **required** | Free-text search query. Searched against ``content`` and ``title``.<br>Content matches seed ahead of title-only matches, because BM25 scores<br>the two fields on scales that cannot be compared — but final order is<br>the composite score, which weighs each hit's relevance within its own<br>run against recency, corroboration and confidence. |
+| `query` | str | **required** | Free-text search query. Searched against ``content`` and ``title``.<br>A title-only match never outranks a content match on relevance: BM25<br>scores the two fields on scales that cannot be compared, so which one<br>wins is a policy rather than a measurement, and this is the policy.<br>Final order is the composite score, which also weighs recency,<br>corroboration and confidence, so a well-corroborated title-only hit<br>can still finish above a marginal content hit. |
 | `repo` | str? | `null` | Repo scoping — see instructions. |
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Optional filter: ``pattern``, ``project_fact``, ``lesson``,<br>or ``agent_context``. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` drops them. |
