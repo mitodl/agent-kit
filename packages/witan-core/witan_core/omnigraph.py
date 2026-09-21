@@ -404,6 +404,59 @@ _QUERY_DECL_RE = re.compile(r"\bquery\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTI
 _PARAM_REF_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
+#: The inline GQ statements :meth:`OmnigraphClient.statement` will run, keyed
+#: by the verb that carries them. A CLOSED SET, not "whatever the engine would
+#: accept" — see that method for why the write path cannot be opened up.
+_BRANCH_STATEMENTS: dict[str, frozenset[str]] = {
+    "query": frozenset({"list"}),
+    "mutate": frozenset({"create", "delete", "merge"}),
+}
+
+_BRANCH_STATEMENT_RE = re.compile(r"\A\s*branch\s+([a-z]+)\b")
+
+
+def _check_branch_statement(verb: str, source: str) -> None:
+    """Raise unless ``source`` is a branch statement ``verb`` may carry.
+
+    ★ THIS IS A SECURITY BOUNDARY, NOT A TYPO CHECK. ``statement`` is a public
+    write path that takes GQ SOURCE, and witan's secret/PII ``guard`` is
+    ``(query_name, params) -> params``: it looks up the named mutation in
+    ``scan.enforce.FIELD_MAP`` and rewrites its free-text params. It has no
+    way to scan raw source, and a statement has no params to hand it. So an
+    arbitrary inline mutation on a guarded client would persist its literals
+    without ever being scanned or redacted — witan builds every server client
+    with that guard enabled by default.
+
+    Restricting the source to branch statements is what makes the question
+    moot rather than merely unlikely: a branch statement's only operand is a
+    branch name, so there is no free text for the guard to have missed.
+    Refusing only when a guard is installed would be the narrower rule and the
+    wrong one — it would leave the shape available on unguarded clients, where
+    the next caller inherits the hazard without inheriting the refusal.
+
+    Also folds in the verb check, which the two transports need: ``_http_execute``
+    calls a write ``verb == "mutate"`` while ``_WRITE_SUBCOMMANDS`` also holds
+    ``load``, ``optimize`` and ``cleanup``. Admitting only the two verbs with a
+    statement form is what keeps those definitions in step.
+    """
+    allowed = _BRANCH_STATEMENTS.get(verb)
+    if allowed is None:
+        raise ValueError(
+            f"statement() runs a query or a mutate, not {verb!r}; "
+            "the other subcommands have no inline-statement form."
+        )
+    match = _BRANCH_STATEMENT_RE.match(source)
+    if match is None or match.group(1) not in allowed:
+        wanted = ", ".join(f"branch {op}" for op in sorted(allowed))
+        raise ValueError(
+            f"statement() runs branch statements only, and {verb!r} carries "
+            f"{wanted}; got {source[:60]!r}. Arbitrary inline GQ is refused "
+            "here because witan's secret/PII write guard scans a named "
+            "mutation's params and cannot see raw source — use `change` or "
+            "`change_many` with a named query, which it can."
+        )
+
+
 def _strip_line_comments(source: str) -> str:
     """Remove ``//`` line comments, without disturbing a ``//`` inside a string.
 
@@ -1720,6 +1773,102 @@ class OmnigraphClient:
             args += ["--older-than", older_than]
         return self._run("cleanup", *args)
 
+    def statement(
+        self,
+        verb: str,
+        source: str,
+        *cli_args: str,
+        label: str | None = None,
+        surface_conflict: bool = False,
+    ) -> str:
+        """Run one inline GQ statement — no query file, no name, no params.
+
+        omnigraph 0.11 exposes branch work as GQ over the canonical routes
+        (upstream RFC 0055): ``branch list`` is a ``query`` statement and
+        ``branch create``/``delete``/``merge`` are ``mutate`` statements. That
+        is what this exists for, and it is the whole reason branch work no
+        longer needs a second subprocess shape: a statement rides the same
+        transport, the same retry/admission policy and the same error
+        classification as every other read and write.
+
+        ★ THE ROUTE DOES NOT WIDEN AUTHORITY, which is the thing to check
+        before putting a branch delete on the same endpoint as every ordinary
+        write. A WRITE statement is authorized as its branch action, not as
+        the route's. Measured against a 0.11.0 server running witan's own
+        code-graph Cedar bundle (2026-09-21): a ``witan-users`` actor, who
+        holds ``change`` on unprotected branches but deliberately not
+        ``branch_delete``, gets ``403 policy denied action 'branch_delete'
+        targeting branch 'act-alice/wip'`` from ``POST /mutate``, while the
+        same request as ``act-svc-witan-ci`` succeeds. ``branch create``
+        likewise checks ``branch_create``.
+
+        READS DO NOT FOLLOW THAT RULE, and the asymmetry is load-bearing.
+        ``branch list`` on ``/query`` checks plain ``read``, exactly as a named
+        query does: an actor in no group is refused with ``policy denied action
+        'read'``, the same wording an ordinary read gets. Had it checked a
+        ``branch_list`` of its own, every read-only actor would start failing
+        ``witan_code.store.probe_cluster_graph``, which exists precisely
+        because listing one graph's branches needs nothing beyond ``read``.
+
+        THREE THINGS DIFFER FROM A NAMED CALL, all of them load-bearing:
+
+        - **No params key on the wire.** Not an empty one — none. See
+          :meth:`~witan_core.omnigraph_http.PooledTransport.query`.
+        - **No ``_extra_args``.** A statement takes no ``--branch``, so the
+          subclass args are neither injected nor lost, which is also what lets
+          a branched client use HTTP here (``carries_extra_args=False``).
+        - **``cli_args`` reach the CLI path only.** They are the flags with no
+          body equivalent — ``--format json`` to get a parseable read,
+          ``--yes`` for a destructive write against a non-local scope — and the
+          HTTP path needs neither, since it always answers JSON and carries its
+          authorization in the token.
+
+        ``label`` names the operation in an error message and in the retry
+        loop's logging, defaulting to ``verb``. A statement's verb is a poor
+        label on its own: every branch operation would report itself as
+        ``omnigraph mutate failed``, where the CLI subcommand this replaces
+        said ``branch``.
+
+        ★ ``source`` MUST BE A BRANCH STATEMENT, and that is a security
+        boundary rather than a convenience: this is a public write path taking
+        GQ source, and witan's secret/PII ``guard`` can only scan a named
+        mutation's params. See :func:`_check_branch_statement`.
+
+        ``surface_conflict`` matters more here than it does for
+        :meth:`change`, because 0.11 answers a duplicate ``branch create``
+        with **HTTP 409** (verified against the 0.11.0 server: ``{"error":
+        "branch 'x' already exists", "code": "conflict"}``). ``classify_status``
+        reads a 409 as retryable on purpose, so without this an
+        already-exists — a routine outcome when two callers create the same
+        view at once — would be retried through the whole budget, with its
+        backoff sleeps, before surfacing. The CLI path has no such trap: the
+        same failure is prose that matches no marker and classifies FATAL.
+        """
+        _check_branch_statement(verb, source)
+        is_write = verb == "mutate"
+        transport = self._http_transport(carries_extra_args=False)
+        if transport is not None:
+            return self._http_execute(
+                transport,
+                verb,
+                source,
+                None,
+                label or verb,
+                surface_conflict=surface_conflict,
+            )
+        cmd = [
+            self._binary,
+            verb,
+            *self._store_args(),
+            *(["--quiet"] if is_write else []),
+            "-e",
+            source,
+            *cli_args,
+        ]
+        return self._execute(
+            cmd, label or verb, is_write=is_write, surface_conflict=surface_conflict
+        )
+
     # ── Internals ─────────────────────────────────────────────────
 
     def _extra_args(self, subcommand: str) -> list[str]:
@@ -1736,7 +1885,9 @@ class OmnigraphClient:
 
     # ── Pooled HTTP transport (reads/writes against a deployed server) ──
 
-    def _http_transport(self) -> _http.PooledTransport | None:
+    def _http_transport(
+        self, *, carries_extra_args: bool = True
+    ) -> _http.PooledTransport | None:
         """The pooled transport for this store, or ``None`` to use the CLI.
 
         Three conditions have to hold, and the third is the interesting one:
@@ -1757,6 +1908,15 @@ class OmnigraphClient:
            ``_extra_args`` rather than against ``branch`` so any FUTURE subclass
            arg is caught by the same guard instead of quietly being dropped.
 
+        ``carries_extra_args=False`` switches condition 3 off, and only
+        :meth:`statement` passes it. The condition exists because an injected
+        arg would be DROPPED on the HTTP body; a call that injects none has
+        nothing to drop. omnigraph 0.11's branch statements are exactly that
+        case — the CLI's own help says they take "no name, params, --branch or
+        --snapshot" — so a branched client may run one over HTTP without its
+        ``--branch`` going missing, because there was never a ``--branch`` to
+        send. Do not reuse this for anything that has a branch to target.
+
         Built lazily and cached: constructing it parses a URL and allocates a
         ``threading.local``, and witan builds a fresh client per request to keep
         per-actor tokens from racing (ADR-0004). The pooled CONNECTIONS live in
@@ -1767,7 +1927,9 @@ class OmnigraphClient:
             return None
         if os.environ.get(HTTP_TRANSPORT_ENV_VAR, "").strip().lower() in _FALSEY:
             return None
-        if self._extra_args("query") or self._extra_args("mutate"):
+        if carries_extra_args and (
+            self._extra_args("query") or self._extra_args("mutate")
+        ):
             return None
         return shared_transport(self.server_url)
 
@@ -1798,7 +1960,7 @@ class OmnigraphClient:
         transport: _http.PooledTransport,
         verb: str,
         source: str,
-        params: dict,
+        params: dict | None,
         label: str,
         *,
         surface_conflict: bool = False,

@@ -215,6 +215,15 @@ def parse_retry_after(value: str | None) -> float | None:
     return seconds if seconds >= 0 else None
 
 
+def _statement_payload(source: str, params: dict | None) -> dict:
+    """The JSON body for a query/mutate: ``params`` present only when there is one.
+
+    Separate from the two call sites so read and write cannot drift on the one
+    thing 0.11 distinguishes — see :meth:`PooledTransport.query`.
+    """
+    return {"query": source} if params is None else {"query": source, "params": params}
+
+
 def classify_status(status: int, message: str) -> str:
     """Map an HTTP status + error message onto the shared classification names.
 
@@ -566,14 +575,23 @@ class PooledTransport:
         self,
         graph_id: str,
         source: str,
-        params: dict,
+        params: dict | None,
         token: str | None,
     ):
-        """``POST /graphs/<id>/query`` — a read. Always safe to repeat."""
-        payload = {"query": source, "params": params}
+        """``POST /graphs/<id>/query`` — a read. Always safe to repeat.
+
+        ★ ``params=None`` OMITS THE KEY, WHICH IS NOT THE SAME AS ``{}``.
+        omnigraph 0.11's ``branch list`` statement refuses a request carrying
+        the key at all. Verified against the 0.11.0 server: ``{"query":
+        "branch list", "params": {}}`` answers 400 ``{"error": "a branch
+        statement takes no name and no parameters", "code": "bad_request"}``,
+        and the identical body without the key succeeds. Named queries keep
+        sending their params dict, empty or not, so only the statement path
+        (:meth:`~witan_core.omnigraph.OmnigraphClient.statement`) passes None.
+        """
         return self.post(
             f"/graphs/{graph_id}/query",
-            payload,
+            _statement_payload(source, params),
             token,
             idempotent=True,
         )
@@ -582,7 +600,7 @@ class PooledTransport:
         self,
         graph_id: str,
         source: str,
-        params: dict,
+        params: dict | None,
         token: str | None,
         if_graph_commit: str | None = None,
     ):
@@ -593,13 +611,16 @@ class PooledTransport:
         a terminal 412 (:data:`PRECONDITION_FAILED`), never a silent
         unconditional write — the route and the header move together precisely
         so there is no way to ask for a precondition and not get one.
+
+        ``params=None`` omits the key — see :meth:`query` for why a branch
+        statement needs that and nothing else does.
         """
         path = f"/graphs/{graph_id}/mutate"
         if if_graph_commit is not None:
             path += IF_GRAPH_COMMIT_SUFFIX
         return self.post(
             path,
-            {"query": source, "params": params},
+            _statement_payload(source, params),
             token,
             idempotent=False,
             if_graph_commit=if_graph_commit,

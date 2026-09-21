@@ -6,6 +6,8 @@ import subprocess
 
 import pytest
 
+from witan_core.omnigraph import OmnigraphConflict
+
 from witan_code import repo as repo_module
 
 from .conftest import SAMPLE, requires_stack
@@ -194,18 +196,36 @@ def test_a_view_opened_by_two_callers_at_once_is_not_an_error(tmp_path, monkeypa
 
 @requires_stack
 @pytest.mark.parametrize(
-    ("error", "listed"),
+    ("exc", "listed"),
     [
-        ("omnigraph branch failed (exit 1):\npermission denied", ["main"]),
+        (
+            RuntimeError("omnigraph mutate failed (exit 1):\npermission denied"),
+            ["main"],
+        ),
         # The message alone is not trusted: the branch has to actually be there.
         (
-            "omnigraph branch failed (exit 1):\nbranch 'feature_race' already exists",
+            RuntimeError(
+                "omnigraph mutate failed (exit 1):\n"
+                "branch 'feature_race' already exists"
+            ),
+            ["main"],
+        ),
+        # What the cluster raises for the same race. 0.11 answers a duplicate
+        # create with HTTP 409, `classify_status` reads a 409 as retryable, and
+        # `ensure_branch`'s `surface_conflict=True` is what turns that into this
+        # rather than a retry budget spent re-racing. `OmnigraphConflict` is a
+        # `RuntimeError`, so the recovery clause sees both shapes the same way —
+        # and still re-lists before deciding.
+        (
+            OmnigraphConflict(
+                "branch 'feature_race' already exists (HTTP 409, conflict)"
+            ),
             ["main"],
         ),
     ],
 )
 def test_a_create_failure_that_is_not_the_race_still_raises(
-    tmp_path, monkeypatch, error, listed
+    tmp_path, monkeypatch, exc, listed
 ):
     from witan_code import config as cfg_module
     from witan_code.graph import OmnigraphClient
@@ -217,12 +237,62 @@ def test_a_create_failure_that_is_not_the_race_still_raises(
     monkeypatch.setattr(client, "list_branches", lambda: listed)
 
     def fail(*_args, **_kwargs):
-        raise RuntimeError(error)
+        raise exc
 
-    monkeypatch.setattr(client, "_run", fail)
+    monkeypatch.setattr(client, "statement", fail)
     with pytest.raises(RuntimeError) as excinfo:
         client.ensure_branch()
-    assert str(excinfo.value) == error
+    assert excinfo.value is exc
+
+
+@requires_stack
+def test_a_conflicting_create_is_retried_a_bounded_number_of_spaced_times(
+    tmp_path, monkeypatch
+):
+    """The transient half of the 409, which the already-exists tests cannot see.
+
+    0.11 answers the write-authority precondition with a 409 as well, and
+    `classify_status` keys on the status, so `ensure_branch` cannot tell it
+    from a duplicate create. It retries for that one, and the retry has to be
+    both BOUNDED (a permanently conflicted graph must fail, not hang) and
+    SPACED (`_retry_loop` raises on the first retryable under
+    `surface_conflict`, before its own `time.sleep`, so three attempts inside
+    one listing round trip would be no wait at all for a writer mid-commit).
+
+    Neither property is visible in the other tests: they stub `list_branches`
+    to a fixed value and never count.
+    """
+    from witan_code import config as cfg_module
+    from witan_code import graph as graph_module
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    client = OmnigraphClient(
+        str(tmp_path / "store"), cfg_module.load().queries_dir, branch="feature_race"
+    )
+    monkeypatch.setattr(client, "list_branches", lambda: ["main"])
+    slept: list[float] = []
+    monkeypatch.setattr(graph_module.time, "sleep", slept.append)
+
+    attempts = []
+
+    def always_conflicts(*_args, **_kwargs):
+        attempts.append(None)
+        raise OmnigraphConflict(
+            "write authority 'graph_head:main' changed during preparation "
+            "(HTTP 409, conflict)"
+        )
+
+    monkeypatch.setattr(client, "statement", always_conflicts)
+
+    with pytest.raises(OmnigraphConflict):
+        client.ensure_branch()
+
+    assert len(attempts) == graph_module._ENSURE_BRANCH_ATTEMPTS
+    assert slept == [
+        graph_module._ENSURE_BRANCH_BACKOFF_SECONDS * n
+        for n in range(1, graph_module._ENSURE_BRANCH_ATTEMPTS)
+    ], "retries must be spaced, not merely counted"
 
 
 @requires_stack

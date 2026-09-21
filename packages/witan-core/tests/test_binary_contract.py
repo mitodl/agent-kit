@@ -704,15 +704,93 @@ def test_commit_list_timestamps_are_microseconds(store):
 # ── branch list ───────────────────────────────────────────────────────────
 
 
-def test_branch_list_returns_named_branch_rows(store):
-    """`witan_code.graph.list_branches` accepts either `{"branches": [...]}` or
-    a bare list, and each row as a dict with "name" or a bare string."""
-    parsed = json.loads(_run("branch", "list", "--store", store, "--json").stdout)
+def test_branch_list_is_a_query_statement_returning_name_rows(store):
+    """The exact contract `witan_code.graph.list_branches` reads: 0.11 serves
+    `branch list` as a GQ statement on the canonical read route (RFC 0055),
+    answering the same `rows` envelope a named query does, one `{"name": ...}`
+    per branch."""
+    parsed = json.loads(
+        _run("query", "--store", store, "-e", "branch list", "--format", "json").stdout
+    )
 
-    rows = parsed.get("branches", parsed) if isinstance(parsed, dict) else parsed
-    assert isinstance(rows, list)
-    names = [r.get("name") if isinstance(r, dict) else r for r in rows]
-    assert "main" in names
+    assert parsed["columns"] == ["name"]
+    assert "main" in [row["name"] for row in parsed["rows"]]
+
+
+def test_a_branch_statement_needs_its_name_quoted(store):
+    """Why `witan_code.graph._gq_branch_name` exists. An unquoted name is a
+    parse error, so interpolating one straight into the statement would fail
+    every create and delete on a view whose name carries a `/` or a `.`, which
+    every namespaced view's does."""
+    unquoted = _run(
+        "mutate",
+        "--store",
+        store,
+        "-e",
+        "branch create act-x/v from main",
+        expect_ok=False,
+    )
+    assert "parse error" in unquoted.stderr
+
+    quoted = _run("mutate", "--store", store, "-e", 'branch create "act-x/v" from main')
+    assert "act-x/v" in quoted.stdout
+
+
+def test_a_quote_inside_a_branch_name_parses_and_is_refused_a_layer_down(store):
+    """★ THE REASON `_gq_branch_name` REFUSES A `"`, WHICH IS NOT THE OBVIOUS
+    ONE. GQ honours `\\"` inside a quoted string, so the parser accepts it and
+    builds the name `we"ird`. The refusal comes from the storage layer
+    afterwards, validating the ref.
+
+    Pinned because the wrong reading ("a `"` is a parse error, so it can never
+    mean anything") is exactly what would justify widening that charset later.
+    It parses; what stops it is one level down."""
+    escaped = _run(
+        "mutate",
+        "--store",
+        store,
+        "-e",
+        'branch create "we\\"ird" from main',
+        expect_ok=False,
+    )
+
+    assert "parse error" not in escaped.stderr
+    assert "Branch segment" in escaped.stderr
+    assert 'we"ird' in escaped.stderr
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        # Ll — the easy case, and the one an ASCII-only guard already fails.
+        "café",
+        # Lo + Cyrillic Ll, with the `/` and `_` a view name really carries.
+        "act-x/дом_v1",
+        # ★ Lo + Mc, and Lo + Mn. These are the ones `\w` and `str.isalnum`
+        # BOTH reject: omnigraph's "alphanumeric" is Rust's, whose alphabetic
+        # half is the Unicode `Alphabetic` property, and that includes
+        # `Other_Alphabetic` — the combining vowel signs. A guard built on
+        # `\w` is therefore narrower than the engine, which is the direction
+        # that strands the reaper.
+        "कि",
+        "אָ",
+    ],
+)
+def test_branch_segments_may_be_unicode_alphabetic(store, name):
+    """omnigraph's validator says "Only alphanumeric, '.', '-', '_' are
+    allowed" per `/`-separated segment, and its "alphanumeric" is Unicode's,
+    not ASCII's and not Python's. `witan_code.graph._is_quotable_branch` has to
+    match the ENGINE's rule: narrower, and the reaper refuses to delete views
+    omnigraph created quite happily."""
+    created = _run(
+        "mutate", "--store", store, "-e", f'branch create "{name}" from main'
+    )
+    assert name in created.stdout
+
+    rows = json.loads(
+        _run("query", "--store", store, "-e", "branch list", "--format", "json").stdout
+    )["rows"]
+    assert name in [row["name"] for row in rows]
 
 
 # ── version / snapshot ────────────────────────────────────────────────────

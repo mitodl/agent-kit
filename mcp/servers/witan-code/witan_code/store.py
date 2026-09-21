@@ -562,7 +562,7 @@ def probe_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> Sto
     records into one error per subprocess and reports success having written
     nothing.
 
-    Asks a GRAPH-scoped question (``branch list --graph <id>``, the cheapest
+    Asks a GRAPH-scoped question (the ``branch list`` statement, the cheapest
     one that has to reach the store to be answered) rather than the
     server-scoped ``graphs list``. That is not a detail: ``graphs list`` is a
     management-surface action that no ordinary client can use against the
@@ -571,6 +571,18 @@ def probe_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> Sto
     before it parsed a single file. Listing one graph's branches needs only
     ``read`` on that graph, which every actor the v1 Cedar bundle grants — CI,
     users, service and admin alike — already holds.
+
+    ★ AND IT STILL NEEDS ONLY ``read`` NOW THAT IT IS A GQ STATEMENT ON
+    ``/query`` RATHER THAN A CLI SUBCOMMAND, which is not obvious: the WRITE
+    statements on ``/mutate`` are authorized as their own branch actions
+    (``branch delete`` checks ``branch_delete``, not the route's ``change``),
+    so a reader could reasonably expect ``branch list`` to check a matching
+    ``branch_list``. It does not. Measured against a 0.11.0 server running
+    this bundle: an actor in no group gets ``policy denied action 'read'`` for
+    ``branch list``, the identical wording an ordinary named read gets, while
+    the same actor's ``branch create`` is denied as ``branch_create``. Had it
+    gone the other way, every read-only actor would be failing this write-path
+    preflight.
 
     On the DIRECT path it also inherits
     :class:`~witan_core.omnigraph.OmnigraphClient`'s connect-retry budget, so a

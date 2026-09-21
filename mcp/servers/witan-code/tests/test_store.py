@@ -5,6 +5,7 @@ reads and per-entry Path construction. That makes their edge cases (an empty
 store, an unreadable one, a dangling symlink) worth pinning explicitly.
 """
 
+import json
 import os
 import threading
 import time
@@ -611,6 +612,67 @@ def test_the_local_fallback_hint_names_the_setting_actually_routing(monkeypatch)
 
     assert "code_transport" in str(exc.value)
     assert "code_server" not in str(exc.value)
+
+
+class _NotFoundConnection:
+    """An omnigraph-server that serves no graph, answering as 0.11.0 does.
+
+    Body and status measured against a real `omnigraph-server --cluster`
+    (0.11.0, 2026-09-21): `POST /graphs/nosuch/query` with a `branch list`
+    statement answers `404 {"error": "graph 'nosuch' not found", "code":
+    "not_found"}`.
+    """
+
+    def __init__(self, host, port=None, timeout=None, context=None):
+        self.host = host
+
+    def connect(self):
+        pass
+
+    def request(self, method, path, body=None, headers=None):
+        pass
+
+    def getresponse(self):
+        class _Response:
+            status = 404
+            will_close = False
+
+            def read(self):
+                return json.dumps(
+                    {"error": "graph 'nosuch' not found", "code": "not_found"}
+                ).encode()
+
+            def getheader(self, _name, default=None):
+                return default
+
+        return _Response()
+
+    def close(self):
+        pass
+
+
+def test_a_missing_cluster_graph_is_still_recognised_over_http(monkeypatch):
+    """★ THE WORDING `_NOT_FOUND_RE` KEYS ON NOW ARRIVES FROM THE SERVER.
+
+    `list_branches` was unconditionally a subprocess, so `_NOT_FOUND_RE` was
+    tuned against what the CLI printed (see the comment above it). It is a
+    `branch list` statement now, so a remote client takes the pooled transport
+    and this discrimination runs on the HTTP body instead. If the server ever
+    stops quoting the id, every missing graph files as `ClusterUnreachable`
+    rather than `ClusterGraphMissing`, which is the exact confusion those two
+    types exist to prevent — and nothing else in the suite would notice,
+    because every other probe test fakes the client.
+    """
+    monkeypatch.setattr(http_module.http.client, "HTTPSConnection", _NotFoundConnection)
+    monkeypatch.setattr(http_module.http.client, "HTTPConnection", _NotFoundConnection)
+    monkeypatch.setenv("WITAN_CODE_SERVER", "https://omnigraph.test")
+    from witan_code import config as cfg_module
+
+    cfg = cfg_module.load()
+    ref = store_module.StoreRef(uri="https://omnigraph.test", graph_id="nosuch")
+
+    with pytest.raises(store_module.ClusterGraphMissing):
+        store_module.probe_cluster_graph(ref, "code-nosuch", cfg)
 
 
 def test_a_failed_listing_is_not_cached(monkeypatch):

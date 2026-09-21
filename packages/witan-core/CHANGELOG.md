@@ -8,6 +8,8 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-09-21
+
 ### Added
 
 - **`RemoteMCPProxy.ensure_tool_schema()` / `prime_tool_schema()`**, for a
@@ -20,7 +22,33 @@ a MINOR bump may include breaking changes).
   lock inside `_invoke_once`, which would deadlock the shared-event-loop
   caller (`witan.remote.serve`).
 
+- **`OmnigraphClient.statement(verb, source, *cli_args)`: run one inline GQ
+  statement.** omnigraph 0.11 serves branch work as GQ over the canonical
+  routes (upstream RFC 0055): `branch list` on `query`, `branch
+  create`/`delete`/`merge` on `mutate`. A caller no longer needs a second
+  subprocess shape for it. A statement sends no params key at all (0.11 refuses
+  a branch statement that carries one, even an empty one), injects no
+  `_extra_args`, and may therefore use the pooled HTTP transport even on a
+  client that is otherwise pinned to the CLI by its extra args.
+
+  The route does not widen authority: a statement is authorized as its branch
+  action, so `branch delete` on `/mutate` checks `branch_delete`, not the
+  `change` that route otherwise implies. Verified against a 0.11.0 server
+  running witan's own code-graph Cedar bundle.
+
+  `source` is restricted to branch statements, which is a security boundary
+  rather than a convenience. The secret/PII write `guard` is
+  `(query_name, params) -> params` and cannot scan raw GQ, so an arbitrary
+  inline mutation on a guarded client would persist its literals unscanned.
+  A branch statement's only operand is a branch name, which makes the question
+  moot instead of merely unlikely. Use `change`/`change_many` with a named
+  query for anything carrying data.
+
 ### Changed
+
+- **`PooledTransport.query`/`mutate` take `params: dict | None`.** `None` omits
+  the key from the request body; every existing caller keeps sending its dict,
+  empty or not.
 
 - **`configure_sentry` no longer turns a dropped OTLP batch into a Sentry
   issue.** The exporters log "Failed to export ... batch due to timeout, max
