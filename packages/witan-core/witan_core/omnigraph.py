@@ -1415,6 +1415,14 @@ class AdmissionCapExceeded(RuntimeError, Refusal):
     """The server's per-actor admission cap refused this write. Nothing was written."""
 
 
+#: Where an operator hit by :class:`StoreQuarantined` finds the procedure. An
+#: absolute URL rather than the repo-relative path, because this message is
+#: raised by an installed CLI or MCP client that has no checkout to resolve a
+#: relative path against. The page is published by the ``witan-context`` site
+#: (``zensical.toml``'s ``site_url``), which serves directory-style URLs.
+RUNBOOK_URL = "https://witan-context.readthedocs.io/guides/store-quarantine-runbook/"
+
+
 class StoreQuarantined(RuntimeError, Refusal):
     """The store will not open: an active OCC recovery sidecar records a manifest
     delta that does not match the original commit it names.
@@ -1436,7 +1444,7 @@ class StoreQuarantined(RuntimeError, Refusal):
     2026-09-18 recovery. :func:`sidecar_operation_id` parses it out so the
     message can state it and :attr:`operation_id` can carry it.
 
-    See ``docs/guides/store-quarantine-runbook.md`` for the recovery procedure.
+    See :data:`RUNBOOK_URL` for the recovery procedure.
     """
 
     def __init__(self, message: str, operation_id: str | None = None) -> None:
@@ -2508,8 +2516,7 @@ class OmnigraphClient:
                     f"omnigraph {label} refused: the store is quarantined by "
                     f"an unresolved OCC recovery sidecar{named}. Reads, "
                     f"writes and `omnigraph repair` are all blocked until an "
-                    f"operator resolves it — see "
-                    f"docs/guides/store-quarantine-runbook.md. Retrying "
+                    f"operator resolves it — see {RUNBOOK_URL}. Retrying "
                     f"will not clear it:\n{err.strip()}",
                     operation_id,
                 ) from None

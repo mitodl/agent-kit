@@ -37,9 +37,15 @@ snapshot and the Lance transaction at each planned table version and, when they
 match, record the operation as `RolledForward` and remove the sidecar by itself.
 
 That PR merged 2026-09-15, two days after the v0.11.0 tag, and no release has
-carried it yet, so the binary we pin still bricks. The whole of the manual
-procedure below exists only until a release includes #716. When one does, the
-work is to bump the pin, not to automate step 5.
+carried it yet, so the binary we pin still bricks.
+
+**It narrows this procedure rather than retiring it.** #716 heals a sidecar
+whose planned effect still MATCHES what was committed; its own description is
+explicit that "contradictory sidecars still refuse recovery". So once a release
+carries it, the common case resolves itself and what is left here is the
+genuinely contradictory sidecar, which still opens to nothing and still needs
+an operator. Read the steps below as the procedure for that case, not as
+scaffolding to delete.
 
 Since agent-kit#364, `witan serve` serialises writes to one `s3://` root across
 its own threads (`witan_core.omnigraph.store_write_lock`), so two concurrent
@@ -54,16 +60,31 @@ not a supported writer topology.
 Observed versions: witan 0.36.0, witan-core 0.37.0, omnigraph 0.11.0, storage
 format 9. Recorded from the 2026-09-18 recovery of a direct-S3 root.
 
+**First, settle what `<store-uri>` means below**, because the two deployments
+are shaped differently and guessing targets a path that does not exist:
+
+- A **direct** store is the configured graph URI, whole. `WITAN_MEMORY_URI`
+  and this server's README take that shape, e.g.
+  `s3://personal-witan/graph.omni`. There is no root above it and no `graphs/`
+  beneath it. The 2026-09-18 incident was on one of these.
+- A **cluster-managed** store sits under a storage root, one graph per
+  directory: `s3://<bucket>/<root>/graphs/<graph-id>.omni`.
+
+Every command below uses `<store-uri>` for whichever applies. Read it out of
+the running configuration rather than reconstructing it: the deployed tier
+carries it in the cluster ConfigMap, and a local target has it in
+`WITAN_MEMORY_URI` or the named target's `server` entry.
+
 **1. Stop the writers.** Every writer against this root, not just the one that
 reported the error: other `witan serve` processes, the CI indexer, the view
 reaper, any CLI session. A writer arriving mid-repair re-creates the state you
 are about to resolve.
 
-**2. Back the root up before touching anything.** The repair in step 6 rewrites
-table heads and is not reversible.
+**2. Back the store up before touching anything.** The repair in step 7
+rewrites table heads and is not reversible. Step 6 only previews it.
 
 ```bash
-aws s3 sync s3://<bucket>/<root> s3://<bucket>/backups/quarantine-$(date -u +%Y%m%dT%H%M)/
+aws s3 sync <store-uri> s3://<bucket>/backups/quarantine-$(date -u +%Y%m%dT%H%M)/
 ```
 
 Verify the copy's object count matches the source before continuing. A backup
@@ -74,7 +95,7 @@ only record of what the losing writer intended, and step 5 moves it out of the
 way. Keep it where a later upstream report can reach it:
 
 ```bash
-aws s3 cp s3://<bucket>/<root>/graphs/<graph>.omni/__recovery/<operation>.json \
+aws s3 cp <store-uri>/__recovery/<operation>.json \
   ./quarantine-evidence/<operation>.json
 ```
 
@@ -95,14 +116,14 @@ is active, so move it aside. Do not delete it: step 3's copy is evidence, not a
 substitute.
 
 ```bash
-aws s3 mv s3://<bucket>/<root>/graphs/<graph>.omni/__recovery/<operation>.json \
+aws s3 mv <store-uri>/__recovery/<operation>.json \
   s3://<bucket>/quarantined-sidecars/<operation>.json
 ```
 
 **6. Preview the repair, and read it.** Never go straight to `--confirm`:
 
 ```bash
-omnigraph repair --store s3://<bucket>/<root>/graphs/<graph>.omni --json
+omnigraph repair --store <store-uri> --json
 ```
 
 Expect `suspicious` for exactly the datasets the sidecar named, each with a
@@ -119,15 +140,15 @@ forcing through them can discard committed rows. Stop and investigate instead.
 **7. Repair.**
 
 ```bash
-omnigraph repair --store s3://<bucket>/<root>/graphs/<graph>.omni --confirm --force
+omnigraph repair --store <store-uri> --confirm --force
 ```
 
 **8. Verify, rather than assume.** All four:
 
 ```bash
 # No drift anywhere, and no sidecar left behind.
-omnigraph repair --store s3://<bucket>/<root>/graphs/<graph>.omni --json
-aws s3 ls s3://<bucket>/<root>/graphs/<graph>.omni/__recovery/
+omnigraph repair --store <store-uri> --json
+aws s3 ls <store-uri>/__recovery/
 
 # Real reads and writes through witan itself, not just the CLI.
 witan memory --target <target> <a term you know is indexed>
@@ -148,11 +169,23 @@ the pre-repair state nor the post-repair one, while believing you rolled back.
 
 ```bash
 aws s3 sync --delete \
-  s3://<bucket>/backups/quarantine-<stamp>/ s3://<bucket>/<root>
+  s3://<bucket>/backups/quarantine-<stamp>/ <store-uri>
 ```
 
-**9. Restart the writers**, one at a time, and confirm the first one's writes
-land before starting the next.
+**9. Restart the writers — but not all of them directly.** Bringing every
+writer back up against one `s3://` store rebuilds the exact topology this page
+opens by calling unsupported, and with it the race that produced the sidecar.
+So:
+
+- Resume **one** writer against `<store-uri>` directly, and confirm its writes
+  land before going further.
+- Any other writer resumes through a served single-writer target
+  (`https://…`), which is the supported arrangement for a shared root. One
+  that cannot be pointed at a served target stays down until it can.
+
+If only ever one writer was direct, this is just "start it again" — but check
+rather than assume, because the incident is itself evidence that something was
+writing concurrently.
 
 ## Afterwards
 
