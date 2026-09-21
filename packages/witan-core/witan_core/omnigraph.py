@@ -1740,14 +1740,22 @@ class OmnigraphClient:
 
         ★ THE ROUTE DOES NOT WIDEN AUTHORITY, which is the thing to check
         before putting a branch delete on the same endpoint as every ordinary
-        write. A statement is authorized as its BRANCH action, not as the
-        route's. Measured against a 0.11.0 server running witan's own
+        write. A WRITE statement is authorized as its branch action, not as
+        the route's. Measured against a 0.11.0 server running witan's own
         code-graph Cedar bundle (2026-09-21): a ``witan-users`` actor, who
         holds ``change`` on unprotected branches but deliberately not
         ``branch_delete``, gets ``403 policy denied action 'branch_delete'
         targeting branch 'act-alice/wip'`` from ``POST /mutate``, while the
         same request as ``act-svc-witan-ci`` succeeds. ``branch create``
         likewise checks ``branch_create``.
+
+        READS DO NOT FOLLOW THAT RULE, and the asymmetry is load-bearing.
+        ``branch list`` on ``/query`` checks plain ``read``, exactly as a named
+        query does: an actor in no group is refused with ``policy denied action
+        'read'``, the same wording an ordinary read gets. Had it checked a
+        ``branch_list`` of its own, every read-only actor would start failing
+        ``witan_code.store.probe_cluster_graph``, which exists precisely
+        because listing one graph's branches needs nothing beyond ``read``.
 
         THREE THINGS DIFFER FROM A NAMED CALL, all of them load-bearing:
 

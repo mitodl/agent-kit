@@ -671,7 +671,6 @@ def test_a_branched_client_does_use_http_for_a_statement(
     assert json.loads(request["body"]) == {
         "query": 'branch create "act-alice/wip" from main'
     }
-    assert "--branch" not in request["body"]
 
 
 @pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE"])

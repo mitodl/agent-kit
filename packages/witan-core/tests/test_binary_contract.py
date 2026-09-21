@@ -759,19 +759,38 @@ def test_a_quote_inside_a_branch_name_parses_and_is_refused_a_layer_down(store):
     assert 'we"ird' in escaped.stderr
 
 
-def test_branch_segments_may_be_unicode_alphanumeric(store):
-    """The other half of that charset. omnigraph's validator says "Only
-    alphanumeric, '.', '-', '_' are allowed" per `/`-separated segment, and its
-    "alphanumeric" is Unicode's, not ASCII's. `_QUOTABLE_BRANCH` has to match
-    the ENGINE's rule: narrower, and the reaper refuses to delete views
+@pytest.mark.parametrize(
+    "name",
+    [
+        # Ll — the easy case, and the one an ASCII-only guard already fails.
+        "café",
+        # Lo + Cyrillic Ll, with the `/` and `_` a view name really carries.
+        "act-x/дом_v1",
+        # ★ Lo + Mc, and Lo + Mn. These are the ones `\w` and `str.isalnum`
+        # BOTH reject: omnigraph's "alphanumeric" is Rust's, whose alphabetic
+        # half is the Unicode `Alphabetic` property, and that includes
+        # `Other_Alphabetic` — the combining vowel signs. A guard built on
+        # `\w` is therefore narrower than the engine, which is the direction
+        # that strands the reaper.
+        "कि",
+        "אָ",
+    ],
+)
+def test_branch_segments_may_be_unicode_alphabetic(store, name):
+    """omnigraph's validator says "Only alphanumeric, '.', '-', '_' are
+    allowed" per `/`-separated segment, and its "alphanumeric" is Unicode's,
+    not ASCII's and not Python's. `witan_code.graph._is_quotable_branch` has to
+    match the ENGINE's rule: narrower, and the reaper refuses to delete views
     omnigraph created quite happily."""
-    created = _run("mutate", "--store", store, "-e", 'branch create "café" from main')
-    assert "café" in created.stdout
+    created = _run(
+        "mutate", "--store", store, "-e", f'branch create "{name}" from main'
+    )
+    assert name in created.stdout
 
-    names = json.loads(
+    rows = json.loads(
         _run("query", "--store", store, "-e", "branch list", "--format", "json").stdout
     )["rows"]
-    assert "café" in [row["name"] for row in names]
+    assert name in [row["name"] for row in rows]
 
 
 # ── version / snapshot ────────────────────────────────────────────────────
