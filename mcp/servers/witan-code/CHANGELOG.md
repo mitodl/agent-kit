@@ -31,15 +31,17 @@ a MINOR bump may include breaking changes).
     honours `\"`) and is then refused by the storage layer, so the guard is
     against a statement that means something other than what was asked, not
     against a syntax error. Names are checked against omnigraph's own rule,
-    which is Unicode alphanumeric plus `.`, `-`, `_` per `/`-separated
-    segment — `café` and `act-x/дом` are valid branch names, and a narrower
-    charset would have made the reaper refuse to delete views omnigraph
-    created quite happily.
+    which is Unicode `Alphabetic` or numeric plus `.`, `-`, `_` per
+    `/`-separated segment. That admits `café`, `act-x/дом`, and the combining
+    vowel signs of Indic, Hebrew and Arabic scripts (`कि`, `אָ`) that Python's
+    `\w` and `str.isalnum` both reject. A narrower charset would have made the
+    reaper refuse to delete views omnigraph created quite happily.
   - A duplicate `branch create` answers HTTP 409, which `classify_status`
     reads as retryable by status. So does the transient write-authority
     precondition, and the two are indistinguishable. `ensure_branch` surfaces
     conflicts and does its own re-list-and-retry, which resolves the first
-    without giving up the retry the second needs.
+    without giving up the retry the second needs. That retry carries its own
+    backoff, because the engine's does not run under `surface_conflict`.
   - `branch list` returns a `rows` envelope of `{"name": ...}`, not the old
     `{"branches": [...]}`.
 
