@@ -11,6 +11,11 @@
 **/.ruff_cache
 **/.mypy_cache
 **/node_modules
+# Built by the ui-builder stage inside the image. Excluding the host's copy
+# stops a stale local build being copied in by `COPY mcp/servers/witan/` and
+# then only partially overlaid: COPY never deletes, so orphaned hashed assets
+# from an older build would ride along.
+mcp/servers/witan/witan/ui_dist
 **/__cluster
 **/*.omni
 dist

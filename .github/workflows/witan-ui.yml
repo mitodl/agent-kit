@@ -1,0 +1,105 @@
+name: witan UI
+
+# Narrower paths than witan-tests.yml, deliberately: this job builds a
+# TypeScript bundle and resolves nothing from the uv workspace, so a Python
+# dependency change cannot affect it.
+on:
+  push:
+    branches: [main]
+    paths: &ui_paths
+      - "mcp/servers/witan/ui/**"
+      - ".github/workflows/witan-ui.yml"
+      # What carries the bundle into the wheel. A change here can break the
+      # release without touching a line of TypeScript.
+      - "mcp/servers/witan/pyproject.toml"
+  pull_request:
+    paths: *ui_paths
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: witan UI (typecheck, lint, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp/servers/witan/ui
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # The pin lives in .node-version so a local build and CI cannot
+          # disagree about it; Renovate bumps the one file.
+          node-version-file: mcp/servers/witan/ui/.node-version
+          cache: npm
+          cache-dependency-path: mcp/servers/witan/ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      # Last, because it is the step the release depends on: publish-witan.yml
+      # runs the same build before `uv build`, and a bundle that fails to build
+      # there fails the release. Better to learn it on the PR.
+      - name: Build
+        run: npm run build
+
+  packaging:
+    name: witan UI (bundle reaches the wheel)
+    runs-on: ubuntu-latest
+
+    # The failure this exists for is silent and only shows up at release time:
+    # hatch drops a missing `artifacts` path without complaint, `uv build`
+    # succeeds, and the published witan has no UI in it. publish-witan.yml
+    # asserts the same thing, but that runs after the version bump has already
+    # landed on main. This runs on the PR that would cause it.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Stub a bundle
+        # The real one is not needed: what is under test is whether a file at
+        # this path reaches the wheel, not what vite put in it. Stubbing keeps
+        # this job off node entirely, so it stays a packaging check.
+        run: |
+          mkdir -p mcp/servers/witan/witan/ui_dist/assets
+          echo '<!doctype html>' > mcp/servers/witan/witan/ui_dist/index.html
+          echo '/* stub */' > mcp/servers/witan/witan/ui_dist/assets/stub.css
+
+      - name: Build
+        working-directory: mcp/servers/witan
+        run: uv build -o dist
+
+      - name: Assert the bundle is in the wheel and the sdist
+        # Both, because `uv build` builds the wheel FROM the sdist: checking
+        # only the wheel would still pass if `artifacts` were moved to the
+        # wheel target, which is the mistake the config comment warns about.
+        working-directory: mcp/servers/witan
+        run: |
+          wheel="$(ls dist/*.whl)"
+          sdist="$(ls dist/*.tar.gz)"
+          for expected in witan/ui_dist/index.html witan/ui_dist/assets/stub.css; do
+            if ! unzip -l "$wheel" | grep -q "$expected"; then
+              echo "::error::$expected is missing from $wheel"
+              exit 1
+            fi
+          done
+          if ! tar tzf "$sdist" | grep -q 'witan/ui_dist/index.html'; then
+            echo "::error::the sdist has no ui_dist; the wheel is built from it"
+            exit 1
+          fi
