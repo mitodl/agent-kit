@@ -120,7 +120,8 @@ def test_zero_weights_preserve_bm25_order(server, monkeypatch):
         [
             srv.client.read("read.gq", "get_memory", {"slug": s})[0] | {"score": score}
             for s, score in ((b["slug"], 2.0), (a["slug"], 1.0))
-        ]
+        ],
+        srv._CONTENT_BAND,
     )
     monkeypatch.setattr(srv, "_search_rows", lambda *_a, **_kw: list(seed))
 
@@ -134,80 +135,85 @@ def test_zero_weights_preserve_bm25_order(server, monkeypatch):
 # ── relevance normalisation (omnigraph 0.11 `bm25(...) as score`) ──
 
 
-def test_relevance_is_the_score_relative_to_the_run_s_best(server):
-    """THE POINT OF THE CHANGE. Rank position says how hits ORDER; it cannot say
-    how far apart they are, so it reported the same 1.0/0.5/0.0 for any three
-    rows whatever their scores really were.
-
-    The numbers here are the ones the 0.11.0 binary actually returned for a
-    three-document corpus (see `_with_relevance`), and the assertion is that the
-    last row is no longer written off as worthless.
-    """
+def test_relevance_keeps_the_engine_s_spacing_within_a_run(server):
+    """Rank position said how hits ORDER; it could not say how far apart they
+    are, so for any three rows it reported 1.0/0.5/0.0 and wrote the last one
+    off entirely. These are the scores the 0.11.0 binary returned for a
+    three-document corpus, scaled into the content band."""
     from witan import server as srv
 
     rows = srv._with_relevance(
-        [{"score": 0.675232}, {"score": 0.3818718}, {"score": 0.23144846}]
+        [{"score": 0.675232}, {"score": 0.3818718}, {"score": 0.23144846}],
+        srv._CONTENT_BAND,
     )
     got = [r["_relevance"] for r in rows]
 
     assert got[0] == 1.0
-    assert got[1] == pytest.approx(0.5655, abs=1e-3)
-    assert got[2] == pytest.approx(0.3428, abs=1e-3)
-    # What the rank-position proxy would have said for the same three rows.
-    assert got != [1.0, 0.5, 0.0]
+    assert got[1] == pytest.approx(0.5 + 0.5 * 0.5655, abs=1e-3)
+    assert got[2] == pytest.approx(0.5 + 0.5 * 0.3428, abs=1e-3)
+    # The weakest match is no longer written off at the band's floor.
+    assert got[2] > srv._CONTENT_BAND[0]
+
+
+def test_every_content_hit_outranks_every_title_only_hit(server):
+    """★ THE POLICY THE BANDS EXIST FOR, and it is not hypothetical: without
+    them this is what regresses.
+
+    Normalising each run against its own best puts the top title-only hit at
+    1.0 — level with the top content hit. Measured on 0.11.0, a memory whose
+    title matched and whose content said nothing relevant scored 0.902 on
+    `title` against 0.675 for the best `content` match, so the naive version
+    moves it by the whole `w_bm25` term (1.0), more than recency can ever
+    contribute (0.3). Before 0.11 the concatenated runs made this true by
+    construction; the bands are what keeps it true now it has to be chosen.
+    """
+    from witan import server as srv
+
+    content = srv._with_relevance(
+        [{"score": 0.675232}, {"score": 0.3818718}], srv._CONTENT_BAND
+    )
+    title = srv._with_relevance([{"score": 0.90204775}], srv._TITLE_BAND)
+
+    assert min(r["_relevance"] for r in content) > max(r["_relevance"] for r in title)
+    # The title hit outscored every content hit on the raw number.
+    assert 0.90204775 > max(0.675232, 0.3818718)
 
 
 def test_tied_scores_get_equal_relevance(server):
-    """The proxy spread tied rows across the whole range because they happened
-    to arrive in some order. Equal scores now mean equal relevance, so the
-    re-rank stops inventing a difference the engine never reported."""
+    """Rank position spread tied rows across the whole range because they
+    happened to arrive in some order. Equal scores now mean equal relevance."""
     from witan import server as srv
 
-    rows = srv._with_relevance([{"score": 1.5}, {"score": 1.5}])
+    rows = srv._with_relevance([{"score": 1.5}, {"score": 1.5}], srv._CONTENT_BAND)
 
     assert [r["_relevance"] for r in rows] == [1.0, 1.0]
-
-
-def test_each_run_is_normalised_against_its_own_best(server):
-    """Content and title scores are not comparable — measured: a title-only hit
-    scored 0.902 on `title` while the best content hit scored 0.675 on
-    `content`. Normalising per run is what stops the title hit being read as
-    the more relevant of the two."""
-    from witan import server as srv
-
-    content = srv._with_relevance([{"score": 0.675232}, {"score": 0.3818718}])
-    title = srv._with_relevance([{"score": 0.90204775}])
-
-    assert content[0]["_relevance"] == 1.0
-    assert title[0]["_relevance"] == 1.0
 
 
 def test_an_empty_run_normalises_to_nothing(server):
     from witan import server as srv
 
-    assert srv._with_relevance([]) == []
+    assert srv._with_relevance([], srv._TITLE_BAND) == []
 
 
 def test_an_all_zero_run_does_not_divide_by_zero(server):
     """Cannot arise for rows `search()` matched, but the guard must hold: every
-    row is equally uninformative, so they all take the value the proxy gave a
-    single row."""
+    row is equally uninformative, so they all take the band's top."""
     from witan import server as srv
 
-    rows = srv._with_relevance([{"score": 0.0}, {"score": 0.0}])
+    rows = srv._with_relevance([{"score": 0.0}, {"score": 0.0}], srv._TITLE_BAND)
 
-    assert [r["_relevance"] for r in rows] == [1.0, 1.0]
+    assert [r["_relevance"] for r in rows] == [0.5, 0.5]
 
 
 def test_a_missing_score_is_not_fatal_to_a_search(server):
     """0.11 omits null fields from a row and `read` restores them as None. A
-    null score should never have happened for a matched row, but ranking it
-    last beats raising out of a search the caller asked for."""
+    null score should never happen for a matched row, but ranking it at the
+    band's floor beats raising out of a search the caller asked for."""
     from witan import server as srv
 
-    rows = srv._with_relevance([{"score": 2.0}, {"score": None}])
+    rows = srv._with_relevance([{"score": 2.0}, {"score": None}], srv._CONTENT_BAND)
 
-    assert [r["_relevance"] for r in rows] == [1.0, 0.0]
+    assert [r["_relevance"] for r in rows] == [1.0, 0.5]
 
 
 @requires_omnigraph
@@ -239,10 +245,12 @@ def test_the_relevance_reaching_the_re_rank_comes_from_the_engine(server):
     relevance = [r["_relevance"] for r in rows]
 
     assert len(relevance) == 3
+    # The assertion rank position could never satisfy: three content rows sat
+    # at exactly 1.0/0.5/0.0 whatever they scored, so the weakest was written
+    # off. Real spacing puts all three strictly inside the content band.
     assert relevance[0] == 1.0
-    # The assertion the proxy could never satisfy.
-    assert relevance[-1] > 0.0
-    assert relevance != [1.0, 0.5, 0.0]
+    assert all(r > srv._CONTENT_BAND[0] for r in relevance)
+    assert relevance[1] != pytest.approx(0.5)
     assert relevance == sorted(relevance, reverse=True)
 
 

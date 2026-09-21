@@ -184,23 +184,27 @@ a MINOR bump may include breaking changes).
   rank position.** The engine could not project `bm25(...)` as a column before
   0.11, so relevance was the candidate's POSITION in the result: top hit 1.0,
   last hit 0.0, whatever the scores actually were. That is a function of the
-  row count alone, so twenty near-identical weak matches were spread across
-  the full range while a set with one standout match was compressed into it,
-  and the composite score then weighed that against real recency and
-  corroboration numbers. The eight memory search queries now return
-  `bm25(...) as score` and each row carries its score relative to the best in
-  its own run.
+  row count alone, so twenty near-identical weak matches were spread across the
+  full range while a set with one excellent match was compressed into it, and
+  the composite score then weighed that against real recency and corroboration
+  numbers. The eight memory search queries now return `bm25(...) as score`.
 
-  Normalisation is per run and divides by the maximum, both deliberately.
-  Min-max would pin the worst row of every run at 0.0, which is the proxy's
-  own defect in better arithmetic; dividing by the max keeps the top hit at
-  1.0, so a tuned `WITAN_RANK_W_BM25` keeps the meaning it was tuned with.
-  Across runs the scores are not comparable at all: measured on 0.11.0, a
-  memory whose title matched and whose content said nothing relevant scored
-  0.902 on `title`, above the 0.675 of the best `content` match, because a
-  short field inflates under BM25 length normalisation. So content hits are
-  still unioned ahead of title-only hits by position rather than interleaved
-  by score.
+  Relevance is scaled over each run's own best rather than min-max scaled;
+  min-max would pin the worst row of every run at its floor, which is the
+  rank-position defect in better arithmetic.
+
+  **Content hits still outrank title-only hits on the relevance term**, and
+  that now takes saying out loud. The content and title runs score different
+  fields and their scores are not comparable: measured on 0.11.0, a memory
+  whose title matched and whose content said nothing relevant scored 0.902 on
+  `title` against 0.675 for the best `content` match, because a short field
+  inflates under BM25 length normalisation. Concatenating the runs used to make
+  content precedence true by construction; normalising each run to 0-to-1 would
+  have silently dropped it and moved title-only hits by the whole `w_bm25` term
+  (1.0 by default, against a recency term that maxes out at 0.3). So each run
+  is scaled into a band instead — content into the upper half of `[0, 1]`,
+  title-only into the lower — which keeps the old ordering as an explicit
+  policy while the engine's score does the spacing inside each band.
 
   Result rows are unchanged: the score is used for ranking and stripped before
   it reaches a caller. Task and project search are untouched, because they
