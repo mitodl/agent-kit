@@ -1232,9 +1232,11 @@ def test_a_read_inside_hold_write_lock_is_unaffected(monkeypatch, tmp_path):
 def _overlap_detector(monkeypatch, hold=0.05):
     """Stub subprocess.run so it reports the most calls ever in flight at once.
 
-    ``max_in_flight`` is the assertion every test below turns on: 1 means the
-    calls were serialised, 2 means they overlapped. The hold is what gives a
-    second caller time to arrive while the first is still inside.
+    ``max_in_flight`` of 1 means the calls were serialised, 2 that they
+    overlapped. The hold is what gives a second caller time to arrive while the
+    first is still inside. Used where a *weaker* check is enough; the regression
+    test below parks a writer inside the store instead, so it cannot pass by the
+    two threads simply never meeting.
     """
     state = {"in_flight": 0, "max_in_flight": 0, "calls": 0}
     guard = threading.Lock()
@@ -1284,18 +1286,54 @@ def test_concurrent_writes_to_one_s3_store_do_not_overlap(monkeypatch):
     s3:// used to be grouped with http(s) as "unlockable", which is true of
     flock and false of a mutex. This is the test that pins the distinction:
     same process, same store, no overlap.
+
+    Written so it can only fail by the lock being wrongly GRANTED, the same way
+    the flock contention test above is: the first writer parks inside the
+    subprocess and the second is checked for having stayed out. A slow second
+    thread merely makes the negative check weaker, never false, so this cannot
+    pass vacuously on a starved runner the way a pure hold-and-count would.
     """
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
     client = OmnigraphClient("s3://bucket/graph-v9.omni", Path("/queries"))
-    seen = _overlap_detector(monkeypatch)
+    first_inside = threading.Event()
+    may_finish = threading.Event()
+    entered: list[int] = []
+    guard = threading.Lock()
+
+    def fake_run(cmd, **kwargs):
+        with guard:
+            entered.append(1)
+            ordinal = len(entered)
+        if ordinal == 1:
+            first_inside.set()
+            may_finish.wait(timeout=10)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(og.subprocess, "run", fake_run)
 
     def write():
         client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
 
-    _run_together(write, write)
+    finished = threading.Event()
 
-    assert seen["calls"] == 2
-    assert seen["max_in_flight"] == 1
+    def both():
+        _run_together(write, write)
+        finished.set()
+
+    driver = threading.Thread(target=both, daemon=True)
+    driver.start()
+    assert first_inside.wait(timeout=10)
+
+    # The whole point: the second writer must not be inside the store while the
+    # first one is.
+    time.sleep(0.5)
+    with guard:
+        assert len(entered) == 1
+
+    may_finish.set()
+    assert finished.wait(timeout=15)
+    driver.join(timeout=15)
+    assert len(entered) == 2
 
 
 def test_concurrent_writes_to_different_s3_stores_do_overlap(monkeypatch):

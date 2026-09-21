@@ -206,6 +206,45 @@ def test_status_classification(status, message, expected):
     assert ogh.classify_status(status, message) == expected
 
 
+_SIDECAR_MESSAGE = (
+    "OCC recovery sidecar '01M2V544QY00SSGZA0PSRK3B9X' found original commit id "
+    "'01M2V54457QR0XB7ZW47H5V88H' but its manifest delta differs"
+)
+
+
+@pytest.mark.parametrize("status", [409, 500, 503])
+def test_a_quarantined_store_is_classified_on_every_status_it_can_arrive_with(
+    status,
+):
+    """★ 503 IS THE ONE THAT MATTERS, and it is why this check sits above the
+    503 block rather than below it with the other message markers.
+
+    That block returns unconditionally. Below it, a server relaying the sidecar
+    error as 503 would be read as UNAVAILABLE, and the caller would wait out the
+    whole connect budget only to be told it could not reach a server that
+    answered it. The `recovery required` special case already inside that block
+    exists for the same reason.
+    """
+    assert ogh.classify_status(status, _SIDECAR_MESSAGE) == ogh.STORE_QUARANTINED
+
+
+def test_a_quarantined_store_is_not_sent_to_repair():
+    """`_repair` cannot open a graph held shut by an active sidecar, so a
+    quarantine message that also names `omnigraph repair` must not be read as
+    repairable."""
+    message = _SIDECAR_MESSAGE + "; run `omnigraph repair` to inspect"
+    assert ogh.classify_status(500, message) == ogh.STORE_QUARANTINED
+
+
+def test_the_self_clearing_recovery_barrier_keeps_its_own_classification():
+    """Both quarantine markers are required precisely so the barrier, which also
+    says "recovery", stays retryable for reads on its own budget."""
+    assert (
+        ogh.classify_status(503, "recovery required for operation 01KZY…")
+        == ogh.RECOVERY_REQUIRED
+    )
+
+
 def test_repair_wins_over_retryable_when_both_words_appear():
     """`_execute` repairs before it sleeps, so the classifier must agree.
 

@@ -1318,6 +1318,10 @@ def store_write_lock(store: str) -> Iterator[None]:
         with _in_process_write_lock(store):
             yield
         return
+    # Everything else is a local path, and the fall-through assumes it: a scheme
+    # dropped from BOTH lists above would land here and flock `<scheme>:/…lock`,
+    # a real local file named after a remote store. Any new scheme belongs in
+    # one of the two lists.
     fh = acquire_store_flock(store)
     try:
         yield

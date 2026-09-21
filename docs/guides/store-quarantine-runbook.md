@@ -130,16 +130,26 @@ omnigraph repair --store s3://<bucket>/<root>/graphs/<graph>.omni --json
 aws s3 ls s3://<bucket>/<root>/graphs/<graph>.omni/__recovery/
 
 # Real reads and writes through witan itself, not just the CLI.
-witan memory search --target <target> <a term you know is indexed>
+witan memory --target <target> <a term you know is indexed>
 witan tasks --target <target>
 ```
 
 The 2026-09-18 recovery ended with `no_drift` on all 27 datasets, zero active
 sidecars, and reads and writes succeeding.
 
-**Rollback.** If the repair leaves the graph worse, restore step 2's copy over
-the root with the writers still stopped, and start again from step 4 with the
-preserved sidecar. There is no partial undo of a forced repair.
+**Rollback.** If the repair leaves the graph worse, restore step 2's copy with
+the writers still stopped, then start again from step 4 with the preserved
+sidecar. There is no partial undo of a forced repair.
+
+The restore has to be `--delete`, and that flag is destructive in the direction
+you want: without it `aws s3 sync` is purely additive, so every object the
+forced repair created survives and you end up with a mixed root that is neither
+the pre-repair state nor the post-repair one, while believing you rolled back.
+
+```bash
+aws s3 sync --delete \
+  s3://<bucket>/backups/quarantine-<stamp>/ s3://<bucket>/<root>
+```
 
 **9. Restart the writers**, one at a time, and confirm the first one's writes
 land before starting the next.

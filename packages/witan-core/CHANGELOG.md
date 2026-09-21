@@ -28,7 +28,10 @@ a MINOR bump may include breaking changes).
   now covers all three tiers: flock for a local path, a per-URI in-process
   `RLock` for `s3://`, nothing for a served store. Writers in *separate*
   processes against one `s3://` root are still uncoordinated — that topology
-  wants a served single-writer target.
+  wants a served single-writer target. Consequence worth knowing: `store_merge`
+  into an `s3://` target now holds that lock across export → reconcile → load,
+  so it blocks the process's other writes to that graph for the duration, as it
+  has always done for a local target.
 
 ## [0.38.0] - 2026-09-21
 

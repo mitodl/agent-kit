@@ -248,7 +248,8 @@ def _statement_payload(source: str, params: dict | None) -> dict:
 QUARANTINE_MARKERS = ("occ recovery sidecar", "manifest delta differs")
 
 
-def is_store_quarantined(lowered: str) -> bool:
+def is_store_quarantined(message: str) -> bool:
+    lowered = message.lower()
     return all(marker in lowered for marker in QUARANTINE_MARKERS)
 
 
@@ -272,6 +273,16 @@ def classify_status(status: int, message: str) -> str:
         # server has told us our stated condition was false, and no wording
         # makes that retryable.
         return PRECONDITION_FAILED
+    # ★ ABOVE THE 503 BLOCK, WHICH RETURNS UNCONDITIONALLY. Put after it, this
+    # check is unreachable for a server that relays the sidecar error as 503,
+    # and the caller then waits out the whole _UNAVAILABLE_MAX_WAIT budget
+    # before being told it "could not connect" — to a server that answered. Its
+    # placement is the same judgement the `recovery required` special case
+    # inside that block already makes: not every 503 means "wait for the
+    # server". Also ahead of NEEDS_REPAIR, since an active sidecar blocks
+    # `omnigraph repair` too and a quarantine message may well name it.
+    if is_store_quarantined(lowered):
+        return STORE_QUARANTINED
     if status == 503:
         # ★ NOT EVERY 503 IS "WAIT FOR THE SERVER". The blanket rule below rests
         # on a premise this one breaks: that a 503 proves the request was
@@ -290,11 +301,6 @@ def classify_status(status: int, message: str) -> str:
         # unreachable server (wait for it), and the response proves the request
         # was rejected rather than applied, so it is safe for writes too.
         return UNAVAILABLE
-    # BEFORE NEEDS_REPAIR: an active sidecar blocks `omnigraph repair` as well,
-    # so classifying it as repairable would drive a repair that fails
-    # identically. See STORE_QUARANTINED.
-    if is_store_quarantined(lowered):
-        return STORE_QUARANTINED
     if any(marker in lowered for marker in ("ahead of manifest", "omnigraph repair")):
         return NEEDS_REPAIR
     if any(

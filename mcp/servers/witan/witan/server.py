@@ -2497,8 +2497,14 @@ def merge_store(
 
     # Held across export → reconcile → load, so no other writer can land
     # between the target export and the load and make the decisions stale. The
-    # load inside re-enters this lock rather than blocking on it; a remote
-    # target takes no lock at all (flock coordinates local writers only).
+    # load inside re-enters this lock rather than blocking on it.
+    #
+    # An `s3://` target is held too, since agent-kit#364 gave that tier an
+    # in-process mutex. So a merge into an s3 target blocks this process's other
+    # writes to that graph for the whole reconcile, which can be minutes. That
+    # is the same bargain a local target has always made, and it is the point:
+    # a writer landing mid-reconcile is what makes the decisions stale. A served
+    # target still takes no lock, because its other writers are on other hosts.
     with target_client.hold_write_lock():
         with tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp:
             tmp_path = Path(tmp)
