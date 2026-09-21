@@ -17,7 +17,11 @@ import pytest
 
 from witan_code import config as cfg_module
 from witan_code import reaper as reaper_module
-from witan_code.graph import OmnigraphClient
+from witan_code.graph import (
+    OmnigraphClient,
+    UnquotableBranchName,
+    _gq_branch_name,
+)
 from witan_code.reaper import ViewAge, reap, select_stale
 
 from .conftest import requires_omnigraph
@@ -205,6 +209,49 @@ def test_one_undeletable_view_does_not_strand_the_sweep():
     )
     assert report.deleted == ["act-bob/older"]
     assert report.failed == [("act-alice/ancient", "branch is locked")]
+
+
+def test_a_name_the_client_cannot_quote_is_recorded_rather_than_raised():
+    """The same rule, for the one failure this client can produce BEFORE it
+    reaches the engine. `branch list` returns whatever any client ever created,
+    so a name outside `_QUOTABLE_BRANCH` is reachable here and nowhere else.
+
+    It is pinned because the exception TYPE is load-bearing and invisible: the
+    handler above catches `RuntimeError`, `select_stale` sorts oldest-first,
+    and a sibling type would therefore abort the sweep at the oldest poison
+    name, stranding every newer stale view behind it and returning no report at
+    all.
+    """
+
+    class _WithAnUnquotableName(_FakeClient):
+        def list_branches(self):
+            return ['act-alice/we"ird', "act-bob/older"]
+
+        def branch_last_write(self, name):
+            # Oldest first out of `select_stale`, so the bad one is reached
+            # before the good one, which is the case that used to strand.
+            return NOW - (500 * DAY if '"' in name else 400 * DAY)
+
+        def delete_branch(self, name):
+            _gq_branch_name(name)  # what the real client does first
+            super().delete_branch(name)
+
+    report = reap(
+        _WithAnUnquotableName(is_remote=False),
+        graph="local",
+        now=NOW,
+        max_idle=14,
+        apply=True,
+    )
+
+    assert report.deleted == ["act-bob/older"]
+    assert [view for view, _ in report.failed] == ['act-alice/we"ird']
+
+
+def test_the_unquotable_name_error_is_a_runtime_error():
+    """What the test above rests on, stated directly so a change to the class
+    fails here rather than as a stranded sweep."""
+    assert issubclass(UnquotableBranchName, RuntimeError)
 
 
 def test_a_disabled_window_ages_nothing_rather_than_ageing_and_discarding():

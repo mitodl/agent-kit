@@ -639,7 +639,9 @@ def test_a_client_injecting_extra_cli_args_stays_on_the_subprocess(
     assert client._http_transport() is None
 
 
-def test_a_branched_client_does_use_http_for_a_statement(monkeypatch, queries_dir):
+def test_a_branched_client_does_use_http_for_a_statement(
+    _fake_http, monkeypatch, queries_dir
+):
     """...and the exception that proves the rule above states it correctly.
 
     The guard exists because an injected arg would be DROPPED on the HTTP body.
@@ -648,6 +650,10 @@ def test_a_branched_client_does_use_http_for_a_statement(monkeypatch, queries_di
     nothing to drop, and `statement` opts out. Without this, every branch
     create and delete on the cluster would stay a subprocess purely because the
     client happens to be branched, which is what this change removes.
+
+    Driven end to end rather than asserted on `_http_transport` alone: what
+    matters is that the statement reaches the wire, at the right route, with no
+    trace of the `--branch` this client injects everywhere else.
     """
 
     class BranchedClient(OmnigraphClient):
@@ -655,9 +661,17 @@ def test_a_branched_client_does_use_http_for_a_statement(monkeypatch, queries_di
             return ["--branch", "act-alice/wip"]
 
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/omnigraph")
+    FakeConnection.script = [ok({"outcome": {"kind": "created", "name": "x"}})]
     client = BranchedClient("http://host:8080", queries_dir, graph_id="council")
 
-    assert client._http_transport(carries_extra_args=False) is not None
+    client.statement("mutate", 'branch create "act-alice/wip" from main')
+
+    request = FakeConnection.created[-1].requests[-1]
+    assert request["path"] == "/graphs/council/mutate"
+    assert json.loads(request["body"]) == {
+        "query": 'branch create "act-alice/wip" from main'
+    }
+    assert "--branch" not in request["body"]
 
 
 @pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE"])

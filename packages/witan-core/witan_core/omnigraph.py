@@ -1725,18 +1725,29 @@ class OmnigraphClient:
         verb: str,
         source: str,
         *cli_args: str,
+        label: str | None = None,
         surface_conflict: bool = False,
     ) -> str:
         """Run one inline GQ statement — no query file, no name, no params.
 
         omnigraph 0.11 exposes branch work as GQ over the canonical routes
         (upstream RFC 0055): ``branch list`` is a ``query`` statement and
-        ``branch create``/``delete``/``merge`` are ``mutate`` statements, under
-        the same Cedar actions as the ``/branches`` endpoints. That is what
-        this exists for, and it is the whole reason branch work no longer needs
-        a second subprocess shape: a statement rides the same transport, the
-        same retry/admission policy and the same error classification as every
-        other read and write.
+        ``branch create``/``delete``/``merge`` are ``mutate`` statements. That
+        is what this exists for, and it is the whole reason branch work no
+        longer needs a second subprocess shape: a statement rides the same
+        transport, the same retry/admission policy and the same error
+        classification as every other read and write.
+
+        ★ THE ROUTE DOES NOT WIDEN AUTHORITY, which is the thing to check
+        before putting a branch delete on the same endpoint as every ordinary
+        write. A statement is authorized as its BRANCH action, not as the
+        route's. Measured against a 0.11.0 server running witan's own
+        code-graph Cedar bundle (2026-09-21): a ``witan-users`` actor, who
+        holds ``change`` on unprotected branches but deliberately not
+        ``branch_delete``, gets ``403 policy denied action 'branch_delete'
+        targeting branch 'act-alice/wip'`` from ``POST /mutate``, while the
+        same request as ``act-svc-witan-ci`` succeeds. ``branch create``
+        likewise checks ``branch_create``.
 
         THREE THINGS DIFFER FROM A NAMED CALL, all of them load-bearing:
 
@@ -1751,6 +1762,12 @@ class OmnigraphClient:
           HTTP path needs neither, since it always answers JSON and carries its
           authorization in the token.
 
+        ``label`` names the operation in an error message and in the retry
+        loop's logging, defaulting to ``verb``. A statement's verb is a poor
+        label on its own: every branch operation would report itself as
+        ``omnigraph mutate failed``, where the CLI subcommand this replaces
+        said ``branch``.
+
         ``surface_conflict`` matters more here than it does for
         :meth:`change`, because 0.11 answers a duplicate ``branch create``
         with **HTTP 409** (verified against the 0.11.0 server: ``{"error":
@@ -1761,6 +1778,17 @@ class OmnigraphClient:
         backoff sleeps, before surfacing. The CLI path has no such trap: the
         same failure is prose that matches no marker and classifies FATAL.
         """
+        # The two paths disagree about what a write is if they are allowed to:
+        # `_http_execute` calls it `verb == "mutate"` while `_WRITE_SUBCOMMANDS`
+        # also holds `load`, `optimize` and `cleanup`. Rather than reconcile
+        # two definitions for verbs that have no statement form anyway, only
+        # the two that do are accepted, and then the definitions agree.
+        if verb not in ("query", "mutate"):
+            raise ValueError(
+                f"statement() runs a query or a mutate, not {verb!r}; "
+                "the other subcommands have no inline-statement form."
+            )
+        is_write = verb == "mutate"
         transport = self._http_transport(carries_extra_args=False)
         if transport is not None:
             return self._http_execute(
@@ -1768,10 +1796,9 @@ class OmnigraphClient:
                 verb,
                 source,
                 None,
-                verb,
+                label or verb,
                 surface_conflict=surface_conflict,
             )
-        is_write = verb in _WRITE_SUBCOMMANDS
         cmd = [
             self._binary,
             verb,
@@ -1782,7 +1809,7 @@ class OmnigraphClient:
             *cli_args,
         ]
         return self._execute(
-            cmd, verb, is_write=is_write, surface_conflict=surface_conflict
+            cmd, label or verb, is_write=is_write, surface_conflict=surface_conflict
         )
 
     # ── Internals ─────────────────────────────────────────────────

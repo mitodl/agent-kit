@@ -8,6 +8,8 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-21
+
 ### Changed
 
 - **Branch work goes through omnigraph 0.11 GQ statements, not the branch
@@ -16,18 +18,34 @@ a MINOR bump may include breaking changes).
   mutate routes as every other read and write, so they share its transport,
   retry policy and error classification. Against the cluster that removes a
   subprocess per call, including on a branched client, which the named-query
-  path still cannot route over HTTP.
+  path still cannot route over HTTP. Cedar still scopes these as branch
+  actions rather than as the route's `change`, so no actor gains authority it
+  did not have (verified against a 0.11.0 server running the code-graph
+  bundle).
 
-  Two behaviours of 0.11 this depends on, both measured against the 0.11.0
-  binary and server: a branch name must be QUOTED in the statement (an
-  unquoted `act-x/v` is a parse error, and there is no escape for a `"` inside
-  the quotes, so a name carrying one is refused rather than interpolated), and
-  a duplicate `branch create` answers HTTP 409, which is retryable by status —
-  `ensure_branch` surfaces it instead, then re-lists to confirm, as it already
-  did for the CLI's prose.
+  Three behaviours of 0.11 this depends on, all measured against the 0.11.0
+  binary and server:
 
-  Needs the next `witan-core` release for `OmnigraphClient.statement`; the
-  floor moves to that version when it ships.
+  - A branch name must be QUOTED in the statement; an unquoted `act-x/v` is a
+    parse error. A `"` inside the quotes, on the other hand, PARSES fine (GQ
+    honours `\"`) and is then refused by the storage layer, so the guard is
+    against a statement that means something other than what was asked, not
+    against a syntax error. Names are checked against omnigraph's own rule,
+    which is Unicode alphanumeric plus `.`, `-`, `_` per `/`-separated
+    segment — `café` and `act-x/дом` are valid branch names, and a narrower
+    charset would have made the reaper refuse to delete views omnigraph
+    created quite happily.
+  - A duplicate `branch create` answers HTTP 409, which `classify_status`
+    reads as retryable by status. So does the transient write-authority
+    precondition, and the two are indistinguishable. `ensure_branch` surfaces
+    conflicts and does its own re-list-and-retry, which resolves the first
+    without giving up the retry the second needs.
+  - `branch list` returns a `rows` envelope of `{"name": ...}`, not the old
+    `{"branches": [...]}`.
+
+- **Require `witan-core>=0.38`**, for `OmnigraphClient.statement`. The failure
+  without it is a runtime `AttributeError` on the first `list_branches()`, not
+  an import error, so `just check-core-floor` cannot catch it.
 
 ## [0.19.1] - 2026-09-18
 

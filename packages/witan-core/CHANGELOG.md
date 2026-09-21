@@ -8,6 +8,8 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-09-21
+
 ### Added
 
 - **`RemoteMCPProxy.ensure_tool_schema()` / `prime_tool_schema()`**, for a
@@ -22,12 +24,17 @@ a MINOR bump may include breaking changes).
 
 - **`OmnigraphClient.statement(verb, source, *cli_args)`: run one inline GQ
   statement.** omnigraph 0.11 serves branch work as GQ over the canonical
-  routes (upstream RFC 0055) — `branch list` on `query`, `branch
-  create`/`delete`/`merge` on `mutate` — so a caller no longer needs a second
+  routes (upstream RFC 0055): `branch list` on `query`, `branch
+  create`/`delete`/`merge` on `mutate`. A caller no longer needs a second
   subprocess shape for it. A statement sends no params key at all (0.11 refuses
   a branch statement that carries one, even an empty one), injects no
   `_extra_args`, and may therefore use the pooled HTTP transport even on a
   client that is otherwise pinned to the CLI by its extra args.
+
+  The route does not widen authority: a statement is authorized as its branch
+  action, so `branch delete` on `/mutate` checks `branch_delete`, not the
+  `change` that route otherwise implies. Verified against a 0.11.0 server
+  running witan's own code-graph Cedar bundle.
 
 ### Changed
 

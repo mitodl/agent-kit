@@ -720,7 +720,7 @@ def test_branch_list_is_a_query_statement_returning_name_rows(store):
 def test_a_branch_statement_needs_its_name_quoted(store):
     """Why `witan_code.graph._gq_branch_name` exists. An unquoted name is a
     parse error, so interpolating one straight into the statement would fail
-    every create and delete on a view whose name carries a `/` or a `.` — which
+    every create and delete on a view whose name carries a `/` or a `.`, which
     every namespaced view's does."""
     unquoted = _run(
         "mutate",
@@ -730,14 +730,21 @@ def test_a_branch_statement_needs_its_name_quoted(store):
         "branch create act-x/v from main",
         expect_ok=False,
     )
-    assert unquoted.returncode != 0
+    assert "parse error" in unquoted.stderr
 
     quoted = _run("mutate", "--store", store, "-e", 'branch create "act-x/v" from main')
     assert "act-x/v" in quoted.stdout
 
-    # And there is no escape for a `"` inside one, which is the other half of
-    # that helper: a name carrying one cannot be expressed, so it is refused
-    # rather than turned into a statement that means something else.
+
+def test_a_quote_inside_a_branch_name_parses_and_is_refused_a_layer_down(store):
+    """★ THE REASON `_gq_branch_name` REFUSES A `"`, WHICH IS NOT THE OBVIOUS
+    ONE. GQ honours `\\"` inside a quoted string, so the parser accepts it and
+    builds the name `we"ird`. The refusal comes from the storage layer
+    afterwards, validating the ref.
+
+    Pinned because the wrong reading ("a `"` is a parse error, so it can never
+    mean anything") is exactly what would justify widening that charset later.
+    It parses; what stops it is one level down."""
     escaped = _run(
         "mutate",
         "--store",
@@ -746,7 +753,25 @@ def test_a_branch_statement_needs_its_name_quoted(store):
         'branch create "we\\"ird" from main',
         expect_ok=False,
     )
-    assert escaped.returncode != 0
+
+    assert "parse error" not in escaped.stderr
+    assert "Branch segment" in escaped.stderr
+    assert 'we"ird' in escaped.stderr
+
+
+def test_branch_segments_may_be_unicode_alphanumeric(store):
+    """The other half of that charset. omnigraph's validator says "Only
+    alphanumeric, '.', '-', '_' are allowed" per `/`-separated segment, and its
+    "alphanumeric" is Unicode's, not ASCII's. `_QUOTABLE_BRANCH` has to match
+    the ENGINE's rule: narrower, and the reaper refuses to delete views
+    omnigraph created quite happily."""
+    created = _run("mutate", "--store", store, "-e", 'branch create "café" from main')
+    assert "café" in created.stdout
+
+    names = json.loads(
+        _run("query", "--store", store, "-e", "branch list", "--format", "json").stdout
+    )["rows"]
+    assert "café" in [row["name"] for row in names]
 
 
 # ── version / snapshot ────────────────────────────────────────────────────

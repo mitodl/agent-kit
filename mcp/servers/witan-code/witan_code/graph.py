@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 from witan_core.omnigraph import OmnigraphClient as _BaseOmnigraphClient
-from witan_core.omnigraph import _is_storage_version_mismatch
+from witan_core.omnigraph import OmnigraphConflict, _is_storage_version_mismatch
 
 from witan_core import chunking
 from . import config as cfg_module
@@ -23,6 +23,7 @@ from . import views
 __all__ = [
     "OmnigraphClient",
     "SharedGraphWriteRefused",
+    "UnquotableBranchName",
     "check_writable",
     "is_stale_schema",
     "owns_view",
@@ -39,32 +40,63 @@ class SharedGraphWriteRefused(RuntimeError):
     """A writer tried to write a view of a shared graph it does not own."""
 
 
+class UnquotableBranchName(RuntimeError):
+    """A branch name that cannot be written into a GQ branch statement.
+
+    A ``RuntimeError`` on purpose: the names that reach :func:`_gq_branch_name`
+    from outside this package come from ``branch list``, so the reaper meets
+    them one at a time and must record the bad one in ``report.failed`` and
+    carry on. Its handler catches ``RuntimeError``, and a sibling type would
+    abort the whole sweep at the oldest poison name, stranding every newer
+    stale view behind it.
+    """
+
+
 #: What a branch name may contain for :func:`_gq_branch_name` to be able to put
-#: it in a statement. It is the union of what every component's own sanitizer
-#: emits (:mod:`witan_code.views`) plus the ``/`` that joins them, so no name
-#: witan-code constructs is ever refused.
-_QUOTABLE_BRANCH = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
+#: it in a statement. Deliberately the ENGINE'S rule, not witan-code's: 0.11's
+#: storage layer validates each ``/``-separated segment as "alphanumeric, '.',
+#: '-', '_'", and its "alphanumeric" is Unicode, so ``café`` and ``act-x/дом``
+#: are both branch names it creates quite happily. ``\w`` is that same set
+#: (Unicode word characters, which include ``_``), plus the ``.``, ``-`` and
+#: the ``/`` that separates segments.
+#:
+#: Matching the engine rather than our own sanitizers is what keeps this a
+#: quoting guard instead of a second, stricter naming policy: every name
+#: witan-code builds is inside it either way, and a name some other client
+#: created is refused only when the engine would refuse it too.
+_QUOTABLE_BRANCH = re.compile(r"\A[\w./-]+\Z")
+
+#: How many times :meth:`OmnigraphClient.ensure_branch` re-lists and retries
+#: after a 409. Small on purpose: the duplicate-create case resolves on the
+#: second listing, and the transient precondition it also covers already has
+#: the engine's own backoff underneath each attempt.
+_ENSURE_BRANCH_ATTEMPTS = 3
 
 
 def _gq_branch_name(name: str) -> str:
-    """``name`` as a GQ string literal, or raise.
+    """``name`` as a GQ string literal, or raise :class:`UnquotableBranchName`.
 
-    A branch statement needs the name QUOTED — verified against the 0.11.0
-    binary, ``branch create act-x/feat_y from main`` is a parse error and
-    ``branch create "act-x/feat_y" from main`` succeeds — and 0.11 has no
-    escape for a ``"`` inside one (``"we\\"ird"`` is also a parse error). So a
-    name carrying one cannot be expressed at all, and this refuses rather than
-    emitting a statement that means something else.
+    A branch statement needs its name QUOTED. Verified against the 0.11.0
+    binary: ``branch create act-x/feat_y from main`` is a ``parse error``, and
+    ``branch create "act-x/feat_y" from main`` succeeds.
 
-    Unreachable for a name this package built, which is the point: the names
-    that do not come from here are the ones ``branch list`` hands the reaper,
-    which are whatever any client ever created on the store.
+    GQ *does* honour ``\\"`` inside the quotes, so the danger is not that a
+    ``"`` fails to parse. It is that it parses fine and the statement then
+    means something other than what the caller asked. What refuses
+    ``"we\\"ird"`` is the storage layer, one level down and after the parse:
+    ``storage: Ref is invalid: Branch segment 'we"ird.<ulid>' contains invalid
+    characters``. So the charset above, which excludes both ``"`` and ``\\``,
+    is what keeps a name from reaching that point at all.
+
+    Unreachable for a name this package built. The ones that do not come from
+    here are whatever ``branch list`` returns, which is whatever any client
+    ever created on the store.
     """
     if not _QUOTABLE_BRANCH.match(name):
-        raise ValueError(
+        raise UnquotableBranchName(
             f"branch name {name!r} cannot be written as an omnigraph GQ "
-            "statement: it has characters outside [A-Za-z0-9._/-], and 0.11 "
-            "has no escape for them inside a quoted branch name."
+            r"statement: it has characters outside [\w./-], which is what "
+            "omnigraph itself allows in a branch segment."
         )
     return f'"{name}"'
 
@@ -255,7 +287,9 @@ class OmnigraphClient(_BaseOmnigraphClient):
         envelope a named read returns — verified identical on both transports
         against the 0.11.0 binary and the 0.11.0 server.
         """
-        result = self.statement("query", "branch list", "--format", "json")
+        result = self.statement(
+            "query", "branch list", "--format", "json", label="branch list"
+        )
         try:
             parsed = json.loads(result)
         except json.JSONDecodeError:
@@ -274,38 +308,62 @@ class OmnigraphClient(_BaseOmnigraphClient):
 
         Needed before the first *read* on a new branch — reads never fork
         (only ``load --from`` does), so a read against a missing branch errors.
+
+        ★ TWO DIFFERENT 409s ARRIVE HERE AND ONLY ONE IS THIS METHOD'S RACE.
+        0.11 answers a duplicate create with ``branch 'x' already exists``, and
+        it answers a lost write-authority precondition (``write authority
+        'graph_head:main' changed during preparation``) with a 409 too.
+        ``classify_status`` keys on the status, so it cannot tell them apart,
+        and reads both as RETRYABLE.
+
+        Neither default is right on its own. Retrying silently would spend the
+        whole budget, backoff sleeps included, re-racing a branch that is
+        already there; ``surface_conflict=True`` alone would turn the genuinely
+        transient precondition into a hard failure of ``code_store_open``,
+        where the old CLI path rode it out. So conflicts are surfaced AND the
+        retry is put back here, around a fresh listing — which is what makes
+        the duplicate case resolve as "it exists, we are done" instead of as
+        another doomed attempt.
+
+        The CLI path produces neither 409: its already-exists is prose matching
+        no marker, classifies FATAL, and lands in the ``RuntimeError`` clause.
         """
-        if self.branch is None or self.branch in self.list_branches():
+        if self.branch is None:
             return
-        try:
-            self.statement(
-                "mutate",
-                f"branch create {_gq_branch_name(self.branch)} from main",
-                surface_conflict=True,
-            )
-        except RuntimeError as exc:
-            # Two concurrent `code_store_open` calls for one view both see it
-            # missing, and the second create fails. The branch exists either
-            # way, which is all this method promises. Re-listing confirms that
-            # rather than trusting the message alone.
-            #
-            # ONE CLAUSE COVERS BOTH TRANSPORTS because `OmnigraphConflict` is
-            # a `RuntimeError` and carries the engine's own message. The CLI
-            # prints "branch 'x' already exists" and classifies FATAL; the
-            # server answers 409, which `classify_status` reads as retryable,
-            # so the `surface_conflict=True` above is what turns that into this
-            # exception instead of a full retry budget spent re-racing a branch
-            # that already exists.
-            if "already exists" not in str(exc) or self.branch not in (
-                self.list_branches()
-            ):
-                raise
+        create = f"branch create {_gq_branch_name(self.branch)} from main"
+        conflict: RuntimeError | None = None
+        for _ in range(_ENSURE_BRANCH_ATTEMPTS):
+            if self.branch in self.list_branches():
+                return
+            try:
+                self.statement(
+                    "mutate", create, label="branch create", surface_conflict=True
+                )
+                return
+            except OmnigraphConflict as exc:
+                conflict = exc
+            except RuntimeError as exc:
+                # The CLI's own already-exists. Two concurrent
+                # `code_store_open` calls for one view both saw it missing and
+                # both tried to create it. Anything else is a real failure.
+                if "already exists" not in str(exc):
+                    raise
+                conflict = exc
+        # The message alone is never trusted: the branch has to actually be
+        # there, which is all this method promises.
+        if self.branch not in self.list_branches():
+            raise conflict  # noqa: RSE102 — the loop cannot exit without one
 
     def delete_branch(self, name: str) -> None:
         # `--yes` is for the CLI path only, where a destructive write against a
         # non-local scope refuses without it; the HTTP route has no prompt to
         # skip and ignores flags entirely.
-        self.statement("mutate", f"branch delete {_gq_branch_name(name)}", "--yes")
+        self.statement(
+            "mutate",
+            f"branch delete {_gq_branch_name(name)}",
+            "--yes",
+            label="branch delete",
+        )
 
     def branch_last_write(self, name: str) -> float | None:
         """When ``name`` was last written, as epoch seconds, or ``None``.
