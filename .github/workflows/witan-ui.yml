@@ -1,8 +1,9 @@
 name: witan UI
 
-# Narrower paths than witan-tests.yml, deliberately: this job builds a
-# TypeScript bundle and resolves nothing from the uv workspace, so a Python
-# dependency change cannot affect it.
+# Narrower paths than witan-tests.yml, deliberately. The build job is pure
+# TypeScript, but the packaging and fixtures jobs below do resolve from the uv
+# workspace, so this filter names the workspace inputs they actually read
+# rather than the whole of it.
 on:
   push:
     branches: [main]

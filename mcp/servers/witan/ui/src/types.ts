@@ -143,8 +143,8 @@ export interface WorkflowProjectDetail extends WorkflowProject {
 	description: string | null;
 	author: string | null;
 	blocked_by: string[] | null;
-	/** Slugs of the projects THIS one holds back. */
-	blocks: string[] | null;
+	/** Slugs of the projects THIS one holds back. Always present. */
+	blocks: string[];
 	github_issue: string | null;
 	tags: string[] | null;
 	created_at: string;
@@ -275,11 +275,29 @@ export function isTaskDetail(value: unknown): value is TaskDetail {
 	);
 }
 
+export function isReadyTaskRow(value: unknown): value is ReadyTaskRow {
+	return (
+		isRecord(value) &&
+		typeof value.slug === "string" &&
+		typeof value.title === "string" &&
+		typeof value.priority === "string" &&
+		typeof value.status === "string" &&
+		"assignee" in value
+	);
+}
+
 export function isProjectStatus(value: unknown): value is ProjectStatus {
 	return (
 		isRecord(value) &&
+		// The rollup's own projection, and its rows. Checking only
+		// `isRecord(project)` left the six-field shape and `ready_tasks`
+		// unguarded, and `ready_tasks` is what the §7.1 widget reads
+		// `lease_expired` off.
 		isRecord(value.project) &&
+		isWorkflowProjectCore(value.project) &&
+		"github_pr" in value.project &&
 		Array.isArray(value.ready_tasks) &&
+		value.ready_tasks.every(isReadyTaskRow) &&
 		typeof value.ready_truncated === "boolean" &&
 		isRecord(value.counts) &&
 		typeof (value.counts as { ready?: unknown }).ready === "number"
@@ -348,7 +366,13 @@ export function isMemoryNeighbors(value: unknown): value is MemoryNeighbors {
 
 export function isTopicResult(value: unknown): value is TopicResult {
 	return (
-		isRecord(value) && isRecord(value.topic) && Array.isArray(value.memories)
+		isRecord(value) &&
+		isRecord(value.topic) &&
+		Array.isArray(value.memories) &&
+		// Descends, because `topic` is an untyped record and `memories` is the
+		// only declared structure here: without this the guard could not go
+		// stale, because it was asserting nothing.
+		value.memories.every(isMemory)
 	);
 }
 

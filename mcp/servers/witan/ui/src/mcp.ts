@@ -34,25 +34,42 @@ import { assertFlagsMatchServer, unwrap } from "./unwrap.js";
  * mutations.
  */
 
+/** The path segment the bundle is mounted under. */
+const MOUNT = "/ui/";
+
 /**
- * Same origin as the page: the server serving this bundle also serves /mcp.
+ * Where `/mcp` is, given the document's own URL.
  *
- * Resolved per connect rather than at module scope, and against `baseURI`
- * rather than `origin`. Both matter for the MCP Apps widgets this layer is
- * meant to serve: a widget runs in a sandboxed iframe, where
- * `window.location.origin` is the STRING "null" and the URL constructor
- * throws, at import time, taking the whole module graph down rather than one
- * call. `baseURI` also means a bundle mounted under a path prefix resolves
- * relative to it instead of assuming the root.
+ * ★ ANCHORED ON THE MOUNT SEGMENT, NOT ON THE DOCUMENT'S DEPTH. Two earlier
+ * versions of this got it wrong in the same way, and both failed identically:
+ * every tool call POSTed at the page instead of the MCP endpoint, and the
+ * GET-only `/ui/` route answered 405.
+ *
+ *   "mcp"     -> /ui/mcp           wrong from any document
+ *   "../mcp"  -> /mcp              right, but only from /ui/<one-segment>
+ *
+ * The second is what a hash-routed app happens to produce today. Spec §6.1
+ * wants the URL to carry the view, the filters and the open slug, so the
+ * first view that uses `history.pushState` instead of a fragment puts the
+ * document at /ui/board/tk-x, and "../mcp" silently resolves to /ui/mcp
+ * again. Cutting at the mount instead is independent of how deep the route
+ * goes.
+ *
+ * Kept relative to the document rather than absolute on the origin so a
+ * reverse-proxy prefix survives (/witan/ui/board/x -> /witan/mcp), and
+ * resolved per connect rather than at module scope so a document whose URL
+ * the constructor rejects (an `about:srcdoc` widget frame) throws on one
+ * call rather than taking the module graph down at import.
  */
+export function mcpEndpoint(documentUrl: string): URL {
+	const here = new URL(documentUrl);
+	const cut = here.pathname.lastIndexOf(MOUNT);
+	const prefix = cut === -1 ? "/" : here.pathname.slice(0, cut + 1);
+	return new URL(`${prefix}mcp`, here);
+}
+
 function endpoint(): URL {
-	// ★ "../mcp", NOT "mcp". The bundle is served under /ui/, so `baseURI` is
-	// ".../ui/" and a bare "mcp" resolves to /ui/mcp, which is the SPA
-	// catch-all: every tool call would POST at the page itself and get
-	// index.html back. Resolving one level up gives /mcp, and it still tracks
-	// a reverse-proxy prefix (/witan/ui/ -> /witan/mcp), which is why this is
-	// relative to `baseURI` rather than absolute on the origin.
-	return new URL("../mcp", document.baseURI);
+	return mcpEndpoint(document.baseURI);
 }
 
 const PROTOCOL_ERA = "2026-07-28";

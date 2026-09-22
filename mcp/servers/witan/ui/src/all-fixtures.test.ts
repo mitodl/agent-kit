@@ -22,13 +22,20 @@ import { BOUND_TOOLS, unwrap } from "./unwrap.js";
  * covered the moment it lands rather than when someone remembers to import
  * it.
  *
- * Checking only the MCP envelope was not enough, and that gap was real: a
- * renamed field in a result nothing else guarded (`task_search`,
- * `workflow_project_get`/`list`, `workflow_session_list`, `topic_get`) would
- * survive a regeneration and leave the hand-written type quietly stale, which
- * is the one thing these fixtures exist to prevent. VALIDATORS below is
- * exhaustive over the bound set, and the test that asserts so is what stops a
- * new tool from being added without one.
+ * Checking only the MCP envelope was not enough: a renamed field in a result
+ * nothing else guarded (`task_search`, `workflow_project_get`/`list`,
+ * `workflow_session_list`, `topic_get`) survived a regeneration and left the
+ * hand-written type quietly stale.
+ *
+ * ★ EXHAUSTIVE OVER TOOLS, NOT OVER FIELDS, and the difference is worth
+ * knowing. The test below pins that every bound tool has a validator, so one
+ * cannot be added without one. Each validator checks the fields that
+ * DISCRIMINATE its type (what separates a search row from a list row, a
+ * project summary from the detail) rather than every field it declares. A
+ * rename of an unchecked field still passes here in the same PR that
+ * regenerates the fixture; `just ui-fixtures-check` catches it in every PR
+ * that does not, and `fixtures.test.ts` asserts the specific fields the views
+ * read.
  */
 const FIXTURES = import.meta.glob("../fixtures/*.json", {
 	eager: true,
