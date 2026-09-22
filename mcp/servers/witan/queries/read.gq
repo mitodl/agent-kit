@@ -376,6 +376,27 @@ query contradicts_in($slug: String) {
     order { $w.created_at desc }
 }
 
+// Every Contradicts edge with both endpoints, for `memory_contradictions`. Both
+// endpoints are Memory, so every node column is aliased `a_*`/`b_*` for the same
+// reason as the `edge_*` aliases above: unaliased, `$a.slug` and `$b.slug` both
+// strip to `slug` and one endpoint silently overwrites the other.
+query contradicts_pairs() {
+    match {
+        $a: Memory
+        $b: Memory
+        $a $w:contradicts $b
+    }
+    return {
+        $a.slug as a_slug, $a.title as a_title, $a.kind as a_kind,
+        $a.repo as a_repo, $a.author as a_author, $a.updated_at as a_updated_at,
+        $b.slug as b_slug, $b.title as b_title, $b.kind as b_kind,
+        $b.repo as b_repo, $b.author as b_author, $b.updated_at as b_updated_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
+}
+
 // Memories that AppliesTo $slug (in-direction; pairs with applies_to_targets).
 query applies_to_sources($slug: String) {
     match {

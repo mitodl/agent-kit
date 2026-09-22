@@ -4,6 +4,7 @@ import {
 } from "@modelcontextprotocol/client";
 import type {
 	Memory,
+	MemoryContradiction,
 	MemoryKind,
 	MemoryNeighbors,
 	ProjectStatus,
@@ -329,6 +330,16 @@ export function memoryNeighbors(args: {
 	kinds?: string[];
 }): Promise<MemoryNeighbors> {
 	return read("memory_neighbors", args);
+}
+
+/**
+ * Every contradicting pair, newest link first. A pair is in scope when either
+ * memory is in `repo`.
+ */
+export function memoryContradictions(args: {
+	repo: string;
+}): Promise<MemoryContradiction[]> {
+	return read("memory_contradictions", args);
 }
 
 /** `topic` is a `tp-` slug or a `name:kind` spec, e.g. `witan-ui:topic`. */

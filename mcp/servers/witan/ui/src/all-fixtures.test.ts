@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	isMemory,
+	isMemoryContradiction,
 	isMemoryNeighbors,
 	isProjectStatus,
 	isRecallResult,
@@ -58,6 +59,8 @@ const VALIDATORS: Record<string, (value: unknown) => boolean> = {
 	memory_list: (v) => Array.isArray(v) && v.every(isMemory),
 	memory_search: (v) => Array.isArray(v) && v.every(isMemory),
 	memory_neighbors: isMemoryNeighbors,
+	memory_contradictions: (v) =>
+		Array.isArray(v) && v.every(isMemoryContradiction),
 	topic_get: (v) => v === null || isTopicResult(v),
 };
 
@@ -96,6 +99,7 @@ const OPTIONAL_FIELDS: Record<string, string[]> = {
 	memory_list: MEMORY_OPTIONAL,
 	memory_search: MEMORY_OPTIONAL,
 	memory_neighbors: [],
+	memory_contradictions: [],
 	topic_get: [],
 };
 

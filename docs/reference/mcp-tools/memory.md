@@ -227,6 +227,28 @@ properties existed, and nothing backfills them.
 | `slug` | str | **required** | The memory whose neighbours to fetch. |
 | `kinds` | list[`supersedes` \| `refines` \| `applies_to` \| `contradicts` \| `related_to` \| `tagged`]? | `null` | Optional subset of edge kinds to include. Omit (``None``) for all kinds;<br>an explicit empty list returns no kinds. |
 
+## `memory_contradictions`
+
+List every pair of memories that contradict each other, newest link first.
+
+An unranked enumeration of the ``contradicts`` edges, for reviewing
+conflicts rather than loading context. ``recall`` reports a contradiction
+only when both memories land in its result, and ``memory_neighbors`` needs a
+slug to start from; this needs neither.
+
+Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
+carry ``slug, title, kind, repo, author, updated_at``; ``a`` is the side the
+link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
+all ``null`` on links written before edge properties existed.
+
+One row per unordered pair. ``contradicts`` is symmetric but can be stored
+in both directions; when it is, the newer link is the one reported, the same
+newest-wins rule as ``memory_neighbors``.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `repo` | str? | `null` | Repo scoping — see instructions. A pair is included when EITHER memory<br>is in scope, since a contradiction across two repos concerns both. With<br>no repo detected and none passed, only pairs touching an unscoped memory<br>(``repo`` null) are returned. |
+
 ## `memory_symbols`
 
 Code symbols a memory concerns (direction: memory → symbols).

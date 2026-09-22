@@ -256,6 +256,7 @@ TOOL_GROUPS: list[tuple[str, str, str, list[str]]] = [
             "memory_search",
             "memory_link",
             "memory_neighbors",
+            "memory_contradictions",
             "memory_symbols",
             "memory_for_contract",
             "symbol_context",
