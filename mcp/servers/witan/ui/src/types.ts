@@ -8,10 +8,11 @@
  *
  * They are kept honest from the other side instead: `fixtures/` holds real
  * results recorded from real tool calls (`just ui-fixtures`).
- * `all-fixtures.test.ts` walks every one of them through the unwrapper, and
- * `fixtures.test.ts` asserts the specific shapes below against the ones the
- * views lean on. A server change that renames a field fails the frontend
- * suite in the same PR that made it.
+ * `all-fixtures.test.ts` runs every one of them through the unwrapper and then
+ * through the guard below for its tool, and drops each field in turn to pin
+ * that the guard notices; `fixtures.test.ts` asserts the specific shapes the
+ * views lean on. A server change that renames a field fails the frontend suite
+ * in the same PR that made it.
  *
  * Fields are optional where the server genuinely omits them, not defensively.
  * `lease_expired` is the clearest case: it is present only on an
@@ -235,151 +236,314 @@ export interface TopicResult {
 
 // ── Runtime guards ─────────────────────────────────────────────────
 //
-// Narrow, and deliberately so. These exist to catch a server whose shape has
-// moved out from under the types above, which shows up as a missing or
-// wrong-typed key on the FIRST row. Validating every field of every row would
-// be a schema validator, and the fixtures are what play that part.
+// EXHAUSTIVE OVER THE FIELDS EACH TYPE DECLARES, not only over the ones that
+// discriminate one projection from another. The narrower version of this
+// missed exactly what the fixtures exist to catch: `isWorkflowProjectDetail`
+// checked three of the thirteen fields it declares, so renaming `github_pr`,
+// `author`, `blocked_by`, `github_issue`, `tags`, `updated_at` or
+// `completed_at` server-side left the hand-written type stale and the whole
+// suite green.
+//
+// Each guard below is a field table instead: every required field must be
+// present AND the right type, and every optional field that IS present must be
+// the right type. An absent optional is fine, since that is what makes it
+// optional; a `lease_expired: "yes"` is not.
+//
+// The closed unions (`TaskStatus`, `TaskPriority`, `TaskType`,
+// `WorkflowPhase`, `MemoryKind`) are checked for membership rather than for
+// `typeof === "string"`. They transcribe the server's own unions, and a view
+// switching on one silently drops any value the type does not name, so a
+// server that adds a status SHOULD fail here.
+
+type Check = (value: unknown) => boolean;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const str: Check = (v) => typeof v === "string";
+const num: Check = (v) => typeof v === "number";
+const bool: Check = (v) => typeof v === "boolean";
+/** A field declared `unknown`: the KEY has to be there, the value is free. */
+const anything: Check = () => true;
+const nullable =
+	(check: Check): Check =>
+	(v) =>
+		v === null || check(v);
+const arrayOf =
+	(check: Check): Check =>
+	(v) =>
+		Array.isArray(v) && v.every(check);
+const oneOf =
+	(...allowed: readonly string[]): Check =>
+	(v) =>
+		typeof v === "string" && allowed.includes(v);
+
+const strList = nullable(arrayOf(str));
+
+const taskStatus = oneOf("open", "in_progress", "blocked", "closed");
+const taskPriority = oneOf("p0", "p1", "p2", "p3");
+const taskType = oneOf("bug", "feature", "task", "chore", "epic");
+const workflowPhase = oneOf("discovery", "spec", "implementation", "delivery");
+const memoryKind = oneOf("pattern", "project_fact", "lesson", "agent_context");
+
+/**
+ * Every required field present and well-typed; every present optional one
+ * well-typed.
+ *
+ * `undefined` counts as absent even when the key exists: `JSON.parse` never
+ * produces it, but a hand-built object in a test does.
+ */
+function matches(
+	value: unknown,
+	required: Record<string, Check>,
+	optional: Record<string, Check> = {},
+): boolean {
+	if (!isRecord(value)) {
+		return false;
+	}
+	for (const [key, check] of Object.entries(required)) {
+		if (!(key in value) || !check(value[key])) {
+			return false;
+		}
+	}
+	for (const [key, check] of Object.entries(optional)) {
+		if (key in value && value[key] !== undefined && !check(value[key])) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// The tables mirror the interfaces above, and `extends` becomes a spread, so a
+// field added to a base type reaches every guard built on it.
+
+const TASK_CORE: Record<string, Check> = {
+	slug: str,
+	title: str,
+	repo: nullable(str),
+	type: taskType,
+	status: taskStatus,
+	priority: taskPriority,
+	project_slug: nullable(str),
+	parent_slug: nullable(str),
+	assignee: nullable(str),
+	external_uri: nullable(str),
+	tags: strList,
+	updated_at: str,
+};
+const TASK_CORE_OPTIONAL: Record<string, Check> = { lease_expired: bool };
+
+const TASK_ROW: Record<string, Check> = {
+	...TASK_CORE,
+	blocked_by: strList,
+	created_at: str,
+	closed_at: nullable(str),
+	claimed_at: nullable(str),
+};
+
+const WORKFLOW_PROJECT_CORE: Record<string, Check> = {
+	slug: str,
+	title: str,
+	phase: workflowPhase,
+	status: str,
+	repos: strList,
+};
+
+const WORKFLOW_PROJECT: Record<string, Check> = {
+	...WORKFLOW_PROJECT_CORE,
+	github_pr: nullable(str),
+};
+
 export function isTaskCore(value: unknown): value is TaskCore {
-	return (
-		isRecord(value) &&
-		typeof value.slug === "string" &&
-		typeof value.title === "string" &&
-		typeof value.status === "string"
-	);
+	return matches(value, TASK_CORE, TASK_CORE_OPTIONAL);
+}
+
+export function isTaskComment(value: unknown): value is TaskComment {
+	return matches(value, {
+		slug: str,
+		task_slug: str,
+		body: str,
+		author: str,
+		created_at: str,
+	});
+}
+
+export function isTaskChild(value: unknown): value is TaskChild {
+	return matches(value, { slug: str, title: str, status: taskStatus });
+}
+
+export function isCodeBranchRef(value: unknown): value is CodeBranchRef {
+	return matches(value, {
+		slug: str,
+		repo: str,
+		branch: str,
+		status: nullable(str),
+		updated_at: nullable(str),
+	});
 }
 
 export function isTaskRow(value: unknown): value is TaskRow {
-	return (
-		isTaskCore(value) &&
-		// The read-gap fields, which only the LIST projection carries. They are
-		// what the board and the Gantt read, and a server without them would
-		// otherwise surface as an empty chart. A `task_search` hit correctly
-		// fails this and is a `TaskSearchRow`.
-		"created_at" in value &&
-		"closed_at" in value
-	);
+	// The read-gap fields (`created_at`, `closed_at`, `claimed_at`,
+	// `blocked_by`) are what the board and the Gantt read, and only the LIST
+	// projection carries them. A `task_search` hit correctly fails this and is
+	// a `TaskSearchRow`.
+	return matches(value, TASK_ROW, TASK_CORE_OPTIONAL);
 }
 
 export function isTaskDetail(value: unknown): value is TaskDetail {
-	return (
-		isTaskRow(value) &&
-		Array.isArray((value as TaskDetail).comments) &&
-		Array.isArray((value as TaskDetail).blocks) &&
-		Array.isArray((value as TaskDetail).children) &&
-		Array.isArray((value as TaskDetail).branches)
-	);
-}
-
-export function isReadyTaskRow(value: unknown): value is ReadyTaskRow {
-	return (
-		isRecord(value) &&
-		typeof value.slug === "string" &&
-		typeof value.title === "string" &&
-		typeof value.priority === "string" &&
-		typeof value.status === "string" &&
-		"assignee" in value
-	);
-}
-
-export function isProjectStatus(value: unknown): value is ProjectStatus {
-	return (
-		isRecord(value) &&
-		// The rollup's own projection, and its rows. Checking only
-		// `isRecord(project)` left the six-field shape and `ready_tasks`
-		// unguarded, and `ready_tasks` is what the §7.1 widget reads
-		// `lease_expired` off.
-		isRecord(value.project) &&
-		isWorkflowProjectCore(value.project) &&
-		"github_pr" in value.project &&
-		Array.isArray(value.ready_tasks) &&
-		value.ready_tasks.every(isReadyTaskRow) &&
-		typeof value.ready_truncated === "boolean" &&
-		isRecord(value.counts) &&
-		typeof (value.counts as { ready?: unknown }).ready === "number"
-	);
-}
-
-export function isMemory(value: unknown): value is Memory {
-	return (
-		isRecord(value) &&
-		typeof value.slug === "string" &&
-		typeof value.kind === "string" &&
-		typeof value.title === "string"
+	return matches(
+		value,
+		{
+			...TASK_ROW,
+			description: nullable(str),
+			resolution: nullable(str),
+			symbol_refs: strList,
+			author: nullable(str),
+			comments: arrayOf(isTaskComment),
+			blocks: arrayOf(str),
+			children: arrayOf(isTaskChild),
+			branches: arrayOf(isCodeBranchRef),
+		},
+		TASK_CORE_OPTIONAL,
 	);
 }
 
 export function isTaskSearchRow(value: unknown): value is TaskSearchRow {
-	return isTaskCore(value) && "description" in value;
+	return matches(
+		value,
+		{ ...TASK_CORE, description: nullable(str) },
+		TASK_CORE_OPTIONAL,
+	);
+}
+
+export function isReadyTaskRow(value: unknown): value is ReadyTaskRow {
+	return matches(
+		value,
+		{
+			slug: str,
+			title: str,
+			priority: taskPriority,
+			status: taskStatus,
+			assignee: nullable(str),
+		},
+		{ lease_expired: bool },
+	);
 }
 
 export function isWorkflowProjectCore(
 	value: unknown,
 ): value is WorkflowProjectCore {
-	return (
-		isRecord(value) &&
-		typeof value.slug === "string" &&
-		typeof value.title === "string" &&
-		typeof value.phase === "string" &&
-		typeof value.status === "string"
-	);
+	return matches(value, WORKFLOW_PROJECT_CORE);
 }
 
-export function isWorkflowProjectDetail(
-	value: unknown,
-): value is WorkflowProjectDetail {
-	return (
-		isWorkflowProjectCore(value) &&
-		"description" in value &&
-		"blocks" in value &&
-		"created_at" in value
-	);
+/** The rollup's `project`: six fields, NOT what `workflow_project_get` sends. */
+export function isWorkflowProject(value: unknown): value is WorkflowProject {
+	return matches(value, WORKFLOW_PROJECT);
 }
 
 export function isWorkflowProjectSummary(
 	value: unknown,
 ): value is WorkflowProjectSummary {
-	return isWorkflowProjectCore(value) && "github_issue" in value;
+	return matches(value, {
+		...WORKFLOW_PROJECT_CORE,
+		blocked_by: strList,
+		github_issue: nullable(str),
+		tags: strList,
+		updated_at: str,
+	});
+}
+
+export function isWorkflowProjectDetail(
+	value: unknown,
+): value is WorkflowProjectDetail {
+	return matches(value, {
+		...WORKFLOW_PROJECT,
+		description: nullable(str),
+		author: nullable(str),
+		blocked_by: strList,
+		blocks: arrayOf(str),
+		github_issue: nullable(str),
+		tags: strList,
+		created_at: str,
+		updated_at: str,
+		completed_at: nullable(str),
+	});
 }
 
 export function isWorkflowSession(value: unknown): value is WorkflowSession {
-	return (
-		isRecord(value) &&
-		typeof value.slug === "string" &&
-		typeof value.phase === "string" &&
-		"started_at" in value &&
-		"ended_at" in value
+	return matches(
+		value,
+		{
+			slug: str,
+			project_slug: nullable(str),
+			phase: workflowPhase,
+			summary: nullable(str),
+			started_at: str,
+			ended_at: nullable(str),
+			superseded_by: nullable(str),
+		},
+		{
+			session_id: str,
+			tools_used: strList,
+			files_changed: strList,
+		},
 	);
 }
 
-export function isMemoryNeighbors(value: unknown): value is MemoryNeighbors {
-	return (
-		isRecord(value) &&
-		typeof value.slug === "string" &&
-		isRecord(value.neighbors)
+export function isProjectStatus(value: unknown): value is ProjectStatus {
+	return matches(value, {
+		project: isWorkflowProject,
+		ready_tasks: arrayOf(isReadyTaskRow),
+		ready_truncated: bool,
+		last_session: anything,
+		blockers: arrayOf(str),
+		counts: (v) => matches(v, { ready: num, open_tasks: num }),
+	});
+}
+
+export function isMemory(value: unknown): value is Memory {
+	return matches(
+		value,
+		{
+			slug: str,
+			kind: memoryKind,
+			title: str,
+			repo: nullable(str),
+			created_at: str,
+		},
+		{
+			content: str,
+			tags: strList,
+			author: nullable(str),
+			confidence: nullable(num),
+			category: nullable(str),
+			severity: nullable(str),
+			language: nullable(str),
+			symbol_refs: strList,
+			updated_at: str,
+		},
 	);
 }
 
-export function isTopicResult(value: unknown): value is TopicResult {
-	return (
-		isRecord(value) &&
-		isRecord(value.topic) &&
-		Array.isArray(value.memories) &&
-		// Descends, because `topic` is an untyped record and `memories` is the
-		// only declared structure here: without this the guard could not go
-		// stale, because it was asserting nothing.
-		value.memories.every(isMemory)
-	);
+export function isContradiction(value: unknown): value is Contradiction {
+	return matches(value, { a: str, b: str });
 }
 
 export function isRecallResult(value: unknown): value is RecallResult {
-	return (
-		isRecord(value) &&
-		Array.isArray(value.memories) &&
-		Array.isArray(value.contradictions)
-	);
+	return matches(value, {
+		memories: arrayOf(isMemory),
+		seeds: anything,
+		contradictions: arrayOf(isContradiction),
+	});
+}
+
+export function isMemoryNeighbors(value: unknown): value is MemoryNeighbors {
+	return matches(value, { slug: str, neighbors: isRecord });
+}
+
+export function isTopicResult(value: unknown): value is TopicResult {
+	// Descends into `memories`, because `topic` is an untyped record and the
+	// memory list is the only declared structure here.
+	return matches(value, { topic: isRecord, memories: arrayOf(isMemory) });
 }
