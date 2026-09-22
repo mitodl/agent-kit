@@ -1,0 +1,21 @@
+{
+  "result": {
+    "author": "fixtures",
+    "blocked_by": null,
+    "blocks": [],
+    "completed_at": null,
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "description": "A human-readable surface for the graph.",
+    "github_issue": null,
+    "github_pr": null,
+    "phase": "discovery",
+    "repos": [
+      "https://github.com/mitodl/agent-kit"
+    ],
+    "slug": "wp-fixture-001",
+    "status": "active",
+    "tags": null,
+    "title": "Witan UI",
+    "updated_at": "2026-01-01T00:00:00+00:00"
+  }
+}

@@ -43,6 +43,21 @@ a MINOR bump may include breaking changes).
   boundary `witan serve` already enforces: this server has no inbound
   authentication, so binding a remote-backed one to a socket would make it a
   credential-sharing proxy.
+- **The UI reads the graph through a typed MCP client.**
+  `mcp/servers/witan/ui/src/mcp.ts` is the one file in the frontend that knows
+  it speaks MCP: one named function per tool in ADR 0011's bound read set, no
+  generic `call(name, args)`, and no writes. Results are taken out of their
+  envelope by each tool's recorded `x-fastmcp-wrap-result` flag rather than by
+  guessing from the value's shape, which matters because a wrapped list and an
+  unwrapped dict carrying a `result` key are indistinguishable at runtime, and
+  `task_get` of a slug that does not exist is a present `null` rather than an
+  error.
+
+  The result types are hand-written (the tools carry no output schema worth
+  generating from) and kept honest by `ui/fixtures/`, real results recorded
+  from real tool calls by `just ui-fixtures`. `just ui-fixtures-check` gates
+  them in CI on server changes as well as frontend ones, so a renamed field
+  fails the frontend suite in the PR that renamed it.
 - **A web UI ships inside the wheel.** `mcp/servers/witan/ui/` is a
   TypeScript/Vite package built to `witan/ui_dist/`, which hatch carries into
   the sdist and the wheel. This release adds the package, its build and its

@@ -1,0 +1,79 @@
+{
+  "result": [
+    {
+      "assignee": "fixture-agent",
+      "blocked_by": null,
+      "claimed_at": "2026-01-01T00:00:00+00:00",
+      "closed_at": null,
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "external_uri": null,
+      "lease_expired": false,
+      "parent_slug": null,
+      "priority": "p1",
+      "project_slug": "wp-fixture-001",
+      "repo": "https://github.com/mitodl/agent-kit",
+      "slug": "tk-fixture-005",
+      "status": "in_progress",
+      "tags": null,
+      "title": "Scaffold the frontend package",
+      "type": "task",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    },
+    {
+      "assignee": null,
+      "blocked_by": [
+        "tk-fixture-000"
+      ],
+      "claimed_at": null,
+      "closed_at": null,
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "external_uri": null,
+      "parent_slug": "tk-fixture-002",
+      "priority": "p2",
+      "project_slug": "wp-fixture-001",
+      "repo": "https://github.com/mitodl/agent-kit",
+      "slug": "tk-fixture-004",
+      "status": "blocked",
+      "tags": null,
+      "title": "Board view driven by task_ready",
+      "type": "task",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    },
+    {
+      "assignee": null,
+      "blocked_by": null,
+      "claimed_at": null,
+      "closed_at": null,
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "external_uri": null,
+      "parent_slug": "tk-fixture-002",
+      "priority": "p1",
+      "project_slug": "wp-fixture-001",
+      "repo": "https://github.com/mitodl/agent-kit",
+      "slug": "tk-fixture-000",
+      "status": "open",
+      "tags": null,
+      "title": "Close the read gaps",
+      "type": "task",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    },
+    {
+      "assignee": null,
+      "blocked_by": null,
+      "claimed_at": null,
+      "closed_at": null,
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "external_uri": null,
+      "parent_slug": null,
+      "priority": "p2",
+      "project_slug": "wp-fixture-001",
+      "repo": "https://github.com/mitodl/agent-kit",
+      "slug": "tk-fixture-002",
+      "status": "open",
+      "tags": null,
+      "title": "Witan UI epic",
+      "type": "epic",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    }
+  ]
+}

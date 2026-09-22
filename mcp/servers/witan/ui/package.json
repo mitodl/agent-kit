@@ -8,11 +8,12 @@
 		"dev": "vite",
 		"build": "vite build",
 		"typecheck": "tsc --noEmit",
-		"lint": "biome check .",
-		"format": "biome check --write .",
+		"lint": "biome check src vite.config.ts vitest.config.ts",
+		"format": "biome check --write src vite.config.ts vitest.config.ts",
 		"test": "vitest run"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/client": "^2.0.0",
 		"lit-html": "^3.3.1"
 	},
 	"devDependencies": {

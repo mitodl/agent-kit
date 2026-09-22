@@ -17,10 +17,21 @@ on:
       # that silent-failure path without touching anything else.
       - ".gitignore"
       # The image builds the bundle in its own stage and copies it into the
-      # source tree; both the stage and that copy's ORDERING are load-bearing,
-      # and nothing else in CI builds this image.
+      # source tree, and nothing else in CI builds this image.
       - "docker/witan.Dockerfile"
       - ".dockerignore"
+      # The fixtures are recorded from the live tools, so a SERVER change is
+      # what makes them stale. Without these the gate below would only fire on
+      # frontend PRs, which are the ones that cannot break it.
+      - "mcp/servers/witan/witan/**"
+      - "mcp/servers/witan/queries/**"
+      # The generator runs `omnigraph init` against this, so a field added to
+      # Task or Memory here changes every recorded result.
+      - "mcp/servers/witan/schema/**"
+      # Resolved by path in the workspace, and it owns the timestamp format
+      # and the store client the recording goes through.
+      - "packages/witan-core/**"
+      - "bin/gen_ui_fixtures.py"
   pull_request:
     paths: *ui_paths
 
@@ -161,3 +172,42 @@ jobs:
               sys.exit(f'{index} is missing from the image')
           print('bundle present:', sorted(p.name for p in bundle.iterdir()))
           "
+  fixtures:
+    name: witan UI (fixtures match the live tools)
+    runs-on: ubuntu-latest
+
+    # The fixtures are the UI's contract with the server: real tool results
+    # that the frontend suite walks through the unwrapper and the hand-written
+    # types. Re-recording them here is what turns "a server field was renamed"
+    # into a red check on the PR that renamed it, instead of a view that
+    # silently renders nothing weeks later.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-packages
+
+      - name: Cache omnigraph binary
+        id: cache-omnigraph
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/bin/omnigraph
+          key: omnigraph-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/witan-core/witan_core/omnigraph_install.py') }}
+
+      - name: Install omnigraph binary
+        # The generator seeds a real store and drives the real tools, so the
+        # binary has to be present before it runs.
+        if: steps.cache-omnigraph.outputs.cache-hit != 'true'
+        run: uv run python -c "from witan_core.omnigraph_install import install_omnigraph; install_omnigraph(dry_run=False)"
+
+      - name: Check the fixtures against the live tools
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          just ui-fixtures-check

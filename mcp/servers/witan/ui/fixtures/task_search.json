@@ -1,0 +1,19 @@
+{
+  "result": [
+    {
+      "assignee": null,
+      "description": "task_list limit, list timestamps, task_get edges.",
+      "external_uri": null,
+      "parent_slug": "tk-fixture-002",
+      "priority": "p1",
+      "project_slug": "wp-fixture-001",
+      "repo": "https://github.com/mitodl/agent-kit",
+      "slug": "tk-fixture-000",
+      "status": "open",
+      "tags": null,
+      "title": "Close the read gaps",
+      "type": "task",
+      "updated_at": "2026-01-01T00:00:00+00:00"
+    }
+  ]
+}

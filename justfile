@@ -315,6 +315,23 @@ bump package part:
 # (tutorials, overviews, explanation). `docs-gen` produces the first two;
 # `docs-check` is the CI gate that stops them drifting from the code.
 
+# ── The witan UI's contract with the server ──────────────────────────────────
+#
+# The UI's result types are hand-written (every bound tool is registered
+# without an output_schema, so there is nothing to generate from). These
+# fixtures are what keeps them honest: real results from real tool calls
+# against a seeded store, which the frontend suite parses through the
+# unwrapper. `ui-fixtures-check` is the CI gate that stops them drifting from
+# the server, the same way `docs-check` gates generated pages.
+
+# Re-record the UI fixtures from the live tools.
+ui-fixtures:
+    ./bin/gen_ui_fixtures.py
+
+# Fail if any UI fixture is out of date. Runs in CI.
+ui-fixtures-check:
+    ./bin/gen_ui_fixtures.py --check
+
 # Regenerate and re-mirror every non-handwritten docs page.
 docs-gen:
     ./bin/gen_docs.py
