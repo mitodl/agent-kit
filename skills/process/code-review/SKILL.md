@@ -153,6 +153,13 @@ Six dimensions, most severe first when findings are reported:
 
 Full rubric with worked examples: [references/dimensions.md](references/dimensions.md).
 
+For a repository under `github.com/mitodl/`, also run the checks in
+[references/ol-conventions.md](references/ol-conventions.md): secrets and
+least privilege, hardcoded environment values and versions, silent `.get()` on
+required config, Pulumi renames that force replacement, component reuse, and
+dbt modeling checks. They feed the same four dimensions and go through the same
+verification pass; they don't add a fifth category.
+
 ## Verification pass
 
 Before a finding goes in the final report, re-read the exact lines it

@@ -1,0 +1,29 @@
+{
+	"skill_name": "code-review",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "Review this diff to src/ol_infrastructure/applications/example/__main__.py in mitodl/ol-infrastructure.\n\nContext you can rely on: the project directory contains Pulumi.applications.example.QA.yaml and Pulumi.applications.example.Production.yaml, so this entrypoint deploys to both environments. `db_password` is set in both stack files as a `secure:` value. src/bridge/lib/versions.py already defines `EXAMPLE_VERSION = \"1.4.2\"` with a Renovate annotation.\n\nDiff:\n+ example_config = Config(\"example\")\n+ bucket_policy_arn = \"arn:aws:iam::123456789012:policy/example-qa-bucket\"\n+ db_password = example_config.get(\"db_password\")\n+ app_image = \"ghcr.io/mitodl/example:1.4.2\"\n+ db_secret = aws.secretsmanager.SecretVersion(\"example-db-password\", secret_id=db_secret_container.id, secret_string=db_password)\n+ policy_attachment = aws.iam.RolePolicyAttachment(\"example-policy\", policy_arn=bucket_policy_arn, role=app_role.name)",
+			"expected_output": "Findings for the QA-specific ARN attached in a stack that also deploys to Production, the required secret read with .get() (when unset, None is passed as secret_string; when set, the plain str loses Pulumi's secret marking; require_secret() fixes both), and the image tag duplicating EXAMPLE_VERSION in versions.py. No findings about formatting.",
+			"files": [],
+			"expectations": [
+				"The hardcoded ARN is reported with Production as the environment where it is wrong",
+				"The .get() on db_password is reported with the None failure mode and recommends require_secret()",
+				"The inline image tag is reported as duplicating EXAMPLE_VERSION in src/bridge/lib/versions.py",
+				"The review uses references/ol-conventions.md because the repo is under mitodl",
+				"No finding is raised about formatting or import order"
+			]
+		},
+		{
+			"id": 2,
+			"prompt": "Review my branch: it renames the Pulumi resource `aws.s3.Bucket(\"mitxonline-media-bucket\", ...)` to `aws.s3.Bucket(\"mitxonline-media-storage\", ...)` in mitodl/ol-infrastructure for readability.",
+			"expected_output": "A correctness finding that changing the logical name makes Pulumi delete and recreate the live bucket, recommending keeping the name or adding aliases.",
+			"files": [],
+			"expectations": [
+				"The rename is reported as a correctness finding, not a style note",
+				"The failure scenario names the delete/replace of the existing bucket",
+				"The fix offers keeping the original name or ResourceOptions(aliases=...)"
+			]
+		}
+	]
+}

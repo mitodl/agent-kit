@@ -1,0 +1,19 @@
+{
+	"skill_name": "create-ol-pull-request",
+	"evals": [
+		{
+			"id": 1,
+			"prompt": "Draft the PR body for this branch in mitodl/ol-infrastructure; don't create the PR yet. Title: \"Explicitly reduce the TTL for instructor uploaded files\". Tickets: N/A. No UI changes, no additional context, no pre-merge checklist, not a draft, and skip the implementation details block. What it does: sets an explicit 30 second TTL on instructor-uploaded files in the edX CDN config, because updated files kept serving stale content. Testing: I applied it to MITx Online QA, re-uploaded a file with the same name, and saw the new version served within 30 seconds. There's no command to run for this; it's a manual check.",
+			"expected_output": "A PR body in the mitodl template whose description opens with the stale-content problem, then the TTL change, and whose testing section describes the manual re-upload check in MITx Online QA without inventing a command. No report-style headers, bold-label bullets, or status emoji; Screenshots, Additional Context, and Checklist are omitted.",
+			"files": [],
+			"expectations": [
+				"The agent drafts the body without asking for metadata that the prompt already supplied",
+				"The description opens with the stale-content context before describing the TTL change",
+				"The testing section names MITx Online QA and the manual re-upload check, and does not invent a command or unrun steps",
+				"The body contains no ## Summary, ## Problem, ## Root Cause, or ## Key Changes headers",
+				"The body contains no bold-label bullets and no ✅/⚠️ markers",
+				"Screenshots, Additional Context, and Checklist sections are omitted"
+			]
+		}
+	]
+}
