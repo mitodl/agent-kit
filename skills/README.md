@@ -32,6 +32,7 @@ Skills are organized by **category**. Each skill lives in
 | containers | [`docker-uv-image-builds`](./containers/docker-uv-image-builds/SKILL.md) | `mitodl/<service>` naming, git short-ref tags, relocatable `uv` venvs |
 | workflow | [`validate-before-commit`](./workflow/validate-before-commit/SKILL.md) | Run `pre-commit` → `mypy` → `pulumi preview` proactively before declaring done |
 | workflow | [`creating-skills`](./workflow/creating-skills/SKILL.md) | Create a new skill: frontmatter, category placement, progressive disclosure, index updates |
+| workflow | [`extract-style-profile`](./workflow/extract-style-profile/SKILL.md) | Profile how a person, team, or repo codes and communicates from git/GitHub history; outputs CLAUDE.md/AGENTS.md rules with evidence |
 | process | [`create-ol-github-issue`](./process/create-ol-github-issue/SKILL.md) | Create mitodl GitHub issues using org standard templates |
 | process | [`create-ol-pull-request`](./process/create-ol-pull-request/SKILL.md) | Create mitodl pull requests using the org's standard PR template, after an independent goal/security review and a claim audit |
 | process | [`create-ol-rfc-discussion`](./process/create-ol-rfc-discussion/SKILL.md) | Write and post a structured RFC as a GitHub Discussion in mitodl/hq under the RFC category |
