@@ -101,6 +101,106 @@ def test_failure_is_recorded_and_reraised(capsys):
     assert payload["tool"] == "task_close"
 
 
+def test_failure_says_what_went_wrong(capsys):
+    # The defect this closes: fastmcp logs `Error calling tool 'x'` with
+    # exc_info=False for a FastMCPError and never renders str(exc), so
+    # Production showed code_store_views failing 27% of calls with no
+    # diagnosable text anywhere but the Tempo span.
+    async def call_next(_ctx):
+        msg = "boom"
+        raise ValueError(msg)
+
+    with pytest.raises(ValueError, match="boom"):
+        _run(ObservabilityMiddleware(), _Context("task_close"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["error"] == "boom"
+    assert payload["error_type"] == "ValueError"
+    assert payload["refused"] is False
+
+
+def test_an_opted_in_refusal_logs_its_message(capsys):
+    # ClusterGraphMissing is the real production case: a repo that has no
+    # cluster graph. It sets log_safe_message, so the message reaches the line
+    # -- while still counting under outcome="error", which the error-ratio
+    # alert depends on.
+    from witan_core.refusal import Refusal
+
+    class ClusterGraphMissing(RuntimeError, Refusal):
+        log_safe_message = True
+
+    async def call_next(_ctx):
+        msg = "'x' code graph is not served by the omnigraph-server"
+        raise ClusterGraphMissing(msg)
+
+    with pytest.raises(ClusterGraphMissing):
+        _run(ObservabilityMiddleware(), _Context("code_store_views"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["outcome"] == "error"
+    assert payload["refused"] is True
+    assert payload["error_type"] == "ClusterGraphMissing"
+    assert "is not served by the omnigraph-server" in payload["error"]
+
+
+def test_a_refusal_withholds_its_message_by_default(capsys):
+    # THE DEFAULT IS THE POINT. witan_code.ingest.IngestRefused is raised from
+    # mutate_many as f"...got {value!r}." over the CALLER's own step value, and
+    # fastmcp's FastMCPError arm never rendered it, so logging it would be new
+    # exposure rather than a restatement. A new refusal that echoes its input
+    # is withheld unless someone reads it and opts in.
+    from witan_core.refusal import Refusal
+
+    class IngestRefused(RuntimeError, Refusal):
+        pass
+
+    async def call_next(_ctx):
+        msg = "Every step needs a non-empty 'name'; got 'SENSITIVE-STEP-VALUE'."
+        raise IngestRefused(msg)
+
+    with pytest.raises(IngestRefused):
+        _run(ObservabilityMiddleware(), _Context("code_store_mutate_many"), call_next)
+    written = capsys.readouterr().err
+    assert "SENSITIVE-STEP-VALUE" not in written
+    payload = json.loads(written.strip())
+    assert payload["error_type"] == "IngestRefused"
+    assert payload["refused"] is True
+    assert payload["error_withheld"] is True
+    assert "error" not in payload
+
+
+def test_a_long_message_is_truncated(capsys):
+    async def call_next(_ctx):
+        raise ValueError("x" * (middleware_module._MAX_ERROR_CHARS + 50))
+
+    with pytest.raises(ValueError):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["error"] == "x" * middleware_module._MAX_ERROR_CHARS + "..."
+
+
+def test_a_message_less_failure_still_names_its_type(capsys):
+    # An empty `error` key would be worse than none: it reads as "no message
+    # was produced" rather than "this exception carries none".
+    async def call_next(_ctx):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["error_type"] == "KeyboardInterrupt"
+    assert "error" not in payload
+
+
+def test_a_successful_call_carries_no_error_fields(capsys):
+    async def call_next(_ctx):
+        return "result"
+
+    _run(ObservabilityMiddleware(), _Context("task_get"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert "error" not in payload
+    assert "error_type" not in payload
+    assert "refused" not in payload
+
+
 def test_tool_is_bound_for_nested_log_lines(capsys):
     # The point of binding a contextvar rather than passing a logger down: a log
     # line emitted deep inside the tool still says which tool it came from.
@@ -302,3 +402,390 @@ def test_fastmcp_still_names_the_class_this_way():
     from fastmcp.tools.base import InputRequiredToolResult as Upstream
 
     assert Upstream.__name__ == "InputRequiredToolResult"
+
+
+# ── Through a real FastMCP server ────────────────────────────────────────────
+# The tests above drive `on_call_tool` directly, which is the right unit for
+# the middleware's own logic but is NOT the shape production produces:
+# `FastMCP.call_tool` sits INSIDE the middleware chain and re-raises anything
+# that is not a `FastMCPError` as `ToolError(f"Error calling tool ...: {e}")`.
+# So `error_type` is the real class only for a FastMCPError. These drive the
+# whole server so that claim is tested rather than assumed.
+
+
+def _server_with_tools():
+    """A FastMCP server carrying the middleware and three failing tools."""
+    from fastmcp import FastMCP
+
+    from witan_core.refusal import Refusal
+
+    class ClusterGraphMissing(RuntimeError, Refusal):
+        log_safe_message = True
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(ObservabilityMiddleware())
+
+    @mcp.tool
+    def refuses() -> str:
+        msg = "'x' code graph is not served by the omnigraph-server"
+        raise ClusterGraphMissing(msg)
+
+    @mcp.tool
+    def breaks() -> str:
+        msg = "underlying omnigraph failure"
+        raise RuntimeError(msg)
+
+    @mcp.tool
+    def takes_a_string(content: str) -> str:
+        return content
+
+    return mcp
+
+
+def _stderr_payloads(capsys):
+    """Every JSON log line just written to stderr."""
+    return [
+        json.loads(line)
+        for line in capsys.readouterr().err.strip().splitlines()
+        if line.strip().startswith("{")
+    ]
+
+
+def _call(mcp, name, arguments=None):
+    configure_logging(log_format="json", level="INFO", force=True)
+
+    async def drive():
+        return await mcp.call_tool(name, arguments or {})
+
+    return asyncio.run(drive())
+
+
+def test_a_refusal_keeps_its_class_through_the_server(capsys):
+    mcp = _server_with_tools()
+    with pytest.raises(Exception, match="not served"):
+        _call(mcp, "refuses")
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_type"] == "ClusterGraphMissing"
+    assert payload["refused"] is True
+    assert "is not served by the omnigraph-server" in payload["error"]
+
+
+def test_an_ordinary_exception_arrives_already_wrapped(capsys):
+    # Documents the limit the class docstring now states: fastmcp re-raises a
+    # non-FastMCPError as ToolError before this middleware sees it, so the
+    # class is lost and only the message survives.
+    mcp = _server_with_tools()
+    with pytest.raises(Exception, match="underlying omnigraph failure"):
+        _call(mcp, "breaks")
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_type"] == "ToolError"
+    assert payload["refused"] is False
+    assert "underlying omnigraph failure" in payload["error"]
+
+
+def test_a_bad_argument_never_puts_the_caller_s_value_in_the_log(capsys):
+    # THE LEAK THIS GUARDS. pydantic renders a rejected field as
+    # `input_value=<what the caller sent>`, and fastmcp's ValidationError IS
+    # that string. Logging it would ship tool arguments to Loki. fastmcp keeps
+    # input out of its own line for the same reason
+    # (`_validation_error_summary`, "never input-derived validation details")
+    # while still telling the client.
+    mcp = _server_with_tools()
+    sensitive = "ping tmacey@mit.edu about the outage"
+    configure_logging(log_format="json", level="INFO", force=True)
+
+    async def drive():
+        return await mcp.call_tool("takes_a_string", {"content": {"text": sensitive}})
+
+    with pytest.raises(Exception):
+        asyncio.run(drive())
+    written = capsys.readouterr().err
+    assert sensitive not in written
+    assert "tmacey@mit.edu" not in written
+    assert "input_value" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    assert payload["outcome"] == "error"
+    assert payload["error_withheld"] is True
+    assert "error" not in payload
+
+
+def test_a_withheld_validation_error_still_says_what_kind(capsys):
+    # Withholding the message must not mean withholding the diagnosis. fastmcp
+    # computes this same summary but logs it on its own non-propagating logger,
+    # so it lands beside our JSON as unparsed text rather than in a field a
+    # query can reach. We compute it ourselves for that reason.
+    mcp = _server_with_tools()
+    with pytest.raises(Exception):
+        _call(mcp, "takes_a_string", {"content": {"text": "whatever"}})
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_withheld"] is True
+    assert payload["error_count"] == 1
+    assert payload["error_types"] == ["string_type"]
+
+
+def test_a_model_failing_inside_a_tool_body_is_withheld_too(capsys):
+    # The "a body error is always one of our own models" reasoning was wrong:
+    # witan_code.config._Target is a BaseModel built straight from TOML by
+    # _parse_targets, with no `except ValidationError` in that module, and
+    # cfg_module.load() runs on tool paths. So this arm sees externally sourced
+    # validation and gets the same treatment as the argument arm.
+    import pydantic
+
+    class Target(pydantic.BaseModel):
+        name: str
+
+    async def call_next(_ctx):
+        Target(name={"from": "SENSITIVE-TOML-VALUE"})
+
+    with pytest.raises(pydantic.ValidationError):
+        _run(ObservabilityMiddleware(), _Context("code_store_load"), call_next)
+    written = capsys.readouterr().err
+    assert "SENSITIVE-TOML-VALUE" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    assert payload["error_type"] == "ValidationError"
+    assert payload["error_withheld"] is True
+    assert payload["error_count"] == 1
+    assert "error" not in payload
+
+
+def test_an_exception_whose_message_explodes_does_not_replace_it(capsys):
+    # _error_fields runs inside `except BaseException`, so anything escaping it
+    # would hand the caller a server fault in place of their real failure. The
+    # partially built result is kept, so `refused` survives. Opted in, so
+    # __str__ is actually reached.
+    from witan_core.refusal import Refusal
+
+    class Exploding(RuntimeError, Refusal):
+        log_safe_message = True
+
+        def __str__(self):
+            raise KeyboardInterrupt
+
+    async def call_next(_ctx):
+        raise Exploding
+
+    with pytest.raises(Exploding):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_type"] == "Exploding"
+    assert payload["refused"] is True
+    assert payload["error_undescribable"] is True
+    assert "error" not in payload
+
+
+def test_a_custom_validation_code_is_not_logged_verbatim(capsys):
+    # A validator may build its PydanticCustomError `type` out of the value it
+    # just rejected, so the CODE is caller-controlled too and the summary would
+    # leak by the back door. fastmcp allowlists against pydantic's own
+    # ErrorType literals for this reason; so do we. No in-repo validator does
+    # this today, which is what makes it worth a test rather than a comment.
+    from typing import Annotated
+
+    from fastmcp import FastMCP
+    from pydantic import AfterValidator
+    from pydantic_core import PydanticCustomError
+
+    def reject_loudly(value: str) -> str:
+        raise PydanticCustomError("leaked_" + value, "nope")
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(ObservabilityMiddleware())
+
+    @mcp.tool
+    def checked(value: Annotated[str, AfterValidator(reject_loudly)]) -> str:
+        return value
+
+    configure_logging(log_format="json", level="INFO", force=True)
+
+    async def drive():
+        return await mcp.call_tool("checked", {"value": "SECRET-TOKEN"})
+
+    with pytest.raises(Exception):
+        asyncio.run(drive())
+    written = capsys.readouterr().err
+    assert "SECRET-TOKEN" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    assert payload["error_types"] == [middleware_module._CUSTOM_VALIDATION_CODE]
+
+
+def test_a_builtin_validation_code_survives_the_allowlist(capsys):
+    # The allowlist must not flatten everything to custom_error, or the summary
+    # stops being a diagnosis.
+    mcp = _server_with_tools()
+    with pytest.raises(Exception):
+        _call(mcp, "takes_a_string", {"content": {"text": "whatever"}})
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_types"] == ["string_type"]
+
+
+def test_a_broken_describer_is_distinguishable_from_a_withheld_message(capsys):
+    # error_withheld is a decision; error_undescribable is a breakage. One
+    # field for both would make them indistinguishable in a Loki filter.
+    from witan_core.refusal import Refusal
+
+    class Exploding(RuntimeError, Refusal):
+        log_safe_message = True
+
+        def __str__(self):
+            raise KeyboardInterrupt
+
+    async def call_next(_ctx):
+        raise Exploding
+
+    with pytest.raises(Exploding):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_undescribable"] is True
+    assert "error_withheld" not in payload
+
+
+def test_a_custom_validator_s_sentence_is_not_logged_verbatim(capsys):
+    # PydanticCustomError lets a validator write both the code and the message
+    # out of the value it just rejected. Neither reaches the line: the code is
+    # allowlisted and the message is withheld with every other validation
+    # message.
+    from typing import Annotated
+
+    import pydantic
+    from pydantic import AfterValidator
+    from pydantic_core import PydanticCustomError
+
+    def reject_loudly(value: str) -> str:
+        raise PydanticCustomError("custom_code", "rejected " + value)
+
+    class Body(pydantic.BaseModel):
+        field: Annotated[str, AfterValidator(reject_loudly)]
+
+    async def call_next(_ctx):
+        Body(field="SENSITIVE-ROW-VALUE")
+
+    with pytest.raises(pydantic.ValidationError):
+        _run(ObservabilityMiddleware(), _Context("memory_store"), call_next)
+    written = capsys.readouterr().err
+    assert "SENSITIVE-ROW-VALUE" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    assert payload["error_types"] == [middleware_module._CUSTOM_VALIDATION_CODE]
+    assert "error" not in payload
+
+
+def test_a_builtin_code_s_message_can_still_carry_the_value(capsys):
+    # WHY ALLOWLISTING THE CODE WAS NOT ENOUGH, and why the message had to go.
+    # `value_error` and `assertion_error` ARE builtin codes, and pydantic
+    # renders the raised exception's own text into msg: a validator doing
+    # `raise ValueError(f"rejected {value}")` produces
+    # "Value error, rejected <the value>". Gating on the code passes it
+    # straight through.
+    from typing import Annotated
+
+    import pydantic
+    from pydantic import AfterValidator
+
+    def reject(value: str) -> str:
+        msg = f"rejected {value}"
+        raise ValueError(msg)
+
+    class Body(pydantic.BaseModel):
+        field: Annotated[str, AfterValidator(reject)]
+
+    async def call_next(_ctx):
+        Body(field="SENSITIVE-ROW-VALUE")
+
+    with pytest.raises(pydantic.ValidationError):
+        _run(ObservabilityMiddleware(), _Context("memory_store"), call_next)
+    written = capsys.readouterr().err
+    assert "SENSITIVE-ROW-VALUE" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    # The code is builtin and still reported; only the sentence is gone.
+    assert payload["error_types"] == ["value_error"]
+    assert "error" not in payload
+
+
+# ── The audit itself ─────────────────────────────────────────────────────────
+# Every test above builds a throwaway local Refusal, so none of them notices if
+# a REAL type's opt-in is wrong, or if a tenth refusal appears already opted in.
+# That gap is not hypothetical: the first version of this contract opted in
+# three types whose raise sites append `\n{err.strip()}`, an arbitrary upstream
+# string, and every test still passed.
+
+EXPECTED_LOG_SAFE = {
+    # opted in: identifiers, counts, or masked by the detectors' contract
+    ("witan_core.identity", "ActorTokenMissing"): True,
+    ("witan_core.omnigraph", "WriteQueueFull"): True,
+    ("witan.server", "MissingReference"): True,
+    ("witan.scan.enforce", "WriteBlocked"): True,
+    ("witan_code.store", "ClusterGraphMissing"): True,
+    # withheld: the message carries an arbitrary upstream string
+    ("witan_core.omnigraph", "WriteIndeterminate"): False,
+    ("witan_core.omnigraph", "AdmissionCapExceeded"): False,
+    ("witan_core.omnigraph", "StoreQuarantined"): False,
+    ("witan_code.ingest", "IngestRefused"): False,
+}
+
+
+def _import_refusal(module_name, class_name):
+    """The class, or None when that server is not installed in this env."""
+    import importlib
+
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError:
+        return None
+    return getattr(module, class_name, None)
+
+
+@pytest.mark.parametrize(("where", "expected"), sorted(EXPECTED_LOG_SAFE.items()))
+def test_every_refusal_s_opt_in_is_what_the_audit_decided(where, expected):
+    module_name, class_name = where
+    cls = _import_refusal(module_name, class_name)
+    if cls is None:
+        pytest.skip(f"{module_name} not importable here")
+    assert cls.log_safe_message is expected, (
+        f"{class_name}.log_safe_message is {cls.log_safe_message}, expected "
+        f"{expected}. If the message changed, re-read its raise sites and "
+        f"update both the class and this table -- do not just flip the test."
+    )
+
+
+def test_no_refusal_outside_the_audit_is_opted_in():
+    # A tenth refusal added later defaults to False and is fine; one added with
+    # log_safe_message = True and no entry here is what this catches.
+    from witan_core.refusal import Refusal
+
+    audited = {name for _, name in EXPECTED_LOG_SAFE}
+
+    def walk(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from walk(sub)
+
+    unaudited_opted_in = sorted(
+        sub.__name__
+        for sub in walk(Refusal)
+        if sub.__name__ not in audited
+        and sub.__module__.split(".")[0] in {"witan", "witan_code", "witan_core"}
+        and sub.__dict__.get("log_safe_message") is True
+    )
+    assert not unaudited_opted_in, (
+        f"opted in without an audit entry: {unaudited_opted_in}. Read the raise "
+        f"sites, then add it to EXPECTED_LOG_SAFE."
+    )

@@ -43,6 +43,24 @@ class Refusal(_Base):  # type: ignore[misc,valid-type]
     # 3.14.
     log_level = logging.WARNING
 
+    log_safe_message = False
+    """Whether this refusal's message may go into a structured log field.
+
+    OFF BY DEFAULT, and the default is the point. A refusal's message is
+    written to be read by the CALLER, which is not the same as being safe to
+    ship to Loki: ``IngestRefused`` interpolates the caller's own step value
+    (``got {value!r}``), and until the observability middleware began recording
+    failure detail, fastmcp's ``FastMCPError`` arm rendered none of these
+    messages, so none of it was exposed. Opting in per type is what keeps a
+    newly-written refusal that echoes its input from silently undoing that.
+
+    Set it ``True`` only when the message is built from identifiers (a graph, a
+    slug, an actor id, a count) or is masked by that type's own contract, as
+    ``scan.enforce.WriteBlocked`` documents. When in doubt leave it off: the
+    class NAME reaches the log either way, and the class name alone is what
+    turned the 2026-09-16 ``code_store_views`` mystery into a diagnosis.
+    """
+
     def __init__(self, *args: object) -> None:
         super().__init__(*args)
         self.log_level = logging.WARNING

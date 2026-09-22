@@ -66,6 +66,14 @@ class WriteBlocked(RuntimeError, Refusal):
     preview only. The raw matched value never appears here or in any log line.
     """
 
+    # Opted in: a field name, a detector id and `Finding.preview`. The
+    # masking lives in the DETECTORS (`detectors.py` builds every preview with
+    # `masked_preview`), not in `Finding`, whose `preview` is a plain `str`.
+    # A third-party scanner plugged in through the registry could put the raw
+    # match there, which would make this opt-in wrong -- so that is the thing
+    # to re-check before widening the detector set.
+    log_safe_message = True
+
     def __init__(self, query_name: str, findings: list[tuple[str, Finding]]) -> None:
         self.query_name = query_name
         self.findings = findings
