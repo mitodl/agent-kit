@@ -100,9 +100,16 @@ jobs:
         if: steps.check.outputs.new == 'true'
         run: |
           wheel="$(ls dist/*.whl)"
-          if ! unzip -l "$wheel" | grep -q 'witan/ui_dist/index.html'; then
-            echo "::error::$wheel has no witan/ui_dist/index.html — the UI build did not reach the wheel"
-            unzip -l "$wheel"
+          # The listing goes into a variable rather than through `| grep -q`:
+          # grep exits on the first match and closes the pipe, so `unzip` can
+          # take SIGPIPE and, under `pipefail`, fail the step that just found
+          # what it wanted. Not reachable under this workflow's default
+          # `bash -e`, but the cost of getting it wrong here is a blocked
+          # release.
+          listing="$(unzip -l "$wheel")"
+          if ! grep -q 'witan/ui_dist/index.html' <<<"$listing"; then
+            echo "::error::$wheel has no witan/ui_dist/index.html: the UI build did not reach the wheel"
+            echo "$listing"
             exit 1
           fi
 

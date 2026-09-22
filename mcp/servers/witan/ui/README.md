@@ -67,7 +67,9 @@ Four places build it, and none of them may be dropped:
 - `publish-witan.yml` before `uv build`, then asserts the same thing on the
   real wheel;
 - `docker/witan.Dockerfile`'s `ui-builder` stage, copied into the source tree
-  before `uv sync`.
+  before `uv sync`. `witan-ui.yml`'s `image` job builds that Dockerfile and
+  asserts the bundle resolves from `witan.__file__`, which is the only check
+  that looks at the deployed artifact rather than at a wheel.
 
 **The checks are presence-only, not freshness.** On the release runner that is
 enough: fresh checkout, `npm ci`, and vite's `emptyOutDir` mean the bundle in

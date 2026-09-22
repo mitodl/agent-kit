@@ -132,8 +132,12 @@ COPY pyproject.toml uv.lock ./
 COPY packages/ packages/
 COPY mcp/servers/witan/ mcp/servers/witan/
 COPY mcp/servers/witan-code/ mcp/servers/witan-code/
-# After the source copy, not before: `COPY mcp/servers/witan/` would overwrite
-# the bundle with the (absent) working-tree copy.
+# After the source copy rather than before it. TWO things keep a developer's
+# stale local bundle out of the image, and either one alone is enough: this
+# ordering, and .dockerignore excluding the host's ui_dist so the source copy
+# carries no bundle to overlay in the first place. Verified by inverting the
+# order with the ignore in place, which still produces a correct image.
+# Removing BOTH is what lets a stale host build ride in.
 COPY --from=ui-builder /witan/ui_dist/ mcp/servers/witan/witan/ui_dist/
 
 RUN uv venv --relocatable /opt/venv
