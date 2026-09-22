@@ -120,3 +120,21 @@ def test_repo_defaults_to_the_detected_repo(server):
 
     # conftest sets WITAN_REPO to HERE.
     assert _pairs(server.memory_contradictions()) == [{here, there}]
+
+
+@requires_omnigraph
+def test_no_repo_detected_keeps_only_pairs_touching_an_unscoped_memory(
+    server, monkeypatch
+):
+    """Nothing detected is not the same as all repos: a caller with no repo
+    context sees only what nobody scoped, as with `memory_list`."""
+    unscoped = _memory(server, "unscoped", repo="")
+    here = _memory(server, "here")
+    there = _memory(server, "there", repo=ELSEWHERE)
+    server.memory_link(unscoped, here, "contradicts")
+    server.memory_link(here, there, "contradicts")
+
+    # An empty WITAN_REPO disables detection entirely.
+    monkeypatch.setenv("WITAN_REPO", "")
+
+    assert _pairs(server.memory_contradictions()) == [{unscoped, here}]

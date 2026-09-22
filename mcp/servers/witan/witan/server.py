@@ -4086,7 +4086,7 @@ def memory_contradictions(repo: str | None = None) -> list[dict]:
         (``repo`` null) are returned.
     """
     detected = repo_module.detect(override=repo)
-    everything = not detected and repo == ""
+    everything = repo == ""
 
     pairs: dict[frozenset[str], dict] = {}
     for row in client.read("read.gq", "contradicts_pairs", {}):
