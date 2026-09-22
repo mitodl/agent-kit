@@ -161,12 +161,26 @@ def serve(
     The legacy HTTP+SSE transport is not offered: MCP 2026-07-28 deprecates it
     with a 12-month offramp, and witan has no deployment on it to carry over.
 
+    HTTP transports run behind fastmcp's Host/Origin guard in ``"auto"`` mode.
+    It validates the Host header when the server is bound to a loopback
+    address, and the Origin header when either the server or the request's
+    Host is loopback. A request carrying no Origin (the CLI, curl, an agent)
+    always passes. A server bound to a non-loopback address, which is what the
+    deployment runs, is unaffected by either check.
+
+    No Host/Origin allowlist is configured, deliberately: setting one for the
+    deployment would 403 every request from the browser UI. See the call to
+    ``run`` in this function's body for the mechanism.
+
     Parameters
     ----------
     transport: MCP transport. ``stdio`` for local; ``streamable-http`` (or its
         ``http`` alias) binds a network listener. Env: ``WITAN_MCP_TRANSPORT``.
     host: Interface to bind for HTTP transports. ``0.0.0.0`` inside a container.
-        Env: ``WITAN_MCP_HOST``.
+        Note that the Host/Origin guard above engages only on a LOOPBACK bind:
+        serving on ``0.0.0.0`` from a workstation to reach a browser on another
+        machine turns both checks off, and that endpoint has no authentication
+        of its own. Env: ``WITAN_MCP_HOST``.
     port: Port to bind for HTTP transports. Env: ``WITAN_MCP_PORT``.
     shutdown_grace_seconds: How long uvicorn waits for in-flight requests after
         SIGTERM before dropping them. FastMCP's own default is **2 seconds**,
@@ -213,6 +227,35 @@ def serve(
             port=port,
             path=path,
             middleware=trace_context_middleware(),
+            # Off by default in fastmcp (settings.py:280). Without it the
+            # loopback endpoint is unauthenticated AND unguarded, so any page
+            # the user visits can POST tool calls to 127.0.0.1 once `witan ui`
+            # serves a bundle.
+            #
+            # What "auto" checks is keyed on the BIND address, not on the
+            # request: Host is validated only when `scope["server"]` is
+            # loopback (`_should_validate_host`, http.py:281-286), and Origin
+            # when either that or the request's own Host is
+            # (`_should_validate_origin`, http.py:288-298). So a loopback bind
+            # gets DNS-rebinding and cross-site-POST protection, and the
+            # 0.0.0.0-bound deployment is left exactly as it was. A non-loopback
+            # LOCAL bind (`--host 0.0.0.0` on a workstation) gets nothing
+            # either; see the `host` parameter's doc.
+            #
+            # We pass no allowlist, and that is load-bearing for the
+            # deployment. Note this does NOT mean the middleware runs without
+            # one: for a loopback bind fastmcp appends the bind host itself
+            # (`_resolve_allowed_hosts_for_run`, mixins/transport.py:52-65), so
+            # `has_explicit_allowed_hosts` is True locally. What must not
+            # happen is an allowlist reaching the non-loopback bind, because
+            # `allowed_hosts` switches Origin validation on unconditionally;
+            # APISIX terminates TLS and uvicorn trusts forwarded headers only
+            # from FORWARDED_ALLOW_IPS, so the server would compute the request
+            # origin as http://<host> while the page sends
+            # Origin: https://<host>, and every POST from the deployed page
+            # would 403. Anyone adding one must pass None rather than []: an
+            # empty list still counts as explicit (http.py:241).
+            host_origin_protection="auto",
             # Overrides FastMCP's hardcoded 2s. See
             # DEFAULT_SHUTDOWN_GRACE_SECONDS — without this the deployment's
             # 150s termination grace buys time uvicorn refuses to use, and every
