@@ -828,6 +828,10 @@ MIRRORED: list[tuple[str, str]] = [
     ("mcp/servers/witan/docs/USER_GUIDE.md", "guides/witan-user-guide.md"),
     ("mcp/servers/witan/docs/write-path-scanning.md", "guides/write-path-scanning.md"),
     ("mcp/servers/witan/docs/migration-runbook.md", "guides/migration-runbook.md"),
+    (
+        "mcp/servers/witan/docs/store-quarantine-runbook.md",
+        "guides/store-quarantine-runbook.md",
+    ),
     ("mcp/servers/witan/docs/deployed-witan-onboarding.md", "guides/deployed-witan.md"),
     ("mcp/servers/witan-code/docs/USER_GUIDE.md", "guides/witan-code-user-guide.md"),
     ("mcp/servers/witan-code/docs/BRANCH_INDEXING.md", "guides/branch-indexing.md"),

@@ -627,6 +627,12 @@ def _classify_cli_error(stderr: str) -> str:
     # beats retryable when a message could be read as either.
     if any(m in lowered for m in _PRECONDITION_FAILED):
         return _http.PRECONDITION_FAILED
+    # Ahead of _RECOVERY_REQUIRED and _NEEDS_REPAIR both: this names a sidecar
+    # that no amount of waiting resolves and that blocks `omnigraph repair`
+    # itself, so either of those readings would retry or repair into the same
+    # wall. See `_http.STORE_QUARANTINED`.
+    if _http.is_store_quarantined(lowered):
+        return _http.STORE_QUARANTINED
     if any(m in lowered for m in _RECOVERY_REQUIRED):
         return _http.RECOVERY_REQUIRED
     if any(m in lowered for m in _FULL_TEXT_REBUILD_REQUIRED):
@@ -1190,11 +1196,59 @@ def _recovery_backoff(attempt: int) -> float:
 
 # ── Re-entrant per-store write lock ───────────────────────────────
 #
-# Stores flock cannot coordinate: an http(s) server (writers are other
-# processes on other hosts) and an s3:// root (no local file to lock). A
-# superset of _SERVER_SCHEMES on purpose — s3 is not a *remote server*, but it
-# is just as unlockable.
-_UNLOCKABLE_SCHEMES = ("http://", "https://", "s3://")
+# THREE TIERS, NOT TWO, and the middle one is the whole point of this section.
+#
+#   local path   flock on `<store>.lock`. Excludes every writer on the host,
+#                this process's threads and other processes alike.
+#   s3://        an in-process mutex keyed by the store URI. There is no local
+#                file to flock and no server to arbitrate, but the writers that
+#                actually collide are this process's own threads, and those a
+#                mutex does exclude.
+#   http(s)://   nothing. The writers are on other hosts and the server
+#                arbitrates between them; a lock here would only serialise this
+#                client against itself for no gain.
+#
+# ★ THE MIDDLE TIER IS A REVERSAL. s3:// used to sit with http(s) under one
+# `_UNLOCKABLE_SCHEMES`, reasoning that a store flock cannot coordinate either
+# one. True, and it silently answered a question nobody asked: flock cannot,
+# but a mutex can, and "no cross-host lock is possible" is not "no lock is
+# worth taking". agent-kit#364 is what that cost — two concurrent tool calls in
+# ONE `witan serve` process, against one format-9 direct-S3 root, raced the
+# same manifest version and left an OCC recovery sidecar whose delta did not
+# match the commit it named. The graph then refused every read, every write and
+# `omnigraph repair` until an operator quarantined the sidecar by hand and
+# force-repaired four drifted table heads (see StoreQuarantined).
+#
+# ★ WHAT THIS DOES NOT FIX, SAID PLAINLY: separate processes. Two `witan serve`
+# replicas, or a CLI run alongside a server, still write to an s3:// root with
+# no coordination between them and can reproduce #364 exactly. A shared s3 root
+# wants a served single-writer target (http(s)://) or upstream coordination;
+# this closes the one racer pair we control, not the class.
+_UNLOCKABLE_SCHEMES = _SERVER_SCHEMES
+_IN_PROCESS_LOCK_SCHEMES = ("s3://",)
+
+# Keyed by the store URI, never reclaimed: one entry per graph this process has
+# written to, which is bounded by the graphs it serves (16 in production).
+_in_process_write_locks: dict[str, threading.RLock] = {}
+_in_process_write_locks_guard = threading.Lock()
+
+
+def _in_process_write_lock(store: str) -> threading.RLock:
+    """The process-wide mutex for ``store``, created on first use.
+
+    An ``RLock`` because the nesting the flock tier tracks by hand in
+    ``_held_flocks`` — a write issued inside :meth:`hold_write_lock` — has to
+    re-enter here too, and an ``RLock`` already does that per thread, which is
+    the same keying.
+    """
+    key = store.rstrip("/")
+    with _in_process_write_locks_guard:
+        lock = _in_process_write_locks.get(key)
+        if lock is None:
+            lock = _in_process_write_locks[key] = threading.RLock()
+    return lock
+
+
 #
 # flock is held by the OPEN FILE DESCRIPTION, not by the process, so a second
 # `open()` of the same `<store>.lock` blocks even from the thread that already
@@ -1248,6 +1302,31 @@ def release_store_flock(store: str, fh) -> None:
     if fh is not None:
         fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
         fh.close()
+
+
+@contextmanager
+def store_write_lock(store: str) -> Iterator[None]:
+    """Serialise writes to ``store`` for the duration of the block.
+
+    The single entry point for all three tiers above, so a caller never has to
+    know which one a URI falls into. A no-op for a served store.
+    """
+    if store.startswith(_UNLOCKABLE_SCHEMES):
+        yield
+        return
+    if store.startswith(_IN_PROCESS_LOCK_SCHEMES):
+        with _in_process_write_lock(store):
+            yield
+        return
+    # Everything else is a local path, and the fall-through assumes it: a scheme
+    # dropped from BOTH lists above would land here and flock `<scheme>:/…lock`,
+    # a real local file named after a remote store. Any new scheme belongs in
+    # one of the two lists.
+    fh = acquire_store_flock(store)
+    try:
+        yield
+    finally:
+        release_store_flock(store, fh)
 
 
 class StoreUnavailable(RuntimeError):
@@ -1334,6 +1413,58 @@ class WriteQueueFull(RuntimeError, Refusal):
 
 class AdmissionCapExceeded(RuntimeError, Refusal):
     """The server's per-actor admission cap refused this write. Nothing was written."""
+
+
+#: Where an operator hit by :class:`StoreQuarantined` finds the procedure. An
+#: absolute URL rather than the repo-relative path, because this message is
+#: raised by an installed CLI or MCP client that has no checkout to resolve a
+#: relative path against. The page is published by the ``witan-context`` site
+#: (``zensical.toml``'s ``site_url``), which serves directory-style URLs.
+RUNBOOK_URL = "https://witan-context.readthedocs.io/guides/store-quarantine-runbook/"
+
+
+class StoreQuarantined(RuntimeError, Refusal):
+    """The store will not open: an active OCC recovery sidecar records a manifest
+    delta that does not match the original commit it names.
+
+    Every read, every write and ``omnigraph repair`` itself are refused with
+    this same error until an operator resolves the sidecar, so there is nothing
+    the client can do about it and nothing waiting will fix. Raised on the first
+    attempt, for reads as well as writes.
+
+    ★ IT IS A REFUSAL, NOT AN INCIDENT PER CALL. Once a graph is in this state
+    every subsequent tool call hits it, and routing each one to Sentry with a
+    stack trace buries the single operational fact — one graph is down — under
+    hundreds of identical issues. The condition needs one operator, not an
+    alert per caller.
+
+    ★ AND IT CARRIES THE OPERATION ID. The remedy needs the sidecar's name to
+    quarantine the right file, and the raw error is the only place it appears;
+    reading it back out of a truncated log was the slowest step of the
+    2026-09-18 recovery. :func:`sidecar_operation_id` parses it out so the
+    message can state it and :attr:`operation_id` can carry it.
+
+    See :data:`RUNBOOK_URL` for the recovery procedure.
+    """
+
+    def __init__(self, message: str, operation_id: str | None = None) -> None:
+        super().__init__(message)
+        self.operation_id = operation_id
+
+
+_SIDECAR_ID_RE = re.compile(r"occ recovery sidecar '([^']+)'", re.IGNORECASE)
+
+
+def sidecar_operation_id(msg: str) -> str | None:
+    """The OCC recovery sidecar's operation id from a quarantine error, if named.
+
+    Lenient like the other response parsers here: a message that does not quote
+    an id is still a quarantine, just one whose sidecar the operator has to find
+    by listing ``__recovery/``. Failing to parse a detail must never turn a
+    legible refusal back into an opaque one.
+    """
+    match = _SIDECAR_ID_RE.search(msg)
+    return match.group(1) if match else None
 
 
 def _is_storage_version_mismatch(msg: str) -> bool:
@@ -2224,7 +2355,12 @@ class OmnigraphClient:
             if gate_write
             else nullcontext()
         )
-        with gate:
+        # The store lock goes INSIDE the admission gate, exactly where the
+        # flock it generalises used to sit: a write must not hold the store
+        # against this process's other threads while it waits for a server slot
+        # it may never be given.
+        write_lock = store_write_lock(self.graph_uri) if is_write else nullcontext()
+        with gate, write_lock:
             return self._retry_loop(
                 attempt_once,
                 label,
@@ -2249,229 +2385,225 @@ class OmnigraphClient:
         call cannot usefully still be running, or ``None`` when no cut-off is
         known — in which case a ``Retry-After`` is obeyed rather than
         second-guessed."""
-        lock_fh = self._acquire_write_lock(is_write)
-        try:
-            attempt = 0
-            admission_cap_attempt = 0
-            recovery_attempt = 0
-            unavailable_attempt = 0
-            unavailable_started: float | None = None
-            while True:
-                result = attempt_once()
-                if result.kind == _http.OK:
-                    return result.body
-                err = result.error
-                kind = result.kind
-                if self._STORAGE_MISMATCH_HINT and _is_storage_version_mismatch(err):
-                    raise RuntimeError(
-                        _friendly_storage_error(err, self._STORAGE_MISMATCH_HINT)
-                    ) from None
-                if kind == _http.UNAVAILABLE and not (
-                    self.is_remote and self.connect_retry
-                ):
-                    # A connect failure against a LOCAL store is not a restarting
-                    # server, and a caller that opted out of the wait wants an
-                    # answer now. Either way it stops being a retryable
-                    # condition and falls through to the generic failure below.
-                    kind = _http.FATAL
-                if kind == _http.UNAVAILABLE:
-                    # Its own budget, like the admission cap below: this is a
-                    # gap in the server's availability, not a conflict over the
-                    # graph, so it neither consumes _MAX_ATTEMPTS nor honours
-                    # surface_conflict (there is no conflict to surface).
-                    #
-                    # Reaching here means re-running is known safe. For a WRITE
-                    # that is because the request provably never left this
-                    # process (the CLI's "tcp connect error", or a failure
-                    # during the transport's explicit `connect()`); a write
-                    # whose fate is ambiguous is classified FATAL by both
-                    # transports and never arrives here. Reads may also arrive
-                    # here from a mid-flight failure, which is fine precisely
-                    # because repeating a query changes nothing.
-                    #
-                    # Elapsed is measured from the FIRST connect failure, not
-                    # from entry, so a call that spent time on unrelated drift
-                    # retries still gets the full restart-length window.
-                    #
-                    # The final sleep is CLAMPED to the time remaining rather
-                    # than skipped for overshooting, so the budget is spent to
-                    # the last second and the deadline itself gets one more
-                    # attempt. Raising early instead would silently shorten the
-                    # window by up to _UNAVAILABLE_MAX_DELAY — the same species
-                    # of "the constant does not mean what it says" bug this
-                    # budget was rewritten to fix.
-                    now = time.monotonic()
-                    if unavailable_started is None:
-                        unavailable_started = now
-                    unavailable_attempt += 1
-                    elapsed = now - unavailable_started
-                    if elapsed < _UNAVAILABLE_MAX_WAIT:
-                        time.sleep(
-                            min(
-                                _unavailable_backoff(unavailable_attempt),
-                                _UNAVAILABLE_MAX_WAIT - elapsed,
-                            )
+        attempt = 0
+        admission_cap_attempt = 0
+        recovery_attempt = 0
+        unavailable_attempt = 0
+        unavailable_started: float | None = None
+        while True:
+            result = attempt_once()
+            if result.kind == _http.OK:
+                return result.body
+            err = result.error
+            kind = result.kind
+            if self._STORAGE_MISMATCH_HINT and _is_storage_version_mismatch(err):
+                raise RuntimeError(
+                    _friendly_storage_error(err, self._STORAGE_MISMATCH_HINT)
+                ) from None
+            if kind == _http.UNAVAILABLE and not (
+                self.is_remote and self.connect_retry
+            ):
+                # A connect failure against a LOCAL store is not a restarting
+                # server, and a caller that opted out of the wait wants an
+                # answer now. Either way it stops being a retryable
+                # condition and falls through to the generic failure below.
+                kind = _http.FATAL
+            if kind == _http.UNAVAILABLE:
+                # Its own budget, like the admission cap below: this is a
+                # gap in the server's availability, not a conflict over the
+                # graph, so it neither consumes _MAX_ATTEMPTS nor honours
+                # surface_conflict (there is no conflict to surface).
+                #
+                # Reaching here means re-running is known safe. For a WRITE
+                # that is because the request provably never left this
+                # process (the CLI's "tcp connect error", or a failure
+                # during the transport's explicit `connect()`); a write
+                # whose fate is ambiguous is classified FATAL by both
+                # transports and never arrives here. Reads may also arrive
+                # here from a mid-flight failure, which is fine precisely
+                # because repeating a query changes nothing.
+                #
+                # Elapsed is measured from the FIRST connect failure, not
+                # from entry, so a call that spent time on unrelated drift
+                # retries still gets the full restart-length window.
+                #
+                # The final sleep is CLAMPED to the time remaining rather
+                # than skipped for overshooting, so the budget is spent to
+                # the last second and the deadline itself gets one more
+                # attempt. Raising early instead would silently shorten the
+                # window by up to _UNAVAILABLE_MAX_DELAY — the same species
+                # of "the constant does not mean what it says" bug this
+                # budget was rewritten to fix.
+                now = time.monotonic()
+                if unavailable_started is None:
+                    unavailable_started = now
+                unavailable_attempt += 1
+                elapsed = now - unavailable_started
+                if elapsed < _UNAVAILABLE_MAX_WAIT:
+                    time.sleep(
+                        min(
+                            _unavailable_backoff(unavailable_attempt),
+                            _UNAVAILABLE_MAX_WAIT - elapsed,
                         )
-                        continue
-                    raise StoreUnavailable(
-                        f"omnigraph {label} failed after {unavailable_attempt} "
-                        f"attempts over {elapsed:.0f}s — could not connect to "
-                        f"{self.server_url}:\n{err.strip()}"
                     )
-                if kind == _http.ADMISSION_CAP:
-                    # Independent budget/backoff from the drift retries below —
-                    # doesn't consume _MAX_ATTEMPTS and ignores surface_conflict.
-                    #
-                    # The server's own Retry-After wins over the blind schedule
-                    # when there is one — but only when THE CALL CAN STILL
-                    # AFFORD IT, and that is measured against the remaining
-                    # budget, not against _ADMISSION_CAP_MAX_DELAY. Those are
-                    # different quantities and conflating them was wrong in both
-                    # directions: it rejected a `Retry-After: 5` that fits
-                    # comfortably inside a 30s budget, while happily sleeping
-                    # five separate 4s hints for a total of 20s on top of
-                    # whatever the write gate had already spent queueing —
-                    # arriving at exactly the cut-off it meant to stay inside.
-                    #
-                    # With no deadline (the CLI path) there is no cut-off to
-                    # respect and any hint is obeyed, which is the pre-existing
-                    # behaviour for that transport.
-                    admission_cap_attempt += 1
-                    hint = result.retry_after
-                    delay = (
-                        hint
-                        if hint is not None
-                        else _admission_cap_backoff(admission_cap_attempt)
-                    )
-                    remaining = (
-                        None if deadline is None else deadline - time.monotonic()
-                    )
-                    if remaining is not None and delay > remaining:
-                        # Sleeping past the deadline can only end as a torn-down
-                        # connection whose outcome the caller cannot determine.
-                        # Failing NOW, quoting what the server asked for, is the
-                        # honest answer — the wait it wants belongs to whoever
-                        # schedules the retry, not to a call that cannot extend
-                        # its own deadline.
-                        asked = (
-                            f"which asked to be retried in {hint:.0f}s"
-                            if hint is not None
-                            else "and the backoff before another attempt"
-                        )
-                        raise AdmissionCapExceeded(
-                            f"omnigraph {label} was refused by the server's "
-                            f"admission cap, {asked} — longer than the "
-                            f"{max(remaining, 0.0):.1f}s this call has left. "
-                            f"Nothing was written; retry in {delay:.0f}s:\n"
-                            f"{err.strip()}"
-                        )
-                    if admission_cap_attempt < _ADMISSION_CAP_MAX_ATTEMPTS:
-                        time.sleep(delay)
-                        continue
-                    raise AdmissionCapExceeded(
-                        f"omnigraph {label} failed after "
-                        f"{_ADMISSION_CAP_MAX_ATTEMPTS} attempts (actor "
-                        f"admission cap exceeded):\n{err.strip()}"
-                    )
-                if kind == _http.RECOVERY_REQUIRED:
-                    # ★ A WRITE STOPS HERE. See `WriteIndeterminate`: this one
-                    # response covers both an effect-free bystander barrier and
-                    # a request whose table effects may already have landed, and
-                    # nothing on the wire separates them. Retrying the ambiguous
-                    # case duplicates the mutation once recovery rolls the
-                    # original forward, and a shorter budget only shrinks the
-                    # window in which that happens rather than closing it.
-                    #
-                    # Deliberately NOT honouring surface_conflict either: the
-                    # barrier fires for writers contending with nobody, so
-                    # reporting it as a lost race would be a confident wrong
-                    # answer.
-                    if is_write:
-                        raise WriteIndeterminate(
-                            f"omnigraph {label} hit a recovery barrier on the "
-                            f"branch. ITS OUTCOME IS INDETERMINATE — the write "
-                            f"may already have landed, wholly or partly, and "
-                            f"the response does not say which. Re-read before "
-                            f"retrying; retrying blind writes it twice if it "
-                            f"did land:\n{err.strip()}"
-                        ) from None
-                    # A READ is safe to repeat, and the barrier does clear on
-                    # its own — measured self-clearing in under a second. Its
-                    # own budget, like the admission cap: neither consumes
-                    # _MAX_ATTEMPTS.
-                    recovery_attempt += 1
-                    if recovery_attempt < _RECOVERY_MAX_ATTEMPTS:
-                        time.sleep(_recovery_backoff(recovery_attempt))
-                        continue
-                    raise RuntimeError(
-                        f"omnigraph {label} failed after {_RECOVERY_MAX_ATTEMPTS} "
-                        f"attempts — a recovery barrier on the branch kept "
-                        f"blocking the read:\n{err.strip()}"
-                    )
-                if kind == _http.PRECONDITION_FAILED:
-                    # TERMINAL. The caller stated a precondition and it was
-                    # false, so re-sending this exact write is never right —
-                    # upstream never replays it either. A CAS caller still gets
-                    # `OmnigraphConflict` so `task_claim` can re-read and answer
-                    # `lost_race`; everyone else gets a hard error rather than
-                    # a silent retry over the winner.
-                    #
-                    # Note this raises on the FIRST attempt in both branches: it
-                    # does not fall through to the retry counter below, which is
-                    # the difference between this and a 409.
-                    if surface_conflict:
-                        raise OmnigraphConflict(err.strip()) from None
-                    raise RuntimeError(
-                        f"omnigraph {label} was refused because its stated "
-                        f"precondition no longer held — the graph moved since "
-                        f"you read it. NOTHING WAS WRITTEN, and this write must "
-                        f"not be retried as-is; re-read and decide:\n{err.strip()}"
-                    )
-                if kind == _http.FULL_TEXT_REBUILD_REQUIRED:
-                    # TERMINAL, on the first attempt. The index cannot serve
-                    # this engine's analyzer and no amount of retrying changes
-                    # that; upstream says so outright. Ordinary reads are
-                    # unaffected — only full-text queries land here — so this is
-                    # not a broken graph, and the remedy is in the server's own
-                    # message, which is why it is passed through whole.
-                    raise RuntimeError(
-                        f"omnigraph {label} was refused because a full-text "
-                        f"index needs an explicit rebuild for this engine "
-                        f"version. Retrying will not clear it, and ordinary "
-                        f"(non-search) reads are unaffected:\n{err.strip()}"
-                    )
-                if surface_conflict and kind == _http.RETRYABLE:
-                    # A compare-and-swap caller wants to lose the race, not
-                    # re-apply its write over the winner. Surface immediately.
-                    raise OmnigraphConflict(err.strip()) from None
-                attempt += 1
-                if attempt < _MAX_ATTEMPTS:
-                    if kind == _http.NEEDS_REPAIR:
-                        self._repair(env)
-                        continue
-                    if kind == _http.RETRYABLE:
-                        time.sleep(0.05 * attempt)
-                        continue
-                # `exit N` only makes sense for a subprocess; an HTTP attempt
-                # carries no returncode and says so by omitting it, rather than
-                # inventing one that would read as a CLI exit status.
-                exited = (
-                    "" if result.returncode is None else f" (exit {result.returncode})"
+                    continue
+                raise StoreUnavailable(
+                    f"omnigraph {label} failed after {unavailable_attempt} "
+                    f"attempts over {elapsed:.0f}s — could not connect to "
+                    f"{self.server_url}:\n{err.strip()}"
                 )
-                raise RuntimeError(f"omnigraph {label} failed{exited}:\n{err.strip()}")
-        finally:
-            # Not `if lock_fh is not None`: a re-entrant acquisition returns
-            # None *and* has a depth to decrement, so the release has to run
-            # either way. It is a no-op when no lock was taken at all (remote
-            # store, or a read).
-            if is_write and not self.graph_uri.startswith(_UNLOCKABLE_SCHEMES):
-                release_store_flock(self.graph_uri, lock_fh)
-
-    def _acquire_write_lock(self, is_write: bool):
-        """Hold a per-store exclusive lock for writes (local stores)."""
-        if not is_write or self.graph_uri.startswith(_UNLOCKABLE_SCHEMES):
-            return None
-        return acquire_store_flock(self.graph_uri)
+            if kind == _http.ADMISSION_CAP:
+                # Independent budget/backoff from the drift retries below —
+                # doesn't consume _MAX_ATTEMPTS and ignores surface_conflict.
+                #
+                # The server's own Retry-After wins over the blind schedule
+                # when there is one — but only when THE CALL CAN STILL
+                # AFFORD IT, and that is measured against the remaining
+                # budget, not against _ADMISSION_CAP_MAX_DELAY. Those are
+                # different quantities and conflating them was wrong in both
+                # directions: it rejected a `Retry-After: 5` that fits
+                # comfortably inside a 30s budget, while happily sleeping
+                # five separate 4s hints for a total of 20s on top of
+                # whatever the write gate had already spent queueing —
+                # arriving at exactly the cut-off it meant to stay inside.
+                #
+                # With no deadline (the CLI path) there is no cut-off to
+                # respect and any hint is obeyed, which is the pre-existing
+                # behaviour for that transport.
+                admission_cap_attempt += 1
+                hint = result.retry_after
+                delay = (
+                    hint
+                    if hint is not None
+                    else _admission_cap_backoff(admission_cap_attempt)
+                )
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and delay > remaining:
+                    # Sleeping past the deadline can only end as a torn-down
+                    # connection whose outcome the caller cannot determine.
+                    # Failing NOW, quoting what the server asked for, is the
+                    # honest answer — the wait it wants belongs to whoever
+                    # schedules the retry, not to a call that cannot extend
+                    # its own deadline.
+                    asked = (
+                        f"which asked to be retried in {hint:.0f}s"
+                        if hint is not None
+                        else "and the backoff before another attempt"
+                    )
+                    raise AdmissionCapExceeded(
+                        f"omnigraph {label} was refused by the server's "
+                        f"admission cap, {asked} — longer than the "
+                        f"{max(remaining, 0.0):.1f}s this call has left. "
+                        f"Nothing was written; retry in {delay:.0f}s:\n"
+                        f"{err.strip()}"
+                    )
+                if admission_cap_attempt < _ADMISSION_CAP_MAX_ATTEMPTS:
+                    time.sleep(delay)
+                    continue
+                raise AdmissionCapExceeded(
+                    f"omnigraph {label} failed after "
+                    f"{_ADMISSION_CAP_MAX_ATTEMPTS} attempts (actor "
+                    f"admission cap exceeded):\n{err.strip()}"
+                )
+            if kind == _http.STORE_QUARANTINED:
+                # TERMINAL FOR READS TOO, and on the first attempt. The
+                # sidecar stays active until an operator moves it, so the
+                # retry budget only spends the caller's deadline before
+                # reporting the same thing.
+                operation_id = sidecar_operation_id(err)
+                named = f" (sidecar operation {operation_id})" if operation_id else ""
+                raise StoreQuarantined(
+                    f"omnigraph {label} refused: the store is quarantined by "
+                    f"an unresolved OCC recovery sidecar{named}. Reads, "
+                    f"writes and `omnigraph repair` are all blocked until an "
+                    f"operator resolves it — see {RUNBOOK_URL}. Retrying "
+                    f"will not clear it:\n{err.strip()}",
+                    operation_id,
+                ) from None
+            if kind == _http.RECOVERY_REQUIRED:
+                # ★ A WRITE STOPS HERE. See `WriteIndeterminate`: this one
+                # response covers both an effect-free bystander barrier and
+                # a request whose table effects may already have landed, and
+                # nothing on the wire separates them. Retrying the ambiguous
+                # case duplicates the mutation once recovery rolls the
+                # original forward, and a shorter budget only shrinks the
+                # window in which that happens rather than closing it.
+                #
+                # Deliberately NOT honouring surface_conflict either: the
+                # barrier fires for writers contending with nobody, so
+                # reporting it as a lost race would be a confident wrong
+                # answer.
+                if is_write:
+                    raise WriteIndeterminate(
+                        f"omnigraph {label} hit a recovery barrier on the "
+                        f"branch. ITS OUTCOME IS INDETERMINATE — the write "
+                        f"may already have landed, wholly or partly, and "
+                        f"the response does not say which. Re-read before "
+                        f"retrying; retrying blind writes it twice if it "
+                        f"did land:\n{err.strip()}"
+                    ) from None
+                # A READ is safe to repeat, and the barrier does clear on
+                # its own — measured self-clearing in under a second. Its
+                # own budget, like the admission cap: neither consumes
+                # _MAX_ATTEMPTS.
+                recovery_attempt += 1
+                if recovery_attempt < _RECOVERY_MAX_ATTEMPTS:
+                    time.sleep(_recovery_backoff(recovery_attempt))
+                    continue
+                raise RuntimeError(
+                    f"omnigraph {label} failed after {_RECOVERY_MAX_ATTEMPTS} "
+                    f"attempts — a recovery barrier on the branch kept "
+                    f"blocking the read:\n{err.strip()}"
+                )
+            if kind == _http.PRECONDITION_FAILED:
+                # TERMINAL. The caller stated a precondition and it was
+                # false, so re-sending this exact write is never right —
+                # upstream never replays it either. A CAS caller still gets
+                # `OmnigraphConflict` so `task_claim` can re-read and answer
+                # `lost_race`; everyone else gets a hard error rather than
+                # a silent retry over the winner.
+                #
+                # Note this raises on the FIRST attempt in both branches: it
+                # does not fall through to the retry counter below, which is
+                # the difference between this and a 409.
+                if surface_conflict:
+                    raise OmnigraphConflict(err.strip()) from None
+                raise RuntimeError(
+                    f"omnigraph {label} was refused because its stated "
+                    f"precondition no longer held — the graph moved since "
+                    f"you read it. NOTHING WAS WRITTEN, and this write must "
+                    f"not be retried as-is; re-read and decide:\n{err.strip()}"
+                )
+            if kind == _http.FULL_TEXT_REBUILD_REQUIRED:
+                # TERMINAL, on the first attempt. The index cannot serve
+                # this engine's analyzer and no amount of retrying changes
+                # that; upstream says so outright. Ordinary reads are
+                # unaffected — only full-text queries land here — so this is
+                # not a broken graph, and the remedy is in the server's own
+                # message, which is why it is passed through whole.
+                raise RuntimeError(
+                    f"omnigraph {label} was refused because a full-text "
+                    f"index needs an explicit rebuild for this engine "
+                    f"version. Retrying will not clear it, and ordinary "
+                    f"(non-search) reads are unaffected:\n{err.strip()}"
+                )
+            if surface_conflict and kind == _http.RETRYABLE:
+                # A compare-and-swap caller wants to lose the race, not
+                # re-apply its write over the winner. Surface immediately.
+                raise OmnigraphConflict(err.strip()) from None
+            attempt += 1
+            if attempt < _MAX_ATTEMPTS:
+                if kind == _http.NEEDS_REPAIR:
+                    self._repair(env)
+                    continue
+                if kind == _http.RETRYABLE:
+                    time.sleep(0.05 * attempt)
+                    continue
+            # `exit N` only makes sense for a subprocess; an HTTP attempt
+            # carries no returncode and says so by omitting it, rather than
+            # inventing one that would read as a CLI exit status.
+            exited = "" if result.returncode is None else f" (exit {result.returncode})"
+            raise RuntimeError(f"omnigraph {label} failed{exited}:\n{err.strip()}")
 
     @contextmanager
     def hold_write_lock(self) -> Iterator[None]:
@@ -2483,18 +2615,13 @@ class OmnigraphClient:
         would make the decisions stale.
 
         The nested writes inside the block re-enter the lock rather than
-        blocking on it (see :func:`acquire_store_flock`). A no-op for remote
-        stores, matching :meth:`_acquire_write_lock` — flock is a local-file
-        mechanism and cannot coordinate writers on a shared server.
+        blocking on it — see :func:`acquire_store_flock` for the flock tier and
+        :func:`_in_process_write_lock` for the s3 one. A no-op for a served
+        store, where the server arbitrates between writers this client cannot
+        see.
         """
-        if self.graph_uri.startswith(_UNLOCKABLE_SCHEMES):
+        with store_write_lock(self.graph_uri):
             yield
-            return
-        fh = acquire_store_flock(self.graph_uri)
-        try:
-            yield
-        finally:
-            release_store_flock(self.graph_uri, fh)
 
     def _repair(self, env: dict) -> None:
         """Reconcile manifest/HEAD drift so the retried write can proceed."""

@@ -55,6 +55,7 @@ nav = [
     { "Write-path scanning" = "guides/write-path-scanning.md" },
     { "Using a deployed witan" = "guides/deployed-witan.md" },
     { "Migration runbook" = "guides/migration-runbook.md" },
+    { "Store quarantine runbook" = "guides/store-quarantine-runbook.md" },
   ] },
   { "Reference" = [
     { "Overview" = "reference/index.md" },
