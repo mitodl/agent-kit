@@ -118,12 +118,12 @@ def check_member(root: Path, member: str) -> list[Problem]:
             )
         )
     # DELIBERATELY NOT CHECKED: that the newest heading equals the version.
-    # A changelog entry ahead of the version is the normal mid-release state —
-    # `just bump` requires the entry to exist BEFORE it will move the version,
-    # so between writing the entry and running the bump every package is
-    # legitimately in exactly that shape. Flagging it would make the pre-flight
-    # check inside `just bump` unsatisfiable, and would fail CI on any PR that
-    # documents a release in one commit and cuts it in the next.
+    # `just bump` writes both together (bump-my-version sets the version, then
+    # `scriv collect` writes the matching heading from pending changelog.d/
+    # fragments in the same recipe), so in the normal flow they're never out of
+    # step to begin with. Left unchecked anyway for a changelog hand-edited
+    # ahead of a release — a state this doesn't need to forbid to catch what it
+    # exists to catch: the version and the record of what shipped disagreeing.
     return problems
 
 
@@ -148,8 +148,8 @@ def check(root: str = ".") -> None:
         print(f"  {problem.package}: {problem.detail}\n", file=sys.stderr)
     print(
         "Release a package with `just bump <package> <major|minor|patch>`, "
-        "which keeps all three in step. See the justfile recipe for why the "
-        "CHANGELOG entry is written first.",
+        "which keeps all three in step. Add a changelog.d/ fragment first "
+        "with `just changelog <package>` if there isn't one yet.",
         file=sys.stderr,
     )
     raise SystemExit(1)
