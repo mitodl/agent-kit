@@ -111,6 +111,10 @@ function openBlockerSlugs(
  * dependents first; the result is reversed. A component of more than one
  * task, or one that blocks itself, is a cycle, and collapsing it into one
  * node is what lets the depth pass below finish instead of looping.
+ *
+ * Iterative, with an explicit stack of frames: a recursive visit goes one call
+ * deeper per task along a chain, and a long enough chain would throw
+ * `RangeError` before anything was drawn.
  */
 export function components(
 	slugs: string[],
@@ -123,38 +127,63 @@ export function components(
 	const onStack = new Set<string>();
 	const found: string[][] = [];
 
-	const visit = (slug: string): void => {
+	const enter = (slug: string): void => {
 		index.set(slug, counter);
 		low.set(slug, counter);
 		counter += 1;
 		stack.push(slug);
 		onStack.add(slug);
-		for (const to of next.get(slug) ?? []) {
-			if (!index.has(to)) {
-				visit(to);
-				low.set(slug, Math.min(low.get(slug) ?? 0, low.get(to) ?? 0));
-			} else if (onStack.has(to)) {
-				low.set(slug, Math.min(low.get(slug) ?? 0, index.get(to) ?? 0));
-			}
-		}
-		if (low.get(slug) === index.get(slug)) {
-			const component: string[] = [];
-			let popped: string | undefined;
-			do {
-				popped = stack.pop();
-				if (popped === undefined) {
-					break;
-				}
-				onStack.delete(popped);
-				component.push(popped);
-			} while (popped !== slug);
-			found.push(component.sort());
-		}
+	};
+	const lower = (slug: string, to: number): void => {
+		low.set(slug, Math.min(low.get(slug) ?? 0, to));
 	};
 
-	for (const slug of slugs) {
-		if (!index.has(slug)) {
-			visit(slug);
+	for (const root of slugs) {
+		if (index.has(root)) {
+			continue;
+		}
+		// Each frame is a task and how many of its dependents it has walked.
+		const frames: { slug: string; walked: number }[] = [
+			{ slug: root, walked: 0 },
+		];
+		enter(root);
+		while (frames.length > 0) {
+			const frame = frames[frames.length - 1] as {
+				slug: string;
+				walked: number;
+			};
+			const targets = next.get(frame.slug) ?? [];
+			if (frame.walked < targets.length) {
+				const to = targets[frame.walked] as string;
+				frame.walked += 1;
+				if (!index.has(to)) {
+					enter(to);
+					frames.push({ slug: to, walked: 0 });
+				} else if (onStack.has(to)) {
+					lower(frame.slug, index.get(to) ?? 0);
+				}
+				continue;
+			}
+			// Every dependent walked: the frame returns, as the recursive call
+			// would, and hands its `low` to its caller.
+			frames.pop();
+			const caller = frames[frames.length - 1];
+			if (caller) {
+				lower(caller.slug, low.get(frame.slug) ?? 0);
+			}
+			if (low.get(frame.slug) === index.get(frame.slug)) {
+				const component: string[] = [];
+				let popped: string | undefined;
+				do {
+					popped = stack.pop();
+					if (popped === undefined) {
+						break;
+					}
+					onStack.delete(popped);
+					component.push(popped);
+				} while (popped !== frame.slug);
+				found.push(component.sort());
+			}
 		}
 	}
 	return found.reverse();
@@ -245,7 +274,7 @@ export function layout(data: Waves): WaveLayout {
 		downstream.set(slug, seen.size);
 	}
 
-	const critical = criticalPath(slugs, rows, prev, wave, componentOf);
+	const critical = criticalPath(slugs, rows, prev, next, wave, componentOf);
 	const onPath = new Set(critical);
 	const readySlugs = new Set(data.ready.map((task) => task.slug));
 
@@ -321,14 +350,16 @@ function isStep(path: string[], from: string, to: string): boolean {
  * priority, then the slug, so the path does not flicker between polls.
  *
  * A cycle's members share a wave. The step out of one can leave from a member
- * other than the one the path came in by, and naming only the entry would
- * record an edge that does not exist, so that member is named too. Reaching
- * an outside stub ends the path there: its own blockers are not read.
+ * other than the one the path came in by, so the shortest run of real edges
+ * between the two, inside the cycle, is spliced in: naming only the ends would
+ * record an edge that does not exist. Reaching an outside stub ends the path
+ * there: its own blockers are not read.
  */
 function criticalPath(
 	slugs: string[],
 	rows: Map<string, { task: TaskRow; outside: boolean }>,
 	prev: Map<string, string[]>,
+	next: Map<string, string[]>,
 	wave: Map<string, number>,
 	componentOf: Map<string, number>,
 ): string[] {
@@ -370,10 +401,43 @@ function criticalPath(
 			break;
 		}
 		if (step.member !== at) {
-			path.unshift(step.member);
+			path.unshift(...within(step.member, at, next, componentOf).slice(0, -1));
 		}
 		path.unshift(step.from);
 		at = step.from;
+	}
+	return path;
+}
+
+/**
+ * The shortest run of edges from `from` to `to` that stays inside their
+ * component, both ends included.
+ *
+ * Breadth-first, so a cycle is walked no further than it has to be. A path
+ * always exists: two members of one strongly connected component reach each
+ * other by definition.
+ */
+function within(
+	from: string,
+	to: string,
+	next: Map<string, string[]>,
+	componentOf: Map<string, number>,
+): string[] {
+	const component = componentOf.get(from);
+	const cameFrom = new Map<string, string | null>([[from, null]]);
+	const queue = [from];
+	for (let head = 0; head < queue.length && !cameFrom.has(to); head += 1) {
+		const at = queue[head] as string;
+		for (const target of next.get(at) ?? []) {
+			if (componentOf.get(target) === component && !cameFrom.has(target)) {
+				cameFrom.set(target, at);
+				queue.push(target);
+			}
+		}
+	}
+	const path: string[] = [];
+	for (let at: string | null = to; at !== null; at = cameFrom.get(at) ?? null) {
+		path.unshift(at);
 	}
 	return path;
 }
@@ -491,7 +555,10 @@ export function waves(data: Waves, route: Route): TemplateResult {
 	const plan = layout(data);
 	const project = plan.nodes.filter((node) => !node.outside);
 	if (project.length === 0) {
-		return emptyBox("Nothing is open in this project.");
+		// The notes still render: a task this read saw closed while the
+		// parallel `task_ready` read still returned it is the race they name.
+		return html`${emptyBox("Nothing is open in this project.")}
+      ${notes(plan, route)}`;
 	}
 	return html`
     <section class="waves" aria-label="Waves">

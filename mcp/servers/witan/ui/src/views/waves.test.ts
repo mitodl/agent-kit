@@ -97,6 +97,20 @@ describe("components", () => {
 			["tk-c"],
 		]);
 	});
+
+	it("walks a chain far longer than the call stack is deep", () => {
+		// A recursive visit threw RangeError here before anything was drawn.
+		const length = 50_000;
+		const slugs = Array.from({ length }, (_, at) => `tk-${at}`);
+		const next = new Map(
+			slugs.slice(0, -1).map((slug, at) => [slug, [slugs[at + 1] as string]]),
+		);
+		const found = components(slugs, next);
+
+		expect(found).toHaveLength(length);
+		expect(found[0]).toEqual(["tk-0"]);
+		expect(found.at(-1)).toEqual([`tk-${length - 1}`]);
+	});
 });
 
 describe("layout", () => {
@@ -262,6 +276,28 @@ describe("layout", () => {
 				.map((edge) => `${edge.from}>${edge.to}`)
 				.sort(),
 		).toEqual(["tk-a>tk-c", "tk-b>tk-d", "tk-c>tk-b"]);
+	});
+
+	it("walks every member between where a path enters a cycle and leaves it", () => {
+		// x → z → y → x, entered at x from a, left from y to d. Naming x and y
+		// alone would claim an x → y edge and drop z.
+		const plan = layout(
+			data([
+				task("tk-a"),
+				task("tk-x", { blocked_by: ["tk-a", "tk-y"] }),
+				task("tk-z", { blocked_by: ["tk-x"] }),
+				task("tk-y", { blocked_by: ["tk-z"] }),
+				task("tk-d", { blocked_by: ["tk-y"] }),
+			]),
+		);
+
+		expect(plan.critical).toEqual(["tk-a", "tk-x", "tk-z", "tk-y", "tk-d"]);
+		expect(
+			plan.edges
+				.filter((edge) => edge.critical)
+				.map((edge) => `${edge.from}>${edge.to}`)
+				.sort(),
+		).toEqual(["tk-a>tk-x", "tk-x>tk-z", "tk-y>tk-d", "tk-z>tk-y"]);
 	});
 
 	it("reports a task that blocks itself", () => {
@@ -436,6 +472,17 @@ describe("waves", () => {
 
 		expect(text(root)).toContain("Nothing is open in this project");
 		expect(root.querySelector("svg")).toBeNull();
+	});
+
+	it("keeps the race note when the only task closed between the reads", () => {
+		const closed = task("tk-a", { status: "closed" });
+		render(
+			waves({ tasks: [closed], ready: [task("tk-a")], outside: [] }, route),
+			root,
+		);
+
+		expect(text(root)).toContain("Nothing is open in this project");
+		expect(text(root)).toContain("task_ready and this chart disagree on tk-a");
 	});
 
 	it("links every task to the detail panel", () => {
