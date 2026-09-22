@@ -31,7 +31,7 @@ export function parseTimestamp(value: string | null | undefined): Date | null {
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
+export const DAY = 24 * HOUR;
 
 /**
  * How long ago, coarsely.
@@ -63,6 +63,29 @@ export function ago(
 		return `${Math.floor(elapsed / HOUR)}h ago`;
 	}
 	return `${Math.floor(elapsed / DAY)}d ago`;
+}
+
+/**
+ * A span of time, to the two largest units: `3d 4h`, `5h 12m`, `40m`.
+ *
+ * Two units because the timeline's spans run from minutes (a session) to
+ * weeks (a backlog task's lead time), and one unit rounds a 36-hour task down
+ * to "1d".
+ */
+export function duration(ms: number): string {
+	if (ms < MINUTE) {
+		return "<1m";
+	}
+	const days = Math.floor(ms / DAY);
+	const hours = Math.floor((ms % DAY) / HOUR);
+	const minutes = Math.floor((ms % HOUR) / MINUTE);
+	if (days > 0) {
+		return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+	}
+	if (hours > 0) {
+		return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+	}
+	return `${minutes}m`;
 }
 
 /** The full instant, for a `title=` beside every `ago`. */

@@ -25,7 +25,16 @@ export interface Route {
 	slug: string | null;
 	/** Whether closed tasks are listed. Off by default, as the CLI has it. */
 	closed: boolean;
+	/** The timeline's window, in days back from the read. One of `WINDOW_DAYS`. */
+	days: number;
 }
+
+/**
+ * The windows the timeline offers. A closed set rather than free input, so a
+ * hand-edited `days=100000` cannot ask for every session ever recorded, which
+ * is the unbounded read `since` exists to avoid (spec §3.7).
+ */
+export const WINDOW_DAYS = [7, 14, 30, 90] as const;
 
 /**
  * The route a page with no fragment starts at.
@@ -42,6 +51,8 @@ export const DEFAULT_ROUTE: Route = {
 	project: null,
 	slug: null,
 	closed: false,
+	// Spec §6.6: "where the last two weeks went".
+	days: 14,
 };
 
 /**
@@ -68,7 +79,15 @@ export function parseRoute(hash: string): Route {
 		project: params.get("project") || null,
 		slug: params.get("slug") || null,
 		closed: params.get("closed") === "1",
+		days: parseDays(params.get("days")),
 	};
+}
+
+function parseDays(value: string | null): number {
+	const days = Number(value);
+	return (WINDOW_DAYS as readonly number[]).includes(days)
+		? days
+		: DEFAULT_ROUTE.days;
 }
 
 /**
@@ -92,6 +111,9 @@ export function formatRoute(route: Route): string {
 	}
 	if (route.closed) {
 		params.set("closed", "1");
+	}
+	if (route.days !== DEFAULT_ROUTE.days) {
+		params.set("days", String(route.days));
 	}
 	const query = params.toString();
 	return query ? `#${route.view}?${query}` : `#${route.view}`;

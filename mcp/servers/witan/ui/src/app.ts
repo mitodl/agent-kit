@@ -1,5 +1,6 @@
 import { html, nothing, render, type TemplateResult } from "lit-html";
 import { emptyBox, placeholderFor, readStatus } from "./chrome.js";
+import { DAY } from "./format.js";
 import { LiveRead, type Snapshot } from "./live.js";
 import {
 	taskGet,
@@ -16,6 +17,7 @@ import type { TaskDetail, WorkflowProjectSummary } from "./types.js";
 import { type Board, board, TASK_LIMIT } from "./views/board.js";
 import { projectList, projectRollup, type Rollup } from "./views/projects.js";
 import { taskDetail, taskMissing } from "./views/task-detail.js";
+import { type Timeline, timeline } from "./views/timeline.js";
 
 /**
  * The wiring: route in, reads out, one render.
@@ -60,6 +62,11 @@ export class App {
 	/** The scope `board` is reading, keyed the same way as `rollupKey`. */
 	private boardKey: string | null = null;
 
+	private timeline: LiveRead<Timeline> | null = null;
+	private timelineSnapshot: Snapshot<Timeline> | null = null;
+	/** The scope `timeline` is reading, keyed the same way as `rollupKey`. */
+	private timelineKey: string | null = null;
+
 	private detail: LiveRead<TaskDetail | null> | null = null;
 	private detailSnapshot: Snapshot<TaskDetail | null> | null = null;
 	private detailKey: string | null = null;
@@ -97,6 +104,7 @@ export class App {
 		this.projects.stop();
 		this.rollup?.stop();
 		this.board?.stop();
+		this.timeline?.stop();
 		this.detail?.stop();
 	}
 
@@ -138,6 +146,7 @@ export class App {
 	private syncReads(): void {
 		this.syncRollup();
 		this.syncBoard();
+		this.syncTimeline();
 		this.syncDetail();
 	}
 
@@ -208,6 +217,41 @@ export class App {
 		this.board.start();
 	}
 
+	private syncTimeline(): void {
+		if (this.route.view !== "timeline") {
+			this.timeline?.stop();
+			this.timeline = null;
+			this.timelineSnapshot = null;
+			this.timelineKey = null;
+			return;
+		}
+		// The repo is not in the key: both reads are repo-wide (see
+		// `readTimeline`) and the repo narrows them in the browser.
+		const scope = { project: this.route.project, days: this.route.days };
+		const key = JSON.stringify(scope);
+		if (this.timeline && key === this.timelineKey) {
+			return;
+		}
+		const read = () => readTimeline(scope);
+		this.timelineKey = key;
+		if (this.timeline) {
+			this.timeline.retarget(read);
+			return;
+		}
+		// No interval (spec §6.6): it plots elapsed time, so a poll every 30
+		// seconds would only move the right edge. Focus and Refresh still read.
+		this.timeline = new LiveRead(
+			read,
+			(snapshot) => {
+				this.timelineSnapshot = snapshot;
+				this.draw();
+			},
+			{ intervalMs: 0 },
+		);
+		this.timelineSnapshot = this.timeline.snapshot;
+		this.timeline.start();
+	}
+
 	private syncDetail(): void {
 		const slug = this.route.slug;
 		if (!slug) {
@@ -240,6 +284,13 @@ export class App {
 			const live = this.board;
 			return {
 				snapshot: this.boardSnapshot,
+				refresh: () => live.refresh(),
+			};
+		}
+		if (this.timeline && this.timelineSnapshot) {
+			const live = this.timeline;
+			return {
+				snapshot: this.timelineSnapshot,
 				refresh: () => live.refresh(),
 			};
 		}
@@ -293,6 +344,18 @@ export class App {
 				return waiting;
 			}
 			return board(snapshot.data as Board, this.route);
+		}
+
+		if (this.route.view === "timeline") {
+			const snapshot = this.timelineSnapshot;
+			if (!snapshot) {
+				return emptyBox("Reading the timeline…");
+			}
+			const waiting = placeholderFor(snapshot, "the timeline");
+			if (waiting) {
+				return waiting;
+			}
+			return timeline(snapshot.data as Timeline, this.route);
 		}
 
 		if (this.route.view !== "projects") {
@@ -465,6 +528,45 @@ async function readBoard(scope: {
 		truncated: [ready, open, blocked, inProgress, closed ?? []].some(
 			(rows) => rows.length >= TASK_LIMIT,
 		),
+	};
+}
+
+/**
+ * The reads behind the timeline (spec §6.6), all-or-nothing like the others.
+ *
+ * Tasks are read whole and windowed in the browser: `task_list` has no time
+ * filter, and a task created long before the window can still be open or have
+ * closed inside it. Sessions are windowed by the server through `since`, which
+ * trims what crosses the wire but not what the server reads: it filters in
+ * Python after reading every session (`read.gq` has no DateTime comparison,
+ * spec §3.7), and keeps every session that never ended, however old. Across
+ * every repo, for the reason the board's live read is.
+ */
+async function readTimeline(scope: {
+	project: string | null;
+	days: number;
+}): Promise<Timeline> {
+	const readAt = Date.now();
+	const since = new Date(readAt - scope.days * DAY).toISOString();
+	const [tasks, sessions, projects] = await Promise.all([
+		// `project_slug` returns early and uncapped; see `readRollup` for why a
+		// limit there would only drop rows.
+		scope.project
+			? taskList({ repo: "", project_slug: scope.project })
+			: taskList({ repo: "", limit: TASK_LIMIT }),
+		workflowSessionList(
+			scope.project ? { since, project_slug: scope.project } : { since },
+		),
+		// `status: null` is every status; omitted, the tool lists active ones.
+		workflowProjectList({ repo: "", status: null }),
+	]);
+	return {
+		tasks,
+		sessions,
+		readAt,
+		days: scope.days,
+		truncated: !scope.project && tasks.length >= TASK_LIMIT,
+		projects,
 	};
 }
 
