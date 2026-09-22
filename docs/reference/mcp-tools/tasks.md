@@ -47,6 +47,15 @@ another agent says the task's stated premise is wrong without overwriting
 your description, so it is often a correction to the very plan the
 description sets out.
 
+It also carries its edges, which the node fields alone do not give:
+``blocks`` (slugs of the tasks THIS one holds back — the inverse of the
+``blocked_by`` field), ``children`` and ``branches`` (the ``CodeBranch``es
+working it). An ``in_progress`` task also carries ``lease_expired`` (see
+``task_ready``).
+
+``DiscoveredFrom`` is not included: it has no read query, and nothing has
+needed it.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The ``tk-`` slug to retrieve. |
@@ -57,7 +66,16 @@ List tasks, filtered by repo, status, project, parent, and/or assignee.
 
 ``project_slug`` and ``parent`` take precedence as the primary scope; other
 filters are applied on top in Python. With no filters, lists recent tasks
-across all repos.
+across all repos — 50 of them unless ``limit`` says otherwise.
+
+An ``in_progress`` row carries ``lease_expired`` (see ``task_ready``); rows
+in any other status do not.
+
+``closed_at`` is not yet an invariant of ``status``: ``task_release``
+leaves it untouched, and reopening a task through ``task_update`` keeps
+the old value. So a closed row can carry no ``closed_at``, and an open one
+can carry a stale one. Read it as "when this last closed", not as "this is
+closed".
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -66,6 +84,7 @@ across all repos.
 | `project_slug` | str? | `null` | List the tasks of a WorkflowProject. |
 | `parent` | str? | `null` | List the direct children of a parent task/epic. |
 | `assignee` | str? | `null` | Filter to a single owner. ``"@me"`` resolves to the calling identity<br>(every session of it) — the only spelling that works from a client<br>that cannot know the identity a deployment resolves from its token. |
+| `limit` | int? | `null` | Maximum rows to return, 1 to 10,000. Omitted, every scope behaves as<br>it always has: 50 rows unscoped, uncapped when scoped by repo, project<br>or parent. That asymmetry is why this is nullable rather than<br>``limit: int = 50`` — a plain default would either cap the scoped<br>reads that are uncapped today, or, applied only to the unscoped ones,<br>make an explicit ``limit=50`` indistinguishable from not asking.<br>On the repo-detected branch (the default, since ``repo`` is inferred)<br>the rows are this repo's followed by the unscoped ones, two<br>``updated_at`` runs concatenated rather than merged. So a limit there<br>keeps this repo's tasks and may return no unscoped ones at all, even<br>if an unscoped task was touched more recently. Pass ``repo=""`` for a<br>single ``updated_at`` ordering across everything. |
 
 ## `task_search`
 
@@ -94,7 +113,9 @@ likely abandoned it — see ``readiness.status_pickable``), AND every task in
 its ``blocked_by`` list is closed. A returned ``in_progress`` task is
 therefore a reclaim, not fresh work — check ``assignee``/``claimed_at``
 (falling back to ``updated_at`` when ``claimed_at`` is null, e.g. a legacy
-row) before starting it. This is the core coordination primitive — call it
+row) before starting it, and it carries ``lease_expired: true`` saying so
+without your having to apply the lease rule yourself. This is the core
+coordination primitive — call it
 to pick the next actionable item without manual triage. Results are
 ordered by priority (``p0`` first).
 

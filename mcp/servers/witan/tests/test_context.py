@@ -1319,7 +1319,13 @@ def test_inject_context_remote_asks_for_held_tasks_across_all_repos(
     the current checkout's by `RemoteMCPProxy._map_args` — which would make the
     remote path miss comments on held tasks in other repos, while the local path
     scans every repo. The explicit sentinel keeps both answering the same
-    question."""
+    question.
+
+    The explicit `limit` is part of the same question. `assignee` is applied
+    in Python after the read and an unscoped read is capped at 50 in the
+    query, so without it your own held tasks can fall outside the newest 50
+    `in_progress` rows and this block comes back empty for an unrelated
+    reason."""
     from witan import context as ctx_module
 
     monkeypatch.setenv("TMPDIR", str(tmp_path))
@@ -1334,7 +1340,7 @@ def test_inject_context_remote_asks_for_held_tasks_across_all_repos(
 
     assert (
         "task_list",
-        {"assignee": "@me", "status": "in_progress", "repo": ""},
+        {"assignee": "@me", "status": "in_progress", "repo": "", "limit": 10000},
     ) in server.calls
 
 

@@ -39,6 +39,9 @@ from .run_helpers import (
 # task_ready truncates server-side. Anything filtered client-side afterwards (a
 # search intersection, --status) needs every ready task, so the cap goes out of
 # reach.
+# The server's own ceiling on `task_list(limit=...)`; asking for more raises.
+_MAX_TASK_LIMIT = 10000
+
 _ALL_READY = 2**31 - 1
 
 
@@ -73,8 +76,17 @@ def _search_tasks(
             repo=repo_arg, project_slug=project, assignee=assignee, limit=_ALL_READY
         )
     elif assignee:
+        # The limit matters for the same reason the docstring gives above: an
+        # unscoped `task_list` is capped at 50 IN THE QUERY and `assignee` is
+        # applied in Python after the read, so without it a real search hit
+        # gets intersected away whenever the matching task falls outside the
+        # 50 most recently updated ones.
         allowed = _fn(s.task_list)(
-            repo=repo_arg, status=status, project_slug=project, assignee=assignee
+            repo=repo_arg,
+            status=status,
+            project_slug=project,
+            assignee=assignee,
+            limit=_MAX_TASK_LIMIT,
         )
     else:
         return hits
@@ -149,8 +161,17 @@ def tasks(
         if status is not None:
             rows = [r for r in rows if r.get("status") == status]
     else:
+        # Pass the limit through rather than only slicing below. Without it an
+        # unscoped read is capped at 50 IN THE QUERY, so `--all-repos --limit
+        # 200` returned 50 and the flag was a lie. Asked for more than the
+        # server's ceiling, take the ceiling: the slice below still applies,
+        # and `--limit 99999` should bound a listing rather than raise.
         rows = _fn(s.task_list)(
-            repo=repo_arg, status=status, project_slug=project, assignee=assignee
+            repo=repo_arg,
+            status=status,
+            project_slug=project,
+            assignee=assignee,
+            limit=min(limit, _MAX_TASK_LIMIT),
         )
         # A bare `witan tasks` is a live-work view: drop closed tasks unless the
         # user explicitly asks for a status (including `--status closed`).

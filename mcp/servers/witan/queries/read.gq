@@ -1014,7 +1014,8 @@ query list_tasks_by_repo($repo: String) {
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+        $t.assignee, $t.external_uri, $t.tags,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
     }
     order { $t.updated_at desc }
 }
@@ -1026,7 +1027,8 @@ query list_tasks_by_repo_status($repo: String, $status: String) {
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+        $t.assignee, $t.external_uri, $t.tags,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
     }
     order { $t.updated_at desc }
 }
@@ -1038,10 +1040,30 @@ query list_tasks_by_status($status: String) {
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+        $t.assignee, $t.external_uri, $t.tags,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
     }
     order { $t.updated_at desc }
     limit 50
+}
+
+// The uncapped twin of `list_tasks_by_status`, for an explicit `task_list`
+// limit. omnigraph 0.11 cannot take `limit` as a query parameter (`limit
+// $limit` fails `omnigraph lint` with "expected integer"), so the cap is a
+// literal here and the caller slices in Python — the same shape the memory
+// reads use. `list_all_tasks`'s twin is `list_unscoped_tasks` below.
+query list_tasks_by_status_uncapped($status: String) {
+    match {
+        $t: Task { status: $status }
+    }
+    return {
+        $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
+        $t.project_slug, $t.parent_slug, $t.blocked_by,
+        $t.assignee, $t.external_uri, $t.tags,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+    }
+    order { $t.updated_at desc }
+    limit 10000
 }
 
 query list_all_tasks() {
@@ -1051,7 +1073,8 @@ query list_all_tasks() {
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+        $t.assignee, $t.external_uri, $t.tags,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
     }
     order { $t.updated_at desc }
     limit 50
@@ -1064,7 +1087,8 @@ query list_unscoped_tasks() {
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+        $t.assignee, $t.external_uri, $t.tags,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
     }
     order { $t.updated_at desc }
     limit 10000
@@ -1094,7 +1118,8 @@ query list_tasks_by_project($project_slug: String) {
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+        $t.assignee, $t.external_uri, $t.tags,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
     }
     order { $t.updated_at desc }
 }
@@ -1106,7 +1131,8 @@ query list_tasks_by_parent($parent_slug: String) {
     return {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
-        $t.assignee, $t.external_uri, $t.tags, $t.updated_at, $t.claimed_at
+        $t.assignee, $t.external_uri, $t.tags,
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
     }
     order { $t.priority, $t.updated_at desc }
 }

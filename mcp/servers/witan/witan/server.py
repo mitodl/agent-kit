@@ -4377,6 +4377,29 @@ def _latest_session_summary(project_slug: str) -> dict | None:
     }
 
 
+# How many ready tasks the rollup lists. The count beside them is exact even
+# when there are more; `ready_truncated` says which case you are looking at.
+_PROJECT_READY_CAP = 100
+
+_PROJECT_READY_KEYS = ("slug", "title", "priority", "status", "assignee")
+
+
+def _project_ready_row(task: dict) -> dict:
+    """One `ready_tasks` row: a fixed projection, plus the lease flag if any.
+
+    `lease_expired` is carried through rather than projected away because a
+    ready `in_progress` row IS a stale claim, and the widget bound to this tool
+    (spec §7.1) has no second call available to work that out. It is added
+    conditionally for the same reason `_with_lease_flag` adds it conditionally:
+    on a status where no lease exists, a `false` would read as "claim still
+    live".
+    """
+    row = {k: task.get(k) for k in _PROJECT_READY_KEYS}
+    if "lease_expired" in task:
+        row["lease_expired"] = task["lease_expired"]
+    return row
+
+
 @_tool
 def workflow_project_status(slug: str) -> dict | None:
     """One-call "what should I do next" resume view for a workflow project.
@@ -4386,6 +4409,11 @@ def workflow_project_status(slug: str) -> dict | None:
     under it (same readiness rule as ``task_ready``), the **last session's
     handoff summary** (and whether it's still open), and any project-level
     **blockers**. Returns ``None`` if the project doesn't exist.
+
+    ``ready_tasks`` is capped at 100 while ``counts.ready`` counts every ready
+    task, so the two disagree on a busy project; ``ready_truncated`` is true
+    exactly when they do. The count has no ceiling of its own: it is bounded
+    by the project's task count, which ready work is a subset of.
 
     Parameters
     ----------
@@ -4402,17 +4430,30 @@ def workflow_project_status(slug: str) -> dict | None:
     # Delegate to task_ready (not readiness.filter_ready) so the "same rule as
     # task_ready" promise is literal: it fetches out-of-project blockers instead
     # of treating a blocker absent from this project's task set as closed.
-    ready = task_ready(project_slug=slug, limit=100)
+    #
+    # Count every ready task, then truncate, not the other way round.
+    # `counts.ready = len(ready)` over a read already capped at 100 reported
+    # exactly 100 for a project with any larger number, and a widget bound to
+    # this tool (spec §7.1) cannot call another one to find out the real
+    # figure. Reading one past the cap would only say WHETHER it truncated, so
+    # the slice happens below instead.
+    #
+    # The limit is the project's own task count rather than a constant,
+    # because ready tasks are a SUBSET of `tasks` and a slice at that size
+    # therefore cannot truncate. A fixed ceiling would put the same silent cap
+    # back, just further out. `task_ready` applies its limit as a plain Python
+    # slice after filtering, and `list_tasks_by_project` underneath it is
+    # uncapped, so this costs no extra store read.
+    ready = task_ready(project_slug=slug, limit=max(len(tasks), 1))
+    ready_truncated = len(ready) > _PROJECT_READY_CAP
 
     return {
         "project": {
             k: p.get(k)
             for k in ("slug", "title", "phase", "status", "repos", "github_pr")
         },
-        "ready_tasks": [
-            {k: t.get(k) for k in ("slug", "title", "priority", "status", "assignee")}
-            for t in ready
-        ],
+        "ready_tasks": [_project_ready_row(t) for t in ready[:_PROJECT_READY_CAP]],
+        "ready_truncated": ready_truncated,
         "last_session": _latest_session_summary(slug),
         "blockers": list(p.get("blocked_by") or []),
         "counts": {"ready": len(ready), "open_tasks": open_tasks},
@@ -5632,11 +5673,56 @@ def workflow_session_end(
     return {"session_slug": session_slug, "ended_at": now}
 
 
+def _ended_at_or_after(ended_at: str | None, since: datetime) -> bool:
+    """Whether a session falls inside a ``since`` window.
+
+    An open session (no ``ended_at``) is always in: it is running now, so no
+    window that reaches the present can exclude it, and dropping it would hide
+    exactly the sessions a live view exists to show.
+
+    A naive ``ended_at`` is read as UTC, the same tolerance
+    ``readiness.lease_expired`` extends for the same reason: a legacy or
+    hand-edited row can lack the offset, and comparing it against an aware one
+    raises ``TypeError`` rather than answering.
+
+    An unparseable ``ended_at`` is kept rather than dropped. A malformed
+    stored timestamp is a visible oddity when it shows up; silently vanishing
+    from every windowed read is not. The CALLER's ``since`` gets the opposite
+    treatment and is parsed once, by the caller — see ``workflow_session_list``.
+    """
+    if not ended_at:
+        return True
+    try:
+        return _as_utc(datetime.fromisoformat(ended_at)) >= since
+    except (ValueError, TypeError):
+        return True
+
+
+def _as_utc(moment: datetime) -> datetime:
+    """Read a naive timestamp as UTC, so two of them are always comparable."""
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _parse_since(since: str) -> datetime:
+    """Parse a caller's window bound, loudly.
+
+    Separate from the per-row parse so a bad value is one error rather than a
+    silently empty filter: the comparison runs per row, and swallowing a bad
+    ``since`` there would make every row compare true.
+    """
+    try:
+        return _as_utc(datetime.fromisoformat(since))
+    except (ValueError, TypeError):
+        msg = f"since must be an ISO timestamp, got {since!r}"
+        raise ValueError(msg) from None
+
+
 @_tool
 def workflow_session_list(
     project_slug: str | None = None,
     open_only: bool = False,
     include_superseded: bool = False,
+    since: str | None = None,
 ) -> list[dict]:
     """
     List workflow sessions, newest last.
@@ -5663,7 +5749,26 @@ def workflow_session_list(
         Keep superseded rows instead of dropping them. For ``witan session
         list``, the one caller that wants to see what
         ``migrate dedupe-sessions`` did rather than the leaked-session view.
+    since:
+        ISO timestamp. Keep only sessions that ended at or after it, plus
+        every still-open one — an open session has no ``ended_at`` to compare
+        and is current by definition, so a window must not drop it. Without
+        this an unscoped read returns every session ever recorded, and a view
+        showing the last two weeks pays for all of it on every poll.
+
+        Raises ``ValueError`` if it does not parse, the empty string
+        included. Tolerating either would mean ``since="last week"`` or
+        ``since=""`` silently returning every session, which is the same
+        unsignalled no-op this parameter exists to remove.
+
+        The filter runs in Python: ``read.gq`` has no comparison on a
+        ``DateTime``, so this bounds the response, not the store read.
     """
+    # `is not None`, not truthiness: an explicit `since=""` would otherwise
+    # skip the filter silently, which is the behaviour this parameter's
+    # "unparseable values raise" promise exists to rule out. Omitted stays
+    # omitted; supplied-and-empty is a bad value and says so.
+    since_at = _parse_since(since) if since is not None else None
     if project_slug:
         rows = client.read(
             "read.gq", "list_sessions_by_project", {"project_slug": project_slug}
@@ -5677,6 +5782,8 @@ def workflow_session_list(
         rows = [r for r in rows if not r.get("superseded_by")]
     if open_only:
         rows = [r for r in rows if not r.get("ended_at")]
+    if since_at:
+        rows = [r for r in rows if _ended_at_or_after(r.get("ended_at"), since_at)]
     return rows
 
 
@@ -5692,6 +5799,37 @@ TaskPriority = Literal["p0", "p1", "p2", "p3"]
 TaskLinkKind = Literal["blocks", "parent", "discovered_from", "addresses"]
 
 _PRIORITY_ORDER = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
+
+# Upper bound on an explicit `task_list` limit, and the ceiling
+# `workflow_project_status` counts ready work up to. Matches the literal cap in
+# the `*_uncapped` queries, so asking for more than the query can return is a
+# ValueError rather than a silently short answer.
+_MAX_TASK_LIMIT = 10000
+
+
+def _with_lease_flag(row: dict) -> dict:
+    """Stamp ``lease_expired`` onto an ``in_progress`` row; pass anything else through.
+
+    "Who is holding a stale claim" needs the SERVER's rule, not a copy of it.
+    `readiness.status_pickable` is that rule for `in_progress` — including the
+    `updated_at` fallback for a row with no `claimed_at` — and it is what
+    `task_ready` already decides reclaimability with, so a UI reading this flag
+    and the board reading `task_ready` can never disagree.
+
+    Deriving it in the browser was the alternative and it drifts: the lease
+    window is `readiness.CLAIM_LEASE_SECONDS`, and a client copy of that
+    constant goes stale the day the server's changes. Inferring it from
+    `task_ready` membership does not work either — an `in_progress` task whose
+    lease lapsed while it still has an open blocker never appears in Ready
+    (`readiness.is_ready` requires every blocker closed), and that is exactly
+    the abandoned-and-blocking case worth seeing.
+
+    Only `in_progress` carries the key. On any other status a lease is not a
+    thing that exists, and a `false` there would read as "claim still live".
+    """
+    if row.get("status") != "in_progress":
+        return row
+    return {**row, "lease_expired": readiness.status_pickable(row)}
 
 
 def _unblock_dependents(repo: str | None) -> None:
@@ -6015,6 +6153,15 @@ def task_get(slug: str) -> dict | None:
     your description, so it is often a correction to the very plan the
     description sets out.
 
+    It also carries its edges, which the node fields alone do not give:
+    ``blocks`` (slugs of the tasks THIS one holds back — the inverse of the
+    ``blocked_by`` field), ``children`` and ``branches`` (the ``CodeBranch``es
+    working it). An ``in_progress`` task also carries ``lease_expired`` (see
+    ``task_ready``).
+
+    ``DiscoveredFrom`` is not included: it has no read query, and nothing has
+    needed it.
+
     Parameters
     ----------
     slug:
@@ -6023,27 +6170,70 @@ def task_get(slug: str) -> dict | None:
     rows = client.read("read.gq", "get_task", {"slug": slug})
     if not rows:
         return None
-    return {**rows[0], "comments": _task_comments(slug)}
+    # `blocks` and `children` are unguarded on purpose: both touch only `Task`
+    # and `Blocks`, which every store that can answer `get_task` already has,
+    # so a failure there is a real read failure and should propagate.
+    #
+    # `branches` is guarded, because `CodeBranch` has the same history
+    # `TaskComment` does — a store provisioned before the type was added
+    # answers "unknown node type" — and `context.py:353-368` has isolated the
+    # identical read for that reason since the type landed. Letting it through
+    # would break `task_get` outright on such a store, which is the failure
+    # `_task_comments` exists to avoid, reintroduced to add one field.
+    children = client.read("read.gq", "list_tasks_by_parent", {"parent_slug": slug})
+    blocks = client.read("read.gq", "blocks_to_slugs", {"from": slug})
+    return {
+        **_with_lease_flag(rows[0]),
+        "comments": _task_comments(slug),
+        "blocks": [r["slug"] for r in blocks],
+        "children": [
+            {k: c.get(k) for k in ("slug", "title", "status")} for c in children
+        ],
+        "branches": _task_branches(slug),
+    }
 
 
-def _no_comment_type(exc: Exception) -> bool:
-    """Whether ``exc`` is the store saying it has never heard of ``TaskComment``.
+def _task_branches(slug: str) -> list[dict]:
+    """The ``CodeBranch``es working a task; ``[]`` if the store has no such type."""
+    try:
+        return client.read("read.gq", "task_code_branches", {"task_slug": slug})
+    except RuntimeError as exc:
+        if not _no_such_type(exc, "CodeBranch"):
+            raise
+        logger.warning(
+            "witan.task_branches.unavailable", task_slug=slug, hint=_MIGRATE_HINT
+        )
+        return []
+
+
+def _no_such_type(exc: Exception, type_name: str) -> bool:
+    """Whether ``exc`` is the store saying it has never heard of ``type_name``.
 
     Reachable in two ways, neither of them exotic. ``_ensure_graph`` re-applies
     ``schema.pg`` only to a LOCAL store, so a deployed graph provisioned before
-    this node type existed answers ``unknown node/edge type``. And a local store
+    a node type existed answers ``unknown node/edge type``. And a local store
     whose schema has drifted far enough that ``schema apply`` REFUSES the
     migration outright ("removing constraints from 'Task' is not supported")
     never picks up any new type either, silently, since the re-apply is
     best-effort by design.
+
+    Not specific to ``TaskComment``: ``CodeBranch`` has the same history, and
+    ``context.py``'s ``code_branch_tasks`` read has guarded against exactly
+    this since that type was added.
     """
     message = str(exc).lower()
-    return "unknown node" in message and "taskcomment" in message
+    return "unknown node" in message and type_name.lower() in message
+
+
+def _no_comment_type(exc: Exception) -> bool:
+    """``_no_such_type`` for ``TaskComment``."""
+    return _no_such_type(exc, "TaskComment")
 
 
 _MIGRATE_HINT = (
-    "this store has no TaskComment type — run `witan migrate schema`, and if "
-    "that refuses the migration, the store needs an export/re-init"
+    "this store is missing a node type this read needs — run `witan migrate "
+    "schema`, and if that refuses the migration, the store needs an "
+    "export/re-init"
 )
 
 
@@ -6156,13 +6346,23 @@ def task_list(
     project_slug: str | None = None,
     parent: str | None = None,
     assignee: str | None = None,
+    limit: int | None = None,
 ) -> list[dict]:
     """
     List tasks, filtered by repo, status, project, parent, and/or assignee.
 
     ``project_slug`` and ``parent`` take precedence as the primary scope; other
     filters are applied on top in Python. With no filters, lists recent tasks
-    across all repos.
+    across all repos — 50 of them unless ``limit`` says otherwise.
+
+    An ``in_progress`` row carries ``lease_expired`` (see ``task_ready``); rows
+    in any other status do not.
+
+    ``closed_at`` is not yet an invariant of ``status``: ``task_release``
+    leaves it untouched, and reopening a task through ``task_update`` keeps
+    the old value. So a closed row can carry no ``closed_at``, and an open one
+    can carry a stale one. Read it as "when this last closed", not as "this is
+    closed".
 
     Parameters
     ----------
@@ -6178,7 +6378,24 @@ def task_list(
         Filter to a single owner. ``"@me"`` resolves to the calling identity
         (every session of it) — the only spelling that works from a client
         that cannot know the identity a deployment resolves from its token.
+    limit:
+        Maximum rows to return, 1 to 10,000. Omitted, every scope behaves as
+        it always has: 50 rows unscoped, uncapped when scoped by repo, project
+        or parent. That asymmetry is why this is nullable rather than
+        ``limit: int = 50`` — a plain default would either cap the scoped
+        reads that are uncapped today, or, applied only to the unscoped ones,
+        make an explicit ``limit=50`` indistinguishable from not asking.
+
+        On the repo-detected branch (the default, since ``repo`` is inferred)
+        the rows are this repo's followed by the unscoped ones, two
+        ``updated_at`` runs concatenated rather than merged. So a limit there
+        keeps this repo's tasks and may return no unscoped ones at all, even
+        if an unscoped task was touched more recently. Pass ``repo=""`` for a
+        single ``updated_at`` ordering across everything.
     """
+    if limit is not None and not 1 <= limit <= _MAX_TASK_LIMIT:
+        msg = f"limit must be between 1 and {_MAX_TASK_LIMIT}, got {limit}"
+        raise ValueError(msg)
     if assignee == _ME:
         assignee = _holder_identity(_current_author())
     if project_slug:
@@ -6210,15 +6427,35 @@ def task_list(
             ]
             rows = repo_rows + unscoped
         elif status:
-            rows = client.read("read.gq", "list_tasks_by_status", {"status": status})
+            # The unscoped reads are the only ones capped in the query, at 50
+            # rows — which is why "all repos" silently truncated. An explicit
+            # limit swaps in the uncapped twin and slices below.
+            rows = client.read(
+                "read.gq",
+                "list_tasks_by_status_uncapped" if limit else "list_tasks_by_status",
+                {"status": status},
+            )
         else:
-            rows = client.read("read.gq", "list_all_tasks", {})
+            # `list_unscoped_tasks` IS `list_all_tasks` uncapped: same
+            # projection, same order, `limit 10000` instead of 50.
+            rows = client.read(
+                "read.gq",
+                "list_unscoped_tasks" if limit else "list_all_tasks",
+                {},
+            )
 
     if status:
         rows = [r for r in rows if r.get("status") == status]
     if assignee:
         rows = [r for r in rows if _holder_matches(r.get("assignee"), assignee)]
-    return rows
+    if limit is not None:
+        # After filtering, so a limit bounds what the caller receives rather
+        # than what survives the filters. On the repo-detected branch the rows
+        # are repo-scoped ones followed by unscoped ones rather than one
+        # `updated_at` ordering, so a limit there keeps this repo's tasks
+        # first, which is the useful half of that read.
+        rows = rows[:limit]
+    return [_with_lease_flag(r) for r in rows]
 
 
 def _search_task_bm25(name: str, params: dict) -> list[dict]:
@@ -6924,7 +7161,9 @@ def task_ready(
     its ``blocked_by`` list is closed. A returned ``in_progress`` task is
     therefore a reclaim, not fresh work — check ``assignee``/``claimed_at``
     (falling back to ``updated_at`` when ``claimed_at`` is null, e.g. a legacy
-    row) before starting it. This is the core coordination primitive — call it
+    row) before starting it, and it carries ``lease_expired: true`` saying so
+    without your having to apply the lease rule yourself. This is the core
+    coordination primitive — call it
     to pick the next actionable item without manual triage. Results are
     ordered by priority (``p0`` first).
 
@@ -6983,7 +7222,7 @@ def task_ready(
         and _holder_matches(r.get("assignee"), assignee)
     ]
     ready.sort(key=lambda r: _PRIORITY_ORDER.get(r.get("priority"), 9))
-    return ready[:limit]
+    return [_with_lease_flag(r) for r in ready[:limit]]
 
 
 @_tool

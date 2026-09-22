@@ -15,6 +15,38 @@ a MINOR bump may include breaking changes).
   the sdist and the wheel. This release adds the package, its build and its
   packaging only — it renders the app frame; the views and the routes that
   serve them are separate changes. Nothing serves `/ui/` yet.
+
+- **`task_list` takes a `limit`.** 1 to 10,000, applied to every scope.
+  Omitted, nothing changes: 50 rows unscoped, uncapped when scoped by repo,
+  project or parent. Without it an unscoped read returned the 50 most recently
+  updated tasks and said nothing about the rest, so `task_list(repo="")` and
+  `witan graph --all-repos` were quietly partial on a graph of any size. The
+  in-repo callers pass it now: `witan tasks --limit` reaches past 50,
+  `witan graph` draws the whole graph, and the context hook's held-task block
+  no longer misses your own tasks because they fell outside the newest 50.
+- **Task list rows carry `created_at` and `closed_at`.** Only `task_get`
+  returned them, so anything plotting a task's lifetime needed one read per
+  task. Note that `closed_at` is not yet an invariant of `status`:
+  `task_release` leaves it untouched and a reopen keeps the old value, so read
+  it as "when this last closed" rather than as "this is closed".
+- **`task_get` returns its edges:** `blocks` (the tasks this one holds back,
+  the inverse of `blocked_by`), `children`, and `branches` (the `CodeBranch`es
+  working it). `DiscoveredFrom` is still not exposed — it has no read query.
+- **`in_progress` rows carry `lease_expired`,** on `task_list`, `task_ready`
+  and `task_get`. This is the server's own rule (`readiness.status_pickable`,
+  including the `updated_at` fallback), so a stale claim is visible without a
+  client copying `CLAIM_LEASE_SECONDS` and drifting from it. Rows in any other
+  status do not carry the key, since a lease is not a thing that exists there.
+  It is not inferable from `task_ready` membership: an `in_progress` task whose
+  lease lapsed while it still has an open blocker never appears in Ready.
+- **`workflow_session_list` takes a `since`.** Keeps sessions that ended at or
+  after it, plus every still-open one. An unscoped read otherwise returns every
+  session ever recorded, and grows forever. The comparison runs in Python, so
+  this bounds the response rather than the store read. A `since` that does not
+  parse raises rather than being ignored, since a tolerated one would silently
+  return every session.
+- **`workflow_project_status` reports `ready_truncated`.**
+
 ### Fixed
 
 - **`task_ready` no longer re-reads blockers it has already fetched.** Its
@@ -48,6 +80,20 @@ a MINOR bump may include breaking changes).
   at up to 51s, so it is now 60s — being killed there leaves a session open with
   no handoff summary. The pi `workflow-context` extension was tighter still at
   5s and now matches at 45s.
+
+- **`workflow_project_status` reported a wrong `counts.ready`.** It counted a
+  list already truncated at 100, so any project with more ready tasks than that
+  reported exactly 100. The count is now taken before the truncation and is
+  exact; `ready_tasks` is still capped at 100, and `ready_truncated` says when
+  the two disagree. Those rows also keep `lease_expired`, so a widget bound to
+  this tool can see a stale claim without a second call. The count is bounded
+  by the project's own task count rather than by a constant, since ready work
+  is a subset of it, so there is no second ceiling further out.
+- **`witan tasks QUERY --assignee` no longer drops older matches.** That path
+  intersects search hits with `task_list(assignee=...)`, and `assignee` is
+  applied after a read capped at 50 rows, so a genuine hit vanished whenever
+  it fell outside the 50 most recently updated tasks.
+
 ### Security
 
 - **`witan serve` turns on fastmcp's Host/Origin guard on every HTTP
