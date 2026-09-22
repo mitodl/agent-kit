@@ -6101,6 +6101,37 @@ def _update_task(
     # timeline cannot draw a bar from either.
     merged_status = changes.get("status", current.get("status"))
     merged_claimed_at = changes.get("claimed_at", current.get("claimed_at"))
+
+    if merged_status != "closed":
+        merged_closed_at = None
+    elif changes.get("closed_at"):
+        # `task_close` naming its own timestamp.
+        merged_closed_at = changes["closed_at"]
+    elif current.get("status") == "closed":
+        # ALREADY closed, so an unrelated edit must not re-stamp it.
+        merged_closed_at = current.get("closed_at")
+    else:
+        # ARRIVING at closed. The current value is not carried over even when
+        # there is one: a row that was not closed but carries a `closed_at` is
+        # precisely what this rule exists to correct, and keeping it would date
+        # the close before the work.
+        merged_closed_at = now_iso()
+
+    # ★ A LEASE THIS WRITE IS ACTUALLY TAKING, not merely a row that is
+    # in_progress. Two writes reach here with `in_progress` and no claim in
+    # them: `task_release(status="in_progress")`, which explicitly nulls
+    # `claimed_at`, and any unrelated edit to an in_progress row, which merely
+    # copies the lease already there. Stamping on either would make
+    # `first_claimed_at` mean "noticed while in progress", and on a migrated
+    # row it would silently backfill it from `claimed_at` — the substitution
+    # this field exists to avoid.
+    taking_lease = changes.get("claimed_at") is not None
+    merged_first_claimed_at = current.get("first_claimed_at") or (
+        changes["claimed_at"]
+        if taking_lease and merged_status == "in_progress"
+        else None
+    )
+
     merged = {
         "slug": slug,
         "title": changes.get("title", current.get("title")),
@@ -6117,32 +6148,19 @@ def _update_task(
         "resolution": changes.get("resolution", current.get("resolution")),
         "symbol_refs": changes.get("symbol_refs", current.get("symbol_refs")),
         "tags": changes.get("tags", current.get("tags")),
-        # Stamped on arrival at `closed`, cleared on leaving it. An explicit
-        # `closed_at` still wins — that is `task_close` naming its own
-        # timestamp — but only while the row is actually closed.
-        "closed_at": (
-            changes.get("closed_at") or current.get("closed_at") or now_iso()
-            if merged_status == "closed"
-            else None
-        ),
+        # Stamped on arrival at `closed`, cleared on leaving it. Derived
+        # above, because which of the three sources wins depends on the
+        # CURRENT status as well as the merged one.
+        "closed_at": merged_closed_at,
         "claimed_at": merged_claimed_at,
-        # Set once, on the first arrival at `in_progress`, and NEVER cleared:
-        # not by a release, not by a close, not by a reopen. `claimed_at`
-        # cannot serve this purpose — `task_claim` overwrites it on every
-        # lease renewal and `task_release` nulls it, so any task worked longer
-        # than one lease has already lost its first claim.
-        #
-        # Taken from the lease this same write is setting rather than from a
-        # second `now_iso()`, so the first claim records ONE instant instead of
+        # Set once, on the first claim ever, and NEVER cleared: not by a
+        # release, not by a close, not by a reopen. `claimed_at` cannot serve
+        # this purpose — `task_claim` overwrites it on every lease renewal and
+        # `task_release` nulls it, so any task worked longer than one lease has
+        # already lost its first claim. It takes the instant of the lease this
+        # same write is setting, so a first claim records ONE time rather than
         # two a few milliseconds apart.
-        "first_claimed_at": (
-            current.get("first_claimed_at")
-            or (
-                (merged_claimed_at or now_iso())
-                if merged_status == "in_progress"
-                else None
-            )
-        ),
+        "first_claimed_at": merged_first_claimed_at,
         "updated_at": now_iso(),
     }
     update: _Step = ("mutations.gq", "update_task", merged)

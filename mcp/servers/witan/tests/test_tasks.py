@@ -1893,3 +1893,136 @@ def test_reclaiming_a_reopened_task_clears_the_stale_close_time(server):
     node = server.task_get(t["slug"])
     assert node["status"] == "in_progress"
     assert node["closed_at"] is None
+
+
+# ── The legacy rows, which the API can no longer produce ────────────────────
+#
+# Both invariants have to hold for rows written BEFORE they held, because this
+# change deliberately does not sweep them. These build such rows through the
+# raw mutation, which is the only way past `_update_task` now.
+
+_LEGACY_ROW = {
+    "title": "legacy",
+    "description": "",
+    "repo": "https://github.com/mitodl/agent-kit",
+    "type": "task",
+    "status": "open",
+    "priority": "p2",
+    "project_slug": None,
+    "parent_slug": None,
+    "blocked_by": None,
+    "assignee": None,
+    "external_uri": None,
+    "author": "tmacey@mit.edu",
+    "symbol_refs": None,
+    "tags": None,
+    "created_at": "2026-09-01T00:00:00+00:00",
+    "updated_at": "2026-09-01T00:00:00+00:00",
+    "claimed_at": None,
+}
+
+
+def _legacy_task(slug, **fields):
+    """Insert a Task straight through the mutation, bypassing `_update_task`."""
+    from witan import server as srv
+
+    srv.client.change(
+        "mutations.gq", "insert_task", {"slug": slug, **_LEGACY_ROW, **fields}
+    )
+
+
+@requires_omnigraph
+def test_closing_a_row_carrying_a_stale_close_time_stamps_the_transition(server):
+    """An OPEN row can carry a `closed_at`: that is the bug being fixed.
+
+    Closing it must date the close now, not at whatever the stale value says.
+    Preserving the current value unconditionally would date the close before
+    the work that led to it.
+    """
+    from witan import server as srv
+
+    _legacy_task("tk-legacy-stale-close")
+    srv.client.change(
+        "mutations.gq",
+        "update_task",
+        {
+            "slug": "tk-legacy-stale-close",
+            "title": "legacy",
+            "description": "",
+            "type": "task",
+            "status": "open",
+            "priority": "p2",
+            "repo": "https://github.com/mitodl/agent-kit",
+            "project_slug": None,
+            "parent_slug": None,
+            "blocked_by": None,
+            "assignee": None,
+            "external_uri": None,
+            "resolution": None,
+            "symbol_refs": None,
+            "tags": None,
+            "closed_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-09-01T00:00:00+00:00",
+            "claimed_at": None,
+            "first_claimed_at": None,
+        },
+    )
+    assert server.task_get("tk-legacy-stale-close")["closed_at"] is not None
+
+    server.task_update("tk-legacy-stale-close", status="closed")
+
+    closed_at = server.task_get("tk-legacy-stale-close")["closed_at"]
+    assert closed_at is not None
+    assert not closed_at.startswith("2026-01-01")
+
+
+@requires_omnigraph
+def test_releasing_to_in_progress_is_not_a_claim(server):
+    """`task_release(status="in_progress")` nulls the lease, so it starts nothing."""
+    _legacy_task("tk-release-to-ip", status="in_progress", assignee="agentA")
+
+    server.task_release("tk-release-to-ip", assignee="agentA", status="in_progress")
+
+    node = server.task_get("tk-release-to-ip")
+    assert node["claimed_at"] is None
+    assert node["first_claimed_at"] is None
+
+
+@requires_omnigraph
+def test_an_edit_does_not_backfill_first_claimed_at_from_an_old_lease(server):
+    """The substitution this field exists to avoid.
+
+    A row migrated from before the field has a `claimed_at` and no
+    `first_claimed_at`. An unrelated edit merely copies that lease forward; it
+    is not a claim, and treating it as one would invent a work start out of a
+    value that means something else.
+    """
+    _legacy_task(
+        "tk-migrated-in-progress",
+        status="in_progress",
+        assignee="agentA",
+        claimed_at="2026-09-01T00:00:00+00:00",
+    )
+
+    server.task_update("tk-migrated-in-progress", title="edited")
+
+    node = server.task_get("tk-migrated-in-progress")
+    assert node["claimed_at"] == "2026-09-01T00:00:00"
+    assert node["first_claimed_at"] is None
+
+
+@requires_omnigraph
+def test_claiming_a_migrated_row_sets_first_claimed_at_from_the_new_lease(server):
+    """The same row, actually claimed: the new lease is the first claim on record."""
+    _legacy_task(
+        "tk-migrated-then-claimed",
+        status="in_progress",
+        assignee="agentA",
+        claimed_at="2026-09-01T00:00:00+00:00",
+    )
+
+    server.task_claim("tk-migrated-then-claimed", assignee="agentA")
+
+    node = server.task_get("tk-migrated-then-claimed")
+    assert node["first_claimed_at"] == node["claimed_at"]
+    assert not node["first_claimed_at"].startswith("2026-09-01")
