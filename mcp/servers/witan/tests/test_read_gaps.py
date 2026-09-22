@@ -416,6 +416,18 @@ def test_an_unparseable_since_is_refused(server):
 
 
 @requires_omnigraph
+def test_an_empty_since_is_refused_rather_than_ignored(server):
+    """★ Supplied-and-empty is a bad value, not an omission.
+
+    `if since:` skipped the filter on `""`, so a caller that built the
+    argument from an empty form field got every session ever recorded and no
+    indication that the window had been dropped. Omitted still means omitted.
+    """
+    with pytest.raises(ValueError, match="since must be an ISO timestamp"):
+        server.workflow_session_list(since="")
+
+
+@requires_omnigraph
 def test_a_naive_since_is_read_as_utc(server):
     """A caller passing a tz-less timestamp gets an answer, not a TypeError.
 
@@ -464,6 +476,34 @@ def test_the_ready_count_is_exact_while_the_list_stays_capped(server, monkeypatc
 
     assert status["counts"]["ready"] == 5
     assert len(status["ready_tasks"]) == 3
+    assert status["ready_truncated"] is True
+
+
+@requires_omnigraph
+def test_the_ready_count_has_no_ceiling_of_its_own(server, monkeypatch):
+    """The count is bounded by the project's task count, not by a constant.
+
+    Passing a fixed ceiling to `task_ready` would put the same silent cap
+    back, just further out. Ready tasks are a subset of the project's tasks,
+    so slicing at that size cannot truncate. Checked by shrinking the CAP,
+    which is what `ready_tasks` is limited by, and asserting the COUNT ignores
+    it.
+    """
+    from witan import server as srv
+
+    monkeypatch.setattr(srv, "_PROJECT_READY_CAP", 1)
+    monkeypatch.setattr(srv, "_MAX_TASK_LIMIT", 2)
+    project = server.workflow_project_create(title="p", description="d")
+    for i in range(5):
+        server.task_create(
+            title=f"task {i}", description="x", project_slug=project["slug"]
+        )
+
+    status = server.workflow_project_status(project["slug"])
+
+    # 5, not 2: a `_MAX_TASK_LIMIT`-shaped ceiling would have clamped it.
+    assert status["counts"]["ready"] == 5
+    assert len(status["ready_tasks"]) == 1
     assert status["ready_truncated"] is True
 
 

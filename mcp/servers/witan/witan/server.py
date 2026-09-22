@@ -4412,8 +4412,8 @@ def workflow_project_status(slug: str) -> dict | None:
 
     ``ready_tasks`` is capped at 100 while ``counts.ready`` counts every ready
     task, so the two disagree on a busy project; ``ready_truncated`` is true
-    exactly when they do. The count has its own ceiling at 10,000
-    (``_MAX_TASK_LIMIT``), which no project is near.
+    exactly when they do. The count has no ceiling of its own: it is bounded
+    by the project's task count, which ready work is a subset of.
 
     Parameters
     ----------
@@ -4431,15 +4431,20 @@ def workflow_project_status(slug: str) -> dict | None:
     # task_ready" promise is literal: it fetches out-of-project blockers instead
     # of treating a blocker absent from this project's task set as closed.
     #
-    # Count every ready task, then truncate — not the other way round.
+    # Count every ready task, then truncate, not the other way round.
     # `counts.ready = len(ready)` over a read already capped at 100 reported
     # exactly 100 for a project with any larger number, and a widget bound to
     # this tool (spec §7.1) cannot call another one to find out the real
     # figure. Reading one past the cap would only say WHETHER it truncated, so
-    # the limit here is the tool's ceiling and the slice happens below. The
-    # store read is the same either way: `list_tasks_by_project` is uncapped,
-    # and `task_ready`'s limit only slices in Python.
-    ready = task_ready(project_slug=slug, limit=_MAX_TASK_LIMIT)
+    # the slice happens below instead.
+    #
+    # The limit is the project's own task count rather than a constant,
+    # because ready tasks are a SUBSET of `tasks` and a slice at that size
+    # therefore cannot truncate. A fixed ceiling would put the same silent cap
+    # back, just further out. `task_ready` applies its limit as a plain Python
+    # slice after filtering, and `list_tasks_by_project` underneath it is
+    # uncapped, so this costs no extra store read.
+    ready = task_ready(project_slug=slug, limit=max(len(tasks), 1))
     ready_truncated = len(ready) > _PROJECT_READY_CAP
 
     return {
@@ -5751,14 +5756,19 @@ def workflow_session_list(
         this an unscoped read returns every session ever recorded, and a view
         showing the last two weeks pays for all of it on every poll.
 
-        Raises ``ValueError`` if it does not parse. Tolerating it would mean
-        ``since="last week"`` silently returning every session, which is the
-        same unsignalled no-op this parameter exists to remove.
+        Raises ``ValueError`` if it does not parse, the empty string
+        included. Tolerating either would mean ``since="last week"`` or
+        ``since=""`` silently returning every session, which is the same
+        unsignalled no-op this parameter exists to remove.
 
         The filter runs in Python: ``read.gq`` has no comparison on a
         ``DateTime``, so this bounds the response, not the store read.
     """
-    since_at = _parse_since(since) if since else None
+    # `is not None`, not truthiness: an explicit `since=""` would otherwise
+    # skip the filter silently, which is the behaviour this parameter's
+    # "unparseable values raise" promise exists to rule out. Omitted stays
+    # omitted; supplied-and-empty is a bad value and says so.
+    since_at = _parse_since(since) if since is not None else None
     if project_slug:
         rows = client.read(
             "read.gq", "list_sessions_by_project", {"project_slug": project_slug}

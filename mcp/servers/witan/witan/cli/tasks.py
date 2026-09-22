@@ -76,8 +76,17 @@ def _search_tasks(
             repo=repo_arg, project_slug=project, assignee=assignee, limit=_ALL_READY
         )
     elif assignee:
+        # The limit matters for the same reason the docstring gives above: an
+        # unscoped `task_list` is capped at 50 IN THE QUERY and `assignee` is
+        # applied in Python after the read, so without it a real search hit
+        # gets intersected away whenever the matching task falls outside the
+        # 50 most recently updated ones.
         allowed = _fn(s.task_list)(
-            repo=repo_arg, status=status, project_slug=project, assignee=assignee
+            repo=repo_arg,
+            status=status,
+            project_slug=project,
+            assignee=assignee,
+            limit=_MAX_TASK_LIMIT,
         )
     else:
         return hits

@@ -510,6 +510,39 @@ def test_tasks_query_finds_tasks_older_than_the_recent_window(server, monkeypatc
 
 
 @requires_omnigraph
+def test_tasks_query_with_assignee_finds_matches_older_than_the_window(
+    server, monkeypatch
+):
+    """★ The SAME cap, on the branch that intersects with the assignee listing.
+
+    The test above covers the plain search path. This one covers
+    `--assignee`, which does not return hits directly: it intersects them with
+    `task_list(assignee=...)`, and `assignee` is applied in Python AFTER a
+    read that is capped at 50 rows in the query. So a genuine hit held by the
+    right person was intersected away whenever it fell outside the 50 most
+    recently updated tasks, which the docstring on `_search_tasks` warns about
+    for the branch right above it.
+    """
+    from witan.cli import _common
+    from witan.cli._common import _fn
+    from witan.cli.tasks import tasks
+
+    monkeypatch.setattr(_common, "_server", server)
+    captured = []
+    monkeypatch.setattr(_common.console, "print", lambda *a, **k: captured.append(a[0]))
+
+    held = _fn(server.task_create)(title="starrocks grafana dashboard", description="d")
+    _fn(server.task_claim)(slug=held["slug"], assignee="agentA")
+    for i in range(51):
+        _fn(server.task_create)(title=f"filler {i}", description="unrelated")
+
+    tasks("grafana dashboard", all_repos=True, assignee="agentA")
+
+    table = next(c for c in captured if hasattr(c, "columns"))
+    assert _table_column(table, "slug") == [held["slug"]]
+
+
+@requires_omnigraph
 def test_tasks_ready_honours_status_with_and_without_query(server, monkeypatch):
     """`--ready --status open` drops ready tasks in other statuses either way."""
     from witan.cli import _common

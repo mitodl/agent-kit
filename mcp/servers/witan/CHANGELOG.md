@@ -15,62 +15,6 @@ a MINOR bump may include breaking changes).
   the sdist and the wheel. This release adds the package, its build and its
   packaging only — it renders the app frame; the views and the routes that
   serve them are separate changes. Nothing serves `/ui/` yet.
-### Fixed
-
-- **`task_ready` no longer re-reads blockers it has already fetched.** Its
-  repo-scoped branch scans every Task and then narrows to the candidates, but
-  resolved blocker statuses against the narrowed set — so every blocker living
-  in another repo was unknown and fetched again, one `get_task` per blocker.
-  Measured against a deployment that was ~3.0s of a 4.2s call, on identical
-  scans to a 1.2s `task_list`.
-
-- **The context hook issues its independent reads together.** `witan
-  inject-context` against a deployment made up to ten sequential tool calls, so
-  the cold path was their sum. It now runs in two waves (the second needs the
-  first's answers), which measured 11.3s -> 6.5s on the same graph, byte-identical
-  output. Each read keeps its own failure isolation, and a machine that cannot
-  start threads falls back to running them in line. The wave primes the proxy's
-  tool schema once first, so the fan-out does not have every worker discover it
-  (4 `tools/list` cold, against 1 for the sequential path it replaced); against
-  a `witan-core` predating `prime_tool_schema` this is skipped and the old
-  behaviour stands.
-
-- **The context hook's ready list respects cross-repo blockers.** It offers a
-  repo-scoped slice of an all-Task scan, and an unresolvable blocker counts as
-  closed — so a task blocked by an open task in another repo was advertised as
-  ready to work. `readiness.filter_ready` now takes the wider row set, which
-  the hook already had in hand.
-
-- **The prompt and stop hooks get timeouts above what they are timing.** Both
-  were 15s. `witan inject-context` was measured at 16-23s cold on a large graph,
-  so the hook was killed mid-read and the user paid the full wait for no block;
-  it is now 45s. `witan session-checkpoint` writes, and a write has been measured
-  at up to 51s, so it is now 60s — being killed there leaves a session open with
-  no handoff summary. The pi `workflow-context` extension was tighter still at
-  5s and now matches at 45s.
-### Security
-
-- **`witan serve` turns on fastmcp's Host/Origin guard on every HTTP
-  transport.** The local endpoint is unauthenticated, so once `witan ui`
-  serves a page from the same process, any other page the user has open can
-  POST tool calls to 127.0.0.1 and read the graph. `host_origin_protection`
-  ships off in fastmcp; passing `"auto"` turns it on. On a loopback bind it
-  rejects a foreign Host (421, closing DNS rebinding) and a foreign Origin
-  (403, closing the cross-site POST from a remote page). The CLI, curl and
-  agents send no Origin and are unaffected.
-
-  Two limits worth knowing. The guard still admits any other LOOPBACK origin,
-  such as a dev server on `localhost:3000`, so a page served by another
-  process on the same machine can still reach the endpoint. And the checks are
-  keyed on the bind address: `witan serve --host 0.0.0.0` on a workstation
-  gets neither. Both are accepted for now; code already running on your
-  machine does not need the browser to reach the store.
-
-  No allowlist is set, deliberately. `allowed_hosts` switches Origin
-  validation on unconditionally, and behind APISIX's TLS termination the
-  server computes the request origin as `http://<host>` while the page sends
-  `Origin: https://<host>`, so every POST from the deployed page would 403.
-### Added
 
 - **`task_list` takes a `limit`.** 1 to 10,000, applied to every scope.
   Omitted, nothing changes: 50 rows unscoped, uncapped when scoped by repo,
@@ -105,12 +49,73 @@ a MINOR bump may include breaking changes).
 
 ### Fixed
 
+- **`task_ready` no longer re-reads blockers it has already fetched.** Its
+  repo-scoped branch scans every Task and then narrows to the candidates, but
+  resolved blocker statuses against the narrowed set — so every blocker living
+  in another repo was unknown and fetched again, one `get_task` per blocker.
+  Measured against a deployment that was ~3.0s of a 4.2s call, on identical
+  scans to a 1.2s `task_list`.
+
+- **The context hook issues its independent reads together.** `witan
+  inject-context` against a deployment made up to ten sequential tool calls, so
+  the cold path was their sum. It now runs in two waves (the second needs the
+  first's answers), which measured 11.3s -> 6.5s on the same graph, byte-identical
+  output. Each read keeps its own failure isolation, and a machine that cannot
+  start threads falls back to running them in line. The wave primes the proxy's
+  tool schema once first, so the fan-out does not have every worker discover it
+  (4 `tools/list` cold, against 1 for the sequential path it replaced); against
+  a `witan-core` predating `prime_tool_schema` this is skipped and the old
+  behaviour stands.
+
+- **The context hook's ready list respects cross-repo blockers.** It offers a
+  repo-scoped slice of an all-Task scan, and an unresolvable blocker counts as
+  closed — so a task blocked by an open task in another repo was advertised as
+  ready to work. `readiness.filter_ready` now takes the wider row set, which
+  the hook already had in hand.
+
+- **The prompt and stop hooks get timeouts above what they are timing.** Both
+  were 15s. `witan inject-context` was measured at 16-23s cold on a large graph,
+  so the hook was killed mid-read and the user paid the full wait for no block;
+  it is now 45s. `witan session-checkpoint` writes, and a write has been measured
+  at up to 51s, so it is now 60s — being killed there leaves a session open with
+  no handoff summary. The pi `workflow-context` extension was tighter still at
+  5s and now matches at 45s.
+
 - **`workflow_project_status` reported a wrong `counts.ready`.** It counted a
   list already truncated at 100, so any project with more ready tasks than that
   reported exactly 100. The count is now taken before the truncation and is
   exact; `ready_tasks` is still capped at 100, and `ready_truncated` says when
   the two disagree. Those rows also keep `lease_expired`, so a widget bound to
-  this tool can see a stale claim without a second call.
+  this tool can see a stale claim without a second call. The count is bounded
+  by the project's own task count rather than by a constant, since ready work
+  is a subset of it, so there is no second ceiling further out.
+- **`witan tasks QUERY --assignee` no longer drops older matches.** That path
+  intersects search hits with `task_list(assignee=...)`, and `assignee` is
+  applied after a read capped at 50 rows, so a genuine hit vanished whenever
+  it fell outside the 50 most recently updated tasks.
+
+### Security
+
+- **`witan serve` turns on fastmcp's Host/Origin guard on every HTTP
+  transport.** The local endpoint is unauthenticated, so once `witan ui`
+  serves a page from the same process, any other page the user has open can
+  POST tool calls to 127.0.0.1 and read the graph. `host_origin_protection`
+  ships off in fastmcp; passing `"auto"` turns it on. On a loopback bind it
+  rejects a foreign Host (421, closing DNS rebinding) and a foreign Origin
+  (403, closing the cross-site POST from a remote page). The CLI, curl and
+  agents send no Origin and are unaffected.
+
+  Two limits worth knowing. The guard still admits any other LOOPBACK origin,
+  such as a dev server on `localhost:3000`, so a page served by another
+  process on the same machine can still reach the endpoint. And the checks are
+  keyed on the bind address: `witan serve --host 0.0.0.0` on a workstation
+  gets neither. Both are accepted for now; code already running on your
+  machine does not need the browser to reach the store.
+
+  No allowlist is set, deliberately. `allowed_hosts` switches Origin
+  validation on unconditionally, and behind APISIX's TLS termination the
+  server computes the request origin as `http://<host>` while the page sends
+  `Origin: https://<host>`, so every POST from the deployed page would 403.
 
 ## [0.36.0] - 2026-09-18
 

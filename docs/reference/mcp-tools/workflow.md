@@ -62,8 +62,8 @@ handoff summary** (and whether it's still open), and any project-level
 
 ``ready_tasks`` is capped at 100 while ``counts.ready`` counts every ready
 task, so the two disagree on a busy project; ``ready_truncated`` is true
-exactly when they do. The count has its own ceiling at 10,000
-(``_MAX_TASK_LIMIT``), which no project is near.
+exactly when they do. The count has no ceiling of its own: it is bounded
+by the project's task count, which ready work is a subset of.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -339,7 +339,7 @@ Use ``witan session sweep`` to close them in bulk.
 | `project_slug` | str? | `null` | Restrict to one project's sessions. Omit for every project. |
 | `open_only` | bool | `False` | Only sessions with no ``ended_at``. Superseded sessions (deduped by<br>``witan migrate dedupe-sessions``) are always excluded — they are<br>already skipped by every aggregate read and are not leaks. |
 | `include_superseded` | bool | `False` | Keep superseded rows instead of dropping them. For ``witan session<br>list``, the one caller that wants to see what<br>``migrate dedupe-sessions`` did rather than the leaked-session view. |
-| `since` | str? | `null` | ISO timestamp. Keep only sessions that ended at or after it, plus<br>every still-open one — an open session has no ``ended_at`` to compare<br>and is current by definition, so a window must not drop it. Without<br>this an unscoped read returns every session ever recorded, and a view<br>showing the last two weeks pays for all of it on every poll.<br>Raises ``ValueError`` if it does not parse. Tolerating it would mean<br>``since="last week"`` silently returning every session, which is the<br>same unsignalled no-op this parameter exists to remove.<br>The filter runs in Python: ``read.gq`` has no comparison on a<br>``DateTime``, so this bounds the response, not the store read. |
+| `since` | str? | `null` | ISO timestamp. Keep only sessions that ended at or after it, plus<br>every still-open one — an open session has no ``ended_at`` to compare<br>and is current by definition, so a window must not drop it. Without<br>this an unscoped read returns every session ever recorded, and a view<br>showing the last two weeks pays for all of it on every poll.<br>Raises ``ValueError`` if it does not parse, the empty string<br>included. Tolerating either would mean ``since="last week"`` or<br>``since=""`` silently returning every session, which is the same<br>unsignalled no-op this parameter exists to remove.<br>The filter runs in Python: ``read.gq`` has no comparison on a<br>``DateTime``, so this bounds the response, not the store read. |
 
 ## `workflow_trace_list`
 
