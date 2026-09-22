@@ -126,9 +126,30 @@ export interface WorkflowProjectSummary extends WorkflowProjectCore {
 	updated_at: string;
 }
 
-/** A project as `workflow_project_get` and the rollup's `project` return it. */
+/**
+ * The rollup's `project`, which is a six-field projection.
+ *
+ * NOT what `workflow_project_get` returns: that one carries nine more fields
+ * (see `WorkflowProjectDetail`). Sharing one interface between them made the
+ * detail view unable to reach `description`, `blocked_by` or `blocks`, and
+ * widening it instead would have promised the rollup fields it does not send.
+ */
 export interface WorkflowProject extends WorkflowProjectCore {
 	github_pr: string | null;
+}
+
+/** What `workflow_project_get` returns: the whole node. */
+export interface WorkflowProjectDetail extends WorkflowProject {
+	description: string | null;
+	author: string | null;
+	blocked_by: string[] | null;
+	/** Slugs of the projects THIS one holds back. */
+	blocks: string[] | null;
+	github_issue: string | null;
+	tags: string[] | null;
+	created_at: string;
+	updated_at: string;
+	completed_at: string | null;
 }
 
 export interface WorkflowSession {
@@ -271,6 +292,63 @@ export function isMemory(value: unknown): value is Memory {
 		typeof value.slug === "string" &&
 		typeof value.kind === "string" &&
 		typeof value.title === "string"
+	);
+}
+
+export function isTaskSearchRow(value: unknown): value is TaskSearchRow {
+	return isTaskCore(value) && "description" in value;
+}
+
+export function isWorkflowProjectCore(
+	value: unknown,
+): value is WorkflowProjectCore {
+	return (
+		isRecord(value) &&
+		typeof value.slug === "string" &&
+		typeof value.title === "string" &&
+		typeof value.phase === "string" &&
+		typeof value.status === "string"
+	);
+}
+
+export function isWorkflowProjectDetail(
+	value: unknown,
+): value is WorkflowProjectDetail {
+	return (
+		isWorkflowProjectCore(value) &&
+		"description" in value &&
+		"blocks" in value &&
+		"created_at" in value
+	);
+}
+
+export function isWorkflowProjectSummary(
+	value: unknown,
+): value is WorkflowProjectSummary {
+	return isWorkflowProjectCore(value) && "github_issue" in value;
+}
+
+export function isWorkflowSession(value: unknown): value is WorkflowSession {
+	return (
+		isRecord(value) &&
+		typeof value.slug === "string" &&
+		typeof value.phase === "string" &&
+		"started_at" in value &&
+		"ended_at" in value
+	);
+}
+
+export function isMemoryNeighbors(value: unknown): value is MemoryNeighbors {
+	return (
+		isRecord(value) &&
+		typeof value.slug === "string" &&
+		isRecord(value.neighbors)
+	);
+}
+
+export function isTopicResult(value: unknown): value is TopicResult {
+	return (
+		isRecord(value) && isRecord(value.topic) && Array.isArray(value.memories)
 	);
 }
 

@@ -12,7 +12,7 @@ import type {
 	TaskRow,
 	TaskSearchRow,
 	TopicResult,
-	WorkflowProject,
+	WorkflowProjectDetail,
 	WorkflowProjectSummary,
 	WorkflowSession,
 } from "./types.js";
@@ -46,7 +46,13 @@ import { assertFlagsMatchServer, unwrap } from "./unwrap.js";
  * relative to it instead of assuming the root.
  */
 function endpoint(): URL {
-	return new URL("mcp", document.baseURI);
+	// ★ "../mcp", NOT "mcp". The bundle is served under /ui/, so `baseURI` is
+	// ".../ui/" and a bare "mcp" resolves to /ui/mcp, which is the SPA
+	// catch-all: every tool call would POST at the page itself and get
+	// index.html back. Resolving one level up gives /mcp, and it still tracks
+	// a reverse-proxy prefix (/witan/ui/ -> /witan/mcp), which is why this is
+	// relative to `baseURI` rather than absolute on the origin.
+	return new URL("../mcp", document.baseURI);
 }
 
 const PROTOCOL_ERA = "2026-07-28";
@@ -206,9 +212,10 @@ export function taskSearch(args: {
 	return read("task_search", args);
 }
 
+/** The DETAIL shape: nine fields more than the rollup's `project`. */
 export function workflowProjectGet(
 	slug: string,
-): Promise<WorkflowProject | null> {
+): Promise<WorkflowProjectDetail | null> {
 	return read("workflow_project_get", { slug });
 }
 
@@ -242,6 +249,9 @@ export function recall(args: {
 	repo: string;
 	task?: string;
 	topic?: string;
+	kind?: MemoryKind;
+	limit?: number;
+	hops?: number;
 }): Promise<RecallResult> {
 	return read("recall", args);
 }

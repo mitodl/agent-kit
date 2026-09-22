@@ -32,6 +32,12 @@ on:
       # and the store client the recording goes through.
       - "packages/witan-core/**"
       - "bin/gen_ui_fixtures.py"
+      # The fixtures job resolves its Python environment from the lockfile and
+      # runs through a just recipe, so a lock-only fastmcp bump can change
+      # result wrapping and a recipe edit can break the gate, both with no
+      # other file in this list touched.
+      - "uv.lock"
+      - "justfile"
   pull_request:
     paths: *ui_paths
 
