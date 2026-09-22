@@ -161,6 +161,26 @@ describe("the In progress column", () => {
 		expect(column("In progress").textContent).toContain("claimed 2h ago");
 	});
 
+	it("draws a task caught mid-claim by two reads once, as its newer row", () => {
+		// The status reads run in parallel: `open` saw it before the claim,
+		// `in_progress` after.
+		const before = row({
+			slug: "tk-racing",
+			status: "open",
+			updated_at: "2026-01-01T04:00:00",
+		});
+		const after = row({
+			slug: "tk-racing",
+			status: "in_progress",
+			updated_at: "2026-01-01T05:00:00",
+		});
+
+		draw(fromFixtures({ ready: [], live: [before, after] }));
+
+		expect(slugsIn("In progress")).toEqual(["tk-racing"]);
+		expect(slugsIn("Blocked")).toEqual([]);
+	});
+
 	it("puts the longest-held claim first", () => {
 		const older = row({
 			slug: "tk-older",

@@ -103,10 +103,30 @@ export function leaseStart(task: TaskRow): string {
 	return task.claimed_at ?? task.updated_at;
 }
 
+/**
+ * One row per slug, the most recently updated winning.
+ *
+ * The three status reads run in parallel and each sees the graph at its own
+ * moment, so a task claimed between them comes back from BOTH the `open` read
+ * and the `in_progress` one. Drawn as-is, it is a card in Blocked and In
+ * progress at once, and which row a blocker lookup found depended on read
+ * order.
+ */
+export function latestBySlug(rows: TaskRow[]): Map<string, TaskRow> {
+	const latest = new Map<string, TaskRow>();
+	for (const row of rows) {
+		const seen = latest.get(row.slug);
+		if (!seen || at(row.updated_at) > at(seen.updated_at)) {
+			latest.set(row.slug, row);
+		}
+	}
+	return latest;
+}
+
 export function columns(board: Board, route: Route): Columns {
-	const live = new Map(board.live.map((task) => [task.slug, task]));
+	const live = latestBySlug(board.live);
 	const ready = new Set(board.ready.map((task) => task.slug));
-	const scoped = board.live.filter((task) => inScope(task, route));
+	const scoped = [...live.values()].filter((task) => inScope(task, route));
 
 	return {
 		ready: board.ready,
