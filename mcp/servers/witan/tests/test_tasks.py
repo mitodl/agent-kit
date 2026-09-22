@@ -732,7 +732,10 @@ def test_task_update_defaulted_assignee_is_qualified_by_session_id(server):
         session_id="cccccccc-9999-0000-1111-222222222222",
     )
     node = server.task_get(t["slug"])
-    assert node["assignee"] == f"{srv._current_author()}#cccccccc"
+    assert node["assignee"] == (
+        f"{srv._current_author()}"
+        f"#{srv._session_suffix('cccccccc-9999-0000-1111-222222222222')}"
+    )
 
 
 @requires_omnigraph
@@ -828,7 +831,10 @@ def test_parallel_sessions_of_one_person_do_not_share_a_claim(server, monkeypatc
     monkeypatch.setenv("CLAUDE_SESSION_ID", "aaaaaaaa-1111-2222-3333-444444444444")
     first = server.task_claim(t["slug"])
     assert first["claimed"] is True
-    assert first["assignee"] == f"{srv._current_author()}#aaaaaaaa"
+    assert first["assignee"] == (
+        f"{srv._current_author()}"
+        f"#{srv._session_suffix('aaaaaaaa-1111-2222-3333-444444444444')}"
+    )
 
     monkeypatch.setenv("CLAUDE_SESSION_ID", "bbbbbbbb-5555-6666-7777-888888888888")
     second = server.task_claim(t["slug"])
@@ -862,7 +868,9 @@ def test_caller_supplied_session_id_beats_the_server_environment(server, monkeyp
 
     first = server.task_claim(t["slug"], session_id="11111111-aaaa")
     assert first["claimed"] is True
-    assert first["assignee"] == f"{srv._current_author()}#11111111"
+    assert first["assignee"] == (
+        f"{srv._current_author()}#{srv._session_suffix('11111111-aaaa')}"
+    )
 
     second = server.task_claim(t["slug"], session_id="22222222-bbbb")
     assert second["claimed"] is False
@@ -875,6 +883,47 @@ def test_caller_supplied_session_id_beats_the_server_environment(server, monkeyp
         )["assignee"]
         == "ci-worker"
     )
+
+
+@requires_omnigraph
+def test_session_ids_sharing_a_prefix_get_different_holders(server, monkeypatch):
+    """Claude Code's session-URL form all starts with the literal ``session_``.
+
+    The qualifier used to be the first 8 characters of the id, which is the
+    whole of that prefix and none of what follows — so every caller passing an
+    id of that shape claimed as ``<identity>#session_``, the
+    ``current_holder != holder`` test went False, and the second session
+    silently renewed the first's lease while being told ``claimed: True``. The
+    qualifier is a digest of the entire id now, so the shared prefix carries no
+    weight.
+    """
+    from witan import server as srv
+
+    monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
+    t = server.task_create(title="prefixed session ids", description="x")
+
+    first = server.task_claim(t["slug"], session_id="session_01NFADvkst516nGYnrkHMHuD")
+    second = server.task_claim(t["slug"], session_id="session_01PQRSTuvw987zYXwvuTSRQ")
+
+    assert first["claimed"] is True
+    assert srv._is_qualified(first["assignee"])
+    assert second["claimed"] is False
+    assert second["reason"] == "held"
+    assert second["held_by"] == first["assignee"]
+
+    # Both qualify, and to different sessions — not to the shared prefix.
+    holders = {
+        srv._claim_holder(session_id=sid)
+        for sid in (
+            "session_01NFADvkst516nGYnrkHMHuD",
+            "session_01PQRSTuvw987zYXwvuTSRQ",
+        )
+    }
+    assert len(holders) == 2
+    assert all(srv._is_qualified(h) for h in holders)
+
+    # The person is still readable off either one.
+    assert {srv._holder_identity(h) for h in holders} == {srv._current_author()}
 
 
 def test_holder_qualifier_survives_rich_rendering(monkeypatch):
@@ -893,11 +942,12 @@ def test_holder_qualifier_survives_rich_rendering(monkeypatch):
 
     monkeypatch.setenv("CLAUDE_SESSION_ID", "aaaaaaaa-1111-2222-3333-444444444444")
     holder = srv._claim_holder()
-    assert "aaaaaaaa" in holder
+    qualifier = srv._session_suffix("aaaaaaaa-1111-2222-3333-444444444444")
+    assert qualifier in holder
 
     buf = io.StringIO()
     Console(file=buf, width=200, no_color=True).print(holder)
-    assert "aaaaaaaa" in buf.getvalue()
+    assert qualifier in buf.getvalue()
 
 
 @requires_omnigraph

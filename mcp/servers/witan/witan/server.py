@@ -831,6 +831,7 @@ _ME = "@me"
 # same way ``_lease_expired`` is above.
 _SESSION_SUFFIX_RE = readiness.SESSION_SUFFIX_RE
 _holder_identity = readiness.holder_identity
+_session_suffix = readiness.session_suffix
 
 
 def _claim_holder(assignee: str | None = None, session_id: str | None = None) -> str:
@@ -862,15 +863,11 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
     and ``session_slug``; an agent calling a *deployed* witan directly (not
     through the CLI proxy) has to pass its own.
 
-    The environment is still consulted as the local-stdio fallback. Truncated
-    because the holder string is read by humans in refusal messages and task
-    listings, and 8 hex chars is plenty to tell two concurrent sessions apart.
-
-    A caller-supplied ``session_id`` is not guaranteed to be
-    ``_SESSION_SUFFIX_RE``'s charset (``[0-9A-Za-z_-]``) — characters outside
-    it are stripped before truncating, so e.g. ``"run.1234"`` still qualifies
-    as ``"run1234"`` instead of silently producing a holder that
-    ``_is_qualified`` can't recognize as qualified.
+    The environment is still consulted as the local-stdio fallback. The id is
+    condensed to 8 hex chars by ``readiness.session_suffix`` — short because
+    the holder string is read by humans in refusal messages and task listings,
+    and a digest rather than a prefix because the id's shape varies by caller
+    (see that function).
 
     With no session id from either source there is only one session to be, so
     the bare identity is both correct and byte-identical to what older stores
@@ -880,7 +877,7 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
         return assignee
     identity = _current_author()
     session = session_id or os.environ.get("CLAUDE_SESSION_ID") or ""
-    suffix = re.sub(r"[^0-9A-Za-z_-]", "", session)[:8]
+    suffix = _session_suffix(session)
     return f"{identity}#{suffix}" if suffix else identity
 
 

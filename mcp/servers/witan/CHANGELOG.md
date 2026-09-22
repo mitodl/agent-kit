@@ -10,6 +10,18 @@ a MINOR bump may include breaking changes).
 
 ### Fixed
 
+- **A claim holder's session qualifier is a digest of the whole session id.**
+  It was the first 8 characters, which is the entire shared prefix and none of
+  the distinguishing part for Claude Code's session-URL form
+  (`session_01NFADvkst516nGYnrkHMHuD`) — an id an agent calling a deployed
+  witan directly has to pass itself. Every such caller claimed as
+  `<identity>#session_`, so `task_claim`'s `current_holder != holder` test went
+  False, the second session renewed the first's lease and was told
+  `claimed: True`, and the response said `qualified: true` throughout: the
+  silent double-claim the qualifier exists to prevent. A digest assumes nothing
+  about where an id's entropy sits. Holders are 60-minute leases, so nothing
+  recorded under the old spelling needs migrating.
+
 - **`task_ready` no longer re-reads blockers it has already fetched.** Its
   repo-scoped branch scans every Task and then narrows to the candidates, but
   resolved blocker statuses against the narrowed set — so every blocker living

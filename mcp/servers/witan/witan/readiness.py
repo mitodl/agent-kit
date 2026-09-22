@@ -13,6 +13,7 @@ holder string must match the server's.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -34,6 +35,39 @@ SESSION_SUFFIX_RE = re.compile(r"#[0-9A-Za-z_-]{1,64}$")
 def holder_identity(holder: str | None) -> str | None:
     """Strip a holder's ``#<session>`` qualifier, leaving the person."""
     return SESSION_SUFFIX_RE.sub("", holder) if holder else holder
+
+
+# Bytes of digest behind the qualifier; hex doubles it, so 4 -> 8 characters.
+SESSION_DIGEST_BYTES = 4
+
+
+def session_suffix(session_id: str | None) -> str:
+    """Condense an agent session id to the ``#<session>`` qualifier's payload.
+
+    Session ids reach us in more than one shape. Under local stdio it is a bare
+    UUID from ``$CLAUDE_SESSION_ID``; an agent calling a deployment directly
+    passes whatever its own runtime hands it, which for Claude Code is the
+    session-URL form ``session_01NFADvkst516nGYnrkHMHuD``. Keeping the *first*
+    8 characters worked on the first shape and collapsed the second onto the
+    shared literal prefix ``session_`` — so every such caller claimed as
+    ``<identity>#session_``, ``task_claim``'s ``current_holder != holder`` test
+    went False again, and the silent double-claim the qualifier exists to
+    prevent came back while the response still said ``qualified: true``.
+
+    A digest of the whole id assumes nothing about where its entropy sits, and
+    lands inside ``SESSION_SUFFIX_RE``'s charset by construction rather than by
+    stripping. It is stable across processes and hosts, so the same session
+    renewing its own lease still matches byte for byte.
+
+    An empty (or whitespace-only) id means there is nothing to qualify, and the
+    caller falls back to the bare identity.
+    """
+    session = (session_id or "").strip()
+    if not session:
+        return ""
+    return hashlib.blake2b(
+        session.encode(), digest_size=SESSION_DIGEST_BYTES
+    ).hexdigest()
 
 
 # Advisory-claim lease: a task left ``in_progress`` longer than this without being

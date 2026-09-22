@@ -166,3 +166,34 @@ def test_filter_ready_candidate_status_wins_over_a_stale_wider_row():
     stale = [{"slug": "tk-b", "status": "open"}]
     got = [t["slug"] for t in readiness.filter_ready(tasks, blocker_rows=stale)]
     assert got == ["tk-a"]
+
+
+def test_session_suffix_distinguishes_ids_sharing_a_prefix():
+    """The qualifier has to come from the whole id, not its head.
+
+    Claude Code's session-URL form is a common ``session_`` prefix plus the
+    part that actually identifies the session, so a head-truncated qualifier
+    was the same 8 characters for every one of them.
+    """
+    a = readiness.session_suffix("session_01NFADvkst516nGYnrkHMHuD")
+    b = readiness.session_suffix("session_01PQRSTuvw987zYXwvuTSRQ")
+    assert a != b
+    assert a == readiness.session_suffix("session_01NFADvkst516nGYnrkHMHuD")
+
+
+def test_session_suffix_is_a_recognisable_qualifier():
+    """Whatever charset the id arrives in, the suffix has to be one
+    ``SESSION_SUFFIX_RE`` reads back as qualified — otherwise the holder looks
+    unqualified to every caller that asks."""
+    for session_id in ("run.1234", "ffffffff-1234-5678-9abc-def012345678", "Ω/…#"):
+        holder = f"someone#{readiness.session_suffix(session_id)}"
+        assert readiness.SESSION_SUFFIX_RE.search(holder)
+        assert readiness.holder_identity(holder) == "someone"
+
+
+def test_session_suffix_of_nothing_is_empty():
+    """No id means one session, so there is nothing to qualify and the caller
+    keeps the bare identity."""
+    assert readiness.session_suffix(None) == ""
+    assert readiness.session_suffix("") == ""
+    assert readiness.session_suffix("   ") == ""
