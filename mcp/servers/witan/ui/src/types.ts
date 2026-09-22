@@ -220,6 +220,16 @@ export interface Memory {
 	symbol_refs?: string[] | null;
 	created_at: string;
 	updated_at?: string;
+	/** Present only on `memory_get(include_topics=True)`. */
+	topics?: MemoryTopic[];
+}
+
+/** A Topic a memory is tagged with, and the link that tags it. */
+export interface MemoryTopic {
+	slug: string;
+	name: string;
+	kind: string;
+	edge: EdgeMeta;
 }
 
 /** A pair of memories that contradict each other, as `recall` reports them. */
@@ -242,6 +252,10 @@ export interface ContradictionEndpoint {
 	repo: string | null;
 	author: string;
 	updated_at: string;
+	/** The claim itself, so the inbox needs no read per side. */
+	content: string;
+	/** The memory's own score, usually unset. Not the link's confidence. */
+	confidence: number | null;
 }
 
 /**
@@ -262,13 +276,48 @@ export interface MemoryContradiction {
 	edge: EdgeMeta;
 }
 
+/**
+ * The groups `memory_neighbors` returns, in the order the detail panel shows
+ * them. `superseded_by` is the inbound side of `supersedes`, not a link kind
+ * of its own.
+ */
+export const NEIGHBOR_KINDS = [
+	"superseded_by",
+	"supersedes",
+	"refines",
+	"applies_to",
+	"related_to",
+	"contradicts",
+] as const;
+
+export type NeighborKind = (typeof NEIGHBOR_KINDS)[number];
+
+/** One linked memory: a projection of the other end, plus the link. */
+export interface MemoryNeighbor {
+	slug: string;
+	kind: MemoryKind;
+	title: string;
+	repo: string | null;
+	created_at: string;
+	edge: EdgeMeta;
+}
+
 export interface MemoryNeighbors {
 	slug: string;
-	neighbors: Record<string, unknown>;
+	/** Every kind is present when none were asked for, each possibly empty. */
+	neighbors: Partial<Record<NeighborKind, MemoryNeighbor[]>>;
+}
+
+export interface Topic {
+	slug: string;
+	name: string;
+	kind: string;
+	created_at: string;
 }
 
 export interface TopicResult {
-	topic: Record<string, unknown>;
+	topic: Topic;
+	/** Slim rows: no `content`, no `author`. */
 	memories: Memory[];
 }
 
@@ -541,6 +590,10 @@ export function isProjectStatus(value: unknown): value is ProjectStatus {
 	});
 }
 
+function isMemoryTopic(value: unknown): value is MemoryTopic {
+	return matches(value, { slug: str, name: str, kind: str, edge: isEdgeMeta });
+}
+
 export function isMemory(value: unknown): value is Memory {
 	return matches(
 		value,
@@ -561,6 +614,7 @@ export function isMemory(value: unknown): value is Memory {
 			language: nullable(str),
 			symbol_refs: strList,
 			updated_at: str,
+			topics: arrayOf(isMemoryTopic),
 		},
 	);
 }
@@ -587,6 +641,8 @@ function isContradictionEndpoint(
 		repo: nullable(str),
 		author: str,
 		updated_at: str,
+		content: str,
+		confidence: nullable(num),
 	});
 }
 
@@ -609,12 +665,36 @@ export function isMemoryContradiction(
 	});
 }
 
+function isMemoryNeighbor(value: unknown): value is MemoryNeighbor {
+	return matches(value, {
+		slug: str,
+		kind: memoryKind,
+		title: str,
+		repo: nullable(str),
+		created_at: str,
+		edge: isEdgeMeta,
+	});
+}
+
+const neighborKind = oneOf(...NEIGHBOR_KINDS);
+
 export function isMemoryNeighbors(value: unknown): value is MemoryNeighbors {
-	return matches(value, { slug: str, neighbors: isRecord });
+	// The group keys are checked for membership like the other closed unions:
+	// a group the panel does not name is a group it silently never draws.
+	return matches(value, {
+		slug: str,
+		neighbors: (v) =>
+			isRecord(v) &&
+			Object.entries(v).every(
+				([kind, rows]) => neighborKind(kind) && arrayOf(isMemoryNeighbor)(rows),
+			),
+	});
 }
 
 export function isTopicResult(value: unknown): value is TopicResult {
-	// Descends into `memories`, because `topic` is an untyped record and the
-	// memory list is the only declared structure here.
-	return matches(value, { topic: isRecord, memories: arrayOf(isMemory) });
+	return matches(value, {
+		topic: (v) =>
+			matches(v, { slug: str, name: str, kind: str, created_at: str }),
+		memories: arrayOf(isMemory),
+	});
 }

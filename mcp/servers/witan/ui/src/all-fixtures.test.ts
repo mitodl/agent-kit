@@ -95,7 +95,8 @@ const OPTIONAL_FIELDS: Record<string, string[]> = {
 	workflow_project_list: [],
 	workflow_session_list: ["session_id", "tools_used", "files_changed"],
 	recall: [],
-	memory_get: MEMORY_OPTIONAL,
+	// `topics` only with `include_topics`, which the UI always passes.
+	memory_get: [...MEMORY_OPTIONAL, "topics"],
 	memory_list: MEMORY_OPTIONAL,
 	memory_search: MEMORY_OPTIONAL,
 	memory_neighbors: [],

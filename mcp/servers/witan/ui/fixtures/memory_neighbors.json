@@ -18,7 +18,22 @@
     ],
     "refines": [],
     "related_to": [],
-    "supersedes": []
+    "superseded_by": [],
+    "supersedes": [
+      {
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "edge": {
+          "author": "fixtures",
+          "confidence": "asserted",
+          "created_at": "2026-01-01T00:00:00+00:00",
+          "role": "the shape test misreads a bare dict"
+        },
+        "kind": "pattern",
+        "repo": "https://github.com/mitodl/agent-kit",
+        "slug": "pat-fixture-010",
+        "title": "Unwrap MCP results by looking for a result key"
+      }
+    ]
   },
   "slug": "pat-fixture-007"
 }

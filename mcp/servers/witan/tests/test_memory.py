@@ -269,6 +269,41 @@ def test_supersedes_hides_old_from_search(server):
 
 
 @requires_omnigraph
+def test_supersedes_hides_old_from_list(server):
+    old = server.memory_store(kind="pattern", title="old", content="first take")
+    new = server.memory_store(kind="pattern", title="new", content="second take")
+    server.memory_link(new["slug"], old["slug"], "supersedes")
+
+    for listed in (
+        server.memory_list(),
+        server.memory_list(kind="pattern"),
+        server.memory_list(repo=""),
+    ):
+        slugs = {m["slug"] for m in listed}
+        assert old["slug"] not in slugs
+        assert new["slug"] in slugs
+
+    with_old = {m["slug"] for m in server.memory_list(include_superseded=True)}
+    assert {old["slug"], new["slug"]} <= with_old
+
+
+@requires_omnigraph
+def test_neighbors_superseded_by_is_the_inbound_side(server):
+    old = server.memory_store(kind="pattern", title="old", content="first take")
+    new = server.memory_store(kind="pattern", title="new", content="second take")
+    server.memory_link(new["slug"], old["slug"], "supersedes", role="rewrite")
+
+    replaced = server.memory_neighbors(old["slug"])["neighbors"]
+    assert [n["slug"] for n in replaced["superseded_by"]] == [new["slug"]]
+    assert replaced["superseded_by"][0]["edge"]["role"] == "rewrite"
+    assert replaced["supersedes"] == []
+
+    replacing = server.memory_neighbors(new["slug"])["neighbors"]
+    assert [n["slug"] for n in replacing["supersedes"]] == [old["slug"]]
+    assert replacing["superseded_by"] == []
+
+
+@requires_omnigraph
 def test_related_to_is_symmetric(server):
     a = server.memory_store(kind="pattern", title="a", content="alpha content")
     b = server.memory_store(kind="pattern", title="b", content="beta content")
@@ -329,6 +364,7 @@ def test_neighbors_kinds_subset_and_empty(server):
     # omitting kinds (None) returns all kinds
     assert set(server.memory_neighbors(a["slug"])["neighbors"]) == {
         "supersedes",
+        "superseded_by",
         "refines",
         "applies_to",
         "contradicts",

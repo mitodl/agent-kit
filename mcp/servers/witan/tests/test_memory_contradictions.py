@@ -33,8 +33,19 @@ def test_reports_both_endpoints_and_the_edge(server):
     assert row["b"]["slug"] == b
     assert row["a"]["title"] == "alpha"
     assert row["b"]["title"] == "beta"
+    assert row["a"]["content"] == "alpha content"
+    assert row["b"]["content"] == "beta content"
     for side in (row["a"], row["b"]):
-        assert set(side) == {"slug", "title", "kind", "repo", "author", "updated_at"}
+        assert set(side) == {
+            "slug",
+            "title",
+            "kind",
+            "repo",
+            "author",
+            "updated_at",
+            "content",
+            "confidence",
+        }
         assert side["kind"] == "pattern"
         assert side["repo"] == HERE
     assert row["edge"]["role"] == "disagree on the default"
@@ -138,3 +149,34 @@ def test_no_repo_detected_keeps_only_pairs_touching_an_unscoped_memory(
     monkeypatch.setenv("WITAN_REPO", "")
 
     assert _pairs(server.memory_contradictions()) == [{unscoped, here}]
+
+
+@requires_omnigraph
+def test_superseding_either_side_resolves_the_pair(server):
+    a = _memory(server, "alpha")
+    b = _memory(server, "beta")
+    c = _memory(server, "gamma")
+    d = _memory(server, "delta")
+    server.memory_link(a, b, "contradicts")
+    server.memory_link(c, d, "contradicts")
+    replacement = _memory(server, "alpha, corrected")
+    server.memory_link(replacement, a, "supersedes")
+
+    assert _pairs(server.memory_contradictions(repo="")) == [{c, d}]
+    assert {c, d} in _pairs(
+        server.memory_contradictions(repo="", include_superseded=True)
+    )
+    assert {a, b} in _pairs(
+        server.memory_contradictions(repo="", include_superseded=True)
+    )
+
+
+@requires_omnigraph
+def test_agrees_with_recall_on_a_superseded_pair(server):
+    a = _memory(server, "shared words alpha")
+    b = _memory(server, "shared words beta")
+    server.memory_link(a, b, "contradicts")
+    server.memory_link(_memory(server, "shared words gamma"), a, "supersedes")
+
+    assert server.recall(query="shared words", repo="")["contradictions"] == []
+    assert server.memory_contradictions(repo="") == []

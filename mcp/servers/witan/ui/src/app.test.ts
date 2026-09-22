@@ -1,9 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import contradictionsFixture from "../fixtures/memory_contradictions.json" with {
+	type: "json",
+};
+import memoryGetFixture from "../fixtures/memory_get.json" with {
+	type: "json",
+};
+import memoryListFixture from "../fixtures/memory_list.json" with {
+	type: "json",
+};
+import neighborsFixture from "../fixtures/memory_neighbors.json" with {
+	type: "json",
+};
+import recallFixture from "../fixtures/recall.json" with { type: "json" };
 import taskGetFixture from "../fixtures/task_get.json" with { type: "json" };
 import taskListFixture from "../fixtures/task_list.json" with { type: "json" };
 import taskReadyFixture from "../fixtures/task_ready.json" with {
 	type: "json",
 };
+import topicGetFixture from "../fixtures/topic_get.json" with { type: "json" };
 import projectGetFixture from "../fixtures/workflow_project_get.json" with {
 	type: "json",
 };
@@ -17,9 +31,14 @@ import sessionListFixture from "../fixtures/workflow_session_list.json" with {
 	type: "json",
 };
 import type {
+	Memory,
+	MemoryContradiction,
+	MemoryNeighbors,
 	ProjectStatus,
+	RecallResult,
 	TaskDetail,
 	TaskRow,
+	TopicResult,
 	WorkflowProjectDetail,
 	WorkflowProjectSummary,
 	WorkflowSession,
@@ -42,6 +61,13 @@ vi.mock("./mcp.js", () => ({
 	taskList: vi.fn(),
 	taskReady: vi.fn(),
 	taskGet: vi.fn(),
+	memoryContradictions: vi.fn(),
+	memoryGet: vi.fn(),
+	memoryList: vi.fn(),
+	memoryNeighbors: vi.fn(),
+	memorySearch: vi.fn(),
+	recall: vi.fn(),
+	topicGet: vi.fn(),
 }));
 
 const mcp = await import("./mcp.js");
@@ -67,6 +93,7 @@ const sessions = unwrap<WorkflowSession[]>(
 const task = unwrap<TaskDetail>("task_get", taskGetFixture);
 const ready = unwrap<TaskRow[]>("task_ready", taskReadyFixture);
 const { TASK_LIMIT } = await import("./views/board.js");
+const memory = unwrap<Memory>("memory_get", memoryGetFixture);
 
 let root: HTMLElement;
 let app: InstanceType<typeof App>;
@@ -81,6 +108,28 @@ beforeEach(() => {
 	);
 	vi.mocked(mcp.taskReady).mockResolvedValue(ready);
 	vi.mocked(mcp.taskGet).mockResolvedValue(task);
+	vi.mocked(mcp.memoryContradictions).mockResolvedValue(
+		unwrap<MemoryContradiction[]>(
+			"memory_contradictions",
+			contradictionsFixture,
+		),
+	);
+	vi.mocked(mcp.memoryGet).mockResolvedValue(memory);
+	vi.mocked(mcp.memoryList).mockResolvedValue(
+		unwrap<Memory[]>("memory_list", memoryListFixture),
+	);
+	vi.mocked(mcp.memoryNeighbors).mockResolvedValue(
+		unwrap<MemoryNeighbors>("memory_neighbors", neighborsFixture),
+	);
+	vi.mocked(mcp.memorySearch).mockResolvedValue(
+		unwrap<Memory[]>("memory_list", memoryListFixture),
+	);
+	vi.mocked(mcp.recall).mockResolvedValue(
+		unwrap<RecallResult>("recall", recallFixture),
+	);
+	vi.mocked(mcp.topicGet).mockResolvedValue(
+		unwrap<TopicResult>("topic_get", topicGetFixture),
+	);
 
 	window.location.hash = "";
 	root = document.createElement("div");
@@ -439,6 +488,141 @@ describe("App", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("lands the memory view on the inbox over a browse list", async () => {
+		await open("#memory?repo=https%3A%2F%2Fgithub.com%2Fmitodl%2Fagent-kit");
+		await vi.waitFor(() => expect(root.querySelector(".inbox")).not.toBeNull());
+
+		const repo = "https://github.com/mitodl/agent-kit";
+		expect(mcp.memoryList).toHaveBeenCalledWith({
+			repo,
+			kind: undefined,
+			include_superseded: false,
+		});
+		expect(mcp.memoryContradictions).toHaveBeenCalledWith({ repo });
+		expect(mcp.recall).not.toHaveBeenCalled();
+	});
+
+	it("reads the inbox in one call, not one more per memory in it", async () => {
+		// The page polls every 30s; a read per side would fan out with the
+		// inbox, and one failed side would fail the whole page.
+		await open("#memory");
+		await vi.waitFor(() => expect(root.querySelector(".inbox")).not.toBeNull());
+
+		expect(mcp.memoryContradictions).toHaveBeenCalledTimes(1);
+		expect(mcp.memoryGet).not.toHaveBeenCalled();
+	});
+
+	it("keeps resolved pairs out of the inbox when superseded memories are shown", async () => {
+		// The toggle widens the list; a resolved pair offering "Resolve" again
+		// would read as open.
+		await open("#memory?superseded=1");
+		await vi.waitFor(() => expect(root.querySelector(".inbox")).not.toBeNull());
+
+		expect(mcp.memoryContradictions).toHaveBeenCalledWith({ repo: "" });
+		expect(mcp.memoryList).toHaveBeenCalledWith({
+			repo: "",
+			kind: undefined,
+			include_superseded: true,
+		});
+		expect(mcp.memoryGet).not.toHaveBeenCalledWith(expect.anything(), {
+			topics: true,
+		});
+	});
+
+	it("searches through recall, or memory_search when plain", async () => {
+		await open("#memory?q=unwrap&kind=pattern&superseded=1");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".recall-pairs")).not.toBeNull(),
+		);
+		expect(mcp.recall).toHaveBeenCalledWith({
+			query: "unwrap",
+			repo: "",
+			kind: "pattern",
+			include_superseded: true,
+		});
+		expect(mcp.memoryContradictions).not.toHaveBeenCalled();
+
+		window.location.hash = "#memory?q=unwrap&plain=1";
+		await vi.waitFor(() =>
+			expect(mcp.memorySearch).toHaveBeenCalledWith({
+				query: "unwrap",
+				repo: "",
+				kind: undefined,
+				include_superseded: false,
+			}),
+		);
+	});
+
+	it("shows one topic's memories", async () => {
+		await open("#memory?topic=tp-topic-witan-ui");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".topic-heading")).not.toBeNull(),
+		);
+
+		expect(mcp.topicGet).toHaveBeenCalledWith("tp-topic-witan-ui");
+		expect(mcp.memoryList).not.toHaveBeenCalled();
+	});
+
+	it("narrows a topic by kind in the browser, since topic_get takes none", async () => {
+		await open("#memory?topic=tp-topic-witan-ui&kind=lesson");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".topic-heading")).not.toBeNull(),
+		);
+
+		const kinds = [...root.querySelectorAll("tbody .badge")].map(
+			(badge) => badge.textContent,
+		);
+		expect(kinds.length).toBeGreaterThan(0);
+		expect(new Set(kinds)).toEqual(new Set(["lesson"]));
+	});
+
+	it("opens a memory slug as a memory, not a task", async () => {
+		await open(`#memory?slug=${memory.slug}`);
+		await vi.waitFor(() =>
+			expect(root.querySelector(".memory-detail")).not.toBeNull(),
+		);
+
+		expect(mcp.memoryNeighbors).toHaveBeenCalledWith({ slug: memory.slug });
+		expect(mcp.memoryGet).toHaveBeenCalledWith(memory.slug, { topics: true });
+		expect(mcp.taskGet).not.toHaveBeenCalled();
+		expect(root.querySelector(".detail-panel h2")?.textContent).toBe(
+			memory.title,
+		);
+	});
+
+	it("treats a null memory as a stale link, not a failure", async () => {
+		vi.mocked(mcp.memoryGet).mockResolvedValue(null);
+		await open("#memory?slug=pat-gone");
+
+		await vi.waitFor(() =>
+			expect(root.querySelector(".detail-panel")?.textContent).toContain(
+				"No memory",
+			),
+		);
+		expect(root.querySelector('[role="alert"]')).toBeNull();
+	});
+
+	it("does not re-read the memory list when a memory is opened beside it", async () => {
+		await open("#memory");
+		await vi.waitFor(() => expect(mcp.memoryList).toHaveBeenCalledTimes(1));
+
+		window.location.hash = `#memory?slug=${memory.slug}`;
+		await vi.waitFor(() =>
+			expect(root.querySelector(".memory-detail")).not.toBeNull(),
+		);
+
+		expect(mcp.memoryList).toHaveBeenCalledTimes(1);
+		expect(root.querySelector(".inbox")).not.toBeNull();
+	});
+
+	it("does not read memories behind another tab", async () => {
+		await open("#projects?q=unwrap");
+		await vi.waitFor(() => expect(mcp.workflowProjectList).toHaveBeenCalled());
+
+		expect(mcp.recall).not.toHaveBeenCalled();
+		expect(mcp.memoryList).not.toHaveBeenCalled();
 	});
 
 	it("asks for a project before reading any waves", async () => {

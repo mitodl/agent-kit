@@ -3,6 +3,8 @@
     {
       "a": {
         "author": "fixtures",
+        "confidence": null,
+        "content": "fastmcp wraps list and dict|None returns as structuredContent {'result': ...} and marks the schema with x-fastmcp-wrap-result. Guessing from the value's shape gets a bare dict return wrong.",
         "kind": "pattern",
         "repo": "https://github.com/mitodl/agent-kit",
         "slug": "pat-fixture-007",
@@ -11,6 +13,8 @@
       },
       "b": {
         "author": "fixtures",
+        "confidence": null,
+        "content": "An unscoped task_list returned 50 rows and said nothing about the rest.",
         "kind": "lesson",
         "repo": "https://github.com/mitodl/agent-kit",
         "slug": "les-fixture-009",

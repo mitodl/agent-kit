@@ -302,18 +302,24 @@ export function recall(args: {
 	kind?: MemoryKind;
 	limit?: number;
 	hops?: number;
+	include_superseded?: boolean;
 }): Promise<RecallResult> {
 	return read("recall", args);
 }
 
-export function memoryGet(slug: string): Promise<Memory | null> {
-	return read("memory_get", { slug });
+/** `topics` attaches each Tagged edge, which costs a second graph read. */
+export function memoryGet(
+	slug: string,
+	options: { topics?: boolean } = {},
+): Promise<Memory | null> {
+	return read("memory_get", { slug, include_topics: options.topics ?? false });
 }
 
 export function memoryList(args: {
 	kind?: MemoryKind;
 	repo: string;
 	language?: string;
+	include_superseded?: boolean;
 }): Promise<Memory[]> {
 	return read("memory_list", args);
 }
@@ -322,6 +328,7 @@ export function memorySearch(args: {
 	query: string;
 	repo: string;
 	kind?: MemoryKind;
+	include_superseded?: boolean;
 }): Promise<Memory[]> {
 	return read("memory_search", args);
 }
@@ -335,10 +342,12 @@ export function memoryNeighbors(args: {
 
 /**
  * Every contradicting pair, newest link first. A pair is in scope when either
- * memory is in `repo`.
+ * memory is in `repo`. A pair with a superseded side is resolved, and dropped
+ * unless `include_superseded`.
  */
 export function memoryContradictions(args: {
 	repo: string;
+	include_superseded?: boolean;
 }): Promise<MemoryContradiction[]> {
 	return read("memory_contradictions", args);
 }

@@ -64,6 +64,7 @@
   ],
   "seeds": {
     "query": [
+      "pat-fixture-010",
       "pat-fixture-007"
     ]
   }

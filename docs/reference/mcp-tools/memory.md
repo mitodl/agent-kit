@@ -162,6 +162,7 @@ Browse stored memories without a search query — e.g. all ``lesson`` or
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Optional filter: ``pattern``, ``project_fact``, ``lesson``, or<br>``agent_context``. Omit to list all kinds. |
 | `repo` | str? | `null` | Repo scoping — see instructions. With no repo detected and none passed,<br>returns slim records (slug, kind, title, tags — no content) for unscoped<br>memories; ``memory_get`` a slug for its full content. |
 | `language` | str? | `null` | Optional post-filter by ``language`` (e.g. ``python``); applies to the<br>full-content results, not the slim unscoped listing. |
+| `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` drops them, as ``memory_search`` and ``recall`` do. |
 
 ## `memory_search`
 
@@ -212,8 +213,10 @@ link to itself. Returns ``linked: False`` in those cases rather than raising.
 Return the memories directly linked to ``slug``, grouped by edge kind.
 
 For symmetric kinds (``contradicts``, ``related_to``) both directions are
-unioned and de-duplicated. Use after ``memory_get`` to see what a memory
-connects to.
+unioned and de-duplicated. ``superseded_by`` is the inbound side of
+``supersedes``: the memories that replaced this one, which is what a reader
+who landed on a superseded memory needs next. Use after ``memory_get`` to
+see what a memory connects to.
 
 Each neighbour carries an ``edge`` dict — ``{confidence, role, author,
 created_at}`` — describing the LINK rather than either endpoint. ``role``
@@ -225,7 +228,7 @@ properties existed, and nothing backfills them.
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `slug` | str | **required** | The memory whose neighbours to fetch. |
-| `kinds` | list[`supersedes` \| `refines` \| `applies_to` \| `contradicts` \| `related_to` \| `tagged`]? | `null` | Optional subset of edge kinds to include. Omit (``None``) for all kinds;<br>an explicit empty list returns no kinds. |
+| `kinds` | list[`supersedes` \| `refines` \| `applies_to` \| `contradicts` \| `related_to` \| `tagged` \| `superseded_by`]? | `null` | Optional subset of edge kinds to include. Omit (``None``) for all kinds;<br>an explicit empty list returns no kinds. |
 
 ## `memory_contradictions`
 
@@ -237,17 +240,23 @@ only when both memories land in its result, and ``memory_neighbors`` needs a
 slug to start from; this needs neither.
 
 Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
-carry ``slug, title, kind, repo, author, updated_at``; ``a`` is the side the
-link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
+carry ``slug, title, kind, repo, author, updated_at, content, confidence``;
+``a`` is the side the link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
 all ``null`` on links written before edge properties existed.
 
 One row per unordered pair. ``contradicts`` is symmetric but can be stored
 in both directions; when it is, the newer link is the one reported, the same
 newest-wins rule as ``memory_neighbors``.
 
+Superseding either side is how a contradiction gets resolved, so a pair
+with a superseded memory in it is dropped by default. That is also what
+keeps this in agreement with ``recall``, which prunes superseded memories
+before it looks for pairs.
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `repo` | str? | `null` | Repo scoping — see instructions. A pair is included when EITHER memory<br>is in scope, since a contradiction across two repos concerns both. With<br>no repo detected and none passed, only pairs touching an unscoped memory<br>(``repo`` null) are returned. |
+| `include_superseded` | bool | `False` | When ``True``, keep pairs where either memory has been superseded, i.e.<br>the resolved ones. |
 
 ## `memory_symbols`
 
