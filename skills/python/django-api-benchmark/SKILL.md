@@ -70,8 +70,19 @@ export into a gap-annotated timeline, and what to extract from responses.
 
 ## Step 3 — Build the harness
 
-Four files in an untracked `.bench/` directory (add it to `.git/info/exclude`).
-Adapt the templates:
+An untracked `.bench/` directory (add it to `.git/info/exclude`).
+
+First **install an execution backend**. The harness has to run `manage.py`, reach
+Postgres, and make a `git switch` take effect in whatever is actually executing
+the app — the only three things that differ between dev environments. They live
+behind `.bench/backend.sh`; copy
+[`backends/compose.sh`](references/backends/compose.sh) (a per-repo
+`docker compose` stack) or [`backends/k8s-tilt.sh`](references/backends/k8s-tilt.sh)
+(ol-infrastructure's k3d + Tilt `local-dev`) there. Both may be present on one
+machine — **ask rather than guess**. See
+[references/environments.md](references/environments.md).
+
+Then adapt the templates:
 
 | Template | Role |
 | --- | --- |
@@ -80,15 +91,20 @@ Adapt the templates:
 | [`templates/trace.py`](references/templates/trace.py) | In-process OTel capture for per-query attribution |
 | [`templates/agg.jq`](references/templates/agg.jq) | Median-per-query aggregation of the traced repeats |
 | [`templates/run.sh`](references/templates/run.sh) | Recreate DB → migrate → seed → arm A → switch ref → arm B |
+| [`backends/`](references/backends/) | The one file that knows what your dev environment is |
 
 Non-negotiables, each of which exists because skipping it produces a wrong
 number — details in [references/harness.md](references/harness.md):
 
 - **Run through `manage.py shell`, not pytest.** Test settings commonly enable
   profilers and coverage that scale with the work under test.
-- **Point `DATABASE_URL` at a dedicated throwaway database.** Never the dev one.
+- **Point `DATABASE_URL` at a dedicated throwaway database.** Never the dev one,
+  and never a name that does not start with `bench` — this step drops it.
 - **Seed once; switch git refs around the seeded database.** Reseeding per arm
   reintroduces data variance and destroys comparability.
+- **Verify each arm ran the ref you think, rather than assuming `git switch`
+  took effect.** It is immediate under a bind mount and asynchronous under a
+  push-based sync.
 - **Assert your preconditions and exit if they fail** — profiler off, `DEBUG`
   off. A benchmark that silently measures the wrong thing is the whole risk.
 - **Separate the wall-clock pass from the query-capture pass.** Capturing
@@ -129,6 +145,7 @@ Before quoting any delta:
    between arms, report *inconclusive* rather than a number.
 4. **Re-run at a second seed shape.** A delta stable across shapes is the
    single strongest evidence you can produce locally.
+5. **Each arm reports the ref it actually ran**, and the two differ.
 
 ## Step 6 — Report a floor, not an estimate
 
@@ -138,6 +155,10 @@ disproportionately. Say so, every time.
 
 State in the write-up:
 - The seed shape, next to the numbers.
+- The execution environment, and anything it contributes to the spread —
+  a benchmark sharing a pod with a live server is noisier than one in an
+  isolated container, and a shared database has contention a dedicated one
+  does not.
 - Which inputs were **guesses**, and that they are identical across arms (so
   they move the baseline, not the delta).
 - Any production signal the harness **failed** to reproduce, and what you ruled
@@ -160,6 +181,8 @@ Do not quote a single headline number without the shape it was measured on.
 | Factory defaults as "realistic" | Blank rich-text fields, one related row where production has dozens |
 | Tuning the seed against the query you changed | Circular. Calibrate only on unchanged observables |
 | Extrapolating local ms to production ms | Different hardware, cache state and network. Report a floor |
+| Measuring inside a pod running an auto-reloader | The reloader watches the source tree, so switching refs — or writing harness output there — re-imports the app while you are timing it |
+| Letting the destructive step inherit the ambient cluster context | A developer's current `kubectl` context is routinely a deployed environment; this harness runs `DROP DATABASE` |
 
 ## References
 
@@ -167,8 +190,10 @@ Do not quote a single headline number without the shape it was measured on.
 | --- | --- |
 | [evidence.md](references/evidence.md) | The batched question to ask, reading an OTel JSON export, extracting shape from sample responses, what no artifact can tell you |
 | [harness.md](references/harness.md) | Why `manage.py shell` over pytest, the throwaway-DB and ref-switching mechanics, measurement method, the env-var contract |
+| [environments.md](references/environments.md) | The backend contract, `docker compose` vs local-dev k8s, why a ref switch needs waiting for, fidelity differences to disclose, the `DROP DATABASE` guards |
 | [calibration.md](references/calibration.md) | The observables table, structural vs sizing realism, a worked falsification, auditing factory defaults |
 | [templates/](references/templates/) | `seed.py`, `bench.py`, `trace.py`, `run.sh` |
+| [backends/](references/backends/) | `compose.sh`, `k8s-tilt.sh` |
 
 ## Resources
 

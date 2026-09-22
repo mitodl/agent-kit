@@ -4,9 +4,10 @@ TEMPLATE - adapt to the app under test.
 Capture an in-process OTel trace of one endpoint against the seeded bench
 database, for per-query attribution. Run via:  manage.py shell < .bench/trace.py
 
-Emits .bench/out/trace-$BENCH_LABEL.json: every span with start/end in
+Prints one `TRACE_RESULT {json}` line: every span with start/end in
 nanoseconds plus the gap to the next query, so the same analysis used on the
-production trace applies.
+production trace applies. Stdout, not a file - the harness must not assume
+the app environment shares a filesystem with the host.
 
 NOTE: instrumentation is not free, and app telemetry is normally disabled
 without an OTLP endpoint - which is what makes bench.py's timings clean.
@@ -16,6 +17,7 @@ Absolute numbers here are NOT the benchmark numbers. This is for attribution
 
 import json
 import os
+import sys
 
 from django.conf import settings
 
@@ -29,9 +31,10 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 LABEL = os.environ.get("BENCH_LABEL", "unknown")
-IDS_PATH = os.environ.get("BENCH_IDS_PATH", "/src/.bench/ids.json")
 REPEATS = int(os.environ.get("BENCH_TRACE_REPEATS", "7"))
-OUT = f"/src/.bench/out/trace-{LABEL}.json"
+# Default deliberately outside the source tree: under an auto-reloading
+# dev server that watches it, writing there re-imports Django mid-run.
+DEFAULT_IDS_PATH = "/tmp/bench-ids.json"  # noqa: S108
 
 exporter = InMemorySpanExporter()
 provider = TracerProvider()
@@ -51,8 +54,22 @@ from rest_framework.test import APIClient  # noqa: E402
 # Force a reconnect so the instrumented connect() is the one used.
 connection.close()
 
-with open(IDS_PATH) as fh:  # noqa: PTH123
-    ids = json.load(fh)
+
+def _load_ids():
+    """
+    Results travel between harness steps over stdout/env, never through a
+    shared filesystem: not every execution backend has one. BENCH_IDS_JSON is
+    what run.sh passes; BENCH_IDS_PATH is the fallback for running a step by
+    hand.
+    """
+    raw = os.environ.get("BENCH_IDS_JSON")
+    if raw:
+        return json.loads(raw)
+    with open(os.environ.get("BENCH_IDS_PATH", DEFAULT_IDS_PATH)) as fh:  # noqa: PTH123
+        return json.load(fh)
+
+
+ids = _load_ids()
 
 client = APIClient()
 # client.force_authenticate(user=User.objects.get(pk=ids["user_id"]))
@@ -98,20 +115,17 @@ for _ in range(REPEATS):
         s["gap_ms"] = round((nxt - s["end"]) / 1e6, 2)
     runs.append({"wall_ms": round((root_end - db[0]["start"]) / 1e6, 1), "db": db})
 
-os.makedirs(os.path.dirname(OUT), exist_ok=True)  # noqa: PTH103, PTH120
-with open(OUT, "w") as fh:  # noqa: PTH123
-    json.dump(
-        {
-            "label": LABEL,
-            "repeats": REPEATS,
-            "profiler_active": any("zeal" in m for m in settings.MIDDLEWARE),
-            "response_bytes": len(response.content),
-            "runs": runs,
-        },
-        fh,
-        indent=1,
-    )
+result = {
+    "label": LABEL,
+    "repeats": REPEATS,
+    "profiler_active": any("zeal" in m for m in settings.MIDDLEWARE),
+    "response_bytes": len(response.content),
+    "runs": runs,
+}
 
+# Machine handoff on stdout; the human summary on stderr so it does not have to
+# be filtered back out of the payload.
+print("TRACE_RESULT " + json.dumps(result))  # noqa: T201
 print(  # noqa: T201
     "TRACE_SUMMARY "
     + json.dumps(
@@ -120,7 +134,7 @@ print(  # noqa: T201
             "repeats": REPEATS,
             "db_spans": len(runs[0]["db"]),
             "wall_ms_each": [r["wall_ms"] for r in runs],
-            "out": OUT,
         }
-    )
+    ),
+    file=sys.stderr,
 )

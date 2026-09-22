@@ -4,70 +4,140 @@
 # A/B an endpoint on the current git ref vs a baseline ref, against ONE seeded
 # throwaway database. Untracked; add .bench/ to .git/info/exclude.
 #
+# The execution environment lives behind .bench/backend.sh - copy one of
+# references/backends/{compose,k8s-tilt}.sh there. See environments.md.
+#
 # Usage:  .bench/run.sh [baseline-ref]
 #         BENCH_BLOB_BYTES=8192 .bench/run.sh    # re-run at another shape
 set -euo pipefail
 
 # App-specific settings overrides the seed needs - most commonly turning off
-# remote object storage, or the factories will try to upload images:
-#   BENCH_EXTRA_ENV='-e MYAPP_USE_S3=False'
+# remote object storage, or the factories will try to upload images. A
+# space-separated VAR=VAL list, identical across backends:
+#   BENCH_EXTRA_ENV='MYAPP_USE_S3=False'
 BASE_REF=${1:-main}
-SERVICE=${BENCH_SERVICE:-web}
 BENCH_DB=${BENCH_DB:-bench_db}
-DB_URL="postgres://postgres:postgres@db:5432/${BENCH_DB}"
 BRANCH=$(git branch --show-current)
 OUT_DIR=.bench/out
 mkdir -p "$OUT_DIR"
+
+# The scratch database is dropped and recreated below. Refuse any name that is
+# not obviously a scratch one, which also rules out every app database in a
+# shared cluster (mitlearn, mitxonline, ...).
+case "$BENCH_DB" in
+  bench*) ;;
+  *) echo "refusing: BENCH_DB='${BENCH_DB}' must start with 'bench'" >&2; exit 1 ;;
+esac
+
+if [ ! -f .bench/backend.sh ]; then
+  echo "missing .bench/backend.sh - copy a backend from the skill's references/backends/" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source .bench/backend.sh
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "working tree is dirty; commit or stash before benchmarking" >&2
   exit 1
 fi
 
-dc_run() {
-  docker compose run --rm --no-deps \
-    -e DATABASE_URL="$DB_URL" \
-    -e DEBUG=False \
-    -e BENCH_IDS_PATH=/src/.bench/ids.json \
-    ${BENCH_EXTRA_ENV:-} \
-    ${BENCH_BLOB_BYTES:+-e BENCH_BLOB_BYTES="$BENCH_BLOB_BYTES"} \
-    "$@" "$SERVICE"
+# Backends may define bench_wait_settled to block until the app environment has
+# finished reacting to a source change. Bind-mount backends need nothing.
+if ! declare -F bench_wait_settled >/dev/null; then
+  bench_wait_settled() { :; }
+fi
+
+app_exec() {
+  bench_exec \
+    DATABASE_URL="$BENCH_DB_URL" \
+    DEBUG=False \
+    ${BENCH_BLOB_BYTES:+BENCH_BLOB_BYTES="$BENCH_BLOB_BYTES"} \
+    "$@"
+}
+
+# Prove the app environment is actually running the ref we just switched to,
+# rather than trusting that a `git switch` took effect. Instant under a bind
+# mount; blocks through Tilt's push-sync (and any `uv sync` it triggers) under
+# Kubernetes. Compares files the two refs genuinely differ on, so it cannot
+# pass by accident.
+bench_sync_ref() {
+  local want=$1 deadline=$((SECONDS + ${BENCH_SYNC_TIMEOUT:-300})) f
+  local -a probes=()
+  while IFS= read -r f; do
+    if [ -f "$f" ]; then probes+=("$f"); fi
+  done < <(git diff --name-only "$BASE_REF" "$BRANCH" -- '*.py' | head -3)
+
+  if [ ${#probes[@]} -eq 0 ]; then
+    echo "!! no .py file differs between ${BASE_REF} and ${BRANCH}; cannot verify the arm ran ${want}" >&2
+    return 0
+  fi
+  for f in "${probes[@]}"; do
+    until bench_exec -- cat "$f" 2>/dev/null | cmp -s - "$f"; do
+      if [ "$SECONDS" -ge "$deadline" ]; then
+        echo "timed out waiting for ${f} to reach the app environment at ${want}" >&2
+        exit 1
+      fi
+      sleep 2
+    done
+  done
+  bench_wait_settled
 }
 
 if [ "${BENCH_SKIP_SEED:-0}" != "1" ]; then
+  echo "==> target: ${BENCH_TARGET_DESC}"
   echo "==> recreating ${BENCH_DB}"
-  docker compose exec -T db psql -U postgres -q \
-    -c "DROP DATABASE IF EXISTS ${BENCH_DB}" \
-    -c "CREATE DATABASE ${BENCH_DB}" >/dev/null
+  bench_psql "DROP DATABASE IF EXISTS ${BENCH_DB}" "CREATE DATABASE ${BENCH_DB}" >/dev/null
 
   echo "==> migrating"
-  dc_run python manage.py migrate --no-input >/dev/null
+  app_exec -- python manage.py migrate --no-input >/dev/null
 
   echo "==> seeding"
-  dc_run python manage.py shell <.bench/seed.py | tee "$OUT_DIR/seed.txt" | grep SEED_SHAPE
+  # SEED_SHAPE is both the human record of the shape and the machine handoff to
+  # the bench/trace steps - it is json.dumps(ids). Results travel on stdout, not
+  # through a shared filesystem, because not every backend has one.
+  app_exec -- python manage.py shell <.bench/seed.py |
+    tee "$OUT_DIR/seed.txt" |
+    sed -n 's/^SEED_SHAPE //p' >"$OUT_DIR/ids.json"
+  cat "$OUT_DIR/ids.json"
 fi
+
+if [ ! -s "$OUT_DIR/ids.json" ]; then
+  echo "no seeded ids at $OUT_DIR/ids.json; re-run without BENCH_SKIP_SEED=1" >&2
+  exit 1
+fi
+IDS_JSON=$(cat "$OUT_DIR/ids.json")
 
 run_arm() {
   local label=$1
-  echo "==> benchmarking ${label}"
-  dc_run -e BENCH_LABEL="$label" python manage.py shell <.bench/bench.py |
-    grep BENCH_RESULT | sed 's/^BENCH_RESULT //' >"$OUT_DIR/${label}.json"
-  dc_run -e BENCH_LABEL="$label" python manage.py shell <.bench/trace.py |
-    grep TRACE_SUMMARY >/dev/null
+  echo "==> benchmarking ${label} ($(git rev-parse --short HEAD))"
+  git rev-parse --short HEAD >"$OUT_DIR/${label}.ref"
+  app_exec BENCH_IDS_JSON="$IDS_JSON" BENCH_LABEL="$label" \
+    -- python manage.py shell <.bench/bench.py |
+    sed -n 's/^BENCH_RESULT //p' >"$OUT_DIR/${label}.json"
+  app_exec BENCH_IDS_JSON="$IDS_JSON" BENCH_LABEL="$label" \
+    -- python manage.py shell <.bench/trace.py |
+    sed -n 's/^TRACE_RESULT //p' >"$OUT_DIR/trace-${label}.json"
   cat "$OUT_DIR/${label}.json"
 }
 
 # Seed once, switch refs around it: that is what makes this an A/B rather than
 # two unrelated measurements.
+bench_sync_ref "$BRANCH"
 run_arm "branch"
 
 echo "==> switching to ${BASE_REF}"
 git switch --quiet "$BASE_REF"
 trap 'git switch --quiet "$BRANCH"' EXIT
+bench_sync_ref "$BASE_REF"
 run_arm "base"
 git switch --quiet "$BRANCH"
 trap - EXIT
+bench_sync_ref "$BRANCH"
 echo "==> back on ${BRANCH}"
+
+echo
+echo "measured against: ${BENCH_TARGET_DESC}"
+echo "arms: base=$(cat "$OUT_DIR/base.ref") branch=$(cat "$OUT_DIR/branch.ref")"
 
 echo
 echo "=== wall clock ==="
