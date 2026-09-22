@@ -621,3 +621,54 @@ def test_a_broken_describer_is_distinguishable_from_a_withheld_message(capsys):
     payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
     assert payload["error_undescribable"] is True
     assert "error_withheld" not in payload
+
+
+def test_a_custom_validator_s_sentence_is_not_logged_verbatim(capsys):
+    # Copilot on #386: include_input=False drops the structured input entry but
+    # does not sanitise `msg`, and a PydanticCustomError's message is written
+    # by the validator, which can build it out of the value it just rejected --
+    # the same vector as its `type`, one field over. Gated on the same
+    # allowlist, so a custom code yields the placeholder and not the sentence.
+    from typing import Annotated
+
+    import pydantic
+    from pydantic import AfterValidator
+    from pydantic_core import PydanticCustomError
+
+    def reject_loudly(value: str) -> str:
+        raise PydanticCustomError("custom_code", "rejected " + value)
+
+    class Body(pydantic.BaseModel):
+        field: Annotated[str, AfterValidator(reject_loudly)]
+
+    async def call_next(_ctx):
+        Body(field="SENSITIVE-ROW-VALUE")
+
+    with pytest.raises(pydantic.ValidationError):
+        _run(ObservabilityMiddleware(), _Context("memory_store"), call_next)
+    written = capsys.readouterr().err
+    assert "SENSITIVE-ROW-VALUE" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    assert middleware_module._CUSTOM_VALIDATION_CODE in payload["error"]
+    assert payload["error_types"] == [middleware_module._CUSTOM_VALIDATION_CODE]
+
+
+def test_a_builtin_message_still_reads_as_a_sentence(capsys):
+    # The gate must not flatten every body error to a code, or this arm stops
+    # being the diagnosis it exists to be.
+    import pydantic
+
+    class Finding(pydantic.BaseModel):
+        start: int
+
+    async def call_next(_ctx):
+        Finding(start="nope")
+
+    with pytest.raises(pydantic.ValidationError):
+        _run(ObservabilityMiddleware(), _Context("memory_store"), call_next)
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert "start: Input should be a valid integer" in payload["error"]

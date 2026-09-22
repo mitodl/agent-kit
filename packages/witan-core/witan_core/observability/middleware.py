@@ -77,7 +77,7 @@ so its message is pydantic's, caller input and all.
 def _builtin_validation_codes() -> frozenset[str] | None:
     """pydantic's own ``ErrorType`` literals, or ``None`` if unavailable.
 
-    The allowlist behind :func:`_validation_summary`'s ``error_types``. A
+    The allowlist behind :func:`_code_summary`'s ``error_types``. A
     validator is free to raise ``PydanticCustomError`` with a ``type`` it
     builds at runtime, which can be built out of the value it just rejected --
     so a code that is not one of these is not safe to log.
@@ -230,23 +230,41 @@ def _code_summary(pydantic_exc: Any) -> dict[str, Any]:
     return summary
 
 
+def _detail_text(detail: Any) -> str:
+    """One failure as ``<field path>: <reason>``.
+
+    ``include_input=False`` drops the structured ``input`` entry but does NOT
+    sanitise ``msg``: a ``PydanticCustomError``'s message is written by the
+    validator and can be built out of the value it just rejected, exactly like
+    its ``type``. So the sentence is only used when the code is one of
+    pydantic's own; a custom code yields the code placeholder instead, which is
+    the same gate :func:`_code_summary` applies.
+
+    RESIDUAL, stated rather than papered over: ``loc`` is not gated, and for a
+    builtin ``extra_forbidden`` (or a dict-key failure) the path IS the
+    offending key. That cannot arise for the models this arm sees, which are
+    constructed with explicit keyword arguments and declare no ``extra``
+    policy, but it is a property of those models rather than of this function.
+    """
+    path = ".".join(str(part) for part in detail.get("loc", ())) or "<root>"
+    code = str(detail.get("type", ""))
+    if _BUILTIN_VALIDATION_CODES is None or code not in _BUILTIN_VALIDATION_CODES:
+        return f"{path}: [{_CUSTOM_VALIDATION_CODE}]"
+    return f"{path}: {detail.get('msg', '')}"
+
+
 def _without_input(pydantic_exc: Any) -> str:
-    """A pydantic error rendered as text, with every input value dropped.
+    """A pydantic error rendered as text, with the input values dropped.
 
     ``str(exc)`` would embed ``input_value=`` for each failure. This keeps what
     diagnoses the bug -- the model, the field path and pydantic's own sentence
-    -- and nothing that was being validated. The field path is safe HERE, where
-    the model is one of ours and its field names are in our source; it is not
-    safe on the argument arm, which is why that one gets codes only.
+    -- and not what was being validated. See :func:`_detail_text` for which
+    parts of that are gated and the one that is not.
     """
     details = pydantic_exc.errors(
         include_url=False, include_context=False, include_input=False
     )
-    rendered = "; ".join(
-        f"{'.'.join(str(part) for part in detail.get('loc', ())) or '<root>'}: "
-        f"{detail.get('msg', '')}"
-        for detail in details
-    )
+    rendered = "; ".join(_detail_text(detail) for detail in details)
     return f"{len(details)} validation error(s) for {pydantic_exc.title}: {rendered}"
 
 
