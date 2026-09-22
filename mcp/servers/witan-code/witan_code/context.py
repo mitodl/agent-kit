@@ -183,12 +183,11 @@ _BRIDGE_PROBE_TTL = 300.0
 
 
 def _bridge_probe_path(cfg: cfg_module.Config) -> Path:
-    """Where the cached bridge verdict lives — beside the session lock, in TMPDIR.
+    """Where the cached bridge verdict lives, in TMPDIR.
 
     Keyed by a hash of the code dir rather than the path itself: two code dirs
     must not collide on one cache entry, and a long path must not blow past a
-    filename limit — the same reasoning, and the same digest, as
-    :func:`_lock_path`.
+    filename limit. The same reasoning as :func:`_state_digest`.
     """
     tmp = Path(os.environ.get("TMPDIR", "/tmp"))
     digest = hashlib.sha256(str(cfg.code_dir).encode()).hexdigest()[:16]

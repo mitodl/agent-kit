@@ -77,6 +77,8 @@ def test_session_init_queues_the_project_and_hands_the_lock_to_a_drainer(
     assert argv[1:5] == ["-m", "witan_code", "_drain-pending", str(_repo)]
     assert kwargs["pass_fds"] == (int(argv[5]),)
     assert hooks._take_pending(_repo) == [_repo]
+    # Busy from the moment the lock is taken, before the drainer is even up.
+    assert context.indexing_in_progress() is True
 
 
 def test_session_init_in_a_subdirectory_shares_the_toplevel_s_lock(
@@ -108,6 +110,7 @@ def test_session_init_survives_a_failed_spawn(_repo, monkeypatch):
     assert fd is not None  # released for the next hook
     os.close(fd)
     assert hooks._has_pending(_repo)  # and the refresh is still queued
+    assert context.indexing_in_progress() is False
 
 
 # ── reindex_hook outside a repo ───────────────────────────────────────────────

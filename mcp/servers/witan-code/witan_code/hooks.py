@@ -38,6 +38,8 @@ from .context import _busy_path, _lock_path, _project_dir, _state_path
 
 logger = get_logger("witan.code.hooks")
 
+_LOG_MAX_BYTES = 1024 * 1024
+
 
 def session_init() -> None:
     """SessionStart: seed/refresh the whole repo's code graph in the background.
@@ -146,8 +148,17 @@ def _submit(checkout: Path, target: Path) -> None:
         return
     if lock_fd is None:
         return
+    # Marked busy here rather than only once the drainer is up, so a prompt
+    # that fires right after SessionStart already says indexing is under way.
+    busy = _busy_path(checkout)
+    log_path = _state_path(checkout, "log")
     try:
-        with _state_path(checkout, "log").open("w") as log:
+        busy.touch()
+        # Appended, so a failure is still there after the next edit spawns a
+        # new drainer; restarted once it grows past the cap.
+        if log_path.exists() and log_path.stat().st_size > _LOG_MAX_BYTES:
+            log_path.unlink()
+        with log_path.open("a") as log:
             popen_detached(
                 [
                     sys.executable,
@@ -163,7 +174,8 @@ def _submit(checkout: Path, target: Path) -> None:
                 stderr=subprocess.STDOUT,
             )
     except OSError:
-        pass  # the queue survives; the next hook to find the lock free drains it
+        # The queue survives; the next hook to find the lock free drains it.
+        busy.unlink(missing_ok=True)
     finally:
         # The child holds its own copy of the descriptor, and a flock belongs
         # to the open file, not the descriptor, so closing ours releases
