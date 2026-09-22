@@ -60,7 +60,17 @@ export interface TaskRow extends TaskCore {
 	blocked_by: string[] | null;
 	created_at: string;
 	closed_at: string | null;
+	/** The CURRENT lease, which moves on every renewal. Not a work start. */
 	claimed_at: string | null;
+	/**
+	 * When the task was first claimed, ever. Never cleared.
+	 *
+	 * Null on a task never claimed, and on any task last claimed before the
+	 * field shipped — there is no backfill, so the timeline (spec §3.6) draws
+	 * the work-time segment only where this exists rather than guessing it
+	 * from `claimed_at`.
+	 */
+	first_claimed_at: string | null;
 }
 
 /** A `task_search` hit. Narrower, and it carries `description` instead. */
@@ -340,6 +350,7 @@ const TASK_ROW: Record<string, Check> = {
 	created_at: str,
 	closed_at: nullable(str),
 	claimed_at: nullable(str),
+	first_claimed_at: nullable(str),
 };
 
 const WORKFLOW_PROJECT_CORE: Record<string, Check> = {

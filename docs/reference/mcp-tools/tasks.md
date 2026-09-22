@@ -71,11 +71,18 @@ across all repos — 50 of them unless ``limit`` says otherwise.
 An ``in_progress`` row carries ``lease_expired`` (see ``task_ready``); rows
 in any other status do not.
 
-``closed_at`` is not yet an invariant of ``status``: ``task_release``
-leaves it untouched, and reopening a task through ``task_update`` keeps
-the old value. So a closed row can carry no ``closed_at``, and an open one
-can carry a stale one. Read it as "when this last closed", not as "this is
-closed".
+``closed_at`` is an invariant of ``status``: it is set on every row whose
+status is ``closed`` and null on every row whose status is not, whichever
+surface made the transition. Rows written before this held — a release to
+``closed``, or a reopen through ``task_update`` — are corrected the next
+time anything writes them, so a row untouched since then can still carry
+the old spelling.
+
+``first_claimed_at`` is when the task was FIRST claimed, and is never
+cleared. Unlike ``claimed_at``, which is the current lease and moves on
+every renewal, it survives a release, a close and a reopen. It is null on
+a task that has never been claimed, and on any task last claimed before
+the field existed — there is no backfill.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -142,7 +149,7 @@ lease and refuses if someone else holds it); to close a task prefer
 | `title` | str? | `null` | New short label for the work. |
 | `description` | str? | `null` | New full description. Replaces the existing text; it is not appended to. |
 | `type` | `bug` \| `feature` \| `task` \| `chore` \| `epic`? | `null` | ``bug`` \| ``feature`` \| ``task`` \| ``chore`` \| ``epic``. |
-| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``open`` \| ``in_progress`` \| ``blocked`` \| ``closed``. Two values have<br>side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease, and<br>``closed`` stamps ``closed_at`` **and unblocks this task's dependents**,<br>exactly as ``task_close`` does. Prefer ``task_claim`` / ``task_close``<br>for those two transitions — they carry the ownership checks this does<br>not.<br>Setting ``in_progress`` with no ``assignee`` on a task that has none<br>recorded defaults it via ``_claim_holder`` — the same identity<br>``task_claim`` would use — rather than leaving<br>``(in_progress, claimed_at set, assignee null)`` reachable: that<br>combination is a live lease with nobody named on it, which<br>``task_claim`` correctly refuses and correctly cannot say who holds.<br>A task that already has an assignee keeps it; this only fills a gap,<br>never reassigns. |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed`? | `null` | ``open`` \| ``in_progress`` \| ``blocked`` \| ``closed``. Two values have<br>side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease and,<br>on the first one ever, ``first_claimed_at``; ``closed`` **unblocks this<br>task's dependents**, exactly as ``task_close`` does. Prefer<br>``task_claim`` / ``task_close`` for those two transitions — they carry<br>the ownership checks this does not.<br>``closed_at`` follows the status whatever value you pass: set on<br>arrival at ``closed``, cleared on any move away from it, so reopening<br>a task here does not leave it carrying its old close time.<br>Setting ``in_progress`` with no ``assignee`` on a task that has none<br>recorded defaults it via ``_claim_holder`` — the same identity<br>``task_claim`` would use — rather than leaving<br>``(in_progress, claimed_at set, assignee null)`` reachable: that<br>combination is a live lease with nobody named on it, which<br>``task_claim`` correctly refuses and correctly cannot say who holds.<br>A task that already has an assignee keeps it; this only fills a gap,<br>never reassigns. |
 | `priority` | `p0` \| `p1` \| `p2` \| `p3`? | `null` | ``p0`` (highest) … ``p3``. Drives ``task_ready`` ordering. |
 | `repo` | str? | `null` | Canonical repo URI to (re)assign this task to. Pass an explicit value to<br>correct tasks that were created without proper repo context. |
 | `assignee` | str? | `null` | Holder identity to reassign the task to. Prefer ``task_claim`` to take a<br>task for yourself — it checks nobody else holds it, which this does not. |
@@ -210,7 +217,7 @@ if the task is held by a different ``assignee`` unless ``force`` is set.
 | `slug` | str | **required** | The ``tk-`` slug to release. |
 | `assignee` | str? | `null` | Holder identity releasing the task. Defaults to the calling user, same<br>resolution as ``task_claim``'s ``assignee``. The held-by check compares<br>*identities*, ignoring the ``#<session>`` qualifier, so you can release a<br>claim one of your own other sessions took; another person's still needs<br>``force``. |
 | `session_id` | str? | `null` | The calling agent session's id, same resolution and same reason as<br>``task_claim``'s. Only affects the holder string this call is compared<br>*as*; since the comparison is identity-level, omitting it against a<br>deployed server is harmless here in a way it is not for ``task_claim``. |
-| `status` | `open` \| `in_progress` \| `blocked` \| `closed` | `'open'` | Status to return the task to (default ``open``). |
+| `status` | `open` \| `in_progress` \| `blocked` \| `closed` | `'open'` | Status to return the task to (default ``open``). Passing ``closed``<br>stamps ``closed_at`` like any other transition to closed, which it did<br>not before: this surface used to write only status, assignee and<br>``claimed_at``, leaving a closed task with no close time. |
 | `force` | bool | `False` | Release even if held by a different assignee. |
 
 ## `task_close`

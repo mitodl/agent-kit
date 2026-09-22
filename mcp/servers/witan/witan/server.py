@@ -6087,6 +6087,51 @@ def _update_task(
         for field, factory in default_if_missing.items():
             if field not in changes and not current.get(field):
                 changes = {**changes, field: factory()}
+    # ★ `closed_at` AND `first_claimed_at` ARE DERIVED FROM THE MERGED STATUS,
+    # not merged field-by-field like everything else below. Both are invariants
+    # of status, and deriving them here is what makes them hold for every
+    # writer: `task_close`, `task_update`, `task_release` and `task_claim` all
+    # funnel through this function, and three of them used to get it wrong.
+    #
+    # `closed_at` was merged as an ordinary field before this, which made it
+    # "when this last closed" rather than "this is closed". `task_release`
+    # takes a status that may be `closed` and wrote only status/assignee/
+    # claimed_at, producing a closed row with NO close time; a reopen through
+    # `task_update` kept the old value, producing an OPEN row carrying one. A
+    # timeline cannot draw a bar from either.
+    merged_status = changes.get("status", current.get("status"))
+    merged_claimed_at = changes.get("claimed_at", current.get("claimed_at"))
+
+    if merged_status != "closed":
+        merged_closed_at = None
+    elif changes.get("closed_at"):
+        # `task_close` naming its own timestamp.
+        merged_closed_at = changes["closed_at"]
+    elif current.get("status") == "closed":
+        # ALREADY closed, so an unrelated edit must not re-stamp it.
+        merged_closed_at = current.get("closed_at")
+    else:
+        # ARRIVING at closed. The current value is not carried over even when
+        # there is one: a row that was not closed but carries a `closed_at` is
+        # precisely what this rule exists to correct, and keeping it would date
+        # the close before the work.
+        merged_closed_at = now_iso()
+
+    # ★ A LEASE THIS WRITE IS ACTUALLY TAKING, not merely a row that is
+    # in_progress. Two writes reach here with `in_progress` and no claim in
+    # them: `task_release(status="in_progress")`, which explicitly nulls
+    # `claimed_at`, and any unrelated edit to an in_progress row, which merely
+    # copies the lease already there. Stamping on either would make
+    # `first_claimed_at` mean "noticed while in progress", and on a migrated
+    # row it would silently backfill it from `claimed_at` — the substitution
+    # this field exists to avoid.
+    taking_lease = changes.get("claimed_at") is not None
+    merged_first_claimed_at = current.get("first_claimed_at") or (
+        changes["claimed_at"]
+        if taking_lease and merged_status == "in_progress"
+        else None
+    )
+
     merged = {
         "slug": slug,
         "title": changes.get("title", current.get("title")),
@@ -6103,8 +6148,19 @@ def _update_task(
         "resolution": changes.get("resolution", current.get("resolution")),
         "symbol_refs": changes.get("symbol_refs", current.get("symbol_refs")),
         "tags": changes.get("tags", current.get("tags")),
-        "closed_at": changes.get("closed_at", current.get("closed_at")),
-        "claimed_at": changes.get("claimed_at", current.get("claimed_at")),
+        # Stamped on arrival at `closed`, cleared on leaving it. Derived
+        # above, because which of the three sources wins depends on the
+        # CURRENT status as well as the merged one.
+        "closed_at": merged_closed_at,
+        "claimed_at": merged_claimed_at,
+        # Set once, on the first claim ever, and NEVER cleared: not by a
+        # release, not by a close, not by a reopen. `claimed_at` cannot serve
+        # this purpose — `task_claim` overwrites it on every lease renewal and
+        # `task_release` nulls it, so any task worked longer than one lease has
+        # already lost its first claim. It takes the instant of the lease this
+        # same write is setting, so a first claim records ONE time rather than
+        # two a few milliseconds apart.
+        "first_claimed_at": merged_first_claimed_at,
         "updated_at": now_iso(),
     }
     update: _Step = ("mutations.gq", "update_task", merged)
@@ -6254,7 +6310,11 @@ async def task_create(
                 "tags": tags,
                 "created_at": now,
                 "updated_at": now,
+                # Both null even when `status` is `in_progress`: a task created
+                # in that state has not been claimed, and `claimed_at` has said
+                # so since before this field existed.
                 "claimed_at": None,
+                "first_claimed_at": None,
             },
         )
     ]
@@ -6499,11 +6559,18 @@ def task_list(
     An ``in_progress`` row carries ``lease_expired`` (see ``task_ready``); rows
     in any other status do not.
 
-    ``closed_at`` is not yet an invariant of ``status``: ``task_release``
-    leaves it untouched, and reopening a task through ``task_update`` keeps
-    the old value. So a closed row can carry no ``closed_at``, and an open one
-    can carry a stale one. Read it as "when this last closed", not as "this is
-    closed".
+    ``closed_at`` is an invariant of ``status``: it is set on every row whose
+    status is ``closed`` and null on every row whose status is not, whichever
+    surface made the transition. Rows written before this held — a release to
+    ``closed``, or a reopen through ``task_update`` — are corrected the next
+    time anything writes them, so a row untouched since then can still carry
+    the old spelling.
+
+    ``first_claimed_at`` is when the task was FIRST claimed, and is never
+    cleared. Unlike ``claimed_at``, which is the current lease and moves on
+    every renewal, it survives a release, a close and a reopen. It is null on
+    a task that has never been claimed, and on any task last claimed before
+    the field existed — there is no backfill.
 
     Parameters
     ----------
@@ -6715,11 +6782,15 @@ def task_update(
         ``bug`` | ``feature`` | ``task`` | ``chore`` | ``epic``.
     status:
         ``open`` | ``in_progress`` | ``blocked`` | ``closed``. Two values have
-        side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease, and
-        ``closed`` stamps ``closed_at`` **and unblocks this task's dependents**,
-        exactly as ``task_close`` does. Prefer ``task_claim`` / ``task_close``
-        for those two transitions — they carry the ownership checks this does
-        not.
+        side effects: ``in_progress`` stamps a fresh ``claimed_at`` lease and,
+        on the first one ever, ``first_claimed_at``; ``closed`` **unblocks this
+        task's dependents**, exactly as ``task_close`` does. Prefer
+        ``task_claim`` / ``task_close`` for those two transitions — they carry
+        the ownership checks this does not.
+
+        ``closed_at`` follows the status whatever value you pass: set on
+        arrival at ``closed``, cleared on any move away from it, so reopening
+        a task here does not leave it carrying its old close time.
 
         Setting ``in_progress`` with no ``assignee`` on a task that has none
         recorded defaults it via ``_claim_holder`` — the same identity
@@ -6819,9 +6890,11 @@ def task_update(
     default_if_missing: dict[str, Callable[[], object]] = {}
     if status is not None:
         changes["status"] = status
-        if status == "closed":
-            changes["closed_at"] = now_iso()
-        elif status == "in_progress":
+        # `closed_at` is NOT stamped here, and `first_claimed_at` is not either:
+        # both are derived from the merged status inside `_update_task`, so they
+        # hold for `task_release` and `task_close` as well as for this surface.
+        # Stamping a second time here would just be a second opinion.
+        if status == "in_progress":
             # Stamp a lease here too, not just in task_claim, so "started" has one
             # representation (see readiness.status_pickable's updated_at fallback
             # for stores/rows written before this existed).
@@ -7259,9 +7332,15 @@ def task_release(
         *as*; since the comparison is identity-level, omitting it against a
         deployed server is harmless here in a way it is not for ``task_claim``.
     status:
-        Status to return the task to (default ``open``).
+        Status to return the task to (default ``open``). Passing ``closed``
+        stamps ``closed_at`` like any other transition to closed, which it did
+        not before: this surface used to write only status, assignee and
+        ``claimed_at``, leaving a closed task with no close time.
     force:
         Release even if held by a different assignee.
+
+    Releasing clears ``claimed_at`` (the lease) but never ``first_claimed_at``
+    — the point of that field is to survive exactly this.
     """
     holder = _claim_holder(assignee, session_id)
     rows = client.read("read.gq", "get_task", {"slug": slug})

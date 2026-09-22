@@ -1011,7 +1011,8 @@ query get_task($slug: String) {
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.resolution,
         $t.symbol_refs, $t.tags, $t.author,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
 }
 
@@ -1023,7 +1024,8 @@ query list_tasks_by_repo($repo: String) {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
     order { $t.updated_at desc }
 }
@@ -1036,7 +1038,8 @@ query list_tasks_by_repo_status($repo: String, $status: String) {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
     order { $t.updated_at desc }
 }
@@ -1049,7 +1052,8 @@ query list_tasks_by_status($status: String) {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
     order { $t.updated_at desc }
     limit 50
@@ -1068,7 +1072,8 @@ query list_tasks_by_status_uncapped($status: String) {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
     order { $t.updated_at desc }
     limit 10000
@@ -1082,7 +1087,8 @@ query list_all_tasks() {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
     order { $t.updated_at desc }
     limit 50
@@ -1096,7 +1102,8 @@ query list_unscoped_tasks() {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
     order { $t.updated_at desc }
     limit 10000
@@ -1114,7 +1121,8 @@ query list_all_tasks_full() {
         $t.slug, $t.title, $t.description, $t.type, $t.status, $t.priority,
         $t.repo, $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.resolution,
-        $t.symbol_refs, $t.tags, $t.closed_at, $t.claimed_at
+        $t.symbol_refs, $t.tags, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
     limit 10000
 }
@@ -1127,7 +1135,8 @@ query list_tasks_by_project($project_slug: String) {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
     order { $t.updated_at desc }
 }
@@ -1140,7 +1149,8 @@ query list_tasks_by_parent($parent_slug: String) {
         $t.slug, $t.title, $t.repo, $t.type, $t.status, $t.priority,
         $t.project_slug, $t.parent_slug, $t.blocked_by,
         $t.assignee, $t.external_uri, $t.tags,
-        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at
+        $t.created_at, $t.updated_at, $t.closed_at, $t.claimed_at,
+        $t.first_claimed_at
     }
     order { $t.priority, $t.updated_at desc }
 }
