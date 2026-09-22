@@ -92,6 +92,47 @@ export function repoLabel(repo: string | null | undefined): string {
 }
 
 /**
+ * Hosts whose org/repo path is case-insensitive, so folding it cannot merge
+ * two distinct repos. `witan_core.repo_key._CASE_INSENSITIVE_PATH_HOSTS`.
+ */
+const CASE_INSENSITIVE_PATH_HOSTS = new Set(["github.com", "gitlab.com"]);
+
+/**
+ * A git remote as the canonical repo key the server joins on.
+ *
+ * ★ A COPY OF `witan_core.repo_key.normalise`, AND PINNED TO IT. The tools
+ * canonicalize their `repo` argument, so a board scoped to
+ * `git@github.com:Org/Repo.git` reads a correctly scoped Ready column from the
+ * server while every other column, narrowed here, compares the raw string and
+ * comes out empty. Canonicalizing the route once makes both sides answer the
+ * same question. `fixtures/repo-keys.json` is recorded from the Python
+ * function by `just ui-fixtures` and `format.test.ts` holds this to it, so a
+ * change to the rule there fails CI until this follows.
+ *
+ * Both patterns are anchored because Python's `re.match` is, and the SSH one
+ * is tried first because Python tries it first: an HTTPS URL with userinfo
+ * (`https://token@host/org/repo`) matches it, which is harmless only because
+ * the result is the same.
+ */
+export function canonicalRepo(url: string): string {
+	const stripped = url
+		.trim()
+		.replace(/\/+$/, "")
+		.replace(/\.git$/, "");
+	const match =
+		/^(?:ssh:\/\/)?[^@]+@([^:/]+)[:/](.+)/.exec(stripped) ??
+		/^https?:\/\/(?:[^@/]+@)?([^/]+)\/(.+)/.exec(stripped);
+	if (!match) {
+		return stripped;
+	}
+	const host = (match[1] ?? "").toLowerCase();
+	const path = match[2] ?? "";
+	return `https://${host}/${
+		CASE_INSENSITIVE_PATH_HOSTS.has(host) ? path.toLowerCase() : path
+	}`;
+}
+
+/**
  * The path a forge puts between a repo URL and a branch name.
  *
  * ★ A TABLE, NOT A DEFAULT. `/tree/` is GitHub's shape, and witan canonicalizes

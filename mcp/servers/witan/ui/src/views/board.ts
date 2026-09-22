@@ -63,9 +63,8 @@ export function inScope(task: TaskRow, route: Route): boolean {
 		return task.project_slug === route.project;
 	}
 	if (route.repo) {
-		// Compared as written, where the server canonicalizes its `repo`
-		// argument first. The repo filter only offers canonical URIs, so only a
-		// hand-edited fragment can tell the two apart.
+		// Both sides are canonical: `parseRoute` canonicalizes the route, and
+		// the server stores canonical keys.
 		return task.repo === route.repo || task.repo === null;
 	}
 	return true;

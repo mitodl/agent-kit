@@ -48,6 +48,16 @@ describe("parseRoute", () => {
 		expect(route.slug).toBe("tk-y");
 	});
 
+	it("canonicalizes the repo, as the tools will", () => {
+		// Otherwise Ready (scoped by the server, which canonicalizes) and the
+		// columns narrowed in the browser would answer different questions.
+		const route = parseRoute(
+			"#board?repo=git%40github.com%3AMITODL%2Fagent-kit.git",
+		);
+
+		expect(route.repo).toBe("https://github.com/mitodl/agent-kit");
+	});
+
 	it("treats an empty filter value as absent", () => {
 		expect(parseRoute("#projects?project=&slug=").project).toBeNull();
 		expect(parseRoute("#projects?project=&slug=").slug).toBeNull();

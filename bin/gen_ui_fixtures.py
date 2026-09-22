@@ -404,7 +404,52 @@ def _generate() -> dict[str, str]:
         )
         for stale in ("CLAUDE_SESSION_ID", "WITAN_REMOTE_URL", "WITAN_TARGET"):
             os.environ.pop(stale, None)
-        return asyncio.run(_collect(store))
+        written = asyncio.run(_collect(store))
+    written["repo-keys.json"] = _repo_keys()
+    return written
+
+
+# Remotes in every shape `witan_core.repo_key.normalise` handles, including the
+# ones whose handling is not obvious (userinfo, a slash after `.git`, a host
+# whose path keeps its case). The OUTPUTS are recorded from the live function,
+# so this list only has to cover the cases; it cannot drift from the rule.
+_REPO_KEY_INPUTS = (
+    "git@github.com:mitodl/ol-django.git",
+    "https://github.com/mitodl/ol-django",
+    "https://github.com/mitodl/ol-django.git",
+    "git@gitlab.com:grp/sub/repo.git",
+    "https://x-token@github.com/mitodl/repo.git",
+    "ssh://git@github.com/mitodl/repo.git",
+    "https://github.com/mitodl/repo/",
+    "https://github.com/mitodl/repo.git/",
+    "git@github.com:mitodl/repo.git/",
+    "some-bare-string",
+    "https://github.com/MITODL/OL-Django",
+    "https://GitHub.com/mitodl/ol-django",
+    "git@github.com:MITODL/OL-Django.git",
+    "git@gitlab.com:Grp/Sub/Repo.git",
+    "https://Git.example.com/Org/Repo",
+    "http://github.com/mitodl/repo",
+    "  https://github.com/mitodl/repo  ",
+)
+
+
+def _repo_keys() -> str:
+    """``normalise`` over ``_REPO_KEY_INPUTS``, for the UI's copy to match.
+
+    The UI canonicalizes a route's repo in the browser (``canonicalRepo`` in
+    ``ui/src/format.ts``) so its columns compare the same key the tools scope
+    by. That is a second copy of a rule its own module calls a golden
+    contract, so the copy is held to the real function here rather than to a
+    table someone has to remember to update.
+    """
+    from witan_core import repo_key
+
+    return json.dumps(
+        {url: repo_key.normalise(url) for url in _REPO_KEY_INPUTS},
+        indent=2,
+        sort_keys=True,
+    )
 
 
 def main() -> int:
