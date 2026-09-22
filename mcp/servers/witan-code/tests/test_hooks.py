@@ -6,7 +6,10 @@ acquire/release, stdin-JSON parsing, path resolution), not the real indexer
 or a real detached child.
 """
 
+import os
 import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,9 +47,12 @@ def test_session_init_noop_outside_git_repo(tmp_path, monkeypatch):
 
 def test_session_init_spawns_detached_child_and_holds_lock(_repo, monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        hooks, "popen_detached", lambda argv, **kw: calls.append((argv, kw))
-    )
+
+    def _spawn(argv, **kw):
+        calls.append((argv, kw))
+        return SimpleNamespace(pid=os.getpid())
+
+    monkeypatch.setattr(hooks, "popen_detached", _spawn)
 
     hooks.session_init()
 
@@ -55,8 +61,6 @@ def test_session_init_spawns_detached_child_and_holds_lock(_repo, monkeypatch):
     assert argv[1:4] == ["-m", "witan_code", "_index-and-unlock"]
     assert argv[4] == str(_repo)
     lock_arg = argv[5]
-    from pathlib import Path
-
     assert Path(lock_arg).is_dir()  # lock held for the (fake) detached child
 
 
@@ -186,3 +190,181 @@ def test_reindex_hook_swallows_index_failure(tmp_path, monkeypatch):
     hooks.reindex_hook(
         f'{{"tool_input": {{"filename": "{target}"}}}}'
     )  # must not raise
+
+
+# ── queued reindex + drainer ──────────────────────────────────────────────────
+
+
+def _dead_pid() -> int:
+    proc = subprocess.Popen(["true"])
+    proc.wait()
+    return proc.pid
+
+
+def _hold(lock: Path, pid: int) -> None:
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text(str(pid))
+
+
+def test_reindex_hook_in_a_repo_queues_and_spawns_a_drainer(_repo, monkeypatch):
+    target = _repo / "a.py"
+    target.write_text("def f(): pass")
+    indexed, spawned = [], []
+    monkeypatch.setattr(hooks.indexer, "index_path", lambda *a, **k: indexed.append(a))
+    monkeypatch.setattr(
+        hooks, "popen_detached", lambda argv, **kw: spawned.append(argv)
+    )
+
+    hooks.reindex_hook(f'{{"tool_input": {{"file_path": "{target}"}}}}')
+
+    root = hooks.repo_module.root(_repo)
+    assert indexed == []  # the drainer writes, not the hook
+    assert [argv[1:] for argv in spawned] == [
+        ["-m", "witan_code", "_drain-pending", str(root)]
+    ]
+    assert hooks._take_pending(root) == [target]
+
+
+def test_reindex_hook_leaves_the_path_to_a_live_lock_holder(_repo, monkeypatch):
+    target = _repo / "a.py"
+    target.write_text("def f(): pass")
+    root = hooks.repo_module.root(_repo)
+    _hold(hooks._lock_path(root), os.getpid())
+    spawned = []
+    monkeypatch.setattr(
+        hooks, "popen_detached", lambda argv, **kw: spawned.append(argv)
+    )
+
+    hooks.reindex_hook(f'{{"tool_input": {{"file_path": "{target}"}}}}')
+
+    assert spawned == []
+    assert hooks._take_pending(root) == [target]
+
+
+def test_drain_pending_indexes_each_queued_file_once_and_unlocks(_repo, monkeypatch):
+    root = hooks.repo_module.root(_repo)
+    a, b = root / "a.py", root / "b.py"
+    for path in (a, b):
+        path.write_text("x = 1")
+    for path in (a, b, a, a):
+        hooks._enqueue(root, path)
+    indexed = []
+    monkeypatch.setattr(hooks.indexer, "index_path", lambda p, force: indexed.append(p))
+
+    hooks.drain_pending(root)
+
+    assert indexed == [a, b]
+    assert not hooks._lock_path(root).exists()
+    assert not hooks._has_pending(root)
+
+
+def test_drain_pending_picks_up_a_path_queued_while_it_held_the_lock(
+    _repo, monkeypatch
+):
+    root = hooks.repo_module.root(_repo)
+    a, b = root / "a.py", root / "b.py"
+    for path in (a, b):
+        path.write_text("x = 1")
+    hooks._enqueue(root, a)
+    indexed = []
+
+    def _index(p, force):
+        indexed.append(p)
+        if p == a:
+            hooks._enqueue(root, b)  # an edit landing mid-drain
+
+    monkeypatch.setattr(hooks.indexer, "index_path", _index)
+
+    hooks.drain_pending(root)
+
+    assert indexed == [a, b]
+
+
+def test_drain_pending_skips_a_file_deleted_since_it_was_queued(_repo, monkeypatch):
+    root = hooks.repo_module.root(_repo)
+    hooks._enqueue(root, root / "gone.py")
+    indexed = []
+    monkeypatch.setattr(hooks.indexer, "index_path", lambda p, force: indexed.append(p))
+
+    hooks.drain_pending(root)
+
+    assert indexed == []
+    assert not hooks._has_pending(root)
+
+
+def test_drain_pending_continues_past_a_failing_file(_repo, monkeypatch):
+    root = hooks.repo_module.root(_repo)
+    a, b = root / "a.py", root / "b.py"
+    for path in (a, b):
+        path.write_text("x = 1")
+        hooks._enqueue(root, path)
+    indexed = []
+
+    def _index(p, force):
+        if p == a:
+            raise RuntimeError("write authority changed during preparation")
+        indexed.append(p)
+
+    monkeypatch.setattr(hooks.indexer, "index_path", _index)
+
+    hooks.drain_pending(root)
+
+    assert indexed == [b]
+    assert not hooks._lock_path(root).exists()
+
+
+def test_drain_pending_defers_to_a_live_lock_holder(_repo, monkeypatch):
+    root = hooks.repo_module.root(_repo)
+    a = root / "a.py"
+    a.write_text("x = 1")
+    hooks._enqueue(root, a)
+    _hold(hooks._lock_path(root), os.getpid())
+    indexed = []
+    monkeypatch.setattr(hooks.indexer, "index_path", lambda p, force: indexed.append(p))
+
+    hooks.drain_pending(root)
+
+    assert indexed == []
+    assert hooks._take_pending(root) == [a]
+
+
+def test_drain_pending_clears_a_lock_whose_holder_died(_repo, monkeypatch):
+    root = hooks.repo_module.root(_repo)
+    a = root / "a.py"
+    a.write_text("x = 1")
+    hooks._enqueue(root, a)
+    _hold(hooks._lock_path(root), _dead_pid())
+    indexed = []
+    monkeypatch.setattr(hooks.indexer, "index_path", lambda p, force: indexed.append(p))
+
+    hooks.drain_pending(root)
+
+    assert indexed == [a]
+
+
+def test_an_unowned_lock_is_trusted_only_for_the_grace_period(tmp_path):
+    lock = tmp_path / "some.lock"
+    lock.mkdir()
+    assert hooks._lock_held(lock)
+
+    old = lock.stat().st_mtime - hooks._UNOWNED_LOCK_GRACE_SECONDS - 1
+    os.utime(lock, (old, old))
+    assert not hooks._lock_held(lock)
+
+
+def test_index_and_unlock_applies_edits_queued_during_the_full_index(
+    _repo, monkeypatch
+):
+    root = hooks.repo_module.root(_repo)
+    a = root / "a.py"
+    a.write_text("x = 1")
+    lock = hooks._lock_path(root)
+    lock.mkdir(parents=True)
+    hooks._enqueue(root, a)
+    indexed = []
+    monkeypatch.setattr(hooks.indexer, "index_path", lambda p, force: indexed.append(p))
+
+    hooks.index_and_unlock(root, lock)
+
+    assert indexed == [root, a]
+    assert not lock.exists()
