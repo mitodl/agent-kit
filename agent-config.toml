@@ -96,6 +96,7 @@ skills = [
     "validate-before-commit",
     "creating-skills",
     "create-ol-pull-request",
+    "code-review",
     "create-ol-github-issue",
     "create-ol-rfc-discussion",
     "generate-standup",
@@ -117,7 +118,6 @@ skills = ["dagster-code-location-structure"]
 inherits = ["universal"]
 skills = [
     "address-pr-feedback",
-    "code-review",
     "dependency-pruning",
     "dependency-updates",
     "deploy-verification",
