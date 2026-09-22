@@ -87,6 +87,8 @@ with a partial identity configuration rather than serving unauthenticated.
 | `WITAN_MCP_TRANSPORT` | `stdio` | MCP transport: `stdio` for local per-user use, or `streamable-http` (alias `http`) to bind a network listener. The legacy HTTP+SSE transport is deliberately not offered. |
 | `WITAN_OIDC_RESOURCE_URL` | — | witan's own public base URL (no path), e.g. `https://witan.ol.mit.edu`. What `RemoteAuthProvider` advertises as the protected resource in its RFC 9728 metadata (`.well-known/oauth-protected-resource`) and in the `WWW-Authenticate` header on a 401, so an MCP client can discover `WITAN_OIDC_ISSUER`'s real authorization endpoint instead of guessing one on witan's own origin. |
 | `WITAN_OMNIGRAPH_HTTP` | `1` | Use the direct HTTP transport for reads against a deployed omnigraph-server instead of shelling out to the `omnigraph` binary. Set to `0`/`false`/`no`/`off` to revert. Kept as a one-variable revert so a transport-specific production problem is an env change rather than an image rebuild — the CLI path beneath it stays fully maintained and is still the only way to reach `load`, `branch`, and `optimize`. |
+| `WITAN_UI_OIDC_CLIENT_ID` | — | Public Keycloak client the browser UI logs in with, served to the page in `/ui/config.json`. Read on its own rather than with the four vars above, because a deployment that serves no UI needs none of it. Required once `WITAN_OIDC_ISSUER` is set and a bundle is present: `/ui/` then answers 503 naming this variable rather than serving a page that cannot log in. |
+| `WITAN_UI_PORT` | — | Port `witan ui` binds on loopback. Defaults to one the OS reports free. |
 
 ## Code graph (`witan code`)
 

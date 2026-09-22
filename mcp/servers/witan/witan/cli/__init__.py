@@ -32,6 +32,7 @@ from . import (
     targets,  # noqa: F401
     tasks,  # noqa: F401
     traces,  # noqa: F401
+    ui,  # noqa: F401
 )
 from ._common import app, console, print_error, stderr_console
 from .code_routing import warn_if_code_graph_is_local

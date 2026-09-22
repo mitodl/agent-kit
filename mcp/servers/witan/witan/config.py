@@ -241,6 +241,22 @@ def load_identity_config() -> IdentityConfig:
     )
 
 
+def ui_oidc_client_id() -> str | None:
+    """The public Keycloak client the browser UI logs in with.
+
+    Read separately from ``load_identity_config``'s four-way all-or-nothing
+    check rather than added to it, because the two are not the same
+    deployment decision: those four configure how witan AUTHENTICATES tool
+    calls, and a deployment that serves no UI needs none of this. Requiring
+    it there would break every existing deployment on upgrade.
+
+    Its absence is therefore not an error at startup. It is an error only when
+    something asks for the page, which ``ui_routes`` answers with a 503 naming
+    the variable.
+    """
+    return os.environ.get("WITAN_UI_OIDC_CLIENT_ID") or None
+
+
 def load_remote_config(target: str | None = None) -> RemoteConfig | None:
     """Resolve RemoteConfig from env > named target > global config.toml > default.
 

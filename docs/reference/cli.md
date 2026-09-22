@@ -61,6 +61,7 @@ witan — agent memory, planning, and collaboration graph.
 - [`traces`](#witan-traces)
 - [`trace`](#witan-trace)
     - [`list`](#witan-trace-list)
+- [`ui`](#witan-ui)
 - [`migrate`](#witan-migrate)
     - [`schema`](#witan-migrate-schema)
     - [`storage`](#witan-migrate-storage)
@@ -118,6 +119,7 @@ witan — agent memory, planning, and collaboration graph.
 * [`tasks`](#witan-tasks): List tasks for the current repo (or filtered).
 * [`trace`](#witan-trace): Inspect corpus trace records.
 * [`traces`](#witan-traces): List corpus workflow traces (default: current repo).
+* [`ui`](#witan-ui): Open the witan UI in a browser.
 * [`whoami`](#witan-whoami): Show the identity the CLI presents to the deployed witan service.
 
 **Parameters**:
@@ -1167,6 +1169,39 @@ List corpus workflow traces (alias of ``witan traces``).
 * `--author`:
 * `--all-repos, --no-all-repos`: *[default: False]*
 * `--limit`: *[default: 50]*
+
+## witan ui
+
+```console
+witan ui [OPTIONS]
+```
+
+Open the witan UI in a browser.
+
+Against the local store this starts a witan server on 127.0.0.1 serving
+both the page and ``/mcp``, and opens it. The page is an MCP client
+(ADR 0011), so serving both from one origin is what makes its tool calls
+same-origin: no CORS, no preflight per call, and fastmcp's Host/Origin
+guard admits the page under its same-origin rule without an allowlist.
+
+★ AGAINST A REMOTE TARGET THIS OPENS A BROWSER AND EXITS, rather than
+starting anything. ``witan serve`` refuses to re-serve a remote target over
+HTTP for a reason that applies here verbatim: every forwarded call would
+carry the cached OIDC token of whoever started the process, and this server
+has no inbound authentication of its own, so binding it to a socket turns
+it into a credential-sharing proxy. The deployment serves its own copy of
+this page and does its own login.
+
+**Parameters**:
+
+* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
+    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--target`: Names a [targets.<name>] block, and applies to every command — `witan
+    tasks`, `witan memory` and `witan code index` included, none of which
+    could be pointed at one before. Overrides auto-detection by checkout
+    path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
+* `--port`: Env: ``WITAN_UI_PORT``. *[env: WITAN_UI_PORT]*
+* `--browser, --no-browser`: *[default: True]*
 
 ## witan migrate
 
