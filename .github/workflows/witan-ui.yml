@@ -88,15 +88,17 @@ jobs:
         # to inline is a widget that renders blank in Claude Desktop and in
         # nothing CI runs. The server binds a tool only when its file exists,
         # so a missing one would ship silently too.
+        # The list comes from the entries, which test_ui_widgets.py pins to
+        # ui_widgets.BOUND_TOOLS, so a new widget is checked here unasked.
         run: |
-          for tool in task_ready workflow_project_status recall task_list; do
-            file="../witan/ui_dist/widgets/$tool.html"
+          for entry in widgets/*.html; do
+            file="../witan/ui_dist/$entry"
             if [ ! -f "$file" ]; then
               echo "::error::$file was not built"
               exit 1
             fi
-            if grep -Eq '<script[^>]+src=|<link[^>]+href=' "$file"; then
-              echo "::error::$file references an external script or stylesheet"
+            if grep -Eq '<script[^>]+src=|<link[^>]+href=|url\(["'"'"']?https?:|import\(["'"'"'`]https?:' "$file"; then
+              echo "::error::$file references an external origin"
               exit 1
             fi
           done

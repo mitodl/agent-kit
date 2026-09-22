@@ -110,9 +110,10 @@ jobs:
           # The widgets too: a tool is bound to its widget only when the file
           # is present, so a wheel without them serves the four tools unbound
           # and nothing else would say so.
-          for path in index.html widgets/task_ready.html \
-            widgets/workflow_project_status.html widgets/recall.html \
-            widgets/task_list.html; do
+          # Widget names come from the frontend's entries, which
+          # test_ui_widgets.py pins to ui_widgets.BOUND_TOOLS.
+          widgets="$(cd ui && ls widgets/*.html)"
+          for path in index.html $widgets; do
             if ! grep -q "witan/ui_dist/$path" <<<"$listing"; then
               echo "::error::$wheel has no witan/ui_dist/$path: the UI build did not reach the wheel"
               echo "$listing"

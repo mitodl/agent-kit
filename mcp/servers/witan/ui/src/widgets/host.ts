@@ -2,6 +2,7 @@ import type { Transport } from "@modelcontextprotocol/client";
 import { App, applyDocumentTheme } from "@modelcontextprotocol/ext-apps";
 import { html, render, type TemplateResult } from "lit-html";
 import { errorBox } from "../chrome.js";
+import { isLinkable } from "../format.js";
 import { DEFAULT_ROUTE, type Route } from "../route.js";
 import { unwrap } from "../unwrap.js";
 import "../style.css";
@@ -80,6 +81,19 @@ export function mountWidget<T>(
 		}
 	});
 
+	// A cancelled call never sends a result, so without this the widget says
+	// "Waiting for …" forever.
+	app.addEventListener("toolcancelled", (params) => {
+		show(
+			errorBox(
+				new Error(
+					`The call was cancelled${params.reason ? `: ${params.reason}` : "."}`,
+				),
+				tool,
+			),
+		);
+	});
+
 	app.addEventListener("hostcontextchanged", (context) => {
 		if (context.theme) {
 			applyDocumentTheme(context.theme);
@@ -119,8 +133,11 @@ function onClick(app: App, event: MouseEvent): void {
 		return;
 	}
 	event.preventDefault();
+	// The same test `uriFact` used to decide this was a link at all, so a
+	// value drawn as one is never a link that silently does nothing (e.g.
+	// `HTTPS://…`, which a hand-rolled scheme regex would miss).
 	const href = anchor.getAttribute("href") ?? "";
-	if (/^https?:\/\//.test(href)) {
-		void app.openLink({ url: href });
+	if (isLinkable(href)) {
+		void app.openLink({ url: anchor.href });
 	}
 }

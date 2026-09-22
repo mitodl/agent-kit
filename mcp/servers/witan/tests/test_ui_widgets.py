@@ -14,6 +14,7 @@ is a build output the test run has no reason to have.
 """
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from fastmcp import Client, FastMCP
@@ -31,6 +32,14 @@ def widgets(tmp_path):
     for tool in ui_widgets.BOUND_TOOLS:
         (root / f"{tool}.html").write_text(f"<!doctype html><title>{tool}</title>")
     return root
+
+
+def test_the_frontend_builds_a_widget_for_exactly_the_bound_tools():
+    """The CI bundle checks list widgets from the frontend's entries, so this is
+    what keeps them checking the set the server binds."""
+    entries = Path(__file__).parents[1] / "ui" / "widgets"
+
+    assert {p.stem for p in entries.glob("*.html")} == set(ui_widgets.BOUND_TOOLS)
 
 
 def test_a_tool_is_bound_only_when_its_widget_was_built(tmp_path, widgets):

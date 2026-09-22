@@ -135,6 +135,20 @@ describe("every widget", () => {
 		);
 	});
 
+	it("says the call was cancelled rather than waiting forever", async () => {
+		await mount<TaskRow[]>("task_ready", ({ value, route }) =>
+			readyColumn(value, route, NOW),
+		);
+
+		await bridge.sendToolCancelled({ reason: "user stopped it" });
+
+		await vi.waitFor(() =>
+			expect(root.querySelector("[role=alert]")?.textContent).toContain(
+				"cancelled: user stopped it",
+			),
+		);
+	});
+
 	it("reports a result that does not unwrap rather than drawing nothing", async () => {
 		// task_ready is recorded as wrapped; a bare list is not what it sends.
 		await mount<TaskRow[]>("task_ready", ({ value, route }) =>
@@ -179,13 +193,13 @@ describe("every widget", () => {
 				...status,
 				project: {
 					...status.project,
-					github_pr: "https://github.com/o/r/pull/1",
+					github_pr: "HTTPS://github.com/o/r/pull/1",
 				},
 			},
 		});
 
 		const external = root.querySelector<HTMLAnchorElement>(
-			'a[href^="https://"]',
+			'a[href^="HTTPS://"]',
 		);
 		const click = new MouseEvent("click", { bubbles: true, cancelable: true });
 		external?.dispatchEvent(click);
