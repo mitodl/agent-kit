@@ -535,11 +535,38 @@ score = w_bm25   * norm_bm25
 ```
 
 - `norm_bm25` — a normalised BM25 signal over the candidate set so weights are
-  comparable. The engine can't project the raw `bm25(...)` score as a returnable
-  column (it's only valid inside `order`), so the implementation uses **rank
-  position** as the proxy: the candidate set already comes back in BM25-desc order,
-  so the top hit is `1.0` and the last is `0.0` (single candidate → `1.0`). A true
-  min-max of the raw score would be equivalent if/when the engine exposes it.
+  comparable. omnigraph 0.11 projects the raw score (`bm25(...) as score`), and
+  each search run's rows are scaled over the best score **in that run**, into a
+  band of `[0, 1]`: content hits into `[0.5, 1.0]`, title-only hits into
+  `[0, 0.5]`. The bands touch, so the invariant is that a title-only hit never
+  *outranks* a content hit; the two tie only when the engine returned no score
+  for a content row, which puts it on the shared boundary.
+
+  Two things the bands are doing, in order of how easy they are to get wrong:
+
+  1. **Cross-run ordering is a policy, not a measurement.** The two runs score
+     different fields and their scores cannot be compared — measured on 0.11.0,
+     a memory whose title matched and whose content said nothing relevant
+     scored 0.902 on `title`, above the 0.675 of the best `content` match,
+     because a short field inflates under BM25 length normalisation.
+     Concatenating the runs (§3.5) made content precedence true by
+     construction. Once each run is normalised independently that is gone, and
+     the top title-only hit scores the same 1.0 as the top content hit. The
+     bands are how the old ordering survives being chosen rather than inherited.
+  2. **Within a run, spacing is the engine's.** Scaled over the run's maximum,
+     so a run scoring 0.675/0.382/0.231 lands at 1.0/0.783/0.671 in the content
+     band. Min-max scaling would pin the run's worst row at the band floor
+     whatever it scored, which is exactly the defect of the rank-position proxy
+     this replaces (top hit `1.0`, last hit `0.0`, single candidate → `1.0`).
+
+  A band is half the old proxy's range, so the relevance term spans
+  `0.5 * w_bm25` rather than `1.0 * w_bm25` and the other three terms weigh
+  correspondingly more. `w_bm25` tuned against the old range should be doubled.
+
+  An earlier revision of this spec predicted that "a true min-max of the raw
+  score would be equivalent if/when the engine exposes it". It is not, for
+  point 2.
+
 - `age_days` — from `updated_at` to now. `recall`/search receive `now` from the
   server clock at call time.
 - `corroboration` — count of supporting edges into/out of the memory:

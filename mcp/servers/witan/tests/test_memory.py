@@ -78,13 +78,20 @@ def test_content_matches_seed_ahead_of_title_only_matches(server):
     """The two BM25 runs aren't on a comparable scale, so content hits are
     appended-to rather than interleaved-with title hits.
 
-    This pins the *seeding* order, not a guarantee about the final result: the
-    positional proxy is one weighted term in `_score`, so with recency,
-    corroboration or confidence in play a title-only hit can legitimately
-    finish higher — as it can among content hits. Both memories here are
-    fresh, unlinked and of default confidence, so position is the only signal
-    that differs and the seeding order survives to the output.
+    This pins the *seeding* order, not a guarantee about the final result:
+    relevance is one weighted term in `_score`, so with recency, corroboration
+    or confidence in play a title-only hit can legitimately finish higher — as
+    it can among content hits. Both memories here are fresh, unlinked and of
+    default confidence, so relevance is the only signal that differs.
+
+    ★ THE RELEVANCE ASSERTION BELOW IS THE LOAD-BEARING ONE. On the raw BM25
+    numbers the title-only memory wins — measured on 0.11.0, 1.51 on `title`
+    against 1.30 on `content` — because a short field inflates under length
+    normalisation. Asserting only the output order would pass on the re-rank's
+    index tie-break and so would not notice the bands being removed.
     """
+    from witan import server as srv
+
     title_only = server.memory_store(
         kind="lesson",
         title="quokka narwhal",
@@ -95,6 +102,12 @@ def test_content_matches_seed_ahead_of_title_only_matches(server):
         title="an unremarkable heading",
         content="this body discusses quokka narwhal at length",
     )
+
+    relevance = {
+        r["slug"]: r["_relevance"]
+        for r in srv._search_rows("quokka narwhal", None, None)
+    }
+    assert relevance[in_content["slug"]] > relevance[title_only["slug"]]
 
     slugs = [h["slug"] for h in server.memory_search("quokka narwhal")]
     assert slugs.index(in_content["slug"]) < slugs.index(title_only["slug"])
