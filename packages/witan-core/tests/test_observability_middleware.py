@@ -547,5 +547,73 @@ def test_an_exception_whose_message_explodes_does_not_replace_it(capsys):
     payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
     assert payload["error_type"] == "Exploding"
     assert payload["refused"] is True
-    assert payload["error_withheld"] is True
+    assert payload["error_undescribable"] is True
     assert "error" not in payload
+
+
+def test_a_custom_validation_code_is_not_logged_verbatim(capsys):
+    # A validator may build its PydanticCustomError `type` out of the value it
+    # just rejected, so the CODE is caller-controlled too and the summary would
+    # leak by the back door. fastmcp allowlists against pydantic's own
+    # ErrorType literals for this reason; so do we. No in-repo validator does
+    # this today, which is what makes it worth a test rather than a comment.
+    from typing import Annotated
+
+    from fastmcp import FastMCP
+    from pydantic import AfterValidator
+    from pydantic_core import PydanticCustomError
+
+    def reject_loudly(value: str) -> str:
+        raise PydanticCustomError("leaked_" + value, "nope")
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(ObservabilityMiddleware())
+
+    @mcp.tool
+    def checked(value: Annotated[str, AfterValidator(reject_loudly)]) -> str:
+        return value
+
+    configure_logging(log_format="json", level="INFO", force=True)
+
+    async def drive():
+        return await mcp.call_tool("checked", {"value": "SECRET-TOKEN"})
+
+    with pytest.raises(Exception):
+        asyncio.run(drive())
+    written = capsys.readouterr().err
+    assert "SECRET-TOKEN" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    assert payload["error_types"] == [middleware_module._CUSTOM_VALIDATION_CODE]
+
+
+def test_a_builtin_validation_code_survives_the_allowlist(capsys):
+    # The allowlist must not flatten everything to custom_error, or the summary
+    # stops being a diagnosis.
+    mcp = _server_with_tools()
+    with pytest.raises(Exception):
+        _call(mcp, "takes_a_string", {"content": {"text": "whatever"}})
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_types"] == ["string_type"]
+
+
+def test_a_broken_describer_is_distinguishable_from_a_withheld_message(capsys):
+    # error_withheld is a decision; error_undescribable is a breakage. One
+    # field for both would make them indistinguishable in a Loki filter.
+    from witan_core.refusal import Refusal
+
+    class Exploding(RuntimeError, Refusal):
+        def __str__(self):
+            raise KeyboardInterrupt
+
+    async def call_next(_ctx):
+        raise Exploding
+
+    with pytest.raises(Exploding):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_undescribable"] is True
+    assert "error_withheld" not in payload

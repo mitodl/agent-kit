@@ -73,6 +73,34 @@ Built as ``ValidationError(str(pydantic_exc))`` in ``tools/function_tool.py``,
 so its message is pydantic's, caller input and all.
 """
 
+
+def _builtin_validation_codes() -> frozenset[str] | None:
+    """pydantic's own ``ErrorType`` literals, or ``None`` if unavailable.
+
+    The allowlist behind :func:`_validation_summary`'s ``error_types``. A
+    validator is free to raise ``PydanticCustomError`` with a ``type`` it
+    builds at runtime, which can be built out of the value it just rejected --
+    so a code that is not one of these is not safe to log.
+    """
+    try:
+        from typing import get_args
+
+        from pydantic_core import ErrorType
+    except ImportError:  # pragma: no cover - extra absent
+        return None
+    return frozenset(get_args(ErrorType))
+
+
+_BUILTIN_VALIDATION_CODES = _builtin_validation_codes()
+
+_CUSTOM_VALIDATION_CODE = "custom_error"
+"""Stands in for any validation code outside :data:`_BUILTIN_VALIDATION_CODES`.
+
+The same substitution fastmcp makes in ``_validation_error_summary``, for the
+same reason: the set of built-in codes is fixed and public, and anything else
+was assembled by a validator that may have had the caller's value in hand.
+"""
+
 _PYDANTIC_VALIDATION_ERROR = _optional_type("pydantic", "ValidationError")
 """pydantic's own error, which reaches the middleware unwrapped.
 
@@ -210,12 +238,17 @@ def _validation_summary(exc: BaseException) -> dict[str, Any] | None:
     details = pydantic_exc.errors(  # type: ignore[attr-defined]
         include_url=False, include_context=False, include_input=False
     )
-    return {
-        "error_count": len(details),
-        "error_types": sorted(
-            {str(detail.get("type", "unknown")) for detail in details}
-        ),
-    }
+    summary: dict[str, Any] = {"error_count": len(details)}
+    if _BUILTIN_VALIDATION_CODES is not None:
+        summary["error_types"] = sorted(
+            {
+                code
+                if (code := str(detail.get("type", ""))) in _BUILTIN_VALIDATION_CODES
+                else _CUSTOM_VALIDATION_CODE
+                for detail in details
+            }
+        )
+    return summary
 
 
 def _error_fields(exc: BaseException) -> dict[str, Any]:
@@ -239,10 +272,13 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
     In place of the message the line carries ``error_withheld``, plus the
     ``error_count`` and ``error_types`` summary, which is the same trade fastmcp
     makes in ``_validation_error_summary`` ("never input-derived validation
-    details"). Computing that summary here rather than relying on fastmcp's own
-    log line is deliberate: the ``fastmcp`` logger does not propagate and keeps
-    its own handler, so its summary is unparsed text beside our JSON rather than
-    a queryable field.
+    details") -- including its allowlist, which is not decoration: a validator
+    may raise ``PydanticCustomError`` with a ``type`` it built from the value it
+    just rejected, so a code outside :data:`_BUILTIN_VALIDATION_CODES` becomes
+    :data:`_CUSTOM_VALIDATION_CODE` rather than being logged. Computing the
+    summary here rather than relying on fastmcp's own log line is deliberate:
+    the ``fastmcp`` logger does not propagate and keeps its own handler, so its
+    summary is unparsed text beside our JSON rather than a queryable field.
 
     THE MESSAGE IS NOT LOGGED BECAUSE IT IS SAFE. An ordinary exception out of a
     tool body can and does interpolate the caller's arguments -- witan's own
@@ -273,7 +309,17 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
     fault -- a clean refusal would surface as a crash. ``BaseException`` rather
     than ``Exception`` because that is what the caller catches, and a partially
     built result is kept rather than discarded, so a refusal that trips the
-    guard is still marked ``refused``.
+    guard is still marked ``refused``. The failure is reported as
+    ``error_undescribable`` rather than ``error_withheld``, which means the
+    other thing: withholding is a decision, this is a breakage.
+
+    That breadth swallows a ``KeyboardInterrupt`` or ``SystemExit`` raised in
+    the few bytecodes this spans, and that is the accepted trade rather than an
+    oversight. The two cases are indistinguishable from here -- a real signal,
+    or a ``__str__`` that raises one -- and of the two, an exception out of
+    ``__str__`` replacing a clean refusal is the one that has a mechanism. A
+    swallowed interrupt costs a second Ctrl-C; the original failure still
+    propagates either way.
     """
     fields: dict[str, Any] = {"error_type": "unknown"}
     try:
@@ -290,7 +336,7 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
         if message:
             fields["error"] = message
     except BaseException:  # noqa: BLE001 - see docstring; never fail the call
-        fields["error_withheld"] = True
+        fields["error_undescribable"] = True
     return fields
 
 

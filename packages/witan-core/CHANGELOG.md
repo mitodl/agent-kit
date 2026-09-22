@@ -35,7 +35,13 @@ a MINOR bump may include breaking changes).
   summary is computed here rather than left to fastmcp's equivalent log line,
   because the `fastmcp` logger does not propagate and keeps its own handler, so
   its version lands beside our JSON as unparsed text instead of a queryable
-  field.
+  field. `error_types` is allowlisted against pydantic's own `ErrorType`
+  literals, anything else becoming `custom_error`, because a validator may
+  raise `PydanticCustomError` with a `type` built from the value it just
+  rejected -- the same substitution fastmcp makes, and for the same reason.
+
+  A failure that breaks the describer itself logs `error_undescribable: true`
+  instead, which is a different thing from a message deliberately withheld.
 
   And `error_type` is the real exception class only for a `FastMCPError`:
   anything else is re-raised as `ToolError` by `FastMCP.call_tool` before the
