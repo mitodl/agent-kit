@@ -307,6 +307,18 @@ export function boardCard(
 						: nothing
 				}
         ${
+					/*
+					 * Likewise the project. Spec §7.1 asks for it on the task_ready
+					 * widget, whose unscoped result spans projects, and the row carries
+					 * only the slug: a title would take a read the widget cannot make.
+					 */
+					!route.project && task.project_slug
+						? html`· <a href=${routeHref(route, { project: task.project_slug })}
+                  ><code>${task.project_slug}</code></a
+                >`
+						: nothing
+				}
+        ${
 					task.status === "closed"
 						? html`· <span title=${absolute(task.closed_at)}
                   >closed ${ago(task.closed_at, now)}</span

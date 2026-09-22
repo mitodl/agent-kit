@@ -233,6 +233,10 @@ describe("the task_ready widget", () => {
 		);
 		expect(root.textContent).not.toContain("In progress");
 		expect(root.textContent).not.toContain("Blocked");
+		// Spec §7.1: an unscoped result spans projects, so each card names its own.
+		expect(
+			[...root.querySelectorAll(".card-meta code")].map((el) => el.textContent),
+		).toEqual(ready.map((task) => task.project_slug));
 	});
 });
 
