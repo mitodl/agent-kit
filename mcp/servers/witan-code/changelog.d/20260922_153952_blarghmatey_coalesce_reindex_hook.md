@@ -5,16 +5,20 @@
   foreground, one process per Edit/Write, so a session fanning out subagents
   in one worktree put that many uncoordinated writers on one branch view.
   Against a deployed graph they lost each other's optimistic-concurrency races
-  until the retry budget ran out (Sentry WITAN-12). The hook now queues the
-  path and a single detached drainer per checkout applies the queue, indexing
-  each queued file once however many times it was edited. The drainer shares
-  the SessionStart index's lock, so a full index and per-edit reindexes never
-  write at the same time either, and edits queued during a full index are
-  applied when it finishes.
+  until the retry budget ran out (Sentry WITAN-12). Both hooks now put their
+  target on a per-checkout queue (SessionStart queues the project dir,
+  PostToolUse the edited file) and a single detached drainer applies it,
+  indexing each queued target once however many times it was queued.
 
   The index now lands a few seconds after the edit instead of before the hook
   returns. Outside a git checkout the hook still indexes in the foreground.
 
-  The lock now records its holder's pid, so a lock left by a killed indexer is
-  cleared by the next hook instead of blocking that checkout's indexing until
-  someone removes it by hand.
+  The per-checkout state is keyed on the git toplevel rather than
+  `CLAUDE_PROJECT_DIR`, so a session started in a monorepo subdirectory shares
+  its edits' lock. A SessionStart refresh that finds an indexer already
+  running is queued rather than dropped.
+
+  The lock is now a kernel `flock` handed to the drainer, so a killed indexer
+  no longer leaves the checkout locked until someone removes the lock by hand.
+  The lock, the queue and the last drainer's log live in a private 0700
+  `$TMPDIR/witan-code-<uid>/` rather than loose in a shared `/tmp`.

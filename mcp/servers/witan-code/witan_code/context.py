@@ -30,24 +30,26 @@ from __future__ import annotations
 import datetime
 import hashlib
 import os
+import stat
+import tempfile
 import time
 from pathlib import Path
 
 from . import config as cfg_module
+from . import repo as repo_module
 from . import store as store_module
 
-# Matches the lock directory hooks.session_init() creates around a background
-# SessionStart index, so this hook can report "indexing in progress" instead
-# of a misleadingly empty/stale store. Keyed on a hash of the project
-# directory (not the raw sanitized path) so two distinct paths can't collide
-# on the same lock file (e.g. "/tmp/a/b" and "/tmp/a_b" both sanitizing to
-# "_tmp_a_b") and so a deep/long checkout path can't blow past a filesystem's
-# filename length limit and silently fail the `mkdir`.
-_LOCK_PREFIX = "codegraph-init-"
+# Per-checkout state for the hooks' background indexer (see hooks.py): its
+# lock, its queue, and the marker this hook reads to report "indexing in
+# progress" instead of a misleadingly empty/stale store. Keyed on a hash of the
+# checkout (not the raw sanitized path) so two distinct paths can't collide
+# (e.g. "/tmp/a/b" and "/tmp/a_b" both sanitizing to "_tmp_a_b") and so a
+# deep/long checkout path can't blow past a filesystem's filename length limit.
+_STATE_PREFIX = "codegraph-"
 
 
-def _lock_digest(project_dir: Path) -> str:
-    return hashlib.sha256(str(project_dir).encode()).hexdigest()[:16]
+def _state_digest(checkout: Path) -> str:
+    return hashlib.sha256(str(checkout).encode()).hexdigest()[:16]
 
 
 def _project_dir() -> Path:
@@ -58,14 +60,62 @@ def _project_dir() -> Path:
     return Path(os.environ.get("CLAUDE_PROJECT_DIR", cwd))
 
 
-def _lock_path(project_dir: Path) -> Path:
-    tmp = Path(os.environ.get("TMPDIR", "/tmp"))
-    return tmp / f"{_LOCK_PREFIX}{_lock_digest(project_dir)}.lock"
+def checkout_root(path: Path) -> Path:
+    """The key every piece of indexer state is filed under: the git toplevel.
+
+    NOT the project dir as given. A session started in a monorepo
+    subdirectory has a ``CLAUDE_PROJECT_DIR`` that differs from the toplevel
+    its edits resolve to, and keying the two on different strings is how a
+    full index and a per-edit drain ended up holding different locks while
+    writing the same branch view.
+    """
+    return repo_module.root(path) or path
+
+
+def state_dir() -> Path:
+    """This user's private directory for indexer state, created 0700.
+
+    Private because the queue it holds is a list of paths the drainer will
+    index under this user's identity: in a shared TMPDIR, a file another user
+    created first could inject paths into it or, as a symlink, redirect the
+    drainer's truncate. A directory that exists but is not ours, or is not a
+    real directory, is refused rather than used.
+    """
+    path = Path(tempfile.gettempdir()) / f"witan-code-{os.getuid()}"
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    st = path.lstat()
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise PermissionError(f"{path} is not a directory owned by this user")
+    return path
+
+
+def _state_path(checkout: Path, suffix: str) -> Path:
+    return state_dir() / f"{_STATE_PREFIX}{_state_digest(checkout)}.{suffix}"
+
+
+def _lock_path(checkout: Path) -> Path:
+    return _state_path(checkout, "lock")
+
+
+def _busy_path(checkout: Path) -> Path:
+    return _state_path(checkout, "busy")
 
 
 def indexing_in_progress() -> bool:
-    """Whether hooks.session_init()'s background index is still running."""
-    return _lock_path(_project_dir()).is_dir()
+    """Whether the hooks' background indexer is working on this checkout.
+
+    Read from a marker the indexer writes, not by probing its lock: taking the
+    lock even for an instant could make a drainer that is handing off miss its
+    turn and leave the queue undrained. A marker left by a killed indexer only
+    overstates progress in this block until the next indexer clears it.
+    """
+    try:
+        return _busy_path(checkout_root(_project_dir())).exists()
+    except OSError:
+        return False
 
 
 # The one query form that survives not knowing the MCP server's tool prefix.
