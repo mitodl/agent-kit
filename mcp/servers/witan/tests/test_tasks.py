@@ -704,8 +704,8 @@ def test_task_claim_deployed_with_empty_assignee_warns(server, monkeypatch):
 def test_task_claim_session_id_outside_charset_still_qualifies(server, monkeypatch):
     # `_SESSION_SUFFIX_RE` only recognizes `[0-9A-Za-z_-]`. A session_id with
     # any other character (e.g. a `.` in a dotted run id) must still qualify
-    # the holder — disallowed characters are stripped, not passed through
-    # verbatim to silently produce an unrecognizable suffix.
+    # the holder — the id is digested rather than passed through verbatim, so
+    # it cannot silently produce an unrecognizable suffix.
     from witan import server as srv
 
     monkeypatch.setattr(srv, "_is_local_stdio", lambda: False)
@@ -943,6 +943,7 @@ def test_holder_qualifier_survives_rich_rendering(monkeypatch):
     monkeypatch.setenv("CLAUDE_SESSION_ID", "aaaaaaaa-1111-2222-3333-444444444444")
     holder = srv._claim_holder()
     qualifier = srv._session_suffix("aaaaaaaa-1111-2222-3333-444444444444")
+    assert qualifier  # an empty one would make both assertions below vacuous
     assert qualifier in holder
 
     buf = io.StringIO()

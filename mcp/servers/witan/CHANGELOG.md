@@ -19,8 +19,10 @@ a MINOR bump may include breaking changes).
   False, the second session renewed the first's lease and was told
   `claimed: True`, and the response said `qualified: true` throughout: the
   silent double-claim the qualifier exists to prevent. A digest assumes nothing
-  about where an id's entropy sits. Holders are 60-minute leases, so nothing
-  recorded under the old spelling needs migrating.
+  about where an id's entropy sits. Nothing recorded under the old spelling
+  needs migrating, but a session holding a claim across the rollout computes a
+  different qualifier than the one on record, so it is refused its own renewal
+  (told the task is held by its former self) until the 60-minute lease lapses.
 
 - **`task_ready` no longer re-reads blockers it has already fetched.** Its
   repo-scoped branch scans every Task and then narrows to the candidates, but

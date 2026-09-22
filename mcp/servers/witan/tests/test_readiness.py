@@ -168,6 +168,14 @@ def test_filter_ready_candidate_status_wins_over_a_stale_wider_row():
     assert got == ["tk-a"]
 
 
+def test_session_suffix_is_pinned_to_a_known_answer():
+    """Every other test here computes its expectation with the function under
+    test, so a changed hash or digest length would pass the suite while giving
+    every in-flight claim a new holder string, and every session holding one
+    across the deploy a refusal of its own renewal."""
+    assert readiness.session_suffix("session_01NFADvkst516nGYnrkHMHuD") == "21052385"
+
+
 def test_session_suffix_distinguishes_ids_sharing_a_prefix():
     """The qualifier has to come from the whole id, not its head.
 
