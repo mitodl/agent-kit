@@ -189,7 +189,43 @@ def test_config_json_is_not_shadowed_by_the_catch_all(bundle, monkeypatch):
     response = _client(bundle, monkeypatch).get("/ui/config.json")
 
     assert response.status_code == 200
-    assert json.loads(response.text) == {"auth": None}
+    assert json.loads(response.text) == {"auth": None, "mcp_path": "/mcp"}
+
+
+def test_config_json_advertises_the_default_protocol_path(bundle, monkeypatch):
+    """The page cannot find /mcp without being told where it is."""
+    ui_routes.set_mcp_path("/mcp")
+
+    assert _client(bundle, monkeypatch).get("/ui/config.json").json()["mcp_path"] == (
+        "/mcp"
+    )
+
+
+def test_config_json_advertises_a_moved_protocol_path(bundle, monkeypatch):
+    """★ `witan serve --path` moves /mcp; the `/ui/` routes do NOT move with it.
+
+    So a page that assumed the default would render against a server on
+    /api/mcp and then fail every read against a path that is not there. The
+    CLI hands the resolved value over before serving.
+    """
+    ui_routes.set_mcp_path("/api/mcp")
+    try:
+        body = _client(bundle, monkeypatch).get("/ui/config.json").json()
+    finally:
+        ui_routes.set_mcp_path("/mcp")
+
+    assert body["mcp_path"] == "/api/mcp"
+
+
+def test_a_path_without_a_leading_slash_is_normalized(bundle, monkeypatch):
+    """`serve` is forgiving of `--path mcp`, so what it advertises must be too."""
+    ui_routes.set_mcp_path("api/mcp")
+    try:
+        body = _client(bundle, monkeypatch).get("/ui/config.json").json()
+    finally:
+        ui_routes.set_mcp_path("/mcp")
+
+    assert body["mcp_path"] == "/api/mcp"
 
 
 def test_config_json_reports_the_deployed_auth_mode(bundle, monkeypatch, tmp_path):
@@ -203,7 +239,8 @@ def test_config_json_reports_the_deployed_auth_mode(bundle, monkeypatch, tmp_pat
             "issuer": "https://sso.example.org/realms/ol-platform-engineering",
             "client_id": "witan-ui",
             "audience": "witan",
-        }
+        },
+        "mcp_path": "/mcp",
     }
 
 

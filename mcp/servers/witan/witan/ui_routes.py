@@ -39,6 +39,27 @@ INDEX = "index.html"
 
 _CLIENT_ID_VAR = "WITAN_UI_OIDC_CLIENT_ID"
 
+#: The protocol path the page should POST to.
+#:
+#: ★ NOT A CONSTANT, BECAUSE `--path` IS A PUBLIC OPTION. `witan serve
+#: --path /api/mcp` moves the MCP endpoint while these `/ui/` routes stay put,
+#: so a page that assumed `/mcp` would render and then fail every read against
+#: a path that is not there. The CLI resolves the value (flag, then
+#: `WITAN_MCP_PATH`, then the default) and hands it here before serving; the
+#: default below is what a process that never calls `set_mcp_path` gets, which
+#: is every caller embedding the server rather than going through the CLI.
+_mcp_path = "/mcp"
+
+
+def set_mcp_path(path: str) -> None:
+    """Record the protocol path `/ui/config.json` should advertise.
+
+    Called by the CLI once the path is resolved, not at import: `register`
+    runs at module import, long before argv is parsed.
+    """
+    global _mcp_path
+    _mcp_path = path if path.startswith("/") else f"/{path}"
+
 
 def bundle_exists(bundle_dir: Path | None = None) -> bool:
     """Whether a built bundle is present to serve."""
@@ -152,10 +173,17 @@ def ui_config(issuer: str | None, audience: str | None, client_id: str | None) -
     against a loopback store are the files the deployment serves behind a
     login. Baking the mode in at build time would mean two bundles and a way
     to get the wrong one deployed.
+
+    ``mcp_path`` is here for the same reason: it is a server-side decision
+    (``--path``) that the bundle cannot know at build time, and guessing it
+    wrong means a page that loads and then reads nothing.
     """
-    if not issuer:
-        return {"auth": None}
-    return {"auth": {"issuer": issuer, "client_id": client_id, "audience": audience}}
+    auth = (
+        None
+        if not issuer
+        else {"issuer": issuer, "client_id": client_id, "audience": audience}
+    )
+    return {"auth": auth, "mcp_path": _mcp_path}
 
 
 def register(mcp, bundle_dir: Path | None = None) -> bool:

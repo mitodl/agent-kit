@@ -30,11 +30,11 @@ describe("mcpEndpoint", () => {
 		["https://h/witan/ui/board/tk-x", "https://h/witan/mcp"],
 		["https://h/witan/ui/memory/pat-a/neighbours", "https://h/witan/mcp"],
 	])("resolves %s to %s", (documentUrl, expected) => {
-		expect(mcpEndpoint(documentUrl).href).toBe(expected);
+		expect(mcpEndpoint(documentUrl, "/mcp").href).toBe(expected);
 	});
 
 	it("keeps the query and fragment out of the endpoint", () => {
-		const url = mcpEndpoint("http://127.0.0.1:8765/ui/?repo=x#board");
+		const url = mcpEndpoint("http://127.0.0.1:8765/ui/?repo=x#board", "/mcp");
 
 		expect(url.href).toBe("http://127.0.0.1:8765/mcp");
 	});
@@ -42,15 +42,27 @@ describe("mcpEndpoint", () => {
 	it("falls back to the root when the document is not under the mount", () => {
 		// A dev server or a future remount. Answering /mcp is the useful
 		// guess; the alternative is throwing on a page that might still work.
-		expect(mcpEndpoint("http://localhost:5173/").href).toBe(
+		expect(mcpEndpoint("http://localhost:5173/", "/mcp").href).toBe(
 			"http://localhost:5173/mcp",
 		);
+	});
+
+	it.each([
+		// `witan serve --path` moves the protocol endpoint; `/ui/` does not move
+		// with it, so a page that assumed /mcp would read nothing.
+		["http://127.0.0.1:8765/ui/", "/api/mcp", "http://127.0.0.1:8765/api/mcp"],
+		["https://h/witan/ui/board/x", "/api/mcp", "https://h/witan/api/mcp"],
+		// The CLI normalizes a missing leading slash before advertising it, but
+		// the join must not double up if one arrives anyway.
+		["http://127.0.0.1:8765/ui/", "mcp", "http://127.0.0.1:8765/mcp"],
+	])("honours a configured path: %s + %s", (documentUrl, path, expected) => {
+		expect(mcpEndpoint(documentUrl, path).href).toBe(expected);
 	});
 
 	it("anchors on the LAST mount segment", () => {
 		// A prefix that itself contains the mount name. Taking the first
 		// occurrence would point at the proxy's own root.
-		expect(mcpEndpoint("https://h/ui/witan/ui/board/x").href).toBe(
+		expect(mcpEndpoint("https://h/ui/witan/ui/board/x", "/mcp").href).toBe(
 			"https://h/ui/witan/mcp",
 		);
 	});

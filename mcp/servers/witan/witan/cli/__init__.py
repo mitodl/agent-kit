@@ -214,6 +214,12 @@ def serve(
         # Starlette routing asserts a leading slash; be forgiving of `mcp`.
         if not path.startswith("/"):
             path = f"/{path}"
+        # The page has to POST where the protocol actually is: `/ui/` does not
+        # move with `--path`, so without this a non-default path serves a UI
+        # that reads nothing.
+        from .. import ui_routes
+
+        ui_routes.set_mcp_path(path)
         # ASGI, not FastMCP, middleware: FastMCP builds its span at the protocol
         # layer BEFORE its own middleware chain runs, so the caller's context
         # has to be attached further out or the span is already a rival root.
