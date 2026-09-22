@@ -42,7 +42,11 @@ BLOB_BYTES = int(os.environ.get("BENCH_BLOB_BYTES", "2048"))
 # a lower bound, not a count.
 ROW_FLOOR = int(os.environ.get("BENCH_ROW_FLOOR", "388"))
 
-OUT = os.environ.get("BENCH_IDS_PATH", "/src/.bench/ids.json")
+# Default deliberately outside the source tree: under an auto-reloading dev
+# server that watches it, writing there re-imports Django mid-run. run.sh
+# does not read this file - it reads the SEED_SHAPE line below - so this is
+# only for running a step by hand.
+OUT = os.environ.get("BENCH_IDS_PATH", "/tmp/bench-ids.json")  # noqa: S108
 
 
 def html_blob(nbytes):
@@ -95,6 +99,9 @@ ids = build()
 with open(OUT, "w") as fh:  # noqa: PTH123
     json.dump(ids, fh, indent=2)
 
+# This line is BOTH the human record of the shape and the machine handoff to
+# bench.py / trace.py (run.sh captures it and passes it on as
+# BENCH_IDS_JSON). Add fields to `ids`; never drop any from this line.
 print("SEED_SHAPE " + json.dumps(ids))  # noqa: T201
 if ids.get("children", 0) < ROW_FLOOR:
     print(  # noqa: T201

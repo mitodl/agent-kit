@@ -23,7 +23,9 @@ from rest_framework.test import APIClient
 
 WARMUP = int(os.environ.get("BENCH_WARMUP", "3"))
 ITERATIONS = int(os.environ.get("BENCH_ITERATIONS", "15"))
-IDS_PATH = os.environ.get("BENCH_IDS_PATH", "/src/.bench/ids.json")
+# Default deliberately outside the source tree: under an auto-reloading
+# dev server that watches it, writing there re-imports Django mid-run.
+DEFAULT_IDS_PATH = "/tmp/bench-ids.json"  # noqa: S108
 LABEL = os.environ.get("BENCH_LABEL", "unknown")
 
 # --- preconditions: refuse to run rather than produce a wrong number ---------
@@ -35,8 +37,22 @@ if profilers:
 if settings.DEBUG:
     raise SystemExit("DEBUG is on; Django would record every query and skew timings")
 
-with open(IDS_PATH) as fh:  # noqa: PTH123
-    ids = json.load(fh)
+
+def _load_ids():
+    """
+    Results travel between harness steps over stdout/env, never through a
+    shared filesystem: not every execution backend has one. BENCH_IDS_JSON is
+    what run.sh passes; BENCH_IDS_PATH is the fallback for running a step by
+    hand.
+    """
+    raw = os.environ.get("BENCH_IDS_JSON")
+    if raw:
+        return json.loads(raw)
+    with open(os.environ.get("BENCH_IDS_PATH", DEFAULT_IDS_PATH)) as fh:  # noqa: PTH123
+        return json.load(fh)
+
+
+ids = _load_ids()
 
 client = APIClient()
 # client.force_authenticate(user=User.objects.get(pk=ids["user_id"]))
