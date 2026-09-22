@@ -1468,8 +1468,8 @@ class StoreQuarantined(RuntimeError, Refusal):
     # NOT opted in: the raise site appends `\n{err.strip()}` like the two
     # above. The sidecar operation id that an operator actually needs is parsed
     # out and kept on `operation_id`, and that one attribute IS logged:
-    # `_SIDECAR_ID_RE` admits only an identifier's characters, so whatever the
-    # upstream text says, the value is an id or it is None.
+    # `sidecar_operation_id` returns only an identifier-shaped string (no
+    # whitespace, quotes or prose, at most 64 characters) or None.
     log_safe_message = False
     log_safe_attributes = MappingProxyType({"sidecar_operation_id": "operation_id"})
 
@@ -1478,15 +1478,15 @@ class StoreQuarantined(RuntimeError, Refusal):
         self.operation_id = operation_id
 
 
-#: Only an identifier's characters, bounded. omnigraph names sidecars by ULID,
-#: and the class is kept wider than that so a format change degrades to a
-#: parsed id rather than to none. What it must NOT admit is arbitrary text:
-#: the match is logged as a structured field (see
-#: ``StoreQuarantined.log_safe_attributes``), and `err` can be a non-JSON HTTP
-#: body passed through verbatim.
-_SIDECAR_ID_RE = re.compile(
-    r"occ recovery sidecar '([0-9A-Za-z_-]{1,64})'", re.IGNORECASE
-)
+_SIDECAR_ID_RE = re.compile(r"occ recovery sidecar '([^']*)'", re.IGNORECASE)
+
+#: What a sidecar id may look like before it is used. omnigraph names sidecars
+#: by ULID; the class is kept wider than that so a format change still parses.
+#: What it must NOT admit is arbitrary text, because the id is logged as a
+#: structured field (``StoreQuarantined.log_safe_attributes``) and `err` can be
+#: a non-JSON HTTP body passed through verbatim. This bounds the value's shape,
+#: not where it came from.
+_SIDECAR_ID_SHAPE = re.compile(r"[0-9A-Za-z_-]{1,64}")
 
 
 def sidecar_operation_id(msg: str) -> str | None:
@@ -1498,7 +1498,9 @@ def sidecar_operation_id(msg: str) -> str | None:
     legible refusal back into an opaque one.
     """
     match = _SIDECAR_ID_RE.search(msg)
-    return match.group(1) if match else None
+    if match is None or not _SIDECAR_ID_SHAPE.fullmatch(match.group(1)):
+        return None
+    return match.group(1)
 
 
 def _is_storage_version_mismatch(msg: str) -> bool:

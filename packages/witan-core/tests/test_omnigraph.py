@@ -1491,6 +1491,14 @@ def test_a_sidecar_id_that_is_not_an_identifier_is_not_parsed():
         is None
     )
     assert og.sidecar_operation_id(f"OCC recovery sidecar '{'A' * 65}' found") is None
+    # The first sidecar named is the one reported; a malformed first quote does
+    # not fall through to a later, possibly different, sidecar.
+    assert (
+        og.sidecar_operation_id(
+            "OCC recovery sidecar 'not an id' ... OCC recovery sidecar '01M2V544QY'"
+        )
+        is None
+    )
 
 
 def test_an_unnamed_sidecar_is_still_a_quarantine(monkeypatch):

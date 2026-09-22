@@ -22,6 +22,7 @@ these by their own types. Mixing ``Refusal`` in keeps ``WriteBlocked`` a
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import ClassVar
@@ -30,6 +31,48 @@ try:
     from fastmcp.exceptions import ToolError as _Base
 except ImportError:  # pragma: no cover - requires the `mcp` extra
     _Base = Exception  # type: ignore[assignment,misc]
+
+
+RESERVED_LOG_FIELDS = frozenset(
+    {
+        # `mcp.tool_call`'s own keyword arguments. Passing one twice to
+        # `log.info` is a TypeError inside the middleware's `finally`, which
+        # would replace the caller's refusal with a server fault.
+        "event",
+        "tool",
+        "outcome",
+        "duration_ms",
+        "actor_id",
+        "actor",
+        # The failure description `_error_fields` builds.
+        "error",
+        "error_type",
+        "refused",
+        "error_withheld",
+        "error_count",
+        "error_types",
+        "error_undescribable",
+        # Keys the structlog chain reads or writes. `exc_info` would make the
+        # renderer attach the traceback, message and all; the rest are
+        # overwritten by a processor or, for `trace_id`, spoofed when no span
+        # is active.
+        "exc_info",
+        "stack_info",
+        "timestamp",
+        "level",
+        "logger",
+        "trace_id",
+        "span_id",
+        "pod_name",
+        "namespace",
+        "node_name",
+    }
+)
+"""Field names ``Refusal.log_safe_attributes`` may not declare. Names with a
+leading underscore (``_record``, ``_from_structlog``) are refused by
+:data:`_LOG_FIELD_NAME` instead."""
+
+_LOG_FIELD_NAME = re.compile(r"[a-z][a-z0-9_]*")
 
 
 class Refusal(_Base):  # type: ignore[misc,valid-type]
@@ -79,7 +122,25 @@ class Refusal(_Base):  # type: ignore[misc,valid-type]
     only when the value is an identifier or a count BY CONSTRUCTION, not merely
     in the cases seen so far. An attribute that is ``None`` is left off the
     line. Independent of ``log_safe_message``; a type may use either or both.
+
+    Field names are checked when the subclass is defined: lowercase, no leading
+    underscore, and not in :data:`RESERVED_LOG_FIELDS`. A bad name fails at
+    import rather than silently going missing from, or corrupting, the line.
     """
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        bad = sorted(
+            field
+            for field in cls.log_safe_attributes
+            if field in RESERVED_LOG_FIELDS or not _LOG_FIELD_NAME.fullmatch(field)
+        )
+        if bad:
+            msg = (
+                f"{cls.__name__}.log_safe_attributes declares {bad}, which the "
+                f"mcp.tool_call line reserves or cannot carry"
+            )
+            raise TypeError(msg)
 
     def __init__(self, *args: object) -> None:
         super().__init__(*args)

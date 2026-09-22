@@ -205,27 +205,48 @@ def test_an_absent_identifier_is_left_off_the_line(capsys):
     assert "sidecar_operation_id" not in payload
 
 
-def test_a_declared_attribute_cannot_collide_with_the_line_s_own_fields(capsys):
+@pytest.mark.parametrize(
+    "field", ["tool", "error_type", "exc_info", "trace_id", "_record", "Mixed"]
+)
+def test_a_declared_attribute_cannot_collide_with_the_line(field):
     # `tool` twice to log.info is a TypeError inside a `finally`, which would
-    # replace the caller's refusal with a server fault. Dropped, not raised.
+    # replace the caller's refusal with a server fault; `exc_info` makes the
+    # renderer attach the traceback, withheld message included; `_record`
+    # breaks add_logger_name. Refused when the class is defined, not at the
+    # first failing call.
     from witan_core.refusal import Refusal
 
-    class Colliding(RuntimeError, Refusal):
-        log_safe_attributes = {"tool": "who", "error_type": "who", "ok_id": "who"}
+    with pytest.raises(TypeError, match="log_safe_attributes"):
 
-        def __init__(self):
-            super().__init__("nope")
-            self.who = "impostor"
+        class Colliding(RuntimeError, Refusal):
+            log_safe_attributes = {field: "who"}
+
+
+def test_every_key_a_failed_line_carries_is_reserved(capsys, monkeypatch):
+    # RESERVED_LOG_FIELDS is a list of what the logging chain owns, so it goes
+    # stale when a processor adds a key. Drive a real failed call with the
+    # Downward API context present and check nothing on the line is unlisted.
+    # (`trace_id`/`span_id` need a live span and are listed from the source.)
+    from witan_core.observability import processors
+    from witan_core.refusal import RESERVED_LOG_FIELDS, Refusal
+
+    monkeypatch.setattr(
+        processors,
+        "_K8S_CONTEXT",
+        {"pod_name": "p", "namespace": "n", "node_name": "x"},
+    )
+
+    class Plain(RuntimeError, Refusal):
+        pass
 
     async def call_next(_ctx):
-        raise Colliding
+        msg = "nope"
+        raise Plain(msg)
 
-    with pytest.raises(Colliding):
+    with pytest.raises(Plain):
         _run(ObservabilityMiddleware(), _Context("recall"), call_next)
     payload = json.loads(capsys.readouterr().err.strip())
-    assert payload["tool"] == "recall"
-    assert payload["error_type"] == "Colliding"
-    assert payload["ok_id"] == "impostor"
+    assert set(payload) <= RESERVED_LOG_FIELDS, set(payload) - RESERVED_LOG_FIELDS
 
 
 def test_a_long_message_is_truncated(capsys):
@@ -895,10 +916,3 @@ def test_no_refusal_outside_the_audit_logs_attributes():
         f"Read how each attribute is built, then add it to "
         f"EXPECTED_LOG_SAFE_ATTRIBUTES."
     )
-
-
-def test_no_audited_attribute_uses_a_reserved_field_name():
-    # The middleware drops a reserved name rather than fail the call, so
-    # without this a collision would be a silently missing field.
-    for declared in EXPECTED_LOG_SAFE_ATTRIBUTES.values():
-        assert not set(declared) & middleware_module._RESERVED_FIELDS

@@ -312,47 +312,16 @@ def _message_fields(exc: BaseException) -> dict[str, Any]:
     return {"error": str(exc)}
 
 
-_RESERVED_FIELDS = frozenset(
-    {
-        # the line's own keyword arguments
-        "event",
-        "tool",
-        "outcome",
-        "duration_ms",
-        "actor_id",
-        "actor",
-        # and the failure description `_error_fields` builds
-        "error",
-        "error_type",
-        "refused",
-        "error_withheld",
-        "error_count",
-        "error_types",
-        "error_undescribable",
-    }
-)
-"""Field names a refusal's ``log_safe_attributes`` may not use.
-
-The first group is the hard constraint: passing one of those to ``log.info``
-twice is a ``TypeError`` raised in a ``finally`` block, which would replace the
-caller's failure with a server fault. The second is a readability one --
-``error_type`` meaning something else on one refusal's line would be worse than
-a missing id."""
-
-
 def _attribute_fields(exc: BaseException) -> dict[str, Any]:
     """A refusal's declared ``log_safe_attributes``, as their own log fields.
 
-    A declared field in :data:`_RESERVED_FIELDS` is dropped rather than allowed
-    to collide. The audit tables assert no real type declares one, so the drop
-    is a backstop, not a behaviour anyone relies on.
+    ``Refusal.__init_subclass__`` has already refused any name that would
+    collide with the line's own fields, so these are added as-is.
     """
     if not isinstance(exc, Refusal):
         return {}
     fields: dict[str, Any] = {}
     for field, attribute in exc.log_safe_attributes.items():
-        if field in _RESERVED_FIELDS:
-            continue
         value = getattr(exc, attribute)
         if value is not None:
             fields[field] = value
