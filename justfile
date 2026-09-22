@@ -246,7 +246,9 @@ check-core-floor *args:
 # formatting out from under every package at once.
 
 # Start a changelog fragment for a package, e.g. `just changelog witan-core`.
-# Opens the created file so its categories are right there to fill in.
+# Does not open the created file — scriv only does that when `git config
+# scriv.create.edit true` is set, and defaulting it on here would try to
+# launch $EDITOR in a non-interactive/agent session. Edit the printed path.
 changelog package:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -287,7 +289,11 @@ bump package part:
 
     # `find` rather than `ls`/`grep`: an empty changelog.d/ (nothing but the
     # README scriv itself skips) must not look like there's a fragment.
-    frags=$(find "$dir/changelog.d" -maxdepth 1 -type f ! -iname 'README*' 2>/dev/null) || true
+    # Matched to scriv's own selection in _files_to_combine() — *.md/*.rst
+    # only, minus anything matching skip_fragments (README.*) — so a stray
+    # .DS_Store or editor backup can't pass this gate and then make the real
+    # `scriv collect` below exit 2 with "No changelog fragments to collect".
+    frags=$(find "$dir/changelog.d" -maxdepth 1 -type f \( -name '*.md' -o -name '*.rst' \) ! -name 'README.*' 2>/dev/null) || true
     if [[ -z "$frags" ]]; then
         echo "" >&2
         echo "$dir/changelog.d has no fragments." >&2
@@ -323,8 +329,20 @@ bump package part:
         exit 1
     fi
 
-    (cd "$dir" && uvx "$BUMP_TOOL" bump "{{ part }}" --no-commit --no-tag)
+    # Collect before bumping, not after: if collect fails (a malformed
+    # fragment, a duplicate version, uvx unable to resolve the package), the
+    # version is still untouched and nothing here needs undoing. If bump then
+    # fails, the changelog is left documenting a version one commit ahead of
+    # [project].version — the same "entry written, not yet released" state
+    # `check-versions` already tolerates — recoverable by fixing whatever
+    # bump-my-version choked on and running `uvx "$BUMP_TOOL" bump ...`
+    # directly (changelog.d/ is empty by then, so `just bump` itself would
+    # refuse on the fragment gate above). The reverse order risks the
+    # opposite state instead — a bumped, published version with no changelog
+    # entry to show for it — which is exactly the drift this recipe exists to
+    # prevent.
     (cd "$dir" && uvx "$SCRIV_TOOL" collect --version "$new")
+    (cd "$dir" && uvx "$BUMP_TOOL" bump "{{ part }}" --no-commit --no-tag)
     just check-versions
     echo ""
     echo "{{ package }} bumped to ${new}. Commit together:"
