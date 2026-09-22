@@ -37,6 +37,7 @@ import structlog
 
 from witan_core.identity import derive_actor_handle, derive_actor_id
 from witan_core.observability.logging import get_logger
+from witan_core.refusal import Refusal
 
 log = get_logger(__name__)
 
@@ -131,6 +132,45 @@ def _caller_identity() -> dict[str, str]:
     return fields
 
 
+_MAX_ERROR_CHARS = 500
+"""How much of a failure's message reaches the ``mcp.tool_call`` line.
+
+Long enough for every refusal witan raises today -- the longest, an unserved
+cluster graph, runs about 200 characters -- and short enough that a pathological
+message cannot dominate the log stream.
+"""
+
+
+def _error_fields(exc: BaseException) -> dict[str, Any]:
+    """Why a call failed, as log fields.
+
+    fastmcp logs a ``FastMCPError`` as ``Error calling tool '<name>'`` with
+    ``exc_info=False`` and never renders ``str(exc)``, so a refusal reaches the
+    log with no text at all. On 2026-09-16 that left Production showing
+    ``code_store_views`` erroring on 27% of calls with nothing in the log naming
+    a reason; the reason (``ClusterGraphMissing``, a repo with no cluster graph)
+    was in the Tempo span's status message and nowhere else. This puts it on the
+    line that already records the failure.
+
+    ``refused`` separates a call declined on purpose from a service that broke.
+    It is LOG-ONLY: ``witan_tool_calls_total`` keeps counting both under
+    ``outcome="error"``, because the error-ratio alert's headline case -- a
+    quarantined graph answering every request with "not served" -- is itself a
+    refusal, and moving refusals to their own outcome would stop that alert
+    firing on exactly what it was written for.
+    """
+    fields: dict[str, Any] = {
+        "error_type": type(exc).__name__,
+        "refused": isinstance(exc, Refusal),
+    }
+    message = str(exc).strip()
+    if len(message) > _MAX_ERROR_CHARS:
+        message = message[:_MAX_ERROR_CHARS] + "..."
+    if message:
+        fields["error"] = message
+    return fields
+
+
 def _is_input_required(result: Any) -> bool:
     """Whether MRTR converted this call into an elicitation.
 
@@ -141,7 +181,12 @@ def _is_input_required(result: Any) -> bool:
 
 
 class ObservabilityMiddleware(Middleware):  # type: ignore[misc,valid-type]
-    """Emit a span, a counter increment and a duration sample per tool call."""
+    """Emit a span, a counter increment and a duration sample per tool call.
+
+    A failed call also carries why it failed: ``error_type``, ``error`` and
+    ``refused``. See :func:`_error_fields` -- fastmcp renders neither the
+    message nor the class on its own error line.
+    """
 
     def __init__(self) -> None:
         self._tracer = _tracer()
@@ -158,6 +203,7 @@ class ObservabilityMiddleware(Middleware):  # type: ignore[misc,valid-type]
         structlog.contextvars.bind_contextvars(tool=name, **identity)
         started = time.perf_counter()
         outcome = "error"
+        error_fields: dict[str, Any] = {}
         span_cm = (
             self._tracer.start_as_current_span(
                 f"mcp.tool/{name}",
@@ -175,6 +221,11 @@ class ObservabilityMiddleware(Middleware):  # type: ignore[misc,valid-type]
                 result = await call_next(context)
                 outcome = "input_required" if _is_input_required(result) else "ok"
                 return result
+        except BaseException as exc:
+            # BaseException, not Exception: a cancelled call is a real outcome
+            # worth naming, and re-raising keeps cancellation semantics intact.
+            error_fields = _error_fields(exc)
+            raise
         finally:
             elapsed_ms = (time.perf_counter() - started) * 1000
             # Identity is deliberately NOT a metric attribute. Every label here
@@ -192,6 +243,7 @@ class ObservabilityMiddleware(Middleware):  # type: ignore[misc,valid-type]
                 outcome=outcome,
                 duration_ms=elapsed_ms,
                 **identity,
+                **error_fields,
             )
             structlog.contextvars.unbind_contextvars("tool", *identity)
 

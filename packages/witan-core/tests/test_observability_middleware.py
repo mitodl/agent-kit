@@ -101,6 +101,80 @@ def test_failure_is_recorded_and_reraised(capsys):
     assert payload["tool"] == "task_close"
 
 
+def test_failure_says_what_went_wrong(capsys):
+    # The defect this closes: fastmcp logs `Error calling tool 'x'` with
+    # exc_info=False for a FastMCPError and never renders str(exc), so
+    # Production showed code_store_views failing 27% of calls with no
+    # diagnosable text anywhere but the Tempo span.
+    async def call_next(_ctx):
+        msg = "boom"
+        raise ValueError(msg)
+
+    with pytest.raises(ValueError, match="boom"):
+        _run(ObservabilityMiddleware(), _Context("task_close"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["error"] == "boom"
+    assert payload["error_type"] == "ValueError"
+    assert payload["refused"] is False
+
+
+def test_a_refusal_is_marked_as_one(capsys):
+    # ClusterGraphMissing is the real production case: a repo that has no
+    # cluster graph. It is a Refusal, so the line says the service declined
+    # rather than broke -- while still counting under outcome="error", which
+    # the error-ratio alert depends on.
+    from witan_core.refusal import Refusal
+
+    class ClusterGraphMissing(RuntimeError, Refusal):
+        pass
+
+    async def call_next(_ctx):
+        msg = "'x' code graph is not served by the omnigraph-server"
+        raise ClusterGraphMissing(msg)
+
+    with pytest.raises(ClusterGraphMissing):
+        _run(ObservabilityMiddleware(), _Context("code_store_views"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["outcome"] == "error"
+    assert payload["refused"] is True
+    assert payload["error_type"] == "ClusterGraphMissing"
+    assert "is not served by the omnigraph-server" in payload["error"]
+
+
+def test_a_long_message_is_truncated(capsys):
+    async def call_next(_ctx):
+        raise ValueError("x" * (middleware_module._MAX_ERROR_CHARS + 50))
+
+    with pytest.raises(ValueError):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["error"] == "x" * middleware_module._MAX_ERROR_CHARS + "..."
+
+
+def test_a_message_less_failure_still_names_its_type(capsys):
+    # An empty `error` key would be worse than none: it reads as "no message
+    # was produced" rather than "this exception carries none".
+    async def call_next(_ctx):
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["error_type"] == "KeyboardInterrupt"
+    assert "error" not in payload
+
+
+def test_a_successful_call_carries_no_error_fields(capsys):
+    async def call_next(_ctx):
+        return "result"
+
+    _run(ObservabilityMiddleware(), _Context("task_get"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert "error" not in payload
+    assert "error_type" not in payload
+    assert "refused" not in payload
+
+
 def test_tool_is_bound_for_nested_log_lines(capsys):
     # The point of binding a contextvar rather than passing a logger down: a log
     # line emitted deep inside the tool still says which tool it came from.

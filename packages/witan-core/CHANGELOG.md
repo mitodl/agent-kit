@@ -8,6 +8,22 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.38.1] - 2026-09-22
+
+### Changed
+
+- **A failed `mcp.tool_call` line now says why it failed**, carrying
+  `error_type`, `error` (the message, truncated at 500 characters) and
+  `refused`. fastmcp logs a `FastMCPError` as `Error calling tool '<name>'`
+  with `exc_info=False` and never renders `str(exc)`, so a refusal reached the
+  log with no text at all: Production spent two days showing `code_store_views`
+  erroring on 27% of calls with the reason (`ClusterGraphMissing`, a repo that
+  has no cluster graph) readable only in the Tempo span's status message.
+  `refused` is log-only and the metric is untouched --
+  `witan_tool_calls_total` still counts a refusal under `outcome="error"`,
+  because the error-ratio alert's headline case, a quarantined graph answering
+  every request with "not served", is itself a refusal.
+
 ## [0.38.0] - 2026-09-21
 
 ### Added
