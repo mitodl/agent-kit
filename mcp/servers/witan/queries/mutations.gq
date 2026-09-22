@@ -503,7 +503,8 @@ query insert_task(
     $tags: [String]?,
     $created_at: DateTime,
     $updated_at: DateTime,
-    $claimed_at: DateTime?
+    $claimed_at: DateTime?,
+    $first_claimed_at: DateTime?
 ) {
     insert Task {
         slug: $slug,
@@ -523,7 +524,8 @@ query insert_task(
         tags: $tags,
         created_at: $created_at,
         updated_at: $updated_at,
-        claimed_at: $claimed_at
+        claimed_at: $claimed_at,
+        first_claimed_at: $first_claimed_at
     }
 }
 
@@ -547,7 +549,8 @@ query update_task(
     $tags: [String]?,
     $closed_at: DateTime?,
     $updated_at: DateTime,
-    $claimed_at: DateTime?
+    $claimed_at: DateTime?,
+    $first_claimed_at: DateTime?
 ) {
     update Task
         set {
@@ -567,7 +570,8 @@ query update_task(
             tags: $tags,
             closed_at: $closed_at,
             updated_at: $updated_at,
-            claimed_at: $claimed_at
+            claimed_at: $claimed_at,
+            first_claimed_at: $first_claimed_at
         }
         where slug = $slug
 }

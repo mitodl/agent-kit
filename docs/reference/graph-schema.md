@@ -168,8 +168,9 @@ e.g. tk-wire-vault-sidecar-9c1d04
 | `author` | `String @index` |  |
 | `created_at` | `DateTime @index` |  |
 | `updated_at` | `DateTime` |  |
-| `closed_at` | `DateTime?` |  |
-| `claimed_at` | `DateTime?` | advisory-claim lease start (assignee holds it) |
+| `closed_at` | `DateTime?` | stamped on every transition TO closed, cleared on every transition out |
+| `claimed_at` | `DateTime?` | advisory-claim lease start (assignee holds it), overwritten on renewal |
+| `first_claimed_at` | `DateTime?` | the FIRST claim ever; set once, never cleared — the retrospective timeline's work start |
 | `symbol_refs` | `[String]?` | soft refs into the code-graph store |
 | `tags` | `[String]?` |  |
 
