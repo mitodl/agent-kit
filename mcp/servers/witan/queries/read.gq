@@ -292,6 +292,23 @@ query supersedes_targets($slug: String) {
     order { $w.created_at desc }
 }
 
+// The inverse of supersedes_targets: the memories that replaced this one.
+// Without it a superseded memory, which is exactly the one a reader lands on
+// from an old link, cannot say what to read instead.
+query superseded_by_sources($slug: String) {
+    match {
+        $m: Memory { slug: $slug }
+        $other: Memory
+        $other $w:supersedes $m
+    }
+    return {
+        $other.slug, $other.kind, $other.title, $other.repo, $other.created_at,
+        $w.confidence as edge_confidence, $w.role as edge_role,
+        $w.author as edge_author, $w.created_at as edge_created_at
+    }
+    order { $w.created_at desc }
+}
+
 query refines_targets($slug: String) {
     match {
         $m: Memory { slug: $slug }
@@ -389,8 +406,10 @@ query contradicts_pairs() {
     return {
         $a.slug as a_slug, $a.title as a_title, $a.kind as a_kind,
         $a.repo as a_repo, $a.author as a_author, $a.updated_at as a_updated_at,
+        $a.content as a_content, $a.confidence as a_confidence,
         $b.slug as b_slug, $b.title as b_title, $b.kind as b_kind,
         $b.repo as b_repo, $b.author as b_author, $b.updated_at as b_updated_at,
+        $b.content as b_content, $b.confidence as b_confidence,
         $w.confidence as edge_confidence, $w.role as edge_role,
         $w.author as edge_author, $w.created_at as edge_created_at
     }

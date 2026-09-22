@@ -528,3 +528,153 @@ line.session-start {
 	font-size: 1.4rem;
 	line-height: 1;
 }
+
+/* ── Memory ─────────────────────────────────────────────────────── */
+
+.memory-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0.5rem 1rem;
+	font-size: 0.85rem;
+	color: var(--muted);
+	margin-bottom: 1rem;
+}
+
+.memory-toolbar input[type="search"] {
+	min-width: 16rem;
+}
+
+.memory-view > section > h2,
+.memory-view > header > h2 {
+	font-size: 1rem;
+	margin: 1.25rem 0 0.5rem;
+}
+
+ul.pairs,
+ul.neighbors {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+li.pair {
+	border-top: 1px solid var(--rule);
+	padding: 0.75rem 0;
+}
+
+.pair-head {
+	margin: 0 0 0.5rem;
+	font-size: 0.85rem;
+}
+
+/* Side by side: the point of the inbox is reading the two claims against each
+   other, which a stacked layout turns into scrolling back and forth. */
+.sides {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 1rem;
+}
+
+@media (max-width: 55rem) {
+	.sides {
+		grid-template-columns: 1fr;
+	}
+}
+
+.side {
+	border-left: 3px solid var(--warn);
+	padding-left: 0.75rem;
+	min-width: 0;
+}
+
+.side h3 {
+	font-size: 0.95rem;
+	margin: 0.25rem 0;
+}
+
+.side .muted {
+	font-size: 0.85rem;
+	display: flex;
+	gap: 0.75rem;
+	margin: 0 0 0.25rem;
+}
+
+.resolve {
+	margin-top: 0.5rem;
+	font-size: 0.85rem;
+}
+
+.resolve pre {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.badge.contradicted,
+.badge.superseded,
+.badge.severity-warning {
+	color: var(--warn);
+	border-color: var(--warn);
+}
+
+.badge.severity-critical {
+	color: var(--bad);
+	border-color: var(--bad);
+}
+
+.superseded-note {
+	border-left: 3px solid var(--warn);
+	padding-left: 0.75rem;
+}
+
+.memory-detail section {
+	margin-top: 1.25rem;
+}
+
+.memory-detail h3 {
+	font-size: 0.95rem;
+	border-bottom: 1px solid var(--rule);
+	padding-bottom: 0.2rem;
+}
+
+ul.neighbors li {
+	padding: 0.25rem 0 0.25rem 0.5rem;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.4rem;
+	align-items: baseline;
+	border-left: 2px solid var(--rule);
+	margin-bottom: 0.25rem;
+}
+
+/* Asserted and inferred must never look alike: recall weights them
+   differently, and a topic promoted from a free-string tag is a much weaker
+   claim than a link someone named. Solid vs dashed carries it without colour,
+   so it survives a colour-blind reader and a greyscale print. */
+ul.neighbors li.edge-asserted {
+	border-left: 2px solid var(--accent);
+}
+
+ul.neighbors li.edge-inferred {
+	border-left: 2px dashed var(--muted);
+}
+
+.edge-meta {
+	display: inline-flex;
+	gap: 0.4rem;
+	align-items: baseline;
+	font-size: 0.8rem;
+}
+
+.badge.confidence-asserted {
+	color: var(--accent);
+	border-color: var(--accent);
+}
+
+.badge.confidence-inferred {
+	border-style: dashed;
+}
+
+.edge-meta .role {
+	font-style: italic;
+}

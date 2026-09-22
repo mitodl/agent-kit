@@ -207,6 +207,21 @@ async def _seed(srv) -> dict[str, str]:
         to_slug=other["slug"],
         kind="contradicts",
     )
+    # A memory the pattern replaced, so `memory_neighbors` records both sides
+    # of `supersedes` and the default reads have something to prune.
+    replaced = await call(
+        "memory_store",
+        kind="pattern",
+        title="Unwrap MCP results by looking for a result key",
+        content="Take structuredContent['result'] whenever it is there.",
+    )
+    await call(
+        "memory_link",
+        from_slug=memory["slug"],
+        to_slug=replaced["slug"],
+        kind="supersedes",
+        role="the shape test misreads a bare dict",
+    )
 
     return {
         "project": project["slug"],
@@ -215,6 +230,7 @@ async def _seed(srv) -> dict[str, str]:
         "blocked": blocked["slug"],
         "held": held["slug"],
         "memory": memory["slug"],
+        "replaced": replaced["slug"],
     }
 
 
@@ -285,7 +301,9 @@ def _calls(slugs: dict[str, str]) -> dict[str, dict]:
         "workflow_project_list": {"repo": ""},
         "workflow_session_list": {"project_slug": slugs["project"]},
         "recall": {"query": "unwrap mcp results", "repo": ""},
-        "memory_get": {"slug": slugs["memory"]},
+        # With topics: the memory view shows them, and their edges are the
+        # only `inferred` ones the seed produces (promoted from `tags`).
+        "memory_get": {"slug": slugs["memory"], "include_topics": True},
         "memory_list": {"kind": "pattern", "repo": ""},
         "memory_search": {"query": "wrap flag", "repo": ""},
         "memory_neighbors": {"slug": slugs["memory"]},
@@ -361,6 +379,18 @@ async def _collect(store: Path) -> dict[str, str]:
         )
         written["task_get.missing.json"] = json.dumps(
             _normalize(_jsonable(missing_result.structured_content), seen),
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+
+        # The superseded side, whose `superseded_by` is the only non-empty
+        # inbound group, and the reason a reader landing here needs the view.
+        replaced_result = await client.call_tool(
+            "memory_neighbors", {"slug": slugs["replaced"]}
+        )
+        written["memory_neighbors.superseded.json"] = json.dumps(
+            _normalize(_jsonable(replaced_result.structured_content), seen),
             indent=2,
             sort_keys=True,
             default=str,

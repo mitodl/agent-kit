@@ -1,11 +1,18 @@
 import { html, nothing, render, type TemplateResult } from "lit-html";
 import { emptyBox, placeholderFor, readStatus } from "./chrome.js";
 import { DAY } from "./format.js";
-import { LiveRead, type Snapshot } from "./live.js";
+import { KeyedRead, LiveRead, type Snapshot } from "./live.js";
 import {
+	memoryContradictions,
+	memoryGet,
+	memoryList,
+	memoryNeighbors,
+	memorySearch,
+	recall,
 	taskGet,
 	taskList,
 	taskReady,
+	topicGet,
 	workflowProjectGet,
 	workflowProjectList,
 	workflowProjectStatus,
@@ -15,6 +22,14 @@ import { formatRoute, parseRoute, type Route } from "./route.js";
 import { detailPanel, shell } from "./shell.js";
 import type { TaskDetail, WorkflowProjectSummary } from "./types.js";
 import { type Board, board, TASK_LIMIT } from "./views/board.js";
+import {
+	isMemorySlug,
+	type MemoryPage,
+	type MemoryPanel,
+	memoryDetail,
+	memoryMissing,
+	memoryView,
+} from "./views/memory.js";
 import { projectList, projectRollup, type Rollup } from "./views/projects.js";
 import { taskDetail, taskMissing } from "./views/task-detail.js";
 import { type Timeline, timeline } from "./views/timeline.js";
@@ -24,8 +39,8 @@ import { type Timeline, timeline } from "./views/timeline.js";
  *
  * Every other module in the app is a pure function or a class with no opinion
  * about the DOM. This is the one place that owns mutable state, and it holds
- * exactly three things — the route, and one `LiveRead` per read the current
- * route needs.
+ * exactly two kinds of thing: the route, and one read per thing the current
+ * route draws.
  */
 
 export class App {
@@ -44,32 +59,18 @@ export class App {
 	private readonly projects: LiveRead<WorkflowProjectSummary[]>;
 	private projectsSnapshot: Snapshot<WorkflowProjectSummary[]>;
 
-	private rollup: LiveRead<Rollup> | null = null;
-	private rollupSnapshot: Snapshot<Rollup> | null = null;
+	private readonly rollup = new KeyedRead<Rollup>(() => this.draw());
+	private readonly board = new KeyedRead<Board>(() => this.draw());
 	/**
-	 * The arguments `rollup` is currently reading, so an unrelated route change
-	 * does not restart it.
-	 *
-	 * ★ WITHOUT THIS, OPENING A TASK RE-READS THE PROJECT. Every navigation
-	 * comes through one `hashchange`, and a retarget blanks the snapshot by
-	 * design, so a route change that touched only `slug` would flash the whole
-	 * rollup back to "Reading this project…" — on every open and every close.
+	 * No interval (spec §6.6): it plots elapsed time, so a poll every 30
+	 * seconds would only move the right edge. Focus and Refresh still read.
 	 */
-	private rollupKey: string | null = null;
-
-	private board: LiveRead<Board> | null = null;
-	private boardSnapshot: Snapshot<Board> | null = null;
-	/** The scope `board` is reading, keyed the same way as `rollupKey`. */
-	private boardKey: string | null = null;
-
-	private timeline: LiveRead<Timeline> | null = null;
-	private timelineSnapshot: Snapshot<Timeline> | null = null;
-	/** The scope `timeline` is reading, keyed the same way as `rollupKey`. */
-	private timelineKey: string | null = null;
-
-	private detail: LiveRead<TaskDetail | null> | null = null;
-	private detailSnapshot: Snapshot<TaskDetail | null> | null = null;
-	private detailKey: string | null = null;
+	private readonly timeline = new KeyedRead<Timeline>(() => this.draw(), {
+		intervalMs: 0,
+	});
+	private readonly memoryPage = new KeyedRead<MemoryPage>(() => this.draw());
+	private readonly detail = new KeyedRead<TaskDetail | null>(() => this.draw());
+	private readonly memoryDetail = new KeyedRead<MemoryPanel>(() => this.draw());
 
 	/** The slug the panel last rendered, so focus moves only when it opens. */
 	private focusedSlug: string | null = null;
@@ -102,10 +103,12 @@ export class App {
 		window.removeEventListener("hashchange", this.onHashChange);
 		document.removeEventListener("keydown", this.onKeyDown);
 		this.projects.stop();
-		this.rollup?.stop();
-		this.board?.stop();
-		this.timeline?.stop();
-		this.detail?.stop();
+		this.rollup.stop();
+		this.board.stop();
+		this.timeline.stop();
+		this.memoryPage.stop();
+		this.detail.stop();
+		this.memoryDetail.stop();
 	}
 
 	private readonly onHashChange = (): void => {
@@ -138,168 +141,77 @@ export class App {
 	/**
 	 * Point the per-route reads at what the current route needs.
 	 *
-	 * Retargeting rather than rebuilding, and only when that read's own
-	 * arguments changed: a rebuild would restart the poll clock, and a retarget
-	 * blanks the snapshot, so reacting to every route change would re-read a
-	 * project because a task was opened beside it.
+	 * Each key is that read's arguments and nothing else the route carries (see
+	 * `KeyedRead`), so opening a panel does not re-read the view beside it.
 	 */
 	private syncReads(): void {
-		this.syncRollup();
-		this.syncBoard();
-		this.syncTimeline();
-		this.syncDetail();
-	}
+		const route = this.route;
 
-	private syncRollup(): void {
 		// Only the Projects tab draws a rollup. Keyed on the project alone, a
 		// route like `#board?project=wp-x` kept four tool calls going every 30
-		// seconds behind a tab that does not draw it, and showed a read
-		// time for data nothing was rendering.
-		const slug = this.route.view === "projects" ? this.route.project : null;
-		if (!slug) {
-			this.rollup?.stop();
-			this.rollup = null;
-			this.rollupSnapshot = null;
-			this.rollupKey = null;
-			return;
-		}
-		// The project slug is the WHOLE key: nothing else the route carries is
-		// an argument to any of the four reads. The repo used to be here, on the
-		// belief that it narrowed the task list; it does not (see `readRollup`),
-		// so keying on it only bought a pointless re-read of four tools.
-		if (this.rollup && slug === this.rollupKey) {
-			return;
-		}
-		const read = () => readRollup(slug);
-		this.rollupKey = slug;
-		if (this.rollup) {
-			this.rollup.retarget(read);
-			return;
-		}
-		this.rollup = new LiveRead(read, (snapshot) => {
-			this.rollupSnapshot = snapshot;
-			this.draw();
-		});
-		this.rollupSnapshot = this.rollup.snapshot;
-		this.rollup.start();
-	}
+		// seconds behind a tab that does not draw it. The project slug is the
+		// WHOLE key: `repo` is not an argument to any of the four reads (see
+		// `readRollup`), so keying on it only bought a pointless re-read.
+		const project = route.view === "projects" ? route.project : null;
+		this.rollup.sync(project, () => readRollup(project as string));
 
-	private syncBoard(): void {
-		if (this.route.view !== "board") {
-			this.board?.stop();
-			this.board = null;
-			this.boardSnapshot = null;
-			this.boardKey = null;
-			return;
-		}
 		// Every argument any of the board's reads takes, and nothing else, so
 		// opening a card in the panel does not re-read five tools.
-		const scope = {
-			repo: this.route.repo,
-			project: this.route.project,
-			closed: this.route.closed,
-		};
-		const key = JSON.stringify(scope);
-		if (this.board && key === this.boardKey) {
-			return;
-		}
-		const read = () => readBoard(scope);
-		this.boardKey = key;
-		if (this.board) {
-			this.board.retarget(read);
-			return;
-		}
-		this.board = new LiveRead(read, (snapshot) => {
-			this.boardSnapshot = snapshot;
-			this.draw();
-		});
-		this.boardSnapshot = this.board.snapshot;
-		this.board.start();
-	}
+		const boardScope =
+			route.view === "board"
+				? { repo: route.repo, project: route.project, closed: route.closed }
+				: null;
+		this.board.sync(boardScope && JSON.stringify(boardScope), () =>
+			readBoard(boardScope as BoardScope),
+		);
 
-	private syncTimeline(): void {
-		if (this.route.view !== "timeline") {
-			this.timeline?.stop();
-			this.timeline = null;
-			this.timelineSnapshot = null;
-			this.timelineKey = null;
-			return;
-		}
 		// The repo is not in the key: both reads are repo-wide (see
 		// `readTimeline`) and the repo narrows them in the browser.
-		const scope = { project: this.route.project, days: this.route.days };
-		const key = JSON.stringify(scope);
-		if (this.timeline && key === this.timelineKey) {
-			return;
-		}
-		const read = () => readTimeline(scope);
-		this.timelineKey = key;
-		if (this.timeline) {
-			this.timeline.retarget(read);
-			return;
-		}
-		// No interval (spec §6.6): it plots elapsed time, so a poll every 30
-		// seconds would only move the right edge. Focus and Refresh still read.
-		this.timeline = new LiveRead(
-			read,
-			(snapshot) => {
-				this.timelineSnapshot = snapshot;
-				this.draw();
-			},
-			{ intervalMs: 0 },
+		const timelineScope =
+			route.view === "timeline"
+				? { project: route.project, days: route.days }
+				: null;
+		this.timeline.sync(timelineScope && JSON.stringify(timelineScope), () =>
+			readTimeline(timelineScope as TimelineScope),
 		);
-		this.timelineSnapshot = this.timeline.snapshot;
-		this.timeline.start();
-	}
 
-	private syncDetail(): void {
-		const slug = this.route.slug;
-		if (!slug) {
-			this.detail?.stop();
-			this.detail = null;
-			this.detailSnapshot = null;
-			this.detailKey = null;
-			return;
-		}
-		if (this.detail && slug === this.detailKey) {
-			return;
-		}
-		const read = () => taskGet(slug);
-		this.detailKey = slug;
-		if (this.detail) {
-			this.detail.retarget(read);
-			return;
-		}
-		this.detail = new LiveRead(read, (snapshot) => {
-			this.detailSnapshot = snapshot;
-			this.draw();
-		});
-		this.detailSnapshot = this.detail.snapshot;
-		this.detail.start();
+		const memoryScope: MemoryScope | null =
+			route.view === "memory"
+				? {
+						repo: route.repo,
+						q: route.q,
+						kind: route.kind,
+						plain: route.plain,
+						superseded: route.superseded,
+						topic: route.topic,
+					}
+				: null;
+		this.memoryPage.sync(memoryScope && JSON.stringify(memoryScope), () =>
+			readMemoryPage(memoryScope as MemoryScope),
+		);
+
+		// One panel, two kinds of slug: a memory linked from anywhere opens as a
+		// memory, and everything else as a task.
+		const slug = route.slug;
+		const memorySlug = slug && isMemorySlug(slug) ? slug : null;
+		const taskSlug = slug && !memorySlug ? slug : null;
+		this.detail.sync(taskSlug, () => taskGet(taskSlug as string));
+		this.memoryDetail.sync(memorySlug, () =>
+			readMemoryPanel(memorySlug as string),
+		);
 	}
 
 	/** The reads behind whatever the main area is showing, for the status line. */
 	private primary(): { snapshot: Snapshot<unknown>; refresh: () => void } {
-		if (this.board && this.boardSnapshot) {
-			const live = this.board;
-			return {
-				snapshot: this.boardSnapshot,
-				refresh: () => live.refresh(),
-			};
-		}
-		if (this.timeline && this.timelineSnapshot) {
-			const live = this.timeline;
-			return {
-				snapshot: this.timelineSnapshot,
-				refresh: () => live.refresh(),
-			};
-		}
-		if (this.rollup && this.rollupSnapshot) {
-			const rollup = this.rollup;
-			return {
-				snapshot: this.rollupSnapshot,
-				refresh: () => rollup.refresh(),
-			};
+		for (const read of [
+			this.board,
+			this.timeline,
+			this.rollup,
+			this.memoryPage,
+		] as KeyedRead<unknown>[]) {
+			if (read.snapshot) {
+				return { snapshot: read.snapshot, refresh: () => read.refresh() };
+			}
 		}
 		return {
 			snapshot: this.projectsSnapshot,
@@ -335,7 +247,7 @@ export class App {
 
 	private body(inScope: WorkflowProjectSummary[]): TemplateResult {
 		if (this.route.view === "board") {
-			const snapshot = this.boardSnapshot;
+			const snapshot = this.board.snapshot;
 			if (!snapshot) {
 				return emptyBox("Reading the board…");
 			}
@@ -347,7 +259,7 @@ export class App {
 		}
 
 		if (this.route.view === "timeline") {
-			const snapshot = this.timelineSnapshot;
+			const snapshot = this.timeline.snapshot;
 			if (!snapshot) {
 				return emptyBox("Reading the timeline…");
 			}
@@ -358,6 +270,21 @@ export class App {
 			return timeline(snapshot.data as Timeline, this.route);
 		}
 
+		if (this.route.view === "memory") {
+			const snapshot = this.memoryPage.snapshot;
+			if (!snapshot) {
+				return emptyBox("Reading memories…");
+			}
+			const waiting = placeholderFor(snapshot, "memories");
+			if (waiting) {
+				return waiting;
+			}
+			// `readMemoryPage` always resolves to an object.
+			return memoryView(snapshot.data as MemoryPage, this.route, (patch) =>
+				this.navigate(patch),
+			);
+		}
+
 		if (this.route.view !== "projects") {
 			// Named rather than blank: the tabs are declared up front (spec §6) so
 			// the shell has one navigation model, and a person landing on an
@@ -366,7 +293,7 @@ export class App {
 		}
 
 		if (this.route.project) {
-			const snapshot = this.rollupSnapshot;
+			const snapshot = this.rollup.snapshot;
 			if (!snapshot) {
 				return emptyBox("Reading project…");
 			}
@@ -391,7 +318,10 @@ export class App {
 		if (!slug) {
 			return nothing;
 		}
-		const snapshot = this.detailSnapshot;
+		if (isMemorySlug(slug)) {
+			return this.memoryPanel(slug);
+		}
+		const snapshot = this.detail.snapshot;
 		if (!snapshot) {
 			return detailPanel(
 				this.route,
@@ -409,10 +339,7 @@ export class App {
 		}
 		// The panel carries its own read state: it polls separately from the
 		// view underneath, so the top bar cannot report for it.
-		const detail = this.detail;
-		const status = detail
-			? readStatus(snapshot, () => detail.refresh())
-			: nothing;
+		const status = readStatus(snapshot, () => this.detail.refresh());
 		const task = snapshot.data;
 		// A null with a result behind it is the graph saying no: a stale link,
 		// which is normal, rather than a failure.
@@ -423,6 +350,34 @@ export class App {
 			this.route,
 			task.title,
 			taskDetail(task, this.route),
+			status,
+		);
+	}
+
+	/** The panel for a memory slug. The same states as the task panel's. */
+	private memoryPanel(slug: string): TemplateResult {
+		const snapshot = this.memoryDetail.snapshot;
+		if (!snapshot) {
+			return detailPanel(
+				this.route,
+				slug,
+				html`<p class="placeholder" aria-busy="true">Reading ${slug}…</p>`,
+			);
+		}
+		const waiting = placeholderFor(snapshot, slug);
+		if (waiting) {
+			return detailPanel(this.route, slug, waiting);
+		}
+		const status = readStatus(snapshot, () => this.memoryDetail.refresh());
+		// `readMemoryPanel` always resolves to an object once a read has landed.
+		const panel = snapshot.data as MemoryPanel;
+		if (panel.memory === null) {
+			return detailPanel(this.route, slug, memoryMissing(slug), status);
+		}
+		return detailPanel(
+			this.route,
+			panel.memory.title,
+			memoryDetail({ ...panel, memory: panel.memory }, this.route),
 			status,
 		);
 	}
@@ -490,6 +445,9 @@ async function readRollup(slug: string): Promise<Rollup> {
 	return { detail, status, tasks, sessions };
 }
 
+/** The route fields that are arguments to the board's reads. */
+type BoardScope = Pick<Route, "repo" | "project" | "closed">;
+
 /**
  * The reads behind the board (spec §6.4), all-or-nothing like the rollup's.
  *
@@ -500,11 +458,7 @@ async function readRollup(slug: string): Promise<Rollup> {
  * Three status reads rather than one unfiltered one, so the live set never
  * drags every closed task in the graph along with it.
  */
-async function readBoard(scope: {
-	repo: string;
-	project: string | null;
-	closed: boolean;
-}): Promise<Board> {
+async function readBoard(scope: BoardScope): Promise<Board> {
 	// `project_slug` overrides `repo` in both tools, so a project scope passes
 	// `repo: ""` rather than a repo the server would ignore anyway.
 	const scoped = scope.project
@@ -531,6 +485,9 @@ async function readBoard(scope: {
 	};
 }
 
+/** The route fields that are arguments to the timeline's reads. */
+type TimelineScope = Pick<Route, "project" | "days">;
+
 /**
  * The reads behind the timeline (spec §6.6), all-or-nothing like the others.
  *
@@ -542,10 +499,7 @@ async function readBoard(scope: {
  * spec §3.7), and keeps every session that never ended, however old. Across
  * every repo, for the reason the board's live read is.
  */
-async function readTimeline(scope: {
-	project: string | null;
-	days: number;
-}): Promise<Timeline> {
+async function readTimeline(scope: TimelineScope): Promise<Timeline> {
 	const readAt = Date.now();
 	const since = new Date(readAt - scope.days * DAY).toISOString();
 	const [tasks, sessions, projects] = await Promise.all([
@@ -568,6 +522,76 @@ async function readTimeline(scope: {
 		truncated: !scope.project && tasks.length >= TASK_LIMIT,
 		projects,
 	};
+}
+
+/** The route fields that are arguments to the memory view's read. */
+type MemoryScope = Pick<
+	Route,
+	"repo" | "q" | "kind" | "plain" | "superseded" | "topic"
+>;
+
+/**
+ * The read behind the memory view (spec §6.7), which depends on its state.
+ *
+ * A topic shows that topic; a query searches, through `recall` unless the
+ * plain toggle asks for `memory_search`; neither is the landing state, which
+ * is the contradictions inbox over a browse list.
+ *
+ * ★ `topic_get` TAKES NO REPO, KIND OR SUPERSEDED FLAG. A topic is the
+ * cross-repo join surface by design, so its list ignores the repo filter; the
+ * kind is applied here, and the view hides the superseded toggle.
+ */
+async function readMemoryPage(scope: MemoryScope): Promise<MemoryPage> {
+	const { repo, q, plain, superseded } = scope;
+	const kind = scope.kind ?? undefined;
+	if (scope.topic) {
+		const result = await topicGet(scope.topic);
+		// `topic_get` takes no kind either, so the Kind select narrows here.
+		const memories = (result?.memories ?? []).filter(
+			(memory) => !kind || memory.kind === kind,
+		);
+		return { mode: "topic", topic: result?.topic ?? null, memories };
+	}
+	if (q && plain) {
+		const memories = await memorySearch({
+			query: q,
+			repo,
+			kind,
+			include_superseded: superseded,
+		});
+		return { mode: "plain", memories };
+	}
+	if (q) {
+		const result = await recall({
+			query: q,
+			repo,
+			kind,
+			include_superseded: superseded,
+		});
+		return {
+			mode: "recall",
+			memories: result.memories,
+			pairs: result.contradictions,
+		};
+	}
+	const [memories, pairs] = await Promise.all([
+		memoryList({ repo, kind, include_superseded: superseded }),
+		// Never `include_superseded`: a pair with a superseded side is resolved,
+		// and the inbox is the list of what still needs a person.
+		memoryContradictions({ repo }),
+	]);
+	// Each side carries its own `content`, so the inbox is this one read, not
+	// one more per memory in it on every poll.
+	return { mode: "browse", memories, inbox: pairs };
+}
+
+/** One memory and its neighbours, together: the panel draws both or neither. */
+async function readMemoryPanel(slug: string): Promise<MemoryPanel> {
+	const [memory, neighbors] = await Promise.all([
+		memoryGet(slug, { topics: true }),
+		memoryNeighbors({ slug }),
+	]);
+	return { memory, neighbors };
 }
 
 /** Every repo any project names, sorted, for the repo filter. */

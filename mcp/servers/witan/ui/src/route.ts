@@ -1,5 +1,31 @@
 import { canonicalRepo } from "./format.js";
 import { VIEWS, type ViewId } from "./shell.js";
+import type { MemoryKind } from "./types.js";
+
+const MEMORY_KINDS: readonly MemoryKind[] = [
+	"pattern",
+	"project_fact",
+	"lesson",
+	"agent_context",
+];
+
+/**
+ * The memory view's narrowing that happens in the browser, over whatever the
+ * read returned. Each is one exact value or `null` for "any".
+ *
+ * Not tool arguments: only `memory_list` takes `language`, and none of the
+ * reads takes the rest, so filtering here is the one way they mean the same
+ * thing in list, search and recall mode.
+ */
+export const MEMORY_FACETS = [
+	"language",
+	"category",
+	"severity",
+	"tag",
+	"author",
+] as const;
+
+export type MemoryFacet = (typeof MEMORY_FACETS)[number];
 
 /**
  * The app's whole UI state, as the URL carries it.
@@ -27,6 +53,17 @@ export interface Route {
 	closed: boolean;
 	/** The timeline's window, in days back from the read. One of `WINDOW_DAYS`. */
 	days: number;
+	/** The memory view's search text. Empty is the browse state. */
+	q: string;
+	/** One memory kind, else `null` for all four. A tool argument. */
+	kind: MemoryKind | null;
+	/** Plain BM25 (`memory_search`) rather than `recall`. */
+	plain: boolean;
+	/** Whether superseded memories are shown. Off, as the tools default. */
+	superseded: boolean;
+	/** A `tp-` slug when the memory view is showing one topic, else `null`. */
+	topic: string | null;
+	facets: Record<MemoryFacet, string | null>;
 }
 
 /**
@@ -53,6 +90,18 @@ export const DEFAULT_ROUTE: Route = {
 	closed: false,
 	// Spec §6.6: "where the last two weeks went".
 	days: 14,
+	q: "",
+	kind: null,
+	plain: false,
+	superseded: false,
+	topic: null,
+	facets: {
+		language: null,
+		category: null,
+		severity: null,
+		tag: null,
+		author: null,
+	},
 };
 
 /**
@@ -71,6 +120,9 @@ export function parseRoute(hash: string): Route {
 	const [head = "", query = ""] = hash.replace(/^#/, "").split("?", 2);
 	const params = new URLSearchParams(query);
 	const view = VIEWS.find((candidate) => candidate.id === head);
+	const kind = MEMORY_KINDS.find(
+		(candidate) => candidate === params.get("kind"),
+	);
 	return {
 		view: view ? view.id : DEFAULT_ROUTE.view,
 		// Canonical from here on, so every tool call and every browser-side
@@ -80,6 +132,14 @@ export function parseRoute(hash: string): Route {
 		slug: params.get("slug") || null,
 		closed: params.get("closed") === "1",
 		days: parseDays(params.get("days")),
+		q: params.get("q") ?? DEFAULT_ROUTE.q,
+		kind: kind ?? null,
+		plain: params.get("plain") === "1",
+		superseded: params.get("superseded") === "1",
+		topic: params.get("topic") || null,
+		facets: Object.fromEntries(
+			MEMORY_FACETS.map((facet) => [facet, params.get(facet) || null]),
+		) as Route["facets"],
 	};
 }
 
@@ -114,6 +174,27 @@ export function formatRoute(route: Route): string {
 	}
 	if (route.days !== DEFAULT_ROUTE.days) {
 		params.set("days", String(route.days));
+	}
+	if (route.q) {
+		params.set("q", route.q);
+	}
+	if (route.kind) {
+		params.set("kind", route.kind);
+	}
+	if (route.plain) {
+		params.set("plain", "1");
+	}
+	if (route.superseded) {
+		params.set("superseded", "1");
+	}
+	if (route.topic) {
+		params.set("topic", route.topic);
+	}
+	for (const facet of MEMORY_FACETS) {
+		const value = route.facets[facet];
+		if (value) {
+			params.set(facet, value);
+		}
 	}
 	const query = params.toString();
 	return query ? `#${route.view}?${query}` : `#${route.view}`;

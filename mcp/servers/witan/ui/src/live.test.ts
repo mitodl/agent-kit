@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { isStale, LiveRead, type Snapshot } from "./live.js";
+import { isStale, KeyedRead, LiveRead, type Snapshot } from "./live.js";
 
 /** A read whose resolution the test controls, one call at a time. */
 function deferred<T>() {
@@ -265,5 +265,58 @@ describe("LiveRead", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe("KeyedRead", () => {
+	it("reads nothing, and has no snapshot, under a null key", () => {
+		const read = vi.fn(() => Promise.resolve("x"));
+		const keyed = new KeyedRead<string>(() => {});
+
+		keyed.sync(null, read);
+
+		expect(read).not.toHaveBeenCalled();
+		expect(keyed.snapshot).toBeNull();
+	});
+
+	it("does not re-read for an unchanged key", async () => {
+		const read = vi.fn(() => Promise.resolve("x"));
+		const keyed = new KeyedRead<string>(() => {});
+
+		keyed.sync("a", read);
+		await vi.waitFor(() => expect(keyed.snapshot?.data).toBe("x"));
+		keyed.sync("a", read);
+		keyed.stop();
+
+		expect(read).toHaveBeenCalledTimes(1);
+	});
+
+	it("retargets on a new key, dropping the old key's data", async () => {
+		const later = deferred<string>();
+		const keyed = new KeyedRead<string>(() => {});
+
+		keyed.sync("a", () => Promise.resolve("for a"));
+		await vi.waitFor(() => expect(keyed.snapshot?.data).toBe("for a"));
+		keyed.sync("b", () => later.promise);
+
+		// Blank, not "for a": the retained data would answer a question nobody
+		// is asking any more.
+		expect(keyed.snapshot?.data).toBeNull();
+		later.resolve("for b");
+		await vi.waitFor(() => expect(keyed.snapshot?.data).toBe("for b"));
+		keyed.stop();
+	});
+
+	it("stops polling and forgets its snapshot when the key goes null", async () => {
+		const read = vi.fn(() => Promise.resolve("x"));
+		const keyed = new KeyedRead<string>(() => {});
+
+		keyed.sync("a", read);
+		await vi.waitFor(() => expect(keyed.snapshot?.data).toBe("x"));
+		keyed.sync(null, read);
+		window.dispatchEvent(new Event("focus"));
+
+		expect(read).toHaveBeenCalledTimes(1);
+		expect(keyed.snapshot).toBeNull();
 	});
 });
