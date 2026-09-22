@@ -485,6 +485,24 @@ describe("timeline", () => {
 		);
 	});
 
+	it("does not pin a first claim older than the window to its left edge", () => {
+		draw(
+			data({
+				tasks: [
+					task({
+						slug: "tk-released",
+						created_at: naive(READ_AT - 40 * DAY),
+						first_claimed_at: naive(READ_AT - 30 * DAY),
+					}),
+				],
+			}),
+		);
+		expect(row("tk-released").querySelector("line.first-claim")).toBeNull();
+		expect(
+			row("tk-released").querySelector("rect.lead")?.textContent,
+		).toContain("The release time is not recorded");
+	});
+
 	it("marks a lapsed lease", () => {
 		draw(data({ tasks: [{ ...inFlight, lease_expired: true }] }));
 		const lease = row("tk-in-flight").querySelector("line.lease");

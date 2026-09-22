@@ -537,8 +537,10 @@ async function readBoard(scope: {
  * Tasks are read whole and windowed in the browser: `task_list` has no time
  * filter, and a task created long before the window can still be open or have
  * closed inside it. Sessions are windowed by the server through `since`, which
- * is what keeps the read from growing with every session ever recorded
- * (spec §3.7). Across every repo, for the reason the board's live read is.
+ * trims what crosses the wire but not what the server reads: it filters in
+ * Python after reading every session (`read.gq` has no DateTime comparison,
+ * spec §3.7), and keeps every session that never ended, however old. Across
+ * every repo, for the reason the board's live read is.
  */
 async function readTimeline(scope: {
 	project: string | null;

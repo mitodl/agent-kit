@@ -584,6 +584,10 @@ function barRow(
 	const { task } = bar;
 	const ending = task.status === "closed" ? "" : ", still open";
 	const lease = bar.lease !== null ? leaseText(bar, bar.lease) : "";
+	const released =
+		!bar.work && bar.firstClaim !== null
+			? `First claimed ${absolute(new Date(bar.firstClaim))}, then released. The release time is not recorded, so no work segment is drawn.`
+			: "";
 	return html`
     <div class="tl-row" data-slug=${task.slug}>
       <a class="tl-label" href=${routeHref(route, { slug: task.slug })}
@@ -596,7 +600,7 @@ function barRow(
 						bar.firstClaim === null ? "lead hatched" : "lead",
 						bar.lead,
 						x,
-						[`Lead time: ${spanText(bar.lead)}${ending}`, lease]
+						[`Lead time: ${spanText(bar.lead)}${ending}`, released, lease]
 							.filter(Boolean)
 							.join("\n"),
 					)}
@@ -611,21 +615,18 @@ function barRow(
 							: nothing
 					}
           ${
-						!bar.work && bar.firstClaim !== null
-							? mark(
-									"first-claim",
-									bar.firstClaim,
-									x,
-									`First claimed ${absolute(new Date(bar.firstClaim))}; released since, when is not recorded`,
-								)
+						/*
+						 * Neither mark is drawn when it is older than the window:
+						 * clipped, it would sit on the left edge and read as "since the
+						 * window opened". The lead bar's tooltip still carries both.
+						 */
+						released &&
+						bar.firstClaim !== null &&
+						bar.firstClaim >= window.start
+							? mark("first-claim", bar.firstClaim, x, released)
 							: nothing
 					}
           ${
-						/*
-						 * A lease older than the window is not drawn: clipped, it would
-						 * sit on the left edge and read as "since the window opened".
-						 * The lead bar's tooltip still carries it.
-						 */
 						bar.lease !== null && bar.lease >= window.start
 							? mark(
 									task.lease_expired ? "lease stale" : "lease",

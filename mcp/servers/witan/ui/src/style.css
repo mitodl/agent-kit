@@ -460,8 +460,10 @@ line.lease {
 	stroke-width: 2;
 }
 
+/* Dashed as well as coloured, so a lapsed lease does not rest on colour. */
 line.lease.stale {
 	stroke: var(--warn);
+	stroke-dasharray: 3 2;
 }
 
 rect.session {
