@@ -730,6 +730,28 @@ def test_exhausted_conflict_retries_raise_a_refusal(monkeypatch):
     assert calls["n"] == og._MAX_ATTEMPTS
 
 
+def test_an_exhausted_read_is_not_reported_as_write_contention(monkeypatch):
+    """ "Nothing was written" is only a claim a write can make, and a read that
+    can never get a consistent view is a fault worth an ERROR."""
+    client = _client(monkeypatch)
+    _stub_run(monkeypatch, returncode=1, stderr=_WRITE_AUTHORITY_STDERR)
+
+    with pytest.raises(RuntimeError) as exc:
+        client._execute(["omnigraph", "read"], "read", is_write=False)
+    assert not isinstance(exc.value, og.WriteContention)
+
+
+def test_conflict_retries_stop_at_the_call_deadline(monkeypatch):
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_WRITE_AUTHORITY_STDERR)
+    monkeypatch.setenv(og.REMOTE_CALL_BUDGET_ENV_VAR, "0.5")
+    monkeypatch.setattr(og, "_conflict_backoff", lambda attempt: 1.0)
+
+    with pytest.raises(og.WriteContention, match="lost 1 "):
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert calls["n"] == 1
+
+
 def test_conflict_backoff_is_fully_jittered_and_capped(monkeypatch):
     """Full jitter is what breaks the lockstep between OCC losers; the old
     fixed schedule had none."""

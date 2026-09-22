@@ -2650,15 +2650,20 @@ class OmnigraphClient:
                     self._repair(env)
                     continue
                 if kind == _http.RETRYABLE:
-                    time.sleep(_conflict_backoff(attempt))
-                    continue
+                    delay = _conflict_backoff(attempt)
+                    # A retry that starts after the caller's cut-off can only
+                    # end as a torn-down connection, the indeterminate write
+                    # the admission-cap branch above refuses to risk too.
+                    if deadline is None or time.monotonic() + delay < deadline:
+                        time.sleep(delay)
+                        continue
             # `exit N` only makes sense for a subprocess; an HTTP attempt
             # carries no returncode and says so by omitting it, rather than
             # inventing one that would read as a CLI exit status.
             exited = "" if result.returncode is None else f" (exit {result.returncode})"
-            if kind == _http.RETRYABLE:
+            if kind == _http.RETRYABLE and is_write:
                 raise WriteContention(
-                    f"omnigraph {label} lost {_MAX_ATTEMPTS} optimistic-"
+                    f"omnigraph {label} lost {attempt} optimistic-"
                     f"concurrency races in a row{exited} — another writer kept "
                     f"committing to the same tables. Nothing was written; "
                     f"retry once the other writer is done:\n{err.strip()}"
