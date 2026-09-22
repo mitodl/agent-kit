@@ -48,3 +48,23 @@ def test_every_witan_refusal_is_in_the_table():
         f"opted in without an audit entry: "
         f"{sorted(c.__name__ for c in ours - set(EXPECTED_LOG_SAFE))}"
     )
+
+
+def test_no_refusal_here_logs_structured_attributes():
+    """None of ours declares `log_safe_attributes` yet, and one that does needs
+    the same reading as an opt-in. witan-core's
+    `EXPECTED_LOG_SAFE_ATTRIBUTES` cannot see this package, so assert it here.
+    """
+    from witan_core.refusal import Refusal
+
+    def walk(base):
+        for sub in base.__subclasses__():
+            yield sub
+            yield from walk(sub)
+
+    declaring = sorted(
+        sub.__name__
+        for sub in walk(Refusal)
+        if sub.__module__.startswith("witan.") and "log_safe_attributes" in sub.__dict__
+    )
+    assert not declaring, f"declares log_safe_attributes unaudited: {declaring}"

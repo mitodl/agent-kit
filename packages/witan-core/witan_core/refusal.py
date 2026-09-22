@@ -22,6 +22,9 @@ these by their own types. Mixing ``Refusal`` in keeps ``WriteBlocked`` a
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import ClassVar
 
 try:
     from fastmcp.exceptions import ToolError as _Base
@@ -59,6 +62,23 @@ class Refusal(_Base):  # type: ignore[misc,valid-type]
     ``scan.enforce.WriteBlocked`` documents. When in doubt leave it off: the
     class NAME reaches the log either way, and the class name alone is what
     turned the 2026-09-16 ``code_store_views`` mystery into a diagnosis.
+    """
+
+    log_safe_attributes: ClassVar[Mapping[str, str]] = MappingProxyType({})
+    """Structured attributes that may go into the log, as ``{field: attribute}``.
+
+    The way to log the one identifier inside a message that is not safe as a
+    whole. ``log_safe_message`` is all-or-nothing on free text, so a type whose
+    raise site appends an upstream string stays withheld, and loses the
+    identifier with it: ``StoreQuarantined`` carries the sidecar operation id an
+    operator needs to quarantine the right file. Declaring
+    ``{"sidecar_operation_id": "operation_id"}`` puts that attribute on the
+    ``mcp.tool_call`` line as its own field, with none of the prose around it.
+
+    The same bar as ``log_safe_message``, applied to one attribute: declare it
+    only when the value is an identifier or a count BY CONSTRUCTION, not merely
+    in the cases seen so far. An attribute that is ``None`` is left off the
+    line. Independent of ``log_safe_message``; a type may use either or both.
     """
 
     def __init__(self, *args: object) -> None:

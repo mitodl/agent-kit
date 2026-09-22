@@ -12,6 +12,11 @@ witan reports this as `StoreQuarantined` and names the sidecar's operation id in
 the message. It is a refusal, not a transient failure: nothing clears it but an
 operator, and retrying only spends the caller's deadline.
 
+A deployed server does not log that message, because it ends in the transport's
+raw error text. The failed call's `mcp.tool_call` line carries
+`error_type: StoreQuarantined` and the id as its own `sidecar_operation_id`
+field instead.
+
 ## What causes it
 
 Two writers committing against one storage root at the same manifest version,
@@ -89,8 +94,10 @@ aws s3 cp <store-uri>/__recovery/<operation>.json \
   ./quarantine-evidence/<operation>.json
 ```
 
-Also keep the full error text. The operation id is the only handle on the
-sidecar, and a truncated log costs a listing of `__recovery/` to recover.
+Also keep the full error text if you have it (a CLI run prints it). The
+operation id is the only handle on the sidecar; if the line has no
+`sidecar_operation_id`, the id could not be parsed and a listing of
+`__recovery/` is the way to recover it.
 
 **4. Read the sidecar before resolving it.** What matters is which tables it
 names, the expected version, the post-commit pin, and whether the original

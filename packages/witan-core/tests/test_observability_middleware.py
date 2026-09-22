@@ -167,6 +167,67 @@ def test_a_refusal_withholds_its_message_by_default(capsys):
     assert "error" not in payload
 
 
+def test_a_withheld_refusal_still_logs_its_declared_identifier(capsys):
+    # The real case. StoreQuarantined's message ends in the transport's raw
+    # error text, so it stays withheld, but the sidecar operation id inside it
+    # is the one thing an operator needs to quarantine the right file. Reading
+    # it back out of a truncated log was the slowest step of the 2026-09-18
+    # recovery.
+    from witan_core.omnigraph import StoreQuarantined
+
+    async def call_next(_ctx):
+        msg = "store is quarantined (sidecar operation 01M2V544QY):\nSENSITIVE-BODY"
+        raise StoreQuarantined(msg, "01M2V544QY")
+
+    with pytest.raises(StoreQuarantined):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    written = capsys.readouterr().err
+    assert "SENSITIVE-BODY" not in written
+    payload = json.loads(written.strip())
+    assert payload["error_type"] == "StoreQuarantined"
+    assert payload["error_withheld"] is True
+    assert payload["sidecar_operation_id"] == "01M2V544QY"
+    assert "error" not in payload
+
+
+def test_an_absent_identifier_is_left_off_the_line(capsys):
+    # A quarantine whose sidecar could not be parsed. `null` would read as
+    # "parsed, and there was none" in a Loki filter; absence does not.
+    from witan_core.omnigraph import StoreQuarantined
+
+    async def call_next(_ctx):
+        msg = "store is quarantined"
+        raise StoreQuarantined(msg)
+
+    with pytest.raises(StoreQuarantined):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert "sidecar_operation_id" not in payload
+
+
+def test_a_declared_attribute_cannot_collide_with_the_line_s_own_fields(capsys):
+    # `tool` twice to log.info is a TypeError inside a `finally`, which would
+    # replace the caller's refusal with a server fault. Dropped, not raised.
+    from witan_core.refusal import Refusal
+
+    class Colliding(RuntimeError, Refusal):
+        log_safe_attributes = {"tool": "who", "error_type": "who", "ok_id": "who"}
+
+        def __init__(self):
+            super().__init__("nope")
+            self.who = "impostor"
+
+    async def call_next(_ctx):
+        raise Colliding
+
+    with pytest.raises(Colliding):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["tool"] == "recall"
+    assert payload["error_type"] == "Colliding"
+    assert payload["ok_id"] == "impostor"
+
+
 def test_a_long_message_is_truncated(capsys):
     async def call_next(_ctx):
         raise ValueError("x" * (middleware_module._MAX_ERROR_CHARS + 50))
@@ -789,3 +850,55 @@ def test_no_refusal_outside_the_audit_is_opted_in():
         f"opted in without an audit entry: {unaudited_opted_in}. Read the raise "
         f"sites, then add it to EXPECTED_LOG_SAFE."
     )
+
+
+# Which structured attributes each real refusal puts on the line, beside or
+# instead of its message. Same bar as the table above, applied per attribute:
+# an identifier or a count by construction.
+EXPECTED_LOG_SAFE_ATTRIBUTES = {
+    # `sidecar_operation_id` parses it with `_SIDECAR_ID_RE`, which admits only
+    # `[0-9A-Za-z_-]{1,64}`, so the value is an id or None whatever `err` says.
+    ("witan_core.omnigraph", "StoreQuarantined"): {
+        "sidecar_operation_id": "operation_id"
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("where", "expected"), sorted(EXPECTED_LOG_SAFE_ATTRIBUTES.items())
+)
+def test_every_refusal_s_logged_attributes_are_what_the_audit_decided(where, expected):
+    module_name, class_name = where
+    cls = _import_refusal(module_name, class_name)
+    if cls is None:
+        pytest.skip(f"{module_name} not importable here")
+    assert dict(cls.log_safe_attributes) == expected
+
+
+def test_no_refusal_outside_the_audit_logs_attributes():
+    from witan_core.refusal import Refusal
+
+    def walk(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from walk(sub)
+
+    unaudited = sorted(
+        sub.__name__
+        for sub in walk(Refusal)
+        if (sub.__module__, sub.__name__) not in EXPECTED_LOG_SAFE_ATTRIBUTES
+        and sub.__module__.split(".")[0] in {"witan", "witan_code", "witan_core"}
+        and "log_safe_attributes" in sub.__dict__
+    )
+    assert not unaudited, (
+        f"declares log_safe_attributes without an audit entry: {unaudited}. "
+        f"Read how each attribute is built, then add it to "
+        f"EXPECTED_LOG_SAFE_ATTRIBUTES."
+    )
+
+
+def test_no_audited_attribute_uses_a_reserved_field_name():
+    # The middleware drops a reserved name rather than fail the call, so
+    # without this a collision would be a silently missing field.
+    for declared in EXPECTED_LOG_SAFE_ATTRIBUTES.values():
+        assert not set(declared) & middleware_module._RESERVED_FIELDS

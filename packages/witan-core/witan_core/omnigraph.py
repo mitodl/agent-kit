@@ -64,6 +64,7 @@ import urllib.parse
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from types import MappingProxyType
 from typing import NamedTuple, TypeVar
 
 from witan_core import omnigraph_http as _http
@@ -1466,16 +1467,26 @@ class StoreQuarantined(RuntimeError, Refusal):
 
     # NOT opted in: the raise site appends `\n{err.strip()}` like the two
     # above. The sidecar operation id that an operator actually needs is parsed
-    # out and kept on `operation_id`, so it survives this as a structured value
-    # even though the prose does not reach the log.
+    # out and kept on `operation_id`, and that one attribute IS logged:
+    # `_SIDECAR_ID_RE` admits only an identifier's characters, so whatever the
+    # upstream text says, the value is an id or it is None.
     log_safe_message = False
+    log_safe_attributes = MappingProxyType({"sidecar_operation_id": "operation_id"})
 
     def __init__(self, message: str, operation_id: str | None = None) -> None:
         super().__init__(message)
         self.operation_id = operation_id
 
 
-_SIDECAR_ID_RE = re.compile(r"occ recovery sidecar '([^']+)'", re.IGNORECASE)
+#: Only an identifier's characters, bounded. omnigraph names sidecars by ULID,
+#: and the class is kept wider than that so a format change degrades to a
+#: parsed id rather than to none. What it must NOT admit is arbitrary text:
+#: the match is logged as a structured field (see
+#: ``StoreQuarantined.log_safe_attributes``), and `err` can be a non-JSON HTTP
+#: body passed through verbatim.
+_SIDECAR_ID_RE = re.compile(
+    r"occ recovery sidecar '([0-9A-Za-z_-]{1,64})'", re.IGNORECASE
+)
 
 
 def sidecar_operation_id(msg: str) -> str | None:

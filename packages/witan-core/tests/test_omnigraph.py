@@ -1481,6 +1481,18 @@ def test_a_quarantined_store_is_not_sent_to_omnigraph_repair(monkeypatch):
     assert repairs == []
 
 
+def test_a_sidecar_id_that_is_not_an_identifier_is_not_parsed():
+    """The parsed id reaches the log as a structured field, so the quoted text
+    has to be an identifier by construction. Anything else is a quarantine
+    with no named sidecar, the same as the lenient case below."""
+    assert og.sidecar_operation_id(_SIDECAR_STDERR) == "01M2V544QY00SSGZA0PSRK3B9X"
+    assert (
+        og.sidecar_operation_id("OCC recovery sidecar 'token=abc123 secret' found")
+        is None
+    )
+    assert og.sidecar_operation_id(f"OCC recovery sidecar '{'A' * 65}' found") is None
+
+
 def test_an_unnamed_sidecar_is_still_a_quarantine(monkeypatch):
     """Failing to parse one detail must never turn a legible refusal back into
     an opaque one — the operator can still list `__recovery/` by hand."""
