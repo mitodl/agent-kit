@@ -104,8 +104,8 @@ def _project_show(slug: str) -> None:
     s = _srv()
     p = _fn(s.workflow_project_get)(slug=slug)
     if not p:
-        console.print(f"[red]No project {slug!r}.[/red]")
-        return
+        print_error(f"No project {slug!r}.", stderr=True)
+        raise SystemExit(1)
     console.print(f"[bold]{p['slug']}[/bold]  {esc(p.get('title'))}")
     console.print(
         f"  status={_styled(p.get('status', ''), _STATUS_STYLE)}  "

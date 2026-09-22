@@ -27,6 +27,7 @@
   notices `scan test`, `scan rules` and `target list` print alongside their
   table go to stderr there. stderr also carries log lines on success, so
   consumers should branch on the exit code.
-- `witan task <slug>` and `witan project status|tasks` on a missing slug
-  exit 1 with the error on stderr. `task <slug>` used to print it on stdout
-  and exit 0.
+- `witan task <slug>`, `witan project <slug>` and `witan project
+  status|tasks` on a missing slug exit 1 with the error on stderr. `task
+  <slug>` and `project <slug>` used to print it on stdout and exit 0. The
+  `target list` config-parse error also moves to stderr.

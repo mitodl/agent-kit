@@ -260,3 +260,17 @@ def test_project_tasks_detail_adds_dependents(cli, capsys):
     assert rows[blocker["slug"]]["dependents"] == [blocked["slug"]]
     assert rows[blocked["slug"]]["dependents"] == []
     assert rows[blocked["slug"]]["blocked_by"] == [blocker["slug"]]
+
+
+def test_project_show_of_a_missing_project_exits_nonzero_with_nothing_on_stdout(
+    cli, capsys
+):
+    from witan.cli.projects import _project_show
+
+    with pytest.raises(SystemExit) as exc:
+        _project_show("wp-does-not-exist")
+
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "wp-does-not-exist" in captured.err

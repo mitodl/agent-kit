@@ -887,7 +887,7 @@ def list_targets() -> None:
     try:
         targets = cfg_module._parse_targets(cfg_module._load_toml())
     except ValueError as exc:
-        print_error(exc)
+        print_error(exc, stderr=True)
         raise SystemExit(1) from None
     # Same precedence load_remote_config()/load() use: WITAN_TARGET pins a
     # target outright, and auto-detection only runs when it is unset. Marking

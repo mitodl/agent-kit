@@ -308,12 +308,14 @@ and `code stitch`) print `{title, rows}`. For witan's own commands an empty
 result is `rows: []`, never a sentence; the `code` commands still print prose
 when empty. `task <slug>` (also `task show <slug>`) and `project status`
 print the tool's record whole, and `project tasks` and `session list` print
-the tool's rows. TOML has no null, so a null field is omitted there rather
-than blanked. `project <slug>` and `graph` are unaffected.
+the tool's rows. Those four keep nulls in JSON and YAML and omit them in TOML,
+which has no null; the table commands still print a null as `""` in every
+format. `project <slug>`, `trace <slug>` and `graph` are unaffected.
 
 A structured run writes one document to stdout and nothing else; notices and
 log lines go to stderr, including on success. Branch on the exit code, not
-on whether stderr is empty: a missing task or project exits 1.
+on whether stderr is empty: `task <slug>`, `project <slug>`, `project status`
+and `project tasks` exit 1 on a missing slug.
 
 | Command | Description |
 |---|---|
