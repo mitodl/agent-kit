@@ -240,6 +240,7 @@ _ADMIN_ONLY = frozenset(
 _READ_ONLY = frozenset(
     {
         "memory_for_contract",
+        "memory_contradictions",
         "memory_get",
         "memory_list",
         "memory_neighbors",
@@ -280,6 +281,7 @@ _REPO_IS_UPDATE_FIELD = frozenset({"memory_update", "task_update"})
 
 _REPO_IS_SCOPE_OR_STAMP = frozenset(
     {
+        "memory_contradictions",
         "memory_list",
         "memory_search",
         "memory_store",

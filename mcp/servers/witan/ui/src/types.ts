@@ -234,6 +234,34 @@ export interface RecallResult {
 	contradictions: Contradiction[];
 }
 
+/** One side of a `memory_contradictions` pair: a projection, not a `Memory`. */
+export interface ContradictionEndpoint {
+	slug: string;
+	title: string;
+	kind: MemoryKind;
+	repo: string | null;
+	author: string;
+	updated_at: string;
+}
+
+/**
+ * The link itself. Every field is `null` on an edge written before edge
+ * properties existed, and nothing backfills them.
+ */
+export interface EdgeMeta {
+	confidence: "asserted" | "inferred" | null;
+	role: string | null;
+	author: string | null;
+	created_at: string | null;
+}
+
+/** One unordered pair; `a` is the side the surviving link was made from. */
+export interface MemoryContradiction {
+	a: ContradictionEndpoint;
+	b: ContradictionEndpoint;
+	edge: EdgeMeta;
+}
+
 export interface MemoryNeighbors {
 	slug: string;
 	neighbors: Record<string, unknown>;
@@ -546,6 +574,38 @@ export function isRecallResult(value: unknown): value is RecallResult {
 		memories: arrayOf(isMemory),
 		seeds: anything,
 		contradictions: arrayOf(isContradiction),
+	});
+}
+
+function isContradictionEndpoint(
+	value: unknown,
+): value is ContradictionEndpoint {
+	return matches(value, {
+		slug: str,
+		title: str,
+		kind: memoryKind,
+		repo: nullable(str),
+		author: str,
+		updated_at: str,
+	});
+}
+
+export function isEdgeMeta(value: unknown): value is EdgeMeta {
+	return matches(value, {
+		confidence: nullable(oneOf("asserted", "inferred")),
+		role: nullable(str),
+		author: nullable(str),
+		created_at: nullable(str),
+	});
+}
+
+export function isMemoryContradiction(
+	value: unknown,
+): value is MemoryContradiction {
+	return matches(value, {
+		a: isContradictionEndpoint,
+		b: isContradictionEndpoint,
+		edge: isEdgeMeta,
 	});
 }
 

@@ -46,8 +46,8 @@ FIXTURES = REPO / "mcp" / "servers" / "witan" / "ui" / "fixtures"
 SCHEMA = REPO / "mcp" / "servers" / "witan" / "schema" / "schema.pg"
 
 # ADR 0011 §3's bound set, which is the whole read surface the UI may call.
-# `memory_contradictions` joins it when its own task lands; adding anything
-# else here means amending the ADR first.
+# Adding anything here means amending the ADR first, as its 2026-09-22
+# amendment did for `memory_contradictions`.
 BOUND_TOOLS = (
     "task_ready",
     "task_get",
@@ -62,6 +62,7 @@ BOUND_TOOLS = (
     "memory_list",
     "memory_search",
     "memory_neighbors",
+    "memory_contradictions",
     "topic_get",
 )
 
@@ -288,6 +289,7 @@ def _calls(slugs: dict[str, str]) -> dict[str, dict]:
         "memory_list": {"kind": "pattern", "repo": ""},
         "memory_search": {"query": "wrap flag", "repo": ""},
         "memory_neighbors": {"slug": slugs["memory"]},
+        "memory_contradictions": {"repo": ""},
         # `name:kind`, not a bare tag: a plain name resolves nothing and the
         # fixture would record the null case twice over.
         "topic_get": {"topic": "witan-ui:topic"},

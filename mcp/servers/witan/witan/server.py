@@ -391,6 +391,7 @@ mcp = FastMCP(
         "  memory_list      — browse all of one kind (no query); optional language\n"
         "  memory_search    — plain BM25, no graph expansion\n"
         "  memory_neighbors — a known memory's neighbours, by edge kind\n"
+        "  memory_contradictions — every contradicting pair, no seed needed\n"
         "  topic_get        — everything tagged to a topic (cross-repo)\n"
         "  memory_for_contract — memories + code for a contract key\n"
         "  symbol_context   — memories/tasks for a code symbol\n"
@@ -4045,6 +4046,66 @@ def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> di
                     merged[row["slug"]] = {**row, "edge": edge}
         neighbors[kind] = list(merged.values())
     return {"slug": slug, "neighbors": neighbors}
+
+
+_CONTRADICTION_ENDPOINT_FIELDS = (
+    "slug",
+    "title",
+    "kind",
+    "repo",
+    "author",
+    "updated_at",
+)
+
+
+@_tool
+def memory_contradictions(repo: str | None = None) -> list[dict]:
+    """
+    List every pair of memories that contradict each other, newest link first.
+
+    An unranked enumeration of the ``contradicts`` edges, for reviewing
+    conflicts rather than loading context. ``recall`` reports a contradiction
+    only when both memories land in its result, and ``memory_neighbors`` needs a
+    slug to start from; this needs neither.
+
+    Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
+    carry ``slug, title, kind, repo, author, updated_at``; ``a`` is the side the
+    link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
+    all ``null`` on links written before edge properties existed.
+
+    One row per unordered pair. ``contradicts`` is symmetric but can be stored
+    in both directions; when it is, the newer link is the one reported, the same
+    newest-wins rule as ``memory_neighbors``.
+
+    Parameters
+    ----------
+    repo:
+        Repo scoping — see instructions. A pair is included when EITHER memory
+        is in scope, since a contradiction across two repos concerns both. With
+        no repo detected and none passed, only pairs touching an unscoped memory
+        (``repo`` null) are returned.
+    """
+    detected = repo_module.detect(override=repo)
+    everything = repo == ""
+
+    pairs: dict[frozenset[str], dict] = {}
+    for row in client.read("read.gq", "contradicts_pairs", {}):
+        a = {f: row[f"a_{f}"] for f in _CONTRADICTION_ENDPOINT_FIELDS}
+        b = {f: row[f"b_{f}"] for f in _CONTRADICTION_ENDPOINT_FIELDS}
+        if not everything and detected not in (a["repo"], b["repo"]):
+            continue
+        edge = _edge_meta(row)
+        key = frozenset((a["slug"], b["slug"]))
+        # Compared explicitly for the reason memory_neighbors gives: an
+        # unstamped edge sorts oldest, so any stamped one beats it.
+        previous = pairs.get(key)
+        if previous is None or (edge["created_at"] or "") > (
+            previous["edge"]["created_at"] or ""
+        ):
+            pairs[key] = {"a": a, "b": b, "edge": edge}
+    return sorted(
+        pairs.values(), key=lambda p: p["edge"]["created_at"] or "", reverse=True
+    )
 
 
 @_tool

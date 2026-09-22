@@ -47,6 +47,7 @@ READ_TOOLS = frozenset(
         "memory_list",
         "memory_get",
         "memory_neighbors",
+        "memory_contradictions",
         "memory_for_contract",
         "memory_symbols",
         "topic_get",

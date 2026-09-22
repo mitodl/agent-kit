@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import memoryContradictionsFixture from "../fixtures/memory_contradictions.json" with {
+	type: "json",
+};
 import memoryGetFixture from "../fixtures/memory_get.json" with {
 	type: "json",
 };
@@ -25,10 +28,12 @@ import projectStatusFixture from "../fixtures/workflow_project_status.json" with
 };
 import {
 	isMemory,
+	isMemoryContradiction,
 	isProjectStatus,
 	isRecallResult,
 	isTaskDetail,
 	isTaskRow,
+	type MemoryContradiction,
 	type ProjectStatus,
 	type RecallResult,
 	type TaskDetail,
@@ -93,6 +98,7 @@ describe("unwrap", () => {
 describe("the recorded wrap flags", () => {
 	it("cover exactly ADR 0011's bound set", () => {
 		expect(BOUND_TOOLS).toEqual([
+			"memory_contradictions",
 			"memory_get",
 			"memory_list",
 			"memory_neighbors",
@@ -229,6 +235,20 @@ describe("the types match what the server actually returns", () => {
 		);
 
 		expect(typeof neighbors.slug).toBe("string");
+	});
+
+	it("memory_contradictions carries both endpoints and the link", () => {
+		const pairs = unwrap<MemoryContradiction[]>(
+			"memory_contradictions",
+			memoryContradictionsFixture,
+		);
+
+		// The seed links exactly one pair `contradicts`.
+		expect(pairs).toHaveLength(1);
+		expect(pairs.every(isMemoryContradiction)).toBe(true);
+		const [pair] = pairs;
+		expect(pair?.a.slug).not.toBe(pair?.b.slug);
+		expect(pair?.edge.confidence).toBe("asserted");
 	});
 
 	it("recall reports contradictions as unordered pairs", () => {

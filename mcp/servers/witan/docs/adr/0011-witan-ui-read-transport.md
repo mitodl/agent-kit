@@ -1,6 +1,7 @@
 # 11. Witan UI read transport: the UI is an MCP client, same-origin, in both modes
 
-- Status: Accepted
+- Status: Accepted, amended 2026-09-22 (`memory_contradictions` joins the
+  bound set)
 - Date: 2026-09-17
 - Deciders: witan platform owners
 - Tracking: task `tk-decide-the-witan-ui-read-transport-cli-subproces-3b691b`,
@@ -177,7 +178,8 @@ layer binds exactly these and nothing else:
 - projects and sessions: `workflow_project_get`, `workflow_project_status`,
   `workflow_project_list`, `workflow_session_list`
 - memory: `recall`, `memory_get`, `memory_list`, `memory_search`,
-  `memory_neighbors`, `topic_get`
+  `memory_neighbors`, `topic_get`, and `memory_contradictions` (added by the
+  2026-09-22 amendment below)
 
 An implementation that needs a tool outside this list is making a scope change,
 not filling in a gap, and amends this ADR.
@@ -309,3 +311,21 @@ layer.
    the local one.
 6. Correct the discovery memories this ADR contradicts, so the next reader does
    not re-derive the CLI premises from them.
+
+## Amendment (2026-09-22): `memory_contradictions` joins the bound set
+
+The memory view's contradictions inbox had no read to sit on. `recall` reports
+a pair only when both memories land in its ranked, limited result;
+`memory_neighbors` needs a slug to start from; and the graph-wide
+`contradicts_edges_from`/`_to` queries feed only the private `_edge_index`, not
+any tool. The spec (`docs/internals/design/witan-ui-spec.md` §3.5) settled this
+by adding a tool rather than a `recall` mode, because `recall` is a ranked,
+seeded read and an inbox is an unranked enumeration.
+
+`memory_contradictions(repo)` is that tool, and §3's list above now names it.
+It is read-only, returns one row per unordered pair (newest link wins when a
+pair is stored both ways, matching `memory_neighbors`), and scopes a pair in
+when either memory is in the requested repo. It sits in the same read
+allowlists as the other memory reads (the CLI's local dispatch and the remote
+proxy), so nothing about the UI's position as an ordinary MCP client changes.
+Tracked as task `tk-add-a-read-only-memory-contradictions-tool-and-a-44e4a1`.

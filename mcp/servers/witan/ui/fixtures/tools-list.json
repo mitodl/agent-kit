@@ -1,4 +1,23 @@
 {
+  "memory_contradictions": {
+    "output_schema": {
+      "properties": {
+        "result": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "x-fastmcp-wrap-result": true
+    },
+    "wrapped": true
+  },
   "memory_get": {
     "output_schema": {
       "properties": {

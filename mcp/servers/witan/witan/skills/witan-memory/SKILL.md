@@ -80,6 +80,7 @@ with `hops=2`. Reach for a narrower read only for a specific need:
 | Browse all of one kind (no query) | `memory_list(kind=…)` |
 | Plain BM25, no graph expansion | `memory_search` |
 | A known memory's neighbours, by edge kind | `memory_neighbors` |
+| Every pair of memories that contradict each other | `memory_contradictions` |
 | Everything tagged to a topic (cross-repo) | `topic_get` |
 | Memories + code for a contract key | `memory_for_contract` |
 | Memories/tasks for a code symbol | `symbol_context` |
