@@ -307,9 +307,12 @@ export function recall(args: {
 	return read("recall", args);
 }
 
-/** With `topics`, each carrying its Tagged edge: the panel shows them all. */
-export function memoryGet(slug: string): Promise<Memory | null> {
-	return read("memory_get", { slug, include_topics: true });
+/** `topics` attaches each Tagged edge, which costs a second graph read. */
+export function memoryGet(
+	slug: string,
+	options: { topics?: boolean } = {},
+): Promise<Memory | null> {
+	return read("memory_get", { slug, include_topics: options.topics ?? false });
 }
 
 export function memoryList(args: {

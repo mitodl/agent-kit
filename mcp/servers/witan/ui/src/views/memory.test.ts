@@ -365,6 +365,19 @@ describe("memoryDetail", () => {
 		expect(link?.getAttribute("href")).toBe("#memory?topic=tp-topic-witan-ui");
 	});
 
+	it("drops the facets when following a topic, whose rows have none", () => {
+		render(
+			memoryDetail(
+				{ memory, neighbors },
+				{ ...route, facets: { ...DEFAULT_ROUTE.facets, language: "python" } },
+			),
+			root,
+		);
+
+		const link = root.querySelector<HTMLAnchorElement>(".edge-inferred a");
+		expect(link?.getAttribute("href")).toBe("#memory?topic=tp-topic-witan-ui");
+	});
+
 	it("renders a memory with no edges without empty scaffolding", () => {
 		const bare: Memory = { ...memory, topics: [], symbol_refs: null };
 		const none: MemoryNeighbors = {

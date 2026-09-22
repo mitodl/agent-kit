@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit-html";
 import { absolute, ago, repoLabel } from "../format.js";
 import {
+	DEFAULT_ROUTE,
 	MEMORY_FACETS,
 	type MemoryFacet,
 	type Route,
@@ -649,6 +650,9 @@ function topics(
 									topic: topic.slug,
 									q: "",
 									slug: null,
+									// `topic_get` rows are slim, with none of the facet fields,
+									// so a facet carried over would filter every row out.
+									facets: DEFAULT_ROUTE.facets,
 								})}
                 >${topic.name}</a
               >

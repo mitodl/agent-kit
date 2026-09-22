@@ -495,17 +495,12 @@ describe("App", () => {
 		await vi.waitFor(() => expect(root.querySelector(".inbox")).not.toBeNull());
 
 		const repo = "https://github.com/mitodl/agent-kit";
-		// The toggle's default, passed explicitly on both, so the list and the
-		// inbox hide the same superseded memories.
 		expect(mcp.memoryList).toHaveBeenCalledWith({
 			repo,
 			kind: undefined,
 			include_superseded: false,
 		});
-		expect(mcp.memoryContradictions).toHaveBeenCalledWith({
-			repo,
-			include_superseded: false,
-		});
+		expect(mcp.memoryContradictions).toHaveBeenCalledWith({ repo });
 		expect(mcp.recall).not.toHaveBeenCalled();
 	});
 
@@ -527,6 +522,23 @@ describe("App", () => {
 				.mock.calls.map(([slug]) => slug)
 				.sort(),
 		).toEqual([pair.a.slug, pair.b.slug].sort());
+	});
+
+	it("keeps resolved pairs out of the inbox when superseded memories are shown", async () => {
+		// The toggle widens the list; a resolved pair offering "Resolve" again
+		// would read as open.
+		await open("#memory?superseded=1");
+		await vi.waitFor(() => expect(root.querySelector(".inbox")).not.toBeNull());
+
+		expect(mcp.memoryContradictions).toHaveBeenCalledWith({ repo: "" });
+		expect(mcp.memoryList).toHaveBeenCalledWith({
+			repo: "",
+			kind: undefined,
+			include_superseded: true,
+		});
+		expect(mcp.memoryGet).not.toHaveBeenCalledWith(expect.anything(), {
+			topics: true,
+		});
 	});
 
 	it("searches through recall, or memory_search when plain", async () => {
@@ -583,6 +595,7 @@ describe("App", () => {
 		);
 
 		expect(mcp.memoryNeighbors).toHaveBeenCalledWith({ slug: memory.slug });
+		expect(mcp.memoryGet).toHaveBeenCalledWith(memory.slug, { topics: true });
 		expect(mcp.taskGet).not.toHaveBeenCalled();
 		expect(root.querySelector(".detail-panel h2")?.textContent).toBe(
 			memory.title,

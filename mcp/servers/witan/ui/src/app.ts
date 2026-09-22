@@ -581,7 +581,9 @@ async function readMemoryPage(scope: MemoryScope): Promise<MemoryPage> {
 	}
 	const [memories, pairs] = await Promise.all([
 		memoryList({ repo, kind, include_superseded: superseded }),
-		memoryContradictions({ repo, include_superseded: superseded }),
+		// Never `include_superseded`: a pair with a superseded side is resolved,
+		// and the inbox is the list of what still needs a person.
+		memoryContradictions({ repo }),
 	]);
 	return { mode: "browse", memories, inbox: await readInbox(pairs) };
 }
@@ -609,7 +611,7 @@ async function readInbox(pairs: MemoryContradiction[]): Promise<InboxPair[]> {
 /** One memory and its neighbours, together: the panel draws both or neither. */
 async function readMemoryPanel(slug: string): Promise<MemoryPanel> {
 	const [memory, neighbors] = await Promise.all([
-		memoryGet(slug),
+		memoryGet(slug, { topics: true }),
 		memoryNeighbors({ slug }),
 	]);
 	return { memory, neighbors };
