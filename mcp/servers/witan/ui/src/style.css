@@ -478,6 +478,117 @@ line.session-start {
 	stroke-dasharray: 3 2;
 }
 
+/* ── Waves ────────────────────────────────────────────────────── */
+
+ul.wv-summary {
+	padding-left: 1.2rem;
+	margin: 0.5rem 0;
+}
+
+.note.bad {
+	color: var(--bad);
+}
+
+/* The label list and the SVG share one row height: `ROW` and `HEAD` in
+   `views/waves.ts`. Change one side and the labels drift off their bars. */
+.wv-chart {
+	display: grid;
+	grid-template-columns: minmax(8rem, 18rem) 1fr;
+	gap: 0.5rem;
+	margin-top: 0.5rem;
+}
+
+ol.wv-labels {
+	list-style: none;
+	margin: 0;
+	padding: 20px 0 0;
+}
+
+ol.wv-labels li {
+	height: 22px;
+	line-height: 22px;
+	font-size: 0.85rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+ol.wv-labels li.outside {
+	font-style: italic;
+}
+
+ol.wv-labels .count {
+	margin-left: 0.3rem;
+	font-size: 0.75rem;
+}
+
+.wv-track {
+	display: block;
+	width: 100%;
+}
+
+.wv-track text {
+	font-size: 12px;
+	fill: var(--muted);
+}
+
+.wv-track line.grid {
+	stroke: var(--rule);
+	stroke-width: 1;
+}
+
+rect.wv-bar {
+	fill: var(--rule);
+	stroke: var(--muted);
+	stroke-width: 0.5;
+}
+
+rect.wv-bar.ready {
+	fill: var(--accent);
+	fill-opacity: 0.45;
+}
+
+rect.wv-bar.held {
+	fill: var(--accent);
+}
+
+/* Dashed rather than only paler, so "not in this project" does not rest on
+   colour. */
+rect.wv-bar.outside {
+	fill: none;
+	stroke-dasharray: 3 2;
+}
+
+rect.wv-bar.critical {
+	stroke: var(--fg);
+	stroke-width: 2;
+}
+
+rect.wv-bar.cycle {
+	stroke: var(--bad);
+	stroke-width: 2;
+	stroke-dasharray: 4 2;
+}
+
+line.wv-edge {
+	stroke: var(--muted);
+	stroke-width: 1;
+}
+
+line.wv-edge.critical {
+	stroke: var(--fg);
+	stroke-width: 2;
+}
+
+line.wv-edge.cycle {
+	stroke: var(--bad);
+	stroke-dasharray: 4 2;
+}
+
+path.wv-head {
+	fill: var(--muted);
+}
+
 /* ── Detail panel ───────────────────────────────────────────────── */
 
 /* In the flow beside the view, not fixed over the page: spec §6.1 wants the

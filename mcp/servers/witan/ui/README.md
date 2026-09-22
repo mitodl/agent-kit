@@ -10,12 +10,14 @@ to an enumerated set of read tools. (Both are cited by path rather than linked:
 they land in their own changes, and a relative link would be dead here until
 those merge.)
 
-Three tabs are built. Projects has the project list, one project's rollup and
+Four tabs are built. Projects has the project list, one project's rollup and
 the task detail panel (spec §6.2, §6.3). Board has Ready, In progress, Blocked
-and Closed columns (spec §6.4). Timeline draws each task's lead time and work
-time, and the sessions, over a 7 to 90 day window (spec §6.6). The other three
-tabs are declared in the shell and render a note saying they are not built
-yet. Each is its own task (spec §6.5, §6.7, §6.8).
+and Closed columns (spec §6.4). Waves lays one project's open tasks out by
+depth in the `Blocks` graph, with the longest chain and any cycle marked (spec
+§6.5). Timeline draws each task's lead time and work time, and the sessions,
+over a 7 to 90 day window (spec §6.6). The other two tabs are declared in the
+shell and render a note saying they are not built yet. Each is its own task
+(spec §6.7, §6.8).
 
 ## Layout
 

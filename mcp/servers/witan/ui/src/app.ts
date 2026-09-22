@@ -18,6 +18,7 @@ import { type Board, board, TASK_LIMIT } from "./views/board.js";
 import { projectList, projectRollup, type Rollup } from "./views/projects.js";
 import { taskDetail, taskMissing } from "./views/task-detail.js";
 import { type Timeline, timeline } from "./views/timeline.js";
+import { type Waves, waves, wavesPicker } from "./views/waves.js";
 
 /**
  * The wiring: route in, reads out, one render.
@@ -67,6 +68,11 @@ export class App {
 	/** The scope `timeline` is reading, keyed the same way as `rollupKey`. */
 	private timelineKey: string | null = null;
 
+	private waves: LiveRead<Waves> | null = null;
+	private wavesSnapshot: Snapshot<Waves> | null = null;
+	/** The project `waves` is reading, keyed the same way as `rollupKey`. */
+	private wavesKey: string | null = null;
+
 	private detail: LiveRead<TaskDetail | null> | null = null;
 	private detailSnapshot: Snapshot<TaskDetail | null> | null = null;
 	private detailKey: string | null = null;
@@ -105,6 +111,7 @@ export class App {
 		this.rollup?.stop();
 		this.board?.stop();
 		this.timeline?.stop();
+		this.waves?.stop();
 		this.detail?.stop();
 	}
 
@@ -147,6 +154,7 @@ export class App {
 		this.syncRollup();
 		this.syncBoard();
 		this.syncTimeline();
+		this.syncWaves();
 		this.syncDetail();
 	}
 
@@ -252,6 +260,34 @@ export class App {
 		this.timeline.start();
 	}
 
+	private syncWaves(): void {
+		// Waves are per project (spec §6.5), so without one there is nothing to
+		// read: the view asks for a project from the list the shell already has.
+		const slug = this.route.view === "waves" ? this.route.project : null;
+		if (!slug) {
+			this.waves?.stop();
+			this.waves = null;
+			this.wavesSnapshot = null;
+			this.wavesKey = null;
+			return;
+		}
+		if (this.waves && slug === this.wavesKey) {
+			return;
+		}
+		const read = () => readWaves(slug);
+		this.wavesKey = slug;
+		if (this.waves) {
+			this.waves.retarget(read);
+			return;
+		}
+		this.waves = new LiveRead(read, (snapshot) => {
+			this.wavesSnapshot = snapshot;
+			this.draw();
+		});
+		this.wavesSnapshot = this.waves.snapshot;
+		this.waves.start();
+	}
+
 	private syncDetail(): void {
 		const slug = this.route.slug;
 		if (!slug) {
@@ -291,6 +327,13 @@ export class App {
 			const live = this.timeline;
 			return {
 				snapshot: this.timelineSnapshot,
+				refresh: () => live.refresh(),
+			};
+		}
+		if (this.waves && this.wavesSnapshot) {
+			const live = this.waves;
+			return {
+				snapshot: this.wavesSnapshot,
 				refresh: () => live.refresh(),
 			};
 		}
@@ -356,6 +399,22 @@ export class App {
 				return waiting;
 			}
 			return timeline(snapshot.data as Timeline, this.route);
+		}
+
+		if (this.route.view === "waves") {
+			if (!this.route.project) {
+				const waiting = placeholderFor(this.projectsSnapshot, "projects");
+				return waiting ?? wavesPicker(inScope, this.route);
+			}
+			const snapshot = this.wavesSnapshot;
+			if (!snapshot) {
+				return emptyBox("Reading the waves…");
+			}
+			const waiting = placeholderFor(snapshot, "the waves");
+			if (waiting) {
+				return waiting;
+			}
+			return waves(snapshot.data as Waves, this.route);
 		}
 
 		if (this.route.view !== "projects") {
@@ -568,6 +627,40 @@ async function readTimeline(scope: {
 		truncated: !scope.project && tasks.length >= TASK_LIMIT,
 		projects,
 	};
+}
+
+/**
+ * The reads behind one project's waves (spec §6.5).
+ *
+ * `task_list` and `task_ready` in parallel, then one `task_get` per blocker
+ * from outside the project, because the chart has to know whether each is
+ * still open and `task_list` by project cannot say. Outside blockers are few
+ * by construction, where the board's graph-wide status reads would drag every
+ * live task along for them. A `null` (deleted) or closed one is dropped: it
+ * holds nothing back, by `task_ready`'s own resolver.
+ */
+async function readWaves(slug: string): Promise<Waves> {
+	const [tasks, ready] = await Promise.all([
+		// Uncapped by project; see `readRollup` for why no `limit`.
+		taskList({ repo: "", project_slug: slug }),
+		// `task_ready` sorts and then truncates, so its default of 20 would
+		// report most of wave 0 as disagreeing with it.
+		taskReady({ repo: "", project_slug: slug, limit: TASK_LIMIT }),
+	]);
+	const inProject = new Set(tasks.map((task) => task.slug));
+	const elsewhere = new Set(
+		tasks
+			.filter((task) => task.status !== "closed")
+			.flatMap((task) => task.blocked_by ?? [])
+			.filter((blocker) => !inProject.has(blocker)),
+	);
+	const fetched = await Promise.all(
+		[...elsewhere].map((blocker) => taskGet(blocker)),
+	);
+	const outside = fetched.filter(
+		(task): task is TaskDetail => task !== null && task.status !== "closed",
+	);
+	return { tasks, ready, outside };
 }
 
 /** Every repo any project names, sorted, for the repo filter. */

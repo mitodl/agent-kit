@@ -334,7 +334,7 @@ describe("App", () => {
 		await vi.waitFor(() => expect(text()).toContain("In progress"));
 		vi.mocked(mcp.taskReady).mockClear();
 
-		window.location.hash = "#waves";
+		window.location.hash = "#graph";
 		await vi.waitFor(() => expect(text()).toContain("not built yet"));
 		window.dispatchEvent(new Event("focus"));
 
@@ -342,7 +342,7 @@ describe("App", () => {
 	});
 
 	it("names an unbuilt view rather than rendering it empty", async () => {
-		await open("#waves");
+		await open("#graph");
 		expect(text()).toContain("not built yet");
 	});
 
@@ -350,7 +350,7 @@ describe("App", () => {
 		// A project filter carried onto another tab kept four tool calls going
 		// every 30s behind a body that says "not built yet", and showed a read
 		// time for data nothing was rendering.
-		await open(`#waves?project=${projectDetail.slug}`);
+		await open(`#graph?project=${projectDetail.slug}`);
 		await vi.waitFor(() => expect(text()).toContain("not built yet"));
 
 		expect(mcp.workflowProjectGet).not.toHaveBeenCalled();
@@ -439,6 +439,87 @@ describe("App", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("asks for a project before reading any waves", async () => {
+		await open("#waves");
+		await vi.waitFor(() => expect(text()).toContain(projectDetail.title));
+
+		expect(text()).toContain("one project at a time");
+		expect(mcp.taskList).not.toHaveBeenCalled();
+		expect(mcp.taskReady).not.toHaveBeenCalled();
+	});
+
+	it("reads a project's waves with task_ready unlimited", async () => {
+		await open(`#waves?project=${projectDetail.slug}`);
+		await vi.waitFor(() => expect(root.querySelector(".waves")).not.toBeNull());
+
+		expect(mcp.taskList).toHaveBeenCalledWith({
+			repo: "",
+			project_slug: projectDetail.slug,
+		});
+		// Its default of 20 would push most of wave 0 into "disagrees".
+		expect(mcp.taskReady).toHaveBeenCalledWith({
+			repo: "",
+			project_slug: projectDetail.slug,
+			limit: TASK_LIMIT,
+		});
+	});
+
+	it("reads each blocker from outside the project, and draws only open ones", async () => {
+		const [base] = tasks;
+		if (!base) {
+			throw new Error("task_list fixture is empty");
+		}
+		const row = (slug: string, patch: Partial<TaskRow> = {}): TaskRow => ({
+			...base,
+			slug,
+			title: slug,
+			status: "open",
+			project_slug: projectDetail.slug,
+			blocked_by: null,
+			...patch,
+		});
+		vi.mocked(mcp.taskList).mockResolvedValue([
+			row("tk-in"),
+			row("tk-waits", {
+				blocked_by: [
+					"tk-in",
+					"tk-outside-open",
+					"tk-outside-closed",
+					"tk-gone",
+				],
+			}),
+		]);
+		vi.mocked(mcp.taskReady).mockResolvedValue([row("tk-in")]);
+		vi.mocked(mcp.taskGet).mockImplementation(async (slug) => {
+			if (slug === "tk-gone") {
+				return null;
+			}
+			return {
+				...task,
+				slug,
+				title: slug,
+				status: slug === "tk-outside-closed" ? "closed" : "open",
+				project_slug: "wp-elsewhere",
+			};
+		});
+
+		await open(`#waves?project=${projectDetail.slug}`);
+		await vi.waitFor(() =>
+			expect(root.querySelector(".wv-labels")).not.toBeNull(),
+		);
+
+		expect(
+			vi
+				.mocked(mcp.taskGet)
+				.mock.calls.map(([slug]) => slug)
+				.sort(),
+		).toEqual(["tk-gone", "tk-outside-closed", "tk-outside-open"]);
+		const labels = [...root.querySelectorAll(".wv-labels li")].map((li) =>
+			li.getAttribute("data-slug"),
+		);
+		expect(labels).toEqual(["tk-outside-open", "tk-in", "tk-waits"]);
 	});
 
 	it("hands focus back to the link that opened the panel", async () => {
