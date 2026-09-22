@@ -18,3 +18,5 @@ Workflow skills for interacting with external services and developer processes
 | [`code-review`](./code-review/SKILL.md) | Review a diff, branch, path, or PR for correctness bugs, gaps against stated goals, security issues, and reuse/simplification/efficiency cleanups, with a verify-before-reporting pass |
 | [`renovate-security-triage`](./renovate-security-triage/SKILL.md) | Rank open Renovate PRs in your active repos by security urgency using advisory severity, CVSS, and EPSS (read-only) |
 | [`deploy-verification`](./deploy-verification/SKILL.md) | Verify a merged config/infra change actually took effect — CD pipeline, pod rollout, running config, before/after metrics, and unintended-environment scope |
+| [`run-canary-locally`](./run-canary-locally/SKILL.md) | Get a passing local run of the ol-infrastructure Playwright canaries, without risking the account lockout, and read a failed run's trace |
+| [`add-canary-journey`](./add-canary-journey/SKILL.md) | Add a canary journey to an existing property, or onboard a new property into the canary fleet (two list edits) |
