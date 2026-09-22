@@ -132,6 +132,11 @@ def _serve_local(port: int, *, browser: bool) -> None:
     except ImportError:
         pass
 
+    # `witan ui` always serves the protocol at the default path, but say so
+    # explicitly rather than relying on the module default: a process that
+    # served under another path earlier would otherwise leak it into this one.
+    ui_routes.set_mcp_path("/mcp")
+
     url = f"http://127.0.0.1:{port}/ui/"
     console.print(f"witan UI on [bold]{url}[/bold]   [dim](ctrl-c to stop)[/dim]")
 

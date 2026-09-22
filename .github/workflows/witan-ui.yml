@@ -1,8 +1,9 @@
 name: witan UI
 
-# Narrower paths than witan-tests.yml, deliberately: this job builds a
-# TypeScript bundle and resolves nothing from the uv workspace, so a Python
-# dependency change cannot affect it.
+# Narrower paths than witan-tests.yml, deliberately. The build job is pure
+# TypeScript, but the packaging and fixtures jobs below do resolve from the uv
+# workspace, so this filter names the workspace inputs they actually read
+# rather than the whole of it.
 on:
   push:
     branches: [main]
@@ -32,6 +33,12 @@ on:
       # and the store client the recording goes through.
       - "packages/witan-core/**"
       - "bin/gen_ui_fixtures.py"
+      # The fixtures job resolves its Python environment from the lockfile and
+      # runs through a just recipe, so a lock-only fastmcp bump can change
+      # result wrapping and a recipe edit can break the gate, both with no
+      # other file in this list touched.
+      - "uv.lock"
+      - "justfile"
   pull_request:
     paths: *ui_paths
 

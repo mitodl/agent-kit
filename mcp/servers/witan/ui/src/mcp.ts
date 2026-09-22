@@ -12,7 +12,7 @@ import type {
 	TaskRow,
 	TaskSearchRow,
 	TopicResult,
-	WorkflowProject,
+	WorkflowProjectDetail,
 	WorkflowProjectSummary,
 	WorkflowSession,
 } from "./types.js";
@@ -34,19 +34,68 @@ import { assertFlagsMatchServer, unwrap } from "./unwrap.js";
  * mutations.
  */
 
+/** The path segment the bundle is mounted under. */
+const MOUNT = "/ui/";
+
+/** What `/ui/config.json` carries. */
+export interface UiConfig {
+	auth: {
+		issuer: string;
+		client_id: string | null;
+		audience: string | null;
+	} | null;
+	/** Where the protocol is served, which `--path` can move. */
+	mcp_path: string;
+}
+
 /**
- * Same origin as the page: the server serving this bundle also serves /mcp.
+ * Where the protocol endpoint is, given the document's URL and the server's
+ * own configured path.
  *
- * Resolved per connect rather than at module scope, and against `baseURI`
- * rather than `origin`. Both matter for the MCP Apps widgets this layer is
- * meant to serve: a widget runs in a sandboxed iframe, where
- * `window.location.origin` is the STRING "null" and the URL constructor
- * throws, at import time, taking the whole module graph down rather than one
- * call. `baseURI` also means a bundle mounted under a path prefix resolves
- * relative to it instead of assuming the root.
+ * ★ TWO THINGS ARE VARIABLE HERE, AND ASSUMING EITHER ONE HAS BROKEN THIS.
+ *
+ * The MOUNT PREFIX, because the bundle can sit behind a reverse-proxy path.
+ * Anchoring on the mount segment rather than walking up a fixed number of
+ * levels is what makes that independent of route depth:
+ *
+ *   "mcp"     -> /ui/mcp   wrong from any document
+ *   "../mcp"  -> /mcp      right, but only from /ui/<one-segment>
+ *
+ * The second is what a hash-routed app happens to produce. Spec §6.1 wants
+ * the URL to carry the view, the filters and the open slug, so the first view
+ * using `history.pushState` puts the document at /ui/board/tk-x and "../mcp"
+ * resolves to /ui/mcp again.
+ *
+ * The PROTOCOL PATH, because `witan serve --path` is a public option and the
+ * `/ui/` routes do not move with it. It comes from `/ui/config.json` rather
+ * than being assumed, so a server on /api/mcp serves a page that reads.
+ *
+ * Resolved per connect rather than at module scope, so a document whose URL
+ * the constructor rejects (an `about:srcdoc` widget frame) throws on one call
+ * instead of taking the module graph down at import.
  */
-function endpoint(): URL {
-	return new URL("mcp", document.baseURI);
+export function mcpEndpoint(documentUrl: string, mcpPath: string): URL {
+	const here = new URL(documentUrl);
+	const cut = here.pathname.lastIndexOf(MOUNT);
+	const prefix = cut === -1 ? "/" : here.pathname.slice(0, cut + 1);
+	// The configured path is absolute on the server ("/api/mcp"); it joins the
+	// mount prefix rather than replacing it, so a proxy prefix survives.
+	return new URL(`${prefix}${mcpPath.replace(/^\//, "")}`, here);
+}
+
+/** Fetch `/ui/config.json`, which the page reads before anything else. */
+async function uiConfig(): Promise<UiConfig> {
+	const here = new URL(document.baseURI);
+	const cut = here.pathname.lastIndexOf(MOUNT);
+	const prefix = cut === -1 ? "/" : here.pathname.slice(0, cut + MOUNT.length);
+	const response = await fetch(new URL(`${prefix}config.json`, here));
+	if (!response.ok) {
+		throw new Error(
+			`/ui/config.json answered ${response.status}; the page cannot find the ` +
+				"protocol endpoint without it.",
+		);
+	}
+	return (await response.json()) as UiConfig;
 }
 
 const PROTOCOL_ERA = "2026-07-28";
@@ -85,7 +134,12 @@ async function connect(): Promise<Client> {
 		},
 	);
 
-	await mcp.connect(new StreamableHTTPClientTransport(endpoint()));
+	const config = await uiConfig();
+	await mcp.connect(
+		new StreamableHTTPClientTransport(
+			mcpEndpoint(document.baseURI, config.mcp_path),
+		),
+	);
 
 	// Once per page load. The wrap flags the unwrapper reads are recorded at
 	// build time (a widget has no `tools/list` to consult), so this is what
@@ -206,9 +260,10 @@ export function taskSearch(args: {
 	return read("task_search", args);
 }
 
+/** The DETAIL shape: nine fields more than the rollup's `project`. */
 export function workflowProjectGet(
 	slug: string,
-): Promise<WorkflowProject | null> {
+): Promise<WorkflowProjectDetail | null> {
 	return read("workflow_project_get", { slug });
 }
 
@@ -242,6 +297,9 @@ export function recall(args: {
 	repo: string;
 	task?: string;
 	topic?: string;
+	kind?: MemoryKind;
+	limit?: number;
+	hops?: number;
 }): Promise<RecallResult> {
 	return read("recall", args);
 }
