@@ -606,6 +606,11 @@ MemoryLinkKind = Literal[
     "supersedes", "refines", "applies_to", "contradicts", "related_to", "tagged"
 ]
 
+#: What ``memory_neighbors`` can group by: every link kind, plus
+#: ``superseded_by``, the inbound side of ``supersedes``. It is a read-only
+#: direction, not a kind ``memory_link`` can write.
+MemoryNeighborKind = Literal[MemoryLinkKind, "superseded_by"]
+
 TopicKind = Literal["topic", "contract", "symbol", "entity"]
 
 # Edge kind → mutation query that writes it. ``tagged`` (Memory → Topic) is
@@ -797,6 +802,7 @@ def _edge_meta(row: dict) -> dict:
 # from both at read time.
 _MEMORY_NEIGHBOR_QUERIES = {
     "supersedes": ["supersedes_targets"],
+    "superseded_by": ["superseded_by_sources"],
     "refines": ["refines_targets"],
     "applies_to": ["applies_to_targets"],
     "contradicts": ["contradicts_out", "contradicts_in"],
@@ -3267,6 +3273,15 @@ def _rerank(
 # ── Tools ─────────────────────────────────────────────────────────
 
 
+def _superseded_slugs() -> set[str]:
+    """Every memory some newer memory ``Supersedes``, uncached.
+
+    For the unranked reads, which need only this set: ``_edge_index()`` would
+    run eleven queries to also build ranking tallies they never read.
+    """
+    return {r["slug"] for r in client.read("read.gq", "all_superseded_slugs", {})}
+
+
 @_tool
 def memory_search(
     query: str,
@@ -3322,6 +3337,7 @@ def memory_list(
     kind: MemoryKind | None = None,
     repo: str | None = None,
     language: str | None = None,
+    include_superseded: bool = False,
 ) -> list[dict]:
     """
     List memories (no search), optionally filtered by kind, repo, and/or language.
@@ -3344,10 +3360,18 @@ def memory_list(
     language:
         Optional post-filter by ``language`` (e.g. ``python``); applies to the
         full-content results, not the slim unscoped listing.
+    include_superseded:
+        When ``True``, keep memories that a newer memory ``Supersedes``. Default
+        ``False`` drops them, as ``memory_search`` and ``recall`` do.
     """
     detected = repo_module.detect(override=repo)
+    superseded = set() if include_superseded else _superseded_slugs()
+
+    def _current(rows: list[dict]) -> list[dict]:
+        return [r for r in rows if r["slug"] not in superseded]
 
     def _by_language(rows: list[dict]) -> list[dict]:
+        rows = _current(rows)
         if not language:
             return rows
         return [
@@ -3383,7 +3407,7 @@ def memory_list(
         )
     else:
         all_rows = client.read("read.gq", "list_memories_unbounded", {})
-    unscoped = [r for r in all_rows if not r.get("repo")]
+    unscoped = [r for r in _current(all_rows) if not r.get("repo")]
     return [_slim_memory(r) for r in unscoped]
 
 
@@ -3990,13 +4014,15 @@ async def memory_link(
 
 
 @_tool
-def memory_neighbors(slug: str, kinds: list[MemoryLinkKind] | None = None) -> dict:
+def memory_neighbors(slug: str, kinds: list[MemoryNeighborKind] | None = None) -> dict:
     """
     Return the memories directly linked to ``slug``, grouped by edge kind.
 
     For symmetric kinds (``contradicts``, ``related_to``) both directions are
-    unioned and de-duplicated. Use after ``memory_get`` to see what a memory
-    connects to.
+    unioned and de-duplicated. ``superseded_by`` is the inbound side of
+    ``supersedes``: the memories that replaced this one, which is what a reader
+    who landed on a superseded memory needs next. Use after ``memory_get`` to
+    see what a memory connects to.
 
     Each neighbour carries an ``edge`` dict — ``{confidence, role, author,
     created_at}`` — describing the LINK rather than either endpoint. ``role``
@@ -4062,7 +4088,9 @@ _CONTRADICTION_ENDPOINT_FIELDS = (
 
 
 @_tool
-def memory_contradictions(repo: str | None = None) -> list[dict]:
+def memory_contradictions(
+    repo: str | None = None, include_superseded: bool = False
+) -> list[dict]:
     """
     List every pair of memories that contradict each other, newest link first.
 
@@ -4080,6 +4108,11 @@ def memory_contradictions(repo: str | None = None) -> list[dict]:
     in both directions; when it is, the newer link is the one reported, the same
     newest-wins rule as ``memory_neighbors``.
 
+    Superseding either side is how a contradiction gets resolved, so a pair
+    with a superseded memory in it is dropped by default. That is also what
+    keeps this in agreement with ``recall``, which prunes superseded memories
+    before it looks for pairs.
+
     Parameters
     ----------
     repo:
@@ -4087,15 +4120,21 @@ def memory_contradictions(repo: str | None = None) -> list[dict]:
         is in scope, since a contradiction across two repos concerns both. With
         no repo detected and none passed, only pairs touching an unscoped memory
         (``repo`` null) are returned.
+    include_superseded:
+        When ``True``, keep pairs where either memory has been superseded, i.e.
+        the resolved ones.
     """
     detected = repo_module.detect(override=repo)
     everything = repo == ""
+    superseded = set() if include_superseded else _superseded_slugs()
 
     pairs: dict[frozenset[str], dict] = {}
     for row in client.read("read.gq", "contradicts_pairs", {}):
         a = {f: row[f"a_{f}"] for f in _CONTRADICTION_ENDPOINT_FIELDS}
         b = {f: row[f"b_{f}"] for f in _CONTRADICTION_ENDPOINT_FIELDS}
         if not everything and detected not in (a["repo"], b["repo"]):
+            continue
+        if a["slug"] in superseded or b["slug"] in superseded:
             continue
         edge = _edge_meta(row)
         key = frozenset((a["slug"], b["slug"]))
