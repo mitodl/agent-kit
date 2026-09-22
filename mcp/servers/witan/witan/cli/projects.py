@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json as _json
 from typing import Annotated
 
 import cyclopts
@@ -26,6 +25,7 @@ from ._common import (
     render_table,
     WorkflowPhase,
 )
+from .output import dump_record, get_output_format
 from .selected_target import selected_target
 from .run_helpers import (
     _launch_agent,
@@ -70,9 +70,6 @@ def projects(
         rows = _fn(s.workflow_project_search)(query=query, repo=repo_arg, status=status)
     rows = rows[:limit]
     matching = "" if query is None else f" matching '{esc(query)}'"
-    if not rows:
-        console.print(f"[dim]No projects{matching}.[/dim]")
-        return
     detected_repo = (
         _detect_repo_for_display() if not all_repos and repo is None else repo
     )
@@ -96,6 +93,7 @@ def projects(
         title=f"Workflow projects{matching} — {scope}",
         columns=["status", "phase", "slug", "title", "repos"],
         rows=rows_data,
+        empty=f"[dim]No projects{matching}.[/dim]",
         no_wrap={"status", "phase"},
         styles={"status": _STATUS_STYLE},
     )
@@ -178,22 +176,26 @@ def project_status(
 ) -> None:
     """Resume view — phase, ready tasks, last session, blockers ("what next").
 
-    The single-call resume view for a project. Pass ``--json`` for the raw
-    ``workflow_project_status`` payload.
+    The single-call resume view for a project. Under ``--output-format
+    json|toml|yaml`` it prints the raw ``workflow_project_status`` payload.
 
     Parameters
     ----------
     slug: Project ``wp-`` slug.
-    json: Emit the raw JSON payload instead of the formatted view.
+    json: Shorthand for ``witan --output-format json``. The global flag wins
+        when both are given, so ``--output-format yaml … --json`` is YAML.
     """
     s = _srv()
     st = _fn(s.workflow_project_status)(slug=slug)
     if not st:
-        console.print(f"[red]No project {slug!r}.[/red]")
+        print_error(f"No project {slug!r}.", stderr=True)
         raise SystemExit(1)
 
-    if json:
-        console.print_json(_json.dumps(st))
+    fmt = get_output_format()
+    if fmt == "txt" and json:
+        fmt = "json"
+    if fmt != "txt":
+        dump_record(st, fmt)
         return
 
     p = st["project"]
@@ -252,22 +254,41 @@ def project_tasks(
     slug: Project ``wp-`` slug.
     status: Filter to open | in_progress | blocked | closed.
     detail: Expand each task's blockers and dependents.
+
+    Under ``--output-format json|toml|yaml`` it prints ``task_list``'s rows
+    as the tool returned them, and ``--detail`` adds each row's
+    ``dependents``: the slugs of the tasks in this list that it blocks.
     """
     s = _srv()
     p = _fn(s.workflow_project_get)(slug=slug)
     if not p:
-        console.print(f"[red]No project {slug!r}.[/red]")
+        print_error(f"No project {slug!r}.", stderr=True)
         raise SystemExit(1)
 
     rows = _fn(s.task_list)(project_slug=slug)
     if status:
         rows = [r for r in rows if r.get("status") == status]
+    scope = f" ({status})" if status else ""
+
+    # Dependents = tasks in this project that name r as a blocker.
+    dependents: dict[str, list[str]] = {}
+    for r in rows:
+        for b in r.get("blocked_by") or []:
+            dependents.setdefault(b, []).append(r["slug"])
+
+    fmt = get_output_format()
+    if fmt != "txt":
+        if detail:
+            rows = [{**r, "dependents": dependents.get(r["slug"], [])} for r in rows]
+        dump_record(
+            {"title": f"Tasks{scope} — {p.get('title', slug)}", "rows": rows}, fmt
+        )
+        return
+
     if not rows:
-        scope = f" ({status})" if status else ""
         console.print(f"[dim]No tasks{scope} for {slug}.[/dim]")
         return
 
-    scope = f" ({status})" if status else ""
     console.print(
         f"[bold]Tasks{scope} — {escape(p.get('title', slug))}[/bold] ({len(rows)}):"
     )
@@ -283,14 +304,9 @@ def project_tasks(
     if not detail:
         return
 
-    # Dependents = tasks in this project that name r as a blocker. Resolve
-    # statuses from the project's own set first, falling back to a fetch for a
-    # cross-project/unscoped blocker referenced from here.
+    # Resolve statuses from the project's own set first, falling back to a
+    # fetch for a cross-project/unscoped blocker referenced from here.
     by_slug = {r["slug"]: r for r in rows}
-    dependents: dict[str, list[str]] = {}
-    for r in rows:
-        for b in r.get("blocked_by") or []:
-            dependents.setdefault(b, []).append(r["slug"])
 
     def _status_of(task_slug: str) -> str:
         if task_slug in by_slug:

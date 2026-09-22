@@ -367,6 +367,22 @@ def test_list_with_no_targets_says_how_to_add_one(config_file, monkeypatch):
     assert "No targets configured" in recorder.export_text()
 
 
+def test_list_with_no_targets_under_json_is_empty_rows(config_file, capsys):
+    import json
+
+    from witan.cli import output
+    from witan.cli.targets import list_targets
+
+    config_file.write_text("author = 'Someone'\n")
+    output.set_output_format("json")
+    try:
+        list_targets()
+    finally:
+        output.set_output_format("txt")
+
+    assert json.loads(capsys.readouterr().out)["rows"] == []
+
+
 def test_render_block_omits_empty_fields():
     from witan.cli.targets import render_target_block
 

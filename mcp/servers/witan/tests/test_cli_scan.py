@@ -16,7 +16,6 @@ def _capture(monkeypatch):
 
     recorder = Console(record=True, width=200)
     monkeypatch.setattr(_common, "console", recorder)
-    monkeypatch.setattr("witan.cli.scan.console", recorder)
     return recorder
 
 
@@ -117,3 +116,45 @@ def test_test_command_silent_when_scanning_enabled(monkeypatch, tmp_path):
     scan_test("clean text")
 
     assert "disabled" not in recorder.export_text()
+
+
+def test_test_command_under_json_is_empty_rows_with_notices_on_stderr(
+    monkeypatch, tmp_path, capsys
+):
+    """The disabled-scanning note used to land on stdout ahead of the JSON."""
+    import json
+
+    from witan.cli import output
+    from witan.cli.scan import test
+
+    _isolate_config(monkeypatch, tmp_path)
+    monkeypatch.setenv("WITAN_SCAN_ENABLED", "false")
+    output.set_output_format("json")
+    try:
+        test("nothing sensitive here")
+    finally:
+        output.set_output_format("txt")
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["rows"] == []
+    assert "scanning is disabled" in captured.err
+
+
+def test_rules_under_json_keeps_the_status_line_off_stdout(
+    monkeypatch, tmp_path, capsys
+):
+    import json
+
+    from witan.cli import output
+    from witan.cli.scan import rules
+
+    _isolate_config(monkeypatch, tmp_path)
+    output.set_output_format("json")
+    try:
+        rules()
+    finally:
+        output.set_output_format("txt")
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["rows"]
+    assert "Scanning:" in captured.err

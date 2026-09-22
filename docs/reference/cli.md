@@ -49,6 +49,7 @@ witan — agent memory, planning, and collaboration graph.
     - [`remove`](#witan-target-remove)
 - [`tasks`](#witan-tasks)
 - [`task`](#witan-task)
+    - [`show`](#witan-task-show)
     - [`create`](#witan-task-create)
     - [`comment`](#witan-task-comment)
     - [`close`](#witan-task-close)
@@ -124,8 +125,9 @@ witan — agent memory, planning, and collaboration graph.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -154,8 +156,9 @@ It is documented on the launcher rather than repeated on each command.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -173,8 +176,9 @@ Forget the cached token for the configured deployment.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -192,8 +196,9 @@ Show the identity the CLI presents to the deployed witan service.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -212,8 +217,9 @@ interactive HTML graph (vis-network) or a Graphviz DOT file.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -243,8 +249,9 @@ is not in git.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -274,8 +281,9 @@ sessions open forever.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -294,8 +302,9 @@ the store stays cheap. Safe to run repeatedly; takes the store write lock.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -316,8 +325,9 @@ newer than ``older_than``). Irreversible, so it requires ``--yes``.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -337,8 +347,9 @@ Search memory (BM25), or with no query list memories (filtered by --kind).
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -364,8 +375,9 @@ List workflow projects (default: active in the current repo).
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -397,8 +409,9 @@ Manage workflow projects.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -413,13 +426,13 @@ witan project status [OPTIONS] SLUG
 
 Resume view — phase, ready tasks, last session, blockers ("what next").
 
-The single-call resume view for a project. Pass ``--json`` for the raw
-``workflow_project_status`` payload.
+The single-call resume view for a project. Under ``--output-format
+json|toml|yaml`` it prints the raw ``workflow_project_status`` payload.
 
 **Parameters**:
 
 * `SLUG, --slug`: **[required]**
-* `--json, --no-json`: *[default: False]*
+* `--json, --no-json`: when both are given, so ``--output-format yaml … --json`` is YAML. *[default: False]*
 
 ### witan project tasks
 
@@ -576,8 +589,9 @@ Introspect and dry-run write-path content scanning (ADR 0001).
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -616,8 +630,9 @@ Manage workflow sessions.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -690,6 +705,9 @@ witan session list PROJECT-SLUG
 
 List a project's sessions, newest last.
 
+Under ``--output-format json|toml|yaml`` it prints
+``workflow_session_list``'s rows as the tool returned them.
+
 **Parameters**:
 
 * `PROJECT-SLUG, --project-slug`: **[required]**
@@ -718,8 +736,9 @@ Re-run after every upgrade to refresh installed files.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -734,8 +753,9 @@ Register and inspect named [targets.*] blocks (deployed witan endpoints).
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -886,8 +906,9 @@ Pass ``--status closed`` to see them (or any other status to filter to it).
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -918,17 +939,34 @@ Manage tasks.
 * [`link`](#witan-task-link): Link two tasks (or a task to a memory).
 * [`release`](#witan-task-release): Release a claim, returning the task to ``open`` (or another status).
 * [`run`](#witan-task-run): Claim one or more tasks and launch an agent to execute them.
+* [`show`](#witan-task-show): Show one task's details, its sub-tasks, and blocker status.
 * [`unlink`](#witan-task-unlink): Remove a link between two tasks (or a task and a memory).
 * [`update`](#witan-task-update): Update a task's mutable fields (only provided fields change).
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
+* `SLUG, --slug`: **[required]**
+
+### witan task show
+
+```console
+witan task show SLUG
+```
+
+Show one task's details, its sub-tasks, and blocker status.
+
+Under ``--output-format json|toml|yaml`` this prints ``task_get``'s record
+as the tool returned it, every field included, and nothing else.
+
+**Parameters**:
+
 * `SLUG, --slug`: **[required]**
 
 ### witan task create
@@ -1120,8 +1158,9 @@ List corpus workflow traces (default: current repo).
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -1146,8 +1185,9 @@ Inspect corpus trace records.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -1194,8 +1234,9 @@ this page and does its own login.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -1209,8 +1250,9 @@ One-shot, idempotent schema and data migrations.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -1417,8 +1459,9 @@ witan-code — tree-sitter code graph + cross-repo bridge.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -1796,8 +1839,9 @@ deployment would 403 every request from the browser UI. See the call to
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
@@ -1829,8 +1873,9 @@ the task's repo checkout so the agent has the right working directory.
 
 **Parameters**:
 
-* `--output-format`: projects, memory, traces, scan, and mounted witan-code tables. Values:
-    txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
+* `--output-format`: Applies to tasks, task <slug>, projects, project status, project
+    tasks, session list, memory, traces, scan, target list, and mounted
+    witan-code tables. Env: WITAN_OUTPUT_FORMAT. *[choices: txt, json, toml, yaml]* *[env: WITAN_OUTPUT_FORMAT]* *[default: txt]*
 * `--target`: Names a [targets.<name>] block, and applies to every command — `witan
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._common import MemoryKind, _fn, _repo_arg, _srv, app, console, render_table
+from ._common import MemoryKind, _fn, _repo_arg, _srv, app, render_table
 
 
 @app.command
@@ -23,9 +23,6 @@ def memory(
     else:
         rows = _fn(s.memory_list)(kind=kind, repo=repo_arg)[:limit]
         title = f"Memories ({kind})" if kind else "Memories"
-    if not rows:
-        console.print("[dim]No memories.[/dim]")
-        return
     rows_data = [
         {
             "kind": r.get("kind", "project_fact"),
@@ -39,5 +36,6 @@ def memory(
         title=title,
         columns=["kind", "slug", "title", "repo"],
         rows=rows_data,
+        empty="[dim]No memories.[/dim]",
         no_wrap={"kind"},
     )

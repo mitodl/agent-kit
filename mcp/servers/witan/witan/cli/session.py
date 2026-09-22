@@ -27,6 +27,7 @@ from ._common import (
     print_error,
     WorkflowPhase,
 )
+from .output import dump_record, get_output_format
 
 session_app = cyclopts.App(
     name="session",
@@ -234,6 +235,9 @@ def session_sweep(
 def session_list(project_slug: str) -> None:
     """List a project's sessions, newest last.
 
+    Under ``--output-format json|toml|yaml`` it prints
+    ``workflow_session_list``'s rows as the tool returned them.
+
     Parameters
     ----------
     project_slug: The ``wp-`` slug whose sessions to list.
@@ -242,6 +246,10 @@ def session_list(project_slug: str) -> None:
     sessions = _fn(s.workflow_session_list)(
         project_slug=project_slug, include_superseded=True
     )
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_record({"title": f"Sessions for {project_slug}", "rows": sessions}, fmt)
+        return
     if not sessions:
         console.print(f"[dim]No sessions for {project_slug}.[/dim]")
         return

@@ -12,7 +12,7 @@ import cyclopts
 from .. import config as cfg_module
 from ..scan import ScannerRegistry, redact_spans
 from ..scan.allowlist import compile_allowlist, suppression_reason
-from ._common import app, console, render_table
+from ._common import app, notice_console, render_table
 
 scan_app = cyclopts.App(
     name="scan", help="Introspect and dry-run write-path content scanning (ADR 0001)."
@@ -49,17 +49,13 @@ def test(
     """
     cfg = cfg_module.load_scan_config()
     if not cfg.enabled:
-        console.print(
+        notice_console().print(
             "[yellow]Note: scanning is disabled (WITAN_SCAN_ENABLED=false) — "
             "the write path would not scan this. Detectors still run below "
             "for validation.[/yellow]"
         )
     registry = ScannerRegistry.from_config(cfg)
     findings = registry.scan(text, field, node_type)
-    if not findings:
-        console.print("[green]No findings.[/green]")
-        return
-
     allowlist = compile_allowlist(cfg.allowlist)
     reasons = {f: suppression_reason(f, text, cfg, allowlist) for f in findings}
 
@@ -90,23 +86,28 @@ def test(
             "preview",
         ],
         rows=rows_data,
+        empty="[green]No findings.[/green]",
         styles={"action": _MODE_STYLE},
         dim_if_present={"suppressed"},
     )
+    if not findings:
+        return
 
     unsuppressed = [f for f in findings if reasons[f] is None]
-    console.print(f"\n[dim]Redacted preview:[/dim] {redact_spans(text, unsuppressed)}")
+    notice_console().print(
+        f"\n[dim]Redacted preview:[/dim] {redact_spans(text, unsuppressed)}"
+    )
 
     blocking = [
         f for f in unsuppressed if _mode_for(cfg, f.category, f.action) == "block"
     ]
     if blocking:
-        console.print(
+        notice_console().print(
             f"\n[bold red]{len(blocking)} finding(s) would block this write.[/bold red]"
         )
     suppressed_count = len(findings) - len(unsuppressed)
     if suppressed_count:
-        console.print(
+        notice_console().print(
             f"[dim]{suppressed_count} finding(s) allowlisted — downgraded to audit-only.[/dim]"
         )
 
@@ -119,11 +120,9 @@ def rules() -> None:
     scanners = registry.scanners
 
     status = "[green]enabled[/green]" if cfg.enabled else "[dim]disabled[/dim]"
-    console.print(f"Scanning: {status}  (on_scanner_error={cfg.on_scanner_error})\n")
-
-    if not scanners:
-        console.print("[dim]No active detectors.[/dim]")
-        return
+    notice_console().print(
+        f"Scanning: {status}  (on_scanner_error={cfg.on_scanner_error})\n"
+    )
 
     rows_data = [
         {
@@ -138,5 +137,6 @@ def rules() -> None:
         title="Active detectors",
         columns=["detector", "category", "mode", "source"],
         rows=rows_data,
+        empty="[dim]No active detectors.[/dim]",
         styles={"mode": _MODE_STYLE},
     )

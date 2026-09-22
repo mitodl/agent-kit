@@ -66,6 +66,7 @@ def test_a_table_cell_keeps_its_brackets(render):
         title="Tasks",
         columns=["slug", "title"],
         rows=[{"slug": "tk-x", "title": "fix [targets.production]"}],
+        empty="",
     )
 
     assert "[targets.production]" in out
@@ -81,6 +82,7 @@ def test_styling_a_column_still_works_after_escaping(render):
         title="Tasks",
         columns=["status", "title"],
         rows=[{"status": "blocked", "title": "x"}],
+        empty="",
         styles={"status": _STATUS_STYLE},
     )
 
