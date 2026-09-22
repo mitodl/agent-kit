@@ -4077,6 +4077,8 @@ def memory_neighbors(slug: str, kinds: list[MemoryNeighborKind] | None = None) -
     return {"slug": slug, "neighbors": neighbors}
 
 
+# `content` and `confidence` because reviewing a conflict means reading both
+# claims: without them every caller follows up with a `memory_get` per side.
 _CONTRADICTION_ENDPOINT_FIELDS = (
     "slug",
     "title",
@@ -4084,6 +4086,8 @@ _CONTRADICTION_ENDPOINT_FIELDS = (
     "repo",
     "author",
     "updated_at",
+    "content",
+    "confidence",
 )
 
 
@@ -4100,8 +4104,8 @@ def memory_contradictions(
     slug to start from; this needs neither.
 
     Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
-    carry ``slug, title, kind, repo, author, updated_at``; ``a`` is the side the
-    link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
+    carry ``slug, title, kind, repo, author, updated_at, content, confidence``;
+    ``a`` is the side the link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
     all ``null`` on links written before edge properties existed.
 
     One row per unordered pair. ``contradicts`` is symmetric but can be stored

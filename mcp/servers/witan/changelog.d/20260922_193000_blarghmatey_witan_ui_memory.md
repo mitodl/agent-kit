@@ -19,6 +19,8 @@
 
 - **`memory_list` hides superseded memories by default**, as `memory_search`
   and `recall` already did. `include_superseded=True` keeps them.
+- **`memory_contradictions` carries each side's `content` and `confidence`**,
+  so reviewing a pair no longer takes a `memory_get` per side.
 - **`memory_contradictions` drops a pair once either side is superseded**,
   since superseding is how a contradiction is resolved, and `recall` never
   reported such a pair anyway. `include_superseded=True` keeps them.

@@ -252,6 +252,10 @@ export interface ContradictionEndpoint {
 	repo: string | null;
 	author: string;
 	updated_at: string;
+	/** The claim itself, so the inbox needs no read per side. */
+	content: string;
+	/** The memory's own score, usually unset. Not the link's confidence. */
+	confidence: number | null;
 }
 
 /**
@@ -637,6 +641,8 @@ function isContradictionEndpoint(
 		repo: nullable(str),
 		author: str,
 		updated_at: str,
+		content: str,
+		confidence: nullable(num),
 	});
 }
 

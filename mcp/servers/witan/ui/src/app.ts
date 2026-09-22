@@ -20,14 +20,9 @@ import {
 } from "./mcp.js";
 import { formatRoute, parseRoute, type Route } from "./route.js";
 import { detailPanel, shell } from "./shell.js";
-import type {
-	MemoryContradiction,
-	TaskDetail,
-	WorkflowProjectSummary,
-} from "./types.js";
+import type { TaskDetail, WorkflowProjectSummary } from "./types.js";
 import { type Board, board, TASK_LIMIT } from "./views/board.js";
 import {
-	type InboxPair,
 	isMemorySlug,
 	type MemoryPage,
 	type MemoryPanel,
@@ -585,27 +580,9 @@ async function readMemoryPage(scope: MemoryScope): Promise<MemoryPage> {
 		// and the inbox is the list of what still needs a person.
 		memoryContradictions({ repo }),
 	]);
-	return { mode: "browse", memories, inbox: await readInbox(pairs) };
-}
-
-/**
- * Each side of each pair, read in full.
- *
- * Once per distinct slug: a memory that contradicts three others is one read,
- * not three.
- */
-async function readInbox(pairs: MemoryContradiction[]): Promise<InboxPair[]> {
-	const slugs = [...new Set(pairs.flatMap((p) => [p.a.slug, p.b.slug]))];
-	const bodies = new Map(
-		await Promise.all(
-			slugs.map(async (slug) => [slug, await memoryGet(slug)] as const),
-		),
-	);
-	return pairs.map((pair) => ({
-		pair,
-		a: bodies.get(pair.a.slug) ?? null,
-		b: bodies.get(pair.b.slug) ?? null,
-	}));
+	// Each side carries its own `content`, so the inbox is this one read, not
+	// one more per memory in it on every poll.
+	return { mode: "browse", memories, inbox: pairs };
 }
 
 /** One memory and its neighbours, together: the panel draws both or neither. */

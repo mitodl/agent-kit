@@ -33,8 +33,19 @@ def test_reports_both_endpoints_and_the_edge(server):
     assert row["b"]["slug"] == b
     assert row["a"]["title"] == "alpha"
     assert row["b"]["title"] == "beta"
+    assert row["a"]["content"] == "alpha content"
+    assert row["b"]["content"] == "beta content"
     for side in (row["a"], row["b"]):
-        assert set(side) == {"slug", "title", "kind", "repo", "author", "updated_at"}
+        assert set(side) == {
+            "slug",
+            "title",
+            "kind",
+            "repo",
+            "author",
+            "updated_at",
+            "content",
+            "confidence",
+        }
         assert side["kind"] == "pattern"
         assert side["repo"] == HERE
     assert row["edge"]["role"] == "disagree on the default"

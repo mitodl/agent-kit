@@ -65,33 +65,23 @@ function draw(page: MemoryPage, at: Route = route, onNavigate = vi.fn()) {
 	return onNavigate;
 }
 
-/** The inbox as `readInbox` builds it: each side's full memory beside the pair. */
-function inboxOf(rows: MemoryContradiction[]) {
-	const bodies = new Map(recalled.memories.map((m) => [m.slug, m] as const));
-	return rows.map((pair) => ({
-		pair,
-		a: bodies.get(pair.a.slug) ?? null,
-		b: bodies.get(pair.b.slug) ?? null,
-	}));
-}
-
 describe("the contradictions inbox", () => {
 	it("is the landing state, with both bodies side by side", () => {
-		draw({ mode: "browse", memories: listed, inbox: inboxOf(pairs) });
+		draw({ mode: "browse", memories: listed, inbox: pairs });
 
 		const sides = root.querySelectorAll(".pair .side");
 		expect(sides.length).toBe(2);
 		const [pair] = pairs;
 		expect(sides[0]?.textContent).toContain(pair?.a.title);
 		expect(sides[1]?.textContent).toContain(pair?.b.title);
-		// The bodies, which the endpoint projection does not carry.
+		// The bodies, from the pair itself: no read per side.
 		expect(sides[0]?.textContent).toContain("x-fastmcp-wrap-result");
 		expect(sides[1]?.textContent).toContain("returned 50 rows");
 		expect(sides[0]?.textContent).toContain(pair?.a.author);
 	});
 
 	it("shows the link's confidence on every pair", () => {
-		draw({ mode: "browse", memories: listed, inbox: inboxOf(pairs) });
+		draw({ mode: "browse", memories: listed, inbox: pairs });
 
 		expect(
 			root.querySelector(".pair-head .confidence-asserted"),
@@ -99,7 +89,7 @@ describe("the contradictions inbox", () => {
 	});
 
 	it("comes before the browse list", () => {
-		draw({ mode: "browse", memories: listed, inbox: inboxOf(pairs) });
+		draw({ mode: "browse", memories: listed, inbox: pairs });
 
 		const inbox = root.querySelector(".inbox");
 		const table = root.querySelector("table.memories");
@@ -117,23 +107,8 @@ describe("the contradictions inbox", () => {
 		expect(text()).toContain("No unresolved contradictions");
 	});
 
-	it("still renders a pair whose memory was deleted", () => {
-		const [pair] = pairs;
-		if (!pair) {
-			throw new Error("the fixture has no pair");
-		}
-		draw({
-			mode: "browse",
-			memories: listed,
-			inbox: [{ pair, a: null, b: null }],
-		});
-
-		expect(text()).toContain(pair.a.title);
-		expect(text()).toContain("only the link does");
-	});
-
 	it("offers both supersede calls to resolve a pair", () => {
-		draw({ mode: "browse", memories: listed, inbox: inboxOf(pairs) });
+		draw({ mode: "browse", memories: listed, inbox: pairs });
 
 		const [pair] = pairs;
 		const code = root.querySelector(".resolve code")?.textContent ?? "";

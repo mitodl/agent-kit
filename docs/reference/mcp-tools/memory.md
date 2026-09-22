@@ -240,8 +240,8 @@ only when both memories land in its result, and ``memory_neighbors`` needs a
 slug to start from; this needs neither.
 
 Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
-carry ``slug, title, kind, repo, author, updated_at``; ``a`` is the side the
-link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
+carry ``slug, title, kind, repo, author, updated_at, content, confidence``;
+``a`` is the side the link was made from. ``edge`` is ``{confidence, role, author, created_at}``,
 all ``null`` on links written before edge properties existed.
 
 One row per unordered pair. ``contradicts`` is symmetric but can be stored

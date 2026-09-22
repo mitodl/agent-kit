@@ -36,8 +36,8 @@ export type MemoryPage =
 	| {
 			mode: "browse";
 			memories: Memory[];
-			/** Every pair in scope, from `memory_contradictions`. */
-			inbox: InboxPair[];
+			/** Every unresolved pair in scope, from `memory_contradictions`. */
+			inbox: MemoryContradiction[];
 	  }
 	| {
 			mode: "recall";
@@ -56,20 +56,6 @@ export type MemoryPage =
 			topic: Topic | null;
 			memories: Memory[];
 	  };
-
-/**
- * One pair, with each side's full memory.
- *
- * `memory_contradictions` carries a projection of each endpoint with no
- * `content`, and the inbox is useless without the two bodies, so each side is
- * read with `memory_get`. A side that reads `null` was deleted after the edge
- * was written; the pair still renders from the projection.
- */
-export interface InboxPair {
-	pair: MemoryContradiction;
-	a: Memory | null;
-	b: Memory | null;
-}
 
 /** What the panel renders from for a memory slug. */
 export interface MemoryPanel {
@@ -299,7 +285,11 @@ function facetSelect(
 
 // ── The contradictions inbox ───────────────────────────────────────
 
-function inbox(pairs: InboxPair[], route: Route, now: number): TemplateResult {
+function inbox(
+	pairs: MemoryContradiction[],
+	route: Route,
+	now: number,
+): TemplateResult {
 	return html`
     <section class="inbox">
       <h2>Contradictions <span class="count">${pairs.length}</span></h2>
@@ -317,15 +307,18 @@ function inbox(pairs: InboxPair[], route: Route, now: number): TemplateResult {
   `;
 }
 
-function inboxPair(item: InboxPair, route: Route, now: number): TemplateResult {
-	const { pair } = item;
+function inboxPair(
+	pair: MemoryContradiction,
+	route: Route,
+	now: number,
+): TemplateResult {
 	return html`
     <li class="pair">
       <p class="pair-head">
         ${edgeMark(pair.edge, now)}
       </p>
       <div class="sides">
-        ${side(pair.a, item.a, route, now)} ${side(pair.b, item.b, route, now)}
+        ${side(pair.a, route, now)} ${side(pair.b, route, now)}
       </div>
       <details class="resolve">
         <summary>Resolve</summary>
@@ -353,7 +346,6 @@ function supersedeCall(keep: string, drop: string): string {
 
 function side(
 	endpoint: MemoryContradiction["a"],
-	memory: Memory | null,
 	route: Route,
 	now: number,
 ): TemplateResult {
@@ -371,17 +363,9 @@ function side(
         <span title=${absolute(endpoint.updated_at)}
           >updated ${ago(endpoint.updated_at, now)}</span
         >
-        ${confidence(memory?.confidence)}
+        ${confidence(endpoint.confidence)}
       </p>
-      ${
-				memory?.content
-					? html`<p class="prose">${memory.content}</p>`
-					: memory === null
-						? html`<p class="empty">
-                This memory no longer exists; only the link does.
-              </p>`
-						: nothing
-			}
+      <p class="prose">${endpoint.content}</p>
     </article>
   `;
 }

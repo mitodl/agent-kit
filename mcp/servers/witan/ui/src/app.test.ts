@@ -504,24 +504,14 @@ describe("App", () => {
 		expect(mcp.recall).not.toHaveBeenCalled();
 	});
 
-	it("reads each side of a pair once, however many pairs it is in", async () => {
-		const [pair] = unwrap<MemoryContradiction[]>(
-			"memory_contradictions",
-			contradictionsFixture,
-		);
-		if (!pair) {
-			throw new Error("the fixture has no pair");
-		}
-		vi.mocked(mcp.memoryContradictions).mockResolvedValue([pair, pair]);
+	it("reads the inbox in one call, not one more per memory in it", async () => {
+		// The page polls every 30s; a read per side would fan out with the
+		// inbox, and one failed side would fail the whole page.
 		await open("#memory");
 		await vi.waitFor(() => expect(root.querySelector(".inbox")).not.toBeNull());
 
-		expect(
-			vi
-				.mocked(mcp.memoryGet)
-				.mock.calls.map(([slug]) => slug)
-				.sort(),
-		).toEqual([pair.a.slug, pair.b.slug].sort());
+		expect(mcp.memoryContradictions).toHaveBeenCalledTimes(1);
+		expect(mcp.memoryGet).not.toHaveBeenCalled();
 	});
 
 	it("keeps resolved pairs out of the inbox when superseded memories are shown", async () => {
