@@ -278,6 +278,64 @@ p.prose,
 	padding-bottom: 0.2rem;
 }
 
+/* ── Board ──────────────────────────────────────────────────────── */
+
+/* Columns that wrap rather than scroll sideways: with the detail panel open
+   the board has half the page, and a horizontal scroller hides the Blocked
+   column, which is the one that says what is stuck. */
+.board {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+	gap: 1rem;
+	align-items: start;
+}
+
+.board .column h3 {
+	font-size: 0.95rem;
+	border-bottom: 1px solid var(--rule);
+	padding-bottom: 0.2rem;
+	margin: 0 0 0.5rem;
+}
+
+ul.cards,
+ul.blockers {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+ul.cards > li.card {
+	border: 1px solid var(--rule);
+	border-radius: 0.3rem;
+	padding: 0.4rem 0.5rem;
+	margin-bottom: 0.5rem;
+}
+
+/* A lapsed claim is the failure the board exists to show, so its card is
+   marked at the edge as well as by the badge: visible while scanning a
+   column, not only once the badge is read. */
+ul.cards > li.card.stale {
+	border-left: 3px solid var(--warn);
+}
+
+.card p {
+	margin: 0.15rem 0;
+}
+
+.card-meta,
+.claim,
+ul.blockers {
+	font-size: 0.85rem;
+	color: var(--muted);
+}
+
+.claim {
+	display: flex;
+	gap: 0.5rem;
+	align-items: baseline;
+	flex-wrap: wrap;
+}
+
 /* ── Detail panel ───────────────────────────────────────────────── */
 
 /* In the flow beside the view, not fixed over the page: spec §6.1 wants the

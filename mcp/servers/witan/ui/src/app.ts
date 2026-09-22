@@ -4,6 +4,7 @@ import { LiveRead, type Snapshot } from "./live.js";
 import {
 	taskGet,
 	taskList,
+	taskReady,
 	workflowProjectGet,
 	workflowProjectList,
 	workflowProjectStatus,
@@ -12,6 +13,7 @@ import {
 import { formatRoute, parseRoute, type Route } from "./route.js";
 import { detailPanel, shell } from "./shell.js";
 import type { TaskDetail, WorkflowProjectSummary } from "./types.js";
+import { type Board, board, TASK_LIMIT } from "./views/board.js";
 import { projectList, projectRollup, type Rollup } from "./views/projects.js";
 import { taskDetail, taskMissing } from "./views/task-detail.js";
 
@@ -53,6 +55,11 @@ export class App {
 	 */
 	private rollupKey: string | null = null;
 
+	private board: LiveRead<Board> | null = null;
+	private boardSnapshot: Snapshot<Board> | null = null;
+	/** The scope `board` is reading, keyed the same way as `rollupKey`. */
+	private boardKey: string | null = null;
+
 	private detail: LiveRead<TaskDetail | null> | null = null;
 	private detailSnapshot: Snapshot<TaskDetail | null> | null = null;
 	private detailKey: string | null = null;
@@ -89,6 +96,7 @@ export class App {
 		document.removeEventListener("keydown", this.onKeyDown);
 		this.projects.stop();
 		this.rollup?.stop();
+		this.board?.stop();
 		this.detail?.stop();
 	}
 
@@ -129,13 +137,14 @@ export class App {
 	 */
 	private syncReads(): void {
 		this.syncRollup();
+		this.syncBoard();
 		this.syncDetail();
 	}
 
 	private syncRollup(): void {
 		// Only the Projects tab draws a rollup. Keyed on the project alone, a
 		// route like `#board?project=wp-x` kept four tool calls going every 30
-		// seconds behind a tab that renders "not built yet", and showed a read
+		// seconds behind a tab that does not draw it, and showed a read
 		// time for data nothing was rendering.
 		const slug = this.route.view === "projects" ? this.route.project : null;
 		if (!slug) {
@@ -166,6 +175,39 @@ export class App {
 		this.rollup.start();
 	}
 
+	private syncBoard(): void {
+		if (this.route.view !== "board") {
+			this.board?.stop();
+			this.board = null;
+			this.boardSnapshot = null;
+			this.boardKey = null;
+			return;
+		}
+		// Every argument any of the board's reads takes, and nothing else, so
+		// opening a card in the panel does not re-read five tools.
+		const scope = {
+			repo: this.route.repo,
+			project: this.route.project,
+			closed: this.route.closed,
+		};
+		const key = JSON.stringify(scope);
+		if (this.board && key === this.boardKey) {
+			return;
+		}
+		const read = () => readBoard(scope);
+		this.boardKey = key;
+		if (this.board) {
+			this.board.retarget(read);
+			return;
+		}
+		this.board = new LiveRead(read, (snapshot) => {
+			this.boardSnapshot = snapshot;
+			this.draw();
+		});
+		this.boardSnapshot = this.board.snapshot;
+		this.board.start();
+	}
+
 	private syncDetail(): void {
 		const slug = this.route.slug;
 		if (!slug) {
@@ -194,6 +236,13 @@ export class App {
 
 	/** The reads behind whatever the main area is showing, for the status line. */
 	private primary(): { snapshot: Snapshot<unknown>; refresh: () => void } {
+		if (this.board && this.boardSnapshot) {
+			const live = this.board;
+			return {
+				snapshot: this.boardSnapshot,
+				refresh: () => live.refresh(),
+			};
+		}
 		if (this.rollup && this.rollupSnapshot) {
 			const rollup = this.rollup;
 			return {
@@ -234,6 +283,18 @@ export class App {
 	}
 
 	private body(inScope: WorkflowProjectSummary[]): TemplateResult {
+		if (this.route.view === "board") {
+			const snapshot = this.boardSnapshot;
+			if (!snapshot) {
+				return emptyBox("Reading the board…");
+			}
+			const waiting = placeholderFor(snapshot, "the board");
+			if (waiting) {
+				return waiting;
+			}
+			return board(snapshot.data as Board, this.route);
+		}
+
 		if (this.route.view !== "projects") {
 			// Named rather than blank: the tabs are declared up front (spec §6) so
 			// the shell has one navigation model, and a person landing on an
@@ -364,6 +425,47 @@ async function readRollup(slug: string): Promise<Rollup> {
 		workflowSessionList({ project_slug: slug }),
 	]);
 	return { detail, status, tasks, sessions };
+}
+
+/**
+ * The reads behind the board (spec §6.4), all-or-nothing like the rollup's.
+ *
+ * Ready is read with the route's scope, because it IS `task_ready` for that
+ * scope. The non-closed statuses are read across every repo instead and
+ * narrowed in the browser (`views/board.ts` `inScope`), because a blocked card
+ * has to say whether each blocker is still open and blockers cross repos.
+ * Three status reads rather than one unfiltered one, so the live set never
+ * drags every closed task in the graph along with it.
+ */
+async function readBoard(scope: {
+	repo: string;
+	project: string | null;
+	closed: boolean;
+}): Promise<Board> {
+	// `project_slug` overrides `repo` in both tools, so a project scope passes
+	// `repo: ""` rather than a repo the server would ignore anyway.
+	const scoped = scope.project
+		? { repo: "", project_slug: scope.project }
+		: { repo: scope.repo };
+	const everywhere = (status: string) =>
+		taskList({ repo: "", status, limit: TASK_LIMIT });
+	const [ready, open, blocked, inProgress, closed] = await Promise.all([
+		taskReady({ ...scoped, limit: TASK_LIMIT }),
+		everywhere("open"),
+		everywhere("blocked"),
+		everywhere("in_progress"),
+		scope.closed
+			? taskList({ ...scoped, status: "closed", limit: TASK_LIMIT })
+			: Promise.resolve(null),
+	]);
+	return {
+		ready,
+		live: [...open, ...blocked, ...inProgress],
+		closed,
+		truncated: [ready, open, blocked, inProgress, closed ?? []].some(
+			(rows) => rows.length >= TASK_LIMIT,
+		),
+	};
 }
 
 /** Every repo any project names, sorted, for the repo filter. */

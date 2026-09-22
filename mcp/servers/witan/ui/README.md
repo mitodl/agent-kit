@@ -10,9 +10,11 @@ to an enumerated set of read tools. (Both are cited by path rather than linked:
 they land in their own changes, and a relative link would be dead here until
 those merge.)
 
-The Projects tab is built: the project list, one project's rollup, and the
-task detail panel (spec §6.2, §6.3). The other five tabs are declared in the
-shell and render a note saying so; each is its own task (spec §6.4 to §6.8).
+Two tabs are built. Projects has the project list, one project's rollup and
+the task detail panel (spec §6.2, §6.3). Board has Ready, In progress, Blocked
+and Closed columns (spec §6.4). The other four tabs are declared in the shell
+and render a note saying they are not built yet. Each is its own task (spec
+§6.5 to §6.8).
 
 ## Layout
 
