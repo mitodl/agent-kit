@@ -17,6 +17,11 @@
 #   docker build -f docker/witan.Dockerfile -t witan:$(git rev-parse --short HEAD) .
 
 ARG PYTHON_VERSION=3.14
+# The tag of the node image the UI stage builds in. The exact version is pinned
+# in mcp/servers/witan/ui/.node-version, which the GitHub workflows read; this
+# is the major line that pin lives on (24 = Krypton, the current LTS). Renovate
+# covers both.
+ARG NODE_VERSION=24
 # Keep in lockstep with witan_core's installer pin
 # (packages/witan-core/witan_core/omnigraph_install.py :: _OMNIGRAPH_VERSION)
 # and docker/omnigraph-server.Dockerfile's — see that file for why a split
@@ -84,6 +89,26 @@ RUN set -eux; \
     install -m 0755 "$found" /out/omnigraph; \
     /out/omnigraph --version
 
+# ── Build the witan UI bundle ─────────────────────────────────────────────────
+# The bundle is a gitignored build output, so the source tree copied in below
+# never carries it. Building it here rather than expecting one on the host
+# keeps the image reproducible from a clean checkout.
+#
+# This stage tracks the MAJOR LINE (the NODE_VERSION arg at the top of the
+# file); mcp/servers/witan/ui/.node-version pins the exact version and is what
+# the GitHub workflows read. They are two pins, not one, and nothing asserts
+# they agree, so bumping .node-version across a major means bumping the arg
+# too. Within a line they can differ by a patch release, which has not
+# mattered for a bundler.
+FROM node:${NODE_VERSION}-trixie-slim AS ui-builder
+WORKDIR /ui
+# package*.json first, so a source-only change reuses the install layer.
+COPY mcp/servers/witan/ui/package.json mcp/servers/witan/ui/package-lock.json ./
+RUN npm ci
+COPY mcp/servers/witan/ui/ ./
+# vite.config.ts writes to ../witan/ui_dist; give it that directory to land in.
+RUN mkdir -p /witan && npm run build
+
 # ── Build the relocatable venv from the uv workspace ──────────────────────────
 FROM python:${PYTHON_VERSION}-slim-trixie AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.12.10@sha256:2bb3ebca0a796a155094a27773d290c4b074572e6107f171d88d086682fd2500 /uv /uvx /usr/local/bin/
@@ -107,6 +132,13 @@ COPY pyproject.toml uv.lock ./
 COPY packages/ packages/
 COPY mcp/servers/witan/ mcp/servers/witan/
 COPY mcp/servers/witan-code/ mcp/servers/witan-code/
+# After the source copy rather than before it. TWO things keep a developer's
+# stale local bundle out of the image, and either one alone is enough: this
+# ordering, and .dockerignore excluding the host's ui_dist so the source copy
+# carries no bundle to overlay in the first place. Verified by inverting the
+# order with the ignore in place, which still produces a correct image.
+# Removing BOTH is what lets a stale host build ride in.
+COPY --from=ui-builder /witan/ui_dist/ mcp/servers/witan/witan/ui_dist/
 
 RUN uv venv --relocatable /opt/venv
 RUN --mount=type=cache,target=/root/.cache/uv \

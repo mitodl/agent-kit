@@ -22,6 +22,8 @@ skills/          # Reusable skills (SKILL.md per skill), organized by category
 custom-agents/   # Agent definitions for Claude Code and GitHub Copilot
 mcp/             # MCP server install helpers and config snippets
   servers/witan/         # Graph-structured memory MCP server (Python)
+    ui/                  # Its web UI (TypeScript/Vite) -- built into witan/ui_dist,
+                         # shipped inside the wheel, NOT independently versioned
   servers/witan-code/    # Tree-sitter code-graph MCP server (Python)
   servers/toolhive-swe/  # ToolHive SWE MCP config (per-tier: ci/qa/prod)
 packages/        # Standalone, independently-versioned Python libraries
@@ -95,6 +97,24 @@ See [`skills/workflow/creating-skills/SKILL.md`](./skills/workflow/creating-skil
 - `witan` MCP servers use `uv` exclusively — never `pip` directly.
 - This repo is one `uv` workspace with a single shared `.venv` at the root (`packages/agent-config-kit`, `packages/agent-kit`, `packages/witan-core`, `mcp/servers/witan`, `mcp/servers/witan-code`) — running `uv sync --package X` then testing package Y against the same env risks cross-contamination (Y sees X's deps, or a stale build of a sibling you just edited). Use the `just test-*` recipes (`justfile`, repo root): each runs `uv run --isolated --package <name> --group test pytest <path>` in its own throwaway venv, so results can't leak between packages. `just test-all` runs all five concurrently via just's native `[parallel]` recipe attribute.
 - **Tests never touch the machine they run on.** Every package's rootdir `conftest.py` loads `testsupport/hermetic.py` (repo root), which redirects `HOME`, the XDG dirs, the witan state files and both graph stores into a throwaway directory, clears the ambient `WITAN_*` selectors, and pins the terminal width — **at import time, not in a fixture**, because importing `witan.server` creates a graph and that happens during collection, before any fixture body runs. A suite that needs one of those values sets it itself; a suite that does not must not inherit yours. The one deliberate exception is `PATH`, which keeps its entry for the real `~/.local/bin` so the omnigraph binary stays findable — a binary is a tool, not state. A `pytest_sessionfinish` hook reports anything that reached the real home anyway: a warning locally (your machine may legitimately be writing there from another session), a failure on CI, inferred from `CI` rather than set per-workflow. Override with `AGENT_KIT_STRICT_HERMETICITY=1|0`. **A new package needs its own rootdir `conftest.py`** — nothing else will supply one, and without it the suite runs against your real home.
+- **The witan UI is a build output that ships in the Python wheel.**
+  `mcp/servers/witan/ui/` builds to `mcp/servers/witan/witan/ui_dist/`, which
+  git ignores; `artifacts` in that package's `pyproject.toml` declares it into
+  the sdist and the wheel. It sits at the `[tool.hatch.build]` level, not on
+  the wheel target alone, because `uv build` builds the wheel FROM the sdist,
+  so a path the sdist drops never reaches the wheel. (Hatch resolves
+  `.gitignore` from the package directory, and the repo-root entry is written
+  anchored, so the declaration is not what makes the bundle ship *today* — it
+  is the correct declaration and becomes load-bearing as soon as anyone adds a
+  `.gitignore` under `mcp/servers/witan/`.) The failure mode is silent: hatch
+  omits a missing `artifacts` path without complaint, so `witan-ui.yml`'s
+  `packaging` job and `publish-witan.yml` both assert `witan/ui_dist/` is in
+  the built wheel. Three places build the bundle: `witan-ui.yml` on PRs,
+  `publish-witan.yml` before `uv build`, and `docker/witan.Dockerfile`'s
+  `ui-builder` stage. **The node version is pinned twice** and nothing asserts
+  the two agree: `mcp/servers/witan/ui/.node-version` has the exact version
+  and both workflows read it, while the Dockerfile's `NODE_VERSION` arg tracks
+  the major line. Bumping across a major means bumping both.
 - Skills are distributed as ZIPs on GitHub releases (tagged `v*`) — the publish workflow handles this automatically.
 - Each publishable package (`agent-config-kit`, `mcp/servers/witan`, `mcp/servers/witan-code`, `packages/agent-kit`, `packages/witan-core`) carries a `[tool.bumpversion]` config — bump a release with **`just bump <package> patch|minor|major`** (repo root), then commit and push to `main`; each package's `publish-*.yml` workflow tests, builds, publishes to PyPI, and tags the release automatically whenever its `pyproject.toml` version line changes. `just bump` writes the CHANGELOG entry's version into `pyproject.toml` only if that entry already exists, so the changelog and the version cannot drift apart; it wraps the pinned `uvx bump-my-version@1.4.1` (calling that directly still works, but skips the changelog gate and the post-check). Commit `pyproject.toml`, `CHANGELOG.md` **and `uv.lock`** together — the lockfile records workspace member versions and moves with the bump. `just check-versions` asserts version/bumpversion-config/CHANGELOG agree and runs in CI on every PR touching a `pyproject.toml` or `CHANGELOG.md`. **If a change adds a `witan_core` symbol AND a caller of it in `witan`/`witan-code`, raise that server's `witan-core>=X` floor in the same change** — the workspace resolves `witan-core` by path, so the new symbol imports fine everywhere except an external `pip install`, which then fails at import rather than at use. `just check-core-floor` is what catches that: it installs each server's wheel into a clean venv with `witan-core` pinned to exactly its declared floor and imports every module, and it runs in CI on every PR touching either server or `witan-core`. `packages/agent-kit`'s `dependencies` on `agent-config-kit[cli]`/`witan-council`/`witan-code` are open-ended floors (no upper bound), so a new release of any of the three is picked up by a fresh install without `ol-agent-kit` itself needing a release.
 
@@ -105,5 +125,6 @@ See [`skills/workflow/creating-skills/SKILL.md`](./skills/workflow/creating-skil
 - [`skills/README.md`](./skills/README.md) — full skill catalog with descriptions
 - [`mcp/README.md`](./mcp/README.md) — MCP server structure and available servers
 - [`mcp/servers/witan/README.md`](./mcp/servers/witan/README.md) — witan graph-memory server
+- [`mcp/servers/witan/ui/README.md`](./mcp/servers/witan/ui/README.md) — the witan web UI and how its bundle is packaged
 - [`custom-agents/README.md`](./custom-agents/README.md) — agent definitions for Claude/Copilot
 - [`docs/`](./docs/) — the **witan-context** documentation site (set up to publish on Read the Docs once that project is registered). `docs/reference/` is GENERATED and `docs/guides/` is mostly MIRRORED from the packages — do not hand-edit either; run `just docs-gen` and commit. `just docs-check` gates this in CI, and `just docs-serve` previews locally. Historical specs live in `docs/internals/`.

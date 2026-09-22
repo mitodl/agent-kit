@@ -28,6 +28,10 @@ build/
 _bin/
 # omnigraph cluster state (populated by `omnigraph cluster import`)
 __cluster/
+# The witan UI bundle, written by `npm run build` in mcp/servers/witan/ui/.
+# A build output, so not committed — hatch's `artifacts` setting in that
+# package's pyproject.toml is what gets it into the sdist and the wheel anyway.
+mcp/servers/witan/witan/ui_dist/
 
 # MCP server logs / caches
 .mcp-cache/

@@ -8,6 +8,13 @@ a MINOR bump may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **A web UI ships inside the wheel.** `mcp/servers/witan/ui/` is a
+  TypeScript/Vite package built to `witan/ui_dist/`, which hatch carries into
+  the sdist and the wheel. This release adds the package, its build and its
+  packaging only — it renders the app frame; the views and the routes that
+  serve them are separate changes. Nothing serves `/ui/` yet.
 ### Fixed
 
 - **`task_ready` no longer re-reads blockers it has already fetched.** Its

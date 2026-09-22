@@ -1,0 +1,163 @@
+name: witan UI
+
+# Narrower paths than witan-tests.yml, deliberately: this job builds a
+# TypeScript bundle and resolves nothing from the uv workspace, so a Python
+# dependency change cannot affect it.
+on:
+  push:
+    branches: [main]
+    paths: &ui_paths
+      - "mcp/servers/witan/ui/**"
+      - ".github/workflows/witan-ui.yml"
+      # What carries the bundle into the wheel. A change here can break the
+      # release without touching a line of TypeScript.
+      - "mcp/servers/witan/pyproject.toml"
+      # The `artifacts` declaration exists for what happens when an ignore
+      # rule starts matching the bundle, so an ignore-only change can move
+      # that silent-failure path without touching anything else.
+      - ".gitignore"
+      # The image builds the bundle in its own stage and copies it into the
+      # source tree; both the stage and that copy's ORDERING are load-bearing,
+      # and nothing else in CI builds this image.
+      - "docker/witan.Dockerfile"
+      - ".dockerignore"
+  pull_request:
+    paths: *ui_paths
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: witan UI (typecheck, lint, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp/servers/witan/ui
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # The pin lives in .node-version so a local build and CI cannot
+          # disagree about it; Renovate bumps the one file.
+          node-version-file: mcp/servers/witan/ui/.node-version
+          cache: npm
+          cache-dependency-path: mcp/servers/witan/ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      # Last, because it is the step the release depends on: publish-witan.yml
+      # runs the same build before `uv build`, and a bundle that fails to build
+      # there fails the release. Better to learn it on the PR.
+      - name: Build
+        run: npm run build
+
+  packaging:
+    name: witan UI (bundle reaches the wheel)
+    runs-on: ubuntu-latest
+
+    # The failure this exists for is silent and only shows up at release time:
+    # hatch drops a missing `artifacts` path without complaint, `uv build`
+    # succeeds, and the published witan has no UI in it. publish-witan.yml
+    # asserts the same thing, but that runs after the version bump has already
+    # landed on main. This runs on the PR that would cause it.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Stub a bundle
+        # The real one is not needed: what is under test is whether a file at
+        # this path reaches the wheel, not what vite put in it. Stubbing keeps
+        # this job off node entirely, so it stays a packaging check.
+        run: |
+          mkdir -p mcp/servers/witan/witan/ui_dist/assets
+          echo '<!doctype html>' > mcp/servers/witan/witan/ui_dist/index.html
+          echo '/* stub */' > mcp/servers/witan/witan/ui_dist/assets/stub.css
+
+      - name: Build
+        working-directory: mcp/servers/witan
+        run: uv build -o dist
+
+      - name: Assert the bundle is in the wheel and the sdist
+        # Both, because `uv build` builds the wheel FROM the sdist: checking
+        # only the wheel would still pass if `artifacts` were moved to the
+        # wheel target, which is the mistake the config comment warns about.
+        working-directory: mcp/servers/witan
+        run: |
+          wheel="$(ls dist/*.whl)"
+          sdist="$(ls dist/*.tar.gz)"
+          # Listings into variables, not `unzip | grep -q`. `grep -q` exits on
+          # the first match and closes the pipe, so the archive command can
+          # take SIGPIPE; under `pipefail` that failure becomes the
+          # pipeline's, and a VALID release is blocked by a check that found
+          # what it was looking for. The default shell here is `bash -e`
+          # without pipefail, so this is not reachable today, but it is one
+          # `shell: bash` away from being reachable and the failure mode is a
+          # blocked release.
+          wheel_listing="$(unzip -l "$wheel")"
+          sdist_listing="$(tar tzf "$sdist")"
+          for expected in witan/ui_dist/index.html witan/ui_dist/assets/stub.css; do
+            if ! grep -q "$expected" <<<"$wheel_listing"; then
+              echo "::error::$expected is missing from $wheel"
+              exit 1
+            fi
+          done
+          if ! grep -q 'witan/ui_dist/index.html' <<<"$sdist_listing"; then
+            echo "::error::the sdist has no ui_dist; the wheel is built from it"
+            exit 1
+          fi
+
+  image:
+    name: witan UI (the image carries the bundle)
+    runs-on: ubuntu-latest
+
+    # ★ THE ONE CHECK THAT LOOKS AT THE DEPLOYED ARTIFACT. The jobs above cover
+    # the Python packaging path; the image is a different one, and it fails
+    # silently: drop the `ui-builder` stage or the COPY that carries its
+    # output in, and the build still succeeds while the image serves no UI.
+    # Verified by deleting that COPY, which builds clean and fails this
+    # assertion.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build the image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: docker/witan.Dockerfile
+          load: true
+          tags: witan:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Assert the bundle is where the routes look for it
+        # Resolved through `witan.__file__` rather than by path, because that
+        # is what `ui_routes.BUNDLE_DIR` does: a bundle present at some other
+        # path in the image would still serve nothing.
+        run: |
+          docker run --rm --entrypoint python witan:ci -c "
+          import pathlib, sys, witan
+          bundle = pathlib.Path(witan.__file__).parent / 'ui_dist'
+          index = bundle / 'index.html'
+          if not index.is_file():
+              sys.exit(f'{index} is missing from the image')
+          print('bundle present:', sorted(p.name for p in bundle.iterdir()))
+          "

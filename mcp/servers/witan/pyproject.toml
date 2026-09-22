@@ -220,6 +220,28 @@ build-backend = "hatchling.build"
 agent-config-kit = { workspace = true }
 witan-core = { workspace = true }
 
+# The UI bundle (witan/ui_dist/, written by `npm run build` in ui/) is a build
+# output that git ignores, so it is declared here rather than left to
+# `packages = ["witan"]`.
+#
+# `artifacts` is what overrides an ignore, and it sits at the
+# [tool.hatch.build] level rather than on the wheel target alone because
+# publish-witan.yml runs `uv build -o dist`, which builds the wheel FROM the
+# sdist: a path the sdist drops never reaches the wheel however the wheel
+# target is configured. Confirmed by moving it to the wheel target with a
+# package-relative ignore in place, which empties both.
+#
+# It does not bite TODAY. Hatch resolves .gitignore from THIS directory, and
+# the repo-root entry is written `mcp/servers/witan/witan/ui_dist/`, which is
+# anchored and so never matches the `witan/ui_dist/...` paths hatch tests. A
+# build with this block deleted still ships the bundle. It is kept because it
+# is the correct declaration and becomes load-bearing the moment anyone adds a
+# .gitignore under mcp/servers/witan/ or rewrites the root entry
+# package-relative, and because `ui-packaging` in witan-ui.yml asserts the
+# bundle reaches the wheel either way.
+[tool.hatch.build]
+artifacts = ["witan/ui_dist/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["witan"]
 

@@ -1,0 +1,62 @@
+:root {
+	--fg: #1a1a1a;
+	--bg: #ffffff;
+	--muted: #6a6a6a;
+	--rule: #d8d8d8;
+	--accent: #1f5f9e;
+	font-family: system-ui, sans-serif;
+	color: var(--fg);
+	background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--fg: #e8e8e8;
+		--bg: #161616;
+		--muted: #9a9a9a;
+		--rule: #333333;
+		--accent: #6aa9e0;
+	}
+}
+
+body {
+	margin: 0;
+	background: var(--bg);
+}
+
+.shell-header {
+	display: flex;
+	align-items: baseline;
+	gap: 1.5rem;
+	padding: 0.75rem 1rem;
+	border-bottom: 1px solid var(--rule);
+}
+
+.shell-header h1 {
+	margin: 0;
+	font-size: 1.1rem;
+	font-weight: 600;
+}
+
+.shell-header nav {
+	display: flex;
+	gap: 1rem;
+}
+
+.shell-header a {
+	color: var(--muted);
+	text-decoration: none;
+}
+
+.shell-header a[aria-current="page"] {
+	color: var(--accent);
+	font-weight: 600;
+}
+
+main {
+	padding: 1rem;
+}
+
+.placeholder {
+	color: var(--muted);
+}
