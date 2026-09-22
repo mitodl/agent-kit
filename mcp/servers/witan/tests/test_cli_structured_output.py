@@ -231,6 +231,18 @@ def test_project_status_global_format_wins_over_json_flag(cli, capsys):
     assert yaml.safe_load(out)["project"]["slug"] == slug
 
 
+def test_project_status_json_flag_wins_over_txt(cli, capsys):
+    """txt may be ambient (WITAN_OUTPUT_FORMAT), so the per-command flag wins."""
+    from witan.cli.projects import project_status
+
+    slug = _project(cli)
+    _as("txt")
+
+    project_status(slug, json=True)
+
+    assert json.loads(capsys.readouterr().out)["project"]["slug"] == slug
+
+
 def test_project_status_json_flag_alone_still_prints_json(cli, capsys):
     from witan.cli.projects import project_status
 

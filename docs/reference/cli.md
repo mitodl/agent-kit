@@ -432,7 +432,11 @@ json|toml|yaml`` it prints the raw ``workflow_project_status`` payload.
 **Parameters**:
 
 * `SLUG, --slug`: **[required]**
-* `--json, --no-json`: when both are given, so ``--output-format yaml … --json`` is YAML. *[default: False]*
+* `--json, --no-json`: Shorthand for ``witan --output-format json``. A structured
+    ``--output-format`` wins over it, so ``--output-format yaml … --json``
+    is YAML. ``txt`` does not, because an explicit ``--output-format txt``
+    and an ambient ``WITAN_OUTPUT_FORMAT=txt`` look the same here, and
+    the per-command flag should win over the ambient one. *[default: False]*
 
 ### witan project tasks
 
@@ -446,6 +450,10 @@ List a project's tasks, optionally with their dependency structure.
 and, with ``--detail``, expands each task's blockers (what it waits on) and
 dependents (what waits on it), resolving statuses from the project's own task
 set so the dependency chain is visible without hopping between commands.
+
+Under ``--output-format json|toml|yaml`` it prints ``task_list``'s rows
+as the tool returned them, and ``--detail`` adds each row's
+``dependents``: the slugs of the tasks in this list that it blocks.
 
 **Parameters**:
 

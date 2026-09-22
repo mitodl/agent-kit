@@ -21,8 +21,10 @@
   `witan code` tables have the same bug and are not covered here.
 - `witan project status` honours the global `--output-format`. Its own
   `--json` flag used to win and the global flag had no effect; `--json` is
-  now shorthand for `--output-format json`, and the global flag wins when
-  both are given.
+  now shorthand for `--output-format json`, and a structured
+  `--output-format` wins over it. `txt` does not, since an explicit
+  `--output-format txt` cannot be told apart from an ambient
+  `WITAN_OUTPUT_FORMAT=txt`.
 - Under a structured format, stdout holds one document and nothing else. The
   notices `scan test`, `scan rules` and `target list` print alongside their
   table go to stderr there. stderr also carries log lines on success, so

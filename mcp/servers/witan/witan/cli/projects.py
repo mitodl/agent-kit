@@ -182,8 +182,12 @@ def project_status(
     Parameters
     ----------
     slug: Project ``wp-`` slug.
-    json: Shorthand for ``witan --output-format json``. The global flag wins
-        when both are given, so ``--output-format yaml … --json`` is YAML.
+    json:
+        Shorthand for ``witan --output-format json``. A structured
+        ``--output-format`` wins over it, so ``--output-format yaml … --json``
+        is YAML. ``txt`` does not, because an explicit ``--output-format txt``
+        and an ambient ``WITAN_OUTPUT_FORMAT=txt`` look the same here, and
+        the per-command flag should win over the ambient one.
     """
     s = _srv()
     st = _fn(s.workflow_project_status)(slug=slug)
@@ -249,15 +253,15 @@ def project_tasks(
     dependents (what waits on it), resolving statuses from the project's own task
     set so the dependency chain is visible without hopping between commands.
 
+    Under ``--output-format json|toml|yaml`` it prints ``task_list``'s rows
+    as the tool returned them, and ``--detail`` adds each row's
+    ``dependents``: the slugs of the tasks in this list that it blocks.
+
     Parameters
     ----------
     slug: Project ``wp-`` slug.
     status: Filter to open | in_progress | blocked | closed.
     detail: Expand each task's blockers and dependents.
-
-    Under ``--output-format json|toml|yaml`` it prints ``task_list``'s rows
-    as the tool returned them, and ``--detail`` adds each row's
-    ``dependents``: the slugs of the tasks in this list that it blocks.
     """
     s = _srv()
     p = _fn(s.workflow_project_get)(slug=slug)
@@ -272,9 +276,10 @@ def project_tasks(
 
     # Dependents = tasks in this project that name r as a blocker.
     dependents: dict[str, list[str]] = {}
-    for r in rows:
-        for b in r.get("blocked_by") or []:
-            dependents.setdefault(b, []).append(r["slug"])
+    if detail:
+        for r in rows:
+            for b in r.get("blocked_by") or []:
+                dependents.setdefault(b, []).append(r["slug"])
 
     fmt = get_output_format()
     if fmt != "txt":
