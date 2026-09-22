@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit-html";
-import { absolute, ago, isLinkable, repoLabel } from "../format.js";
+import { absolute, ago, branchUrl, repoLabel } from "../format.js";
 import { type Route, routeHref } from "../route.js";
 import type { CodeBranchRef, TaskDetail } from "../types.js";
 import { slugLinks, uriFact } from "./parts.js";
@@ -40,7 +40,19 @@ export function taskDetail(
         <dd>
           ${
 						task.repo
-							? html`<a href=${routeHref(route, { repo: task.repo })}
+							? html`<a
+                  href=${routeHref(route, {
+										repo: task.repo,
+										// Repo navigation, so it clears the project and the panel
+										// — the same rule the shell's repo select and the
+										// rollup's repo links follow. Keeping them left the panel
+										// open over a project the filter no longer selects, and
+										// re-read a rollup that `repo` does not narrow anyway
+										// (`task_list` returns early on `project_slug`).
+										project: null,
+										slug: null,
+									})}
+                  title=${task.repo}
                   >${repoLabel(task.repo)}</a
                 >`
 							: "—"
@@ -192,10 +204,11 @@ function neighbours(
  * One CodeBranch, linked to the branch on the forge.
  *
  * The branch is how a stale claim gets traced to an actual checkout, so the
- * useful thing to do with it is open it. `repo` is a canonical repo URI and
- * `branch` a branch name, which is enough to build a `/tree/` URL; a repo URI
- * that is not a URL (or a forge that does not use that path shape) falls back
- * to text rather than guessing, and `isLinkable` is what decides.
+ * useful thing to do with it is open it. `branchUrl` decides whether that is
+ * possible: it knows the branch path for the forges it recognizes and answers
+ * `null` for every other host, which renders as text. An earlier cut assumed
+ * `/tree/` for anything with an https: scheme, which is GitHub's shape and not
+ * GitLab's, so it produced confidently broken links.
  *
  * `updated_at` is shown because it is the field that says whether the branch
  * is still being worked. `slug` goes in the `title` rather than the text: it
@@ -203,12 +216,7 @@ function neighbours(
  * rendering it again put a 60-character id beside the name it repeats.
  */
 function branchItem(branch: CodeBranchRef): TemplateResult {
-	const href = isLinkable(branch.repo)
-		? `${branch.repo.replace(/\.git$/, "").replace(/\/$/, "")}/tree/${branch.branch
-				.split("/")
-				.map(encodeURIComponent)
-				.join("/")}`
-		: null;
+	const href = branchUrl(branch.repo, branch.branch);
 	return html`
     <li title=${branch.slug}>
       ${

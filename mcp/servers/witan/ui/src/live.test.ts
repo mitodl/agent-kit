@@ -165,14 +165,88 @@ describe("LiveRead", () => {
 
 			live.start();
 			expect(read).toHaveBeenCalledTimes(1);
-			vi.advanceTimersByTime(3000);
+			// Awaited between ticks: a tick is skipped while a read is in flight,
+			// and under fake timers nothing settles unless the microtask queue is
+			// drained, so advancing 3s in one step would model a server that never
+			// answers rather than one answering in milliseconds.
+			for (let tick = 0; tick < 3; tick += 1) {
+				await vi.advanceTimersByTimeAsync(1000);
+			}
 			expect(read).toHaveBeenCalledTimes(4);
+
 			live.stop();
-			vi.advanceTimersByTime(3000);
+			await vi.advanceTimersByTimeAsync(3000);
 			expect(read).toHaveBeenCalledTimes(4);
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("skips an interval tick while a read is still in flight", async () => {
+		vi.useFakeTimers();
+		try {
+			const pending = deferred<string>();
+			const read = vi.fn(() => pending.promise);
+			const live = new LiveRead(read, () => {}, { intervalMs: 1000 });
+
+			live.start();
+			expect(read).toHaveBeenCalledTimes(1);
+			// ★ A read slower than the interval would otherwise be cancelled by the
+			// next tick just before it arrived, every time: the view sits at
+			// "Reading…" forever while requests pile up behind it.
+			vi.advanceTimersByTime(5000);
+			expect(read).toHaveBeenCalledTimes(1);
+
+			pending.resolve("landed");
+			await vi.waitFor(() => expect(live.snapshot.data).toBe("landed"));
+			// And polling resumes once it has.
+			vi.advanceTimersByTime(1000);
+			expect(read).toHaveBeenCalledTimes(2);
+			live.stop();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("skips a focus re-read while one is in flight", async () => {
+		const pending = deferred<string>();
+		const read = vi.fn(() => pending.promise);
+		const live = new LiveRead(read, () => {});
+
+		live.start();
+		await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+		window.dispatchEvent(new Event("focus"));
+		expect(read).toHaveBeenCalledTimes(1);
+
+		pending.resolve("landed");
+		await vi.waitFor(() => expect(live.snapshot.data).toBe("landed"));
+		live.stop();
+	});
+
+	it("lets an explicit refresh through even mid-read", async () => {
+		// A person pressing Refresh means "the thing I was waiting for is no
+		// longer what I want", which is not the starvation case above.
+		const first = deferred<string>();
+		const second = deferred<string>();
+		const reads = [first, second];
+		let index = 0;
+		const read = vi.fn(() => {
+			const next = reads[index++];
+			if (!next) {
+				throw new Error("read called more than the test set up");
+			}
+			return next.promise;
+		});
+		const live = new LiveRead(read, () => {});
+
+		live.start();
+		await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+		live.refresh();
+		expect(read).toHaveBeenCalledTimes(2);
+
+		second.resolve("second");
+		await vi.waitFor(() => expect(live.snapshot.data).toBe("second"));
+		live.stop();
 	});
 
 	it("runs no interval when one is disabled", async () => {

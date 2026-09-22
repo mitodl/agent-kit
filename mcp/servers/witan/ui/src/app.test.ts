@@ -130,13 +130,14 @@ describe("App", () => {
 		expect(mcp.workflowSessionList).toHaveBeenCalledWith({
 			project_slug: projectDetail.slug,
 		});
-		// An explicit limit: `task_list` silently caps an unscoped read at 50.
-		expect(mcp.taskList).toHaveBeenCalledWith(
-			expect.objectContaining({
-				project_slug: projectDetail.slug,
-				limit: 1000,
-			}),
-		);
+		// ★ NO `limit`, and `repo: ""`. The by-project query is uncapped, so a
+		// limit can only drop tasks past it; and `task_list` returns early on
+		// `project_slug`, before `repo` is read, so a repo here is a no-op that
+		// would only look like a filter.
+		expect(mcp.taskList).toHaveBeenCalledWith({
+			repo: "",
+			project_slug: projectDetail.slug,
+		});
 	});
 
 	it("opens the detail panel for the slug in the URL", async () => {
@@ -208,17 +209,19 @@ describe("App", () => {
 		expect(text()).toContain("Sessions");
 	});
 
-	it("re-reads the project when the repo filter changes", async () => {
-		// The repo IS an argument to the rollup's `task_list`, so this one has to.
+	it("does not re-read the project when the repo filter changes", async () => {
+		// None of the four reads takes a repo that does anything, so a repo
+		// change cannot alter this rollup. Re-reading on it bought four tool
+		// calls and a blanked body for an identical result.
 		await open(`#projects?project=${projectDetail.slug}`);
 		await vi.waitFor(() => expect(mcp.taskList).toHaveBeenCalledTimes(1));
 
 		window.location.hash = `#projects?repo=https%3A%2F%2Fgithub.com%2Fmitodl%2Fhq&project=${projectDetail.slug}`;
-		await vi.waitFor(() =>
-			expect(mcp.taskList).toHaveBeenCalledWith(
-				expect.objectContaining({ repo: "https://github.com/mitodl/hq" }),
-			),
-		);
+		await vi.waitFor(() => expect(window.location.hash).toContain("mitodl"));
+		await Promise.resolve();
+
+		expect(mcp.taskList).toHaveBeenCalledTimes(1);
+		expect(mcp.workflowProjectGet).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not re-read the open task when the project filter changes", async () => {
@@ -289,6 +292,45 @@ describe("App", () => {
 
 		window.dispatchEvent(new Event("focus"));
 		expect(vi.mocked(mcp.workflowProjectList).mock.calls.length).toBe(before);
+	});
+
+	it("marks the panel stale when a detail poll fails over a shown task", async () => {
+		// ★ The top bar reports the view UNDERNEATH, so without a status line of
+		// its own the panel showed a retained task with no stale marker anywhere
+		// and a Refresh that retried the wrong read — the one case the
+		// retain-last-good rule exists for, silently unreported.
+		await open("#projects?slug=tk-fixture-000");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".task-detail")).not.toBeNull(),
+		);
+
+		vi.mocked(mcp.taskGet).mockRejectedValue(new Error("server went away"));
+		window.dispatchEvent(new Event("focus"));
+
+		const panel = () => root.querySelector(".detail-panel");
+		await vi.waitFor(() =>
+			expect(panel()?.querySelector(".stale")).not.toBeNull(),
+		);
+		// The task is still on screen; only the marker is new.
+		expect(panel()?.textContent).toContain(task.title);
+	});
+
+	it("refreshes the panel's own read, not the view underneath", async () => {
+		await open("#projects?slug=tk-fixture-000");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".task-detail")).not.toBeNull(),
+		);
+		const listReads = vi.mocked(mcp.workflowProjectList).mock.calls.length;
+		const detailReads = vi.mocked(mcp.taskGet).mock.calls.length;
+
+		root.querySelector<HTMLButtonElement>(".detail-panel button")?.click();
+
+		await vi.waitFor(() =>
+			expect(vi.mocked(mcp.taskGet).mock.calls.length).toBe(detailReads + 1),
+		);
+		expect(vi.mocked(mcp.workflowProjectList).mock.calls.length).toBe(
+			listReads,
+		);
 	});
 
 	it("keeps the last good project list when a refresh fails", async () => {

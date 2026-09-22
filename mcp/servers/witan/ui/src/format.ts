@@ -91,6 +91,48 @@ export function repoLabel(repo: string | null | undefined): string {
 	return path || repo;
 }
 
+/**
+ * The path a forge puts between a repo URL and a branch name.
+ *
+ * ★ A TABLE, NOT A DEFAULT. `/tree/` is GitHub's shape, and witan canonicalizes
+ * every remote it sees, including GitLab ones, where the branch lives under
+ * `/-/tree/` instead. Assuming GitHub for anything with an https: scheme
+ * generated confidently broken links for every other host — and a self-hosted
+ * instance of either forge is indistinguishable by hostname, so it is not a
+ * guess worth making. An unrecognized host gets no link at all.
+ */
+const FORGE_TREE_PATHS: Record<string, string> = {
+	"github.com": "tree",
+	"gitlab.com": "-/tree",
+};
+
+/**
+ * A URL for a branch on its forge, or `null` when the host is not one we know.
+ *
+ * `null` is the common, correct answer for a self-hosted or unfamiliar remote:
+ * the caller renders the branch name as text, which is no worse than today and
+ * strictly better than a link that 404s.
+ */
+export function branchUrl(
+	repo: string | null | undefined,
+	branch: string,
+): string | null {
+	if (!isLinkable(repo) || !branch) {
+		return null;
+	}
+	const base = new URL(repo);
+	const treePath = FORGE_TREE_PATHS[base.hostname.toLowerCase()];
+	if (!treePath) {
+		return null;
+	}
+	const path = base.pathname.replace(/\.git$/, "").replace(/\/$/, "");
+	// Each segment escaped, the separators kept: a branch name may contain
+	// slashes (`renovate/astral-sh-ruff`) and they are path separators on the
+	// forge, but anything else in a segment is not.
+	const ref = branch.split("/").map(encodeURIComponent).join("/");
+	return `${base.origin}${path}/${treePath}/${ref}`;
+}
+
 /** Whether a value can be used as an `href`. `external_uri` is free text. */
 export function isLinkable(uri: string | null | undefined): uri is string {
 	if (!uri) {

@@ -76,6 +76,19 @@ describe("taskDetail", () => {
 		expect(hrefs()).toContain("#projects?slug=tk-fixture-004");
 	});
 
+	it("treats the repo fact as repo navigation, clearing project and panel", () => {
+		// Same rule as the shell's repo select and the rollup's repo links.
+		// Keeping them left the panel open over a project the filter no longer
+		// selects, and re-read a rollup that `repo` does not narrow anyway.
+		const route = { ...DEFAULT_ROUTE, project: "wp-x", slug: task.slug };
+		render(taskDetail(task, route), root);
+
+		const repoLink = root.querySelector<HTMLAnchorElement>(".facts a");
+		expect(repoLink?.getAttribute("href")).toBe(
+			"#projects?repo=https%3A%2F%2Fgithub.com%2Fmitodl%2Fagent-kit",
+		);
+	});
+
 	it("links the parent and the project", () => {
 		render(taskDetail(task, DEFAULT_ROUTE), root);
 

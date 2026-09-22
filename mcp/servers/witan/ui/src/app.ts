@@ -24,17 +24,6 @@ import { taskDetail, taskMissing } from "./views/task-detail.js";
  * route needs.
  */
 
-/**
- * Upper bound on a project's task list.
- *
- * Passed explicitly because `task_list` silently caps an unscoped read at 50
- * (the read-gap task added the parameter for this), and a rollup that showed
- * 50 of a project's 80 tasks with no sign of the cut is worse than one that
- * asks for all of them. The server's ceiling is 10000; a project with more
- * tasks than this is not a thing the graph has.
- */
-const TASK_LIMIT = 1000;
-
 export class App {
 	private route: Route;
 	private readonly root: HTMLElement;
@@ -156,15 +145,15 @@ export class App {
 			this.rollupKey = null;
 			return;
 		}
-		// The repo is in the key because it is an argument to the rollup's
-		// `task_list`, so changing it does have to re-read.
-		const key = `${slug}\u0000${this.route.repo}`;
-		if (this.rollup && key === this.rollupKey) {
+		// The project slug is the WHOLE key: nothing else the route carries is
+		// an argument to any of the four reads. The repo used to be here, on the
+		// belief that it narrowed the task list; it does not (see `readRollup`),
+		// so keying on it only bought a pointless re-read of four tools.
+		if (this.rollup && slug === this.rollupKey) {
 			return;
 		}
-		const repo = this.route.repo;
-		const read = () => readRollup(slug, repo);
-		this.rollupKey = key;
+		const read = () => readRollup(slug);
+		this.rollupKey = slug;
 		if (this.rollup) {
 			this.rollup.retarget(read);
 			return;
@@ -294,13 +283,24 @@ export class App {
 		if (waiting) {
 			return detailPanel(this.route, slug, waiting);
 		}
+		// The panel carries its own read state: it polls separately from the
+		// view underneath, so the top bar cannot report for it.
+		const detail = this.detail;
+		const status = detail
+			? readStatus(snapshot, () => detail.refresh())
+			: nothing;
 		const task = snapshot.data;
 		// A null with a result behind it is the graph saying no: a stale link,
 		// which is normal, rather than a failure.
 		if (task === null) {
-			return detailPanel(this.route, slug, taskMissing(slug));
+			return detailPanel(this.route, slug, taskMissing(slug), status);
 		}
-		return detailPanel(this.route, task.title, taskDetail(task, this.route));
+		return detailPanel(
+			this.route,
+			task.title,
+			taskDetail(task, this.route),
+			status,
+		);
 	}
 
 	/**
@@ -350,11 +350,17 @@ export class App {
  * a rollup drawn from three of four would show a task list that disagrees with
  * the counts beside it.
  */
-async function readRollup(slug: string, repo: string): Promise<Rollup> {
+async function readRollup(slug: string): Promise<Rollup> {
 	const [detail, status, tasks, sessions] = await Promise.all([
 		workflowProjectGet(slug),
 		workflowProjectStatus(slug),
-		taskList({ repo, project_slug: slug, limit: TASK_LIMIT }),
+		// ★ NO `repo`, AND NO `limit`. `task_list` returns early on
+		// `project_slug` (server.py: `if project_slug:`), before `repo` is ever
+		// read, so passing one is a no-op that only looks like a filter. And the
+		// by-project query is uncapped, so `limit` cannot widen this read — it
+		// can only silently drop tasks past the cap, which would contradict both
+		// the rollup's own promise and `workflow_project_status`'s counts.
+		taskList({ repo: "", project_slug: slug }),
 		workflowSessionList({ project_slug: slug }),
 	]);
 	return { detail, status, tasks, sessions };

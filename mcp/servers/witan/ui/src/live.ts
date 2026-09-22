@@ -113,9 +113,9 @@ export class LiveRead<T> {
 			// roughly a minute, and the focus listener below is what makes a
 			// returning tab current immediately, so pausing would only add a
 			// second mechanism doing the same job.
-			this.timer = setInterval(() => this.refresh(), this.intervalMs);
+			this.timer = setInterval(() => this.poll(), this.intervalMs);
 		}
-		this.onFocus = () => this.refresh();
+		this.onFocus = () => this.poll();
 		window.addEventListener("focus", this.onFocus);
 		this.refresh();
 	}
@@ -149,7 +149,27 @@ export class LiveRead<T> {
 		this.start();
 	}
 
-	/** Read now, off-cycle. The manual refresh button, and the focus handler. */
+	/**
+	 * An automatic read: the interval, and the focus handler.
+	 *
+	 * ★ SKIPPED WHILE ONE IS ALREADY IN FLIGHT, and that is not an
+	 * optimisation. `refresh` invalidates the previous generation, so a read
+	 * that consistently takes longer than the interval would be cancelled by
+	 * the next tick just before it arrived — every time. The view would sit at
+	 * "Reading…" forever while requests piled up behind it, and the slower the
+	 * server got the more of them there would be.
+	 *
+	 * A person pressing Refresh, and a retarget, still go straight through:
+	 * those mean "the thing I was waiting for is no longer what I want".
+	 */
+	private poll(): void {
+		if (this.state.loading) {
+			return;
+		}
+		this.refresh();
+	}
+
+	/** Read now, off-cycle. The manual refresh button. */
 	refresh(): void {
 		this.generation += 1;
 		const generation = this.generation;

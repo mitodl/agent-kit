@@ -139,6 +139,30 @@ describe("detailPanel", () => {
 		).toBe("#projects?project=wp-x");
 	});
 
+	it("gives the close control an accessible name", () => {
+		// `title` does not supply the accessible name when the element has text,
+		// so a screen reader announced the glyph "×" and nothing else.
+		render(detailPanel(DEFAULT_ROUTE, "A task", html`<p>detail</p>`), root);
+
+		expect(root.querySelector(".close")?.getAttribute("aria-label")).toBe(
+			"Close details",
+		);
+	});
+
+	it("carries the panel's own read status when given one", () => {
+		render(
+			detailPanel(
+				DEFAULT_ROUTE,
+				"A task",
+				html`<p>detail</p>`,
+				html`<span class="stale">stale</span>`,
+			),
+			root,
+		);
+
+		expect(root.querySelector(".detail-panel header .stale")).not.toBeNull();
+	});
+
 	it("is focusable, so opening it can move focus into it", () => {
 		render(detailPanel(DEFAULT_ROUTE, "A task", html`<p>detail</p>`), root);
 		expect(root.querySelector(".detail-panel")?.getAttribute("tabindex")).toBe(

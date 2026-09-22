@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	absolute,
 	ago,
+	branchUrl,
 	isLinkable,
 	parseTimestamp,
 	repoLabel,
@@ -85,6 +86,54 @@ describe("repoLabel", () => {
 	it("names the all-repos scope", () => {
 		expect(repoLabel("")).toBe("all repos");
 		expect(repoLabel(null)).toBe("all repos");
+	});
+});
+
+describe("branchUrl", () => {
+	it("builds a GitHub branch URL", () => {
+		expect(
+			branchUrl("https://github.com/mitodl/agent-kit", "witan-ui-drill-down"),
+		).toBe("https://github.com/mitodl/agent-kit/tree/witan-ui-drill-down");
+	});
+
+	it("uses GitLab's own branch path", () => {
+		// ★ NOT `/tree/`. witan canonicalizes GitLab remotes too, and assuming
+		// GitHub's shape for them produced a confidently broken link.
+		expect(branchUrl("https://gitlab.com/group/proj", "main")).toBe(
+			"https://gitlab.com/group/proj/-/tree/main",
+		);
+	});
+
+	it("declines a host it does not recognize", () => {
+		// Including self-hosted GitHub and GitLab, which are indistinguishable
+		// by hostname. The caller renders the branch name as text.
+		expect(branchUrl("https://git.example.org/team/proj", "main")).toBeNull();
+		expect(branchUrl("some-local-thing", "main")).toBeNull();
+		expect(branchUrl(null, "main")).toBeNull();
+	});
+
+	it("keeps slashes in a branch name as separators", () => {
+		expect(
+			branchUrl(
+				"https://github.com/mitodl/agent-kit",
+				"renovate/astral-sh-ruff",
+			),
+		).toBe("https://github.com/mitodl/agent-kit/tree/renovate/astral-sh-ruff");
+	});
+
+	it("escapes what is not a separator", () => {
+		expect(branchUrl("https://github.com/o/r", "fix/a b#c")).toBe(
+			"https://github.com/o/r/tree/fix/a%20b%23c",
+		);
+	});
+
+	it("drops a .git suffix and a trailing slash", () => {
+		expect(branchUrl("https://github.com/o/r.git", "main")).toBe(
+			"https://github.com/o/r/tree/main",
+		);
+		expect(branchUrl("https://github.com/o/r/", "main")).toBe(
+			"https://github.com/o/r/tree/main",
+		);
 	});
 });
 

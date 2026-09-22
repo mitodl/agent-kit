@@ -1,4 +1,4 @@
-import { html, type nothing, type TemplateResult } from "lit-html";
+import { html, nothing, type TemplateResult } from "lit-html";
 import { repoLabel } from "./format.js";
 import type { Route } from "./route.js";
 import { routeHref } from "./route.js";
@@ -168,6 +168,7 @@ export function detailPanel(
 	route: Route,
 	title: string,
 	body: TemplateResult,
+	status: TemplateResult | typeof nothing = nothing,
 ): TemplateResult {
 	return html`
     <aside
@@ -178,7 +179,21 @@ export function detailPanel(
     >
       <header>
         <h2>${title}</h2>
-        <a class="close" href=${routeHref(route, { slug: null })} title="Close (Esc)"
+        ${
+					/*
+					 * The panel's OWN read state, not the top bar's. The bar reports
+					 * the view underneath, so a detail poll that failed over a task
+					 * still on screen had no stale marker anywhere and Refresh retried
+					 * the wrong read — the one case the retain-last-good rule exists
+					 * for, silently unreported.
+					 */
+					status
+				}
+        <a
+          class="close"
+          href=${routeHref(route, { slug: null })}
+          aria-label="Close details"
+          title="Close (Esc)"
           >×</a
         >
       </header>
