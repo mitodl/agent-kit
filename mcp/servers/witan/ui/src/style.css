@@ -450,6 +450,11 @@ rect.work {
 	fill: var(--accent);
 }
 
+line.first-claim {
+	stroke: var(--accent);
+	stroke-width: 2;
+}
+
 line.lease {
 	stroke: var(--fg);
 	stroke-width: 2;

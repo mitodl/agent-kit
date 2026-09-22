@@ -90,6 +90,7 @@ function data(patch: Partial<Timeline> = {}): Timeline {
 		readAt: READ_AT,
 		days: 14,
 		truncated: false,
+		projects,
 		...patch,
 	};
 }
@@ -170,7 +171,9 @@ describe("taskBar", () => {
 			first_claimed_at: naive(READ_AT - 2 * DAY),
 		});
 		const drawn = bar(released);
-		expect(drawn.work?.start).toBe(READ_AT - 2 * DAY);
+		// When it was released is not recorded, so no segment runs to now.
+		expect(drawn.work).toBeNull();
+		expect(drawn.firstClaim).toBe(READ_AT - 2 * DAY);
 		expect(drawn.lease).toBeNull();
 	});
 
@@ -214,7 +217,6 @@ describe("layout", () => {
 		const plan = layout(
 			data({ tasks: [closed, inFlight, neverClaimed, old] }),
 			DEFAULT_ROUTE,
-			projects,
 		);
 		const drawn = plan.groups.flatMap((group) =>
 			group.bars.map((b) => b.task.slug),
@@ -229,7 +231,6 @@ describe("layout", () => {
 		const plan = layout(
 			data({ tasks: [{ ...closed, closed_at: null }] }),
 			DEFAULT_ROUTE,
-			projects,
 		);
 		expect(plan.undated).toBe(1);
 		expect(plan.groups).toEqual([]);
@@ -249,7 +250,6 @@ describe("layout", () => {
 				],
 			}),
 			DEFAULT_ROUTE,
-			projects,
 		);
 		expect(plan.groups.map((group) => group.title)).toEqual(
 			[project.title, "wp-zzz-gone"]
@@ -287,7 +287,6 @@ describe("layout", () => {
 				],
 			}),
 			DEFAULT_ROUTE,
-			projects,
 		);
 		const spans = plan.groups.flatMap((group) => group.lanes.flat());
 		expect(spans.map((s) => [s.session.slug, s.span.end, s.open])).toEqual([
@@ -310,7 +309,7 @@ describe("layout", () => {
 			session({ ...recent, slug: "ws-none", project_slug: null }),
 		];
 		const slugsFor = (route: Route) =>
-			layout(data({ sessions: all }), route, projects).groups.flatMap((group) =>
+			layout(data({ sessions: all }), route).groups.flatMap((group) =>
 				group.lanes.flat().map((s) => s.session.slug),
 			);
 
@@ -319,12 +318,43 @@ describe("layout", () => {
 		expect(slugsFor(DEFAULT_ROUTE).sort()).toEqual(["ws-in", "ws-none"]);
 	});
 
-	it("narrows tasks by the board's scope rule", () => {
+	it("keeps the sessions and title of a project that is no longer active", () => {
+		// The shell's project list is active-only; a retrospective is mostly
+		// about work that finished.
+		const done: WorkflowProjectSummary = {
+			...(projects[0] as WorkflowProjectSummary),
+			slug: "wp-done",
+			title: "Finished last week",
+			status: "completed",
+			repos: [AGENT_KIT],
+		};
 		const plan = layout(
-			data({ tasks: [{ ...closed, repo: HQ }, inFlight] }),
+			data({
+				projects: [...projects, done],
+				sessions: [
+					session({
+						slug: "ws-done",
+						project_slug: "wp-done",
+						started_at: iso(READ_AT - 5 * DAY),
+						ended_at: iso(READ_AT - 5 * DAY + HOUR),
+					}),
+				],
+			}),
 			{ ...DEFAULT_ROUTE, repo: AGENT_KIT },
-			projects,
 		);
+		expect(plan.groups.map((group) => group.title)).toEqual([
+			"Finished last week",
+		]);
+		expect(plan.groups[0]?.lanes.flat().map((s) => s.session.slug)).toEqual([
+			"ws-done",
+		]);
+	});
+
+	it("narrows tasks by the board's scope rule", () => {
+		const plan = layout(data({ tasks: [{ ...closed, repo: HQ }, inFlight] }), {
+			...DEFAULT_ROUTE,
+			repo: AGENT_KIT,
+		});
 		expect(
 			plan.groups.flatMap((group) => group.bars.map((b) => b.task.slug)),
 		).toEqual(["tk-in-flight"]);
@@ -359,7 +389,7 @@ describe("timeline", () => {
 	}
 
 	function draw(value: Timeline, route: Route = DEFAULT_ROUTE): void {
-		render(timeline(value, route, projects), root);
+		render(timeline(value, route), root);
 	}
 
 	function row(slug: string): Element {
@@ -413,6 +443,46 @@ describe("timeline", () => {
 		const lead = row("tk-closed").querySelector("rect.lead");
 		expect(lead?.classList.contains("hatched")).toBe(true);
 		expect(row("tk-closed").querySelector("rect.work")).toBeNull();
+	});
+
+	it("does not pin a lease older than the window to its left edge", () => {
+		draw(
+			data({
+				tasks: [
+					{
+						...inFlight,
+						claimed_at: naive(READ_AT - 20 * DAY),
+						lease_expired: true,
+					},
+				],
+			}),
+		);
+		expect(row("tk-in-flight").querySelector("line.lease")).toBeNull();
+		// Still named, on the bar.
+		expect(
+			row("tk-in-flight").querySelector("rect.lead")?.textContent,
+		).toContain("Current lease since");
+	});
+
+	it("marks a released task's first claim instead of a segment to now", () => {
+		draw(
+			data({
+				tasks: [
+					task({
+						slug: "tk-released",
+						created_at: naive(READ_AT - 3 * DAY),
+						first_claimed_at: naive(READ_AT - 2 * DAY),
+					}),
+				],
+			}),
+		);
+		expect(row("tk-released").querySelector("rect.work")).toBeNull();
+		const lead = row("tk-released").querySelector("rect.lead");
+		expect(lead?.classList.contains("hatched")).toBe(false);
+		const first = row("tk-released").querySelector("line.first-claim");
+		expect(Number.parseFloat(first?.getAttribute("x1") ?? "")).toBeCloseTo(
+			(12 / 14) * 100,
+		);
 	});
 
 	it("marks a lapsed lease", () => {

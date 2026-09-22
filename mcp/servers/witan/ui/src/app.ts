@@ -355,13 +355,7 @@ export class App {
 			if (waiting) {
 				return waiting;
 			}
-			// All projects, not `inScope`: a task in the repo can belong to a
-			// project that does not list it, and its group still needs a title.
-			return timeline(
-				snapshot.data as Timeline,
-				this.route,
-				this.projectsSnapshot.data ?? [],
-			);
+			return timeline(snapshot.data as Timeline, this.route);
 		}
 
 		if (this.route.view !== "projects") {
@@ -552,7 +546,7 @@ async function readTimeline(scope: {
 }): Promise<Timeline> {
 	const readAt = Date.now();
 	const since = new Date(readAt - scope.days * DAY).toISOString();
-	const [tasks, sessions] = await Promise.all([
+	const [tasks, sessions, projects] = await Promise.all([
 		// `project_slug` returns early and uncapped; see `readRollup` for why a
 		// limit there would only drop rows.
 		scope.project
@@ -561,6 +555,8 @@ async function readTimeline(scope: {
 		workflowSessionList(
 			scope.project ? { since, project_slug: scope.project } : { since },
 		),
+		// `status: null` is every status; omitted, the tool lists active ones.
+		workflowProjectList({ repo: "", status: null }),
 	]);
 	return {
 		tasks,
@@ -568,6 +564,7 @@ async function readTimeline(scope: {
 		readAt,
 		days: scope.days,
 		truncated: !scope.project && tasks.length >= TASK_LIMIT,
+		projects,
 	};
 }
 

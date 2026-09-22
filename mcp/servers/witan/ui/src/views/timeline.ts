@@ -49,6 +49,16 @@ export interface Timeline {
 	days: number;
 	/** The task read came back at `TASK_LIMIT` rows, so there may be more. */
 	truncated: boolean;
+	/**
+	 * Every project, of EVERY status: group titles, and the repos a session's
+	 * project names.
+	 *
+	 * ★ NOT THE SHELL'S PROJECT LIST. That one is `workflow_project_list`'s
+	 * default, active projects only, and a retrospective is mostly about work
+	 * that finished: a project completed last week would lose its title, and
+	 * under a repo filter every one of its sessions.
+	 */
+	projects: WorkflowProjectSummary[];
 }
 
 /** Epoch ms bounds. Unclipped: the chart clips when it draws. */
@@ -61,7 +71,15 @@ export interface TaskBar {
 	task: TaskRow;
 	/** `created_at` to `closed_at`, or to the read for a task not closed. */
 	lead: Span;
-	/** `first_claimed_at` to the lead bar's end, or `null` when unrecorded. */
+	/** When the task was first claimed, or `null` when unrecorded. */
+	firstClaim: number | null;
+	/**
+	 * `first_claimed_at` to the close, or to the read while it is in progress.
+	 *
+	 * `null` on an open task that was claimed and released: when it was
+	 * released is not recorded, so a segment to now would claim work nobody
+	 * is doing. Its first claim is drawn as a mark instead.
+	 */
 	work: Span | null;
 	/** The current lease's start, on an in-progress task only. */
 	lease: number | null;
@@ -73,10 +91,12 @@ export interface SessionSpan {
 	/**
 	 * Never ended, so `span` is its start alone.
 	 *
-	 * ★ NOT DRAWN TO THE READ. Nothing makes an agent call
-	 * `workflow_session_end`, so an open session is as often abandoned as
-	 * running, and a bar to now would claim weeks of work that never happened.
-	 * Against a real graph those bars filled every lane of every project.
+	 * ★ NOT DRAWN TO THE READ. A session ends only when something calls
+	 * `workflow_session_end`: the agent, or the Stop hook when it finds the
+	 * session's handle on local disk (`witan hooks session-checkpoint`). An
+	 * agent that died, or a session started where that hook is not installed,
+	 * leaves it open, so an open session is as likely abandoned as running.
+	 * Against a real graph, bars to now filled every lane of every project.
 	 */
 	open: boolean;
 }
@@ -131,6 +151,7 @@ export function taskBar(
 		return {
 			task,
 			lead: { start: created, end: closed },
+			firstClaim: firstClaimed,
 			work:
 				firstClaimed !== null && firstClaimed <= closed
 					? { start: firstClaimed, end: closed }
@@ -148,7 +169,11 @@ export function taskBar(
 	return {
 		task,
 		lead: { start: created, end: readAt },
-		work: firstClaimed !== null ? { start: firstClaimed, end: readAt } : null,
+		firstClaim: firstClaimed,
+		work:
+			task.status === "in_progress" && firstClaimed !== null
+				? { start: firstClaimed, end: readAt }
+				: null,
 		lease:
 			task.status === "in_progress" ? (ms(leaseStart(task)) ?? null) : null,
 	};
@@ -208,17 +233,15 @@ const NO_PROJECT = "No project";
 /**
  * Everything the chart draws, as data.
  *
- * `projects` supplies group titles and the repo each session's project names.
- * A slug missing from it (a project read not landed yet, or one since
- * deleted) is titled by its slug rather than dropped.
+ * `data.projects` supplies group titles and the repo each session's project
+ * names. A slug missing from it (a project since deleted) is titled by its
+ * slug rather than dropped.
  */
-export function layout(
-	data: Timeline,
-	route: Route,
-	projects: WorkflowProjectSummary[],
-): Layout {
+export function layout(data: Timeline, route: Route): Layout {
 	const window = { start: data.readAt - data.days * DAY, end: data.readAt };
-	const bySlug = new Map(projects.map((project) => [project.slug, project]));
+	const bySlug = new Map(
+		data.projects.map((project) => [project.slug, project]),
+	);
 	const groups = new Map<string | null, Group>();
 	const group = (slug: string | null): Group => {
 		let found = groups.get(slug);
@@ -272,10 +295,9 @@ export function layout(
 			continue;
 		}
 		const key = session.project_slug;
-		sessions.set(key, [
-			...(sessions.get(key) ?? []),
-			{ session, span, open: ended === null },
-		]);
+		const spans = sessions.get(key) ?? [];
+		spans.push({ session, span, open: ended === null });
+		sessions.set(key, spans);
 	}
 	for (const [slug, spans] of sessions) {
 		group(slug).lanes = packLanes(spans);
@@ -339,12 +361,8 @@ const DATE_LABEL = new Intl.DateTimeFormat("en-US", {
 	timeZone: "UTC",
 });
 
-export function timeline(
-	data: Timeline,
-	route: Route,
-	projects: WorkflowProjectSummary[],
-): TemplateResult {
-	const plan = layout(data, route, projects);
+export function timeline(data: Timeline, route: Route): TemplateResult {
+	const plan = layout(data, route);
 	const x = scale(plan.window);
 	const marks = ticks(plan.window, data.days);
 	return html`
@@ -372,7 +390,9 @@ export function timeline(
               <div class="tl-row tl-axis">
                 <span></span>${axis(marks, x)}
               </div>
-              ${plan.groups.map((found) => groupRows(found, route, marks, x))}
+              ${plan.groups.map((found) =>
+								groupRows(found, route, plan.window, marks, x),
+							)}
             `
 			}
     </section>
@@ -438,6 +458,8 @@ function legend(): TemplateResult {
       <li>${swatch(svg`<rect class="work" x="0" y="2" width="24" height="8"></rect>`)} since first claimed</li>
       <li>${swatch(svg`<rect class="lead hatched" x="0" y="2" width="24" height="8"></rect>`)}
         no first-claim time: claimed before it was recorded, or closed unclaimed</li>
+      <li>${swatch(svg`<line class="first-claim" x1="12" y1="0" x2="12" y2="12"></line>`)}
+        first claimed, since released</li>
       <li>${swatch(svg`<line class="lease" x1="12" y1="0" x2="12" y2="12"></line>`)} current lease since</li>
       <li>${swatch(svg`<rect class="session" x="0" y="2" width="24" height="8"></rect>`)} session</li>
       <li>${swatch(svg`<line class="session-start" x1="12" y1="0" x2="12" y2="12"></line>`)}
@@ -526,6 +548,7 @@ function spanText(span: Span): string {
 function groupRows(
 	found: Group,
 	route: Route,
+	window: Span,
 	marks: number[],
 	x: (at: number) => number,
 ): TemplateResult {
@@ -545,7 +568,7 @@ function groupRows(
 				}
         <span class="count">${found.bars.length}</span>
       </h3>
-      ${found.bars.map((bar) => barRow(bar, route, marks, x))}
+      ${found.bars.map((bar) => barRow(bar, route, window, marks, x))}
       ${found.lanes.map((lane, index) => laneRow(lane, index, marks, x))}
     </section>
   `;
@@ -554,11 +577,13 @@ function groupRows(
 function barRow(
 	bar: TaskBar,
 	route: Route,
+	window: Span,
 	marks: number[],
 	x: (at: number) => number,
 ): TemplateResult {
 	const { task } = bar;
 	const ending = task.status === "closed" ? "" : ", still open";
+	const lease = bar.lease !== null ? leaseText(bar, bar.lease) : "";
 	return html`
     <div class="tl-row" data-slug=${task.slug}>
       <a class="tl-label" href=${routeHref(route, { slug: task.slug })}
@@ -568,10 +593,12 @@ function barRow(
 				x,
 				svg`
           ${rect(
-						bar.work ? "lead" : "lead hatched",
+						bar.firstClaim === null ? "lead hatched" : "lead",
 						bar.lead,
 						x,
-						`Lead time: ${spanText(bar.lead)}${ending}`,
+						[`Lead time: ${spanText(bar.lead)}${ending}`, lease]
+							.filter(Boolean)
+							.join("\n"),
 					)}
           ${
 						bar.work
@@ -583,24 +610,53 @@ function barRow(
 								)
 							: nothing
 					}
-          ${bar.lease !== null ? leaseMark(bar, bar.lease, x) : nothing}
+          ${
+						!bar.work && bar.firstClaim !== null
+							? mark(
+									"first-claim",
+									bar.firstClaim,
+									x,
+									`First claimed ${absolute(new Date(bar.firstClaim))}; released since, when is not recorded`,
+								)
+							: nothing
+					}
+          ${
+						/*
+						 * A lease older than the window is not drawn: clipped, it would
+						 * sit on the left edge and read as "since the window opened".
+						 * The lead bar's tooltip still carries it.
+						 */
+						bar.lease !== null && bar.lease >= window.start
+							? mark(
+									task.lease_expired ? "lease stale" : "lease",
+									bar.lease,
+									x,
+									lease,
+								)
+							: nothing
+					}
         `,
 			)}
     </div>
   `;
 }
 
-function leaseMark(
-	bar: TaskBar,
-	lease: number,
-	x: (at: number) => number,
-): unknown {
-	const at = pct(x(lease));
+function leaseText(bar: TaskBar, lease: number): string {
 	const holder = bar.task.assignee ?? "unassigned";
 	const lapsed = bar.task.lease_expired ? " (lapsed)" : "";
-	return svg`<line class=${bar.task.lease_expired ? "lease stale" : "lease"}
-    x1=${at} y1="0" x2=${at} y2=${ROW}
-    ><title>Current lease since ${absolute(new Date(lease))}, ${holder}${lapsed}</title></line>`;
+	return `Current lease since ${absolute(new Date(lease))}, ${holder}${lapsed}`;
+}
+
+/** A full-height tick at one instant. */
+function mark(
+	cls: string,
+	at: number,
+	x: (at: number) => number,
+	label: string,
+): unknown {
+	const left = pct(x(at));
+	return svg`<line class=${cls} x1=${left} y1="0" x2=${left} y2=${ROW}
+    ><title>${label}</title></line>`;
 }
 
 function laneRow(

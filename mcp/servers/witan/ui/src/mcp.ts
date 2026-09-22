@@ -277,7 +277,8 @@ export function workflowProjectStatus(
 /** Summary rows: `github_issue` and no `github_pr`, unlike the single reads. */
 export function workflowProjectList(args: {
 	repo: string;
-	status?: string;
+	/** Omitted, the tool lists `active` projects only; `null` lists every status. */
+	status?: string | null;
 	phase?: string;
 	ready?: boolean;
 }): Promise<WorkflowProjectSummary[]> {

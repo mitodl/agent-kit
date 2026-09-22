@@ -365,6 +365,11 @@ describe("App", () => {
 		);
 
 		expect(mcp.taskList).toHaveBeenCalledWith({ repo: "", limit: TASK_LIMIT });
+		// Every status: a completed project still needs its title and sessions.
+		expect(mcp.workflowProjectList).toHaveBeenCalledWith({
+			repo: "",
+			status: null,
+		});
 		const [args] = vi.mocked(mcp.workflowSessionList).mock.calls[0] ?? [];
 		const since = Date.parse(args?.since ?? "");
 		// Seven days back from the moment of the read, not from some fixed day.

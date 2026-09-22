@@ -7,14 +7,19 @@
   rewrites it; it appears only as a "current lease since" mark on in-progress
   tasks, orange when the server says the lease lapsed. Tasks claimed before
   `first_claimed_at` existed are drawn hatched rather than given a guessed
-  start. Each project's sessions sit in lanes under its tasks.
+  start. Each project's sessions sit in lanes under its tasks, including
+  projects that have since completed, which the rest of the UI's
+  active-only project list would drop.
 
   Two things are left out on purpose, and the page says how many. An open task
   nobody ever claimed has no start but its filing date, so its bar would look
   like work in flight; against a real graph that was most of the chart. And a
-  session that was never ended is drawn as a start mark only, since nothing
-  makes an agent end one and a bar to now would claim weeks that may never
-  have been worked.
+  session that was never ended is drawn as a start mark only. The Stop hook
+  ends a session only when it finds its handle on local disk, so an agent that
+  died or ran without the hook leaves it open, and a bar to now would claim
+  weeks that may never have been worked. For the same reason a task that was
+  claimed and released gets a mark at its first claim rather than a work
+  segment running to now: when it was released is not recorded.
 
   The window is 7, 14 (default), 30 or 90 days, in the URL. Sessions are read
   with `workflow_session_list(since=...)`; the view re-reads on focus and on
