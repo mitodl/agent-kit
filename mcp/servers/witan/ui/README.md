@@ -46,6 +46,12 @@ Formatting follows biome's defaults, with no config file here: `prek.toml`
 already runs biome across the repo, and a second config would be a second
 answer to the same question.
 
+`@biomejs/biome` is pinned to an exact version, matching `prek.toml`'s hook
+rev. A caret range resolved a newer biome than the commit hook runs, and the
+two format the same file differently, so the hook wrote one shape and CI's
+`npm run lint` demanded another on a file nobody had edited. Bump the two
+together.
+
 `npm ci` needs an npm new enough for the pinned node. If a stale global npm
 shadows the one that node ships (`npm --version` well below node's major),
 `npx npm@11 ci` runs the right one without changing anything on the machine.
