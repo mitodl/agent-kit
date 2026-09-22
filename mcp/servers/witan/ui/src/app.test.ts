@@ -357,6 +357,85 @@ describe("App", () => {
 		expect(mcp.taskList).not.toHaveBeenCalled();
 	});
 
+	it("reads the timeline's sessions from the window's start", async () => {
+		const before = Date.now();
+		await open("#timeline?days=7");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".timeline")).not.toBeNull(),
+		);
+
+		expect(mcp.taskList).toHaveBeenCalledWith({ repo: "", limit: TASK_LIMIT });
+		const [args] = vi.mocked(mcp.workflowSessionList).mock.calls[0] ?? [];
+		const since = Date.parse(args?.since ?? "");
+		// Seven days back from the moment of the read, not from some fixed day.
+		expect(since).toBeGreaterThanOrEqual(before - 7 * 86_400_000);
+		expect(since).toBeLessThanOrEqual(Date.now() - 7 * 86_400_000);
+		expect(args?.project_slug).toBeUndefined();
+	});
+
+	it("narrows both timeline reads to a filtered project", async () => {
+		await open(`#timeline?project=${projectDetail.slug}`);
+		await vi.waitFor(() =>
+			expect(root.querySelector(".timeline")).not.toBeNull(),
+		);
+
+		expect(mcp.taskList).toHaveBeenCalledWith({
+			repo: "",
+			project_slug: projectDetail.slug,
+		});
+		expect(mcp.workflowSessionList).toHaveBeenCalledWith(
+			expect.objectContaining({ project_slug: projectDetail.slug }),
+		);
+	});
+
+	it("does not re-read the timeline for a repo change", async () => {
+		// Both reads are repo-wide and the repo narrows them in the browser.
+		await open("#timeline");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".timeline")).not.toBeNull(),
+		);
+		const reads = vi.mocked(mcp.taskList).mock.calls.length;
+
+		window.location.hash =
+			"#timeline?repo=https%3A%2F%2Fgithub.com%2Fmitodl%2Fhq";
+		// The fixture's in-progress task is in agent-kit, so hq draws nothing.
+		await vi.waitFor(() => expect(text()).toContain("Nothing was worked"));
+
+		expect(vi.mocked(mcp.taskList).mock.calls.length).toBe(reads);
+	});
+
+	it("re-reads the timeline when the window changes", async () => {
+		await open("#timeline");
+		await vi.waitFor(() =>
+			expect(root.querySelector(".timeline")).not.toBeNull(),
+		);
+
+		window.location.hash = "#timeline?days=30";
+		await vi.waitFor(() =>
+			expect(vi.mocked(mcp.workflowSessionList).mock.calls.length).toBe(2),
+		);
+	});
+
+	it("does not poll the timeline on an interval", async () => {
+		// Spec §6.6: it plots elapsed time, so it re-reads on focus and Refresh.
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		try {
+			await open("#timeline");
+			await vi.waitFor(() =>
+				expect(root.querySelector(".timeline")).not.toBeNull(),
+			);
+			const reads = vi.mocked(mcp.taskList).mock.calls.length;
+
+			vi.advanceTimersByTime(5 * 60_000);
+			expect(vi.mocked(mcp.taskList).mock.calls.length).toBe(reads);
+
+			window.dispatchEvent(new Event("focus"));
+			expect(vi.mocked(mcp.taskList).mock.calls.length).toBe(reads + 1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("hands focus back to the link that opened the panel", async () => {
 		await open("");
 		await vi.waitFor(() =>

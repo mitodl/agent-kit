@@ -37,6 +37,7 @@ describe("parseRoute", () => {
 			project: "wp-x",
 			slug: "tk-y",
 			closed: true,
+			days: 14,
 		});
 	});
 
@@ -77,8 +78,15 @@ describe("formatRoute", () => {
 			project: "wp-x",
 			slug: "tk-y",
 			closed: true,
+			days: 30,
 		};
 		expect(parseRoute(formatRoute(route))).toEqual(route);
+	});
+
+	it("falls back to the default window for one it does not offer", () => {
+		expect(parseRoute("#timeline?days=100000").days).toBe(DEFAULT_ROUTE.days);
+		expect(parseRoute("#timeline?days=abc").days).toBe(DEFAULT_ROUTE.days);
+		expect(parseRoute("#timeline?days=7").days).toBe(7);
 	});
 
 	it("round-trips a repo URI that needs escaping", () => {

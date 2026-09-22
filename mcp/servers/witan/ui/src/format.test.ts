@@ -5,6 +5,7 @@ import {
 	ago,
 	branchUrl,
 	canonicalRepo,
+	duration,
 	isLinkable,
 	parseTimestamp,
 	repoLabel,
@@ -168,5 +169,27 @@ describe("canonicalRepo", () => {
 
 	it("leaves the all-repos value alone", () => {
 		expect(canonicalRepo("")).toBe("");
+	});
+});
+
+describe("duration", () => {
+	const MINUTE = 60_000;
+	const HOUR = 60 * MINUTE;
+	const DAY = 24 * HOUR;
+
+	it("keeps the two largest units", () => {
+		expect(duration(3 * DAY + 4 * HOUR + 59 * MINUTE)).toBe("3d 4h");
+		expect(duration(5 * HOUR + 12 * MINUTE)).toBe("5h 12m");
+		expect(duration(40 * MINUTE)).toBe("40m");
+	});
+
+	it("drops a zero second unit", () => {
+		expect(duration(2 * DAY)).toBe("2d");
+		expect(duration(3 * HOUR)).toBe("3h");
+	});
+
+	it("does not round a short span to zero", () => {
+		expect(duration(0)).toBe("<1m");
+		expect(duration(59_000)).toBe("<1m");
 	});
 });

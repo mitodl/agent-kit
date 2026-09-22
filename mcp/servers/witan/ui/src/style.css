@@ -336,6 +336,141 @@ ul.blockers {
 	flex-wrap: wrap;
 }
 
+/* ── Timeline ─────────────────────────────────────────────────── */
+
+.timeline {
+	container: timeline / inline-size;
+}
+
+.timeline-head {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 0.5rem 1rem;
+}
+
+.timeline .window {
+	display: flex;
+	gap: 0.75rem;
+}
+
+.timeline .window a[aria-current="page"] {
+	font-weight: 600;
+	text-decoration: none;
+	color: var(--fg);
+}
+
+ul.tl-legend {
+	list-style: none;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 1.25rem;
+	padding: 0;
+	font-size: 0.85rem;
+	color: var(--muted);
+}
+
+.tl-legend .swatch {
+	width: 1.5rem;
+	height: 0.75rem;
+	vertical-align: middle;
+}
+
+.tl-defs {
+	position: absolute;
+}
+
+.tl-group h3 {
+	font-size: 0.95rem;
+	border-bottom: 1px solid var(--rule);
+	padding-bottom: 0.2rem;
+	margin: 1rem 0 0.25rem;
+}
+
+/* The label column is capped rather than sized to the longest title, so the
+   track keeps most of the width and every row's track starts at the same x. */
+.tl-row {
+	display: grid;
+	grid-template-columns: minmax(8rem, 18rem) 1fr;
+	gap: 0.5rem;
+	align-items: center;
+}
+
+.tl-label {
+	font-size: 0.85rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tl-row .tl-track {
+	display: block;
+	width: 100%;
+}
+
+/* A label near the right edge may run a few px past the track rather than be
+   cut mid-word; the ticks past 90% carry no label at all (`axisLabel`). */
+.tl-axis .tl-track {
+	overflow: visible;
+}
+
+.tl-track text {
+	font-size: 12px;
+	fill: var(--muted);
+}
+
+/* A container query, not a media query: the open detail panel halves the
+   timeline's width without the viewport changing at all. */
+@container timeline (max-width: 1000px) {
+	.tl-track text.alternate {
+		display: none;
+	}
+}
+
+.tl-track line.grid {
+	stroke: var(--rule);
+	stroke-width: 1;
+}
+
+rect.lead {
+	fill: var(--rule);
+}
+
+rect.lead.hatched {
+	fill: url(#tl-hatch);
+}
+
+line.hatch {
+	stroke: var(--muted);
+	stroke-width: 1.5;
+}
+
+rect.work {
+	fill: var(--accent);
+}
+
+line.lease {
+	stroke: var(--fg);
+	stroke-width: 2;
+}
+
+line.lease.stale {
+	stroke: var(--warn);
+}
+
+rect.session {
+	fill: var(--accent);
+	fill-opacity: 0.45;
+}
+
+/* Never ended, so only its start is known: a dashed tick, not a bar. */
+line.session-start {
+	stroke: var(--accent);
+	stroke-width: 2;
+	stroke-dasharray: 3 2;
+}
+
 /* ── Detail panel ───────────────────────────────────────────────── */
 
 /* In the flow beside the view, not fixed over the page: spec §6.1 wants the
