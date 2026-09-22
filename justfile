@@ -219,31 +219,55 @@ check-versions *args:
 check-core-floor *args:
     uv run --package witan-core --extra cli --with packaging python bin/check_core_floor.py {{ args }}
 
-# CHANGELOG FIRST, THEN THE VERSION — and the order is the whole point. The
-# recipe computes the version this bump would produce and refuses unless
-# CHANGELOG.md already has a `## [<that version>]` heading. So the only way to
-# release is to have written down what is being released, and the two cannot
-# drift apart, because the bump will not run until they agree.
+# FRAGMENTS ALL ALONG, ONE CHANGELOG ENTRY AT RELEASE TIME. Every package has
+# a changelog.d/ (scriv, https://scriv.readthedocs.io/): a change gets its own
+# fragment file there, named with a timestamp/author/branch so two branches
+# never touch the same line — that per-file-per-change shape is the fix for
+# the version/changelog drift `check-versions` exists to catch, which came
+# from parallel edits to one growing CHANGELOG.md. `just changelog <package>`
+# creates one; `just bump` folds every pending fragment into CHANGELOG.md
+# under the version it just set and deletes them, so the two cannot drift —
+# there is no longer a step where a human has to remember to write the entry
+# at all, only to have written *a* fragment before release.
 #
 # Publishing is triggered by a push to main touching the package's own
-# pyproject.toml (.github/workflows/publish-*.yml), so this recipe IS the
-# release. It deliberately does not commit, tag, or push: what to say in the
-# commit is a judgement call, and a recipe that pushed on your behalf would be
-# one typo away from an unintended PyPI release.
+# pyproject.toml (.github/workflows/publish-*.yml), so `bump` IS the release.
+# It deliberately does not commit, tag, or push: what to say in the commit is
+# a judgement call, and a recipe that pushed on your behalf would be one typo
+# away from an unintended PyPI release.
 #
-# bump-my-version comes via uvx rather than a dev dependency — it is needed
-# only at release time, and pinning it into the workspace would put it in every
-# contributor's environment for no benefit. It IS version-pinned, though: this
-# recipe parses `show-bump`'s human-readable output, so an unpinned `uvx` could
-# resolve a release that reformats it and break version calculation during a
-# release. One variable, used for both the preview and the mutation, so those
-# two can never run different versions of the tool.
+# bump-my-version and scriv come via uvx rather than dev dependencies — needed
+# only at release time, so pinning them into the workspace would put them in
+# every contributor's environment for no benefit. Both ARE version-pinned:
+# this recipe parses `show-bump`'s human-readable output, so an unpinned
+# `uvx bump-my-version` could resolve a release that reformats it and break
+# version calculation during a release; scriv's output becomes CHANGELOG.md
+# text verbatim, so an unpinned `uvx scriv` could silently change that
+# formatting out from under every package at once.
 
-# Release a package, e.g. `just bump witan-core minor`. Changelog entry first.
+# Start a changelog fragment for a package, e.g. `just changelog witan-core`.
+# Opens the created file so its categories are right there to fill in.
+changelog package:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SCRIV_TOOL="scriv@1.8.0"   # keep in step with AGENTS.md
+    case "{{ package }}" in
+        witan-core)       dir=packages/witan-core ;;
+        witan-council)    dir=mcp/servers/witan ;;
+        witan-code)       dir=mcp/servers/witan-code ;;
+        agent-config-kit) dir=packages/agent-config-kit ;;
+        ol-agent-kit)     dir=packages/agent-kit ;;
+        *) echo "unknown package '{{ package }}' — one of: witan-core witan-council witan-code agent-config-kit ol-agent-kit" >&2; exit 1 ;;
+    esac
+    (cd "$dir" && uvx "$SCRIV_TOOL" create)
+
+# Release a package, e.g. `just bump witan-core minor`. Collects pending
+# changelog fragments into CHANGELOG.md under the new version.
 bump package part:
     #!/usr/bin/env bash
     set -euo pipefail
     BUMP_TOOL="bump-my-version@1.4.1"   # keep in step with AGENTS.md
+    SCRIV_TOOL="scriv@1.8.0"            # keep in step with AGENTS.md
     case "{{ package }}" in
         witan-core)       dir=packages/witan-core ;;
         witan-council)    dir=mcp/servers/witan ;;
@@ -260,6 +284,19 @@ bump package part:
     # Everything must already agree before touching anything: bumping on top of
     # existing drift would bury the drift in a release rather than fix it.
     just check-versions
+
+    # `find` rather than `ls`/`grep`: an empty changelog.d/ (nothing but the
+    # README scriv itself skips) must not look like there's a fragment.
+    frags=$(find "$dir/changelog.d" -maxdepth 1 -type f ! -iname 'README*' 2>/dev/null) || true
+    if [[ -z "$frags" ]]; then
+        echo "" >&2
+        echo "$dir/changelog.d has no fragments." >&2
+        echo "" >&2
+        echo "A release with no changelog fragment is one nobody can read." >&2
+        echo "Write one first:" >&2
+        echo "  just changelog {{ package }}" >&2
+        exit 1
+    fi
 
     # `show-bump --ascii` renders as `0.15.0 -- bump -+- minor - 0.16.0`, so the
     # part name and its resulting version sit on one line. Asking the tool
@@ -286,22 +323,14 @@ bump package part:
         exit 1
     fi
 
-    if ! grep -qE "^## \[${new//./\\.}\]" "$dir/CHANGELOG.md"; then
-        echo "" >&2
-        echo "$dir/CHANGELOG.md has no entry for ${new}." >&2
-        echo "" >&2
-        echo "Write it first — a release with no changelog entry is one nobody" >&2
-        echo "can read. Add a '## [${new}] - $(date +%F)' section, then re-run:" >&2
-        echo "  just bump {{ package }} {{ part }}" >&2
-        exit 1
-    fi
-
     (cd "$dir" && uvx "$BUMP_TOOL" bump "{{ part }}" --no-commit --no-tag)
+    (cd "$dir" && uvx "$SCRIV_TOOL" collect --version "$new")
     just check-versions
     echo ""
     echo "{{ package }} bumped to ${new}. Commit together:"
     echo "  $dir/pyproject.toml"
     echo "  $dir/CHANGELOG.md"
+    echo "  $dir/changelog.d/ (the collected fragments are now gone)"
     # uv.lock records every workspace member's version, so it moves with the
     # bump — `just check-versions` above runs uv and refreshes it. Left behind,
     # the next `uv lock --check` (and CI) fails on a repo that looks untouched.

@@ -16,6 +16,8 @@ So an entry here means a floor was raised — because a member gained something
 this meta-package's users are expected to have — and the substance of what
 changed is in that member's own changelog.
 
+<!-- scriv-insert-here -->
+
 ## [0.1.4] - 2026-09-16
 
 - Floors raised to `witan-council>=0.34.0` and `witan-code>=0.19.0`. Both

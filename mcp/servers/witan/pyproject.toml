@@ -265,6 +265,14 @@ filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
+[tool.scriv]
+format = "md"
+fragment_directory = "changelog.d"
+categories = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Performance", "Security", "Notes"]
+md_header_level = "2"
+md_html_anchors = false
+entry_title_template = "[{{ version }}] - {{ date.strftime('%Y-%m-%d') }}"
+
 [dependency-groups]
 test = ["pytest>=8"]
 
