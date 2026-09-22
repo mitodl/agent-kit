@@ -24,15 +24,27 @@ a MINOR bump may include breaking changes).
   because the error-ratio alert's headline case, a quarantined graph answering
   every request with "not served", is itself a refusal.
 
-  Two limits are deliberate. An argument-validation failure logs
-  `error_withheld: true` and NO message: pydantic renders a rejected field as
-  `input_value=<what the caller sent>`, and fastmcp's `ValidationError` is that
-  string, so logging it would ship arbitrary tool arguments to Loki. fastmcp
-  draws the same line, keeping input out of its own log line
-  (`_validation_error_summary`) while still returning the detail to the client.
+  Two limits are deliberate. A VALIDATION failure is summarised, never quoted:
+  the line carries `error_withheld: true` plus `error_count` and `error_types`
+  in place of the message. pydantic renders a rejected field as
+  `input_value=<what the caller sent>`, so its message is somebody's data, and
+  fastmcp's `ValidationError` is built from that string. This covers both arms
+  -- bad arguments, and a model failing inside a tool BODY, which arrives as a
+  bare `pydantic.ValidationError` -- because from the middleware the two differ
+  only in whose data the message holds, the caller's or an upstream row's. The
+  summary is computed here rather than left to fastmcp's equivalent log line,
+  because the `fastmcp` logger does not propagate and keeps its own handler, so
+  its version lands beside our JSON as unparsed text instead of a queryable
+  field.
+
   And `error_type` is the real exception class only for a `FastMCPError`:
   anything else is re-raised as `ToolError` by `FastMCP.call_tool` before the
-  middleware sees it, so the class is lost and only the message survives.
+  middleware sees it, so the class is lost and only the message survives. That
+  message can contain caller arguments, since a tool body is free to
+  interpolate them (witan's `workflow_trace_mine` does). It is logged anyway
+  because fastmcp's generic arm already prints the same message with a full
+  traceback through `logger.exception`, so the field restates what the pod log
+  holds rather than adding to it.
 
 ## [0.38.0] - 2026-09-21
 

@@ -485,3 +485,67 @@ def test_a_bad_argument_never_puts_the_caller_s_value_in_the_log(capsys):
     assert payload["outcome"] == "error"
     assert payload["error_withheld"] is True
     assert "error" not in payload
+
+
+def test_a_withheld_validation_error_still_says_what_kind(capsys):
+    # Withholding the message must not mean withholding the diagnosis. fastmcp
+    # computes this same summary but logs it on its own non-propagating logger,
+    # so it lands beside our JSON as unparsed text rather than in a field a
+    # query can reach. We compute it ourselves for that reason.
+    mcp = _server_with_tools()
+    with pytest.raises(Exception):
+        _call(mcp, "takes_a_string", {"content": {"text": "whatever"}})
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_withheld"] is True
+    assert payload["error_count"] == 1
+    assert payload["error_types"] == ["string_type"]
+
+
+def test_a_model_failing_inside_a_tool_body_is_withheld_too(capsys):
+    # A bare pydantic ValidationError reaches the middleware unwrapped and means
+    # a model failed INSIDE the body, so the data in its message is upstream's
+    # rather than the caller's. Withheld all the same: from here the two differ
+    # only in whose data it is, and neither belongs in Loki by default.
+    import pydantic
+
+    class Upstream(pydantic.BaseModel):
+        n: int
+
+    async def call_next(_ctx):
+        Upstream(n="SENSITIVE-ROW-VALUE")
+
+    with pytest.raises(pydantic.ValidationError):
+        _run(ObservabilityMiddleware(), _Context("code_store_load"), call_next)
+    written = capsys.readouterr().err
+    assert "SENSITIVE-ROW-VALUE" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    assert payload["error_type"] == "ValidationError"
+    assert payload["error_withheld"] is True
+    assert payload["error_count"] == 1
+    assert "error" not in payload
+
+
+def test_an_exception_whose_message_explodes_does_not_replace_it(capsys):
+    # _error_fields runs inside `except BaseException`, so anything escaping it
+    # would hand the caller a server fault in place of their real failure. The
+    # partially built result is kept, so `refused` survives.
+    from witan_core.refusal import Refusal
+
+    class Exploding(RuntimeError, Refusal):
+        def __str__(self):
+            raise KeyboardInterrupt
+
+    async def call_next(_ctx):
+        raise Exploding
+
+    with pytest.raises(Exploding):
+        _run(ObservabilityMiddleware(), _Context("recall"), call_next)
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_type"] == "Exploding"
+    assert payload["refused"] is True
+    assert payload["error_withheld"] is True
+    assert "error" not in payload

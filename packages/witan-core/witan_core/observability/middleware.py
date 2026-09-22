@@ -52,28 +52,36 @@ except ImportError:  # pragma: no cover - requires the `mcp` extra
     get_access_token = None  # type: ignore[assignment]
 
 
-def _message_withholding_types() -> tuple[type, ...]:
-    """Exception types whose ``str()`` echoes the caller's own arguments.
+def _optional_type(module: str, name: str) -> type | None:
+    """A class that may not be installed, or ``None``.
 
-    pydantic renders a failed field as ``... [type=string_type,
-    input_value=<what the caller sent>, input_type=dict]``, and fastmcp's
-    ``ValidationError`` is constructed as ``ValidationError(str(pydantic_exc))``
-    (``tools/function_tool.py``), so the caller's value is the message. Both are
-    listed because either can arrive depending on which layer validated.
+    Resolved once at import rather than per call. Missing is not an error
+    condition here: without fastmcp ``Middleware`` is ``object`` and
+    ``on_call_tool`` is never invoked at all, so a ``None`` can only be seen by
+    a caller driving this module directly.
     """
-    found: list[type] = []
-    for module, name in (
-        ("fastmcp.exceptions", "ValidationError"),
-        ("pydantic", "ValidationError"),
-    ):
-        try:
-            found.append(getattr(__import__(module, fromlist=[name]), name))
-        except (ImportError, AttributeError):  # pragma: no cover - extra absent
-            continue
-    return tuple(found)
+    try:
+        return getattr(__import__(module, fromlist=[name]), name)
+    except (ImportError, AttributeError):  # pragma: no cover - extra absent
+        return None
 
 
-_MESSAGE_WITHHELD = _message_withholding_types()
+_FASTMCP_VALIDATION_ERROR = _optional_type("fastmcp.exceptions", "ValidationError")
+"""fastmcp's wrapper for a call whose ARGUMENTS failed validation.
+
+Built as ``ValidationError(str(pydantic_exc))`` in ``tools/function_tool.py``,
+so its message is pydantic's, caller input and all.
+"""
+
+_PYDANTIC_VALIDATION_ERROR = _optional_type("pydantic", "ValidationError")
+"""pydantic's own error, which reaches the middleware unwrapped.
+
+fastmcp re-raises this one as-is (``server.py``'s ``except
+PydanticValidationError`` arm), and it means a model failed validation inside a
+TOOL BODY rather than at the call boundary. The two are not related by
+inheritance -- fastmcp's is a ``FastMCPError`` -- so both have to be named.
+"""
+
 
 LOCAL_ACTOR = "local"
 """``actor_id`` for a call that carried no JWT.
@@ -159,12 +167,55 @@ def _caller_identity() -> dict[str, str]:
 _MAX_ERROR_CHARS = 500
 """How much of a failure's message reaches the ``mcp.tool_call`` line.
 
-Sized against the longest refusal either server raises today: witan-code's
-``ClusterGraphMissing``, which renders to 386 characters for a real repo and
-endpoint (the sentence, then the provisioning explanation, then the
-index-locally hint). Truncation is for a pathological message, not a routine
-one, so the bound has to clear that with room rather than sit near it.
+A few hundred characters covers the refusals in this codebase with room to
+spare; the longest, witan-code's ``ClusterGraphMissing``, is a sentence plus a
+provisioning explanation plus a hint. The bound is here for the messages that
+have no bound at all -- ``ClusterUnreachable`` passes an arbitrary upstream
+exception through -- so that one pathological failure cannot dominate the log
+stream.
 """
+
+
+def _validation_summary(exc: BaseException) -> dict[str, Any] | None:
+    """An input-free description of a validation failure, or ``None``.
+
+    ``None`` means "not a validation error, log the message normally".
+
+    What comes back is deliberately what fastmcp's own
+    ``_validation_error_summary`` emits -- ``error.errors(include_input=False)``
+    reduced to a count and the set of codes -- and nothing more. In particular
+    NOT the ``loc`` path: for a bad key inside a caller-supplied object the loc
+    contains that key, which is the caller's data again.
+    """
+    pydantic_exc: BaseException | None = None
+    if _PYDANTIC_VALIDATION_ERROR is not None and isinstance(
+        exc, _PYDANTIC_VALIDATION_ERROR
+    ):
+        pydantic_exc = exc
+    elif _FASTMCP_VALIDATION_ERROR is not None and isinstance(
+        exc, _FASTMCP_VALIDATION_ERROR
+    ):
+        # fastmcp raises its wrapper `from` the pydantic error, so the
+        # structured detail is one link away even though the message is a
+        # flattened string by then.
+        cause = exc.__cause__
+        if _PYDANTIC_VALIDATION_ERROR is not None and isinstance(
+            cause, _PYDANTIC_VALIDATION_ERROR
+        ):
+            pydantic_exc = cause
+    else:
+        return None
+    if pydantic_exc is None:
+        return {}
+    details = pydantic_exc.errors(  # type: ignore[attr-defined]
+        include_url=False, include_context=False, include_input=False
+    )
+    return {
+        "error_count": len(details),
+        "error_types": sorted(
+            {str(detail.get("type", "unknown")) for detail in details}
+        ),
+    }
 
 
 def _error_fields(exc: BaseException) -> dict[str, Any]:
@@ -178,24 +229,30 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
     was in the Tempo span's status message and nowhere else. This puts it on the
     line that already records the failure.
 
-    ★ THE MESSAGE IS WITHHELD FOR A VALIDATION ERROR ★
-    "fastmcp already sends the client this string" is NOT a reason to log it:
-    the client boundary and the Loki boundary are not the same boundary, and
-    fastmcp itself draws them differently. Its ``_validation_error_summary``
-    exists solely to log counts and codes -- ``error.errors(include_input=False)``
-    under the docstring "never input-derived validation details" -- while the
-    detail still goes to the caller. A pydantic message embeds
-    ``input_value=<what the caller sent>``, so logging it would ship arbitrary
-    tool arguments to Loki: the content of a ``memory_store``, a token pasted
-    into the wrong field. Nothing is lost by withholding it, because fastmcp
-    logs its own input-free summary on that same arm.
+    ★ A VALIDATION FAILURE IS SUMMARISED, NEVER QUOTED ★
+    pydantic renders a rejected field as ``... [type=string_type,
+    input_value=<what the caller sent>, input_type=dict]``, so its message IS
+    somebody's data. Both arms are treated alike -- fastmcp's ``ValidationError``
+    (bad arguments) and a bare pydantic one (a model failing inside a tool body)
+    -- because from here the two differ only in WHOSE data is in the message,
+    the caller's or an upstream row's, and neither belongs in Loki by default.
+    In place of the message the line carries ``error_withheld``, plus the
+    ``error_count`` and ``error_types`` summary, which is the same trade fastmcp
+    makes in ``_validation_error_summary`` ("never input-derived validation
+    details"). Computing that summary here rather than relying on fastmcp's own
+    log line is deliberate: the ``fastmcp`` logger does not propagate and keeps
+    its own handler, so its summary is unparsed text beside our JSON rather than
+    a queryable field.
 
-    Outside that case the message is safe and adds no exposure. An ordinary
-    exception already reaches the log in full through fastmcp's
-    ``logger.exception``; a ``Refusal``'s message is written to be read by the
-    caller, and the types that could carry something sensitive say so
-    explicitly -- ``scan.enforce.WriteBlocked`` carries a field name, a detector
-    id and a masked preview, never the matched value.
+    THE MESSAGE IS NOT LOGGED BECAUSE IT IS SAFE. An ordinary exception out of a
+    tool body can and does interpolate the caller's arguments -- witan's own
+    ``workflow_trace_mine`` does it -- and this field will carry that. It is
+    logged because fastmcp's generic arm ALREADY prints the same message, with a
+    traceback, through ``logger.exception``; verified by driving a tool that
+    interpolates its argument and finding the value in fastmcp's own stderr with
+    this middleware absent. So the field restates what the pod log already has,
+    in a form a query can reach. The validation arm above is the case where
+    that is not true, which is exactly why it is the case that is withheld.
 
     ``refused`` separates a call declined on purpose from a service that broke.
     It is LOG-ONLY: ``witan_tool_calls_total`` keeps counting both under
@@ -211,26 +268,29 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
     with the original message inside ``error``. Refusals keep their own class,
     which is the case this field was added for.
 
-    Never raises: the module's standing rule, the same one
-    :func:`_caller_identity` documents. A failure to describe a failure must not
-    replace it -- this runs inside an ``except`` block, so an exception here
-    would hand the caller the wrong error entirely.
+    Never raises, and means it: this runs inside an ``except`` block, so an
+    exception escaping here would REPLACE the caller's failure with a server
+    fault -- a clean refusal would surface as a crash. ``BaseException`` rather
+    than ``Exception`` because that is what the caller catches, and a partially
+    built result is kept rather than discarded, so a refusal that trips the
+    guard is still marked ``refused``.
     """
+    fields: dict[str, Any] = {"error_type": "unknown"}
     try:
-        fields: dict[str, Any] = {
-            "error_type": type(exc).__name__,
-            "refused": isinstance(exc, Refusal),
-        }
-        if _MESSAGE_WITHHELD and isinstance(exc, _MESSAGE_WITHHELD):
+        fields["error_type"] = type(exc).__name__
+        fields["refused"] = isinstance(exc, Refusal)
+        summary = _validation_summary(exc)
+        if summary is not None:
             fields["error_withheld"] = True
+            fields.update(summary)
             return fields
         message = str(exc).strip()
         if len(message) > _MAX_ERROR_CHARS:
             message = message[:_MAX_ERROR_CHARS] + "..."
         if message:
             fields["error"] = message
-    except Exception:  # noqa: BLE001 - see docstring; never fail the call
-        return {"error_type": "unknown"}
+    except BaseException:  # noqa: BLE001 - see docstring; never fail the call
+        fields["error_withheld"] = True
     return fields
 
 
