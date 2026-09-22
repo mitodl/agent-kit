@@ -33,6 +33,7 @@ import {
 import { projectList, projectRollup, type Rollup } from "./views/projects.js";
 import { taskDetail, taskMissing } from "./views/task-detail.js";
 import { type Timeline, timeline } from "./views/timeline.js";
+import { type Waves, waves, wavesPicker } from "./views/waves.js";
 
 /**
  * The wiring: route in, reads out, one render.
@@ -68,6 +69,7 @@ export class App {
 	private readonly timeline = new KeyedRead<Timeline>(() => this.draw(), {
 		intervalMs: 0,
 	});
+	private readonly waves = new KeyedRead<Waves>(() => this.draw());
 	private readonly memoryPage = new KeyedRead<MemoryPage>(() => this.draw());
 	private readonly detail = new KeyedRead<TaskDetail | null>(() => this.draw());
 	private readonly memoryDetail = new KeyedRead<MemoryPanel>(() => this.draw());
@@ -106,6 +108,7 @@ export class App {
 		this.rollup.stop();
 		this.board.stop();
 		this.timeline.stop();
+		this.waves.stop();
 		this.memoryPage.stop();
 		this.detail.stop();
 		this.memoryDetail.stop();
@@ -175,6 +178,11 @@ export class App {
 			readTimeline(timelineScope as TimelineScope),
 		);
 
+		// Waves are per project (spec §6.5), so without one there is nothing to
+		// read: the view offers the shell's project list to pick from instead.
+		const wavesProject = route.view === "waves" ? route.project : null;
+		this.waves.sync(wavesProject, () => readWaves(wavesProject as string));
+
 		const memoryScope: MemoryScope | null =
 			route.view === "memory"
 				? {
@@ -206,6 +214,7 @@ export class App {
 		for (const read of [
 			this.board,
 			this.timeline,
+			this.waves,
 			this.rollup,
 			this.memoryPage,
 		] as KeyedRead<unknown>[]) {
@@ -268,6 +277,22 @@ export class App {
 				return waiting;
 			}
 			return timeline(snapshot.data as Timeline, this.route);
+		}
+
+		if (this.route.view === "waves") {
+			if (!this.route.project) {
+				const waiting = placeholderFor(this.projectsSnapshot, "projects");
+				return waiting ?? wavesPicker(inScope, this.route);
+			}
+			const snapshot = this.waves.snapshot;
+			if (!snapshot) {
+				return emptyBox("Reading the waves…");
+			}
+			const waiting = placeholderFor(snapshot, "the waves");
+			if (waiting) {
+				return waiting;
+			}
+			return waves(snapshot.data as Waves, this.route);
 		}
 
 		if (this.route.view === "memory") {
@@ -522,6 +547,40 @@ async function readTimeline(scope: TimelineScope): Promise<Timeline> {
 		truncated: !scope.project && tasks.length >= TASK_LIMIT,
 		projects,
 	};
+}
+
+/**
+ * The reads behind one project's waves (spec §6.5).
+ *
+ * `task_list` and `task_ready` in parallel, then one `task_get` per blocker
+ * from outside the project, because the chart has to know whether each is
+ * still open and `task_list` by project cannot say. Outside blockers are few
+ * by construction, where the board's graph-wide status reads would drag every
+ * live task along for them. A `null` (deleted) or closed one is dropped: it
+ * holds nothing back, by `task_ready`'s own resolver.
+ */
+async function readWaves(slug: string): Promise<Waves> {
+	const [tasks, ready] = await Promise.all([
+		// Uncapped by project; see `readRollup` for why no `limit`.
+		taskList({ repo: "", project_slug: slug }),
+		// `task_ready` sorts and then truncates, so its default of 20 would
+		// report most of wave 0 as disagreeing with it.
+		taskReady({ repo: "", project_slug: slug, limit: TASK_LIMIT }),
+	]);
+	const inProject = new Set(tasks.map((task) => task.slug));
+	const elsewhere = new Set(
+		tasks
+			.filter((task) => task.status !== "closed")
+			.flatMap((task) => task.blocked_by ?? [])
+			.filter((blocker) => !inProject.has(blocker)),
+	);
+	const fetched = await Promise.all(
+		[...elsewhere].map((blocker) => taskGet(blocker)),
+	);
+	const outside = fetched.filter(
+		(task): task is TaskDetail => task !== null && task.status !== "closed",
+	);
+	return { tasks, ready, outside };
 }
 
 /** The route fields that are arguments to the memory view's read. */

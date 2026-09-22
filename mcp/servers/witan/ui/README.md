@@ -10,15 +10,16 @@ to an enumerated set of read tools. (Both are cited by path rather than linked:
 they land in their own changes, and a relative link would be dead here until
 those merge.)
 
-Four tabs are built. Projects has the project list, one project's rollup and
+Five tabs are built. Projects has the project list, one project's rollup and
 the task detail panel (spec §6.2, §6.3). Board has Ready, In progress, Blocked
-and Closed columns (spec §6.4). Timeline draws each task's lead time and work
-time, and the sessions, over a 7 to 90 day window (spec §6.6). Memory has the
-contradictions inbox, browse and search, topics, and the memory panel (spec
-§6.7). The panel opens whichever the slug is, on its prefix, so a memory
-linked from a task opens as a memory. The other two tabs are declared in the
-shell and render a note saying they are not built yet. Each is its own task
-(spec §6.5, §6.8).
+and Closed columns (spec §6.4). Waves lays one project's open tasks out by
+depth in the `Blocks` graph, with the longest chain and any cycle marked (spec
+§6.5). Timeline draws each task's lead time and work time, and the sessions,
+over a 7 to 90 day window (spec §6.6). Memory has the contradictions inbox,
+browse and search, topics, and the memory panel (spec §6.7). The panel opens
+whichever the slug is, on its prefix, so a memory linked from a task opens as
+a memory. The Graph tab is declared in the shell and renders a note saying it
+is not built yet (spec §6.8).
 
 ## Layout
 
