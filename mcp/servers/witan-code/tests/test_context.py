@@ -8,6 +8,7 @@ check, store-exists branching), not the underlying query.
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -17,9 +18,11 @@ from witan_code import context
 
 
 def _lock(tmp_path, monkeypatch, project_dir):
+    """The busy marker `indexing_in_progress` reads; create it to fake a run."""
     monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
-    return context._lock_path(project_dir)
+    return context._busy_path(project_dir)
 
 
 def _stub_store_stats(monkeypatch, health=None):
@@ -313,7 +316,7 @@ def test_the_bridge_verdict_is_cached_across_processes(tmp_path, monkeypatch):
 
 
 def test_lock_path_does_not_collide_on_sanitization(tmp_path, monkeypatch):
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
     a = context._lock_path(Path("/tmp/a/b"))
     b = context._lock_path(Path("/tmp/a_b"))
@@ -324,7 +327,7 @@ def test_lock_path_does_not_collide_on_sanitization(tmp_path, monkeypatch):
 def test_lock_path_name_is_bounded_regardless_of_project_dir_length(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     long_dir = Path("/" + ("deeply-nested-directory-" * 20) + "/checkout")
 
     lock = context._lock_path(long_dir)

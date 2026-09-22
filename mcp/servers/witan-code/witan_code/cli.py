@@ -885,9 +885,10 @@ def session_init_cmd() -> None:
     """Seed/refresh the whole repo's code graph in the background (SessionStart hook).
 
     Detached and non-blocking — returns immediately regardless of repo size.
-    A per-repo lock (shared with ``inject-context``'s "indexing in progress"
-    check) prevents overlapping sessions from indexing at once. Registered as
-    the bare ``SessionStart`` hook command; not usually run by hand.
+    The refresh goes on the same per-checkout queue as ``reindex-hook``'s
+    edits, so one drainer at a time writes the checkout's code graph.
+    Registered as the bare ``SessionStart`` hook command; not usually run by
+    hand.
     """
     from . import hooks as hooks_module
 
@@ -897,12 +898,12 @@ def session_init_cmd() -> None:
         pass
 
 
-@app.command(name="_index-and-unlock", show=False)
-def _index_and_unlock_cmd(target: Path, lock: Path) -> None:
-    """Internal — run only by the detached child ``session-init`` spawns."""
+@app.command(name="_drain-pending", show=False)
+def _drain_pending_cmd(checkout: Path, lock_fd: int) -> None:
+    """Internal — run only by the detached drainer the two hooks spawn."""
     from . import hooks as hooks_module
 
-    hooks_module.index_and_unlock(target, lock)
+    hooks_module.drain_pending(checkout, lock_fd)
 
 
 @app.command(name="reindex-hook")
@@ -910,9 +911,11 @@ def reindex_hook_cmd() -> None:
     """Incrementally reindex the file named in stdin's hook JSON (PostToolUse hook).
 
     Reads the Claude Code hook payload from stdin, extracts
-    ``tool_input.file_path`` (or ``path``/``filename``), and reindexes it if
-    it exists and is a known source type — foreground and fast (one file), so
-    the agent sees the change land immediately. Best-effort: a missing or
+    ``tool_input.file_path`` (or ``path``/``filename``), and queues it for
+    reindexing if it exists. One detached drainer per checkout applies the
+    queue, so parallel agents editing one worktree do not race each other's
+    writes to its branch view. Logs from the last drainer are kept in
+    ``$TMPDIR/witan-code-<uid>/``. Best-effort: a missing or
     malformed payload is a silent no-op. Registered as the bare
     ``PostToolUse`` (matcher ``Edit|Write``) hook command; not usually run by
     hand.
