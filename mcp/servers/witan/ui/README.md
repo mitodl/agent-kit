@@ -10,8 +10,9 @@ to an enumerated set of read tools. (Both are cited by path rather than linked:
 they land in their own changes, and a relative link would be dead here until
 those merge.)
 
-This is a scaffold. It builds, typechecks, lints and tests, and it renders the
-app frame; the views behind the tabs are separate tasks (spec §6).
+The Projects tab is built: the project list, one project's rollup, and the
+task detail panel (spec §6.2, §6.3). The other five tabs are declared in the
+shell and render a note saying so; each is its own task (spec §6.4 to §6.8).
 
 ## Layout
 
@@ -25,12 +26,45 @@ ui/
     mcp.ts        The read layer. The ONLY file that knows it speaks MCP.
     unwrap.ts     Takes a result out of its envelope, keyed on the wrap flag.
     types.ts      Hand-written result types, kept honest by the fixtures.
-    shell.ts      The app frame; views land beside it.
+    app.ts        The wiring: route in, reads out, one render.
+    shell.ts      The app frame: filters, tabs, the detail panel.
+    route.ts      The URL fragment IS the UI state. Parse and format it.
+    live.ts       Polling with last-good retention and staleness.
+    chrome.ts     The loading, empty, error and stale states.
+    format.ts     Timestamps, repo labels, linkability.
+    views/        One module per tab.
   fixtures/       GENERATED (`just ui-fixtures`). Real tool results.
   vite.config.ts  The build. Writes ../witan/ui_dist, the wheel picks it up.
   vitest.config.ts
   .node-version   The exact node pin, read by both GitHub workflows.
 ```
+
+## State, polling and staleness
+
+Every filter, the active tab and the open slug live in the URL fragment
+(`route.ts`), so a link to a stale claim can be pasted to whoever holds it,
+and the back button and the panel's close link cannot disagree about what is
+open. The fragment rather than the path: it never reaches the server, so no
+route here can 404 against a deployment whose catch-all is configured
+differently from `witan ui`.
+
+Witan has no change feed and the stateless protocol era (ADR 0009) has no
+server→client channel, so views poll: every 30 seconds, and on window focus.
+`live.ts` owns that, and owns the rule that makes it safe — **a failed refresh
+keeps the last good data on screen and marks it stale rather than blanking
+it**. A board that empties itself because one poll hit a restarting server
+reads as "nothing is ready", which is a lie a person acts on.
+
+Two distinctions in there are load-bearing and easy to collapse by accident:
+
+- **"No result yet" is not "the result was null".** `task_get` of a missing
+  slug returns `null` as its value, so a panel keyed on the data rather than on
+  `hasResult` says "Reading…" forever for every stale link. This is the same
+  empty/not-found confusion discovery found in the CLI.
+- **A zone-less timestamp is UTC.** The graph stores most of them without an
+  offset, and `new Date()` reads that form as local time, so `format.ts` parses
+  them explicitly. Left to the browser, every stored instant renders shifted
+  and a claim lease age with it.
 
 ## The read layer
 

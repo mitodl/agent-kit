@@ -1,9 +1,12 @@
 :root {
 	--fg: #1a1a1a;
 	--bg: #ffffff;
+	--panel-bg: #fbfbfb;
 	--muted: #6a6a6a;
 	--rule: #d8d8d8;
 	--accent: #1f5f9e;
+	--warn: #9a5b00;
+	--bad: #a32020;
 	font-family: system-ui, sans-serif;
 	color: var(--fg);
 	background: var(--bg);
@@ -13,9 +16,12 @@
 	:root {
 		--fg: #e8e8e8;
 		--bg: #161616;
+		--panel-bg: #1e1e1e;
 		--muted: #9a9a9a;
 		--rule: #333333;
 		--accent: #6aa9e0;
+		--warn: #e0a95b;
+		--bad: #e08080;
 	}
 }
 
@@ -24,10 +30,21 @@ body {
 	background: var(--bg);
 }
 
+a {
+	color: var(--accent);
+}
+
+code {
+	font-size: 0.9em;
+}
+
+/* ── Shell ──────────────────────────────────────────────────────── */
+
 .shell-header {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: baseline;
-	gap: 1.5rem;
+	gap: 1rem 1.5rem;
 	padding: 0.75rem 1rem;
 	border-bottom: 1px solid var(--rule);
 }
@@ -43,20 +60,271 @@ body {
 	gap: 1rem;
 }
 
-.shell-header a {
+.shell-header nav a {
 	color: var(--muted);
 	text-decoration: none;
 }
 
-.shell-header a[aria-current="page"] {
+.shell-header nav a[aria-current="page"] {
 	color: var(--accent);
 	font-weight: 600;
 }
 
+.filters {
+	display: flex;
+	align-items: baseline;
+	gap: 1rem;
+	font-size: 0.85rem;
+	color: var(--muted);
+}
+
+.filters select {
+	max-width: 16rem;
+}
+
+/* Pushed to the end of the bar, so the read time sits away from the controls
+   and does not move when a filter label changes width. */
+.read-status {
+	margin-left: auto;
+	display: flex;
+	align-items: baseline;
+	gap: 0.75rem;
+	font-size: 0.85rem;
+	color: var(--muted);
+}
+
+.read-status .stale {
+	color: var(--warn);
+	font-weight: 600;
+}
+
+.workspace {
+	display: flex;
+	align-items: flex-start;
+}
+
 main {
+	padding: 1rem;
+	/* `min-width: 0` or the tables refuse to shrink and push the panel off the
+	   right edge: a flex item's default minimum is its content width. */
+	flex: 1;
+	min-width: 0;
+}
+
+/* ── States ─────────────────────────────────────────────────────── */
+
+.placeholder,
+.empty,
+.muted,
+.note {
+	color: var(--muted);
+}
+
+.error-box {
+	border-left: 3px solid var(--bad);
+	padding: 0.5rem 0.75rem;
+}
+
+.error-box pre {
+	white-space: pre-wrap;
+	margin: 0;
+	color: var(--muted);
+}
+
+/* ── Tables and lists ───────────────────────────────────────────── */
+
+table.rows {
+	border-collapse: collapse;
+	width: 100%;
+	font-size: 0.9rem;
+}
+
+table.rows th {
+	text-align: left;
+	font-weight: 600;
+	border-bottom: 1px solid var(--rule);
+	padding: 0.35rem 0.5rem;
+}
+
+table.rows td {
+	border-bottom: 1px solid var(--rule);
+	padding: 0.35rem 0.5rem;
+	vertical-align: top;
+}
+
+table.rows tr.closed {
+	color: var(--muted);
+}
+
+.badge {
+	display: inline-block;
+	font-size: 0.72rem;
+	border: 1px solid var(--rule);
+	border-radius: 0.6rem;
+	padding: 0 0.4rem;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+.badge.blocked,
+.badge.stale-claim {
+	color: var(--warn);
+	border-color: var(--warn);
+}
+
+.badge.status-closed {
+	color: var(--muted);
+}
+
+.count {
+	font-weight: 400;
+	color: var(--muted);
+	font-size: 0.85rem;
+}
+
+ul.ready,
+ul.sessions,
+ul.comments,
+ul.children,
+ul.branches,
+ul.symbols {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+ul.ready li,
+ul.children li,
+ul.branches li,
+ul.symbols li {
+	padding: 0.2rem 0;
+}
+
+ul.sessions li,
+ul.comments li {
+	border-top: 1px solid var(--rule);
+	padding: 0.5rem 0;
+}
+
+.session-head,
+.comment-head {
+	display: flex;
+	gap: 0.75rem;
+	align-items: baseline;
+	margin: 0 0 0.25rem;
+	font-size: 0.85rem;
+	color: var(--muted);
+}
+
+.assignee {
+	color: var(--muted);
+	font-size: 0.85rem;
+}
+
+/* ── Facts and prose ────────────────────────────────────────────── */
+
+dl.facts {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 0.15rem 0.75rem;
+	margin: 0.5rem 0;
+	font-size: 0.9rem;
+}
+
+dl.facts dt {
+	color: var(--muted);
+}
+
+dl.facts dd {
+	margin: 0;
+}
+
+/* Agent-written text is rendered as text, never parsed as markup; this is what
+   keeps its paragraph breaks. `p.prose` as well as `.prose p`: a comment body
+   IS the paragraph rather than containing one, so the descendant selector
+   alone collapsed every multi-paragraph comment into a run-on block, which is
+   the exact shape of the corrections the thread exists to carry. */
+.prose p,
+p.prose,
+.summary {
+	white-space: pre-wrap;
+	margin: 0.25rem 0;
+	max-width: 60rem;
+}
+
+.crumbs {
+	margin: 0 0 0.25rem;
+	color: var(--muted);
+	font-size: 0.85rem;
+	display: flex;
+	gap: 0.4rem;
+	align-items: baseline;
+	flex-wrap: wrap;
+}
+
+.rollup > header h2 {
+	margin: 0.25rem 0;
+}
+
+.rollup section,
+.task-detail section {
+	margin-top: 1.25rem;
+}
+
+.rollup h3,
+.task-detail h3 {
+	font-size: 0.95rem;
+	border-bottom: 1px solid var(--rule);
+	padding-bottom: 0.2rem;
+}
+
+/* ── Detail panel ───────────────────────────────────────────────── */
+
+/* In the flow beside the view, not fixed over the page: spec §6.1 wants the
+   view underneath to stay readable, and a fixed drawer covered the filter bar
+   as well, so narrowing the list while reading a task meant closing it first.
+   Sticky keeps it in view as the list scrolls past. */
+.detail-panel {
+	flex: 0 0 min(36rem, 50vw);
+	position: sticky;
+	top: 0;
+	align-self: flex-start;
+	max-height: 100vh;
+	overflow-y: auto;
+	background: var(--panel-bg);
+	border-left: 1px solid var(--rule);
 	padding: 1rem;
 }
 
-.placeholder {
-	color: var(--muted);
+/* Below the width where a split reads as two cramped columns, the panel takes
+   the page. It is what a phone gets, and it is still closed by Escape or the
+   close link. */
+@media (max-width: 55rem) {
+	.workspace {
+		display: block;
+	}
+
+	.detail-panel {
+		max-height: none;
+		border-left: none;
+		border-top: 1px solid var(--rule);
+	}
+}
+
+.detail-panel > header {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+.detail-panel > header h2 {
+	margin: 0;
+	font-size: 1rem;
+}
+
+.detail-panel .close {
+	text-decoration: none;
+	font-size: 1.4rem;
+	line-height: 1;
 }
