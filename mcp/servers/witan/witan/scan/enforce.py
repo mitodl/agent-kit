@@ -66,6 +66,10 @@ class WriteBlocked(RuntimeError, Refusal):
     preview only. The raw matched value never appears here or in any log line.
     """
 
+    # Masked by this class's own contract: a field name, a detector id
+    # and a preview that holds no character of the matched value.
+    log_safe_message = True
+
     def __init__(self, query_name: str, findings: list[tuple[str, Finding]]) -> None:
         self.query_name = query_name
         self.findings = findings

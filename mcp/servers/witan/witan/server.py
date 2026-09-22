@@ -730,6 +730,9 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 class MissingReference(LookupError, Refusal):
     """A write named a slug that is not in the graph."""
 
+    # A tool name, a node type and the slug the caller asked for.
+    log_safe_message = True
+
     def __init__(self, tool: str, node_type: str, slug: str) -> None:
         self.node_type = node_type
         self.slug = slug

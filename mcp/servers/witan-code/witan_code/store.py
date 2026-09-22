@@ -78,6 +78,11 @@ def _cache_key(server_url: str, token: str | None) -> _GraphsCacheKey:
 class ClusterGraphMissing(RuntimeError, Refusal):
     """A cluster graph witan-code needs is not served by the server."""
 
+    # A repo, a graph id and a provisioning hint. This is the message whose
+    # absence made Production's 27% `code_store_views` failure rate
+    # undiagnosable for two days.
+    log_safe_message = True
+
 
 class ClusterUnreachable(RuntimeError):
     """The omnigraph-server could not be asked about a graph at all.

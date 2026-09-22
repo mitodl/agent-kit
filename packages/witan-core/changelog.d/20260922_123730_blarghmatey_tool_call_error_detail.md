@@ -1,51 +1,52 @@
+### Added
+
+- **`Refusal.log_safe_message`: a refusal must opt in before its message is
+  logged.** Off by default. The assumption it replaces was that a refusal's
+  message is safe because it is written for the caller, and that does not hold:
+  `witan_code.ingest.IngestRefused` is raised from `mutate_many` as
+  `f"Every step needs a non-empty {field!r}; got {value!r}."` over the caller's
+  own step. Set it `True` only where the message is built from identifiers (a
+  graph, a slug, an actor id, a count) or is masked by that type's own
+  contract, as `scan.enforce.WriteBlocked` documents. Eight types opted in
+  after an audit; `IngestRefused` deliberately did not.
+
 ### Changed
 
 - **A failed `mcp.tool_call` line now says why it failed**, carrying
-  `error_type`, `error` (the message, truncated at 500 characters) and
-  `refused`. fastmcp logs a `FastMCPError` as `Error calling tool '<name>'`
-  with `exc_info=False` and never renders `str(exc)`, so a refusal reached the
-  log with no text at all: Production spent two days showing `code_store_views`
+  `error_type`, `refused`, and `error` where the message is safe to log.
+  fastmcp logs a `FastMCPError` as `Error calling tool '<name>'` with
+  `exc_info=False` and never renders `str(exc)`, so a refusal reached the log
+  with no text at all: Production spent two days showing `code_store_views`
   erroring on 27% of calls with the reason (`ClusterGraphMissing`, a repo that
   has no cluster graph) readable only in the Tempo span's status message.
+  `error_type` alone answers that and is always present.
+
   `refused` is log-only and the metric is untouched --
   `witan_tool_calls_total` still counts a refusal under `outcome="error"`,
   because the error-ratio alert's headline case, a quarantined graph answering
   every request with "not served", is itself a refusal.
 
-  Two limits are deliberate. A BAD ARGUMENT is summarised, never quoted: the
-  line carries `error_withheld: true` plus `error_count` and `error_types` in
-  place of the message. pydantic renders a rejected field as
-  `input_value=<what the caller sent>`, and fastmcp's `ValidationError` is
-  built from that string, so on that arm the message is the caller's data by
-  construction, and a structured parameter puts a whole payload in it.
-  `error_types` is allowlisted against pydantic's own `ErrorType` literals,
-  anything else becoming `custom_error`, because a validator may raise
-  `PydanticCustomError` with a `type` built from the value it just rejected --
-  the same substitution fastmcp makes, and for the same reason. The summary is
-  computed here rather than left to fastmcp's equivalent log line, because the
-  `fastmcp` logger does not propagate and keeps its own handler, so its version
-  lands beside our JSON as unparsed text instead of a queryable field.
+  A VALIDATION failure never carries its message, on either arm: the line gets
+  `error_withheld: true` plus `error_count` and `error_types`, allowlisted
+  against pydantic's own `ErrorType` literals. Three separate routes put
+  somebody's data in that message, each confirmed by running it. `msg` is not
+  covered by `include_input=False`, and for the BUILTIN codes `value_error` and
+  `assertion_error` pydantic renders the raised exception's own text, so a
+  validator doing `raise ValueError(f"rejected {value}")` yields
+  `"Value error, rejected <the value>"` -- allowlisting the code does not help,
+  because those codes are on the allowlist. A `PydanticCustomError` controls
+  both its `type` and its `msg`. And `loc` names the offending key for
+  `extra_forbidden` or a dict-key failure.
 
-  A model failing inside a tool BODY arrives as a bare
-  `pydantic.ValidationError` and KEEPS its message, because in these servers
-  that is a bug in one of our own models rather than a bad call: neither server
-  parses external data through pydantic (no `model_validate`, `TypeAdapter` or
-  `parse_obj` in either), witan-core defines no models at all, and the three
-  that exist are built from detector names, `re` match offsets, enum members
-  and a `masked_preview` that carries no character of the value it describes.
-  The message is rendered from `errors(include_input=False)`, so it names the
-  model and the fields that failed and never the values. Parsing anything
-  external through pydantic inside a tool body would invalidate that reasoning;
-  `_validation_fields` says so at the point where it would matter.
+  This covers a model failing inside a tool BODY as well as bad arguments. An
+  earlier revision kept the body message on the reasoning that such a failure
+  is always one of our own models; that was wrong.
+  `witan_code.config._Target` is a `BaseModel` built straight from TOML by
+  `_parse_targets` with no `except ValidationError` in that module, and
+  `cfg_module.load()` runs on tool paths.
 
-  And `error_type` is the real exception class only for a `FastMCPError`:
-  anything else is re-raised as `ToolError` by `FastMCP.call_tool` before the
-  middleware sees it, so the class is lost and only the message survives. That
-  message can contain caller arguments, since a tool body is free to
-  interpolate them (witan's `workflow_trace_mine` does). It is logged anyway
-  because fastmcp's generic arm already prints the same message with a full
-  traceback through `logger.exception`, so the field restates what the pod log
-  holds rather than adding to it.
-
-  A failure that breaks the describer itself logs `error_undescribable: true`,
-  which is a different thing from a message deliberately withheld.
+  A failure that is neither a refusal nor a validation error keeps its message,
+  because fastmcp's generic arm has already written the same text to the log in
+  full, with a traceback, through `logger.exception`. A failure that breaks the
+  describer itself logs `error_undescribable: true`, which is a different thing
+  from a message deliberately withheld.

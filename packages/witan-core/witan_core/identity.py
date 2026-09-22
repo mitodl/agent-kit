@@ -93,6 +93,10 @@ def derive_actor_handle(claims: Mapping[str, Any]) -> str | None:
 class ActorTokenMissing(LookupError, Refusal):
     """No omnigraph bearer token is provisioned for this actor yet."""
 
+    # An `act-<sub>` id and the token map's path. The id is already the
+    # `actor_id` field on every log line this would appear beside.
+    log_safe_message = True
+
 
 class ActorTokenResolver:
     """Resolves ``act-<sub>`` → omnigraph bearer token from a provisioned map.

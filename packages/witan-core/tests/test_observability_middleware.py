@@ -118,15 +118,15 @@ def test_failure_says_what_went_wrong(capsys):
     assert payload["refused"] is False
 
 
-def test_a_refusal_is_marked_as_one(capsys):
+def test_an_opted_in_refusal_logs_its_message(capsys):
     # ClusterGraphMissing is the real production case: a repo that has no
-    # cluster graph. It is a Refusal, so the line says the service declined
-    # rather than broke -- while still counting under outcome="error", which
-    # the error-ratio alert depends on.
+    # cluster graph. It sets log_safe_message, so the message reaches the line
+    # -- while still counting under outcome="error", which the error-ratio
+    # alert depends on.
     from witan_core.refusal import Refusal
 
     class ClusterGraphMissing(RuntimeError, Refusal):
-        pass
+        log_safe_message = True
 
     async def call_next(_ctx):
         msg = "'x' code graph is not served by the omnigraph-server"
@@ -139,6 +139,32 @@ def test_a_refusal_is_marked_as_one(capsys):
     assert payload["refused"] is True
     assert payload["error_type"] == "ClusterGraphMissing"
     assert "is not served by the omnigraph-server" in payload["error"]
+
+
+def test_a_refusal_withholds_its_message_by_default(capsys):
+    # THE DEFAULT IS THE POINT. witan_code.ingest.IngestRefused is raised from
+    # mutate_many as f"...got {value!r}." over the CALLER's own step value, and
+    # fastmcp's FastMCPError arm never rendered it, so logging it would be new
+    # exposure rather than a restatement. A new refusal that echoes its input
+    # is withheld unless someone reads it and opts in.
+    from witan_core.refusal import Refusal
+
+    class IngestRefused(RuntimeError, Refusal):
+        pass
+
+    async def call_next(_ctx):
+        msg = "Every step needs a non-empty 'name'; got 'SENSITIVE-STEP-VALUE'."
+        raise IngestRefused(msg)
+
+    with pytest.raises(IngestRefused):
+        _run(ObservabilityMiddleware(), _Context("code_store_mutate_many"), call_next)
+    written = capsys.readouterr().err
+    assert "SENSITIVE-STEP-VALUE" not in written
+    payload = json.loads(written.strip())
+    assert payload["error_type"] == "IngestRefused"
+    assert payload["refused"] is True
+    assert payload["error_withheld"] is True
+    assert "error" not in payload
 
 
 def test_a_long_message_is_truncated(capsys):
@@ -394,7 +420,7 @@ def _server_with_tools():
     from witan_core.refusal import Refusal
 
     class ClusterGraphMissing(RuntimeError, Refusal):
-        pass
+        log_safe_message = True
 
     mcp = FastMCP("test")
     mcp.add_middleware(ObservabilityMiddleware())
@@ -501,45 +527,45 @@ def test_a_withheld_validation_error_still_says_what_kind(capsys):
     assert payload["error_types"] == ["string_type"]
 
 
-def test_a_model_failing_inside_a_tool_body_keeps_its_message(capsys):
-    # A bare pydantic ValidationError reaches the middleware unwrapped and means
-    # a model failed INSIDE the body. Nothing in either server parses external
-    # data through pydantic, so that is a bug in our own model and the message
-    # is the diagnosis: it names the model and the field. The VALUE is still
-    # dropped, because _without_input renders from errors(include_input=False)
-    # rather than str(exc).
+def test_a_model_failing_inside_a_tool_body_is_withheld_too(capsys):
+    # The "a body error is always one of our own models" reasoning was wrong:
+    # witan_code.config._Target is a BaseModel built straight from TOML by
+    # _parse_targets, with no `except ValidationError` in that module, and
+    # cfg_module.load() runs on tool paths. So this arm sees externally sourced
+    # validation and gets the same treatment as the argument arm.
     import pydantic
 
-    class Finding(pydantic.BaseModel):
-        start: int
+    class Target(pydantic.BaseModel):
+        name: str
 
     async def call_next(_ctx):
-        Finding(start="SENSITIVE-ROW-VALUE")
+        Target(name={"from": "SENSITIVE-TOML-VALUE"})
 
     with pytest.raises(pydantic.ValidationError):
-        _run(ObservabilityMiddleware(), _Context("memory_store"), call_next)
+        _run(ObservabilityMiddleware(), _Context("code_store_load"), call_next)
     written = capsys.readouterr().err
-    assert "SENSITIVE-ROW-VALUE" not in written
-    assert "input_value" not in written
+    assert "SENSITIVE-TOML-VALUE" not in written
     payload = next(
         json.loads(line)
         for line in written.strip().splitlines()
         if line.strip().startswith("{") and '"mcp.tool_call"' in line
     )
     assert payload["error_type"] == "ValidationError"
-    assert "Finding" in payload["error"]
-    assert "start" in payload["error"]
+    assert payload["error_withheld"] is True
     assert payload["error_count"] == 1
-    assert "error_withheld" not in payload
+    assert "error" not in payload
 
 
 def test_an_exception_whose_message_explodes_does_not_replace_it(capsys):
     # _error_fields runs inside `except BaseException`, so anything escaping it
     # would hand the caller a server fault in place of their real failure. The
-    # partially built result is kept, so `refused` survives.
+    # partially built result is kept, so `refused` survives. Opted in, so
+    # __str__ is actually reached.
     from witan_core.refusal import Refusal
 
     class Exploding(RuntimeError, Refusal):
+        log_safe_message = True
+
         def __str__(self):
             raise KeyboardInterrupt
 
@@ -610,6 +636,8 @@ def test_a_broken_describer_is_distinguishable_from_a_withheld_message(capsys):
     from witan_core.refusal import Refusal
 
     class Exploding(RuntimeError, Refusal):
+        log_safe_message = True
+
         def __str__(self):
             raise KeyboardInterrupt
 
@@ -624,11 +652,10 @@ def test_a_broken_describer_is_distinguishable_from_a_withheld_message(capsys):
 
 
 def test_a_custom_validator_s_sentence_is_not_logged_verbatim(capsys):
-    # Copilot on #386: include_input=False drops the structured input entry but
-    # does not sanitise `msg`, and a PydanticCustomError's message is written
-    # by the validator, which can build it out of the value it just rejected --
-    # the same vector as its `type`, one field over. Gated on the same
-    # allowlist, so a custom code yields the placeholder and not the sentence.
+    # PydanticCustomError lets a validator write both the code and the message
+    # out of the value it just rejected. Neither reaches the line: the code is
+    # allowlisted and the message is withheld with every other validation
+    # message.
     from typing import Annotated
 
     import pydantic
@@ -653,22 +680,41 @@ def test_a_custom_validator_s_sentence_is_not_logged_verbatim(capsys):
         for line in written.strip().splitlines()
         if line.strip().startswith("{") and '"mcp.tool_call"' in line
     )
-    assert middleware_module._CUSTOM_VALIDATION_CODE in payload["error"]
     assert payload["error_types"] == [middleware_module._CUSTOM_VALIDATION_CODE]
+    assert "error" not in payload
 
 
-def test_a_builtin_message_still_reads_as_a_sentence(capsys):
-    # The gate must not flatten every body error to a code, or this arm stops
-    # being the diagnosis it exists to be.
+def test_a_builtin_code_s_message_can_still_carry_the_value(capsys):
+    # WHY ALLOWLISTING THE CODE WAS NOT ENOUGH, and why the message had to go.
+    # `value_error` and `assertion_error` ARE builtin codes, and pydantic
+    # renders the raised exception's own text into msg: a validator doing
+    # `raise ValueError(f"rejected {value}")` produces
+    # "Value error, rejected <the value>". Gating on the code passes it
+    # straight through.
+    from typing import Annotated
+
     import pydantic
+    from pydantic import AfterValidator
 
-    class Finding(pydantic.BaseModel):
-        start: int
+    def reject(value: str) -> str:
+        msg = f"rejected {value}"
+        raise ValueError(msg)
+
+    class Body(pydantic.BaseModel):
+        field: Annotated[str, AfterValidator(reject)]
 
     async def call_next(_ctx):
-        Finding(start="nope")
+        Body(field="SENSITIVE-ROW-VALUE")
 
     with pytest.raises(pydantic.ValidationError):
         _run(ObservabilityMiddleware(), _Context("memory_store"), call_next)
-    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
-    assert "start: Input should be a valid integer" in payload["error"]
+    written = capsys.readouterr().err
+    assert "SENSITIVE-ROW-VALUE" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    # The code is builtin and still reported; only the sentence is gone.
+    assert payload["error_types"] == ["value_error"]
+    assert "error" not in payload

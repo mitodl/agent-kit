@@ -1393,6 +1393,9 @@ class WriteIndeterminate(RuntimeError, Refusal):
     retrying, because retrying blind writes it twice if it did land.
     """
 
+    # A graph label and the indeterminacy advice. No payload.
+    log_safe_message = True
+
 
 class WriteQueueFull(RuntimeError, Refusal):
     """This process already has as many writes in flight against one graph as the
@@ -1410,9 +1413,15 @@ class WriteQueueFull(RuntimeError, Refusal):
     retry can recognise it without matching on prose.
     """
 
+    # A graph label and this process's own in-flight count.
+    log_safe_message = True
+
 
 class AdmissionCapExceeded(RuntimeError, Refusal):
     """The server's per-actor admission cap refused this write. Nothing was written."""
+
+    # A graph label and the server's own counts.
+    log_safe_message = True
 
 
 #: Where an operator hit by :class:`StoreQuarantined` finds the procedure. An
@@ -1446,6 +1455,9 @@ class StoreQuarantined(RuntimeError, Refusal):
 
     See :data:`RUNBOOK_URL` for the recovery procedure.
     """
+
+    # A graph and the sidecar's operation id, which is the whole remedy.
+    log_safe_message = True
 
     def __init__(self, message: str, operation_id: str | None = None) -> None:
         super().__init__(message)
