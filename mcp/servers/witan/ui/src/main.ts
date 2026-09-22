@@ -1,5 +1,4 @@
-import { render } from "lit-html";
-import { placeholder, shell, viewFromHash } from "./shell.js";
+import { App } from "./app.js";
 import "./style.css";
 
 const root = document.querySelector<HTMLElement>("#app");
@@ -9,13 +8,4 @@ if (!root) {
 	throw new Error("#app is missing from index.html");
 }
 
-function draw(): void {
-	// `root` is narrowed above; the closure needs the non-null form.
-	render(
-		shell(viewFromHash(window.location.hash), placeholder()),
-		root as HTMLElement,
-	);
-}
-
-window.addEventListener("hashchange", draw);
-draw();
+new App(root).start();
