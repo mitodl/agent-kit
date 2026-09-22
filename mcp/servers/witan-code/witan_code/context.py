@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import os
 import stat
 import tempfile
@@ -42,14 +43,27 @@ from . import store as store_module
 # Per-checkout state for the hooks' background indexer (see hooks.py): its
 # lock, its queue, and the marker this hook reads to report "indexing in
 # progress" instead of a misleadingly empty/stale store. Keyed on a hash of the
-# checkout (not the raw sanitized path) so two distinct paths can't collide
+# checkout and its WITAN_* overrides (see `_state_digest`), not the raw
+# sanitized path, so two distinct paths can't collide
 # (e.g. "/tmp/a/b" and "/tmp/a_b" both sanitizing to "_tmp_a_b") and so a
 # deep/long checkout path can't blow past a filesystem's filename length limit.
 _STATE_PREFIX = "codegraph-"
 
 
 def _state_digest(checkout: Path) -> str:
-    return hashlib.sha256(str(checkout).encode()).hexdigest()[:16]
+    """The checkout, plus every ``WITAN_*`` override in this environment.
+
+    The drainer indexes with the environment of the hook that spawned it, and
+    the queue records only paths. Two sessions in one checkout with different
+    overrides (``WITAN_TARGET=qa`` in one, say) would otherwise have the second
+    one's edits written to the first one's target. Folding the overrides in
+    gives each context its own queue and drainer instead.
+    """
+    overrides = sorted(
+        (key, value) for key, value in os.environ.items() if key.startswith("WITAN_")
+    )
+    key = json.dumps([str(checkout), overrides])
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 def _project_dir() -> Path:
@@ -89,6 +103,10 @@ def state_dir() -> Path:
     st = path.lstat()
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
         raise PermissionError(f"{path} is not a directory owned by this user")
+    # Ours, so safe to correct: an older directory created with looser bits,
+    # or a umask that stripped our own access from the `mkdir` above.
+    if stat.S_IMODE(st.st_mode) != 0o700:
+        path.chmod(0o700)
     return path
 
 

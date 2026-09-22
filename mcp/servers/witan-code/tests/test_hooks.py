@@ -328,6 +328,14 @@ def test_state_dir_is_private(_state):
     assert path.stat().st_uid == os.getuid()
 
 
+def test_state_dir_tightens_an_existing_directory_s_mode(_state):
+    path = _state / f"witan-code-{os.getuid()}"
+    path.mkdir(mode=0o777)
+    path.chmod(0o777)
+
+    assert context.state_dir().stat().st_mode & 0o777 == 0o700
+
+
 def test_state_dir_refuses_a_symlink_planted_in_its_place(_state, tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -335,6 +343,23 @@ def test_state_dir_refuses_a_symlink_planted_in_its_place(_state, tmp_path):
 
     with pytest.raises(PermissionError):
         context.state_dir()
+
+
+def test_sessions_with_different_witan_overrides_get_separate_drainers(
+    _repo, monkeypatch
+):
+    """The drainer indexes with its spawner's environment, so an edit made
+    under ``WITAN_TARGET=qa`` must not be applied by a drainer spawned without
+    it."""
+    monkeypatch.delenv("WITAN_TARGET", raising=False)
+    held = hooks._try_lock(_repo)
+
+    monkeypatch.setenv("WITAN_TARGET", "qa")
+    other = hooks._try_lock(_repo)
+
+    assert other is not None
+    os.close(other)
+    os.close(held)
 
 
 def test_a_path_with_a_newline_is_not_queued(_repo):
