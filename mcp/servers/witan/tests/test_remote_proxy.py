@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from fastmcp import Client
 
+from witan import readiness
 from witan.config import RemoteConfig
 from witan.remote.proxy import (
     RemoteServerProxy,
@@ -855,7 +856,9 @@ def test_claim_session_id_is_threaded_from_the_client(proxy, monkeypatch):
         "ffffffff-1234-5678-9abc-def012345678"
     )
     assert claimed["claimed"] is True
-    assert claimed["assignee"].endswith("#ffffffff")
+    assert claimed["assignee"].endswith(
+        "#" + readiness.session_suffix("ffffffff-1234-5678-9abc-def012345678")
+    )
 
 
 def test_claim_without_a_client_session_id_sends_none(proxy, monkeypatch):
