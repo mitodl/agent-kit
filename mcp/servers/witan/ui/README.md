@@ -40,8 +40,11 @@ ui/
     chrome.ts     The loading, empty, error and stale states.
     format.ts     Timestamps, repo labels, linkability.
     views/        One module per tab.
+    widgets/      One MCP Apps widget per bound tool, plus the shared host.
+  widgets/        The widgets' HTML entries, one per tool.
   fixtures/       GENERATED (`just ui-fixtures`). Real tool results.
   vite.config.ts  The build. Writes ../witan/ui_dist, the wheel picks it up.
+  build-widgets.js  Builds each widget into ui_dist/widgets/<tool>.html.
   vitest.config.ts
   .node-version   The exact node pin, read by both GitHub workflows.
 ```
@@ -153,6 +156,35 @@ together.
 `npm ci` needs an npm new enough for the pinned node. If a stale global npm
 shadows the one that node ships (`npm --version` well below node's major),
 `npx npm@11 ci` runs the right one without changing anything on the machine.
+
+## MCP Apps widgets
+
+Four tools carry a widget (spec §7): `task_ready`, `workflow_project_status`,
+`recall` and `task_list`. The server names each in the tool's
+`_meta.ui.resourceUri` (`witan/ui_widgets.py`), and a host that renders MCP
+Apps (Claude Desktop, claude.ai) loads it into a sandboxed iframe and hands it
+the tool's result. Claude Code renders none and shows the text result, which
+the binding does not change.
+
+A widget is a presentation of the one result it is handed. `src/widgets/host.ts`
+does the ext-apps handshake, unwraps the result with the same flags the page
+uses, and draws it with the page's own renderers. It calls nothing back to the
+server, since a widget that needs a second read shows nothing in every client
+that cannot make one. For the same reason each widget draws only what its
+result carries: the `task_ready` widget is the Ready column alone, not a board
+with empty In progress and Blocked columns it never read.
+
+Route links inside a widget are inert and styled as text, because there is no
+router in the iframe. An external link, e.g. a project's PR, goes to the host
+through `openLink`, the only way a sandboxed iframe can open one.
+
+`npm run build` builds the page and then runs `build-widgets.js`, which builds
+each `widgets/*.html` into one self-contained file with
+`vite-plugin-singlefile`. Self-contained because the host's default CSP for a
+widget is `connect-src 'none'`, and no `csp` is declared to widen it. Each is
+about 256 KB (68 KB gzipped), most of it the ext-apps client and zod. The
+server binds a tool only when its widget file exists, so a build that skipped
+the frontend leaves the four tools exactly as they were.
 
 ## Where the bundle goes
 

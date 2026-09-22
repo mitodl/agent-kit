@@ -82,6 +82,25 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Assert every widget is one self-contained file
+        # A widget runs in a host's sandboxed iframe with `connect-src 'none'`
+        # (spec §7.2), so a <script src> or <link> the singlefile build failed
+        # to inline is a widget that renders blank in Claude Desktop and in
+        # nothing CI runs. The server binds a tool only when its file exists,
+        # so a missing one would ship silently too.
+        run: |
+          for tool in task_ready workflow_project_status recall task_list; do
+            file="../witan/ui_dist/widgets/$tool.html"
+            if [ ! -f "$file" ]; then
+              echo "::error::$file was not built"
+              exit 1
+            fi
+            if grep -Eq '<script[^>]+src=|<link[^>]+href=' "$file"; then
+              echo "::error::$file references an external script or stylesheet"
+              exit 1
+            fi
+          done
+
   packaging:
     name: witan UI (bundle reaches the wheel)
     runs-on: ubuntu-latest
@@ -177,6 +196,10 @@ jobs:
           index = bundle / 'index.html'
           if not index.is_file():
               sys.exit(f'{index} is missing from the image')
+          from witan import ui_widgets
+          missing = [t for t in ui_widgets.BOUND_TOOLS if ui_widgets.app_for(t) is None]
+          if missing:
+              sys.exit(f'widgets missing from the image, so these tools ship unbound: {missing}')
           print('bundle present:', sorted(p.name for p in bundle.iterdir()))
           "
   fixtures:

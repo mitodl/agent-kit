@@ -3,8 +3,10 @@ import { emptyBox } from "../chrome.js";
 import { absolute, ago, repoLabel } from "../format.js";
 import { type Route, routeHref } from "../route.js";
 import type {
+	LastSession,
 	ProjectStatus,
 	TaskRow,
+	TaskStatus,
 	WorkflowProjectDetail,
 	WorkflowProjectSummary,
 	WorkflowSession,
@@ -306,6 +308,123 @@ function readyTasks(
 			}
     </section>
   `;
+}
+
+/**
+ * The rollup as `workflow_project_status` alone can draw it, for that tool's
+ * widget (spec §7.1).
+ *
+ * The page's rollup reads four tools; a widget is handed one result and calls
+ * nothing back, so this draws the status projection and says nothing it did
+ * not read: no description, no task table, one session rather than the
+ * history. `null` is the tool's answer for a slug that does not exist.
+ */
+export function statusRollup(
+	status: ProjectStatus | null,
+	route: Route,
+	now = Date.now(),
+): TemplateResult {
+	if (!status) {
+		return emptyBox("No such project in this graph.");
+	}
+	const { project } = status;
+	return html`
+    <article class="rollup">
+      <header>
+        <p class="crumbs"><code>${project.slug}</code></p>
+        <h2>${project.title}</h2>
+        <dl class="facts">
+          <dt>Phase</dt>
+          <dd>${project.phase}</dd>
+          <dt>Status</dt>
+          <dd>${project.status}</dd>
+          <dt>Repos</dt>
+          <dd>${(project.repos ?? []).map(repoLabel).join(", ") || "—"}</dd>
+          <dt>Open tasks</dt>
+          <dd>${status.counts.open_tasks}</dd>
+          ${uriFact("PR", project.github_pr)}
+        </dl>
+      </header>
+      ${
+				status.blockers.length
+					? html`<section class="edges">
+              <h3>Blockers</h3>
+              <p>${status.blockers.join(", ")}</p>
+            </section>`
+					: nothing
+			}
+      ${readyTasks(status, route)}
+      <section>
+        <h3>Last session</h3>
+        ${lastSession(status.last_session, now)}
+      </section>
+    </article>
+  `;
+}
+
+function lastSession(session: LastSession | null, now: number): TemplateResult {
+	if (!session) {
+		return emptyBox("No sessions recorded against this project.");
+	}
+	return html`
+    <ul class="sessions">
+      <li>
+        <p class="session-head">
+          <code>${session.slug}</code>
+          <span class="badge">${session.phase}</span>
+          ${
+						session.ended_at
+							? html`<span title=${absolute(session.ended_at)}
+                  >ended ${ago(session.ended_at, now)}</span
+                >`
+							: html`<span class="badge open">open</span>`
+					}
+        </p>
+        ${
+					session.summary
+						? html`<p class="summary">${session.summary}</p>`
+						: html`<p class="summary muted">No summary.</p>`
+				}
+      </li>
+    </ul>
+  `;
+}
+
+const STATUS_ORDER: TaskStatus[] = ["in_progress", "open", "blocked", "closed"];
+
+const STATUS_HEADINGS: Record<TaskStatus, string> = {
+	in_progress: "In progress",
+	open: "Open",
+	blocked: "Blocked",
+	closed: "Closed",
+};
+
+/**
+ * `task_list`'s rows grouped by status, for that tool's widget (spec §7.1).
+ *
+ * Grouped on the row's own status word, which is all a `task_list` result
+ * carries. That is not the board's rule: an `open` task with an open blocker
+ * lands under Open here, because telling it apart takes a `task_ready` read
+ * this widget is not handed. Empty groups are left out rather than drawn with
+ * an empty message, since the call may have filtered to one status.
+ */
+export function taskGroups(
+	tasks: TaskRow[],
+	route: Route,
+	now = Date.now(),
+): TemplateResult {
+	if (tasks.length === 0) {
+		return emptyBox("No tasks matched.");
+	}
+	return html`${STATUS_ORDER.map((status) => {
+		const group = tasks.filter((task) => task.status === status);
+		return group.length === 0
+			? nothing
+			: html`<section>
+            <h3>${STATUS_HEADINGS[status]} <span class="count">${group.length}</span></h3>
+            ${taskTable(group, route, now)}
+          </section>`;
+	})}`;
 }
 
 export function taskTable(

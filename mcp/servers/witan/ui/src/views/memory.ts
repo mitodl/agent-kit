@@ -17,6 +17,7 @@ import {
 	type MemoryNeighbors,
 	NEIGHBOR_KINDS,
 	type NeighborKind,
+	type RecallResult,
 	type Topic,
 } from "../types.js";
 
@@ -402,6 +403,31 @@ function recallPairs(
         ${pairs.map((pair) => html`<li>${link(pair.a)} contradicts ${link(pair.b)}</li>`)}
       </ul>
     </section>
+  `;
+}
+
+/**
+ * `recall`'s result as its widget draws it (spec §7.1): the contradiction
+ * pairs first, then the ranked memories with each contradicted one marked.
+ *
+ * The same two pieces the memory view's recall mode draws, minus the toolbar,
+ * which only makes sense on a page that can issue another read.
+ */
+export function recallResults(
+	result: RecallResult,
+	route: Route,
+	now = Date.now(),
+): TemplateResult {
+	const page: MemoryPage = {
+		mode: "recall",
+		memories: result.memories,
+		pairs: result.contradictions,
+	};
+	return html`
+    <div class="memory-view">
+      ${recallPairs(page.pairs, page.memories, route)}
+      ${memoryTable(page, page.memories, route, now)}
+    </div>
   `;
 }
 

@@ -12,8 +12,13 @@
 	background: var(--bg);
 }
 
+/*
+ * Dark by the OS preference, unless an MCP Apps host has set the theme
+ * (`data-theme`, written by ext-apps' `applyDocumentTheme`). The host's choice
+ * wins in both directions: a light Claude Desktop on a dark OS stays light.
+ */
 @media (prefers-color-scheme: dark) {
-	:root {
+	:root:not([data-theme="light"]) {
 		--fg: #e8e8e8;
 		--bg: #161616;
 		--panel-bg: #1e1e1e;
@@ -23,6 +28,31 @@
 		--warn: #e0a95b;
 		--bad: #e08080;
 	}
+}
+
+:root[data-theme="dark"] {
+	--fg: #e8e8e8;
+	--bg: #161616;
+	--panel-bg: #1e1e1e;
+	--muted: #9a9a9a;
+	--rule: #333333;
+	--accent: #6aa9e0;
+	--warn: #e0a95b;
+	--bad: #e08080;
+}
+
+/*
+ * Inside an MCP Apps widget the renderers' route links go nowhere (there is no
+ * router in the iframe), so they read as text rather than as dead links.
+ */
+.widget a[href^="#"] {
+	color: inherit;
+	text-decoration: none;
+	cursor: text;
+}
+
+.widget-main {
+	padding: 0.5rem;
 }
 
 body {

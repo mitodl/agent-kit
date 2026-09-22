@@ -195,6 +195,25 @@ export function board(
   `;
 }
 
+/**
+ * The Ready column alone, for the `task_ready` widget (spec §7.1).
+ *
+ * The widget is handed one `task_ready` result and nothing else, so it has no
+ * `live` set to resolve blockers or to fill the other columns from. Drawing
+ * the whole board from that would put "Nobody is holding a task" under In
+ * progress, which is a claim about the graph the widget never read.
+ */
+export function readyColumn(
+	tasks: TaskRow[],
+	route: Route,
+	now = Date.now(),
+): TemplateResult {
+	const card = (task: TaskRow) => boardCard(task, new Map(), route, now);
+	return html`<div class="board">
+    ${column("Ready", tasks, card, "Nothing is ready to pick up.")}
+  </div>`;
+}
+
 function column(
 	title: string,
 	tasks: TaskRow[],
