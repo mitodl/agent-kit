@@ -63,6 +63,9 @@ export function inScope(task: TaskRow, route: Route): boolean {
 		return task.project_slug === route.project;
 	}
 	if (route.repo) {
+		// Compared as written, where the server canonicalizes its `repo`
+		// argument first. The repo filter only offers canonical URIs, so only a
+		// hand-edited fragment can tell the two apart.
 		return task.repo === route.repo || task.repo === null;
 	}
 	return true;
@@ -148,6 +151,8 @@ export function board(
 ): TemplateResult {
 	const cols = columns(data, route);
 	const card = (task: TaskRow) => boardCard(task, cols.live, route, now);
+	const blockedCard = (task: TaskRow) =>
+		boardCard(task, cols.live, route, now, true);
 	return html`
     ${
 			data.truncated
@@ -165,7 +170,7 @@ export function board(
 				card,
 				"Nobody is holding a task.",
 			)}
-      ${column("Blocked", cols.blocked, card, "Nothing is blocked.")}
+      ${column("Blocked", cols.blocked, blockedCard, "Nothing is blocked.")}
       ${cols.closed ? closedColumn(cols.closed, card) : nothing}
     </div>
   `;
@@ -234,12 +239,19 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
  * when the server's `lease_expired` does. The UI never compares the age to a
  * lease length of its own, so the mark and the server's reclaim rule cannot
  * disagree.
+ *
+ * `inBlocked` is the column, not the status. A `blocked`-status task whose
+ * blockers have all closed is READY by `task_ready`'s rule (and stays marked
+ * `blocked` when its blocker closed in another repo, since
+ * `_unblock_dependents` only looks within one), so keying the blocker line on
+ * the status word would tell a person to refresh a task that is ready.
  */
 export function boardCard(
 	task: TaskRow,
 	live: Map<string, TaskRow>,
 	route: Route,
 	now = Date.now(),
+	inBlocked = false,
 ): TemplateResult {
 	const blockers = task.status === "closed" ? [] : openBlockers(task, live);
 	return html`
@@ -266,8 +278,8 @@ export function boardCard(
       </p>
       ${claimLine(task, now)}
       ${
-				task.status === "blocked" || blockers.length > 0
-					? blockerLine(task, blockers, route)
+				inBlocked || blockers.length > 0
+					? blockerLine(blockers, route)
 					: nothing
 			}
     </li>
@@ -299,22 +311,19 @@ function claimLine(
  * "Blocked" without "on what" is not actionable, so a blocked card names each
  * open blocker, links it, and says where it stands.
  *
- * A card can land in Blocked with no open blocker found when the reads raced a
- * close, or when a task is marked `blocked` with no edge at all. Both say so
- * rather than rendering an empty line.
+ * A card lands in Blocked with no open blocker found in two ways, and the
+ * text names both rather than rendering an empty line: the parallel reads
+ * raced a close, which the next poll settles, or `task_ready` never scanned
+ * the task. Its candidates for an all-repos or repo scope come from
+ * `list_unscoped_tasks`, which stops at 10,000 tasks by `updated_at`, closed
+ * ones included, and none of the rows this page receives can show that.
  */
-function blockerLine(
-	task: TaskRow,
-	blockers: TaskRow[],
-	route: Route,
-): TemplateResult {
+function blockerLine(blockers: TaskRow[], route: Route): TemplateResult {
 	if (blockers.length === 0) {
 		return html`<p class="blockers muted">
-      ${
-				task.blocked_by?.length
-					? "No open blocker in the last read; refresh."
-					: "Marked blocked, with no blocker linked."
-			}
+      task_ready did not return this task, and no open blocker was found.
+      Refresh; if it stays here, the graph may be past task_ready's
+      10,000-task scan.
     </p>`;
 	}
 	return html`

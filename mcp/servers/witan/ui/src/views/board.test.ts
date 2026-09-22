@@ -236,13 +236,32 @@ describe("the Blocked column", () => {
 		expect(texts.join(" ")).toContain(open?.title ?? "");
 	});
 
-	it("says so when a blocked task has no blocker linked", () => {
-		const bare = row({ slug: "tk-bare", status: "blocked", blocked_by: null });
-		draw(fromFixtures({ ready: [], live: [bare] }));
+	it("says what a card with no open blocker may mean", () => {
+		// Reads racing a close, or `task_ready` never scanning the task.
+		const orphan = row({
+			slug: "tk-orphan",
+			status: "open",
+			blocked_by: ["tk-closed-elsewhere"],
+		});
+		draw(fromFixtures({ ready: [], live: [orphan] }));
 
 		expect(column("Blocked").textContent).toContain(
-			"Marked blocked, with no blocker linked.",
+			"task_ready did not return this task",
 		);
+	});
+
+	it("draws no blocker line on a blocked-status task that is ready", () => {
+		// Its blocker closed in another repo, which `_unblock_dependents` does
+		// not reach, so the status word is stale and the task is ready.
+		const unblocked = row({
+			slug: "tk-unblocked",
+			status: "blocked",
+			blocked_by: ["tk-closed-elsewhere"],
+		});
+		draw(fromFixtures({ ready: [unblocked], live: [unblocked] }));
+
+		const card = column("Ready").querySelector("li.card");
+		expect(card?.querySelector(".blockers")).toBeNull();
 	});
 });
 
