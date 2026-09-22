@@ -109,8 +109,11 @@ function toolOf(path: string): string {
 	return base.replace(/\.json$/, "").split(".")[0] ?? "";
 }
 
+/** Fixtures that record something other than a tool result. */
+const NOT_TOOL_RESULTS = ["tools-list.json", "repo-keys.json"];
+
 const TOOL_FIXTURES = Object.entries(FIXTURES).filter(
-	([path]) => !path.endsWith("tools-list.json"),
+	([path]) => !NOT_TOOL_RESULTS.some((name) => path.endsWith(name)),
 );
 
 describe("every recorded fixture", () => {

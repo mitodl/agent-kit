@@ -1,3 +1,4 @@
+import { canonicalRepo } from "./format.js";
 import { VIEWS, type ViewId } from "./shell.js";
 
 /**
@@ -61,7 +62,9 @@ export function parseRoute(hash: string): Route {
 	const view = VIEWS.find((candidate) => candidate.id === head);
 	return {
 		view: view ? view.id : DEFAULT_ROUTE.view,
-		repo: params.get("repo") ?? DEFAULT_ROUTE.repo,
+		// Canonical from here on, so every tool call and every browser-side
+		// comparison sees the key the server joins on (see `canonicalRepo`).
+		repo: canonicalRepo(params.get("repo") ?? DEFAULT_ROUTE.repo),
 		project: params.get("project") || null,
 		slug: params.get("slug") || null,
 		closed: params.get("closed") === "1",

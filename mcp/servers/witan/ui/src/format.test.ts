@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import repoKeys from "../fixtures/repo-keys.json" with { type: "json" };
 import {
 	absolute,
 	ago,
 	branchUrl,
+	canonicalRepo,
 	isLinkable,
 	parseTimestamp,
 	repoLabel,
@@ -151,5 +153,20 @@ describe("isLinkable", () => {
 		expect(isLinkable("mitodl/hq#12175")).toBe(false);
 		expect(isLinkable("javascript:alert(1)")).toBe(false);
 		expect(isLinkable(null)).toBe(false);
+	});
+});
+
+describe("canonicalRepo", () => {
+	// ★ Recorded from `witan_core.repo_key.normalise` itself by
+	// `just ui-fixtures`, so a change to the server's rule fails here (and
+	// `ui-fixtures-check` fails in CI) until this copy follows.
+	it.each(
+		Object.entries(repoKeys as Record<string, string>),
+	)("canonicalizes %j as the server does", (url, expected) => {
+		expect(canonicalRepo(url)).toBe(expected);
+	});
+
+	it("leaves the all-repos value alone", () => {
+		expect(canonicalRepo("")).toBe("");
 	});
 });

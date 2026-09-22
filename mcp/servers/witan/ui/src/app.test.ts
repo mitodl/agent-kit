@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import taskGetFixture from "../fixtures/task_get.json" with { type: "json" };
 import taskListFixture from "../fixtures/task_list.json" with { type: "json" };
+import taskReadyFixture from "../fixtures/task_ready.json" with {
+	type: "json",
+};
 import projectGetFixture from "../fixtures/workflow_project_get.json" with {
 	type: "json",
 };
@@ -37,6 +40,7 @@ vi.mock("./mcp.js", () => ({
 	workflowProjectStatus: vi.fn(),
 	workflowSessionList: vi.fn(),
 	taskList: vi.fn(),
+	taskReady: vi.fn(),
 	taskGet: vi.fn(),
 }));
 
@@ -61,6 +65,8 @@ const sessions = unwrap<WorkflowSession[]>(
 	sessionListFixture,
 );
 const task = unwrap<TaskDetail>("task_get", taskGetFixture);
+const ready = unwrap<TaskRow[]>("task_ready", taskReadyFixture);
+const { TASK_LIMIT } = await import("./views/board.js");
 
 let root: HTMLElement;
 let app: InstanceType<typeof App>;
@@ -70,7 +76,10 @@ beforeEach(() => {
 	vi.mocked(mcp.workflowProjectGet).mockResolvedValue(projectDetail);
 	vi.mocked(mcp.workflowProjectStatus).mockResolvedValue(projectStatus);
 	vi.mocked(mcp.workflowSessionList).mockResolvedValue(sessions);
-	vi.mocked(mcp.taskList).mockResolvedValue(tasks);
+	vi.mocked(mcp.taskList).mockImplementation(async (args) =>
+		args.status ? tasks.filter((row) => row.status === args.status) : tasks,
+	);
+	vi.mocked(mcp.taskReady).mockResolvedValue(ready);
 	vi.mocked(mcp.taskGet).mockResolvedValue(task);
 
 	window.location.hash = "";
@@ -242,6 +251,94 @@ describe("App", () => {
 		await vi.waitFor(() =>
 			expect(mcp.taskGet).toHaveBeenCalledWith("tk-fixture-004"),
 		);
+	});
+
+	it("reads Ready with the route's scope and a limit that cannot truncate it", async () => {
+		await open("#board?repo=https%3A%2F%2Fgithub.com%2Fmitodl%2Fagent-kit");
+		await vi.waitFor(() => expect(text()).toContain("In progress"));
+
+		// ★ `task_ready` sorts THEN truncates, so its default 20 would push
+		// ready tasks into Blocked on any board with more than 20 of them.
+		expect(mcp.taskReady).toHaveBeenCalledWith({
+			repo: "https://github.com/mitodl/agent-kit",
+			limit: TASK_LIMIT,
+		});
+	});
+
+	it("reads the live statuses across every repo, and no closed tasks", async () => {
+		await open("#board?repo=https%3A%2F%2Fgithub.com%2Fmitodl%2Fagent-kit");
+		await vi.waitFor(() => expect(text()).toContain("In progress"));
+
+		// ★ All repos regardless of the filter: a blocked card has to know
+		// whether a blocker in another repo is still open.
+		for (const status of ["open", "blocked", "in_progress"]) {
+			expect(mcp.taskList).toHaveBeenCalledWith({
+				repo: "",
+				status,
+				limit: TASK_LIMIT,
+			});
+		}
+		expect(mcp.taskList).not.toHaveBeenCalledWith(
+			expect.objectContaining({ status: "closed" }),
+		);
+	});
+
+	it("scopes a project board by project, as the tools do", async () => {
+		await open(`#board?project=${projectDetail.slug}&closed=1`);
+		await vi.waitFor(() => expect(text()).toContain("Closed"));
+
+		expect(mcp.taskReady).toHaveBeenCalledWith({
+			repo: "",
+			project_slug: projectDetail.slug,
+			limit: TASK_LIMIT,
+		});
+		expect(mcp.taskList).toHaveBeenCalledWith({
+			repo: "",
+			project_slug: projectDetail.slug,
+			status: "closed",
+			limit: TASK_LIMIT,
+		});
+		// Not the rollup: that is the Projects tab's read.
+		expect(mcp.workflowProjectGet).not.toHaveBeenCalled();
+	});
+
+	it("does not re-read the board when a card is opened beside it", async () => {
+		await open("#board");
+		await vi.waitFor(() => expect(text()).toContain("In progress"));
+		const reads = vi.mocked(mcp.taskReady).mock.calls.length;
+
+		window.location.hash = "#board?slug=tk-fixture-000";
+		await vi.waitFor(() =>
+			expect(root.querySelector(".detail-panel")).not.toBeNull(),
+		);
+
+		expect(vi.mocked(mcp.taskReady).mock.calls.length).toBe(reads);
+	});
+
+	it("re-reads the board when its scope changes", async () => {
+		await open("#board");
+		await vi.waitFor(() => expect(text()).toContain("In progress"));
+
+		window.location.hash = "#board?closed=1";
+		await vi.waitFor(() =>
+			expect(mcp.taskList).toHaveBeenCalledWith({
+				repo: "",
+				status: "closed",
+				limit: TASK_LIMIT,
+			}),
+		);
+	});
+
+	it("stops reading the board when another tab is chosen", async () => {
+		await open("#board");
+		await vi.waitFor(() => expect(text()).toContain("In progress"));
+		vi.mocked(mcp.taskReady).mockClear();
+
+		window.location.hash = "#waves";
+		await vi.waitFor(() => expect(text()).toContain("not built yet"));
+		window.dispatchEvent(new Event("focus"));
+
+		expect(mcp.taskReady).not.toHaveBeenCalled();
 	});
 
 	it("names an unbuilt view rather than rendering it empty", async () => {

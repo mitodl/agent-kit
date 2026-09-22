@@ -1,0 +1,19 @@
+{
+  "  https://github.com/mitodl/repo  ": "https://github.com/mitodl/repo",
+  "git@github.com:MITODL/OL-Django.git": "https://github.com/mitodl/ol-django",
+  "git@github.com:mitodl/ol-django.git": "https://github.com/mitodl/ol-django",
+  "git@github.com:mitodl/repo.git/": "https://github.com/mitodl/repo",
+  "git@gitlab.com:Grp/Sub/Repo.git": "https://gitlab.com/grp/sub/repo",
+  "git@gitlab.com:grp/sub/repo.git": "https://gitlab.com/grp/sub/repo",
+  "http://github.com/mitodl/repo": "https://github.com/mitodl/repo",
+  "https://Git.example.com/Org/Repo": "https://git.example.com/Org/Repo",
+  "https://GitHub.com/mitodl/ol-django": "https://github.com/mitodl/ol-django",
+  "https://github.com/MITODL/OL-Django": "https://github.com/mitodl/ol-django",
+  "https://github.com/mitodl/ol-django": "https://github.com/mitodl/ol-django",
+  "https://github.com/mitodl/ol-django.git": "https://github.com/mitodl/ol-django",
+  "https://github.com/mitodl/repo.git/": "https://github.com/mitodl/repo",
+  "https://github.com/mitodl/repo/": "https://github.com/mitodl/repo",
+  "https://x-token@github.com/mitodl/repo.git": "https://github.com/mitodl/repo",
+  "some-bare-string": "some-bare-string",
+  "ssh://git@github.com/mitodl/repo.git": "https://github.com/mitodl/repo"
+}
