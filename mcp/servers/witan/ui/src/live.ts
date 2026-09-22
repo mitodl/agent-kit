@@ -207,3 +207,74 @@ export class LiveRead<T> {
 		this.notify(this.state);
 	}
 }
+
+/**
+ * A `LiveRead` that exists only while the route needs it, keyed on its arguments.
+ *
+ * Every per-route read in the app follows the same three rules, and this is
+ * where they are written once:
+ *
+ * - a `null` key stops the read and drops its snapshot, so a tab that is not
+ *   showing it polls nothing;
+ * - an unchanged key is a no-op. ★ WITHOUT THIS, OPENING A PANEL RE-READS THE
+ *   VIEW: every navigation comes through one `hashchange`, and a retarget
+ *   blanks the snapshot by design, so reacting to a route change that touched
+ *   only the open slug would flash the view back to "Reading…";
+ * - a changed key retargets rather than rebuilds, so the poll clock and the
+ *   focus listener are not torn down and re-added on every filter change.
+ *
+ * The key is whatever string identifies the read's arguments, and nothing
+ * else the route carries: a field in the key that is not an argument buys a
+ * pointless re-read every time it changes.
+ */
+export class KeyedRead<T> {
+	private live: LiveRead<T> | null = null;
+	private key: string | null = null;
+	private state: Snapshot<T> | null = null;
+
+	constructor(
+		private readonly notify: () => void,
+		private readonly options: LiveOptions = {},
+	) {}
+
+	/** The current read's snapshot, or `null` when nothing is being read. */
+	get snapshot(): Snapshot<T> | null {
+		return this.state;
+	}
+
+	sync(key: string | null, read: () => Promise<T>): void {
+		if (key === null) {
+			this.stop();
+			return;
+		}
+		if (this.live && key === this.key) {
+			return;
+		}
+		this.key = key;
+		if (this.live) {
+			this.live.retarget(read);
+			return;
+		}
+		this.live = new LiveRead(
+			read,
+			(snapshot) => {
+				this.state = snapshot;
+				this.notify();
+			},
+			this.options,
+		);
+		this.state = this.live.snapshot;
+		this.live.start();
+	}
+
+	refresh(): void {
+		this.live?.refresh();
+	}
+
+	stop(): void {
+		this.live?.stop();
+		this.live = null;
+		this.key = null;
+		this.state = null;
+	}
+}

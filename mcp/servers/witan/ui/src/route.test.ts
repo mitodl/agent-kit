@@ -32,6 +32,7 @@ describe("parseRoute", () => {
 				"#projects?repo=https%3A%2F%2Fgithub.com%2Fmitodl%2Fagent-kit&project=wp-x&slug=tk-y&closed=1",
 			),
 		).toEqual({
+			...DEFAULT_ROUTE,
 			view: "projects",
 			repo: "https://github.com/mitodl/agent-kit",
 			project: "wp-x",
@@ -39,6 +40,27 @@ describe("parseRoute", () => {
 			closed: true,
 			days: 14,
 		});
+	});
+
+	it("reads the memory view's search, toggles and facets", () => {
+		const route = parseRoute(
+			"#memory?q=wrap+flag&kind=lesson&plain=1&superseded=1&topic=tp-topic-mcp&tag=mcp&author=fixtures",
+		);
+		expect(route.q).toBe("wrap flag");
+		expect(route.kind).toBe("lesson");
+		expect(route.plain).toBe(true);
+		expect(route.superseded).toBe(true);
+		expect(route.topic).toBe("tp-topic-mcp");
+		expect(route.facets).toEqual({
+			...DEFAULT_ROUTE.facets,
+			tag: "mcp",
+			author: "fixtures",
+		});
+	});
+
+	it("drops a memory kind the server does not have", () => {
+		// It is passed straight to the tools, which would refuse the call.
+		expect(parseRoute("#memory?kind=rumour").kind).toBeNull();
 	});
 
 	it("keeps the parts it understands when the view is junk", () => {
@@ -79,6 +101,18 @@ describe("formatRoute", () => {
 			slug: "tk-y",
 			closed: true,
 			days: 30,
+			q: "wrap flag",
+			kind: "pattern",
+			plain: true,
+			superseded: true,
+			topic: "tp-topic-mcp",
+			facets: {
+				language: "python",
+				category: "testing",
+				severity: "warning",
+				tag: "mcp",
+				author: "fixtures",
+			},
 		};
 		expect(parseRoute(formatRoute(route))).toEqual(route);
 	});
