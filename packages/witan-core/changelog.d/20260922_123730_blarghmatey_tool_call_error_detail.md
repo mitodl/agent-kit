@@ -7,8 +7,16 @@
   `f"Every step needs a non-empty {field!r}; got {value!r}."` over the caller's
   own step. Set it `True` only where the message is built from identifiers (a
   graph, a slug, an actor id, a count) or is masked by that type's own
-  contract, as `scan.enforce.WriteBlocked` documents. Eight types opted in
-  after an audit; `IngestRefused` deliberately did not.
+  contract, as `scan.enforce.WriteBlocked` documents.
+
+  Five of the nine opted in. The four that did not are `IngestRefused`, whose
+  message is the caller's own step value, and `WriteIndeterminate`,
+  `AdmissionCapExceeded` and `StoreQuarantined`, whose raise sites all append
+  `\n{err.strip()}` -- and `err` is whatever the transport produced, a non-JSON
+  HTTP body passed through verbatim or the CLI subprocess's whole stderr.
+  `StoreQuarantined` keeps the sidecar operation id an operator needs on its
+  `operation_id` attribute, so that survives as a structured value even though
+  the prose does not reach the log.
 
 ### Changed
 
@@ -45,8 +53,13 @@
   `_parse_targets` with no `except ValidationError` in that module, and
   `cfg_module.load()` runs on tool paths.
 
-  A failure that is neither a refusal nor a validation error keeps its message,
-  because fastmcp's generic arm has already written the same text to the log in
-  full, with a traceback, through `logger.exception`. A failure that breaks the
-  describer itself logs `error_undescribable: true`, which is a different thing
-  from a message deliberately withheld.
+  A PLAIN exception keeps its message, because fastmcp's `except Exception` arm
+  has already written the same text to the log in full, with a traceback,
+  through `logger.exception`. That reasoning does not extend to a
+  `FastMCPError` which is not a `Refusal` -- it takes the `exc_info=False` arm
+  like a refusal does -- but the only one reaching here today is fastmcp's own
+  `NotFoundError("Unknown tool: ...")`, whose payload is already the `tool`
+  field.
+
+  A failure that breaks the describer itself logs `error_undescribable: true`,
+  which is a different thing from a message deliberately withheld.

@@ -718,3 +718,74 @@ def test_a_builtin_code_s_message_can_still_carry_the_value(capsys):
     # The code is builtin and still reported; only the sentence is gone.
     assert payload["error_types"] == ["value_error"]
     assert "error" not in payload
+
+
+# ── The audit itself ─────────────────────────────────────────────────────────
+# Every test above builds a throwaway local Refusal, so none of them notices if
+# a REAL type's opt-in is wrong, or if a tenth refusal appears already opted in.
+# That gap is not hypothetical: the first version of this contract opted in
+# three types whose raise sites append `\n{err.strip()}`, an arbitrary upstream
+# string, and every test still passed.
+
+EXPECTED_LOG_SAFE = {
+    # opted in: identifiers, counts, or masked by the detectors' contract
+    ("witan_core.identity", "ActorTokenMissing"): True,
+    ("witan_core.omnigraph", "WriteQueueFull"): True,
+    ("witan.server", "MissingReference"): True,
+    ("witan.scan.enforce", "WriteBlocked"): True,
+    ("witan_code.store", "ClusterGraphMissing"): True,
+    # withheld: the message carries an arbitrary upstream string
+    ("witan_core.omnigraph", "WriteIndeterminate"): False,
+    ("witan_core.omnigraph", "AdmissionCapExceeded"): False,
+    ("witan_core.omnigraph", "StoreQuarantined"): False,
+    ("witan_code.ingest", "IngestRefused"): False,
+}
+
+
+def _import_refusal(module_name, class_name):
+    """The class, or None when that server is not installed in this env."""
+    import importlib
+
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError:
+        return None
+    return getattr(module, class_name, None)
+
+
+@pytest.mark.parametrize(("where", "expected"), sorted(EXPECTED_LOG_SAFE.items()))
+def test_every_refusal_s_opt_in_is_what_the_audit_decided(where, expected):
+    module_name, class_name = where
+    cls = _import_refusal(module_name, class_name)
+    if cls is None:
+        pytest.skip(f"{module_name} not importable here")
+    assert cls.log_safe_message is expected, (
+        f"{class_name}.log_safe_message is {cls.log_safe_message}, expected "
+        f"{expected}. If the message changed, re-read its raise sites and "
+        f"update both the class and this table -- do not just flip the test."
+    )
+
+
+def test_no_refusal_outside_the_audit_is_opted_in():
+    # A tenth refusal added later defaults to False and is fine; one added with
+    # log_safe_message = True and no entry here is what this catches.
+    from witan_core.refusal import Refusal
+
+    audited = {name for _, name in EXPECTED_LOG_SAFE}
+
+    def walk(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from walk(sub)
+
+    unaudited_opted_in = sorted(
+        sub.__name__
+        for sub in walk(Refusal)
+        if sub.__name__ not in audited
+        and sub.__module__.split(".")[0] in {"witan", "witan_code", "witan_core"}
+        and sub.__dict__.get("log_safe_message") is True
+    )
+    assert not unaudited_opted_in, (
+        f"opted in without an audit entry: {unaudited_opted_in}. Read the raise "
+        f"sites, then add it to EXPECTED_LOG_SAFE."
+    )

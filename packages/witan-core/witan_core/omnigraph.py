@@ -1393,8 +1393,11 @@ class WriteIndeterminate(RuntimeError, Refusal):
     retrying, because retrying blind writes it twice if it did land.
     """
 
-    # A graph label and the indeterminacy advice. No payload.
-    log_safe_message = True
+    # NOT opted in. The raise site appends `\n{err.strip()}`, and `err` is
+    # whatever the transport produced: `error_message()` passes a non-JSON HTTP
+    # body through verbatim, and the CLI transport hands over the subprocess's
+    # whole stderr. Identifiers and advice yes, but not only those.
+    log_safe_message = False
 
 
 class WriteQueueFull(RuntimeError, Refusal):
@@ -1413,15 +1416,20 @@ class WriteQueueFull(RuntimeError, Refusal):
     retry can recognise it without matching on prose.
     """
 
-    # A graph label and this process's own in-flight count.
+    # Opted in: both raise sites build the message from `label`, `key`
+    # (`f"{server_url}|{graph_id}"`) and this process's own counts and times.
+    # No upstream string, unlike its neighbours below.
     log_safe_message = True
 
 
 class AdmissionCapExceeded(RuntimeError, Refusal):
     """The server's per-actor admission cap refused this write. Nothing was written."""
 
-    # A graph label and the server's own counts.
-    log_safe_message = True
+    # NOT opted in, for the same reason as WriteIndeterminate: both raise
+    # sites append `\n{err.strip()}`. Worth knowing that `classify_status`
+    # routes ANY 429 here, including an ingress page that never reached
+    # omnigraph, so `err` is not even bounded to omnigraph's own vocabulary.
+    log_safe_message = False
 
 
 #: Where an operator hit by :class:`StoreQuarantined` finds the procedure. An
@@ -1456,8 +1464,11 @@ class StoreQuarantined(RuntimeError, Refusal):
     See :data:`RUNBOOK_URL` for the recovery procedure.
     """
 
-    # A graph and the sidecar's operation id, which is the whole remedy.
-    log_safe_message = True
+    # NOT opted in: the raise site appends `\n{err.strip()}` like the two
+    # above. The sidecar operation id that an operator actually needs is parsed
+    # out and kept on `operation_id`, so it survives this as a structured value
+    # even though the prose does not reach the log.
+    log_safe_message = False
 
     def __init__(self, message: str, operation_id: str | None = None) -> None:
         super().__init__(message)

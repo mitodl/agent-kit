@@ -195,12 +195,16 @@ def _caller_identity() -> dict[str, str]:
 _MAX_ERROR_CHARS = 500
 """How much of a failure's message reaches the ``mcp.tool_call`` line.
 
-A few hundred characters covers the refusals in this codebase with room to
-spare; the longest, witan-code's ``ClusterGraphMissing``, is a sentence plus a
-provisioning explanation plus a hint. The bound is here for the messages that
-have no bound at all -- ``ClusterUnreachable`` passes an arbitrary upstream
-exception through -- so that one pathological failure cannot dominate the log
-stream.
+Sized for the messages that actually reach this field. The opted-in refusals
+are bounded prose over identifiers: the longest, witan-code's
+``ClusterGraphMissing``, is a sentence plus a provisioning explanation plus a
+hint. What is NOT bounded is an ordinary exception's message, which a tool body
+composes however it likes, so the cap exists for that case rather than for the
+refusals.
+
+(An earlier version of this paragraph reached for ``ClusterUnreachable`` as the
+unbounded example. It is not a ``Refusal`` and never was, so its message has
+never reached this field at all.)
 """
 
 
@@ -288,12 +292,20 @@ def _message_fields(exc: BaseException) -> dict[str, Any]:
     caller's own step, and fastmcp's ``FastMCPError`` arm never rendered it, so
     logging it here would be new exposure rather than a restatement.
 
-    Anything that is NOT a refusal keeps its message, and that asymmetry is
-    deliberate. fastmcp's generic arm has already written the same text to the
-    log in full, with a traceback, through ``logger.exception`` -- verified by
-    driving a tool that interpolates its argument and finding the value in
-    fastmcp's own stderr with this middleware absent. So for those the field
-    restates what the pod log holds; for a refusal there is nothing to restate.
+    Anything that is NOT a refusal keeps its message, and the justification is
+    narrower than it looks. A PLAIN exception has already been written to the
+    log in full, with a traceback, by fastmcp's ``except Exception`` arm calling
+    ``logger.exception`` -- verified by driving a tool that interpolates its
+    argument and finding the value in fastmcp's own stderr with this middleware
+    absent. So for those the field restates what the pod log already holds.
+
+    That is NOT true of a ``FastMCPError`` which is not a ``Refusal``: it takes
+    the ``except FastMCPError`` arm (``exc_info=False``, no ``str(exc)``), so
+    its message would be new exposure exactly as a refusal's is. Today the only
+    one reaching here is fastmcp's own ``NotFoundError("Unknown tool: ...")``,
+    whose payload is the tool name that is already the ``tool`` field, and
+    neither server raises a bare ``ToolError`` from a tool body. If that
+    changes, this arm needs the same opt-in the refusals have.
     """
     if isinstance(exc, Refusal) and not exc.log_safe_message:
         return {"error_withheld": True}
