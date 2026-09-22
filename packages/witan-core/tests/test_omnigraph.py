@@ -19,6 +19,7 @@ import pytest
 from witan_core import omnigraph as og
 from witan_core import omnigraph_http as _http
 from witan_core.omnigraph import OmnigraphClient, OmnigraphConflict
+from witan_core.refusal import Refusal
 
 
 # ── store addressing: local --store vs remote --server/--graph ─────
@@ -713,6 +714,30 @@ def test_surface_conflict_loses_the_race_on_a_write_authority_conflict(monkeypat
             ["omnigraph", "mutate"], "mutate", is_write=True, surface_conflict=True
         )
     assert calls["n"] == 1
+
+
+def test_exhausted_conflict_retries_raise_a_refusal(monkeypatch):
+    """Load, not a fault: it must reach fastmcp as a `Refusal` (logged at
+    WARNING) rather than a bare RuntimeError that becomes a Sentry ERROR, and
+    still be a RuntimeError for every caller that already catches one."""
+    client = _client(monkeypatch)
+    calls = _stub_run(monkeypatch, returncode=1, stderr=_WRITE_AUTHORITY_STDERR)
+
+    with pytest.raises(og.WriteContention, match="Nothing was written") as exc:
+        client._execute(["omnigraph", "mutate"], "mutate", is_write=True)
+    assert isinstance(exc.value, RuntimeError)
+    assert isinstance(exc.value, Refusal)
+    assert calls["n"] == og._MAX_ATTEMPTS
+
+
+def test_conflict_backoff_is_fully_jittered_and_capped(monkeypatch):
+    """Full jitter is what breaks the lockstep between OCC losers; the old
+    fixed schedule had none."""
+    monkeypatch.setattr(og.random, "uniform", lambda lo, hi: (lo, hi))
+
+    assert og._conflict_backoff(1) == (0, og._CONFLICT_BASE_DELAY)
+    assert og._conflict_backoff(2) == (0, og._CONFLICT_BASE_DELAY * 2)
+    assert og._conflict_backoff(20) == (0, og._CONFLICT_MAX_DELAY)
 
 
 # The CLI's own wording for the two conditions `classify_status` keys on by

@@ -164,6 +164,15 @@ _FULL_TEXT_REBUILD_REQUIRED = (
 )
 _MAX_ATTEMPTS = 8
 
+# Backoff between optimistic-concurrency retries. FULL jitter, unlike the
+# helpers below that add 10%: the losers of an OCC race are contending for the
+# same table, and what has to be broken is their lockstep. The old fixed
+# `0.05 * attempt` had none at all and spent ~1.4s across all eight attempts,
+# which is shorter than one served mutate, so a steady stream of writers to one
+# branch view (Sentry WITAN-12) could win every round against a slower one.
+_CONFLICT_BASE_DELAY = 0.1
+_CONFLICT_MAX_DELAY = 1.0
+
 # omnigraph uses strict single-version storage: a release that bumps the
 # internal schema version refuses to open graphs an older binary wrote,
 # raising exactly this pair of substrings wrapped in an unhelpful Rust panic +
@@ -1180,6 +1189,12 @@ def _jittered_backoff(attempt: int, base: float, cap: float) -> float:
     return min(delay + jitter, cap)
 
 
+def _conflict_backoff(attempt: int) -> float:
+    return random.uniform(
+        0, min(_CONFLICT_BASE_DELAY * (2 ** (attempt - 1)), _CONFLICT_MAX_DELAY)
+    )
+
+
 def _admission_cap_backoff(attempt: int) -> float:
     return _jittered_backoff(
         attempt, _ADMISSION_CAP_BASE_DELAY, _ADMISSION_CAP_MAX_DELAY
@@ -1420,6 +1435,21 @@ class WriteQueueFull(RuntimeError, Refusal):
     # (`f"{server_url}|{graph_id}"`) and this process's own counts and times.
     # No upstream string, unlike its neighbours below.
     log_safe_message = True
+
+
+class WriteContention(RuntimeError, Refusal):
+    """A write lost every optimistic-concurrency retry. Nothing was written.
+
+    Each loss is the store refusing the commit because another writer moved
+    the table or branch head first ("stale view", "write authority … changed
+    during preparation"), which is why re-sending the same mutation is safe
+    and why the caller can retry this one too. A refusal rather than a plain
+    ``RuntimeError`` because it is load, not a fault: raised bare, it reached
+    Sentry as an ERROR on every exhausted retry.
+    """
+
+    # NOT opted in: the message ends with the store's own error text.
+    log_safe_message = False
 
 
 class AdmissionCapExceeded(RuntimeError, Refusal):
@@ -2620,12 +2650,19 @@ class OmnigraphClient:
                     self._repair(env)
                     continue
                 if kind == _http.RETRYABLE:
-                    time.sleep(0.05 * attempt)
+                    time.sleep(_conflict_backoff(attempt))
                     continue
             # `exit N` only makes sense for a subprocess; an HTTP attempt
             # carries no returncode and says so by omitting it, rather than
             # inventing one that would read as a CLI exit status.
             exited = "" if result.returncode is None else f" (exit {result.returncode})"
+            if kind == _http.RETRYABLE:
+                raise WriteContention(
+                    f"omnigraph {label} lost {_MAX_ATTEMPTS} optimistic-"
+                    f"concurrency races in a row{exited} — another writer kept "
+                    f"committing to the same tables. Nothing was written; "
+                    f"retry once the other writer is done:\n{err.strip()}"
+                ) from None
             raise RuntimeError(f"omnigraph {label} failed{exited}:\n{err.strip()}")
 
     @contextmanager
