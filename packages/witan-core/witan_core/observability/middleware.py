@@ -204,38 +204,17 @@ stream.
 """
 
 
-def _validation_summary(exc: BaseException) -> dict[str, Any] | None:
-    """An input-free description of a validation failure, or ``None``.
+def _code_summary(pydantic_exc: Any) -> dict[str, Any]:
+    """``error_count`` and ``error_types`` for a pydantic error.
 
-    ``None`` means "not a validation error, log the message normally".
-
-    What comes back is deliberately what fastmcp's own
-    ``_validation_error_summary`` emits -- ``error.errors(include_input=False)``
-    reduced to a count and the set of codes -- and nothing more. In particular
-    NOT the ``loc`` path: for a bad key inside a caller-supplied object the loc
-    contains that key, which is the caller's data again.
+    ``error_types`` is allowlisted against pydantic's own literals, which is not
+    decoration: a validator may raise ``PydanticCustomError`` with a ``type`` it
+    built out of the value it just rejected, so a code outside
+    :data:`_BUILTIN_VALIDATION_CODES` becomes :data:`_CUSTOM_VALIDATION_CODE`
+    rather than being logged. Never the ``loc``: for an ``extra_forbidden`` or a
+    bad key inside a caller-supplied object, the loc IS the caller's key.
     """
-    pydantic_exc: BaseException | None = None
-    if _PYDANTIC_VALIDATION_ERROR is not None and isinstance(
-        exc, _PYDANTIC_VALIDATION_ERROR
-    ):
-        pydantic_exc = exc
-    elif _FASTMCP_VALIDATION_ERROR is not None and isinstance(
-        exc, _FASTMCP_VALIDATION_ERROR
-    ):
-        # fastmcp raises its wrapper `from` the pydantic error, so the
-        # structured detail is one link away even though the message is a
-        # flattened string by then.
-        cause = exc.__cause__
-        if _PYDANTIC_VALIDATION_ERROR is not None and isinstance(
-            cause, _PYDANTIC_VALIDATION_ERROR
-        ):
-            pydantic_exc = cause
-    else:
-        return None
-    if pydantic_exc is None:
-        return {}
-    details = pydantic_exc.errors(  # type: ignore[attr-defined]
+    details = pydantic_exc.errors(
         include_url=False, include_context=False, include_input=False
     )
     summary: dict[str, Any] = {"error_count": len(details)}
@@ -251,6 +230,81 @@ def _validation_summary(exc: BaseException) -> dict[str, Any] | None:
     return summary
 
 
+def _without_input(pydantic_exc: Any) -> str:
+    """A pydantic error rendered as text, with every input value dropped.
+
+    ``str(exc)`` would embed ``input_value=`` for each failure. This keeps what
+    diagnoses the bug -- the model, the field path and pydantic's own sentence
+    -- and nothing that was being validated. The field path is safe HERE, where
+    the model is one of ours and its field names are in our source; it is not
+    safe on the argument arm, which is why that one gets codes only.
+    """
+    details = pydantic_exc.errors(
+        include_url=False, include_context=False, include_input=False
+    )
+    rendered = "; ".join(
+        f"{'.'.join(str(part) for part in detail.get('loc', ())) or '<root>'}: "
+        f"{detail.get('msg', '')}"
+        for detail in details
+    )
+    return f"{len(details)} validation error(s) for {pydantic_exc.title}: {rendered}"
+
+
+def _validation_fields(exc: BaseException) -> dict[str, Any] | None:
+    """How a validation failure is described, or ``None`` if it is not one.
+
+    THE TWO ARMS ARE NOT THE SAME EVENT, and the split is the whole point.
+
+    fastmcp's ``ValidationError`` means the CALL's arguments failed. It is built
+    as ``ValidationError(str(pydantic_exc))`` (``tools/function_tool.py``), so
+    its message is pydantic's, ``input_value=<what the caller sent>`` and all.
+    That is somebody else's data by construction, and a structured parameter
+    puts a whole payload in it, so the message is withheld and only codes are
+    logged.
+
+    A bare ``pydantic.ValidationError`` means a model failed INSIDE A TOOL BODY.
+    fastmcp re-raises that one unchanged rather than masking it. In this
+    codebase such a failure is a bug in our own code, not a bad call: neither
+    server parses external data through pydantic (no ``model_validate``,
+    ``TypeAdapter`` or ``parse_obj`` anywhere in them), witan-core defines no
+    models at all, and the three that exist -- ``Finding``, ``AuditEvent``,
+    ``RedactionNotice`` -- are built from detector names, ``re`` match offsets,
+    enum members and a ``masked_preview`` that by contract contains no character
+    of the value it describes. The config models are the other candidate and
+    cannot reach here: every one of their errors is already converted to a
+    source-attributed ``ValueError`` (``witan/config.py``), and the one
+    per-write path, ``ScanConfig.for_repo``, uses ``model_copy``, which does not
+    validate. So the message is the diagnosis and it is ours to read.
+
+    ★ WHAT WOULD INVALIDATE THAT ★ Parsing anything external through pydantic
+    inside a tool body -- an omnigraph row, an HTTP response, a file -- makes
+    this arm start carrying that data. If you are adding such a call, either
+    keep the model out of the tool body or move its type to the withheld arm.
+    Even then the input values themselves never appear: :func:`_without_input`
+    renders from ``errors(include_input=False)``, so the exposure would be
+    limited to field paths.
+    """
+    if _FASTMCP_VALIDATION_ERROR is not None and isinstance(
+        exc, _FASTMCP_VALIDATION_ERROR
+    ):
+        fields: dict[str, Any] = {"error_withheld": True}
+        # fastmcp raises its wrapper `from` the pydantic error, so the
+        # structured detail is one link away even though the message is a
+        # flattened string by then. A missing or foreign cause is not a
+        # problem: the message stays withheld, just without the codes.
+        cause = exc.__cause__
+        if _PYDANTIC_VALIDATION_ERROR is not None and isinstance(
+            cause, _PYDANTIC_VALIDATION_ERROR
+        ):
+            fields.update(_code_summary(cause))
+        return fields
+    if _PYDANTIC_VALIDATION_ERROR is not None and isinstance(
+        exc, _PYDANTIC_VALIDATION_ERROR
+    ):
+        return {"error": _without_input(exc), **_code_summary(exc)}
+    return None
+
+
 def _error_fields(exc: BaseException) -> dict[str, Any]:
     """Why a call failed, as log fields.
 
@@ -262,23 +316,18 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
     was in the Tempo span's status message and nowhere else. This puts it on the
     line that already records the failure.
 
-    ★ A VALIDATION FAILURE IS SUMMARISED, NEVER QUOTED ★
+    ★ A BAD ARGUMENT IS SUMMARISED, NEVER QUOTED ★
     pydantic renders a rejected field as ``... [type=string_type,
-    input_value=<what the caller sent>, input_type=dict]``, so its message IS
-    somebody's data. Both arms are treated alike -- fastmcp's ``ValidationError``
-    (bad arguments) and a bare pydantic one (a model failing inside a tool body)
-    -- because from here the two differ only in WHOSE data is in the message,
-    the caller's or an upstream row's, and neither belongs in Loki by default.
-    In place of the message the line carries ``error_withheld``, plus the
-    ``error_count`` and ``error_types`` summary, which is the same trade fastmcp
-    makes in ``_validation_error_summary`` ("never input-derived validation
-    details") -- including its allowlist, which is not decoration: a validator
-    may raise ``PydanticCustomError`` with a ``type`` it built from the value it
-    just rejected, so a code outside :data:`_BUILTIN_VALIDATION_CODES` becomes
-    :data:`_CUSTOM_VALIDATION_CODE` rather than being logged. Computing the
-    summary here rather than relying on fastmcp's own log line is deliberate:
-    the ``fastmcp`` logger does not propagate and keeps its own handler, so its
-    summary is unparsed text beside our JSON rather than a queryable field.
+    input_value=<what the caller sent>, input_type=dict]``, so the message of an
+    argument-validation failure IS the caller's data. That arm logs
+    ``error_withheld`` plus ``error_count`` and ``error_types`` instead, the
+    same trade fastmcp makes in ``_validation_error_summary`` ("never
+    input-derived validation details"). A model failing inside a tool BODY is a
+    different event and keeps its message; :func:`_validation_fields` has the
+    split and the evidence for it. Both are computed here rather than left to
+    fastmcp's own log line, because the ``fastmcp`` logger does not propagate
+    and keeps its own handler, so its version is unparsed text beside our JSON
+    rather than a queryable field.
 
     THE MESSAGE IS NOT LOGGED BECAUSE IT IS SAFE. An ordinary exception out of a
     tool body can and does interpolate the caller's arguments -- witan's own
@@ -325,16 +374,17 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
     try:
         fields["error_type"] = type(exc).__name__
         fields["refused"] = isinstance(exc, Refusal)
-        summary = _validation_summary(exc)
-        if summary is not None:
-            fields["error_withheld"] = True
-            fields.update(summary)
-            return fields
-        message = str(exc).strip()
+        validation = _validation_fields(exc)
+        fields.update(validation if validation is not None else {"error": str(exc)})
+        # One truncation for every arm, so a rendered validation message is
+        # bounded exactly like an ordinary one.
+        message = fields.get("error", "").strip()
         if len(message) > _MAX_ERROR_CHARS:
             message = message[:_MAX_ERROR_CHARS] + "..."
         if message:
             fields["error"] = message
+        else:
+            fields.pop("error", None)
     except BaseException:  # noqa: BLE001 - see docstring; never fail the call
         fields["error_undescribable"] = True
     return fields

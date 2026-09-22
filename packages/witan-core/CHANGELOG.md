@@ -24,24 +24,31 @@ a MINOR bump may include breaking changes).
   because the error-ratio alert's headline case, a quarantined graph answering
   every request with "not served", is itself a refusal.
 
-  Two limits are deliberate. A VALIDATION failure is summarised, never quoted:
-  the line carries `error_withheld: true` plus `error_count` and `error_types`
-  in place of the message. pydantic renders a rejected field as
-  `input_value=<what the caller sent>`, so its message is somebody's data, and
-  fastmcp's `ValidationError` is built from that string. This covers both arms
-  -- bad arguments, and a model failing inside a tool BODY, which arrives as a
-  bare `pydantic.ValidationError` -- because from the middleware the two differ
-  only in whose data the message holds, the caller's or an upstream row's. The
-  summary is computed here rather than left to fastmcp's equivalent log line,
-  because the `fastmcp` logger does not propagate and keeps its own handler, so
-  its version lands beside our JSON as unparsed text instead of a queryable
-  field. `error_types` is allowlisted against pydantic's own `ErrorType`
-  literals, anything else becoming `custom_error`, because a validator may
-  raise `PydanticCustomError` with a `type` built from the value it just
-  rejected -- the same substitution fastmcp makes, and for the same reason.
+  Two limits are deliberate. A BAD ARGUMENT is summarised, never quoted: the
+  line carries `error_withheld: true` plus `error_count` and `error_types` in
+  place of the message. pydantic renders a rejected field as
+  `input_value=<what the caller sent>`, and fastmcp's `ValidationError` is
+  built from that string, so on that arm the message is the caller's data by
+  construction, and a structured parameter puts a whole payload in it.
+  `error_types` is allowlisted against pydantic's own `ErrorType` literals,
+  anything else becoming `custom_error`, because a validator may raise
+  `PydanticCustomError` with a `type` built from the value it just rejected --
+  the same substitution fastmcp makes, and for the same reason. The summary is
+  computed here rather than left to fastmcp's equivalent log line, because the
+  `fastmcp` logger does not propagate and keeps its own handler, so its version
+  lands beside our JSON as unparsed text instead of a queryable field.
 
-  A failure that breaks the describer itself logs `error_undescribable: true`
-  instead, which is a different thing from a message deliberately withheld.
+  A model failing inside a tool BODY arrives as a bare
+  `pydantic.ValidationError` and KEEPS its message, because in these servers
+  that is a bug in one of our own models rather than a bad call: neither server
+  parses external data through pydantic (no `model_validate`, `TypeAdapter` or
+  `parse_obj` in either), witan-core defines no models at all, and the three
+  that exist are built from detector names, `re` match offsets, enum members
+  and a `masked_preview` that carries no character of the value it describes.
+  The message is rendered from `errors(include_input=False)`, so it names the
+  model and the fields that failed and never the values. Parsing anything
+  external through pydantic inside a tool body would invalidate that reasoning;
+  `_validation_fields` says so at the point where it would matter.
 
   And `error_type` is the real exception class only for a `FastMCPError`:
   anything else is re-raised as `ToolError` by `FastMCP.call_tool` before the
@@ -51,6 +58,9 @@ a MINOR bump may include breaking changes).
   because fastmcp's generic arm already prints the same message with a full
   traceback through `logger.exception`, so the field restates what the pod log
   holds rather than adding to it.
+
+  A failure that breaks the describer itself logs `error_undescribable: true`,
+  which is a different thing from a message deliberately withheld.
 
 ## [0.38.0] - 2026-09-21
 

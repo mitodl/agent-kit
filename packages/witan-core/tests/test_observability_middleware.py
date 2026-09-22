@@ -501,32 +501,36 @@ def test_a_withheld_validation_error_still_says_what_kind(capsys):
     assert payload["error_types"] == ["string_type"]
 
 
-def test_a_model_failing_inside_a_tool_body_is_withheld_too(capsys):
+def test_a_model_failing_inside_a_tool_body_keeps_its_message(capsys):
     # A bare pydantic ValidationError reaches the middleware unwrapped and means
-    # a model failed INSIDE the body, so the data in its message is upstream's
-    # rather than the caller's. Withheld all the same: from here the two differ
-    # only in whose data it is, and neither belongs in Loki by default.
+    # a model failed INSIDE the body. Nothing in either server parses external
+    # data through pydantic, so that is a bug in our own model and the message
+    # is the diagnosis: it names the model and the field. The VALUE is still
+    # dropped, because _without_input renders from errors(include_input=False)
+    # rather than str(exc).
     import pydantic
 
-    class Upstream(pydantic.BaseModel):
-        n: int
+    class Finding(pydantic.BaseModel):
+        start: int
 
     async def call_next(_ctx):
-        Upstream(n="SENSITIVE-ROW-VALUE")
+        Finding(start="SENSITIVE-ROW-VALUE")
 
     with pytest.raises(pydantic.ValidationError):
-        _run(ObservabilityMiddleware(), _Context("code_store_load"), call_next)
+        _run(ObservabilityMiddleware(), _Context("memory_store"), call_next)
     written = capsys.readouterr().err
     assert "SENSITIVE-ROW-VALUE" not in written
+    assert "input_value" not in written
     payload = next(
         json.loads(line)
         for line in written.strip().splitlines()
         if line.strip().startswith("{") and '"mcp.tool_call"' in line
     )
     assert payload["error_type"] == "ValidationError"
-    assert payload["error_withheld"] is True
+    assert "Finding" in payload["error"]
+    assert "start" in payload["error"]
     assert payload["error_count"] == 1
-    assert "error" not in payload
+    assert "error_withheld" not in payload
 
 
 def test_an_exception_whose_message_explodes_does_not_replace_it(capsys):
