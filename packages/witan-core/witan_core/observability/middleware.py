@@ -51,6 +51,30 @@ try:
 except ImportError:  # pragma: no cover - requires the `mcp` extra
     get_access_token = None  # type: ignore[assignment]
 
+
+def _message_withholding_types() -> tuple[type, ...]:
+    """Exception types whose ``str()`` echoes the caller's own arguments.
+
+    pydantic renders a failed field as ``... [type=string_type,
+    input_value=<what the caller sent>, input_type=dict]``, and fastmcp's
+    ``ValidationError`` is constructed as ``ValidationError(str(pydantic_exc))``
+    (``tools/function_tool.py``), so the caller's value is the message. Both are
+    listed because either can arrive depending on which layer validated.
+    """
+    found: list[type] = []
+    for module, name in (
+        ("fastmcp.exceptions", "ValidationError"),
+        ("pydantic", "ValidationError"),
+    ):
+        try:
+            found.append(getattr(__import__(module, fromlist=[name]), name))
+        except (ImportError, AttributeError):  # pragma: no cover - extra absent
+            continue
+    return tuple(found)
+
+
+_MESSAGE_WITHHELD = _message_withholding_types()
+
 LOCAL_ACTOR = "local"
 """``actor_id`` for a call that carried no JWT.
 
@@ -135,9 +159,11 @@ def _caller_identity() -> dict[str, str]:
 _MAX_ERROR_CHARS = 500
 """How much of a failure's message reaches the ``mcp.tool_call`` line.
 
-Long enough for every refusal witan raises today -- the longest, an unserved
-cluster graph, runs about 200 characters -- and short enough that a pathological
-message cannot dominate the log stream.
+Sized against the longest refusal either server raises today: witan-code's
+``ClusterGraphMissing``, which renders to 386 characters for a real repo and
+endpoint (the sentence, then the provisioning explanation, then the
+index-locally hint). Truncation is for a pathological message, not a routine
+one, so the bound has to clear that with room rather than sit near it.
 """
 
 
@@ -152,22 +178,59 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
     was in the Tempo span's status message and nowhere else. This puts it on the
     line that already records the failure.
 
+    ★ THE MESSAGE IS WITHHELD FOR A VALIDATION ERROR ★
+    "fastmcp already sends the client this string" is NOT a reason to log it:
+    the client boundary and the Loki boundary are not the same boundary, and
+    fastmcp itself draws them differently. Its ``_validation_error_summary``
+    exists solely to log counts and codes -- ``error.errors(include_input=False)``
+    under the docstring "never input-derived validation details" -- while the
+    detail still goes to the caller. A pydantic message embeds
+    ``input_value=<what the caller sent>``, so logging it would ship arbitrary
+    tool arguments to Loki: the content of a ``memory_store``, a token pasted
+    into the wrong field. Nothing is lost by withholding it, because fastmcp
+    logs its own input-free summary on that same arm.
+
+    Outside that case the message is safe and adds no exposure. An ordinary
+    exception already reaches the log in full through fastmcp's
+    ``logger.exception``; a ``Refusal``'s message is written to be read by the
+    caller, and the types that could carry something sensitive say so
+    explicitly -- ``scan.enforce.WriteBlocked`` carries a field name, a detector
+    id and a masked preview, never the matched value.
+
     ``refused`` separates a call declined on purpose from a service that broke.
     It is LOG-ONLY: ``witan_tool_calls_total`` keeps counting both under
     ``outcome="error"``, because the error-ratio alert's headline case -- a
     quarantined graph answering every request with "not served" -- is itself a
     refusal, and moving refusals to their own outcome would stop that alert
     firing on exactly what it was written for.
+
+    ★ ``error_type`` IS THE REAL CLASS ONLY FOR A ``FastMCPError`` ★
+    Anything else is re-raised by ``FastMCP.call_tool`` as
+    ``ToolError(f"Error calling tool {name!r}: {e}")`` BEFORE it reaches this
+    middleware, so a ``RuntimeError`` out of a tool body logs as ``ToolError``
+    with the original message inside ``error``. Refusals keep their own class,
+    which is the case this field was added for.
+
+    Never raises: the module's standing rule, the same one
+    :func:`_caller_identity` documents. A failure to describe a failure must not
+    replace it -- this runs inside an ``except`` block, so an exception here
+    would hand the caller the wrong error entirely.
     """
-    fields: dict[str, Any] = {
-        "error_type": type(exc).__name__,
-        "refused": isinstance(exc, Refusal),
-    }
-    message = str(exc).strip()
-    if len(message) > _MAX_ERROR_CHARS:
-        message = message[:_MAX_ERROR_CHARS] + "..."
-    if message:
-        fields["error"] = message
+    try:
+        fields: dict[str, Any] = {
+            "error_type": type(exc).__name__,
+            "refused": isinstance(exc, Refusal),
+        }
+        if _MESSAGE_WITHHELD and isinstance(exc, _MESSAGE_WITHHELD):
+            fields["error_withheld"] = True
+            return fields
+        message = str(exc).strip()
+        if len(message) > _MAX_ERROR_CHARS:
+            message = message[:_MAX_ERROR_CHARS] + "..."
+        if message:
+            fields["error"] = message
+    except Exception:  # noqa: BLE001 - see docstring; never fail the call
+        return {"error_type": "unknown"}
     return fields
 
 
@@ -184,8 +247,12 @@ class ObservabilityMiddleware(Middleware):  # type: ignore[misc,valid-type]
     """Emit a span, a counter increment and a duration sample per tool call.
 
     A failed call also carries why it failed: ``error_type``, ``error`` and
-    ``refused``. See :func:`_error_fields` -- fastmcp renders neither the
-    message nor the class on its own error line.
+    ``refused``, since fastmcp renders neither the message nor the class on its
+    own error line. Two limits are deliberate and documented in
+    :func:`_error_fields`: an argument-validation failure withholds its message
+    (it embeds the caller's own input), and ``error_type`` is the real class
+    only for a ``FastMCPError``, which in practice means the refusals this was
+    added for.
     """
 
     def __init__(self) -> None:

@@ -376,3 +376,112 @@ def test_fastmcp_still_names_the_class_this_way():
     from fastmcp.tools.base import InputRequiredToolResult as Upstream
 
     assert Upstream.__name__ == "InputRequiredToolResult"
+
+
+# ── Through a real FastMCP server ────────────────────────────────────────────
+# The tests above drive `on_call_tool` directly, which is the right unit for
+# the middleware's own logic but is NOT the shape production produces:
+# `FastMCP.call_tool` sits INSIDE the middleware chain and re-raises anything
+# that is not a `FastMCPError` as `ToolError(f"Error calling tool ...: {e}")`.
+# So `error_type` is the real class only for a FastMCPError. These drive the
+# whole server so that claim is tested rather than assumed.
+
+
+def _server_with_tools():
+    """A FastMCP server carrying the middleware and three failing tools."""
+    from fastmcp import FastMCP
+
+    from witan_core.refusal import Refusal
+
+    class ClusterGraphMissing(RuntimeError, Refusal):
+        pass
+
+    mcp = FastMCP("test")
+    mcp.add_middleware(ObservabilityMiddleware())
+
+    @mcp.tool
+    def refuses() -> str:
+        msg = "'x' code graph is not served by the omnigraph-server"
+        raise ClusterGraphMissing(msg)
+
+    @mcp.tool
+    def breaks() -> str:
+        msg = "underlying omnigraph failure"
+        raise RuntimeError(msg)
+
+    @mcp.tool
+    def takes_a_string(content: str) -> str:
+        return content
+
+    return mcp
+
+
+def _stderr_payloads(capsys):
+    """Every JSON log line just written to stderr."""
+    return [
+        json.loads(line)
+        for line in capsys.readouterr().err.strip().splitlines()
+        if line.strip().startswith("{")
+    ]
+
+
+def _call(mcp, name, arguments=None):
+    configure_logging(log_format="json", level="INFO", force=True)
+
+    async def drive():
+        return await mcp.call_tool(name, arguments or {})
+
+    return asyncio.run(drive())
+
+
+def test_a_refusal_keeps_its_class_through_the_server(capsys):
+    mcp = _server_with_tools()
+    with pytest.raises(Exception, match="not served"):
+        _call(mcp, "refuses")
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_type"] == "ClusterGraphMissing"
+    assert payload["refused"] is True
+    assert "is not served by the omnigraph-server" in payload["error"]
+
+
+def test_an_ordinary_exception_arrives_already_wrapped(capsys):
+    # Documents the limit the class docstring now states: fastmcp re-raises a
+    # non-FastMCPError as ToolError before this middleware sees it, so the
+    # class is lost and only the message survives.
+    mcp = _server_with_tools()
+    with pytest.raises(Exception, match="underlying omnigraph failure"):
+        _call(mcp, "breaks")
+    payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
+    assert payload["error_type"] == "ToolError"
+    assert payload["refused"] is False
+    assert "underlying omnigraph failure" in payload["error"]
+
+
+def test_a_bad_argument_never_puts_the_caller_s_value_in_the_log(capsys):
+    # THE LEAK THIS GUARDS. pydantic renders a rejected field as
+    # `input_value=<what the caller sent>`, and fastmcp's ValidationError IS
+    # that string. Logging it would ship tool arguments to Loki. fastmcp keeps
+    # input out of its own line for the same reason
+    # (`_validation_error_summary`, "never input-derived validation details")
+    # while still telling the client.
+    mcp = _server_with_tools()
+    sensitive = "ping tmacey@mit.edu about the outage"
+    configure_logging(log_format="json", level="INFO", force=True)
+
+    async def drive():
+        return await mcp.call_tool("takes_a_string", {"content": {"text": sensitive}})
+
+    with pytest.raises(Exception):
+        asyncio.run(drive())
+    written = capsys.readouterr().err
+    assert sensitive not in written
+    assert "tmacey@mit.edu" not in written
+    assert "input_value" not in written
+    payload = next(
+        json.loads(line)
+        for line in written.strip().splitlines()
+        if line.strip().startswith("{") and '"mcp.tool_call"' in line
+    )
+    assert payload["outcome"] == "error"
+    assert payload["error_withheld"] is True
+    assert "error" not in payload

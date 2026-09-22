@@ -24,6 +24,16 @@ a MINOR bump may include breaking changes).
   because the error-ratio alert's headline case, a quarantined graph answering
   every request with "not served", is itself a refusal.
 
+  Two limits are deliberate. An argument-validation failure logs
+  `error_withheld: true` and NO message: pydantic renders a rejected field as
+  `input_value=<what the caller sent>`, and fastmcp's `ValidationError` is that
+  string, so logging it would ship arbitrary tool arguments to Loki. fastmcp
+  draws the same line, keeping input out of its own log line
+  (`_validation_error_summary`) while still returning the detail to the client.
+  And `error_type` is the real exception class only for a `FastMCPError`:
+  anything else is re-raised as `ToolError` by `FastMCP.call_tool` before the
+  middleware sees it, so the class is lost and only the message survives.
+
 ## [0.38.0] - 2026-09-21
 
 ### Added
