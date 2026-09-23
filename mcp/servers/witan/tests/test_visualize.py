@@ -185,3 +185,27 @@ def test_render_rich_empty():
     buf = StringIO()
     visualize.render_rich(g, Console(file=buf))
     assert "No projects or tasks" in buf.getvalue()
+
+
+def test_scope_tasks_drops_closed_unless_asked():
+    closed = {**TASKS[0], "slug": "tk-closed-ffff06", "status": "closed"}
+    tasks = [*TASKS, closed]
+    assert "tk-closed-ffff06" not in {
+        t["slug"] for t in visualize.scope_tasks(PROJECTS, tasks)
+    }
+    assert "tk-closed-ffff06" in {
+        t["slug"] for t in visualize.scope_tasks(PROJECTS, tasks, include_closed=True)
+    }
+
+
+def test_scope_tasks_drops_tasks_of_excluded_projects():
+    # The status filter excluded P2, so its task goes with it; a task with no
+    # project at all stays.
+    orphan = {**TASKS[0], "slug": "tk-orphan-gggg07", "project_slug": None}
+    elsewhere = {**TASKS[0], "slug": "tk-elsewhere-hhhh08", "project_slug": P2_SLUG}
+    kept = {
+        t["slug"]
+        for t in visualize.scope_tasks(PROJECTS[:1], [*TASKS, orphan, elsewhere])
+    }
+    assert "tk-orphan-gggg07" in kept
+    assert "tk-elsewhere-hhhh08" not in kept

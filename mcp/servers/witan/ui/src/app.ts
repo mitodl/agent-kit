@@ -22,6 +22,7 @@ import { formatRoute, parseRoute, type Route } from "./route.js";
 import { detailPanel, shell } from "./shell.js";
 import type { TaskDetail, WorkflowProjectSummary } from "./types.js";
 import { type Board, board, TASK_LIMIT } from "./views/board.js";
+import { CanvasHost, type GraphData, graphView } from "./views/graph.js";
 import {
 	isMemorySlug,
 	type MemoryPage,
@@ -71,6 +72,24 @@ export class App {
 	});
 	private readonly waves = new KeyedRead<Waves>(() => this.draw());
 	private readonly memoryPage = new KeyedRead<MemoryPage>(() => this.draw());
+	private readonly graph = new KeyedRead<GraphData>(() => this.draw());
+	/**
+	 * vis-network is imported on first use, so the other tabs never load it.
+	 * A task opens in the shared panel; a project, which the panel does not
+	 * draw, opens its rollup.
+	 */
+	private readonly canvas = new CanvasHost(
+		(element, onSelect) =>
+			import("./views/graph-canvas.js").then((module) =>
+				module.mountCanvas(element, onSelect),
+			),
+		(slug) =>
+			this.navigate(
+				slug.startsWith("wp-")
+					? { view: "projects", project: slug, slug: null }
+					: { slug },
+			),
+	);
 	private readonly detail = new KeyedRead<TaskDetail | null>(() => this.draw());
 	private readonly memoryDetail = new KeyedRead<MemoryPanel>(() => this.draw());
 
@@ -110,6 +129,8 @@ export class App {
 		this.timeline.stop();
 		this.waves.stop();
 		this.memoryPage.stop();
+		this.graph.stop();
+		this.canvas.release();
 		this.detail.stop();
 		this.memoryDetail.stop();
 	}
@@ -198,6 +219,15 @@ export class App {
 			readMemoryPage(memoryScope as MemoryScope),
 		);
 
+		// Every argument either read takes, as the board's scope is.
+		const graphScope =
+			route.view === "graph"
+				? { repo: route.repo, project: route.project }
+				: null;
+		this.graph.sync(graphScope && JSON.stringify(graphScope), () =>
+			readGraph(graphScope as GraphScope),
+		);
+
 		// One panel, two kinds of slug: a memory linked from anywhere opens as a
 		// memory, and everything else as a task.
 		const slug = route.slug;
@@ -215,6 +245,7 @@ export class App {
 			this.board,
 			this.timeline,
 			this.waves,
+			this.graph,
 			this.rollup,
 			this.memoryPage,
 		] as KeyedRead<unknown>[]) {
@@ -310,11 +341,16 @@ export class App {
 			);
 		}
 
-		if (this.route.view !== "projects") {
-			// Named rather than blank: the tabs are declared up front (spec §6) so
-			// the shell has one navigation model, and a person landing on an
-			// unbuilt tab should learn that it is unbuilt, not that it is empty.
-			return emptyBox(`The ${this.route.view} view is not built yet.`);
+		if (this.route.view === "graph") {
+			const snapshot = this.graph.snapshot;
+			if (!snapshot) {
+				return emptyBox("Reading the graph…");
+			}
+			const waiting = placeholderFor(snapshot, "the graph");
+			if (waiting) {
+				return waiting;
+			}
+			return graphView(snapshot.data as GraphData, this.route, this.canvas);
 		}
 
 		if (this.route.project) {
@@ -581,6 +617,39 @@ async function readWaves(slug: string): Promise<Waves> {
 		(task): task is TaskDetail => task !== null && task.status !== "closed",
 	);
 	return { tasks, ready, outside };
+}
+
+/** The route fields that are arguments to the graph's reads. */
+type GraphScope = Pick<Route, "repo" | "project">;
+
+/**
+ * The reads behind the Graph tab (spec §6.8): the two `witan graph` makes.
+ *
+ * Active projects only, as the CLI's default `--status active` has it, and
+ * every task in scope with closed ones among them: whether closed tasks are
+ * DRAWN is the route's Closed filter, applied in the browser by `scopeTasks`
+ * so toggling it does not re-read. A project narrows both reads to that one
+ * project, which the CLI has no flag for.
+ */
+async function readGraph(scope: GraphScope): Promise<GraphData> {
+	if (scope.project) {
+		const slug = scope.project;
+		const [projects, tasks] = await Promise.all([
+			workflowProjectList({ repo: "" }),
+			// Uncapped by project; see `readRollup` for why no `limit`.
+			taskList({ repo: "", project_slug: slug }),
+		]);
+		return {
+			projects: projects.filter((project) => project.slug === slug),
+			tasks,
+			truncated: false,
+		};
+	}
+	const [projects, tasks] = await Promise.all([
+		workflowProjectList({ repo: scope.repo }),
+		taskList({ repo: scope.repo, limit: TASK_LIMIT }),
+	]);
+	return { projects, tasks, truncated: tasks.length >= TASK_LIMIT };
 }
 
 /** The route fields that are arguments to the memory view's read. */

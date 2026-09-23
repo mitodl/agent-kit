@@ -819,3 +819,54 @@ ul.neighbors li.edge-inferred {
 .edge-meta .role {
 	font-style: italic;
 }
+
+/* ── Graph ──────────────────────────────────────────────────────── */
+
+ul.gr-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem 1rem;
+	margin: 0.5rem 0;
+	padding: 0;
+	list-style: none;
+	font-size: 0.85rem;
+	color: var(--muted);
+}
+
+.gr-swatch {
+	width: 0.7rem;
+	height: 0.7rem;
+	margin-right: 0.3rem;
+	vertical-align: middle;
+}
+
+/*
+ * vis-network sizes its canvas to this box, so it needs a real height: a
+ * block with no content collapses to zero and the graph draws into nothing.
+ */
+.graph-canvas {
+	height: calc(100vh - 14rem);
+	min-height: 24rem;
+	border: 1px solid var(--rule);
+	border-radius: 4px;
+}
+
+/*
+ * vis-network's tooltip. Its own stylesheet is not loaded (see
+ * `views/graph-canvas.ts`), so this is the whole of its styling: the network
+ * positions it and toggles `visibility` through the CSSOM, which the CSP
+ * allows, and everything else comes from here.
+ */
+div.vis-tooltip {
+	position: absolute;
+	visibility: hidden;
+	padding: 0.35rem 0.5rem;
+	font-size: 0.8rem;
+	color: var(--fg);
+	background: var(--panel-bg);
+	border: 1px solid var(--rule);
+	border-radius: 4px;
+	box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
+	pointer-events: none;
+	z-index: 5;
+}

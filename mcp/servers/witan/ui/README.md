@@ -10,7 +10,7 @@ to an enumerated set of read tools. (Both are cited by path rather than linked:
 they land in their own changes, and a relative link would be dead here until
 those merge.)
 
-Five tabs are built. Projects has the project list, one project's rollup and
+Every tab is built. Projects has the project list, one project's rollup and
 the task detail panel (spec §6.2, §6.3). Board has Ready, In progress, Blocked
 and Closed columns (spec §6.4). Waves lays one project's open tasks out by
 depth in the `Blocks` graph, with the longest chain and any cycle marked (spec
@@ -18,8 +18,11 @@ depth in the `Blocks` graph, with the longest chain and any cycle marked (spec
 over a 7 to 90 day window (spec §6.6). Memory has the contradictions inbox,
 browse and search, topics, and the memory panel (spec §6.7). The panel opens
 whichever the slug is, on its prefix, so a memory linked from a task opens as
-a memory. The Graph tab is declared in the shell and renders a note saying it
-is not built yet (spec §6.8).
+a memory. Graph is `witan graph`'s project and task graph, drawn with
+vis-network, which is bundled and loaded only when the tab is opened (spec
+§6.8). Its transform is a port of `witan/visualize.py`, held to the Python by
+`fixtures/graph.json`: the generator runs the real transform over the recorded
+list results and `views/graph.test.ts` compares.
 
 ## Layout
 

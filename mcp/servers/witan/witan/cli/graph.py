@@ -54,22 +54,12 @@ def graph(
     repo_arg = _repo_arg(repo, all_repos)
 
     projects = _fn(s.workflow_project_list)(repo=repo_arg, status=status or None)
-    project_slugs = {p["slug"] for p in projects}
 
     # An explicit limit, because an unscoped `task_list` is capped at 50 in
     # the query: `witan graph --all-repos` drew the 50 most recently updated
     # tasks and silently omitted the rest of the graph it claims to show.
     tasks_raw = _fn(s.task_list)(repo=repo_arg, status=None, limit=_GRAPH_TASK_LIMIT)
-    if not all_tasks:
-        tasks_raw = [t for t in tasks_raw if t.get("status") != "closed"]
-
-    # Include tasks with no project or whose project appeared in the filtered
-    # project list. Tasks linked to projects excluded by --status are dropped.
-    tasks = [
-        t
-        for t in tasks_raw
-        if not t.get("project_slug") or t.get("project_slug") in project_slugs
-    ]
+    tasks = visualize.scope_tasks(projects, tasks_raw, include_closed=all_tasks)
 
     g = visualize.build_graph(projects, tasks, show_belongs_to=not no_belongs_to)
     visualize.render_rich(g, console)

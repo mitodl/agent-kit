@@ -56,6 +56,25 @@ class WorkflowGraph:
     edges: list[GraphEdge] = field(default_factory=list)
 
 
+def scope_tasks(
+    projects: list[dict], tasks: list[dict], *, include_closed: bool = False
+) -> list[dict]:
+    """The tasks ``witan graph`` draws for a set of projects.
+
+    Closed tasks are dropped unless asked for. A task is kept when it has no
+    project or its project is in ``projects``, so a task under a project the
+    status filter excluded is dropped with it. The UI's Graph tab ports this
+    alongside ``build_graph`` (``ui/src/views/graph.ts``).
+    """
+    project_slugs = {p["slug"] for p in projects}
+    return [
+        t
+        for t in tasks
+        if (include_closed or t.get("status") != "closed")
+        and (not t.get("project_slug") or t.get("project_slug") in project_slugs)
+    ]
+
+
 def build_graph(
     projects: list[dict],
     tasks: list[dict],

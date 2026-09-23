@@ -436,6 +436,7 @@ def _generate() -> dict[str, str]:
             os.environ.pop(stale, None)
         written = asyncio.run(_collect(store))
     written["repo-keys.json"] = _repo_keys()
+    written["graph.json"] = _graph(written)
     return written
 
 
@@ -477,6 +478,43 @@ def _repo_keys() -> str:
 
     return json.dumps(
         {url: repo_key.normalise(url) for url in _REPO_KEY_INPUTS},
+        indent=2,
+        sort_keys=True,
+    )
+
+
+def _graph(written: dict[str, str]) -> str:
+    """``witan graph``'s nodes and edges over the recorded list fixtures.
+
+    The Graph tab ports ``scope_tasks`` and ``build_graph`` to TypeScript
+    (spec §6.8), and this is what holds the port to the CLI: the same two
+    recorded reads through the Python transform, for ``graph.test.ts`` to
+    compare against. The tooltip and ``detail`` are left out because they are
+    presentation the two renderers do differently (HTML vs. plain text, the
+    whole row vs. the shared panel).
+    """
+    from witan import visualize
+
+    projects = json.loads(written["workflow_project_list.json"])["result"]
+    tasks = json.loads(written["task_list.json"])["result"]
+    graph = visualize.build_graph(projects, visualize.scope_tasks(projects, tasks))
+    return json.dumps(
+        {
+            "nodes": [
+                {
+                    "id": n.id,
+                    "label": n.label,
+                    "group": n.group,
+                    "color": n.color,
+                    "status": n.status,
+                }
+                for n in graph.nodes
+            ],
+            "edges": [
+                {"src": e.src, "dst": e.dst, "kind": e.kind, "label": e.label}
+                for e in graph.edges
+            ],
+        },
         indent=2,
         sort_keys=True,
     )
