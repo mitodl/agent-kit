@@ -9,6 +9,7 @@ MCP entry and hook commands, and that the starter-config writer behaves.
 """
 
 import json
+import re
 from pathlib import Path
 
 from agent_config_kit import apply
@@ -193,3 +194,44 @@ def test_prune_idempotent_and_leaves_others():
 
 def test_prune_no_hooks_section_is_noop():
     assert setup.prune_legacy_hook_entries({}) is False
+
+
+# --- Pi extension source contract ------------------------------------------
+#
+# The Pi extension is TypeScript that no test here can execute, so these read
+# its source. They pin the Pi prompt-injection budget to the Claude hook's and
+# keep the package copy and its configs/pi mirror byte-identical.
+
+_PKG_EXT = Path(setup.__file__).parent / "extensions" / "pi" / "workflow-context.ts"
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_CONFIG_EXT = _REPO_ROOT / "configs" / "pi" / "extensions" / "workflow-context.ts"
+
+
+def _ts_const_ms(source: str, name: str) -> int:
+    match = re.search(rf"^const {name} = ([\d_]+);$", source, re.MULTILINE)
+    assert match, f"{name} is not declared as a numeric const"
+    return int(match.group(1).replace("_", ""))
+
+
+def test_pi_inject_context_timeout_matches_the_claude_hook():
+    source = _PKG_EXT.read_text()
+    timeout_ms = _ts_const_ms(source, "INJECT_CONTEXT_TIMEOUT_MS")
+
+    assert timeout_ms == setup.INJECT_CONTEXT_TIMEOUT_SECONDS * 1000
+    assert "timeout: INJECT_CONTEXT_TIMEOUT_MS" in source
+    # Only the prompt-injection read blocks; session_shutdown stays detached.
+    assert source.count("spawnSync(") == 1
+
+
+def test_claude_inject_context_hook_uses_the_shared_constant(tmp_path):
+    bundle = setup.witan_bundle(tmp_path, "tester")
+    (hook,) = [
+        h for h in bundle.hooks if getattr(h, "command", None) == "witan inject-context"
+    ]
+    assert hook.timeout_seconds == setup.INJECT_CONTEXT_TIMEOUT_SECONDS
+
+
+def test_configs_pi_mirror_matches_the_package_extension():
+    assert _CONFIG_EXT.read_bytes() == _PKG_EXT.read_bytes(), (
+        f"{_CONFIG_EXT} drifted from {_PKG_EXT}; copy the package file over it"
+    )

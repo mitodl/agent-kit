@@ -1588,7 +1588,7 @@ exported symbols by canonical symbol string — distinct from the coarser
 ### witan code inject-context
 
 ```console
-witan code inject-context
+witan code inject-context [OPTIONS]
 ```
 
 Print a short code-graph status block for the UserPromptSubmit hook.
@@ -1596,6 +1596,13 @@ Print a short code-graph status block for the UserPromptSubmit hook.
 Registered as the bare ``UserPromptSubmit`` hook command; always exits 0
 and prints nothing when there's no store or in-flight index for the
 current repo.
+
+**Parameters**:
+
+* `--client`: Which agent the block's tool-discovery instructions are written for:
+    ``claude`` (``ToolSearch``, the default) or ``pi`` (pi-mcp-adapter's
+    ``mcp`` proxy). The Pi extension passes ``--client pi``; nothing is
+    inferred from the environment. *[choices: claude, pi]* *[default: claude]*
 
 ### witan code serve
 

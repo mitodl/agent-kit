@@ -10,6 +10,7 @@ correct.
 """
 
 import json
+import re
 from pathlib import Path
 
 from agent_config_kit import apply
@@ -173,3 +174,58 @@ def test_setup_pi_notes_when_pi_mcp_adapter_is_installed(tmp_path, monkeypatch, 
     assert "WARNING:" not in out
     assert "note:" in out
     assert "pi-mcp-adapter is declared in" in out
+
+
+# --- Pi extension source contract ------------------------------------------
+#
+# The Pi extension is TypeScript that no test here can execute, so these read
+# its source. They pin two things a Python-side change cannot see drifting:
+# the Pi prompt-injection budget matching the Claude hook's, and the three
+# copies of the file (package, configs/pi mirror) staying byte-identical.
+
+_PKG_EXT = Path(setup.__file__).parent / "extensions" / "pi" / "codegraph.ts"
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_CONFIG_EXT = _REPO_ROOT / "configs" / "pi" / "extensions" / "codegraph.ts"
+
+
+def _ts_const_ms(source: str, name: str) -> int:
+    match = re.search(rf"^const {name} = ([\d_]+);$", source, re.MULTILINE)
+    assert match, f"{name} is not declared as a numeric const"
+    return int(match.group(1).replace("_", ""))
+
+
+def test_pi_inject_context_timeout_matches_the_claude_hook():
+    """A 5s Pi budget killed the cold read every Claude prompt waits out."""
+    source = _PKG_EXT.read_text()
+    timeout_ms = _ts_const_ms(source, "INJECT_CONTEXT_TIMEOUT_MS")
+
+    assert timeout_ms == setup.INJECT_CONTEXT_TIMEOUT_SECONDS * 1000
+    assert setup.INJECT_CONTEXT_TIMEOUT_SECONDS >= 15
+    # The one blocking call is the one that uses the constant; nothing else
+    # hard-codes its own number.
+    assert "timeout: INJECT_CONTEXT_TIMEOUT_MS" in source
+    assert source.count("spawnSync(") == 1
+    assert "timeout: 5000" not in source
+
+
+def test_claude_inject_context_hook_uses_the_shared_constant(tmp_path):
+    bundle = setup.witan_code_bundle(tmp_path, "tester")
+    (hook,) = [
+        h
+        for h in bundle.hooks
+        if getattr(h, "command", None) == "witan-code inject-context"
+    ]
+    assert hook.timeout_seconds == setup.INJECT_CONTEXT_TIMEOUT_SECONDS
+
+
+def test_configs_pi_mirror_matches_the_package_extension():
+    assert _CONFIG_EXT.read_bytes() == _PKG_EXT.read_bytes(), (
+        f"{_CONFIG_EXT} drifted from {_PKG_EXT}; copy the package file over it"
+    )
+
+
+def test_pi_extension_asks_for_pi_rendered_context():
+    """Without `--client pi` the block tells Pi to call a ToolSearch it lacks."""
+    source = _PKG_EXT.read_text()
+
+    assert 'spawnSync("witan-code", ["inject-context", "--client", "pi"]' in source

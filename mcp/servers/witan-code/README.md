@@ -688,7 +688,10 @@ A Pi equivalent of all four lives in one extension,
   can tell "no cross-repo consumers" from "no cross-repo data"), and the
   `ToolSearch` call that makes the `code_*` tools callable when the harness
   delivers them deferred — followed by a `code_find_definition` →
-  `code_callers`/`code_impact` call template.
+  `code_callers`/`code_impact` call template. `--client pi` (what the Pi
+  extension passes) swaps the `ToolSearch` step for pi-mcp-adapter's `mcp`
+  proxy: `mcp({ search: ... })` for the exact server-prefixed name, then
+  `mcp({ tool: ..., args: {...} })`. The default stays Claude's.
   Independent of `witan`'s own `inject-context` hook (no cross-package
   coupling) — register it alone for a witan-code-only install. Prints
   nothing when the repo has neither a store nor an index in flight.

@@ -21,6 +21,11 @@ cannot see in its tool list is not actionable, so the block leads with the
 ``ToolSearch`` that makes the tools callable and then gives a call template to
 fill in.
 
+That unlock step is Claude Code's. Pi has no ``ToolSearch``: its MCP tools
+reach the agent through pi-mcp-adapter's ``mcp`` proxy tool, so the Pi
+extension asks for ``--client pi`` and gets the proxy's search-then-call
+instructions instead (see :func:`_discovery_line`).
+
 Kept short on purpose: this is prepended to *every* prompt, so tokens spent
 here are spent for the life of every session.
 """
@@ -35,6 +40,7 @@ import stat
 import tempfile
 import time
 from pathlib import Path
+from typing import Literal
 
 from . import config as cfg_module
 from . import repo as repo_module
@@ -144,6 +150,46 @@ def indexing_in_progress() -> bool:
 # under any prefix and puts the three workhorse tools first.
 _TOOLSEARCH_QUERY = '`ToolSearch(query="+code_ find_definition callers impact")`'
 
+# Which agent the block is rendered for. Passed explicitly by the caller (the
+# Pi extension runs `witan-code inject-context --client pi`), never inferred
+# from the environment: an ambient variable leaking across a nested shell or a
+# subprocess would silently hand one agent the other's calling convention.
+Client = Literal["claude", "pi"]
+
+# Pi has no ToolSearch. Under pi-mcp-adapter's default config (no
+# `directTools`, which `witan-code setup --agent pi` does not set) every MCP
+# tool sits behind the adapter's single `mcp` proxy tool, and its name carries
+# a server prefix (`toolPrefix`, default "server": `witan-code_code_callers`
+# for a server named `witan-code`, `witan_code_callers` when witan serves the
+# code tools itself). The prefix is config-dependent, so the block has the
+# agent search first and call whatever name the search returned. Search
+# tokenizes on non-alphanumerics and ranks by term matches, so this query puts
+# the three workhorse tools first under any prefix — the same job the `+code_`
+# form does for ToolSearch. Syntax per pi-mcp-adapter's README "Usage" table
+# (`mcp({ search })`, `mcp({ tool, args })`).
+_PI_SEARCH_CALL = '`mcp({ search: "code_find_definition callers impact" })`'
+_PI_TOOL_CALL = (
+    '`mcp({ tool: "<exact name the search returned>", args: { name: "X" } })`'
+)
+
+
+def _discovery_line(client: Client) -> str:
+    """How to reach the ``code_*`` tools from this client, then what to call."""
+    if client == "pi":
+        return (
+            "`code_*` tools are behind the `mcp` proxy tool, not in your tool "
+            f"list — find their exact names with {_PI_SEARCH_CALL}, then call "
+            f"one with {_PI_TOOL_CALL} instead of grep: `code_find_definition` "
+            "→ `symbol_id` → `code_callers` / `code_impact` (blast radius "
+            "before editing). More: `/skill:witan-code`."
+        )
+    return (
+        "`code_*` tools may not be in your tool list — load them with "
+        f"{_TOOLSEARCH_QUERY}, then use them instead of grep: "
+        '`code_find_definition(name="X")` → `symbol_id` → `code_callers` / '
+        "`code_impact` (blast radius before editing). More: `/witan-code`."
+    )
+
 
 def _coverage_line(store: store_module.StoreRef, cfg: cfg_module.Config) -> str:
     """One line on whether cross-repo resolution can answer anything here.
@@ -245,11 +291,14 @@ def _bridge_ok(cfg: cfg_module.Config) -> bool | None:
     return ok
 
 
-def inject_context() -> str:
+def inject_context(client: Client = "claude") -> str:
     """A short markdown status block, or "" when there's nothing worth saying.
 
     Silent when the repo has neither a store nor an index in flight (nothing
     to report), so this hook adds no noise for repos that don't use witan-code.
+
+    ``client`` picks the tool-discovery instructions: Claude's ``ToolSearch``
+    (the default) or Pi's ``mcp`` proxy. Everything else is client-neutral.
     """
     cfg = cfg_module.load()
     slug = store_module.detect_repo(cfg)
@@ -311,10 +360,5 @@ def inject_context() -> str:
     coverage = _coverage_line(store, cfg)
     if coverage:
         lines.append(coverage)
-    lines.append(
-        "`code_*` tools may not be in your tool list — load them with "
-        f"{_TOOLSEARCH_QUERY}, then use them instead of grep: "
-        '`code_find_definition(name="X")` → `symbol_id` → `code_callers` / '
-        "`code_impact` (blast radius before editing). More: `/witan-code`."
-    )
+    lines.append(_discovery_line(client))
     return "\n".join(lines) + "\n"

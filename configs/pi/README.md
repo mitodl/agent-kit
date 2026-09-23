@@ -14,9 +14,17 @@ so the omnigraph trackers work the same under Pi.
   installed by `witan-code setup --agent pi`) —
   - `session_start`: seeds/refreshes the whole repo's Layer-2 code graph in the background.
   - `tool_call`/`tool_result` (`edit`/`write`): incrementally re-indexes the edited file.
-  - `before_agent_start`: reports whether the code graph is indexed (file count,
-    last-updated) or still being built, plus cross-repo coverage and the
-    `ToolSearch` + `code_find_definition` calls to make against it.
+  - `before_agent_start`: runs `witan-code inject-context --client pi` and
+    appends its block: whether the code graph is indexed (file count,
+    last-updated) or still being built, cross-repo coverage, and how to reach
+    the `code_*` tools under Pi. Pi has no `ToolSearch`, and the generated
+    pi-mcp-adapter config does not set `directTools`, so the tools sit behind
+    the adapter's `mcp` proxy under a server-prefixed name
+    (`witan-code_code_find_definition` under the default
+    `toolPrefix: "server"`). The block therefore says to search for the exact
+    name and call that:
+    `mcp({ search: "code_find_definition callers impact" })`, then
+    `mcp({ tool: "<exact name the search returned>", args: { name: "X" } })`.
   - `session_shutdown`: opportunistically compacts the current repo's store and
     the shared bridge store (throttled) — has no session-id dependency, so it
     *is* mirrored under Pi.
@@ -37,6 +45,21 @@ so the omnigraph trackers work the same under Pi.
 
 Both are best-effort: any failure (missing binary, non-git dir, no data) is
 swallowed and never disrupts the session.
+
+Only the `before_agent_start` context read waits, and it waits exactly as long
+as the matching Claude `UserPromptSubmit` hook: 15s for `witan-code
+inject-context`, 45s for `witan inject-context` (each extension's
+`INJECT_CONTEXT_TIMEOUT_MS`, pinned by the packages' `tests/test_setup.py` to
+`INJECT_CONTEXT_TIMEOUT_SECONDS` in `witan_code.setup` / `witan.setup`). The
+first prompt in a cache window pays a cold graph read that has to finish once
+to fill the cache; a shorter Pi budget kills that read and every prompt comes
+back with no block. A timeout still degrades to no context rather than a
+stalled turn. Every other handler (`session_start` indexing, edit reindexing,
+`session_shutdown`) runs detached and never blocks.
+
+The copies in `extensions/` must stay byte-identical to the package files
+linked above; edit the package file, copy it here, and `tests/test_setup.py`
+in each package fails if they drift.
 
 ## Installation
 
