@@ -38,9 +38,6 @@ def traces(
     rows = _fn(s.workflow_trace_list)(
         repo=_repo_arg(repo, all_repos), tags=tags, author=author, limit=limit
     )
-    if not rows:
-        console.print("[dim]No traces.[/dim]")
-        return
     detected_repo = (
         _detect_repo_for_display() if not all_repos and repo is None else repo
     )
@@ -70,6 +67,7 @@ def traces(
         title=f"Workflow traces — {scope}",
         columns=["slug", "title", "sessions", "mined", "repos"],
         rows=rows_data,
+        empty="[dim]No traces.[/dim]",
         no_wrap={"slug", "sessions", "mined"},
     )
 

@@ -195,6 +195,16 @@ def print_error(message: object, *, stderr: bool = False) -> None:
     (stderr_console if stderr else console).print(f"[red]{esc(message)}[/red]")
 
 
+def notice_console() -> Console:
+    """The console for prose printed alongside a command's table or record.
+
+    ``console`` under ``txt``; ``stderr_console`` under a structured format,
+    where stdout has to hold one parseable document and nothing else. A
+    notice printed there ahead of the JSON makes the whole output unparseable.
+    """
+    return console if get_output_format() == "txt" else stderr_console
+
+
 def _styled(value: str, table: dict) -> str:
     style = table.get(value)
     return f"[{style}]{esc(value)}[/{style}]" if style else esc(value)
@@ -218,6 +228,7 @@ def render_table(
     title: str,
     columns: list[str],
     rows: list[dict[str, object]],
+    empty: str,
     no_wrap: set[str] | None = None,
     styles: dict[str, dict[str, str]] | None = None,
     dim_if_present: set[str] | None = None,
@@ -232,12 +243,21 @@ def render_table(
     unchanged, so structured output keeps its native type (e.g. a session
     count stays a JSON number). ``styles``/``dim_if_present``/``placeholders``
     are display-only concerns applied only in ``txt`` mode.
+
+    ``empty`` is the Rich markup ``txt`` mode prints instead of a table when
+    there are no rows. It is a parameter rather than each caller's early
+    return because an early return there runs before the format is ever
+    consulted, which is how ``--output-format json`` printed a prose sentence
+    on an empty list and broke every consumer parsing it.
     """
     rows = [{k: ("" if v is None else v) for k, v in r.items()} for r in rows]
 
     fmt = get_output_format()
     if fmt != "txt":
         dump_structured(rows, title, fmt)
+        return
+    if not rows:
+        console.print(empty)
         return
 
     no_wrap = no_wrap or set()

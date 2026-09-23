@@ -26,6 +26,7 @@ from ._common import (
     print_error,
     render_table,
 )
+from .output import dump_record, get_output_format
 from .selected_target import selected_target
 from .run_helpers import (
     _launch_agent,
@@ -179,18 +180,16 @@ def tasks(
             rows = [r for r in rows if r.get("status") != "closed"]
     rows = rows[:limit]
 
-    if not rows:
-        if query is not None:
-            console.print(f"[dim]No tasks match '{esc(query)}'.[/dim]")
-        elif detected_repo and not all_repos:
-            console.print(
-                f"[dim]No tasks scoped to {_short_repo(detected_repo)}.[/dim] "
-                f"Tasks may have been created without repo context. "
-                f"Try [bold]--all-repos[/bold] to see all tasks."
-            )
-        else:
-            console.print("[dim]No tasks.[/dim]")
-        return
+    if query is not None:
+        empty = f"[dim]No tasks match '{esc(query)}'.[/dim]"
+    elif detected_repo and not all_repos:
+        empty = (
+            f"[dim]No tasks scoped to {_short_repo(detected_repo)}.[/dim] "
+            f"Tasks may have been created without repo context. "
+            f"Try [bold]--all-repos[/bold] to see all tasks."
+        )
+    else:
+        empty = "[dim]No tasks.[/dim]"
 
     if all_repos:
         scope = "all repos"
@@ -214,7 +213,16 @@ def tasks(
         }
         for r in rows
     ]
-    columns = list(rows_data[0])
+    columns = [
+        "priority",
+        "status",
+        "type",
+        "slug",
+        "title",
+        "repo",
+        "assignee",
+        "blocked_by",
+    ]
     # Search rows don't carry blocked_by, and a blank value would read as "no
     # blockers". The status column still flags a blocked task. Drop the key
     # from the rows too: structured output dumps rows, not columns.
@@ -226,6 +234,7 @@ def tasks(
         title=f"{base_title} — {scope}",
         columns=columns,
         rows=rows_data,
+        empty=empty,
         no_wrap={"priority", "status", "type"},
         styles={"priority": _PRIORITY_STYLE, "status": _STATUS_STYLE},
         placeholders={"repo": "(unscoped)"},
@@ -233,11 +242,20 @@ def tasks(
 
 
 def _task_show(slug: str) -> None:
-    """Show one task's details, its sub-tasks, and blocker status."""
+    """Show one task's details, its sub-tasks, and blocker status.
+
+    Under ``--output-format json|toml|yaml`` this prints ``task_get``'s record
+    as the tool returned it, every field included, and nothing else.
+    """
     s = _srv()
     t = _fn(s.task_get)(slug=slug)
     if not t:
-        console.print(f"[red]No task {slug!r}.[/red]")
+        print_error(f"No task {slug!r}.", stderr=True)
+        raise SystemExit(1)
+
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_record(t, fmt)
         return
 
     console.print(f"[bold]{t['slug']}[/bold]  {esc(t.get('title'))}")
@@ -298,6 +316,7 @@ task_app = cyclopts.App(
     default_command=_task_show,
 )
 app.command(task_app)
+task_app.command(_task_show, name="show")
 
 
 @task_app.command(name="create")

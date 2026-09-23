@@ -37,7 +37,14 @@ import cyclopts
 import tomli_w
 
 from .. import config as cfg_module
-from ._common import _split_csv, app, console, print_error, render_table
+from ._common import (
+    _split_csv,
+    app,
+    console,
+    notice_console,
+    print_error,
+    render_table,
+)
 
 targets_app = cyclopts.App(
     name="target",
@@ -880,16 +887,8 @@ def list_targets() -> None:
     try:
         targets = cfg_module._parse_targets(cfg_module._load_toml())
     except ValueError as exc:
-        print_error(exc)
+        print_error(exc, stderr=True)
         raise SystemExit(1) from None
-    if not targets:
-        console.print(
-            f"[yellow]No targets configured[/yellow] in {cfg_module.config_path()}.\n"
-            "  Add one with [bold]witan target add <name> --remote-url … "
-            "--oidc-issuer …[/bold]"
-        )
-        return
-
     # Same precedence load_remote_config()/load() use: WITAN_TARGET pins a
     # target outright, and auto-detection only runs when it is unset. Marking
     # the repo-matched one regardless would point `*` at a target no other
@@ -897,7 +896,7 @@ def list_targets() -> None:
     if pinned := os.environ.get("WITAN_TARGET"):
         selected = next((t for t in targets if t.name == pinned), None)
         if selected is None:
-            console.print(
+            notice_console().print(
                 f"[yellow]WITAN_TARGET={pinned!r} is not a configured target[/yellow] "
                 "— no target is in effect."
             )
@@ -922,6 +921,11 @@ def list_targets() -> None:
         title=f"witan targets ({cfg_module.config_path()})",
         columns=["cur", "name", "remote_url", "server", "graph", "matches"],
         rows=rows,
+        empty=(
+            f"[yellow]No targets configured[/yellow] in {cfg_module.config_path()}.\n"
+            "  Add one with [bold]witan target add <name> --remote-url … "
+            "--oidc-issuer …[/bold]"
+        ),
         no_wrap={"cur", "name"},
         placeholders={"matches": "explicit only"},
     )

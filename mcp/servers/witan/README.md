@@ -300,19 +300,28 @@ indexed code graphs. Installed alongside the server (`uv run witan …`,
 or `uv tool install` the package to get it on `PATH`):
 
 Pass `--output-format json|toml|yaml` (default `txt`; env `WITAN_OUTPUT_FORMAT`)
-anywhere on the command line to get a machine-readable dump of a
-table-producing command's rows instead of the rich table — e.g.
-`witan tasks --all-repos --output-format json`. Covers `tasks`, `projects`,
-`memory`, `traces`, `scan test`, `scan rules`, and (when `witan-code` is
-installed) `code repos`, `code symbols`, and `code stitch`; commands whose
-output isn't a flat table (`task <slug>`, `project <slug>`, `graph`, …) are
-unaffected.
+anywhere on the command line to get a machine-readable dump instead of the
+rich view, e.g. `witan tasks --all-repos --output-format json`. The table
+commands (`tasks`, `projects`, `memory`, `traces`, `scan test`, `scan rules`,
+`target list`, and with `witan-code` installed `code repos`, `code symbols`
+and `code stitch`) print `{title, rows}`. For witan's own commands an empty
+result is `rows: []`, never a sentence; the `code` commands still print prose
+when empty. `task <slug>` (also `task show <slug>`) and `project status`
+print the tool's record whole, and `project tasks` and `session list` print
+the tool's rows. Those four keep nulls in JSON and YAML and omit them in TOML,
+which has no null; the table commands still print a null as `""` in every
+format. `project <slug>`, `trace <slug>` and `graph` are unaffected.
+
+A structured run writes one document to stdout and nothing else; notices and
+log lines go to stderr, including on success. Branch on the exit code, not
+on whether stderr is empty: `task <slug>`, `project <slug>`, `project status`
+and `project tasks` exit 1 on a missing slug.
 
 | Command | Description |
 |---|---|
 | `setup [--agent claude\|pi\|…\|all]` | Install witan for one or all supported coding agents; also writes a starter `~/.config/witan/config.toml` if one doesn't exist yet |
 | `tasks [--ready] [--status …] [--project wp-…] [--all-repos]` | Tasks for the current repo (closed elided by default — pass `--status closed` to see them); `--ready` = open with no open blockers |
-| `task <tk-slug>` | One task's details, blockers, and sub-tasks |
+| `task [show] <tk-slug>` | One task's details, blockers, and sub-tasks |
 | `task create <title>` | Create a task from the CLI |
 | `task close\|claim\|release\|update\|link <tk-slug> …` | Drive task state transitions from the CLI |
 | `run <tk-slug> [--agent claude\|pi] [--dry-run]` | Claim a task and launch an agent to execute it |

@@ -321,9 +321,10 @@ def _launcher(
 
     Parameters
     ----------
-    output_format: Output format for table commands. Commands include tasks,
-        projects, memory, traces, scan, and mounted witan-code tables. Values:
-        txt | json | toml | yaml. Env: WITAN_OUTPUT_FORMAT.
+    output_format: txt | json | toml | yaml.
+        Applies to tasks, task <slug>, projects, project status, project
+        tasks, session list, memory, traces, scan, target list, and mounted
+        witan-code tables. Env: WITAN_OUTPUT_FORMAT.
     target: Which deployment to talk to.
         Names a [targets.<name>] block, and applies to every command — `witan
         tasks`, `witan memory` and `witan code index` included, none of which

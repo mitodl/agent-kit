@@ -3,6 +3,9 @@
 The CLI's table-producing commands render a rich :class:`~rich.table.Table`
 by default (``txt``). ``--output-format json|toml|yaml`` swaps that for a
 machine-readable dump of the same rows instead, via :func:`dump_structured`.
+An empty table dumps ``rows: []``, never the prose the ``txt`` view prints.
+Commands whose output is a record rather than a table go through
+:func:`dump_record`.
 """
 
 from __future__ import annotations
@@ -39,7 +42,28 @@ def dump_structured(
     go through :func:`witan.cli._common.render_table`, which normalizes
     ``None`` to ``""`` first — TOML has no null.
     """
-    payload = {"title": title, "rows": rows}
+    dump_record({"title": title, "rows": rows}, fmt)
+
+
+def _drop_nulls(value: object) -> object:
+    if isinstance(value, dict):
+        return {k: _drop_nulls(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_drop_nulls(v) for v in value if v is not None]
+    return value
+
+
+def dump_record(payload: dict[str, object], fmt: OutputFormat) -> None:
+    """Print one record as JSON, TOML, or YAML, as the tool returned it.
+
+    For output that is not a table: ``task <slug>`` and ``project status``
+    print a tool's record, ``project tasks`` and ``session list`` its rows.
+    JSON and YAML keep ``null``. TOML has none, so a ``None`` there is omitted
+    rather than rewritten to ``""``, which would make an unset ``closed_at``
+    read as present.
+    """
+    if fmt == "toml":
+        payload = _drop_nulls(payload)
     if fmt == "json":
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     elif fmt == "yaml":

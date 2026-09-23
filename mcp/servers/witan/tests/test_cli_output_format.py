@@ -53,7 +53,9 @@ def test_render_table_txt_prints_rich_table(monkeypatch):
         _common.console, "print", lambda *a, **kw: captured.append(a[0])
     )
 
-    render_table(title="Tasks", columns=["slug", "status", "title"], rows=_rows())
+    render_table(
+        title="Tasks", columns=["slug", "status", "title"], rows=_rows(), empty=""
+    )
 
     assert len(captured) == 1
     table = captured[0]
@@ -64,7 +66,9 @@ def test_render_table_txt_prints_rich_table(monkeypatch):
 def test_render_table_json_dumps_raw_rows(capsys):
     output_module.set_output_format("json")
 
-    render_table(title="Tasks", columns=["slug", "status", "title"], rows=_rows())
+    render_table(
+        title="Tasks", columns=["slug", "status", "title"], rows=_rows(), empty=""
+    )
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["title"] == "Tasks"
@@ -76,7 +80,9 @@ def test_render_table_yaml_dumps_raw_rows(capsys):
 
     output_module.set_output_format("yaml")
 
-    render_table(title="Tasks", columns=["slug", "status", "title"], rows=_rows())
+    render_table(
+        title="Tasks", columns=["slug", "status", "title"], rows=_rows(), empty=""
+    )
 
     payload = yaml.safe_load(capsys.readouterr().out)
     assert payload["title"] == "Tasks"
@@ -88,7 +94,9 @@ def test_render_table_toml_dumps_raw_rows(capsys):
 
     output_module.set_output_format("toml")
 
-    render_table(title="Tasks", columns=["slug", "status", "title"], rows=_rows())
+    render_table(
+        title="Tasks", columns=["slug", "status", "title"], rows=_rows(), empty=""
+    )
 
     payload = tomllib.loads(capsys.readouterr().out)
     assert payload["title"] == "Tasks"
@@ -103,6 +111,7 @@ def test_render_table_structured_formats_ignore_styling(capsys):
         title="Tasks",
         columns=["slug", "status"],
         rows=[{"slug": "tk-a", "status": ""}],
+        empty="",
         styles={"status": {"open": "green"}},
         placeholders={"status": "(none)"},
     )
