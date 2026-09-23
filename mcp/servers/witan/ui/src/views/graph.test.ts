@@ -122,7 +122,11 @@ describe("graphView", () => {
 
 	it("mounts one canvas and feeds it every render", async () => {
 		const { canvas, mount } = fakeCanvas();
-		const host = new CanvasHost(mount, () => {});
+		const host = new CanvasHost(
+			mount,
+			() => {},
+			() => {},
+		);
 
 		render(graphView(data, route, host), root);
 		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalledTimes(1));
@@ -136,7 +140,18 @@ describe("graphView", () => {
 
 	it("counts what it draws and shows the key", () => {
 		const { mount } = fakeCanvas();
-		render(graphView(data, route, new CanvasHost(mount, () => {})), root);
+		render(
+			graphView(
+				data,
+				route,
+				new CanvasHost(
+					mount,
+					() => {},
+					() => {},
+				),
+			),
+			root,
+		);
 		const text = (root.textContent ?? "").replace(/\s+/g, " ");
 		expect(text).toContain("1 project");
 		expect(text).toContain("4 tasks");
@@ -150,7 +165,11 @@ describe("graphView", () => {
 			graphView(
 				{ projects: [], tasks: [], truncated: false },
 				route,
-				new CanvasHost(mount, () => {}),
+				new CanvasHost(
+					mount,
+					() => {},
+					() => {},
+				),
 			),
 			root,
 		);
@@ -164,7 +183,11 @@ describe("graphView", () => {
 			graphView(
 				{ ...data, truncated: true },
 				route,
-				new CanvasHost(mount, () => {}),
+				new CanvasHost(
+					mount,
+					() => {},
+					() => {},
+				),
 			),
 			root,
 		);
@@ -175,7 +198,11 @@ describe("graphView", () => {
 describe("CanvasHost", () => {
 	it("destroys the network when its container goes", async () => {
 		const { canvas, mount } = fakeCanvas();
-		const host = new CanvasHost(mount, () => {});
+		const host = new CanvasHost(
+			mount,
+			() => {},
+			() => {},
+		);
 		host.attach(document.createElement("div"));
 		await vi.waitFor(() => expect(mount).toHaveBeenCalled());
 		await Promise.resolve();
@@ -183,6 +210,27 @@ describe("CanvasHost", () => {
 		host.attach(undefined);
 
 		expect(canvas.destroy).toHaveBeenCalledTimes(1);
+	});
+
+	it("says the drawing code failed to load rather than showing an empty box", async () => {
+		// e.g. the server was upgraded under an open page and the old hashed
+		// chunk now 404s.
+		const mount = vi.fn(async () => {
+			throw new Error("Failed to fetch dynamically imported module");
+		});
+		const onError = vi.fn();
+		const host = new CanvasHost(mount, () => {}, onError);
+		const root = document.createElement("div");
+		const data: GraphData = { projects, tasks, truncated: false };
+
+		render(graphView(data, route, host), root);
+		await vi.waitFor(() => expect(onError).toHaveBeenCalled());
+		render(graphView(data, route, host), root);
+
+		expect(root.querySelector("[role=alert]")?.textContent).toContain(
+			"Failed to fetch dynamically imported module",
+		);
+		expect(root.querySelector(".graph-canvas")).toBeNull();
 	});
 
 	it("drops a mount that lands after the container was replaced", async () => {
@@ -200,7 +248,11 @@ describe("CanvasHost", () => {
 					}),
 			)
 			.mockResolvedValueOnce(second);
-		const host = new CanvasHost(mount, () => {});
+		const host = new CanvasHost(
+			mount,
+			() => {},
+			() => {},
+		);
 		host.show({ nodes: [], edges: [] }, null);
 
 		host.attach(document.createElement("div"));

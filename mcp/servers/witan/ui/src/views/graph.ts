@@ -1,6 +1,6 @@
 import { html, nothing, svg, type TemplateResult } from "lit-html";
 import { ref } from "lit-html/directives/ref.js";
-import { emptyBox } from "../chrome.js";
+import { emptyBox, errorBox } from "../chrome.js";
 import type { Route } from "../route.js";
 import type { TaskRow, WorkflowProjectSummary } from "../types.js";
 
@@ -113,7 +113,7 @@ export function buildGraph(
 			group: "project",
 			color: PROJECT_COLORS[status] ?? "#56b870",
 			status,
-			tooltip: `${project.slug}\nphase: ${project.phase} · status: ${status}`,
+			tooltip: `${project.slug}\nphase: ${project.phase ?? "?"} · status: ${status}`,
 		});
 	}
 
@@ -171,9 +171,12 @@ export interface Canvas {
 	destroy(): void;
 }
 
+/** Called with the clicked node and which kind of node it is. */
+export type OnSelect = (id: string, group: GraphNode["group"]) => void;
+
 export type MountCanvas = (
 	element: HTMLElement,
-	onSelect: (id: string) => void,
+	onSelect: OnSelect,
 ) => Promise<Canvas>;
 
 /**
@@ -194,10 +197,18 @@ export class CanvasHost {
 		null;
 	/** Bumped per mount, so a mount that lands after a newer one is dropped. */
 	private generation = 0;
+	/**
+	 * Why the network could not be mounted, e.g. the lazily imported chunk
+	 * 404ing because the server was upgraded under an open page. Kept until a
+	 * reload: the chunk name is baked into this page's bundle, so retrying the
+	 * same import cannot succeed.
+	 */
+	error: Error | null = null;
 
 	constructor(
 		private readonly mount: MountCanvas,
-		private readonly onSelect: (id: string) => void,
+		private readonly onSelect: OnSelect,
+		private readonly onError: () => void,
 	) {}
 
 	/** The `ref` callback: called with the container, or `undefined` on removal. */
@@ -211,16 +222,25 @@ export class CanvasHost {
 		}
 		this.element = element;
 		const generation = this.generation;
-		void this.mount(element, this.onSelect).then((canvas) => {
-			if (generation !== this.generation) {
-				canvas.destroy();
-				return;
-			}
-			this.canvas = canvas;
-			if (this.pending) {
-				canvas.update(this.pending.graph, this.pending.selected);
-			}
-		});
+		this.mount(element, this.onSelect).then(
+			(canvas) => {
+				if (generation !== this.generation) {
+					canvas.destroy();
+					return;
+				}
+				this.canvas = canvas;
+				if (this.pending) {
+					canvas.update(this.pending.graph, this.pending.selected);
+				}
+			},
+			(error: unknown) => {
+				if (generation !== this.generation) {
+					return;
+				}
+				this.error = error instanceof Error ? error : new Error(String(error));
+				this.onError();
+			},
+		);
 	};
 
 	show(graph: WorkflowGraph, selected: string | null): void {
@@ -252,6 +272,12 @@ export function graphView(
 			route.closed
 				? "No projects or tasks to draw."
 				: "No active projects or open tasks to draw.",
+		);
+	}
+	if (host.error) {
+		return errorBox(
+			new Error(`${host.error.message} Reload the page to try again.`),
+			"the graph drawing code",
 		);
 	}
 	host.show(graph, route.slug);

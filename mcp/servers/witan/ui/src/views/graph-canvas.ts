@@ -1,6 +1,12 @@
 import { DataSet } from "vis-data";
 import { type Edge, Network, type Node } from "vis-network";
-import { type Canvas, EDGE_COLORS, type WorkflowGraph } from "./graph.js";
+import {
+	type Canvas,
+	EDGE_COLORS,
+	type GraphNode,
+	type OnSelect,
+	type WorkflowGraph,
+} from "./graph.js";
 
 /**
  * The one module that imports vis-network, loaded by `import()` on first use.
@@ -26,12 +32,10 @@ interface VisEdge extends Edge {
 	id: string;
 }
 
-export function mountCanvas(
-	element: HTMLElement,
-	onSelect: (id: string) => void,
-): Canvas {
+export function mountCanvas(element: HTMLElement, onSelect: OnSelect): Canvas {
 	const nodes = new DataSet<VisNode>();
 	const edges = new DataSet<VisEdge>();
+	const groups = new Map<string, GraphNode["group"]>();
 	const network = new Network(
 		element,
 		{ nodes, edges },
@@ -54,8 +58,9 @@ export function mountCanvas(
 
 	network.on("click", (params: { nodes: string[] }) => {
 		const [id] = params.nodes;
-		if (id) {
-			onSelect(id);
+		const group = id ? groups.get(id) : undefined;
+		if (id && group) {
+			onSelect(id, group);
 		}
 	});
 
@@ -74,6 +79,10 @@ export function mountCanvas(
 			const fg = style.getPropertyValue("--fg").trim();
 			const muted = style.getPropertyValue("--muted").trim();
 
+			groups.clear();
+			for (const node of graph.nodes) {
+				groups.set(node.id, node.group);
+			}
 			const nextNodes: VisNode[] = graph.nodes.map((node) => ({
 				id: node.id,
 				label: node.label,

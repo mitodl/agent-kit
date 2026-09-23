@@ -83,12 +83,13 @@ export class App {
 			import("./views/graph-canvas.js").then((module) =>
 				module.mountCanvas(element, onSelect),
 			),
-		(slug) =>
+		(slug, group) =>
 			this.navigate(
-				slug.startsWith("wp-")
+				group === "project"
 					? { view: "projects", project: slug, slug: null }
 					: { slug },
 			),
+		() => this.draw(),
 	);
 	private readonly detail = new KeyedRead<TaskDetail | null>(() => this.draw());
 	private readonly memoryDetail = new KeyedRead<MemoryPanel>(() => this.draw());
@@ -625,7 +626,7 @@ type GraphScope = Pick<Route, "repo" | "project">;
 /**
  * The reads behind the Graph tab (spec §6.8): the two `witan graph` makes.
  *
- * Active projects only, as the CLI's default `--status active` has it, and
+ * Active projects, as the CLI's default `--status active` has it, and
  * every task in scope with closed ones among them: whether closed tasks are
  * DRAWN is the route's Closed filter, applied in the browser by `scopeTasks`
  * so toggling it does not re-read. A project narrows both reads to that one
@@ -635,7 +636,10 @@ async function readGraph(scope: GraphScope): Promise<GraphData> {
 	if (scope.project) {
 		const slug = scope.project;
 		const [projects, tasks] = await Promise.all([
-			workflowProjectList({ repo: "" }),
+			// Every status: the project was named, so a completed one is still
+			// the one asked for. The active-only default would drop it, and
+			// `scopeTasks` would drop every task with it.
+			workflowProjectList({ repo: "", status: null }),
 			// Uncapped by project; see `readRollup` for why no `limit`.
 			taskList({ repo: "", project_slug: slug }),
 		]);

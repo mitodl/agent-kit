@@ -77,10 +77,13 @@ vi.mock("./mcp.js", () => ({
 const canvas = {
 	update: vi.fn(),
 	destroy: vi.fn(),
-	onSelect: (_id: string) => {},
+	onSelect: (_id: string, _group: "project" | "task") => {},
 };
 vi.mock("./views/graph-canvas.js", () => ({
-	mountCanvas: (_element: HTMLElement, onSelect: (id: string) => void) => {
+	mountCanvas: (
+		_element: HTMLElement,
+		onSelect: (id: string, group: "project" | "task") => void,
+	) => {
 		canvas.onSelect = onSelect;
 		return canvas;
 	},
@@ -418,20 +421,29 @@ describe("App", () => {
 	});
 
 	it("reads the graph `witan graph` reads, across the route's repo", async () => {
-		await open("#graph");
+		// A repo scope, so the graph's project read cannot be mistaken for the
+		// shell's own, which is always `{ repo: "" }`.
+		const repo = "https://github.com/mitodl/agent-kit";
+		await open(`#graph?repo=${encodeURIComponent(repo)}`);
 		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
 
-		// Active projects (the tool's default, and the CLI's) and every task,
-		// lifted off the unscoped 50-row cap.
-		expect(mcp.workflowProjectList).toHaveBeenCalledWith({ repo: "" });
-		expect(mcp.taskList).toHaveBeenCalledWith({ repo: "", limit: TASK_LIMIT });
+		// Active projects (the tool's default, and the CLI's: no `status`) and
+		// every task, lifted off the unscoped 50-row cap.
+		expect(mcp.workflowProjectList).toHaveBeenCalledWith({ repo });
+		expect(mcp.taskList).toHaveBeenCalledWith({ repo, limit: TASK_LIMIT });
 		expect(text()).toContain("4 tasks");
 	});
 
-	it("narrows the graph to one project by project, uncapped", async () => {
+	it("narrows the graph to one project of any status, uncapped", async () => {
 		await open(`#graph?project=${projectDetail.slug}`);
 		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
 
+		// A named project is drawn even once completed, which the
+		// active-only default would drop along with all of its tasks.
+		expect(mcp.workflowProjectList).toHaveBeenCalledWith({
+			repo: "",
+			status: null,
+		});
 		expect(mcp.taskList).toHaveBeenCalledWith({
 			repo: "",
 			project_slug: projectDetail.slug,
@@ -443,12 +455,12 @@ describe("App", () => {
 		await open("#graph");
 		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
 		vi.mocked(mcp.taskList).mockClear();
+		canvas.update.mockClear();
 
+		// jsdom fires `hashchange` on a timer, so wait for the redraw it causes
+		// rather than for the fragment, which changes at once.
 		window.location.hash = "#graph?closed=1";
-		await vi.waitFor(() =>
-			expect(window.location.hash).toBe("#graph?closed=1"),
-		);
-		await Promise.resolve();
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
 
 		expect(mcp.taskList).not.toHaveBeenCalled();
 	});
@@ -457,7 +469,7 @@ describe("App", () => {
 		await open("#graph");
 		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
 
-		canvas.onSelect(task.slug);
+		canvas.onSelect(task.slug, "task");
 
 		await vi.waitFor(() =>
 			expect(window.location.hash).toBe(`#graph?slug=${task.slug}`),
@@ -473,7 +485,7 @@ describe("App", () => {
 		await open("#graph");
 		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
 
-		canvas.onSelect(projectDetail.slug);
+		canvas.onSelect(projectDetail.slug, "project");
 
 		await vi.waitFor(() =>
 			expect(window.location.hash).toBe(
