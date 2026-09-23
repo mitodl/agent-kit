@@ -1,7 +1,8 @@
 import { html, nothing, svg, type TemplateResult } from "lit-html";
 import { ref } from "lit-html/directives/ref.js";
 import { emptyBox, errorBox } from "../chrome.js";
-import type { Route } from "../route.js";
+import { repoLabel } from "../format.js";
+import { type Route, routeHref } from "../route.js";
 import type { TaskRow, WorkflowProjectSummary } from "../types.js";
 
 /**
@@ -52,6 +53,26 @@ export interface GraphNode {
 	status: string;
 	/** Plain text. vis-network renders a string title as text, never as HTML. */
 	tooltip: string;
+	/** The untruncated title, for the list view. */
+	title: string;
+	/** The `GraphCluster.key` this node collapses into on a large graph. */
+	cluster: string;
+}
+
+/**
+ * A project and its tasks, or the tasks of one repo that have no project in
+ * the graph. What a large graph collapses into (see `CLUSTER_ABOVE`), and
+ * what the list view groups by.
+ */
+export interface GraphCluster {
+	/** The project's slug, or `repo:<uri>` for a repo's projectless tasks. */
+	key: string;
+	label: string;
+	/** The project's slug, or `null` for a repo group. */
+	project: string | null;
+	color: string;
+	/** Task slugs, in graph order. */
+	tasks: string[];
 }
 
 export interface GraphEdge {
@@ -64,7 +85,18 @@ export interface GraphEdge {
 export interface WorkflowGraph {
 	nodes: GraphNode[];
 	edges: GraphEdge[];
+	clusters: GraphCluster[];
 }
+
+/**
+ * Above this many nodes the canvas collapses each cluster into one node.
+ *
+ * Measured with the real canvas in headless Chromium: 400 tasks lay out in
+ * about a quarter of a second of main-thread time, 800 take 38 seconds, and
+ * 1,200 were still laying out after a minute. A graph-wide scope was about
+ * 1,150 live tasks when this was written.
+ */
+export const CLUSTER_ABOVE = 400;
 
 /** What the Graph tab reads, as the app hands it over. */
 export interface GraphData {
@@ -103,17 +135,28 @@ export function buildGraph(
 	const edges: GraphEdge[] = [];
 	const projectSlugs = new Set<string>();
 	const taskSlugs = new Set<string>();
+	const clusters = new Map<string, GraphCluster>();
 
 	for (const project of projects) {
 		projectSlugs.add(project.slug);
 		const status = project.status || "active";
+		const color = PROJECT_COLORS[status] ?? "#56b870";
+		clusters.set(project.slug, {
+			key: project.slug,
+			label: project.title || project.slug,
+			project: project.slug,
+			color,
+			tasks: [],
+		});
 		nodes.push({
 			id: project.slug,
 			label: truncate(project.title || project.slug, 40),
 			group: "project",
-			color: PROJECT_COLORS[status] ?? "#56b870",
+			color,
 			status,
 			tooltip: `${project.slug}\nphase: ${project.phase ?? "?"} · status: ${status}`,
+			title: project.title || project.slug,
+			cluster: project.slug,
 		});
 	}
 
@@ -122,6 +165,22 @@ export function buildGraph(
 		const status = task.status || "open";
 		const priority = task.priority || "p2";
 		const base = truncate(task.title || task.slug, 35);
+		const key =
+			task.project_slug && projectSlugs.has(task.project_slug)
+				? task.project_slug
+				: `repo:${task.repo ?? ""}`;
+		let cluster = clusters.get(key);
+		if (!cluster) {
+			cluster = {
+				key,
+				label: `${task.repo ? repoLabel(task.repo) : "No repo"} (no project)`,
+				project: null,
+				color: PROJECT_COLORS.abandoned ?? "",
+				tasks: [],
+			};
+			clusters.set(key, cluster);
+		}
+		cluster.tasks.push(task.slug);
 		nodes.push({
 			id: task.slug,
 			label:
@@ -130,6 +189,8 @@ export function buildGraph(
 			color: TASK_COLORS[status] ?? "#e8a33d",
 			status,
 			tooltip: `${task.slug}\nstatus: ${status} · priority: ${priority}\n${task.title}`,
+			title: task.title || task.slug,
+			cluster: key,
 		});
 	}
 
@@ -162,7 +223,7 @@ export function buildGraph(
 		}
 	}
 
-	return { nodes, edges };
+	return { nodes, edges, clusters: [...clusters.values()] };
 }
 
 /**
@@ -303,6 +364,15 @@ export function graphView(
         detail, or a project for its rollup.
       </p>
       ${
+				graph.nodes.length > CLUSTER_ABOVE
+					? html`<p class="note">
+              That is more than lays out usefully at once, so each project, and
+              each repo's tasks with no project, is drawn as one node. Click one
+              to open it, or narrow the graph by repo or project.
+            </p>`
+					: nothing
+			}
+      ${
 				data.truncated
 					? html`<p class="note">
               The task read hit its limit, so the graph may be missing tasks.
@@ -310,8 +380,63 @@ export function graphView(
 					: nothing
 			}
       ${legend()}
-      <div class="graph-canvas" ${ref(host.attach)}></div>
+      <div
+        class="graph-canvas"
+        role="img"
+        aria-label="Project and task graph. The List view below has every node as a link."
+        ${ref(host.attach)}
+      ></div>
+      ${listView(graph, route)}
     </section>
+  `;
+}
+
+/**
+ * Every node as a link, grouped as the canvas clusters them.
+ *
+ * The canvas is pointer-only: its nodes are neither focusable nor in the
+ * accessibility tree. This is the same graph for a keyboard or a screen
+ * reader, and its links go where a click on the canvas does.
+ */
+function listView(graph: WorkflowGraph, route: Route): TemplateResult {
+	const byId = new Map(graph.nodes.map((node) => [node.id, node]));
+	return html`
+    <details class="gr-list">
+      <summary>List view</summary>
+      <ul>
+        ${graph.clusters.map(
+					(cluster) => html`<li>
+            ${
+							cluster.project
+								? html`<a
+                    href=${routeHref(route, {
+											view: "projects",
+											project: cluster.project,
+											slug: null,
+										})}
+                    >${cluster.label}</a
+                  >`
+								: cluster.label
+						}
+            ${
+							cluster.tasks.length > 0
+								? html`<ul>
+                    ${cluster.tasks.map((slug) => {
+											const node = byId.get(slug);
+											return html`<li>
+                        <a href=${routeHref(route, { slug })}
+                          >${node?.title ?? slug}</a
+                        >
+                        <span class="muted">${node?.status}</span>
+                      </li>`;
+										})}
+                  </ul>`
+								: nothing
+						}
+          </li>`,
+				)}
+      </ul>
+    </details>
   `;
 }
 

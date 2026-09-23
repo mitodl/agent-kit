@@ -22,7 +22,11 @@ a memory. Graph is `witan graph`'s project and task graph, drawn with
 vis-network, which is bundled and loaded only when the tab is opened (spec
 §6.8). Its transform is a port of `witan/visualize.py`, held to the Python by
 `fixtures/graph.json`: the generator runs the real transform over the recorded
-list results and `views/graph.test.ts` compares.
+list results and `views/graph.test.ts` compares. Above 400 nodes each project,
+and each repo's projectless tasks, is drawn as one node that opens on click,
+because a graph-wide scope (about 1,150 live tasks) never finished laying out
+drawn whole. A List view under the canvas has every node as a link, since the
+canvas itself is pointer-only.
 
 ## Layout
 

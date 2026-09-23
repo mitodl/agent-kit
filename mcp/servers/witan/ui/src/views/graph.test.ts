@@ -14,6 +14,7 @@ import {
 	buildGraph,
 	type Canvas,
 	CanvasHost,
+	CLUSTER_ABOVE,
 	type GraphData,
 	graphView,
 	scopeTasks,
@@ -89,6 +90,48 @@ describe("buildGraph", () => {
 			"[p0] Urgent",
 			"Later",
 		]);
+	});
+});
+
+describe("buildGraph clusters", () => {
+	const project = projects[0] as WorkflowProjectSummary;
+
+	it("groups a project with its tasks, and projectless tasks by repo", () => {
+		const graph = buildGraph(
+			[project],
+			[
+				task("tk-in", { project_slug: project.slug }),
+				task("tk-loose-a", {
+					project_slug: null,
+					repo: "https://github.com/o/a",
+				}),
+				task("tk-loose-b", {
+					project_slug: null,
+					repo: "https://github.com/o/a",
+				}),
+				// Its project is not in the graph, so it is projectless here.
+				task("tk-orphan", { project_slug: "wp-gone", repo: null }),
+			],
+		);
+
+		expect(
+			graph.clusters.map(({ key, project: slug, tasks: members }) => ({
+				key,
+				slug,
+				members,
+			})),
+		).toEqual([
+			{ key: project.slug, slug: project.slug, members: ["tk-in"] },
+			{
+				key: "repo:https://github.com/o/a",
+				slug: null,
+				members: ["tk-loose-a", "tk-loose-b"],
+			},
+			{ key: "repo:", slug: null, members: ["tk-orphan"] },
+		]);
+		const byId = new Map(graph.nodes.map((node) => [node.id, node.cluster]));
+		expect(byId.get(project.slug)).toBe(project.slug);
+		expect(byId.get("tk-loose-b")).toBe("repo:https://github.com/o/a");
 	});
 });
 
@@ -168,6 +211,57 @@ describe("graphView", () => {
 		expect(text).toContain("4 tasks");
 		expect(text).toContain("7 edges");
 		expect(root.querySelector(".gr-legend")).not.toBeNull();
+	});
+
+	it("lists every node as a link, for a keyboard or a screen reader", () => {
+		const { mount } = fakeCanvas();
+		render(
+			graphView(
+				data,
+				route,
+				new CanvasHost(
+					mount,
+					() => {},
+					() => {},
+				),
+			),
+			root,
+		);
+		const links = [...root.querySelectorAll<HTMLAnchorElement>(".gr-list a")];
+		const hrefs = links.map((link) => link.getAttribute("href"));
+
+		// Each task goes where a click on its node does: the shared panel.
+		for (const row of tasks) {
+			expect(hrefs).toContain(`#graph?slug=${row.slug}`);
+		}
+		// And each project to its rollup.
+		expect(hrefs).toContain(`#projects?project=${projects[0]?.slug}`);
+		expect(links).toHaveLength(tasks.length + projects.length);
+	});
+
+	it("says why a large graph is drawn collapsed", () => {
+		const { mount } = fakeCanvas();
+		const many = Array.from({ length: CLUSTER_ABOVE }, (_, index) =>
+			task(`tk-many-${index}`, { project_slug: null }),
+		);
+		const host = new CanvasHost(
+			mount,
+			() => {},
+			() => {},
+		);
+
+		render(
+			graphView(
+				{ ...data, tasks: many.slice(0, CLUSTER_ABOVE - 1) },
+				route,
+				host,
+			),
+			root,
+		);
+		expect(root.textContent).not.toContain("drawn as one node");
+
+		render(graphView({ ...data, tasks: many }, route, host), root);
+		expect(root.textContent).toContain("drawn as one node");
 	});
 
 	it("says there is nothing to draw rather than drawing an empty canvas", () => {
@@ -264,7 +358,7 @@ describe("CanvasHost", () => {
 			() => {},
 			() => {},
 		);
-		host.show({ nodes: [], edges: [] }, null);
+		host.show({ nodes: [], edges: [], clusters: [] }, null);
 
 		host.attach(document.createElement("div"));
 		host.attach(document.createElement("div"));
