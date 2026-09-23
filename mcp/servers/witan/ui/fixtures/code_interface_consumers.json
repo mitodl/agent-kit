@@ -1,6 +1,7 @@
 {
   "result": [
     {
+      "confidence": 1.0,
       "file": "web/settings.py",
       "framework": "django",
       "generic": null,

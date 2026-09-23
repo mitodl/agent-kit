@@ -589,8 +589,12 @@ def _generate() -> dict[str, str]:
             }
         )
         # witan-code's store in the throwaway home too, and nothing that would
-        # point it at a remote code server instead.
+        # point it at a remote code server instead. WITAN_CONFIG is pinned as
+        # well as HOME: a [targets.*] block matching this repo can set
+        # `code_server`, and an env var set empty does not override it, so an
+        # inherited config would send this fictional seed to a shared bridge.
         os.environ["WITAN_CODE_DIR"] = str(home / "code")
+        os.environ["WITAN_CONFIG"] = str(home / ".config" / "witan" / "config.toml")
         for stale in (
             "CLAUDE_SESSION_ID",
             "WITAN_REMOTE_URL",

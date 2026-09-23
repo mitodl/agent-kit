@@ -1,6 +1,7 @@
 {
   "result": [
     {
+      "confidence": 1.0,
       "file": "src/web/__main__.py",
       "framework": "pulumi",
       "generic": null,

@@ -80,7 +80,7 @@ export function parseContractKey(
 	const at = value.indexOf(":");
 	const kind = value.slice(0, at);
 	const key = value.slice(at + 1);
-	return at > 0 && key && kind in KIND_COLORS
+	return at > 0 && key && Object.hasOwn(KIND_COLORS, kind)
 		? { kind: kind as ContractKind, key }
 		: null;
 }
@@ -100,11 +100,23 @@ export function knowsGeneric(deps: RepoDependencies): boolean {
  * The edges the route's browser-side filters leave, with each edge's weight
  * and kinds recounted from the contracts that survived.
  *
- * With the defaults (floor 0.5, generic shown) this is the tool's result
- * unchanged: the server already drops endpoint consumers under 0.5.
+ * With the defaults (all repos, floor 0.5, generic shown) this is the tool's
+ * result unchanged: the server already drops endpoint consumers under 0.5.
+ *
+ * ★ THE REPO IS MATCHED EXACTLY HERE, on top of the tool's own filter. The
+ * tool's `repo` is a substring, so scoping to `.../ol-django` also keeps the
+ * edges of `.../ol-django-extras`. The route's repo is a whole canonical URI,
+ * and an edge in scope is one with that repo at either end.
  */
 export function visibleEdges(deps: RepoDependencies, route: Route): DepEdge[] {
 	return deps.edges.flatMap((edge) => {
+		if (
+			route.repo &&
+			edge.consumer !== route.repo &&
+			edge.provider !== route.repo
+		) {
+			return [];
+		}
 		const contracts = edge.contracts.filter(
 			(contract) =>
 				contract.confidence >= route.confidence &&
@@ -177,12 +189,22 @@ export function bridgeView(props: BridgeViewProps): TemplateResult {
 			)}`;
 	}
 	const open = route.edge ? parseEdgeKey(route.edge) : null;
-	host.show({ repos: deps.repos, edges }, route.edge);
+	// Under a repo filter, the repos at the ends of its edges (or the repo
+	// alone, if it has none), rather than every repo the substring matched.
+	const repos = route.repo
+		? [
+				...new Set([
+					route.repo,
+					...edges.flatMap((e) => [e.consumer, e.provider]),
+				]),
+			]
+		: deps.repos;
+	host.show({ repos, edges }, route.edge);
 	return html`
     <section class="bridge" aria-label="Bridge">
       ${controls(props)}
       <p class="note">
-        ${deps.repos.length} ${deps.repos.length === 1 ? "repo" : "repos"} ·
+        ${repos.length} ${repos.length === 1 ? "repo" : "repos"} ·
         ${edges.length} ${edges.length === 1 ? "edge" : "edges"}. An edge points
         from the repo that depends to the repo it depends on. Choose one for
         the contracts behind it.
@@ -398,6 +420,27 @@ export function stage2(symbol: string | null): string | null {
 	return known.length > 0 ? known.join(" ") : null;
 }
 
+/**
+ * The rows that could have made the edge at this floor.
+ *
+ * `code_repo_dependencies` builds its edges only from endpoint consumers at
+ * or above 0.5, and the page's floor can raise that; the binding tools apply
+ * no floor at all. So an endpoint consumer row under the floor did not produce
+ * the edge being drilled, and is left out. A row with no score reads as 1, as
+ * witan-code's own readers treat it.
+ */
+export function producingRows(
+	rows: InterfaceBinding[],
+	floor: number,
+): InterfaceBinding[] {
+	return rows.filter(
+		(row) =>
+			row.role !== "consumer" ||
+			row.kind !== "endpoint" ||
+			(row.confidence ?? 1) >= floor,
+	);
+}
+
 /** One contract's bindings on the open edge. */
 export function bindingTable(rows: InterfaceBinding[]): TemplateResult {
 	if (rows.length === 0) {
@@ -421,7 +464,14 @@ export function bindingTable(rows: InterfaceBinding[]): TemplateResult {
       <tbody>
         ${rows.map(
 					(row) => html`<tr>
-            <td>${row.role}</td>
+            <td>
+              ${row.role}
+              ${
+								row.confidence != null && row.confidence < 1
+									? html`<span class="muted">${row.confidence.toFixed(2)}</span>`
+									: nothing
+							}
+            </td>
             <td>${repoLabel(row.repo)}</td>
             <td><code>${row.key}</code></td>
             <td>

@@ -110,8 +110,9 @@ const OPTIONAL_FIELDS: Record<string, string[]> = {
 	memory_contradictions: [],
 	topic_get: [],
 	code_repo_dependencies: [],
-	code_interface_providers: [],
-	code_interface_consumers: [],
+	// `InterfaceBinding.confidence`: a witan-code older than the field omits it.
+	code_interface_providers: ["confidence"],
+	code_interface_consumers: ["confidence"],
 };
 
 /** `../fixtures/task_get.missing.json` -> `task_get`. */

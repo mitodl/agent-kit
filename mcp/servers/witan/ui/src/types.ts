@@ -391,6 +391,11 @@ export interface InterfaceBinding {
 	generic: string | null;
 	/** The Stage-2 canonical symbol, `{scheme}:{manager}:{package}:{version}:{descriptor}`. */
 	symbol: string | null;
+	/**
+	 * Endpoint-consumer trust, 0 to 1; null reads as 1. Optional: a witan-code
+	 * older than the field does not return it.
+	 */
+	confidence?: number | null;
 }
 
 // ── Runtime guards ─────────────────────────────────────────────────
@@ -804,19 +809,23 @@ export function isRepoDependencies(value: unknown): value is RepoDependencies {
 }
 
 export function isInterfaceBinding(value: unknown): value is InterfaceBinding {
-	return matches(value, {
-		slug: str,
-		kind: contractKind,
-		key: str,
-		key_norm: str,
-		role: oneOf("provider", "consumer", "shared"),
-		repo: str,
-		file: str,
-		symbol_id: nullable(str),
-		line: nullable(num),
-		language: nullable(str),
-		framework: nullable(str),
-		generic: nullable(str),
-		symbol: nullable(str),
-	});
+	return matches(
+		value,
+		{
+			slug: str,
+			kind: contractKind,
+			key: str,
+			key_norm: str,
+			role: oneOf("provider", "consumer", "shared"),
+			repo: str,
+			file: str,
+			symbol_id: nullable(str),
+			line: nullable(num),
+			language: nullable(str),
+			framework: nullable(str),
+			generic: nullable(str),
+			symbol: nullable(str),
+		},
+		{ confidence: nullable(num) },
+	);
 }

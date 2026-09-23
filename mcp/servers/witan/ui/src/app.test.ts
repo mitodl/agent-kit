@@ -984,6 +984,29 @@ describe("the Bridge tab", () => {
 		expect(tabs).not.toContain("Bridge");
 	});
 
+	it("asks again after a failed first check, rather than hiding the tab for good", async () => {
+		// The page loaded while the server restarted: every other tab recovers
+		// on its next read, and so must this one.
+		vi.mocked(mcp.codeGraphAvailable)
+			.mockRejectedValueOnce(new Error("connection refused"))
+			.mockResolvedValue(true);
+		await open("#bridge");
+		await vi.waitFor(() => expect(mcp.codeGraphAvailable).toHaveBeenCalled());
+
+		window.dispatchEvent(new Event("focus"));
+
+		await vi.waitFor(() => expect(bridgeCanvas.update).toHaveBeenCalled());
+		expect(mcp.codeGraphAvailable).toHaveBeenCalledTimes(2);
+	});
+
+	it("says it is checking, not that witan-code is missing, before the answer", async () => {
+		vi.mocked(mcp.codeGraphAvailable).mockReturnValue(new Promise(() => {}));
+		await open("#bridge");
+
+		expect(text()).toContain("Checking whether this server has the code graph");
+		expect(text()).not.toContain("not installed");
+	});
+
 	it("passes the kind and precision to the tool, and filters the rest here", async () => {
 		await open("#bridge?contract=env_var&precise=1");
 		await vi.waitFor(() =>

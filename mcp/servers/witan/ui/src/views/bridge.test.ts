@@ -21,6 +21,7 @@ import {
 	type OnSelectEdge,
 	parseContractKey,
 	parseEdgeKey,
+	producingRows,
 	stage2,
 	visibleEdges,
 } from "./bridge.js";
@@ -99,6 +100,80 @@ describe("visibleEdges", () => {
 	});
 });
 
+describe("visibleEdges under a repo filter", () => {
+	it("keeps only edges with that exact repo at an end", () => {
+		// The tool's `repo` is a substring, so `.../ol-django` brings back
+		// `.../ol-django-extras` too; the route's repo is a whole URI.
+		const DJANGO = "https://github.com/mitodl/ol-django";
+		const EXTRAS = "https://github.com/mitodl/ol-django-extras";
+		const scoped: RepoDependencies = {
+			repos: [DJANGO, EXTRAS, INFRA],
+			edges: [
+				{
+					consumer: DJANGO,
+					provider: INFRA,
+					weight: 1,
+					kinds: { env_var: 1 },
+					contracts: [{ kind: "env_var", key: "A", confidence: 1 }],
+				},
+				{
+					consumer: EXTRAS,
+					provider: INFRA,
+					weight: 1,
+					kinds: { env_var: 1 },
+					contracts: [{ kind: "env_var", key: "B", confidence: 1 }],
+				},
+			],
+		};
+		expect(
+			visibleEdges(scoped, { ...route, repo: DJANGO }).map((e) => e.consumer),
+		).toEqual([DJANGO]);
+	});
+});
+
+describe("producingRows", () => {
+	const row = unwrap<InterfaceBinding[]>(
+		"code_interface_consumers",
+		consumersFixture,
+	)[0] as InterfaceBinding;
+
+	it("drops endpoint consumers under the floor, which made no edge", () => {
+		const rows: InterfaceBinding[] = [
+			{
+				...row,
+				kind: "endpoint",
+				role: "consumer",
+				file: "kept.py",
+				confidence: 0.7,
+			},
+			{
+				...row,
+				kind: "endpoint",
+				role: "consumer",
+				file: "phantom.py",
+				confidence: 0.2,
+			},
+			{
+				...row,
+				kind: "endpoint",
+				role: "provider",
+				file: "served.py",
+				confidence: 0.2,
+			},
+		];
+		expect(producingRows(rows, 0.5).map((r) => r.file)).toEqual([
+			"kept.py",
+			"served.py",
+		]);
+		expect(producingRows(rows, 0.9).map((r) => r.file)).toEqual(["served.py"]);
+	});
+
+	it("reads a missing score as 1, as witan-code's own readers do", () => {
+		const { confidence: _, ...old } = { ...row, kind: "endpoint" as const };
+		expect(producingRows([old], 0.9)).toHaveLength(1);
+	});
+});
+
 describe("knowsGeneric", () => {
 	it("is false for a witan-code that predates the flag", () => {
 		// Its toggle could never hide anything, so it is not offered.
@@ -125,6 +200,8 @@ describe("route keys", () => {
 
 	it("refuse a contract of a kind the bridge does not have", () => {
 		expect(parseContractKey("database:x")).toBeNull();
+		// Not an own key, so not a kind: a hand-edited URL must not send it on.
+		expect(parseContractKey("toString:x")).toBeNull();
 		expect(parseEdgeKey("only-one")).toBeNull();
 	});
 });
