@@ -33,6 +33,17 @@ _WITAN_CODE_ARGS = [
 # git `main`.
 _CLI_HOOK_PLATFORMS = ("claude", "pi")
 
+# How long the prompt-path `witan-code inject-context` may run before its
+# output is abandoned — the Claude `UserPromptSubmit` hook below AND the Pi
+# extension's `before_agent_start` (`extensions/pi/codegraph.ts`, which spells
+# it `INJECT_CONTEXT_TIMEOUT_MS`; tests/test_setup.py asserts the two agree).
+# The first prompt in a cache window can pay a cold store read of ~10s, and it
+# has to finish once to populate the on-disk cache: a timeout inside that cold
+# path kills the read, discards the block, and leaves every later prompt cold
+# too. 15s gives that path headroom while still degrading a hung git/store
+# read to "no context" rather than a stalled turn.
+INJECT_CONTEXT_TIMEOUT_SECONDS = 15
+
 
 def witan_code_bundle(
     pkg_dir: Path, author: str, *, binary: str = "witan-code"
@@ -71,8 +82,9 @@ def witan_code_bundle(
     # Bare CLI commands, no wrapper script — portable everywhere `binary`
     # installs (Windows included, where bash/setsid don't exist), matching
     # witan's own `witan inject-context`/`session-checkpoint` hooks. The
-    # prompt-path timeouts mirror witan's: a hung git or store read must
-    # degrade to no context/no compaction, never stall the agent.
+    # prompt-path timeouts exist for the same reason as witan's: a hung git or
+    # store read must degrade to no context/no compaction, never stall the
+    # agent (INJECT_CONTEXT_TIMEOUT_SECONDS says why inject-context gets 15s).
     hooks: list[Hook] = [
         DeclarativeHook(
             event=HookEvent.SESSION_START,
@@ -86,7 +98,7 @@ def witan_code_bundle(
         DeclarativeHook(
             event=HookEvent.USER_PROMPT_SUBMIT,
             command=f"{binary} inject-context",
-            timeout_seconds=15,
+            timeout_seconds=INJECT_CONTEXT_TIMEOUT_SECONDS,
         ),
         DeclarativeHook(
             event=HookEvent.STOP,

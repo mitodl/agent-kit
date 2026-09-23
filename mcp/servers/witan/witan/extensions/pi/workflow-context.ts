@@ -26,6 +26,20 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+/**
+ * How long before_agent_start waits for `witan inject-context`: 45s, the same
+ * budget as the Claude `UserPromptSubmit` hook `witan setup` installs
+ * (`witan.setup.INJECT_CONTEXT_TIMEOUT_SECONDS`; tests/test_setup.py asserts
+ * the two agree). 5s cleared the warm output-cache hit (0.6-0.9s measured in
+ * agent-kit#349) but sat far below the cold path (16-23s there), so every
+ * prompt that missed the 30s cache silently contributed no block. A timeout
+ * is still wanted — a hung read must degrade to no context rather than stall
+ * the turn — but it has to sit above the cold path, not inside it.
+ *
+ * Only this prompt-injection read waits. session_shutdown stays detached.
+ */
+const INJECT_CONTEXT_TIMEOUT_MS = 45_000;
+
 /** Run a witan subcommand detached in the background; ignore all failures. */
 function runInBackground(args: string[], cwd?: string): void {
 	try {
@@ -44,16 +58,11 @@ function runInBackground(args: string[], cwd?: string): void {
 export default function workflowContextExtension(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", async (event: any, ctx: any) => {
 		try {
-			// 45s, matching the Claude hook `witan setup` installs. 5s cleared
-			// the warm output-cache hit (0.6-0.9s measured in agent-kit#349)
-			// but sat far below the cold path (16-23s there), so every prompt
-			// that missed the 30s cache silently contributed no block. A
-			// timeout is still wanted — a hung read must degrade to no
-			// context rather than stall the turn — but it has to sit above
-			// the cold path, not inside it.
+			// A timeout, a missing CLI, or a non-zero exit all land in the
+			// `r.status !== 0` branch below: no context, never a thrown error.
 			const r = spawnSync("witan", ["inject-context"], {
 				encoding: "utf8",
-				timeout: 45000,
+				timeout: INJECT_CONTEXT_TIMEOUT_MS,
 				cwd: ctx?.cwd,
 			});
 			const text = (r.stdout ?? "").trim();

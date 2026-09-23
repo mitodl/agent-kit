@@ -45,6 +45,13 @@ _WITAN_ARGS = [
 # `--with`-bearing uvx form does.
 _CLI_HOOK_PLATFORMS = ("claude", "pi")
 
+# How long the prompt-path `witan inject-context` may run before its output is
+# abandoned — the Claude `UserPromptSubmit` hook below AND the Pi extension's
+# `before_agent_start` (`extensions/pi/workflow-context.ts`, which spells it
+# `INJECT_CONTEXT_TIMEOUT_MS`; tests/test_setup.py asserts the two agree). Why
+# 45s rather than something tighter is in `witan_bundle`'s hook comment.
+INJECT_CONTEXT_TIMEOUT_SECONDS = 45
+
 
 def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     skills_dir = pkg_dir / "skills"
@@ -74,8 +81,9 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     #
     # inject-context is a read path, measured at 16-23s cold on a graph with 19
     # active projects and 184 ready tasks. The reads behind that are fixed, so
-    # 45s is headroom for a graph bigger than the one measured, not a budget
-    # anything is expected to use.
+    # 45s (INJECT_CONTEXT_TIMEOUT_SECONDS) is headroom for a graph bigger than
+    # the one measured, not a budget anything is expected to use. Pi's
+    # workflow-context extension waits the same 45s for the same command.
     #
     # session-checkpoint is a WRITE path (`workflow_session_end`), and a single
     # write against a deployment has been measured at up to 51s — see the
@@ -87,7 +95,7 @@ def witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
         DeclarativeHook(
             event=HookEvent.USER_PROMPT_SUBMIT,
             command="witan inject-context",
-            timeout_seconds=45,
+            timeout_seconds=INJECT_CONTEXT_TIMEOUT_SECONDS,
         ),
         DeclarativeHook(
             event=HookEvent.STOP,
