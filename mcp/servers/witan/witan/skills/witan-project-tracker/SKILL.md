@@ -34,10 +34,16 @@ When the hook injects context showing an active project that matches your work:
 ```
 workflow_session_start(
     project_slug="wp-add-vault-k8s-auth-a3f912",
-    session_id="<$CLAUDE_SESSION_ID on Claude Code, or any stable session UUID>",
+    session_id="<$CLAUDE_SESSION_ID on Claude Code, $PI_SESSION_ID on Pi>",
     phase="implementation",
 )
 ```
+
+Read the id with `echo "${CLAUDE_SESSION_ID:-$PI_SESSION_ID}"` in your shell
+tool rather than inventing one: the Claude Code Stop hook and the Pi workflow
+extension's shutdown handler find the session to auto-close by that same id.
+Only on an agent that sets neither, use any stable per-session string and close
+the session explicitly.
 
 Link the session before doing substantive work. The phase should reflect what
 this particular session will focus on, not necessarily the project's current
@@ -67,7 +73,7 @@ Then immediately start a session:
 ```
 workflow_session_start(
     project_slug="<slug returned above>",
-    session_id="<session UUID>",
+    session_id="<$CLAUDE_SESSION_ID on Claude Code, $PI_SESSION_ID on Pi>",
     phase="discovery",
 )
 ```

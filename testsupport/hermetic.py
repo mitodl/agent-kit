@@ -115,8 +115,11 @@ _CLEARED = (
     "WITAN_SCAN_PLUGINS",
     "WITAN_SCAN_ALLOWLIST",
     # Identity of the calling agent session, which several code paths record
-    # as provenance.
+    # as provenance. Pi's is a fallback for Claude's (see
+    # witan.session_state.current_session_id), so a suite run from inside a Pi
+    # bash command would otherwise pick up the live Pi session.
     "CLAUDE_SESSION_ID",
+    "PI_SESSION_ID",
     # Observability: an exporter endpoint set on a developer's box would have
     # the suite emit spans at a real collector.
     "OTEL_EXPORTER_OTLP_ENDPOINT",

@@ -115,7 +115,9 @@ def session_checkpoint() -> None:
     from .. import maintenance, session_state
     from ._common import _fn, _srv
 
-    session_id = os.environ.get("CLAUDE_SESSION_ID") or ""
+    # $CLAUDE_SESSION_ID under Claude Code's Stop hook; $PI_SESSION_ID under
+    # Pi, whose workflow extension sets it on this process at session_shutdown.
+    session_id = session_state.current_session_id()
     handle = session_state.read_handle(session_id)
     session_slug = (handle or {}).get("session_slug")
     if session_slug:

@@ -100,7 +100,7 @@ Two arguments the deployed server cannot resolve for itself are filled in
 client-side before dispatch: `repo` (it has no git checkout) and `session_slug`
 (the protocol carries no session state, and a replica shares no filesystem with
 your agent). The latter comes from the handle `witan session start` parked under
-`$CLAUDE_SESSION_ID`, so memories written remotely keep their `SessionProduced`
+the agent session id (`$CLAUDE_SESSION_ID`, else `$PI_SESSION_ID`), so memories written remotely keep their `SessionProduced`
 provenance. Pass either explicitly to override.
 
 ```bash
@@ -641,8 +641,9 @@ current git repo to stdout, for the `UserPromptSubmit` hook
 ### `session-checkpoint`
 
 Auto-close the active WorkflowSession on agent stop: reads back the session
-handle `workflow_session_start` returned (persisted client-side under
-`$CLAUDE_SESSION_ID`) and passes its `session_slug` to `workflow_session_end`.
+handle `workflow_session_start` returned (persisted client-side under the agent
+session id: `$CLAUDE_SESSION_ID`, else `$PI_SESSION_ID`, which the Pi workflow
+extension sets on this command at `session_shutdown`) and passes its `session_slug` to `workflow_session_end`.
 The call is dispatched the same way every other CLI command is, so it reaches
 the deployment when `WITAN_REMOTE_URL` is set. No-op if there is no handle —
 the session was already closed explicitly (Stop hook). No flags.

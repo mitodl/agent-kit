@@ -8,10 +8,14 @@
  *  - `workflow-session-checkpoint.sh` (Stop): on session end, runs `witan
  *    session-checkpoint`, which opportunistically compacts the memory graph
  *    store (throttled; see witan.maintenance.spawn_background_optimize) so
- *    query latency doesn't re-bloat — see #124. It also tries to auto-close
- *    the active WorkflowSession, but that half is keyed on
- *    `CLAUDE_SESSION_ID` and safely no-ops under Pi (unset env var); the
- *    optimize half has no such dependency, so it *is* safe to mirror here.
+ *    query latency doesn't re-bloat — see #124. It also auto-closes the
+ *    active WorkflowSession, looked up by the agent session id. Pi exposes
+ *    `PI_SESSION_ID` only to its bash tool's commands, not to its own process
+ *    env, so the handler sets it on the checkpoint child explicitly from
+ *    `ctx.sessionManager.getSessionId()` — the same value the agent passed
+ *    as `session_id` to `workflow_session_start` (read via
+ *    `echo $PI_SESSION_ID`). No session id, no handle: the close no-ops and
+ *    the compaction still runs.
  *
  * Both delegate to the `witan` CLI. Requires `witan` on PATH
  * (`uv tool install git+https://github.com/mitodl/agent-kit#subdirectory=mcp/servers/witan`).
@@ -41,12 +45,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const INJECT_CONTEXT_TIMEOUT_MS = 45_000;
 
 /** Run a witan subcommand detached in the background; ignore all failures. */
-function runInBackground(args: string[], cwd?: string): void {
+function runInBackground(
+	args: string[],
+	cwd?: string,
+	env?: NodeJS.ProcessEnv,
+): void {
 	try {
 		const child = spawn("witan", args, {
 			detached: true,
 			stdio: "ignore",
 			...(cwd ? { cwd } : {}),
+			...(env ? { env } : {}),
 		});
 		child.on("error", () => {}); // CLI not installed, etc.
 		child.unref();
@@ -78,6 +87,28 @@ export default function workflowContextExtension(pi: ExtensionAPI): void {
 	// Detached and non-blocking — session_shutdown fires before teardown, not
 	// after, so this must not wait on the child process.
 	pi.on("session_shutdown", async (_event, ctx: any) => {
-		runInBackground(["session-checkpoint"], ctx?.cwd);
+		runInBackground(["session-checkpoint"], ctx?.cwd, checkpointEnv(ctx));
 	});
+}
+
+/**
+ * The checkpoint child's env: Pi's own, plus this session's `PI_SESSION_ID`
+ * so `witan session-checkpoint` finds the handle `workflow_session_start`
+ * parked under it. Only the child's copy is touched. `CLAUDE_SESSION_ID` is
+ * dropped from that copy because witan prefers it over `PI_SESSION_ID`, and a
+ * value inherited from an enclosing Claude Code session names a different
+ * session than the one shutting down. Undefined (inherit unchanged) when the
+ * id is unavailable — the close then no-ops.
+ */
+function checkpointEnv(ctx: any): NodeJS.ProcessEnv | undefined {
+	let sessionId: string | undefined;
+	try {
+		sessionId = ctx?.sessionManager?.getSessionId?.();
+	} catch {
+		sessionId = undefined;
+	}
+	if (!sessionId) return undefined;
+	const env: NodeJS.ProcessEnv = { ...process.env, PI_SESSION_ID: sessionId };
+	delete env.CLAUDE_SESSION_ID;
+	return env;
 }
