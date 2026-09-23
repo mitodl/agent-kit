@@ -115,12 +115,18 @@ SEARCH_LIMIT=1000
 
 # Run a `gh search` command with the result cap and newest-first ordering, so
 # that if the cap is ever hit the oldest items are the ones dropped, and say so.
+# A failed search still yields [] so one org can't sink the whole run, but it
+# warns: a silently empty org reads the same as an idle one.
 _capped_search() {
 	local label="$1"
 	shift
-	local out
-	out="$("$@" --sort updated --order desc --limit "$SEARCH_LIMIT" 2>/dev/null || echo "[]")"
-	if (($(jq length <<<"$out") >= SEARCH_LIMIT)); then
+	local out count
+	if ! out="$("$@" --sort updated --order desc --limit "$SEARCH_LIMIT")"; then
+		echo "Warning: $label search failed; its results are missing" >&2
+		out="[]"
+	fi
+	count="$(jq length <<<"$out" 2>/dev/null)" || count=0
+	if ((count >= SEARCH_LIMIT)); then
 		echo "Warning: $label search hit the $SEARCH_LIMIT-result cap; older items are missing" >&2
 	fi
 	printf '%s\n' "$out"
