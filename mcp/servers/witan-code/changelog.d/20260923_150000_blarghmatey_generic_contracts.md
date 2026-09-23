@@ -11,3 +11,10 @@
   consumer under 0.5 makes no `code_repo_dependencies` edge, but these tools
   return every row, so without the score a reader could not tell the rows that
   made an edge from the phantoms. Additive.
+- **`code_interface_providers` and `code_interface_consumers` take
+  `in_repo`**, an exact repo URI to narrow to. It is applied in the query, so
+  the 500-row limit counts that repo's rows: a key bound in more than 500
+  places across every repo could otherwise cut off the repo being asked about.
+  Named `in_repo` rather than `repo` because the remote proxy fills an omitted
+  `repo` with the caller's detected one, which would have narrowed every
+  existing call. Omitted, every repo, as before.

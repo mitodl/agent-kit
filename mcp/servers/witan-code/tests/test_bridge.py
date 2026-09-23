@@ -415,6 +415,18 @@ def test_cross_repo_env_and_endpoint_linkage(tmp_path, monkeypatch):
     # ones that did not.
     assert all(isinstance(c["confidence"], float) for c in ep_consumers)
 
+    # `in_repo` narrows in the query, to that exact repo.
+    only_b = _fn(srv.code_interface_providers)(
+        "env_var", "MITOL_APP_BASE_URL", in_repo="https://github.com/test/repo-b"
+    )
+    assert only_b == providers
+    assert (
+        _fn(srv.code_interface_providers)(
+            "env_var", "MITOL_APP_BASE_URL", in_repo="https://github.com/test/repo-a"
+        )
+        == []
+    )
+
 
 @requires_stack
 def test_repo_symbols_not_read_without_endpoint_consumers(tmp_path, monkeypatch):
