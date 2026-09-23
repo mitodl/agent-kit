@@ -353,6 +353,41 @@ def test_build_graph_confidence_on_emitted_edge_contracts():
     assert ep_contracts[0]["confidence"] == 0.75
 
 
+def test_build_graph_flags_generic_contracts_without_dropping_them():
+    """A stoplisted key still makes its edge, flagged, so a reader can hide it."""
+    rows = [
+        {
+            "kind": "env_var",
+            "key_norm": "PORT",
+            "role": "consumer",
+            "repo": A,
+            "generic": "1",
+        },
+        {
+            "kind": "env_var",
+            "key_norm": "PORT",
+            "role": "provider",
+            "repo": B,
+            "generic": "1",
+        },
+        {
+            "kind": "env_var",
+            "key_norm": "MITOL_APP_BASE_URL",
+            "role": "consumer",
+            "repo": A,
+        },
+        {
+            "kind": "env_var",
+            "key_norm": "MITOL_APP_BASE_URL",
+            "role": "provider",
+            "repo": B,
+        },
+    ]
+    g = visualize.build_graph(rows)
+    flags = {c["key"]: c["generic"] for c in g.edges[(A, B)].contracts}
+    assert flags == {"PORT": True, "MITOL_APP_BASE_URL": False}
+
+
 def test_build_graph_rejects_invalid_min_precision():
     with pytest.raises(ValueError):
         visualize.build_graph(ROWS, min_precision="nonsense")
