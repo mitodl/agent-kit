@@ -113,8 +113,25 @@ describe("formatRoute", () => {
 				tag: "mcp",
 				author: "fixtures",
 			},
+			contract: "endpoint",
+			confidence: 0.7,
+			hideGeneric: true,
+			precise: true,
+			edge: "https://github.com/example/web|https://github.com/example/api",
+			// A key with its own colons: the value splits on the first one only.
+			binding: "service:repo:https://github.com/example/web",
 		};
 		expect(parseRoute(formatRoute(route))).toEqual(route);
+	});
+
+	it("falls back to the server's floor for a confidence it does not offer", () => {
+		// Below 0.5 would promise edges the server already dropped.
+		expect(parseRoute("#bridge?confidence=0.1").confidence).toBe(0.5);
+		expect(parseRoute("#bridge?confidence=0.9").confidence).toBe(0.9);
+	});
+
+	it("drops a contract kind it does not know", () => {
+		expect(parseRoute("#bridge?contract=database").contract).toBeNull();
 	});
 
 	it("falls back to the default window for one it does not offer", () => {

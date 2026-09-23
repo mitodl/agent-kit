@@ -64,9 +64,25 @@ BOUND_TOOLS = (
     "memory_neighbors",
     "memory_contradictions",
     "topic_get",
+    "code_repo_dependencies",
+    "code_interface_providers",
+    "code_interface_consumers",
+)
+
+# Bound tools a server may legitimately lack: witan-code is a separate package,
+# mounted only when installed (ADR 0011, 2026-09-23 amendment). Recorded as
+# optional so the page tolerates their absence instead of failing its
+# once-per-load check against `tools/list`.
+OPTIONAL_TOOLS = frozenset(
+    {"code_repo_dependencies", "code_interface_providers", "code_interface_consumers"}
 )
 
 REPO_URI = "https://github.com/mitodl/agent-kit"
+
+# The bridge seed's repos. Fictional, so the fixtures carry nobody's code.
+_INFRA = "https://github.com/example/infra"
+_WEB = "https://github.com/example/web"
+_API = "https://github.com/example/api"
 
 
 class _NoElicitCtx:
@@ -253,6 +269,131 @@ _SLUG_PREFIXES = "pat|pf|les|ctx|wp|ws|wt|tk|tc|mem"
 _SLUGGED = re.compile(rf"^({_SLUG_PREFIXES})-.+-[0-9a-f]{{6}}$")
 
 
+def _seed_bridge() -> None:
+    """A small cross-repo bridge: every edge shape the explorer draws.
+
+    Written straight through ``bridge.write_bindings`` rather than by indexing
+    real checkouts, so the seed is a handful of rows instead of three repos on
+    disk. ``infra`` provides ``DATABASE_URL`` and the stoplisted ``PORT`` that
+    ``web`` reads, and deploys ``web`` (a service edge); ``web`` calls an
+    endpoint ``api`` serves and imports the client package ``api`` publishes.
+    """
+    from witan_code import bridge
+    from witan_code import config as code_cfg
+    from witan_code.bridge_extractors import ParsedBinding
+
+    cfg = code_cfg.load()
+    seeds = {
+        _INFRA: [
+            ParsedBinding(
+                kind="env_var",
+                key="DATABASE_URL",
+                key_norm="DATABASE_URL",
+                role="provider",
+                file="src/web/__main__.py",
+                line=12,
+                language="python",
+                framework="pulumi",
+            ),
+            ParsedBinding(
+                kind="env_var",
+                key="PORT",
+                key_norm="PORT",
+                role="provider",
+                file="src/web/__main__.py",
+                line=13,
+                language="python",
+                framework="pulumi",
+                generic=True,
+            ),
+            ParsedBinding(
+                kind="service",
+                key=f"repo:{_WEB}",
+                key_norm=f"repo:{_WEB}",
+                role="provider",
+                file="src/web/__main__.py",
+                sub_kind="repo",
+                line=20,
+                language="python",
+                framework="pulumi",
+            ),
+        ],
+        _WEB: [
+            ParsedBinding(
+                kind="env_var",
+                key="DATABASE_URL",
+                key_norm="DATABASE_URL",
+                role="consumer",
+                file="web/settings.py",
+                line=40,
+                language="python",
+                framework="django",
+                symbol_id=f"{_WEB}#web/settings.py::DATABASES",
+            ),
+            ParsedBinding(
+                kind="env_var",
+                key="PORT",
+                key_norm="PORT",
+                role="consumer",
+                file="web/settings.py",
+                line=41,
+                language="python",
+                framework="django",
+                generic=True,
+            ),
+            ParsedBinding(
+                kind="endpoint",
+                key="GET /api/v1/courses/42",
+                key_norm="/api/v1/courses/{}",
+                role="consumer",
+                file="web/courses.py",
+                line=8,
+                language="python",
+                symbol_id=f"{_WEB}#web/courses.py::fetch_course",
+            ),
+            ParsedBinding(
+                kind="package",
+                key="example-api-client",
+                key_norm="example-api-client",
+                role="consumer",
+                file="pyproject.toml",
+                line=9,
+                language="toml",
+            ),
+        ],
+        _API: [
+            ParsedBinding(
+                kind="endpoint",
+                key="GET /api/v1/courses/{id}",
+                key_norm="/api/v1/courses/{}",
+                role="provider",
+                file="api/views.py",
+                line=30,
+                language="python",
+                framework="drf",
+                symbol_id=f"{_API}#api/views.py::CourseView",
+            ),
+            ParsedBinding(
+                kind="package",
+                key="example-api-client",
+                key_norm="example-api-client",
+                role="provider",
+                file="client/pyproject.toml",
+                line=2,
+                language="toml",
+            ),
+        ],
+    }
+    for repo, bindings in seeds.items():
+        bridge.write_bindings(
+            bindings,
+            repo,
+            cfg,
+            full_repo=False,
+            touched_files=tuple(sorted({b.file for b in bindings})),
+        )
+
+
 def _jsonable(value):
     """Round-trip through JSON before normalizing.
 
@@ -311,6 +452,12 @@ def _calls(slugs: dict[str, str]) -> dict[str, dict]:
         # `name:kind`, not a bare tag: a plain name resolves nothing and the
         # fixture would record the null case twice over.
         "topic_get": {"topic": "witan-ui:topic"},
+        # `repo` explicit, as for every other tool: "" is every repo.
+        "code_repo_dependencies": {"repo": ""},
+        # `kind` and `key` explicit: the ADR 0011 amendment's rule, and what
+        # an edge's contract hands the drill-down.
+        "code_interface_providers": {"kind": "env_var", "key": "DATABASE_URL"},
+        "code_interface_consumers": {"kind": "env_var", "key": "DATABASE_URL"},
     }
 
 
@@ -329,6 +476,13 @@ async def _collect(store: Path) -> dict[str, str]:
     from witan import server as srv
 
     srv.client = graph_mod.OmnigraphClient(str(store), cfg_mod.load().queries_dir)
+
+    # Mounted as `witan serve` and `witan ui` mount it, so the code tools are
+    # recorded through the same server the page talks to.
+    from witan_code.server import mcp as code_mcp
+
+    srv.mcp.mount(code_mcp)
+    _seed_bridge()
 
     slugs = await _seed(srv)
     written: dict[str, str] = {}
@@ -354,6 +508,8 @@ async def _collect(store: Path) -> dict[str, str]:
                         )
                     ),
                     "output_schema": by_name[name].output_schema,
+                    # Whether a server may lack it. See OPTIONAL_TOOLS.
+                    "optional": name in OPTIONAL_TOOLS,
                 }
                 for name in BOUND_TOOLS
             },
@@ -432,7 +588,22 @@ def _generate() -> dict[str, str]:
                 "WITAN_OPTIMIZE_INTERVAL": "0",
             }
         )
-        for stale in ("CLAUDE_SESSION_ID", "WITAN_REMOTE_URL", "WITAN_TARGET"):
+        # witan-code's store in the throwaway home too, and nothing that would
+        # point it at a remote code server instead. WITAN_CONFIG is pinned as
+        # well as HOME: a [targets.*] block matching this repo can set
+        # `code_server`, and an env var set empty does not override it, so an
+        # inherited config would send this fictional seed to a shared bridge.
+        os.environ["WITAN_CODE_DIR"] = str(home / "code")
+        os.environ["WITAN_CONFIG"] = str(home / ".config" / "witan" / "config.toml")
+        for stale in (
+            "CLAUDE_SESSION_ID",
+            "WITAN_REMOTE_URL",
+            "WITAN_TARGET",
+            "WITAN_CODE_SERVER",
+            "WITAN_CODE_TOKEN",
+            "WITAN_CODE_TRANSPORT",
+            "WITAN_CODE_INDEX_ROLE",
+        ):
             os.environ.pop(stale, None)
         written = asyncio.run(_collect(store))
     written["repo-keys.json"] = _repo_keys()

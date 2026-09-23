@@ -1,5 +1,54 @@
 {
+  "code_interface_consumers": {
+    "optional": true,
+    "output_schema": {
+      "properties": {
+        "result": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "x-fastmcp-wrap-result": true
+    },
+    "wrapped": true
+  },
+  "code_interface_providers": {
+    "optional": true,
+    "output_schema": {
+      "properties": {
+        "result": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "type": "object",
+      "x-fastmcp-wrap-result": true
+    },
+    "wrapped": true
+  },
+  "code_repo_dependencies": {
+    "optional": true,
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "wrapped": false
+  },
   "memory_contradictions": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -19,6 +68,7 @@
     "wrapped": true
   },
   "memory_get": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -42,6 +92,7 @@
     "wrapped": true
   },
   "memory_list": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -61,6 +112,7 @@
     "wrapped": true
   },
   "memory_neighbors": {
+    "optional": false,
     "output_schema": {
       "additionalProperties": true,
       "type": "object"
@@ -68,6 +120,7 @@
     "wrapped": false
   },
   "memory_search": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -87,6 +140,7 @@
     "wrapped": true
   },
   "recall": {
+    "optional": false,
     "output_schema": {
       "additionalProperties": true,
       "type": "object"
@@ -94,6 +148,7 @@
     "wrapped": false
   },
   "task_get": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -117,6 +172,7 @@
     "wrapped": true
   },
   "task_list": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -136,6 +192,7 @@
     "wrapped": true
   },
   "task_ready": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -155,6 +212,7 @@
     "wrapped": true
   },
   "task_search": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -174,6 +232,7 @@
     "wrapped": true
   },
   "topic_get": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -197,6 +256,7 @@
     "wrapped": true
   },
   "workflow_project_get": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -220,6 +280,7 @@
     "wrapped": true
   },
   "workflow_project_list": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -239,6 +300,7 @@
     "wrapped": true
   },
   "workflow_project_status": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {
@@ -262,6 +324,7 @@
     "wrapped": true
   },
   "workflow_session_list": {
+    "optional": false,
     "output_schema": {
       "properties": {
         "result": {

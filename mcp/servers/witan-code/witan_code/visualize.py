@@ -25,12 +25,17 @@ class Edge:
     src: str  # depends on …
     dst: str  # … this repo
     kinds: dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    # the individual cross-repo linkages backing this edge: {"kind", "key"}
+    # the individual cross-repo linkages backing this edge:
+    # {"kind", "key", "confidence", "generic"}
     contracts: list[dict] = field(default_factory=list)
 
-    def add(self, kind: str, key: str, confidence: float = 1.0) -> None:
+    def add(
+        self, kind: str, key: str, confidence: float = 1.0, generic: bool = False
+    ) -> None:
         self.kinds[kind] += 1
-        self.contracts.append({"kind": kind, "key": key, "confidence": confidence})
+        self.contracts.append(
+            {"kind": kind, "key": key, "confidence": confidence, "generic": generic}
+        )
 
     @property
     def weight(self) -> int:
@@ -174,11 +179,17 @@ def build_graph(
     # consumers maps repo -> confidence for the best (highest) confidence row
     # for each (kind, key_norm, consumer_repo) triple.
     consumer_conf: dict[tuple[str, str, str], float] = {}
+    # (kind, key_norm) pairs any binding flags as a stoplisted generic key
+    # (DEBUG, PORT, ...). Carried on the edge's contract rather than filtered
+    # here, so the edge still exists and a reader chooses whether to hide it.
+    generic_keys: set[tuple[str, str]] = set()
 
     for b in filtered:
         b_kind = b["kind"]
         key_norm = b["key_norm"]
         b_repo = b["repo"]
+        if b.get("generic"):
+            generic_keys.add((b_kind, key_norm))
         if b["role"] == "provider":
             groups[(b_kind, key_norm)]["providers"].add(b_repo)
         else:
@@ -222,7 +233,9 @@ def build_graph(
                 ):
                     continue
                 conf = consumer_conf.get((b_kind, key_norm, cons), 1.0)
-                graph.edge(cons, prov).add(b_kind, key_norm, conf)
+                graph.edge(cons, prov).add(
+                    b_kind, key_norm, conf, (b_kind, key_norm) in generic_keys
+                )
 
     if repo:
         graph.edges = {

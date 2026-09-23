@@ -1,4 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import consumersFixture from "../fixtures/code_interface_consumers.json" with {
+	type: "json",
+};
+import providersFixture from "../fixtures/code_interface_providers.json" with {
+	type: "json",
+};
+import dependenciesFixture from "../fixtures/code_repo_dependencies.json" with {
+	type: "json",
+};
 import contradictionsFixture from "../fixtures/memory_contradictions.json" with {
 	type: "json",
 };
@@ -31,11 +40,13 @@ import sessionListFixture from "../fixtures/workflow_session_list.json" with {
 	type: "json",
 };
 import type {
+	InterfaceBinding,
 	Memory,
 	MemoryContradiction,
 	MemoryNeighbors,
 	ProjectStatus,
 	RecallResult,
+	RepoDependencies,
 	TaskDetail,
 	TaskRow,
 	TopicResult,
@@ -68,6 +79,10 @@ vi.mock("./mcp.js", () => ({
 	memorySearch: vi.fn(),
 	recall: vi.fn(),
 	topicGet: vi.fn(),
+	codeGraphAvailable: vi.fn(),
+	codeRepoDependencies: vi.fn(),
+	codeInterfaceProviders: vi.fn(),
+	codeInterfaceConsumers: vi.fn(),
 }));
 
 /**
@@ -86,6 +101,22 @@ vi.mock("./views/graph-canvas.js", () => ({
 	) => {
 		canvas.onSelect = onSelect;
 		return canvas;
+	},
+}));
+
+/** The Bridge tab's network, stubbed the same way. */
+const bridgeCanvas = {
+	update: vi.fn(),
+	destroy: vi.fn(),
+	onSelect: (_edge: string) => {},
+};
+vi.mock("./views/bridge-canvas.js", () => ({
+	mountBridgeCanvas: (
+		_element: HTMLElement,
+		onSelect: (edge: string) => void,
+	) => {
+		bridgeCanvas.onSelect = onSelect;
+		return bridgeCanvas;
 	},
 }));
 
@@ -117,7 +148,24 @@ const memory = unwrap<Memory>("memory_get", memoryGetFixture);
 let root: HTMLElement;
 let app: InstanceType<typeof App>;
 
+const dependencies = unwrap<RepoDependencies>(
+	"code_repo_dependencies",
+	dependenciesFixture,
+);
+const providers = unwrap<InterfaceBinding[]>(
+	"code_interface_providers",
+	providersFixture,
+);
+const consumers = unwrap<InterfaceBinding[]>(
+	"code_interface_consumers",
+	consumersFixture,
+);
+
 beforeEach(() => {
+	vi.mocked(mcp.codeGraphAvailable).mockResolvedValue(true);
+	vi.mocked(mcp.codeRepoDependencies).mockResolvedValue(dependencies);
+	vi.mocked(mcp.codeInterfaceProviders).mockResolvedValue(providers);
+	vi.mocked(mcp.codeInterfaceConsumers).mockResolvedValue(consumers);
 	vi.mocked(mcp.workflowProjectList).mockResolvedValue(projects);
 	vi.mocked(mcp.workflowProjectGet).mockResolvedValue(projectDetail);
 	vi.mocked(mcp.workflowProjectStatus).mockResolvedValue(projectStatus);
@@ -902,5 +950,175 @@ describe("reposIn", () => {
 		expect(
 			reposIn([{ ...(projects[0] as WorkflowProjectSummary), repos: null }]),
 		).toEqual([]);
+	});
+});
+
+describe("the Bridge tab", () => {
+	const WEB = "https://github.com/example/web";
+	const INFRA = "https://github.com/example/infra";
+	const API = "https://github.com/example/api";
+	const edge = (consumer: string, provider: string) =>
+		encodeURIComponent(`${consumer}|${provider}`);
+
+	it("reads the repo graph with repo explicit, as every tool is called", async () => {
+		await open("#bridge");
+		await vi.waitFor(() => expect(bridgeCanvas.update).toHaveBeenCalled());
+
+		expect(mcp.codeRepoDependencies).toHaveBeenCalledWith({
+			repo: "",
+			min_precision: "heuristic",
+		});
+		expect(text()).toContain("3 repos");
+		expect(text()).toContain("3 edges");
+	});
+
+	it("is absent, and reads nothing, when the server has no code graph", async () => {
+		vi.mocked(mcp.codeGraphAvailable).mockResolvedValue(false);
+		await open("#bridge");
+		await vi.waitFor(() => expect(text()).toContain("no code graph"));
+
+		expect(mcp.codeRepoDependencies).not.toHaveBeenCalled();
+		const tabs = [...root.querySelectorAll("nav a")].map((a) =>
+			a.textContent?.trim(),
+		);
+		expect(tabs).not.toContain("Bridge");
+	});
+
+	it("asks again after a failed first check, rather than hiding the tab for good", async () => {
+		// The page loaded while the server restarted: every other tab recovers
+		// on its next read, and so must this one.
+		vi.mocked(mcp.codeGraphAvailable)
+			.mockRejectedValueOnce(new Error("connection refused"))
+			.mockResolvedValue(true);
+		await open("#bridge");
+		await vi.waitFor(() => expect(mcp.codeGraphAvailable).toHaveBeenCalled());
+
+		window.dispatchEvent(new Event("focus"));
+
+		await vi.waitFor(() => expect(bridgeCanvas.update).toHaveBeenCalled());
+		expect(mcp.codeGraphAvailable).toHaveBeenCalledTimes(2);
+	});
+
+	it("says it is checking, not that witan-code is missing, before the answer", async () => {
+		vi.mocked(mcp.codeGraphAvailable).mockReturnValue(new Promise(() => {}));
+		await open("#bridge");
+
+		expect(text()).toContain("Checking whether this server has the code graph");
+		expect(text()).not.toContain("not installed");
+	});
+
+	it("passes the kind and precision to the tool, and filters the rest here", async () => {
+		await open("#bridge?contract=env_var&precise=1");
+		await vi.waitFor(() =>
+			expect(mcp.codeRepoDependencies).toHaveBeenCalledWith({
+				repo: "",
+				kind: "env_var",
+				min_precision: "precise",
+			}),
+		);
+		vi.mocked(mcp.codeRepoDependencies).mockClear();
+		bridgeCanvas.update.mockClear();
+
+		window.location.hash = "#bridge?contract=env_var&precise=1&nogeneric=1";
+		await vi.waitFor(() => expect(bridgeCanvas.update).toHaveBeenCalled());
+
+		expect(mcp.codeRepoDependencies).not.toHaveBeenCalled();
+	});
+
+	it("drills a contract to its bindings in the edge's two repos, kind and key explicit", async () => {
+		await open(
+			`#bridge?edge=${edge(WEB, INFRA)}&binding=${encodeURIComponent("env_var:DATABASE_URL")}`,
+		);
+		await vi.waitFor(() =>
+			expect(root.querySelector(".bridge-bindings")).not.toBeNull(),
+		);
+
+		const args = { kind: "env_var", key: "DATABASE_URL" };
+		expect(mcp.codeInterfaceProviders).toHaveBeenCalledWith({
+			...args,
+			in_repo: INFRA,
+		});
+		expect(mcp.codeInterfaceConsumers).toHaveBeenCalledWith({
+			...args,
+			in_repo: WEB,
+		});
+		const rows = root.querySelectorAll(".bridge-bindings tbody tr");
+		expect(rows).toHaveLength(providers.length + consumers.length);
+		expect(text()).toContain("web/settings.py:40");
+	});
+
+	it("drills a service edge to the deploying repo's binding", async () => {
+		// witan-code draws "infra depends on web" from infra's provider binding
+		// keyed `repo:<web>`, and names the contract only `example/web`.
+		await open(
+			`#bridge?edge=${edge(INFRA, WEB)}&binding=${encodeURIComponent("service:example/web")}`,
+		);
+		await vi.waitFor(() =>
+			expect(mcp.codeInterfaceProviders).toHaveBeenCalledWith({
+				kind: "service",
+				key: `repo:${WEB}`,
+				in_repo: INFRA,
+			}),
+		);
+		expect(mcp.codeInterfaceConsumers).not.toHaveBeenCalled();
+	});
+
+	it("gives the bindings their own read status and Refresh", async () => {
+		// The drill does not poll, and the top bar's Refresh is the graph's,
+		// so without its own a stale or failed binding table had no marker and
+		// no way to retry.
+		await open(
+			`#bridge?edge=${edge(WEB, INFRA)}&binding=${encodeURIComponent("env_var:DATABASE_URL")}`,
+		);
+		await vi.waitFor(() =>
+			expect(root.querySelector(".bridge-bindings")).not.toBeNull(),
+		);
+		vi.mocked(mcp.codeInterfaceProviders).mockClear();
+		vi.mocked(mcp.codeRepoDependencies).mockClear();
+
+		const refresh = root.querySelector<HTMLButtonElement>(
+			".bridge-drill .read-status button",
+		);
+		expect(refresh).not.toBeNull();
+		refresh?.click();
+
+		await vi.waitFor(() =>
+			expect(mcp.codeInterfaceProviders).toHaveBeenCalledTimes(1),
+		);
+		expect(mcp.codeRepoDependencies).not.toHaveBeenCalled();
+	});
+
+	it("keeps only the rows from the edge's own two repos", async () => {
+		// Both tools span every repo; a provider elsewhere is not this edge's.
+		vi.mocked(mcp.codeInterfaceProviders).mockResolvedValue([
+			...providers,
+			{
+				...(providers[0] as InterfaceBinding),
+				repo: API,
+				file: "elsewhere.py",
+			},
+		]);
+		await open(
+			`#bridge?edge=${edge(WEB, INFRA)}&binding=${encodeURIComponent("env_var:DATABASE_URL")}`,
+		);
+		await vi.waitFor(() =>
+			expect(root.querySelector(".bridge-bindings")).not.toBeNull(),
+		);
+
+		expect(text()).not.toContain("elsewhere.py");
+	});
+
+	it("opens an edge clicked on the canvas", async () => {
+		await open("#bridge");
+		await vi.waitFor(() => expect(bridgeCanvas.update).toHaveBeenCalled());
+
+		bridgeCanvas.onSelect(`${WEB}|${API}`);
+
+		await vi.waitFor(() =>
+			expect(root.querySelector(".bridge-edge")).not.toBeNull(),
+		);
+		expect(decodeURIComponent(window.location.hash)).toContain(
+			`edge=${WEB}|${API}`,
+		);
 	});
 });

@@ -144,7 +144,7 @@ query bindings_by_key($kind: String, $key_norm: String) {
     return {
         $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
         $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic,
-        $b.symbol
+        $b.symbol, $b.confidence
     }
     order { $b.repo asc }
     limit 500
@@ -159,9 +159,27 @@ query bindings_by_key_role($kind: String, $key_norm: String, $role: String) {
     return {
         $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
         $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic,
-        $b.symbol
+        $b.symbol, $b.confidence
     }
     order { $b.repo asc }
+    limit 500
+}
+
+// Same, in one repo — the `in_repo` narrowing of code_interface_providers /
+// _consumers. Filtered in the match rather than after the read, so the limit
+// below applies to that repo's rows: a key bound in more than 500 places
+// across every repo would otherwise cut off the repo being asked about.
+
+query bindings_by_key_role_repo($kind: String, $key_norm: String, $role: String, $repo: String) {
+    match {
+        $b: InterfaceBinding { kind: $kind, key_norm: $key_norm, role: $role, repo: $repo }
+    }
+    return {
+        $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
+        $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic,
+        $b.symbol, $b.confidence
+    }
+    order { $b.file asc }
     limit 500
 }
 

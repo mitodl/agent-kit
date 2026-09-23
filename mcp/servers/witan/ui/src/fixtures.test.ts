@@ -42,6 +42,7 @@ import {
 import {
 	assertFlagsMatchServer,
 	BOUND_TOOLS,
+	OPTIONAL_TOOLS,
 	UnknownToolError,
 	unwrap,
 	WrapFlagMismatchError,
@@ -54,6 +55,24 @@ import {
  * renames a field, or flips whether a result is wrapped, fails here in the
  * same PR that made it.
  */
+
+/** The tools unwrapped on the server: each returns a bare `dict`. */
+const UNWRAPPED = new Set([
+	"recall",
+	"memory_neighbors",
+	"code_repo_dependencies",
+]);
+
+/** A `tools/list` that agrees with every recorded flag. */
+function agreeing(): {
+	name: string;
+	outputSchema: Record<string, unknown>;
+}[] {
+	return BOUND_TOOLS.map((name) => ({
+		name,
+		outputSchema: UNWRAPPED.has(name) ? {} : { "x-fastmcp-wrap-result": true },
+	}));
+}
 
 describe("unwrap", () => {
 	it("takes a wrapped list out of its envelope", () => {
@@ -98,6 +117,9 @@ describe("unwrap", () => {
 describe("the recorded wrap flags", () => {
 	it("cover exactly ADR 0011's bound set", () => {
 		expect(BOUND_TOOLS).toEqual([
+			"code_interface_consumers",
+			"code_interface_providers",
+			"code_repo_dependencies",
 			"memory_contradictions",
 			"memory_get",
 			"memory_list",
@@ -117,15 +139,35 @@ describe("the recorded wrap flags", () => {
 	});
 
 	it("accept a server that agrees with them", () => {
-		const live = BOUND_TOOLS.map((name) => ({
-			name,
-			outputSchema:
-				name === "recall" || name === "memory_neighbors"
-					? {}
-					: { "x-fastmcp-wrap-result": true },
-		}));
+		expect(() => assertFlagsMatchServer(agreeing())).not.toThrow();
+	});
+
+	it("record exactly witan-code's three tools as optional", () => {
+		expect([...OPTIONAL_TOOLS].sort()).toEqual([
+			"code_interface_consumers",
+			"code_interface_providers",
+			"code_repo_dependencies",
+		]);
+	});
+
+	it("accept a server without the optional code-graph tools", () => {
+		// witan-code is mounted only when installed (ADR 0011, 2026-09-23
+		// amendment), so its absence is a configuration, not a mismatch.
+		const live = agreeing().filter((tool) => !OPTIONAL_TOOLS.has(tool.name));
 
 		expect(() => assertFlagsMatchServer(live)).not.toThrow();
+	});
+
+	it("still check an optional tool's wrapping when it is present", () => {
+		const live = agreeing().map((tool) =>
+			tool.name === "code_repo_dependencies"
+				? { ...tool, outputSchema: { "x-fastmcp-wrap-result": true } }
+				: tool,
+		);
+
+		expect(() => assertFlagsMatchServer(live)).toThrow(
+			/code_repo_dependencies/,
+		);
 	});
 
 	it("reject a server that has flipped exactly one", () => {
@@ -135,15 +177,11 @@ describe("the recorded wrap flags", () => {
 		// empty graph.
 		// ONE tool changed, with every other flag correct: flipping them all
 		// would throw for a broader reason than the name claims.
-		const live = BOUND_TOOLS.map((name) => ({
-			name,
-			outputSchema:
-				name === "recall"
-					? { "x-fastmcp-wrap-result": true }
-					: name === "memory_neighbors"
-						? {}
-						: { "x-fastmcp-wrap-result": true },
-		}));
+		const live = agreeing().map((tool) =>
+			tool.name === "recall"
+				? { ...tool, outputSchema: { "x-fastmcp-wrap-result": true } }
+				: tool,
+		);
 
 		expect(() => assertFlagsMatchServer(live)).toThrow(WrapFlagMismatchError);
 		expect(() => assertFlagsMatchServer(live)).toThrow(/recall/);

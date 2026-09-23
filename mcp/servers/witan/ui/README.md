@@ -28,6 +28,17 @@ because a graph-wide scope (about 1,150 live tasks) never finished laying out
 drawn whole. A List view under the canvas has every node as a link, since the
 canvas itself is pointer-only.
 
+Bridge is witan-code's cross-repo dependency graph: which repos are coupled
+through shared env vars, endpoints, packages and services. Choose an edge for
+the contracts behind it, and a contract for the `InterfaceBinding` rows in the
+edge's two repos (file, line, framework, enclosing symbol, Stage-2 package).
+It reads three `code_*` tools, added to ADR 0011's bound set as _optional_ by
+its 2026-09-23 amendment: witan-code is mounted only when installed, so the
+tab appears only when `tools/list` has all three, and the once-per-load wrap
+check tolerates their absence. The kind and precision filters are tool
+arguments; the confidence floor and the generic-key toggle filter in the
+browser, so at their defaults the graph is `code_repo_dependencies` unchanged.
+
 ## Layout
 
 It sits here rather than under `packages/` because it is not independently

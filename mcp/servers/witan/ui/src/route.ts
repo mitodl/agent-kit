@@ -1,6 +1,6 @@
 import { canonicalRepo } from "./format.js";
 import { VIEWS, type ViewId } from "./shell.js";
-import type { MemoryKind } from "./types.js";
+import type { ContractKind, MemoryKind } from "./types.js";
 
 const MEMORY_KINDS: readonly MemoryKind[] = [
 	"pattern",
@@ -64,7 +64,33 @@ export interface Route {
 	/** A `tp-` slug when the memory view is showing one topic, else `null`. */
 	topic: string | null;
 	facets: Record<MemoryFacet, string | null>;
+	/** The Bridge tab's contract kind, else `null` for all four. A tool argument. */
+	contract: ContractKind | null;
+	/** The lowest endpoint-consumer confidence the Bridge draws. One of `CONFIDENCE_FLOORS`. */
+	confidence: number;
+	/** Hide stoplisted generic keys (DEBUG, PORT, ...) from the Bridge. */
+	hideGeneric: boolean;
+	/** Only edges a Stage-2 canonical-symbol join covers. A tool argument. */
+	precise: boolean;
+	/** The Bridge edge open, as `consumer|provider` repo URIs, else `null`. */
+	edge: string | null;
+	/** The contract open on that edge, as `kind:key`, else `null`. */
+	binding: string | null;
 }
+
+const CONTRACT_KINDS: readonly ContractKind[] = [
+	"env_var",
+	"endpoint",
+	"package",
+	"service",
+];
+
+/**
+ * The confidence floors the Bridge offers. 0.5 is the server's own: it drops
+ * lower endpoint consumers before building the graph, so a lower floor would
+ * promise edges no read can return.
+ */
+export const CONFIDENCE_FLOORS = [0.5, 0.7, 0.9] as const;
 
 /**
  * The windows the timeline offers. A closed set rather than free input, so a
@@ -102,6 +128,12 @@ export const DEFAULT_ROUTE: Route = {
 		tag: null,
 		author: null,
 	},
+	contract: null,
+	confidence: CONFIDENCE_FLOORS[0],
+	hideGeneric: false,
+	precise: false,
+	edge: null,
+	binding: null,
 };
 
 /**
@@ -140,7 +172,23 @@ export function parseRoute(hash: string): Route {
 		facets: Object.fromEntries(
 			MEMORY_FACETS.map((facet) => [facet, params.get(facet) || null]),
 		) as Route["facets"],
+		contract:
+			CONTRACT_KINDS.find(
+				(candidate) => candidate === params.get("contract"),
+			) ?? null,
+		confidence: parseConfidence(params.get("confidence")),
+		hideGeneric: params.get("nogeneric") === "1",
+		precise: params.get("precise") === "1",
+		edge: params.get("edge") || null,
+		binding: params.get("binding") || null,
 	};
+}
+
+function parseConfidence(value: string | null): number {
+	const floor = Number(value);
+	return (CONFIDENCE_FLOORS as readonly number[]).includes(floor)
+		? floor
+		: DEFAULT_ROUTE.confidence;
 }
 
 function parseDays(value: string | null): number {
@@ -195,6 +243,24 @@ export function formatRoute(route: Route): string {
 		if (value) {
 			params.set(facet, value);
 		}
+	}
+	if (route.contract) {
+		params.set("contract", route.contract);
+	}
+	if (route.confidence !== DEFAULT_ROUTE.confidence) {
+		params.set("confidence", String(route.confidence));
+	}
+	if (route.hideGeneric) {
+		params.set("nogeneric", "1");
+	}
+	if (route.precise) {
+		params.set("precise", "1");
+	}
+	if (route.edge) {
+		params.set("edge", route.edge);
+	}
+	if (route.binding) {
+		params.set("binding", route.binding);
 	}
 	const query = params.toString();
 	return query ? `#${route.view}?${query}` : `#${route.view}`;

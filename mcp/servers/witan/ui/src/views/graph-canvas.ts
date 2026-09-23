@@ -1,7 +1,7 @@
 import { DataSet } from "vis-data";
 import { type Edge, Network, type Node } from "vis-network";
+import type { Canvas } from "./canvas-host.js";
 import {
-	type Canvas,
 	CLUSTER_ABOVE,
 	EDGE_COLORS,
 	type GraphCluster,
@@ -42,7 +42,10 @@ interface VisEdge extends Edge {
 	id: string;
 }
 
-export function mountCanvas(element: HTMLElement, onSelect: OnSelect): Canvas {
+export function mountCanvas(
+	element: HTMLElement,
+	onSelect: OnSelect,
+): Canvas<WorkflowGraph> {
 	const nodes = new DataSet<VisNode>();
 	const edges = new DataSet<VisEdge>();
 	const groups = new Map<string, GraphNode["group"]>();

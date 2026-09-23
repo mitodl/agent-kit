@@ -410,6 +410,22 @@ def test_cross_repo_env_and_endpoint_linkage(tmp_path, monkeypatch):
         "endpoint", "/api/v1/courses/{id}/"
     )
     assert any(c["repo"] == "https://github.com/test/repo-a" for c in ep_consumers)
+    # The trust score comes back with each row, so a reader can tell the
+    # consumer rows that made a code_repo_dependencies edge (>= 0.5) from the
+    # ones that did not.
+    assert all(isinstance(c["confidence"], float) for c in ep_consumers)
+
+    # `in_repo` narrows in the query, to that exact repo.
+    only_b = _fn(srv.code_interface_providers)(
+        "env_var", "MITOL_APP_BASE_URL", in_repo="https://github.com/test/repo-b"
+    )
+    assert only_b == providers
+    assert (
+        _fn(srv.code_interface_providers)(
+            "env_var", "MITOL_APP_BASE_URL", in_repo="https://github.com/test/repo-a"
+        )
+        == []
+    )
 
 
 @requires_stack

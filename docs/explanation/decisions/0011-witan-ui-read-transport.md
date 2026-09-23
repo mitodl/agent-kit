@@ -190,6 +190,9 @@ layer binds exactly these and nothing else:
 - memory: `recall`, `memory_get`, `memory_list`, `memory_search`,
   `memory_neighbors`, `topic_get`, and `memory_contradictions` (added by the
   2026-09-22 amendment below)
+- code graph, _optional_: `code_repo_dependencies`,
+  `code_interface_providers`, `code_interface_consumers` (added by the
+  2026-09-23 amendment below)
 
 An implementation that needs a tool outside this list is making a scope change,
 not filling in a gap, and amends this ADR.
@@ -343,3 +346,51 @@ passes `repo`). It sits in the same read allowlists as the other memory reads
 (the CLI's local dispatch and the remote proxy), so nothing about the UI's
 position as an ordinary MCP client changes.
 Tracked as task `tk-add-a-read-only-memory-contradictions-tool-and-a-44e4a1`.
+
+## Amendment (2026-09-23): three code-graph reads join the bound set, as optional
+
+The cross-repo bridge explorer
+(`tk-cross-repo-dependency-bridge-explorer-shown-only-64ca2d`) shows which
+repos are coupled through shared env vars, endpoints, packages and services,
+and the bindings behind each coupling. That knowledge lives in witan-code's
+bridge store and is reachable only through `code_*` tools, so the explorer
+binds three of them:
+
+- `code_repo_dependencies`: the repo-to-repo graph, each edge carrying the
+  contracts behind it (`kind`, `key`, `confidence`, and `generic` for a
+  stoplisted key such as `PORT`).
+- `code_interface_providers` and `code_interface_consumers`: the
+  `InterfaceBinding` rows for one contract, which is how one edge's contract
+  drills to file, line, framework and enclosing symbol. The page passes
+  `in_repo` (the edge's repo at that end) where the server declares it, and
+  narrows the rows itself as well for a witan-code that predates it.
+
+They are _optional_. witan-code is a separate package that `witan serve` and
+`witan ui` mount only when it is installed, so a server without it is normal.
+The page records the three as optional, tolerates their absence from
+`tools/list`, and shows the tab only when they are present.
+
+The Consequences above name the risk this carries: some code-graph reads
+elicit, and the stateless era has no back-channel for the page to answer on.
+Three rules keep that out:
+
+- **Never bind the tools that elicit to choose something.**
+  `code_find_definition` asks which repo on an ambiguous name and
+  `code_symbols_in_file` asks for a repo URI. Neither is in the set.
+- **Pass arguments explicitly.** `kind` and `key` always, so nothing is left
+  for the server to infer from a working directory the deployment does not
+  have.
+- **The page does not advertise elicitation.** All three tools can offer to
+  index the current repo when the bridge store does not exist yet
+  (`_confirm_and_reindex_bridge`), which would turn a read into a write. On
+  the 2026-07-28 era the browser client pins, a client with no `elicitation`
+  capability makes `witan_core.elicit` report the ask as unsupported
+  (`_wire_mode`), `confirm` returns its `default_when_unsupported` of
+  `False`, and the tool returns its empty shape without indexing
+  (`test_client_that_cannot_elicit_gets_the_defaults` covers the mechanism).
+  A later change that gives the page an elicitation handler would re-open
+  that path and has to amend this ADR.
+
+Jumping from a binding to its symbol's source is not in this set. The
+explorer shows the enclosing `symbol_id` and the Stage-2 `symbol` string as
+text; a symbol view is its own scope change and amends this ADR again.

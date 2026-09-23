@@ -711,6 +711,7 @@ async def code_interface_providers(
     kind: BindingKind,
     key: str,
     min_precision: PrecisionTier = "heuristic",
+    in_repo: str | None = None,
     ctx: Context | None = None,
 ) -> list[dict]:
     """
@@ -730,8 +731,10 @@ async def code_interface_providers(
         normalized (path params collapse to ``{}``).
     min_precision:
         ``heuristic`` (default) | ``precise`` — see server instructions.
+    in_repo:
+        Keep only the bindings in this exact repo URI. Omitted, every repo.
     """
-    return await _bindings_by_role(kind, key, "provider", min_precision, ctx)
+    return await _bindings_by_role(kind, key, "provider", min_precision, in_repo, ctx)
 
 
 @mcp.tool
@@ -739,6 +742,7 @@ async def code_interface_consumers(
     kind: BindingKind,
     key: str,
     min_precision: PrecisionTier = "heuristic",
+    in_repo: str | None = None,
     ctx: Context | None = None,
 ) -> list[dict]:
     """
@@ -755,8 +759,10 @@ async def code_interface_consumers(
         The contract value (``endpoint`` paths are normalized).
     min_precision:
         ``heuristic`` (default) | ``precise`` — see server instructions.
+    in_repo:
+        Keep only the bindings in this exact repo URI. Omitted, every repo.
     """
-    return await _bindings_by_role(kind, key, "consumer", min_precision, ctx)
+    return await _bindings_by_role(kind, key, "consumer", min_precision, in_repo, ctx)
 
 
 async def _bindings_by_role(
@@ -764,19 +770,34 @@ async def _bindings_by_role(
     key: str,
     role: str,
     min_precision: str = "heuristic",
+    in_repo: str | None = None,
     ctx: Context | None = None,
 ) -> list[dict]:
+    """The rows behind code_interface_providers / _consumers.
+
+    ``in_repo`` is deliberately not named ``repo``. The remote proxy fills an
+    omitted ``repo`` with the caller's detected repo (``_map_args``), which
+    here would silently narrow every existing "who else provides this?" call
+    to the one repo it is least useful for.
+    """
     client = _bridge_client()
     if client is None:
         client = await _confirm_and_reindex_bridge(ctx)
         if client is None:
             return []
     key_norm = bridge_extractors.normalize_key(kind, key)
-    rows = client.read(
-        "bridge.gq",
-        "bindings_by_key_role",
-        {"kind": kind, "key_norm": key_norm, "role": role},
-    )
+    if in_repo:
+        rows = client.read(
+            "bridge.gq",
+            "bindings_by_key_role_repo",
+            {"kind": kind, "key_norm": key_norm, "role": role, "repo": in_repo},
+        )
+    else:
+        rows = client.read(
+            "bridge.gq",
+            "bindings_by_key_role",
+            {"kind": kind, "key_norm": key_norm, "role": role},
+        )
     return _filter_by_precision(rows, min_precision)
 
 

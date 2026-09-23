@@ -1,0 +1,70 @@
+{
+  "edges": [
+    {
+      "consumer": "https://github.com/example/web",
+      "contracts": [
+        {
+          "confidence": 1.0,
+          "generic": false,
+          "key": "DATABASE_URL",
+          "kind": "env_var"
+        },
+        {
+          "confidence": 1.0,
+          "generic": true,
+          "key": "PORT",
+          "kind": "env_var"
+        }
+      ],
+      "kinds": {
+        "env_var": 2
+      },
+      "provider": "https://github.com/example/infra",
+      "weight": 2
+    },
+    {
+      "consumer": "https://github.com/example/infra",
+      "contracts": [
+        {
+          "confidence": 1.0,
+          "generic": false,
+          "key": "example/web",
+          "kind": "service"
+        }
+      ],
+      "kinds": {
+        "service": 1
+      },
+      "provider": "https://github.com/example/web",
+      "weight": 1
+    },
+    {
+      "consumer": "https://github.com/example/web",
+      "contracts": [
+        {
+          "confidence": 1.0,
+          "generic": false,
+          "key": "/api/v1/courses/{}",
+          "kind": "endpoint"
+        },
+        {
+          "confidence": 1.0,
+          "generic": false,
+          "key": "example-api-client",
+          "kind": "package"
+        }
+      ],
+      "kinds": {
+        "endpoint": 1,
+        "package": 1
+      },
+      "provider": "https://github.com/example/api",
+      "weight": 2
+    }
+  ],
+  "repos": [
+    "https://github.com/example/api",
+    "https://github.com/example/infra",
+    "https://github.com/example/web"
+  ]
+}

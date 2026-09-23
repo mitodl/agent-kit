@@ -10,14 +10,15 @@ import projectListFixture from "../../fixtures/workflow_project_list.json" with 
 import { DEFAULT_ROUTE, type Route } from "../route.js";
 import type { TaskRow, WorkflowProjectSummary } from "../types.js";
 import { unwrap } from "../unwrap.js";
+import { type Canvas, CanvasHost } from "./canvas-host.js";
 import {
 	buildGraph,
-	type Canvas,
-	CanvasHost,
 	CLUSTER_ABOVE,
 	type GraphData,
 	graphView,
+	type OnSelect,
 	scopeTasks,
+	type WorkflowGraph,
 } from "./graph.js";
 
 const tasks = unwrap<TaskRow[]>("task_list", taskListFixture);
@@ -159,7 +160,10 @@ describe("scopeTasks", () => {
 
 /** A canvas that records what it was handed, since jsdom cannot draw one. */
 function fakeCanvas() {
-	const canvas = { update: vi.fn(), destroy: vi.fn() } satisfies Canvas;
+	const canvas = {
+		update: vi.fn(),
+		destroy: vi.fn(),
+	} satisfies Canvas<WorkflowGraph>;
 	const mount = vi.fn(async () => canvas);
 	return { canvas, mount };
 }
@@ -176,7 +180,7 @@ describe("graphView", () => {
 
 	it("mounts one canvas and feeds it every render", async () => {
 		const { canvas, mount } = fakeCanvas();
-		const host = new CanvasHost(
+		const host = new CanvasHost<WorkflowGraph, OnSelect>(
 			mount,
 			() => {},
 			() => {},
@@ -198,7 +202,7 @@ describe("graphView", () => {
 			graphView(
 				data,
 				route,
-				new CanvasHost(
+				new CanvasHost<WorkflowGraph, OnSelect>(
 					mount,
 					() => {},
 					() => {},
@@ -219,7 +223,7 @@ describe("graphView", () => {
 			graphView(
 				data,
 				route,
-				new CanvasHost(
+				new CanvasHost<WorkflowGraph, OnSelect>(
 					mount,
 					() => {},
 					() => {},
@@ -244,7 +248,7 @@ describe("graphView", () => {
 		const many = Array.from({ length: CLUSTER_ABOVE }, (_, index) =>
 			task(`tk-many-${index}`, { project_slug: null }),
 		);
-		const host = new CanvasHost(
+		const host = new CanvasHost<WorkflowGraph, OnSelect>(
 			mount,
 			() => {},
 			() => {},
@@ -270,7 +274,7 @@ describe("graphView", () => {
 			graphView(
 				{ projects: [], tasks: [], truncated: false },
 				route,
-				new CanvasHost(
+				new CanvasHost<WorkflowGraph, OnSelect>(
 					mount,
 					() => {},
 					() => {},
@@ -288,7 +292,7 @@ describe("graphView", () => {
 			graphView(
 				{ ...data, truncated: true },
 				route,
-				new CanvasHost(
+				new CanvasHost<WorkflowGraph, OnSelect>(
 					mount,
 					() => {},
 					() => {},
@@ -303,7 +307,7 @@ describe("graphView", () => {
 describe("CanvasHost", () => {
 	it("destroys the network when its container goes", async () => {
 		const { canvas, mount } = fakeCanvas();
-		const host = new CanvasHost(
+		const host = new CanvasHost<WorkflowGraph, OnSelect>(
 			mount,
 			() => {},
 			() => {},
@@ -324,7 +328,11 @@ describe("CanvasHost", () => {
 			throw new Error("Failed to fetch dynamically imported module");
 		});
 		const onError = vi.fn();
-		const host = new CanvasHost(mount, () => {}, onError);
+		const host = new CanvasHost<WorkflowGraph, OnSelect>(
+			mount,
+			() => {},
+			onError,
+		);
 		const root = document.createElement("div");
 		const data: GraphData = { projects, tasks, truncated: false };
 
@@ -343,9 +351,9 @@ describe("CanvasHost", () => {
 		// network would otherwise draw into a detached element and leak.
 		const first = { update: vi.fn(), destroy: vi.fn() };
 		const second = { update: vi.fn(), destroy: vi.fn() };
-		let resolveFirst: (canvas: Canvas) => void = () => {};
+		let resolveFirst: (canvas: Canvas<WorkflowGraph>) => void = () => {};
 		const mount = vi
-			.fn<(element: HTMLElement) => Promise<Canvas>>()
+			.fn<(element: HTMLElement) => Promise<Canvas<WorkflowGraph>>>()
 			.mockImplementationOnce(
 				() =>
 					new Promise((resolve) => {
@@ -353,7 +361,7 @@ describe("CanvasHost", () => {
 					}),
 			)
 			.mockResolvedValueOnce(second);
-		const host = new CanvasHost(
+		const host = new CanvasHost<WorkflowGraph, OnSelect>(
 			mount,
 			() => {},
 			() => {},

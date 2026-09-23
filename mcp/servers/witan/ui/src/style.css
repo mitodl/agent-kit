@@ -870,3 +870,58 @@ div.vis-tooltip {
 	pointer-events: none;
 	z-index: 5;
 }
+
+/* ── Bridge ─────────────────────────────────────────────────────── */
+
+.bridge-controls {
+	flex-wrap: wrap;
+	margin: 0.5rem 0;
+}
+
+/* One node per repo, so a shorter box than the Graph tab's. */
+.graph-canvas.bridge-canvas {
+	height: 22rem;
+	min-height: 16rem;
+}
+
+.bridge-edges,
+.bridge-bindings {
+	margin: 0.75rem 0;
+}
+
+.bridge-edges tr[aria-current="true"],
+.bridge-contracts li[aria-current="true"] {
+	background: var(--panel-bg);
+	font-weight: 600;
+}
+
+.bridge-edge-heading {
+	font-size: 1rem;
+	margin: 1rem 0 0.5rem;
+}
+
+ul.bridge-contracts {
+	list-style: none;
+	padding: 0;
+	margin: 0 0 0.75rem;
+}
+
+ul.bridge-contracts li {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-items: baseline;
+	padding: 0.2rem 0.25rem;
+}
+
+.bridge-kind {
+	min-width: 5rem;
+	color: var(--muted);
+	font-size: 0.85rem;
+}
+
+/* The drill's own read status sits above its table, not in the top bar. */
+.bridge-drill .read-status {
+	margin: 0.5rem 0 0;
+	justify-content: flex-end;
+}
