@@ -145,3 +145,22 @@ rev = "v2.4.16"
 hooks = [
   { id = "biome-check", priority = 20, exclude = "^mcp/servers/witan/ui/fixtures/" },
 ]
+
+# ── Skills: portability check (priority 10, parallel) ─────────────────────────
+# Every skill in agent-config.toml's [skills] installs on every platform
+# (Claude Code, Pi, Copilot, OpenCode), so a Claude-only tool (Agent tool,
+# AskUserQuestion, built-in /review, subagents, ...) may be named only in a
+# passage that also gives the fallback. Stdlib-only, no env to build. See the
+# script's docstring for the rule and the `<!-- portability: ok -->` allowlist.
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "skill-portability"
+name = "skill portability (no unconditional Claude-only tools)"
+entry = "python3 bin/check_skill_portability.py"
+language = "system"
+pass_filenames = false
+files = "^(skills/.*\\.md|agent-config\\.toml|bin/check_skill_portability\\.py)$"
+priority = 10

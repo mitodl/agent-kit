@@ -77,9 +77,10 @@ request_claude() {
     echo "  Comment posted: \"${claude_trigger}\"" >&2
     echo "  This only produces a review if ${repo} has a Claude GitHub Action" >&2
     echo "  (e.g. anthropics/claude-code-action) configured to react to PR comments -" >&2
-    echo "  otherwise it's a harmless no-op. If no such workflow is installed, run" >&2
-    echo "  '/review ${repo}#${number}' in a Claude Code session instead for an" >&2
-    echo "  equivalent first-pass review." >&2
+    echo "  otherwise it's a harmless no-op. If no such workflow is installed, do an" >&2
+    echo "  in-session first pass instead: the code-review skill on PR #${number} from" >&2
+    echo "  a checkout of ${repo} (any platform), or Claude Code's built-in" >&2
+    echo "  '/review' where available. See references/action-playbook.md." >&2
   else
     echo "  Failed to post comment." >&2
     return 1

@@ -181,8 +181,15 @@ commands, confirmation phrasing, and edge cases for each bucket. Summary:
 - **`needs_first_pass_review`** — request a bot review with
   `scripts/request-review.sh <repo> <number> [copilot|claude|all]` (default
   `all`; it self-guards against drafts and PRs that already have review
-  activity), and/or run this session's built-in `/review <pr-url>` to have
-  Claude leave its own first-pass review directly.
+  activity), and/or do an in-session first pass yourself. The portable path,
+  which works on any platform including stock Pi, is this repo's
+  [`code-review`](../code-review/SKILL.md) skill run against the PR number
+  from a local checkout of that repo (it resolves the diff with
+  `gh pr diff <number>`), or a direct `gh pr diff <number> -R <repo>` read
+  when no checkout is at hand. Claude Code's built-in `/review <pr-url>` is a
+  Claude-specific alternative, used only where that command exists. Either
+  way the result is a report; posting it on the PR is a separate, confirmed
+  step.
 - **`approved_ready_to_merge`** — confirm per PR, then
   `scripts/merge-pr.sh <repo> <number> [merge|squash|rebase]`. Never batch-merge
   without the user seeing the specific list first.
