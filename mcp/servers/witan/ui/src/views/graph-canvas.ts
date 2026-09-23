@@ -24,6 +24,9 @@ import {
  * because no one text colour reads on every status fill in both themes.
  */
 
+/** The budget for placing nodes a poll added, on top of an already-laid-out graph. */
+const RESTABILIZE_ITERATIONS = 100;
+
 interface VisNode extends Node {
 	id: string;
 }
@@ -42,7 +45,9 @@ export function mountCanvas(element: HTMLElement, onSelect: OnSelect): Canvas {
 		{
 			edges: {
 				arrows: "to",
-				smooth: { enabled: true, type: "dynamic", roundness: 0.5 },
+				// Not "dynamic", which adds a hidden physics node per edge and so
+				// roughly doubles what the simulation has to move.
+				smooth: { enabled: true, type: "continuous", roundness: 0.5 },
 				font: { size: 11, strokeWidth: 0, align: "top" },
 			},
 			// A fixed seed, so the same graph lays out the same way on every
@@ -62,6 +67,17 @@ export function mountCanvas(element: HTMLElement, onSelect: OnSelect): Canvas {
 		if (id && group) {
 			onSelect(id, group);
 		}
+	});
+
+	// Physics runs for a fixed stabilization budget and then stops. Left on, a
+	// graph-wide scope (about 1,150 live tasks when this was written) never
+	// settled, and kept the main thread busy in 200-300 ms chunks for as long
+	// as the tab was open. Stopping at the iteration budget rather than at
+	// `stabilized` is what bounds it: a graph that size may never reach
+	// `stabilized` at all. A poll that brings nodes the layout has not placed
+	// runs one more, shorter, budget for them.
+	network.on("stabilizationIterationsDone", () => {
+		network.setOptions({ physics: { enabled: false } });
 	});
 
 	// The container narrows when the detail panel opens, and vis-network keeps
@@ -105,11 +121,19 @@ export function mountCanvas(element: HTMLElement, onSelect: OnSelect): Canvas {
 			// Update in place and remove what left, rather than clearing: a
 			// cleared set re-runs the layout from scratch on every poll.
 			const nodeIds = new Set(nextNodes.map((node) => node.id));
+			const placed = new Set(nodes.getIds().map(String));
+			const arriving = nextNodes.some((node) => !placed.has(node.id));
 			const edgeIds = new Set(nextEdges.map((edge) => edge.id));
 			nodes.remove(nodes.getIds().filter((id) => !nodeIds.has(String(id))));
 			edges.remove(edges.getIds().filter((id) => !edgeIds.has(String(id))));
 			nodes.update(nextNodes);
 			edges.update(nextEdges);
+			// Not on the first update: the network stabilizes its initial data on
+			// its own, and a second budget queued behind it would only add time.
+			if (arriving && placed.size > 0) {
+				network.setOptions({ physics: { enabled: true } });
+				network.stabilize(RESTABILIZE_ITERATIONS);
+			}
 
 			network.selectNodes(selected && nodeIds.has(selected) ? [selected] : []);
 		},
