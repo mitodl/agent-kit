@@ -40,7 +40,7 @@ Skills are organized by **category**. Each skill lives in
 | process | [`screenshot-pr`](./process/screenshot-pr/SKILL.md) | Capture UI changes for a PR with shot-scraper at desktop, tablet, and mobile viewports |
 | process | [`dependency-updates`](./process/dependency-updates/SKILL.md) | Triage and apply Renovate dependency updates safely across Python, JS/TS, Helm, Apt, and database ecosystems |
 | process | [`dependency-pruning`](./process/dependency-pruning/SKILL.md) | Audit dependencies to find unused ones to remove and underused ones to vendor or rewrite |
-| process | [`github-issue-triage`](./process/github-issue-triage/SKILL.md) | Audit open GitHub issues to identify stale, completed, or superseded items using parallel codebase cross-referencing |
+| process | [`github-issue-triage`](./process/github-issue-triage/SKILL.md) | Audit open GitHub issues to identify stale, completed, or superseded items by cross-referencing the codebase (parallel subagents where available, sequential batches otherwise) |
 | process | [`github-pr-triage`](./process/github-pr-triage/SKILL.md) | Categorize open PRs across an org by required action (needs first-pass review, has feedback, approved & ready to merge) and optionally act on them |
 | process | [`address-pr-feedback`](./process/address-pr-feedback/SKILL.md) | Fetch, categorize, address, and resolve GitHub PR review feedback, with pagination for large/long-running PRs |
 | process | [`code-review`](./process/code-review/SKILL.md) | Review a diff, branch, path, or PR for correctness bugs, gaps against stated goals, security issues, and reuse/simplification/efficiency cleanups, with a verify-before-reporting pass |
@@ -48,6 +48,39 @@ Skills are organized by **category**. Each skill lives in
 | process | [`deploy-verification`](./process/deploy-verification/SKILL.md) | Verify a merged config/infra change actually took effect — CD pipeline, pod rollout, running config, before/after metrics, and unintended-environment scope |
 | process | [`run-canary-locally`](./process/run-canary-locally/SKILL.md) | Get a passing local run of the ol-infrastructure Playwright canaries, without risking the account lockout, and read a failed run's trace |
 | process | [`add-canary-journey`](./process/add-canary-journey/SKILL.md) | Add a canary journey to an existing property, or onboard a new property into the canary fleet (two list edits) |
+
+## Platform capabilities and optional Pi extensions
+
+`agent-kit apply` installs every skill into every detected platform, so a
+skill can't assume Claude Code's own tools. Where a skill benefits from
+delegation or a structured question, it says what to do when the capability
+is present **and** what to do without it (e.g.
+[`github-issue-triage`](./process/github-issue-triage/SKILL.md) runs its
+batches in parallel subagents when available, otherwise sequentially with the
+same evidence and report).
+
+Stock Pi has no subagent tool, no AskUserQuestion-style questionnaire tool and
+no built-in `/review` command. These third-party Pi extensions add the first
+two and are picked up automatically by skills that check for the capability;
+**they are optional**, agent-kit neither declares nor installs them, and every
+skill works without them:
+
+| Extension | Adds | Install |
+|-----------|------|---------|
+| [`pi-subagents`](https://www.npmjs.com/package/pi-subagents) | A `subagent` tool for delegation and parallel child agents | `pi install npm:pi-subagents` |
+| [`@juicesharp/rpiv-ask-user-question`](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question) | A structured questionnaire tool (typed options instead of free-form replies) | `pi install npm:@juicesharp/rpiv-ask-user-question` |
+
+For a first-pass PR review on any platform, use the
+[`code-review`](./process/code-review/SKILL.md) skill rather than a
+platform's built-in review command.
+
+`just check-skills` (also the `skill-portability` prek hook) enforces this:
+it fails when a skill names a Claude-only capability (the `Agent` or `Task`
+tool, `AskUserQuestion`, `ToolSearch`, `TodoWrite`, a built-in `/review`,
+subagents) in a passage that doesn't also give the fallback. A deliberately
+platform-specific passage can opt out with `<!-- portability: ok -->`. See
+[`bin/check_skill_portability.py`](../bin/check_skill_portability.py) for the
+exact rule.
 
 ## Authoring a Skill
 
