@@ -17,6 +17,25 @@ metadata:
 Interactive entry point for the workflow tracking system. Invoke with `/witan-workflow`
 at the start of a session, or `/witan-workflow end` before stopping.
 
+## Asking the user
+
+Several steps below ask the user to choose or type something. Ask the same way
+on every agent:
+
+- **If a structured question tool is actually available to you** (e.g. Claude
+  Code's `AskUserQuestion`, or a question tool a Pi extension registers), use
+  it with the header, question and options given. Where a step also needs free
+  text, use whatever free-text entry that tool offers; if it offers none, ask
+  for the text in a plain message.
+- **Otherwise**, ask the same question in a normal message — number the
+  options, say what free-text answer is accepted — and **end your turn and
+  wait** for the reply. Do not guess an answer or pick a default on the user's
+  behalf.
+
+Never add an option the step does not list just to get a free-text box.
+Either way, nothing that changes the graph (claiming a task, creating or
+starting a project or session) happens until the user has answered.
+
 ## On invocation
 
 **Step 1 — Check args.**
@@ -38,7 +57,7 @@ is not connected and stop.
 
 **Step 3 — Ask the user what to link to.**
 
-Build an `AskUserQuestion` with one question:
+Ask one question (see **Asking the user**):
 
 - Header: "Link session"
 - Question: "Which project does this session belong to?"
@@ -52,6 +71,9 @@ Build an `AskUserQuestion` with one question:
 
 **Step 4 — Handle the response.**
 
+Wait for the answer before calling anything else — do not start a session or
+create a project on a guess.
+
 If **"None / untracked"**: do nothing, stop. The session won't be tracked.
 
 If **"Create new project"**: go to **Create new project** below, then
@@ -61,9 +83,11 @@ Otherwise: the user picked an existing project. Note its slug and phase.
 
 **Step 5 — Ask for the session phase.**
 
-Ask: "What phase is this session?" with options matching the project's valid
-phases: `discovery`, `spec`, `implementation`, `delivery`. Pre-select the
-project's current phase as the default (first option, labelled "(current)").
+Ask (see **Asking the user**): "What phase is this session?" with options
+matching the project's valid phases: `discovery`, `spec`, `implementation`,
+`delivery`. List the project's current phase first, labelled "(current)", as
+the suggested answer — but still wait for the user to answer; do not start the
+session on the suggestion alone.
 
 **Step 6 — Start the session.**
 
@@ -98,10 +122,12 @@ placeholder summary."
 
 ## Create new project
 
-Ask the user two questions in one `AskUserQuestion` call:
+Ask the user two questions together (see **Asking the user**):
 
-1. "Project title?" (free text — use "Other" as the entry point)
+1. "Project title?" (free text)
 2. "Starting phase?" (options: discovery, spec, implementation, delivery)
+
+Do not call `workflow_project_create` until both are answered.
 
 Then call:
 
