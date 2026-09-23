@@ -88,31 +88,42 @@ def test_preflight_absent_when_pi_settings_missing_or_unparseable(home):
     assert mcp_adapter_prerequisite(Scope.GLOBAL)[0] is False
 
 
-@pytest.mark.parametrize("dry_run", [True, False])
-def test_unreadable_pi_settings_do_not_abort_apply(home, dry_run):
-    """The preflight runs after mcp.json is written; a settings file it cannot
-    decode (e.g. left by another tool, or root-owned after ``sudo pi
-    install``) must read as "adapter not found", not raise out of apply
-    before hooks and skills are installed."""
+def test_invalid_utf8_elsewhere_does_not_hide_the_adapter(home):
+    """Pi reads settings.json with invalid bytes replaced (and a BOM
+    stripped), so a stray non-UTF-8 byte in an unrelated value still leaves
+    the adapter loaded; the preflight must agree rather than advise
+    installing it again."""
     settings = _global_settings(home)
     settings.parent.mkdir(parents=True)
-    settings.write_bytes(b'{"packages": ["npm:pi-mcp-adapter\xe9"]}')
+    settings.write_bytes(
+        b'\xef\xbb\xbf{"theme": "caf\xe9", "packages": ["npm:pi-mcp-adapter"]}'
+    )
 
-    assert mcp_adapter_prerequisite(Scope.GLOBAL)[0] is False
-    [prereq] = apply("pi", _bundle(), dry_run=dry_run).prerequisites
-    assert prereq.satisfied is False
+    assert mcp_adapter_prerequisite(Scope.GLOBAL)[0] is True
 
 
-def test_permission_denied_pi_settings_read_as_absent(home, monkeypatch):
-    settings = _global_settings(home)
-    _write_settings(settings, ["npm:pi-mcp-adapter"])
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_unopenable_pi_settings_do_not_abort_apply(home, monkeypatch, dry_run):
+    """The preflight runs after mcp.json is written; a settings file it
+    cannot open (e.g. root-owned after ``sudo pi install``) must be reported
+    as unreadable, not raise out of apply before hooks and skills are
+    installed, and not be misreported as the adapter being missing."""
+    _write_settings(_global_settings(home), ["npm:pi-mcp-adapter"])
+    real_read_text = Path.read_text
 
     def deny(self, *args, **kwargs):
-        raise PermissionError(13, "Permission denied", str(self))
+        if self.name == "settings.json":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_text(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", deny)
 
-    assert mcp_adapter_prerequisite(Scope.GLOBAL)[0] is False
+    satisfied, detail = mcp_adapter_prerequisite(Scope.GLOBAL)
+    assert satisfied is False
+    assert detail.startswith("could not read")
+    assert "was not found" not in detail
+    [prereq] = apply("pi", _bundle(), dry_run=dry_run).prerequisites
+    assert prereq.satisfied is False
 
 
 def test_preflight_accepts_extension_path_setting(home):

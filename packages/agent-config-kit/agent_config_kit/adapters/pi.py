@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ..jsonio import load_json_object
+from ..jsonio import parse_json_object
 from ..models import McpServer, RemoteServer, Scope, StdioServer
 
 MCP_ADAPTER_PACKAGE = "pi-mcp-adapter"
@@ -38,8 +38,9 @@ def _names_adapter(source: object) -> bool:
     return isinstance(source, str) and bool(_ADAPTER_SOURCE.search(source.strip()))
 
 
-def _settings_declare_adapter(path: Path) -> bool:
-    """Whether the Pi settings file at ``path`` loads pi-mcp-adapter.
+def _settings_declare_adapter(path: Path) -> bool | None:
+    """Whether the Pi settings file at ``path`` loads pi-mcp-adapter, or
+    ``None`` when the file exists but cannot be opened.
 
     Pi declares packages in settings.json's ``packages`` array, each either a
     source string or ``{"source": ..., "extensions": [...], ...}``
@@ -48,13 +49,20 @@ def _settings_declare_adapter(path: Path) -> bool:
     extension path in the ``extensions`` array also counts, minus ``!``/``-``
     exclusions (docs/settings.md "Resources").
 
-    A file that cannot be read (permissions, not UTF-8) reads as not
-    declaring the adapter: this check is informational and runs after
-    mcp.json is written, so it must never abort the rest of ``apply``."""
-    try:
-        cfg = load_json_object(path) if path.is_file() else None
-    except (OSError, UnicodeDecodeError):
+    The file is decoded the way Pi's settings-manager reads it
+    (``readFileSync(path, "utf-8")``, which replaces invalid bytes, then a
+    stripped BOM), so a stray non-UTF-8 byte elsewhere in the file does not
+    hide a declaration Pi itself honors. A file that cannot be opened at all
+    (e.g. permissions) returns ``None`` rather than raising: this check is
+    informational and runs after mcp.json is written, so it must never abort
+    the rest of ``apply``."""
+    if not path.is_file():
         return False
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    cfg = parse_json_object(text.removeprefix("\ufeff"))
     if not cfg:
         return False
     packages = cfg.get("packages")
@@ -91,9 +99,21 @@ def mcp_adapter_prerequisite(scope: Scope) -> tuple[bool, str]:
     candidates = [global_settings]
     if scope == Scope.PROJECT:
         candidates.append(Path(".pi") / "settings.json")
+    unreadable = []
     for path in candidates:
-        if _settings_declare_adapter(path):
+        declared = _settings_declare_adapter(path)
+        if declared:
             return True, f"{MCP_ADAPTER_PACKAGE} is declared in {path}"
+        if declared is None:
+            unreadable.append(path)
+    if unreadable:
+        names = " or ".join(str(p) for p in unreadable)
+        return False, (
+            f"could not read {names}, so whether {MCP_ADAPTER_PACKAGE} is "
+            "installed is unknown; Pi ignores these MCP servers without it. "
+            "Fix the file's permissions, then confirm with `pi list` (and "
+            f"`/mcp` inside Pi); if it is missing, run `{MCP_ADAPTER_INSTALL}`."
+        )
     checked = " or ".join(str(p) for p in candidates)
     local_hint = (
         f" (or `{MCP_ADAPTER_INSTALL} -l` for this project only)"

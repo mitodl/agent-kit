@@ -10,7 +10,9 @@
   when it is missing, the CLI prints a yellow warning with
   `pi install npm:pi-mcp-adapter`; when it is found, a dim note. The preflight
   never runs `pi`/`npm` or touches the network, and neither outcome changes
-  the exit code.
+  the exit code. It decodes settings files the way Pi does (invalid bytes
+  replaced, BOM stripped), and a file it cannot open is reported as
+  unreadable instead of aborting `apply` or claiming the adapter is missing.
 
 ### Changed
 
