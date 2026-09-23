@@ -330,11 +330,10 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
 
     ``refused`` separates a call declined on purpose from a service that broke.
     It is LOG-ONLY: ``witan_tool_calls_total`` keeps counting both under
-    ``outcome="error"``, because a code graph the cluster does not serve
-    answers every ``code_store_*`` call with ``ClusterGraphMissing``, which is
-    a refusal, and
-    moving refusals to their own outcome would stop the error-ratio alert
-    firing on it.
+    ``outcome="error"``, because a store call addressed to a code graph the
+    cluster does not serve fails with ``ClusterGraphMissing``, which is a
+    refusal, and moving refusals to their own outcome would stop the
+    error-ratio alert firing on it.
 
     A council graph the cluster does not serve is NOT a refusal. The server
     answers 404, ``omnigraph_http.classify_status`` has no 404 branch and calls
