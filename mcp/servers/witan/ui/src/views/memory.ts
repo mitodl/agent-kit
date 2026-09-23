@@ -166,7 +166,7 @@ export function memoryView(
 				page.mode === "browse" && page.memories.length >= MEMORY_LIST_CAP
 					? html`<p class="note">
               The list came back at its ${MEMORY_LIST_CAP}-memory limit, so
-              older memories are not shown. Narrow by kind, or search.
+              older memories may not be shown. Narrow by kind, or search.
             </p>`
 					: nothing
 			}
