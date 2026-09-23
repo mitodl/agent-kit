@@ -108,6 +108,30 @@ IFS=',' read -ra ORG_LIST <<<"$ORGS"
 # still-open item can't read as "closed in year 1".
 _NULL_CLOSED='map(if (.closedAt // "") | startswith("0001-01-01") then .closedAt = null else . end)'
 
+# The GitHub search API serves at most 1,000 results per query; gh pages up to
+# it. A lower cap silently truncates a busy two-day window (one user had 104
+# authored mitodl PRs in it), and nothing downstream can tell items are missing.
+SEARCH_LIMIT=1000
+
+# Run a `gh search` command with the result cap and newest-first ordering, so
+# that if the cap is ever hit the oldest items are the ones dropped, and say so.
+# A failed search still yields [] so one org can't sink the whole run, but it
+# warns: a silently empty org reads the same as an idle one.
+_capped_search() {
+	local label="$1"
+	shift
+	local out count
+	if ! out="$("$@" --sort updated --order desc --limit "$SEARCH_LIMIT")"; then
+		echo "Warning: $label search failed; its results are missing" >&2
+		out="[]"
+	fi
+	count="$(jq length <<<"$out" 2>/dev/null)" || count=0
+	if ((count >= SEARCH_LIMIT)); then
+		echo "Warning: $label search hit the $SEARCH_LIMIT-result cap; older items are missing" >&2
+	fi
+	printf '%s\n' "$out"
+}
+
 # Fetch PRs across all orgs for a given gh search flag, deduplicated by URL.
 # createdAt/closedAt are what license the words "opened" and "merged" — see
 # SKILL.md "Timestamp discipline". updatedAt alone can only support "worked on".
@@ -115,12 +139,11 @@ _search_prs() {
 	local flag="$1"
 	local since="$2"
 	(for org in "${ORG_LIST[@]}"; do
-		gh search prs \
+		_capped_search "PR $flag in $org" gh search prs \
 			"$flag" "$USERNAME" \
 			--owner "$org" \
 			--updated ">=${since%T*}" \
-			--json number,title,state,url,createdAt,updatedAt,closedAt,isDraft \
-			--limit 50 2>/dev/null || echo "[]"
+			--json number,title,state,url,createdAt,updatedAt,closedAt,isDraft
 	done) | jq -s "add | unique_by(.url) | $_NULL_CLOSED"
 }
 
@@ -198,11 +221,10 @@ _enrich_review_state() {
 _search_issues() {
 	local since_date="${1%T*}"
 	(for org in "${ORG_LIST[@]}"; do
-		gh search issues "involves:$USERNAME" \
+		_capped_search "issue in $org" gh search issues "involves:$USERNAME" \
 			--owner "$org" \
 			--updated ">=${since_date}" \
-			--json number,title,state,url,createdAt,updatedAt,closedAt,author \
-			--limit 50 2>/dev/null || echo "[]"
+			--json number,title,state,url,createdAt,updatedAt,closedAt,author
 	done) | jq -s "add | unique_by(.url) | $_NULL_CLOSED | "'map(select(
     (.author.login? // "" | test("\\[bot\\]$|^renovate$|^dependabot$"; "i") | not) and
     (.title | test("^Dependency Dashboard$|^Renovate Dashboard|^Action Required: Fix Renovate"; "") | not)
