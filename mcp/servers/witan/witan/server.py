@@ -3343,6 +3343,12 @@ def memory_search(
     )[:_SEARCH_LIMIT]
 
 
+# The literal `limit` on the capped `list_*memories*` queries in read.gq, which
+# a language-filtered listing is sliced to so both paths mean the same thing
+# by a full page.
+_MEMORY_LIST_CAP = 100
+
+
 @_tool
 def memory_list(
     kind: MemoryKind | None = None,
@@ -3359,6 +3365,13 @@ def memory_list(
     ``memory_list(kind="project_fact")`` at session start, or
     ``memory_list(kind="pattern", language="python")`` before writing code).
 
+    Returns at most the 100 most recent matching memories. Every filter,
+    including dropping superseded memories, applies before that cap, so fewer
+    than 100 rows is the whole listing and exactly 100 means there may be
+    more. The slim unscoped listing has no 100-row cap. A ``language``-filtered
+    or slim listing reads the 10,000 most recent memories and filters those,
+    so it is complete only while the store holds fewer than 10,000.
+
     Parameters
     ----------
     kind:
@@ -3369,57 +3382,49 @@ def memory_list(
         returns slim records (slug, kind, title, tags — no content) for unscoped
         memories; ``memory_get`` a slug for its full content.
     language:
-        Optional post-filter by ``language`` (e.g. ``python``); applies to the
-        full-content results, not the slim unscoped listing.
+        Optional filter by ``language`` (e.g. ``python``), case-insensitive;
+        applies to the full-content results, not the slim unscoped listing.
     include_superseded:
         When ``True``, keep memories that a newer memory ``Supersedes``. Default
         ``False`` drops them, as ``memory_search`` and ``recall`` do.
     """
     detected = repo_module.detect(override=repo)
-    superseded = set() if include_superseded else _superseded_slugs()
-
-    def _current(rows: list[dict]) -> list[dict]:
-        return [r for r in rows if r["slug"] not in superseded]
-
-    def _by_language(rows: list[dict]) -> list[dict]:
-        rows = _current(rows)
-        if not language:
-            return rows
-        return [
-            r for r in rows if (r.get("language") or "").lower() == language.lower()
-        ]
-
-    if detected and kind:
-        return _by_language(
-            client.read(
-                "read.gq",
-                "list_memories_by_repo_kind",
-                {"repo": detected, "kind": kind},
+    slim = not detected and repo != ""
+    if slim or language:
+        # Filters the capped reads cannot apply before their `limit 100`, so
+        # read every memory and filter here: a filter after the cap would
+        # shorten the list without anything saying more matches exist.
+        if kind:
+            rows = client.read(
+                "read.gq", "list_memories_by_kind_unbounded", {"kind": kind}
             )
+        else:
+            rows = client.read("read.gq", "list_memories_unbounded", {})
+        superseded = set() if include_superseded else _superseded_slugs()
+        rows = [r for r in rows if r["slug"] not in superseded]
+        if slim:
+            # Unscoped memories (repo=null) only; memory_get any slug for more.
+            return [_slim_memory(r) for r in rows if not r.get("repo")]
+        return [
+            r
+            for r in rows
+            if (not detected or r.get("repo") == detected)
+            and (r.get("language") or "").lower() == language.lower()
+        ][:_MEMORY_LIST_CAP]
+
+    # The capped reads exclude superseded rows in the query, so a full page
+    # means the cap was hit rather than that pruning ate into it.
+    prefix = "list_memories" if include_superseded else "list_current_memories"
+    if detected and kind:
+        return client.read(
+            "read.gq", f"{prefix}_by_repo_kind", {"repo": detected, "kind": kind}
         )
     if detected:
-        return _by_language(
-            client.read("read.gq", "list_memories_by_repo", {"repo": detected})
-        )
-    if repo == "":
-        # Explicit all-repos opt-in — return full content.
-        if kind:
-            return _by_language(
-                client.read("read.gq", "list_memories_by_kind", {"kind": kind})
-            )
-        return _by_language(client.read("read.gq", "list_memories", {}))
-    # No repo detected and no explicit override: return slim records for
-    # unscoped memories (repo=null) only. Caller can memory_get any slug it needs.
-    # Use unbounded queries so repo-scoped memories don't push unscoped ones out
-    # of the top-100 window before the Python filter runs.
+        return client.read("read.gq", f"{prefix}_by_repo", {"repo": detected})
+    # Explicit all-repos opt-in (repo="") — return full content.
     if kind:
-        all_rows = client.read(
-            "read.gq", "list_memories_by_kind_unbounded", {"kind": kind}
-        )
-    else:
-        all_rows = client.read("read.gq", "list_memories_unbounded", {})
-    unscoped = [r for r in _current(all_rows) if not r.get("repo")]
-    return [_slim_memory(r) for r in unscoped]
+        return client.read("read.gq", f"{prefix}_by_kind", {"kind": kind})
+    return client.read("read.gq", prefix, {})
 
 
 def _update_memory(slug: str, changes: dict) -> dict | None:

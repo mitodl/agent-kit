@@ -29,6 +29,7 @@ import {
 	edgeMark,
 	facetOptions,
 	isMemorySlug,
+	MEMORY_LIST_CAP,
 	type MemoryPage,
 	memoryDetail,
 	memoryView,
@@ -118,6 +119,31 @@ describe("the contradictions inbox", () => {
 		expect(code).toContain(
 			`memory_link(from_slug="${pair?.b.slug}", to_slug="${pair?.a.slug}", kind="supersedes")`,
 		);
+	});
+});
+
+describe("the browse list's cap", () => {
+	const full = Array.from({ length: MEMORY_LIST_CAP }, (_, i) => ({
+		...memory,
+		slug: `pat-capped-${i}`,
+	}));
+
+	it("says the list may be missing memories when it is full", () => {
+		draw({ mode: "browse", memories: full, inbox: [] });
+
+		expect(text()).toContain(`${MEMORY_LIST_CAP}-memory limit`);
+	});
+
+	it("says nothing when the list is shorter than the cap", () => {
+		draw({ mode: "browse", memories: full.slice(1), inbox: [] });
+
+		expect(root.querySelector("p.note")).toBeNull();
+	});
+
+	it("says nothing for a search, which the cap does not apply to", () => {
+		draw({ mode: "plain", memories: full }, { ...route, q: "x", plain: true });
+
+		expect(root.querySelector("p.note")).toBeNull();
 	});
 });
 

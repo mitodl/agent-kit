@@ -32,6 +32,13 @@ import {
  * by side, before it offers anything else.
  */
 
+/**
+ * `memory_list`'s row cap (server.py `memory_list`). It excludes superseded
+ * memories before capping, so a browse list this long may be missing older
+ * ones and a shorter one is everything in scope.
+ */
+export const MEMORY_LIST_CAP = 100;
+
 /** What the memory view's main area renders from. One read per route. */
 export type MemoryPage =
 	| {
@@ -158,6 +165,14 @@ export function memoryView(
       ${page.mode === "browse" ? inbox(page.inbox, route, now) : nothing}
       ${page.mode === "recall" ? recallPairs(page.pairs, page.memories, route) : nothing}
       ${page.mode === "topic" ? topicHeading(page.topic, route) : nothing}
+      ${
+				page.mode === "browse" && page.memories.length >= MEMORY_LIST_CAP
+					? html`<p class="note">
+              The list came back at its ${MEMORY_LIST_CAP}-memory limit, so
+              older memories may not be shown. Narrow by kind, or search.
+            </p>`
+					: nothing
+			}
       ${
 				page.mode === "topic" && page.topic === null
 					? nothing

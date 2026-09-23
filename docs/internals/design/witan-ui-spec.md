@@ -290,6 +290,21 @@ tasks, `ready_tasks` stays capped at 100, and the result gains
 `ready_truncated: bool`. The widget and the page both show "100 of N" when it
 is set.
 
+### 3.9 `memory_list` prunes superseded rows after its 100-row cap
+
+The capped listings (`list_memories_by_repo` and its three siblings) end in
+`limit 100`, and `memory_list` dropped superseded memories from what came back.
+A repo with more than 100 memories, some superseded, got a short list with no
+sign that more current memories existed past the cap.
+
+Decision: exclude superseded memories inside the query. `list_current_memories*`
+add `not { $_ supersedes $m }` and are `memory_list`'s default read; the
+original four stay for `include_superseded=True`. Fewer than 100 rows is then
+the whole listing, and exactly 100 means there may be more, so the result shape
+stays a list. `language` had the same after-the-cap bug and is not
+expressible in those queries case-insensitively, so a language-filtered call
+reads the unbounded listing, filters, and then slices to 100.
+
 ## 4. The read layer
 
 This replaces the premise of `tk-build-the-witan-ui-read-layer-over-queries-read--825c85`,
@@ -540,6 +555,8 @@ project.
 - Search: `recall(query, repo, kind)`, which carries superseded-pruning and
   re-ranking. The flat `memory_search`/`memory_list` stay available as a
   "plain" toggle.
+- Browse: `memory_list(repo, kind)`. A list of 100 is at the cap (§3.9), and
+  the tab says older memories may not be shown.
 - Detail: `memory_get` plus `memory_neighbors`, grouped by edge kind.
 - Contradictions inbox: `memory_contradictions` (§3.5), each pair side by side.
 - Topics: `topic_get` from any tag on a memory.

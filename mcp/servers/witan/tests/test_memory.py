@@ -288,6 +288,95 @@ def test_supersedes_hides_old_from_list(server):
 
 
 @requires_omnigraph
+@pytest.mark.parametrize(
+    ("kwargs"),
+    [{}, {"kind": "pattern"}, {"repo": ""}, {"repo": "", "kind": "pattern"}],
+)
+def test_superseded_rows_do_not_shorten_a_full_list(server, kwargs):
+    """Pruning after the 100-row cap handed back fewer than 100 rows while
+    more current memories sat past it, so a short list stopped meaning
+    "that is everything"."""
+    from witan import server as srv
+
+    repo = "https://github.com/test/repo"
+    # The 10 newest are superseded by the 10 oldest, and 105 are current.
+    slugs = [f"pat-list-{i:03d}" for i in range(115)]
+    srv.client.load_batch(
+        [
+            {
+                "type": "Memory",
+                "data": {
+                    "slug": slug,
+                    "kind": "pattern",
+                    "title": slug,
+                    "content": slug,
+                    "repo": repo,
+                    "author": "pytest",
+                    "created_at": f"2026-01-01T00:{i // 60:02d}:{i % 60:02d}Z",
+                    "updated_at": f"2026-01-01T00:{i // 60:02d}:{i % 60:02d}Z",
+                },
+            }
+            for i, slug in enumerate(slugs)
+        ]
+        + [
+            {"edge": "Supersedes", "from": slugs[i], "to": slugs[-1 - i]}
+            for i in range(10)
+        ]
+    )
+
+    listed = [m["slug"] for m in server.memory_list(**kwargs)]
+    assert listed == slugs[-11::-1][:100]
+
+    with_old = [m["slug"] for m in server.memory_list(include_superseded=True)]
+    assert with_old == slugs[::-1][:100]
+
+
+@requires_omnigraph
+@pytest.mark.parametrize("repo", [None, ""])
+def test_language_filter_applies_before_the_cap(server, repo):
+    """Filtering by language after the 100-row read left a listing short
+    whenever newer memories in another language filled part of the window."""
+    from witan import server as srv
+
+    def row(i: int, language: str) -> dict:
+        stamp = f"2026-01-01T{i // 3600:02d}:{i // 60 % 60:02d}:{i % 60:02d}Z"
+        slug = f"pat-{language.lower()}-{i:03d}"
+        return {
+            "type": "Memory",
+            "data": {
+                "slug": slug,
+                "kind": "pattern",
+                "title": slug,
+                "content": slug,
+                "repo": "https://github.com/test/repo",
+                "language": language,
+                "author": "pytest",
+                "created_at": stamp,
+                "updated_at": stamp,
+            },
+        }
+
+    # 115 Python memories, the newest 5 superseded, under 50 newer Go ones.
+    python = [row(i, "Python") for i in range(115)]
+    newer_go = [row(200 + i, "go") for i in range(50)]
+    srv.client.load_batch(
+        python
+        + newer_go
+        + [
+            {
+                "edge": "Supersedes",
+                "from": python[i]["data"]["slug"],
+                "to": python[-1 - i]["data"]["slug"],
+            }
+            for i in range(5)
+        ]
+    )
+
+    listed = [m["slug"] for m in server.memory_list(repo=repo, language="python")]
+    assert listed == [r["data"]["slug"] for r in python[-6::-1]][:100]
+
+
+@requires_omnigraph
 def test_neighbors_superseded_by_is_the_inbound_side(server):
     old = server.memory_store(kind="pattern", title="old", content="first take")
     new = server.memory_store(kind="pattern", title="new", content="second take")
