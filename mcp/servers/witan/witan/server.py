@@ -3368,7 +3368,9 @@ def memory_list(
     Returns at most the 100 most recent matching memories. Every filter,
     including dropping superseded memories, applies before that cap, so fewer
     than 100 rows is the whole listing and exactly 100 means there may be
-    more. The slim unscoped listing has no 100-row cap.
+    more. The slim unscoped listing has no 100-row cap. A ``language``-filtered
+    or slim listing reads the 10,000 most recent memories and filters those,
+    so it is complete only while the store holds fewer than 10,000.
 
     Parameters
     ----------
