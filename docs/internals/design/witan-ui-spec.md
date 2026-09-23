@@ -545,7 +545,7 @@ project.
   re-ranking. The flat `memory_search`/`memory_list` stay available as a
   "plain" toggle.
 - Browse: `memory_list(repo, kind)`. A list of 100 is at the cap (§3.9), and
-  the tab says older memories are not shown.
+  the tab says older memories may not be shown.
 - Detail: `memory_get` plus `memory_neighbors`, grouped by edge kind.
 - Contradictions inbox: `memory_contradictions` (§3.5), each pair side by side.
 - Topics: `topic_get` from any tag on a memory.
