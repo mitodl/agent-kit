@@ -6,4 +6,6 @@
   Recall now reports a pair only when both memories are in its result and at
   least one is in `repo`, the same rule `memory_contradictions` scopes by, so
   every pair recall flags is in the inbox for the same `repo`. `repo=""` still
-  reports every pair among the returned memories.
+  reports every pair among the returned memories. With no repo detected and
+  none passed, recall now reports only pairs touching an unscoped memory, as
+  the inbox does, where it used to report every pair it returned.

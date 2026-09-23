@@ -4133,7 +4133,7 @@ def memory_contradictions(
     only when both memories land in its result, and ``memory_neighbors`` needs a
     slug to start from; this needs neither. Both apply the same ``repo`` rule
     (below), so every pair ``recall`` reports is one this lists for the same
-    ``repo``.
+    ``repo`` and ``include_superseded``.
 
     Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
     carry ``slug, title, kind, repo, author, updated_at, content, confidence``;
@@ -8147,8 +8147,11 @@ def recall(
     result AND at least one of them is in ``repo``, the rule
     ``memory_contradictions`` scopes by. Expansion can return memories from
     other repos, but a pair with neither side in ``repo`` is left out, so every
-    pair here is also in ``memory_contradictions`` for the same ``repo``. Pass
-    ``repo=""`` to report every pair among the returned memories.
+    pair here is also in ``memory_contradictions`` for the same ``repo`` and
+    ``include_superseded``. Pass ``repo=""`` to report every pair among the
+    returned memories. With no repo detected and none passed, the rule keeps
+    only pairs touching an unscoped memory, as ``memory_contradictions`` does,
+    even though the ``query`` seed then searches every repo.
 
     Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
     edge — today that means a Tagged edge promoted from a free-string tag,

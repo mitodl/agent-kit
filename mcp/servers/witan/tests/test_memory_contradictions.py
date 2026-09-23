@@ -217,3 +217,22 @@ def test_agrees_with_recall_on_pairs_expansion_pulls_in_from_another_repo(server
         == inbox("")
         == sorted([{seed, there}, {there, there_too}], key=sorted)
     )
+
+
+@requires_omnigraph
+def test_agrees_with_recall_with_no_repo_detected(server, monkeypatch):
+    """recall's query seed searches every repo when nothing is detected, but its
+    pairs follow the inbox's no-detection rule: only those touching an unscoped
+    memory."""
+    unscoped = _memory(server, "wombat unscoped", repo="")
+    here = _memory(server, "wombat here")
+    there = _memory(server, "wombat there", repo=ELSEWHERE)
+    server.memory_link(unscoped, here, "contradicts")
+    server.memory_link(here, there, "contradicts")
+
+    monkeypatch.setenv("WITAN_REPO", "")
+
+    out = server.recall(query="wombat")
+    assert {unscoped, here, there} <= {m["slug"] for m in out["memories"]}
+    recalled = [{c["a"], c["b"]} for c in out["contradictions"]]
+    assert recalled == _pairs(server.memory_contradictions()) == [{unscoped, here}]
