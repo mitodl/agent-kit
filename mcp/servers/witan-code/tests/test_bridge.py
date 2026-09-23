@@ -410,6 +410,10 @@ def test_cross_repo_env_and_endpoint_linkage(tmp_path, monkeypatch):
         "endpoint", "/api/v1/courses/{id}/"
     )
     assert any(c["repo"] == "https://github.com/test/repo-a" for c in ep_consumers)
+    # The trust score comes back with each row, so a reader can tell the
+    # consumer rows that made a code_repo_dependencies edge (>= 0.5) from the
+    # ones that did not.
+    assert all(isinstance(c["confidence"], float) for c in ep_consumers)
 
 
 @requires_stack

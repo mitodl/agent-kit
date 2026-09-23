@@ -144,7 +144,7 @@ query bindings_by_key($kind: String, $key_norm: String) {
     return {
         $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
         $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic,
-        $b.symbol
+        $b.symbol, $b.confidence
     }
     order { $b.repo asc }
     limit 500
@@ -159,7 +159,7 @@ query bindings_by_key_role($kind: String, $key_norm: String, $role: String) {
     return {
         $b.slug, $b.kind, $b.key, $b.key_norm, $b.role, $b.repo,
         $b.file, $b.symbol_id, $b.line, $b.language, $b.framework, $b.generic,
-        $b.symbol
+        $b.symbol, $b.confidence
     }
     order { $b.repo asc }
     limit 500
