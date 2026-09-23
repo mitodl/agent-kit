@@ -892,7 +892,10 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
     and ``session_slug``; an agent calling a *deployed* witan directly (not
     through the CLI proxy) has to pass its own.
 
-    The environment is still consulted as the local-stdio fallback. The id is
+    The environment is still consulted as the local-stdio fallback, via
+    ``session_state.current_session_id`` (``$CLAUDE_SESSION_ID``, else
+    ``$PI_SESSION_ID``; Pi does not export the latter to MCP servers it
+    launches, so under Pi the explicit argument is the path that works). The id is
     condensed to 8 hex chars by ``readiness.session_suffix`` — short because
     the holder string is read by humans in refusal messages and task listings,
     and a digest rather than a prefix because the id's shape varies by caller
@@ -905,7 +908,7 @@ def _claim_holder(assignee: str | None = None, session_id: str | None = None) ->
     if assignee:
         return assignee
     identity = _current_author()
-    session = session_id or os.environ.get("CLAUDE_SESSION_ID") or ""
+    session = session_state.current_session_id(session_id)
     suffix = _session_suffix(session)
     return f"{identity}#{suffix}" if suffix else identity
 
@@ -4496,7 +4499,9 @@ def _is_local_stdio() -> bool:
 def _active_session_slug() -> str | None:
     """The WorkflowSession slug for the current agent session, or None.
 
-    Reads the handle stored locally under ``$CLAUDE_SESSION_ID``. Fails soft on
+    Reads the handle stored locally under the agent session id
+    (``session_state.current_session_id``: ``$CLAUDE_SESSION_ID``, else
+    ``$PI_SESSION_ID``). Fails soft on
     any missing-env/read/parse error — provenance is best-effort and must never
     block a memory write.
 
@@ -4508,7 +4513,7 @@ def _active_session_slug() -> str | None:
     """
     if not _is_local_stdio():
         return None
-    handle = session_state.read_handle(os.environ.get("CLAUDE_SESSION_ID") or "")
+    handle = session_state.read_handle(session_state.current_session_id())
     return (handle or {}).get("session_slug") or None
 
 
@@ -5739,8 +5744,10 @@ def workflow_session_start(
     Call this at the start of any session that is contributing to a tracked
     project. The context injected by the context-injection hook (Claude Code) or
     extension (Pi) provides the ``project_slug``; ``session_id`` should be the
-    session id — ``$CLAUDE_SESSION_ID`` on Claude Code, or any stable unique
-    string for the session otherwise.
+    session id — ``$CLAUDE_SESSION_ID`` on Claude Code, ``$PI_SESSION_ID`` on
+    Pi (read it with ``echo $PI_SESSION_ID`` in the bash tool; it is what the Pi
+    workflow extension's shutdown auto-close looks the handle up by), or any
+    stable unique string for the session otherwise.
 
     Returns an explicit session handle (``session_slug``, ``project_slug``,
     ``phase``, ``session_id``, ``started_at``). Hold on to it and pass
@@ -7164,7 +7171,9 @@ async def task_claim(
         state), and without it every one of your concurrent sessions claims
         under the same name. The CLI's remote proxy fills it in automatically;
         under local stdio the server falls back to its own
-        ``$CLAUDE_SESSION_ID``, which it inherits from the agent.
+        ``$CLAUDE_SESSION_ID`` (else ``$PI_SESSION_ID``), inherited from the
+        agent. Pi does not export ``$PI_SESSION_ID`` to the MCP servers it
+        launches, so under Pi pass the value from ``echo $PI_SESSION_ID``.
     force:
         Steal the task even if another holder's lease is still valid.
     repo:

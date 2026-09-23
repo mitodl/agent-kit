@@ -658,7 +658,8 @@ Link a session to a workflow project.
 
 * `PROJECT-SLUG, --project-slug`: **[required]**
 * `--phase`: **[required]** *[choices: discovery, spec, implementation, delivery]*
-* `--session-id`: generated uuid). The Stop hook keys its state file on this.
+* `--session-id`: Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else a
+    generated uuid. The Stop hook keys its state file on this.
 * `--repo`:
 * `--tags, --empty-tags`:
 

@@ -13,7 +13,6 @@ ADR-0004 JWT→actor→token mapping.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import tempfile
 from collections.abc import Iterator
@@ -629,10 +628,11 @@ class RemoteServerProxy(RemoteMCPProxy):
 
     def _resolve_session_slug(self) -> str | None:
         # The handle `witan session start` (or the local stdio server) parked
-        # under $CLAUDE_SESSION_ID. Sending it makes memories written through the
+        # under the agent session id ($CLAUDE_SESSION_ID, else $PI_SESSION_ID —
+        # see session_state.current_session_id). Sending it makes memories written through the
         # deployment carry SessionProduced provenance, which the server cannot
         # derive on its own — it shares neither the filesystem nor the session id.
-        handle = session_state.read_handle(os.environ.get("CLAUDE_SESSION_ID") or "")
+        handle = session_state.read_handle(session_state.current_session_id())
         return (handle or {}).get("session_slug") or None
 
     def _resolve_session_id(self) -> str | None:
@@ -640,4 +640,4 @@ class RemoteServerProxy(RemoteMCPProxy):
         # qualifier. Unlike the handle above this needs no `witan session start`
         # to have run — the claim has to tell two of one person's concurrent
         # sessions apart whether or not either is attached to a project.
-        return os.environ.get("CLAUDE_SESSION_ID") or None
+        return session_state.current_session_id() or None

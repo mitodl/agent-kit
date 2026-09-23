@@ -11,7 +11,6 @@ inspect a project's session history.
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import cyclopts
@@ -51,12 +50,13 @@ def session_start(
     ----------
     project_slug: The ``wp-`` slug of the project this session belongs to.
     phase: The phase this session is working in.
-    session_id: Unique id for the session (default: ``$CLAUDE_SESSION_ID`` or a
-        generated uuid). The Stop hook keys its state file on this.
+    session_id: Unique id for the session.
+        Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else a
+        generated uuid. The Stop hook keys its state file on this.
     repo: Repo URI to scope the session to (default: auto-detected).
     tags: Optional tags.
     """
-    sid = session_id or os.environ.get("CLAUDE_SESSION_ID") or f"cli-{uuid.uuid4().hex}"
+    sid = session_state.current_session_id(session_id) or f"cli-{uuid.uuid4().hex}"
     s = _srv()
     result = _fn(s.workflow_session_start)(
         project_slug=project_slug,

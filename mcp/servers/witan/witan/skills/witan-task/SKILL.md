@@ -51,7 +51,9 @@ So:
   someone is on it. Pick another task — do not `force` past a live lease
   without a reason you can state.
 - **Pass `session_id`, not `assignee`.** `task_claim(slug=..., session_id=...)`
-  — your `$CLAUDE_SESSION_ID` on Claude Code, any stable per-run id elsewhere.
+  — your `$CLAUDE_SESSION_ID` on Claude Code, `$PI_SESSION_ID` on Pi (read
+  either with `echo "${CLAUDE_SESSION_ID:-$PI_SESSION_ID}"`), any stable
+  per-run id elsewhere.
   It qualifies the holder as `<you>#<session>` so your own parallel sessions
   are told apart; without it they all claim under one name, the contention
   check cannot separate them, and the second session silently renews the
@@ -135,7 +137,7 @@ MCP call fails, tell the user the witan server is not connected and stop.
     plus "Create a task" and "None".
 - On a chosen task: claim it (that is what picking it means — see **Claim
   before you work it**). Call
-  `task_claim(slug="<slug>", session_id="<$CLAUDE_SESSION_ID>")`.
+  `task_claim(slug="<slug>", session_id="<$CLAUDE_SESSION_ID or $PI_SESSION_ID>")`.
   `task_claim` sets `in_progress` with a lease and **refuses if someone else
   holds it** (`{"claimed": false, "held_by": ...}`) — surface that and offer
   another task instead of overwriting. On success confirm: "Claimed **{title}**

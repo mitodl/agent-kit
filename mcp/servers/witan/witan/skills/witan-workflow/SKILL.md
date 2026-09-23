@@ -77,9 +77,13 @@ workflow_session_start(
 )
 ```
 
-For the session id: on Claude Code, run `echo $CLAUDE_SESSION_ID` via Bash. If
-that variable is empty (e.g. under Pi), use a short random hex string instead
-(read `/proc/sys/kernel/random/uuid` and take the first 8 chars).
+For the session id, run `echo "${CLAUDE_SESSION_ID:-$PI_SESSION_ID}"` in your
+shell tool: Claude Code sets `$CLAUDE_SESSION_ID`, Pi sets `$PI_SESSION_ID` for
+commands its `bash` tool runs. Use that value, not a made-up one — it is what
+the Stop hook (Claude Code) or the workflow extension's shutdown handler (Pi)
+looks the session up by to auto-close it. Only if both are empty (another
+agent), use any stable string unique to this session, and close the session
+yourself with `/witan-workflow end`, since nothing else can find it.
 
 Keep the returned `session_slug` for the rest of the session: pass it to
 `memory_store` (and `workflow_trace_mine`) so anything you record is attributed to
@@ -120,7 +124,8 @@ the `session_slug` from this session's state file in the system temp dir
 (`$TMPDIR`, else the platform default — run `python -c "import tempfile;
 print(tempfile.gettempdir())"` if unsure): it is
 `workflow-session-<session id>.json`, where `<session id>` is the value passed
-to `workflow_session_start` (`$CLAUDE_SESSION_ID` on Claude Code). If you no
+to `workflow_session_start` (`$CLAUDE_SESSION_ID` on Claude Code,
+`$PI_SESSION_ID` on Pi). If you no
 longer have the id, pick the newest matching `workflow-session-*.json` in that
 directory.
 

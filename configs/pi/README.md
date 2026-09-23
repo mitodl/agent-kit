@@ -31,9 +31,15 @@ so the omnigraph trackers work the same under Pi.
     graph.
   - `session_shutdown`: runs `witan session-checkpoint`, whose optimize half
     (`spawn_background_optimize`) opportunistically compacts the memory graph
-    store (throttled; see #124) so query latency doesn't re-bloat. Its
-    workflow-session-closing half is keyed on `CLAUDE_SESSION_ID` and safely
-    no-ops when that's unset, so mirroring the whole command under Pi is safe.
+    store (throttled; see #124) so query latency doesn't re-bloat, and
+    auto-closes the active WorkflowSession. The close looks the session handle
+    up by the agent session id: Pi exposes `PI_SESSION_ID` only to commands its
+    `bash` tool runs, not to its own process env, so the extension sets it on
+    the checkpoint child from `ctx.sessionManager.getSessionId()` (and drops any
+    inherited `CLAUDE_SESSION_ID` from that child only, since witan prefers it).
+    For the close to find the session, `workflow_session_start` must have been
+    given the same id — the `witan-workflow` and `witan-project-tracker` skills
+    tell the agent to pass `$PI_SESSION_ID`. With no handle the close no-ops.
 
 Both are best-effort: any failure (missing binary, non-git dir, no data) is
 swallowed and never disrupts the session.
@@ -50,15 +56,3 @@ ln -sf "$(pwd)/extensions/workflow-context.ts" ~/.pi/agent/extensions/
 
 The MCP servers themselves are configured separately in `~/.pi/agent/mcp.json`
 (see [Local Development Setup](../../docs/internals/agent-memory.md#local-development-setup)).
-
-## Not covered
-
-Closing a **workflow** session on exit (the session-closing half of witan's
-Claude `Stop` hook) is not mirrored: under Pi the session id differs from
-Claude's, so the `/tmp` session-state file the checkpoint relies on isn't
-keyed the same way. Close sessions explicitly with the `/witan-workflow end`
-skill, or rely on the next `workflow_session_start`. This limitation is
-specific to the workflow-session-closing half of the checkpoint — the
-memory-graph store compaction half (see `workflow-context.ts` above) has no
-such dependency and is mirrored, same as the **code-graph** `session_shutdown`
-handler.
