@@ -1063,6 +1063,31 @@ describe("the Bridge tab", () => {
 		expect(mcp.codeInterfaceConsumers).not.toHaveBeenCalled();
 	});
 
+	it("gives the bindings their own read status and Refresh", async () => {
+		// The drill does not poll, and the top bar's Refresh is the graph's,
+		// so without its own a stale or failed binding table had no marker and
+		// no way to retry.
+		await open(
+			`#bridge?edge=${edge(WEB, INFRA)}&binding=${encodeURIComponent("env_var:DATABASE_URL")}`,
+		);
+		await vi.waitFor(() =>
+			expect(root.querySelector(".bridge-bindings")).not.toBeNull(),
+		);
+		vi.mocked(mcp.codeInterfaceProviders).mockClear();
+		vi.mocked(mcp.codeRepoDependencies).mockClear();
+
+		const refresh = root.querySelector<HTMLButtonElement>(
+			".bridge-drill .read-status button",
+		);
+		expect(refresh).not.toBeNull();
+		refresh?.click();
+
+		await vi.waitFor(() =>
+			expect(mcp.codeInterfaceProviders).toHaveBeenCalledTimes(1),
+		);
+		expect(mcp.codeRepoDependencies).not.toHaveBeenCalled();
+	});
+
 	it("keeps only the rows from the edge's own two repos", async () => {
 		// Both tools span every repo; a provider elsewhere is not this edge's.
 		vi.mocked(mcp.codeInterfaceProviders).mockResolvedValue([

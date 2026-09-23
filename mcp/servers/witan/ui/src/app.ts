@@ -510,16 +510,25 @@ export class App {
 		return projectList(inScope, this.route);
 	}
 
-	/** The open contract's bindings, in whatever state their read is in. */
+	/**
+	 * The open contract's bindings, in whatever state their read is in.
+	 *
+	 * With their OWN read status, as the detail panel has: this read does not
+	 * poll, and the top bar's Refresh is the graph's, so a stale or failed
+	 * binding table would otherwise carry no marker and have no way to retry.
+	 */
 	private drillSection(): TemplateResult | typeof nothing {
 		const snapshot = this.drill.snapshot;
 		if (!snapshot) {
 			return nothing;
 		}
-		return (
-			placeholderFor(snapshot, "the bindings") ??
-			bindingTable(snapshot.data as InterfaceBinding[])
-		);
+		return html`<div class="bridge-drill">
+      ${readStatus(snapshot, () => this.drill.refresh())}
+      ${
+				placeholderFor(snapshot, "the bindings") ??
+				bindingTable(snapshot.data as InterfaceBinding[])
+			}
+    </div>`;
 	}
 
 	private panel(): TemplateResult | typeof nothing {

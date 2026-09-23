@@ -919,3 +919,9 @@ ul.bridge-contracts li {
 	color: var(--muted);
 	font-size: 0.85rem;
 }
+
+/* The drill's own read status sits above its table, not in the top bar. */
+.bridge-drill .read-status {
+	margin: 0.5rem 0 0;
+	justify-content: flex-end;
+}
