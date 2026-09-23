@@ -81,6 +81,8 @@ depends on the agent:
   `args`:
   `mcp({ search: "code_find_definition callers impact" })`, then
   `mcp({ tool: "<exact name the search returned>", args: { name: "X" } })`.
+  Search reads only cached tool metadata, so if it finds nothing, run
+  `mcp({ connect: "witan-code" })` (or `"witan"`) and search again.
   `mcp({ describe: "<name>" })` shows a tool's parameters. Invoke this skill
   as `/skill:witan-code`.
 

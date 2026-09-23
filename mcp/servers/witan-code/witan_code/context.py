@@ -171,6 +171,12 @@ _PI_SEARCH_CALL = '`mcp({ search: "code_find_definition callers impact" })`'
 _PI_TOOL_CALL = (
     '`mcp({ tool: "<exact name the search returned>", args: { name: "X" } })`'
 )
+# Search reads only the adapter's cached tool metadata, and servers are lazy by
+# default, so a server with no valid cache entry (first use after the cache
+# file already existed, or unused for the cache's 7-day lifetime) returns no
+# matches. Connecting refreshes the metadata; the block names both server
+# names setup registers, since either may be the one serving `code_*` tools.
+_PI_CONNECT_CALL = '`mcp({ connect: "witan-code" })` (or `"witan"`)'
 
 
 def _discovery_line(client: Client) -> str:
@@ -179,7 +185,9 @@ def _discovery_line(client: Client) -> str:
         return (
             "`code_*` tools are behind the `mcp` proxy tool, not in your tool "
             f"list — find their exact names with {_PI_SEARCH_CALL}, then call "
-            f"one with {_PI_TOOL_CALL} instead of grep: `code_find_definition` "
+            f"one with {_PI_TOOL_CALL} instead of grep (if the search finds "
+            f"nothing, run {_PI_CONNECT_CALL} and search again): "
+            "`code_find_definition` "
             "→ `symbol_id` → `code_callers` / `code_impact` (blast radius "
             "before editing). More: `/skill:witan-code`."
         )

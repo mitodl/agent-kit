@@ -52,15 +52,18 @@ so the omnigraph trackers work the same under Pi.
 Both are best-effort: any failure (missing binary, non-git dir, no data) is
 swallowed and never disrupts the session.
 
-Only the `before_agent_start` context read waits, and it waits exactly as long
-as the matching Claude `UserPromptSubmit` hook: 15s for `witan-code
-inject-context`, 45s for `witan inject-context` (each extension's
+Only the `before_agent_start` context read waits, and each command gets the
+same timeout as its matching Claude `UserPromptSubmit` hook: 15s for
+`witan-code inject-context`, 45s for `witan inject-context` (each extension's
 `INJECT_CONTEXT_TIMEOUT_MS`, pinned by the packages' `tests/test_setup.py` to
 `INJECT_CONTEXT_TIMEOUT_SECONDS` in `witan_code.setup` / `witan.setup`). The
 first prompt in a cache window pays a cold graph read that has to finish once
 to fill the cache; a shorter Pi budget kills that read and every prompt comes
 back with no block. A timeout still degrades to no context rather than a
-stalled turn. Every other handler (`session_start` indexing, edit reindexing,
+stalled turn. Unlike Claude, which runs matching hooks in parallel, Pi runs
+`before_agent_start` handlers one after another and `spawnSync` blocks its
+event loop, so with both extensions installed a prompt can wait up to their
+sum (60s) against Claude's 45s. Every other handler (`session_start` indexing, edit reindexing,
 `session_shutdown`) runs detached and never blocks.
 
 The copies in `extensions/` must stay byte-identical to the package files

@@ -434,6 +434,9 @@ def test_inject_context_for_pi_names_the_mcp_proxy_not_toolsearch(
     assert "select:" not in text
     assert 'mcp({ search: "code_find_definition callers impact" })' in text
     assert 'mcp({ tool: "<exact name the search returned>", args: {' in text
+    # Search sees only cached metadata; a lazy server with no cache entry
+    # needs a connect first, or the block dead-ends.
+    assert 'mcp({ connect: "witan-code" })' in text
     assert "/skill:witan-code" in text  # Pi's skill command form
     # The status lines above the discovery line are client-neutral.
     assert "https://github.com/test/cg" in text
