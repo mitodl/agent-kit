@@ -330,10 +330,19 @@ def _error_fields(exc: BaseException) -> dict[str, Any]:
 
     ``refused`` separates a call declined on purpose from a service that broke.
     It is LOG-ONLY: ``witan_tool_calls_total`` keeps counting both under
-    ``outcome="error"``, because the error-ratio alert's headline case -- a
-    quarantined graph answering every request with "not served" -- is itself a
-    refusal, and moving refusals to their own outcome would stop that alert
-    firing on exactly what it was written for.
+    ``outcome="error"``, because a code graph the cluster does not serve
+    answers every ``code_store_*`` call with ``ClusterGraphMissing``, which is
+    a refusal, and
+    moving refusals to their own outcome would stop the error-ratio alert
+    firing on it.
+
+    A council graph the cluster does not serve is NOT a refusal. The server
+    answers 404, ``omnigraph_http.classify_status`` has no 404 branch and calls
+    it FATAL, and the store raises a plain ``RuntimeError`` that fastmcp wraps,
+    so the line carries ``error_type=ToolError, refused=false`` with the 404 in
+    ``error``. That is deliberate: every council tool depends on that one graph,
+    so it is an outage, and a ``Refusal`` would log it at WARNING and keep it
+    out of Sentry.
 
     ★ ``error_type`` IS THE REAL CLASS ONLY FOR A ``FastMCPError`` ★
     Anything else is re-raised by ``FastMCP.call_tool`` as
