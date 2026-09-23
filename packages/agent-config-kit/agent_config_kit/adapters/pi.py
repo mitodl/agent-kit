@@ -20,12 +20,21 @@ def serialize_mcp(server: McpServer) -> dict:
         data: dict = {"command": server.command}
         if server.args:
             data["args"] = server.args
+        # cwd and headers are ServerEntry fields in pi-mcp-adapter's own
+        # types.ts (verified against the installed adapter, v2.37.0), so they
+        # pass through verbatim, the same way the Claude adapter emits them.
+        # The adapter expands ${VAR}/~ in cwd and ${VAR}/!command in header
+        # values itself, so no rewriting happens here.
+        if server.cwd is not None:
+            data["cwd"] = server.cwd
         if server.env:
             data["env"] = server.env
         return data
 
     assert isinstance(server, RemoteServer)
     data = {"url": server.url}
+    if server.headers:
+        data["headers"] = server.headers
     # The manifest's canonical oauth shape is {clientId, callbackPort},
     # matching Claude Code's own documented shape (see claude.py) — but Pi's
     # real shape differs in two ways: a top-level "auth": "oauth"
