@@ -120,13 +120,31 @@ export async function bearerAuth(
 		// getTokens refreshes with the refresh token when the access token is
 		// near expiry, so every request gets a live one without a timer here.
 		token: async () => (await oidc.getTokens()).accessToken,
-		onUnauthorized: async () => {
+		onUnauthorized: () => {
+			// Parallel reads each get their own 401. They share the one restart
+			// rather than the second tripping the loop guard the first just set.
+			if (restarting) {
+				return restarting;
+			}
+			// ★ ONCE TRIPPED, FOR THE LIFE OF THE PAGE. The views keep polling,
+			// and each poll reconnects; a guard that expired with its window
+			// would redirect again on the first poll after it, every minute or
+			// so, for as long as the tab stayed open.
 			const last = Number(sessionStorage.getItem(LOGIN_RESTARTED_AT));
-			if (last && Date.now() - last < LOGIN_LOOP_WINDOW_MS) {
-				throw new LoginRejectedError(auth.issuer);
+			if (rejected || (last && Date.now() - last < LOGIN_LOOP_WINDOW_MS)) {
+				rejected = true;
+				return Promise.reject(new LoginRejectedError(auth.issuer));
 			}
 			sessionStorage.setItem(LOGIN_RESTARTED_AT, String(Date.now()));
-			await oidc.goToAuthServer({ redirectUrl: window.location.href });
+			restarting = oidc.goToAuthServer({
+				redirectUrl: window.location.href,
+			});
+			return restarting;
 		},
 	};
 }
+
+/** The restart in flight, if any. Module state, because it spans reconnects. */
+let restarting: Promise<never> | null = null;
+/** The loop guard tripped; no further 401 on this page redirects. */
+let rejected = false;

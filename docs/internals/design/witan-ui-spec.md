@@ -686,11 +686,13 @@ Changes:
     the PKCE state for an in-flight login and a logged-in/logged-out flag, not
     a token. A reload therefore re-runs the redirect, and Keycloak's SSO
     session answers it without a prompt.
-  - A 401 from `/mcp` restarts the login (`goToAuthServer`). A second 401
-    within a minute of a restart stops and says why instead: a token Keycloak
-    just issued being rejected is a client misconfiguration (usually the
-    missing audience mapper), and restarting again would bounce between the
-    page and Keycloak forever.
+  - A 401 from `/mcp` restarts the login (`goToAuthServer`); parallel reads
+    that all get a 401 share that one restart. A 401 within a minute of a
+    restart (the page after coming back from Keycloak) stops and says why
+    instead, and stays stopped for the life of the page, however long the
+    views keep polling: a token Keycloak just issued being rejected is a client
+    misconfiguration (usually the missing audience mapper), and restarting
+    again would bounce between the page and Keycloak forever.
   - `/ui/config.json` with `"auth": null` (local `witan ui`) creates no OIDC
     client and sends no credential.
 
@@ -706,7 +708,8 @@ Changes:
   fragment; no web storage held the token; a reload came back logged in
   without the login form. With the audience mapper removed, witan answered
   401, the page restarted the login once and then showed the rejection
-  message. A local page with `"auth": null` made no request off its own origin
+  message, and made no further trip to Keycloak over 100 seconds of polling and
+  window focus events. A local page with `"auth": null` made no request off its own origin
   and read `/mcp` with no credential. This is a local run, not a CI check: a
   CI job needs Keycloak started with `start-dev` (a service container cannot
   pass it a command), a browser, and a witan server, and was left for later.
