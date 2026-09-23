@@ -335,6 +335,64 @@ export interface TopicResult {
 	memories: Memory[];
 }
 
+// ── Code graph (witan-code, optional) ───────────────────────────────
+
+/** A cross-repo contract kind, as witan-code's bridge store has them. */
+export type ContractKind = "env_var" | "endpoint" | "package" | "service";
+
+/** One contract behind a repo-to-repo edge. */
+export interface DepContract {
+	kind: ContractKind;
+	/**
+	 * The contract's `key_norm`, except on a `service` edge, where it is the
+	 * deployed repo's short name (`org/repo`) rather than `repo:<uri>`.
+	 */
+	key: string;
+	/** Endpoint-consumer trust, 0.5 to 1. The server drops anything lower. */
+	confidence: number;
+	/**
+	 * A stoplisted key (DEBUG, PORT, ...). Optional because a witan-code
+	 * older than the field does not send it, and the page cannot require a
+	 * version of a package it only finds mounted.
+	 */
+	generic?: boolean;
+}
+
+/** "`consumer` depends on `provider`" through `contracts`. */
+export interface DepEdge {
+	consumer: string;
+	provider: string;
+	weight: number;
+	kinds: Record<string, number>;
+	contracts: DepContract[];
+}
+
+/** `code_repo_dependencies`: every indexed repo, and the edges between them. */
+export interface RepoDependencies {
+	repos: string[];
+	edges: DepEdge[];
+}
+
+/** An `InterfaceBinding` row from `code_interface_providers`/`_consumers`. */
+export interface InterfaceBinding {
+	slug: string;
+	kind: ContractKind;
+	/** As written in the source, e.g. `GET /api/v1/courses/42`. */
+	key: string;
+	key_norm: string;
+	role: "provider" | "consumer" | "shared";
+	repo: string;
+	file: string;
+	symbol_id: string | null;
+	line: number | null;
+	language: string | null;
+	framework: string | null;
+	/** `"1"` for a stoplisted key, else null: the store's own spelling. */
+	generic: string | null;
+	/** The Stage-2 canonical symbol, `{scheme}:{manager}:{package}:{version}:{descriptor}`. */
+	symbol: string | null;
+}
+
 // ── Runtime guards ─────────────────────────────────────────────────
 //
 // EXHAUSTIVE OVER THE FIELDS EACH TYPE DECLARES, not only over the ones that
@@ -718,5 +776,47 @@ export function isTopicResult(value: unknown): value is TopicResult {
 		topic: (v) =>
 			matches(v, { slug: str, name: str, kind: str, created_at: str }),
 		memories: arrayOf(isMemory),
+	});
+}
+
+const contractKind = oneOf("env_var", "endpoint", "package", "service");
+
+function isDepContract(value: unknown): value is DepContract {
+	return matches(
+		value,
+		{ kind: contractKind, key: str, confidence: num },
+		{ generic: bool },
+	);
+}
+
+function isDepEdge(value: unknown): value is DepEdge {
+	return matches(value, {
+		consumer: str,
+		provider: str,
+		weight: num,
+		kinds: (v) => isRecord(v) && Object.values(v).every(num),
+		contracts: arrayOf(isDepContract),
+	});
+}
+
+export function isRepoDependencies(value: unknown): value is RepoDependencies {
+	return matches(value, { repos: arrayOf(str), edges: arrayOf(isDepEdge) });
+}
+
+export function isInterfaceBinding(value: unknown): value is InterfaceBinding {
+	return matches(value, {
+		slug: str,
+		kind: contractKind,
+		key: str,
+		key_norm: str,
+		role: oneOf("provider", "consumer", "shared"),
+		repo: str,
+		file: str,
+		symbol_id: nullable(str),
+		line: nullable(num),
+		language: nullable(str),
+		framework: nullable(str),
+		generic: nullable(str),
+		symbol: nullable(str),
 	});
 }

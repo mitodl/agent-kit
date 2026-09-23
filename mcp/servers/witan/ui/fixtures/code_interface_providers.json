@@ -1,0 +1,19 @@
+{
+  "result": [
+    {
+      "file": "src/web/__main__.py",
+      "framework": "pulumi",
+      "generic": null,
+      "key": "DATABASE_URL",
+      "key_norm": "DATABASE_URL",
+      "kind": "env_var",
+      "language": "python",
+      "line": 12,
+      "repo": "https://github.com/example/infra",
+      "role": "provider",
+      "slug": "https://github.com/example/infra|src/web/__main__.py|env_var||DATABASE_URL|provider|",
+      "symbol": "env:.:infra:main:DATABASE_URL",
+      "symbol_id": null
+    }
+  ]
+}

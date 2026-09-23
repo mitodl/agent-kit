@@ -21,6 +21,8 @@ export const VIEWS = [
 	{ id: "timeline", label: "Timeline" },
 	{ id: "memory", label: "Memory" },
 	{ id: "graph", label: "Graph" },
+	// Shown only when the server has the code graph (see `ShellProps`).
+	{ id: "bridge", label: "Bridge" },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];
@@ -50,6 +52,11 @@ export interface ShellProps {
 	panel: TemplateResult | typeof nothing;
 	/** Called when a filter changes, with the route patch it implies. */
 	onNavigate: (patch: Partial<Route>) => void;
+	/**
+	 * Whether the server has witan-code's tools. Without them the Bridge tab
+	 * is left out rather than drawn and broken: witan-code is optional.
+	 */
+	codeGraph: boolean;
 }
 
 /**
@@ -64,7 +71,7 @@ export function shell(props: ShellProps): TemplateResult {
     <header class="shell-header">
       <h1>Witan</h1>
       <nav aria-label="Views">
-        ${VIEWS.map(
+        ${VIEWS.filter((view) => view.id !== "bridge" || props.codeGraph).map(
 					(view) => html`
             <a
               href=${routeHref(route, { view: view.id })}

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+	isInterfaceBinding,
 	isMemory,
 	isMemoryContradiction,
 	isMemoryNeighbors,
 	isProjectStatus,
 	isRecallResult,
+	isRepoDependencies,
 	isTaskDetail,
 	isTaskRow,
 	isTaskSearchRow,
@@ -62,6 +64,11 @@ const VALIDATORS: Record<string, (value: unknown) => boolean> = {
 	memory_contradictions: (v) =>
 		Array.isArray(v) && v.every(isMemoryContradiction),
 	topic_get: (v) => v === null || isTopicResult(v),
+	code_repo_dependencies: isRepoDependencies,
+	code_interface_providers: (v) =>
+		Array.isArray(v) && v.every(isInterfaceBinding),
+	code_interface_consumers: (v) =>
+		Array.isArray(v) && v.every(isInterfaceBinding),
 };
 
 /**
@@ -102,6 +109,9 @@ const OPTIONAL_FIELDS: Record<string, string[]> = {
 	memory_neighbors: [],
 	memory_contradictions: [],
 	topic_get: [],
+	code_repo_dependencies: [],
+	code_interface_providers: [],
+	code_interface_consumers: [],
 };
 
 /** `../fixtures/task_get.missing.json` -> `task_get`. */

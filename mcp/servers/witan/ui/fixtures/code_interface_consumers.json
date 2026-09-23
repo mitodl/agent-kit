@@ -1,0 +1,19 @@
+{
+  "result": [
+    {
+      "file": "web/settings.py",
+      "framework": "django",
+      "generic": null,
+      "key": "DATABASE_URL",
+      "key_norm": "DATABASE_URL",
+      "kind": "env_var",
+      "language": "python",
+      "line": 40,
+      "repo": "https://github.com/example/web",
+      "role": "consumer",
+      "slug": "https://github.com/example/web|web/settings.py|env_var||DATABASE_URL|consumer|https://github.com/example/web#web/settings.py::DATABASES",
+      "symbol": "env:.:.:.:DATABASE_URL",
+      "symbol_id": "https://github.com/example/web#web/settings.py::DATABASES"
+    }
+  ]
+}

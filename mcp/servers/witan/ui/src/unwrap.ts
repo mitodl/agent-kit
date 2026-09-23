@@ -25,6 +25,19 @@ const WRAPPED: Record<string, boolean> = Object.fromEntries(
 
 export const BOUND_TOOLS = Object.keys(WRAPPED).sort();
 
+/**
+ * Bound tools a server may lack: witan-code's, mounted only when that package
+ * is installed (ADR 0011, 2026-09-23 amendment). Their absence from
+ * `tools/list` is a configuration, not a mismatch.
+ */
+export const OPTIONAL_TOOLS = new Set(
+	Object.entries(
+		wrapFlags as Record<string, { wrapped: boolean; optional?: boolean }>,
+	)
+		.filter(([, info]) => info.optional === true)
+		.map(([name]) => name),
+);
+
 export class UnknownToolError extends Error {
 	constructor(name: string) {
 		super(
@@ -88,7 +101,9 @@ export function assertFlagsMatchServer(
 	for (const [name, recorded] of Object.entries(WRAPPED)) {
 		const tool = byName.get(name);
 		if (!tool) {
-			mismatches.push(`${name} is missing from the server`);
+			if (!OPTIONAL_TOOLS.has(name)) {
+				mismatches.push(`${name} is missing from the server`);
+			}
 			continue;
 		}
 		const actual = Boolean(tool.outputSchema?.["x-fastmcp-wrap-result"]);

@@ -4,12 +4,15 @@ import {
 } from "@modelcontextprotocol/client";
 import { type AuthConfig, bearerAuth } from "./auth.js";
 import type {
+	ContractKind,
+	InterfaceBinding,
 	Memory,
 	MemoryContradiction,
 	MemoryKind,
 	MemoryNeighbors,
 	ProjectStatus,
 	RecallResult,
+	RepoDependencies,
 	TaskDetail,
 	TaskRow,
 	TaskSearchRow,
@@ -18,7 +21,7 @@ import type {
 	WorkflowProjectSummary,
 	WorkflowSession,
 } from "./types.js";
-import { assertFlagsMatchServer, unwrap } from "./unwrap.js";
+import { assertFlagsMatchServer, OPTIONAL_TOOLS, unwrap } from "./unwrap.js";
 
 /**
  * The only file in the frontend that knows it is talking MCP.
@@ -111,6 +114,9 @@ const PROTOCOL_ERA = "2026-07-28";
 
 let connected: Promise<Client> | null = null;
 
+/** Tool names the server listed on connect. */
+let served: Set<string> | null = null;
+
 /**
  * The shared client, connected on first use.
  *
@@ -162,6 +168,7 @@ async function connect(): Promise<Client> {
 	// stops that recording from silently rotting against a server whose return
 	// annotations have moved.
 	const { tools } = await mcp.listTools();
+	served = new Set(tools.map((tool) => tool.name));
 	assertFlagsMatchServer(
 		tools.map((tool) => ({
 			name: tool.name,
@@ -175,6 +182,17 @@ async function connect(): Promise<Client> {
 /** Reset the memoized client. For tests, and for a login that replaces creds. */
 export function resetClient(): void {
 	connected = null;
+	served = null;
+}
+
+/**
+ * Whether the server has the code graph: every optional bound tool, which
+ * today is witan-code's three. All of them rather than any, because the
+ * explorer needs the repo graph and both drill-down reads to work at all.
+ */
+export async function codeGraphAvailable(): Promise<boolean> {
+	await client();
+	return [...OPTIONAL_TOOLS].every((name) => served?.has(name) ?? false);
 }
 
 /** A tool that ran and failed, as opposed to a transport that never reached it. */
@@ -213,6 +231,13 @@ async function read<T>(
 	// server-side exception.
 	if (result.isError) {
 		throw new ToolCallError(tool, describe(result.content));
+	}
+	// A result with no structured content that is not an error is one this
+	// page cannot use: most likely a question the server asked, which this
+	// client never advertises the capability to answer (ADR 0011, 2026-09-23
+	// amendment). Named, rather than handed to the unwrapper as `undefined`.
+	if (result.structuredContent === undefined) {
+		throw new ToolCallError(tool, "returned no structured result");
 	}
 
 	return unwrap<T>(tool, result.structuredContent);
@@ -370,4 +395,30 @@ export function memoryContradictions(args: {
 /** `topic` is a `tp-` slug or a `name:kind` spec, e.g. `witan-ui:topic`. */
 export function topicGet(topic: string): Promise<TopicResult | null> {
 	return read("topic_get", { topic });
+}
+
+// The code graph (witan-code). Optional: check `codeGraphAvailable` first.
+// `kind` and `key` are always explicit (ADR 0011, 2026-09-23 amendment).
+
+/** A bare dict. `repo` is a substring of a repo URI; `""` is every repo. */
+export function codeRepoDependencies(args: {
+	repo: string;
+	kind?: ContractKind;
+	min_precision?: "heuristic" | "precise";
+}): Promise<RepoDependencies> {
+	return read("code_repo_dependencies", args);
+}
+
+export function codeInterfaceProviders(args: {
+	kind: ContractKind;
+	key: string;
+}): Promise<InterfaceBinding[]> {
+	return read("code_interface_providers", args);
+}
+
+export function codeInterfaceConsumers(args: {
+	kind: ContractKind;
+	key: string;
+}): Promise<InterfaceBinding[]> {
+	return read("code_interface_consumers", args);
 }

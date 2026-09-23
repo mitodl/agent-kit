@@ -19,6 +19,7 @@ function frame(overrides: Partial<ShellProps> = {}): ShellProps {
 		body: html`<p>body</p>`,
 		panel: nothing,
 		onNavigate: () => {},
+		codeGraph: true,
 		...overrides,
 	};
 }
@@ -31,6 +32,17 @@ describe("shell", () => {
 			a.textContent?.trim(),
 		);
 		expect(labels).toEqual(VIEWS.map((view) => view.label));
+	});
+
+	it("leaves the Bridge tab out when the server has no code graph", () => {
+		// witan-code is optional: a tab it cannot back is absent, not broken.
+		render(shell(frame({ codeGraph: false })), root);
+
+		const labels = [...root.querySelectorAll("nav a")].map((a) =>
+			a.textContent?.trim(),
+		);
+		expect(labels).not.toContain("Bridge");
+		expect(labels).toContain("Graph");
 	});
 
 	it("marks exactly the active view as current", () => {

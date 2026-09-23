@@ -3,6 +3,10 @@ import { emptyBox, placeholderFor, readStatus } from "./chrome.js";
 import { DAY } from "./format.js";
 import { KeyedRead, LiveRead, type Snapshot } from "./live.js";
 import {
+	codeGraphAvailable,
+	codeInterfaceConsumers,
+	codeInterfaceProviders,
+	codeRepoDependencies,
 	memoryContradictions,
 	memoryGet,
 	memoryList,
@@ -20,9 +24,29 @@ import {
 } from "./mcp.js";
 import { formatRoute, parseRoute, type Route } from "./route.js";
 import { detailPanel, shell } from "./shell.js";
-import type { TaskDetail, WorkflowProjectSummary } from "./types.js";
+import type {
+	InterfaceBinding,
+	RepoDependencies,
+	TaskDetail,
+	WorkflowProjectSummary,
+} from "./types.js";
 import { type Board, board, TASK_LIMIT } from "./views/board.js";
-import { CanvasHost, type GraphData, graphView } from "./views/graph.js";
+import {
+	type BridgeGraph,
+	bindingTable,
+	bridgeView,
+	drillPlan,
+	type OnSelectEdge,
+	parseContractKey,
+	parseEdgeKey,
+} from "./views/bridge.js";
+import { CanvasHost } from "./views/canvas-host.js";
+import {
+	type GraphData,
+	graphView,
+	type OnSelect,
+	type WorkflowGraph,
+} from "./views/graph.js";
 import {
 	isMemorySlug,
 	type MemoryPage,
@@ -73,12 +97,29 @@ export class App {
 	private readonly waves = new KeyedRead<Waves>(() => this.draw());
 	private readonly memoryPage = new KeyedRead<MemoryPage>(() => this.draw());
 	private readonly graph = new KeyedRead<GraphData>(() => this.draw());
+	private readonly bridge = new KeyedRead<RepoDependencies>(() => this.draw());
+	/** One contract's bindings on the open Bridge edge. */
+	private readonly drill = new KeyedRead<InterfaceBinding[]>(() => this.draw());
+	/**
+	 * Whether the server has witan-code's tools, from the `tools/list` the
+	 * client reads on connect. `false` until that answers, so the Bridge tab
+	 * appears once the server says it can back it, never before.
+	 */
+	private codeGraph = false;
+	private readonly bridgeCanvas = new CanvasHost<BridgeGraph, OnSelectEdge>(
+		(element, onSelect) =>
+			import("./views/bridge-canvas.js").then((module) =>
+				module.mountBridgeCanvas(element, onSelect),
+			),
+		(edge) => this.navigate({ edge, binding: null }),
+		() => this.draw(),
+	);
 	/**
 	 * vis-network is imported on first use, so the other tabs never load it.
 	 * A task opens in the shared panel; a project, which the panel does not
 	 * draw, opens its rollup.
 	 */
-	private readonly canvas = new CanvasHost(
+	private readonly canvas = new CanvasHost<WorkflowGraph, OnSelect>(
 		(element, onSelect) =>
 			import("./views/graph-canvas.js").then((module) =>
 				module.mountCanvas(element, onSelect),
@@ -119,6 +160,16 @@ export class App {
 		this.projects.start();
 		this.syncReads();
 		this.draw();
+		// A failure here is a failure to connect, which every read on the page
+		// already reports; the tab simply stays hidden.
+		codeGraphAvailable().then(
+			(available) => {
+				this.codeGraph = available;
+				this.syncReads();
+				this.draw();
+			},
+			() => {},
+		);
 	}
 
 	stop(): void {
@@ -132,6 +183,9 @@ export class App {
 		this.memoryPage.stop();
 		this.graph.stop();
 		this.canvas.release();
+		this.bridge.stop();
+		this.drill.stop();
+		this.bridgeCanvas.release();
 		this.detail.stop();
 		this.memoryDetail.stop();
 	}
@@ -229,6 +283,23 @@ export class App {
 			readGraph(graphScope as GraphScope),
 		);
 
+		// Only the tool arguments. The confidence floor and the generic toggle
+		// filter in the browser, so changing them does not re-read.
+		const bridgeOn = route.view === "bridge" && this.codeGraph;
+		const bridgeScope = bridgeOn
+			? { repo: route.repo, kind: route.contract, precise: route.precise }
+			: null;
+		this.bridge.sync(bridgeScope && JSON.stringify(bridgeScope), () =>
+			readBridge(bridgeScope as BridgeScope),
+		);
+		const drillScope =
+			bridgeOn && route.edge && route.binding
+				? { edge: route.edge, binding: route.binding }
+				: null;
+		this.drill.sync(drillScope && JSON.stringify(drillScope), () =>
+			readDrill(drillScope as DrillScope),
+		);
+
 		// One panel, two kinds of slug: a memory linked from anywhere opens as a
 		// memory, and everything else as a task.
 		const slug = route.slug;
@@ -247,6 +318,7 @@ export class App {
 			this.timeline,
 			this.waves,
 			this.graph,
+			this.bridge,
 			this.rollup,
 			this.memoryPage,
 		] as KeyedRead<unknown>[]) {
@@ -279,6 +351,7 @@ export class App {
 				body: this.body(inScope),
 				panel: this.panel(),
 				onNavigate: (patch) => this.navigate(patch),
+				codeGraph: this.codeGraph,
 			}),
 			this.root,
 		);
@@ -342,6 +415,31 @@ export class App {
 			);
 		}
 
+		if (this.route.view === "bridge") {
+			if (!this.codeGraph) {
+				// A link pasted from a server that has witan-code, opened on one
+				// that does not (or before the tool list has answered).
+				return emptyBox(
+					"This server has no code graph: witan-code is not installed alongside it.",
+				);
+			}
+			const snapshot = this.bridge.snapshot;
+			if (!snapshot) {
+				return emptyBox("Reading the code graph…");
+			}
+			const waiting = placeholderFor(snapshot, "the code graph");
+			if (waiting) {
+				return waiting;
+			}
+			return bridgeView({
+				deps: snapshot.data as RepoDependencies,
+				route: this.route,
+				host: this.bridgeCanvas,
+				drill: this.drillSection(),
+				onNavigate: (patch) => this.navigate(patch),
+			});
+		}
+
 		if (this.route.view === "graph") {
 			const snapshot = this.graph.snapshot;
 			if (!snapshot) {
@@ -373,6 +471,18 @@ export class App {
 			return waiting;
 		}
 		return projectList(inScope, this.route);
+	}
+
+	/** The open contract's bindings, in whatever state their read is in. */
+	private drillSection(): TemplateResult | typeof nothing {
+		const snapshot = this.drill.snapshot;
+		if (!snapshot) {
+			return nothing;
+		}
+		return (
+			placeholderFor(snapshot, "the bindings") ??
+			bindingTable(snapshot.data as InterfaceBinding[])
+		);
 	}
 
 	private panel(): TemplateResult | typeof nothing {
@@ -654,6 +764,65 @@ async function readGraph(scope: GraphScope): Promise<GraphData> {
 		taskList({ repo: scope.repo, limit: TASK_LIMIT }),
 	]);
 	return { projects, tasks, truncated: tasks.length >= TASK_LIMIT };
+}
+
+/** The route fields that are arguments to the Bridge's graph read. */
+interface BridgeScope {
+	repo: string;
+	kind: Route["contract"];
+	precise: boolean;
+}
+
+/**
+ * The repo graph (ADR 0011, 2026-09-23 amendment).
+ *
+ * `repo` is a SUBSTRING filter in this tool, keeping edges that touch a repo
+ * whose URI contains it, and the route's repo is a whole canonical URI, so it
+ * narrows to that repo's edges. `""` is every repo, as everywhere else.
+ */
+function readBridge(scope: BridgeScope): Promise<RepoDependencies> {
+	return codeRepoDependencies({
+		repo: scope.repo,
+		...(scope.kind ? { kind: scope.kind } : {}),
+		min_precision: scope.precise ? "precise" : "heuristic",
+	});
+}
+
+interface DrillScope {
+	edge: string;
+	binding: string;
+}
+
+/**
+ * One contract's bindings on one edge: the provider rows from the provider
+ * repo and the consumer rows from the consumer repo (see `drillPlan` for the
+ * service case). Both tools span every repo, so the narrowing is here.
+ */
+async function readDrill(scope: DrillScope): Promise<InterfaceBinding[]> {
+	const edge = parseEdgeKey(scope.edge);
+	const contract = parseContractKey(scope.binding);
+	if (!edge || !contract) {
+		return [];
+	}
+	const plan = drillPlan(edge, contract);
+	const [providers, consumers] = await Promise.all([
+		plan.providers
+			? codeInterfaceProviders({
+					kind: plan.providers.kind,
+					key: plan.providers.key,
+				})
+			: Promise.resolve([]),
+		plan.consumers
+			? codeInterfaceConsumers({
+					kind: plan.consumers.kind,
+					key: plan.consumers.key,
+				})
+			: Promise.resolve([]),
+	]);
+	return [
+		...providers.filter((row) => row.repo === plan.providers?.repo),
+		...consumers.filter((row) => row.repo === plan.consumers?.repo),
+	];
 }
 
 /** The route fields that are arguments to the memory view's read. */

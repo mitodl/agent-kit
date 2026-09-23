@@ -32,6 +32,9 @@ on:
       # Resolved by path in the workspace, and it owns the timestamp format
       # and the store client the recording goes through.
       - "packages/witan-core/**"
+      # The code-graph fixtures are recorded from witan-code's tools, over a
+      # bridge store built from its own schema and queries.
+      - "mcp/servers/witan-code/witan_code/**"
       - "bin/gen_ui_fixtures.py"
       # The fixtures job resolves its Python environment from the lockfile and
       # runs through a just recipe, so a lock-only fastmcp bump can change
