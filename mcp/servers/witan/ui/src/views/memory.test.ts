@@ -137,13 +137,13 @@ describe("the browse list's cap", () => {
 	it("says nothing when the list is shorter than the cap", () => {
 		draw({ mode: "browse", memories: full.slice(1), inbox: [] });
 
-		expect(text()).not.toContain("limit");
+		expect(root.querySelector("p.note")).toBeNull();
 	});
 
 	it("says nothing for a search, which the cap does not apply to", () => {
 		draw({ mode: "plain", memories: full }, { ...route, q: "x", plain: true });
 
-		expect(text()).not.toContain("limit");
+		expect(root.querySelector("p.note")).toBeNull();
 	});
 });
 

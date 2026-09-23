@@ -290,7 +290,9 @@ Decision: exclude superseded memories inside the query. `list_current_memories*`
 add `not { $_ supersedes $m }` and are `memory_list`'s default read; the
 original four stay for `include_superseded=True`. Fewer than 100 rows is then
 the whole listing, and exactly 100 means there may be more, so the result shape
-stays a list. `language` still filters after the cap.
+stays a list. `language` had the same after-the-cap bug and is not
+expressible in those queries case-insensitively, so a language-filtered call
+reads the unbounded listing, filters, and then slices to 100.
 
 ## 4. The read layer
 

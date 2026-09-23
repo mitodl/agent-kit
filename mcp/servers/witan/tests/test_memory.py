@@ -332,6 +332,51 @@ def test_superseded_rows_do_not_shorten_a_full_list(server, kwargs):
 
 
 @requires_omnigraph
+@pytest.mark.parametrize("repo", [None, ""])
+def test_language_filter_applies_before_the_cap(server, repo):
+    """Filtering by language after the 100-row read left a listing short
+    whenever newer memories in another language filled part of the window."""
+    from witan import server as srv
+
+    def row(i: int, language: str) -> dict:
+        stamp = f"2026-01-01T{i // 3600:02d}:{i // 60 % 60:02d}:{i % 60:02d}Z"
+        slug = f"pat-{language.lower()}-{i:03d}"
+        return {
+            "type": "Memory",
+            "data": {
+                "slug": slug,
+                "kind": "pattern",
+                "title": slug,
+                "content": slug,
+                "repo": "https://github.com/test/repo",
+                "language": language,
+                "author": "pytest",
+                "created_at": stamp,
+                "updated_at": stamp,
+            },
+        }
+
+    # 115 Python memories, the newest 5 superseded, under 50 newer Go ones.
+    python = [row(i, "Python") for i in range(115)]
+    newer_go = [row(200 + i, "go") for i in range(50)]
+    srv.client.load_batch(
+        python
+        + newer_go
+        + [
+            {
+                "edge": "Supersedes",
+                "from": python[i]["data"]["slug"],
+                "to": python[-1 - i]["data"]["slug"],
+            }
+            for i in range(5)
+        ]
+    )
+
+    listed = [m["slug"] for m in server.memory_list(repo=repo, language="python")]
+    assert listed == [r["data"]["slug"] for r in python[-6::-1]][:100]
+
+
+@requires_omnigraph
 def test_neighbors_superseded_by_is_the_inbound_side(server):
     old = server.memory_store(kind="pattern", title="old", content="first take")
     new = server.memory_store(kind="pattern", title="new", content="second take")

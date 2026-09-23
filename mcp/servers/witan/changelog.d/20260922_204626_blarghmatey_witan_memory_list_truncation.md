@@ -6,5 +6,7 @@
   superseded, got fewer than 100 rows with no sign that more current memories
   existed. The default read now excludes superseded memories in the query
   (`list_current_memories*`), so fewer than 100 rows is the whole listing and
-  exactly 100 means there may be more. The Witan UI's Memory tab says so when
-  its browse list is at the cap.
+  exactly 100 means there may be more. `language` filtered after the cap in
+  the same way; a language-filtered listing now reads every memory, filters,
+  and then takes the 100 newest. The Witan UI's Memory tab says when its
+  browse list is at the cap.

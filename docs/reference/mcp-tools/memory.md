@@ -157,17 +157,16 @@ Browse stored memories without a search query — e.g. all ``lesson`` or
 ``memory_list(kind="project_fact")`` at session start, or
 ``memory_list(kind="pattern", language="python")`` before writing code).
 
-Returns at most the 100 most recent memories in scope. Superseded memories
-are excluded before that cap, not after, so fewer than 100 rows is the
-whole listing and exactly 100 means there may be more. ``language``
-filters after the cap, so a language-filtered listing can be short while
-older matches exist; the slim unscoped listing is not capped.
+Returns at most the 100 most recent matching memories. Every filter,
+including dropping superseded memories, applies before that cap, so fewer
+than 100 rows is the whole listing and exactly 100 means there may be
+more. The slim unscoped listing has no 100-row cap.
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Optional filter: ``pattern``, ``project_fact``, ``lesson``, or<br>``agent_context``. Omit to list all kinds. |
 | `repo` | str? | `null` | Repo scoping — see instructions. With no repo detected and none passed,<br>returns slim records (slug, kind, title, tags — no content) for unscoped<br>memories; ``memory_get`` a slug for its full content. |
-| `language` | str? | `null` | Optional post-filter by ``language`` (e.g. ``python``); applies to the<br>full-content results, not the slim unscoped listing. |
+| `language` | str? | `null` | Optional filter by ``language`` (e.g. ``python``), case-insensitive;<br>applies to the full-content results, not the slim unscoped listing. |
 | `include_superseded` | bool | `False` | When ``True``, keep memories that a newer memory ``Supersedes``. Default<br>``False`` drops them, as ``memory_search`` and ``recall`` do. |
 
 ## `memory_search`
