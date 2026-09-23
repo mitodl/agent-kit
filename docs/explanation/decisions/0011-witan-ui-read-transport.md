@@ -361,7 +361,9 @@ binds three of them:
   stoplisted key such as `PORT`).
 - `code_interface_providers` and `code_interface_consumers`: the
   `InterfaceBinding` rows for one contract, which is how one edge's contract
-  drills to file, line, framework and enclosing symbol.
+  drills to file, line, framework and enclosing symbol. The page passes
+  `in_repo` (the edge's repo at that end) where the server declares it, and
+  narrows the rows itself as well for a witan-code that predates it.
 
 They are _optional_. witan-code is a separate package that `witan serve` and
 `witan ui` mount only when it is installed, so a server without it is normal.

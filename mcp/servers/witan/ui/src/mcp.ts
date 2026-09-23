@@ -114,8 +114,8 @@ const PROTOCOL_ERA = "2026-07-28";
 
 let connected: Promise<Client> | null = null;
 
-/** Tool names the server listed on connect. */
-let served: Set<string> | null = null;
+/** The tools the server listed on connect, each with its argument names. */
+let served: Map<string, Set<string>> | null = null;
 
 /**
  * The shared client, connected on first use.
@@ -168,7 +168,12 @@ async function connect(): Promise<Client> {
 	// stops that recording from silently rotting against a server whose return
 	// annotations have moved.
 	const { tools } = await mcp.listTools();
-	served = new Set(tools.map((tool) => tool.name));
+	served = new Map(
+		tools.map((tool) => [
+			tool.name,
+			new Set(Object.keys(tool.inputSchema?.properties ?? {})),
+		]),
+	);
 	assertFlagsMatchServer(
 		tools.map((tool) => ({
 			name: tool.name,
@@ -409,16 +414,41 @@ export function codeRepoDependencies(args: {
 	return read("code_repo_dependencies", args);
 }
 
-export function codeInterfaceProviders(args: {
-	kind: ContractKind;
-	key: string;
-}): Promise<InterfaceBinding[]> {
-	return read("code_interface_providers", args);
+/**
+ * `in_repo` narrows to one exact repo in the server's query, so its row limit
+ * applies to that repo. A witan-code older than the argument would reject the
+ * call for it, so it is sent only when the tool's schema declares it; callers
+ * narrow the rows themselves as well, which is what keeps an older server's
+ * answer correct.
+ */
+export function withInRepo(
+	args: { kind: ContractKind; key: string; in_repo?: string },
+	accepts: Set<string> | undefined,
+): Record<string, unknown> {
+	const { in_repo, ...rest } = args;
+	return in_repo && accepts?.has("in_repo") ? { ...rest, in_repo } : rest;
 }
 
-export function codeInterfaceConsumers(args: {
+export async function codeInterfaceProviders(args: {
 	kind: ContractKind;
 	key: string;
+	in_repo?: string;
 }): Promise<InterfaceBinding[]> {
-	return read("code_interface_consumers", args);
+	await client();
+	return read(
+		"code_interface_providers",
+		withInRepo(args, served?.get("code_interface_providers")),
+	);
+}
+
+export async function codeInterfaceConsumers(args: {
+	kind: ContractKind;
+	key: string;
+	in_repo?: string;
+}): Promise<InterfaceBinding[]> {
+	await client();
+	return read(
+		"code_interface_consumers",
+		withInRepo(args, served?.get("code_interface_consumers")),
+	);
 }

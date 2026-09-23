@@ -1034,8 +1034,14 @@ describe("the Bridge tab", () => {
 		);
 
 		const args = { kind: "env_var", key: "DATABASE_URL" };
-		expect(mcp.codeInterfaceProviders).toHaveBeenCalledWith(args);
-		expect(mcp.codeInterfaceConsumers).toHaveBeenCalledWith(args);
+		expect(mcp.codeInterfaceProviders).toHaveBeenCalledWith({
+			...args,
+			in_repo: INFRA,
+		});
+		expect(mcp.codeInterfaceConsumers).toHaveBeenCalledWith({
+			...args,
+			in_repo: WEB,
+		});
 		const rows = root.querySelectorAll(".bridge-bindings tbody tr");
 		expect(rows).toHaveLength(providers.length + consumers.length);
 		expect(text()).toContain("web/settings.py:40");
@@ -1051,6 +1057,7 @@ describe("the Bridge tab", () => {
 			expect(mcp.codeInterfaceProviders).toHaveBeenCalledWith({
 				kind: "service",
 				key: `repo:${WEB}`,
+				in_repo: INFRA,
 			}),
 		);
 		expect(mcp.codeInterfaceConsumers).not.toHaveBeenCalled();

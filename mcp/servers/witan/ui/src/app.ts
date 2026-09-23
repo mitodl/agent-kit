@@ -836,7 +836,9 @@ interface DrillScope {
 /**
  * One contract's bindings on one edge: the provider rows from the provider
  * repo and the consumer rows from the consumer repo (see `drillPlan` for the
- * service case). Both tools span every repo, so the narrowing is here.
+ * service case). `in_repo` narrows in the server's query where the server has
+ * it; the filter here as well is what keeps an older witan-code, which spans
+ * every repo, correct.
  */
 async function readDrill(scope: DrillScope): Promise<InterfaceBinding[]> {
 	const edge = parseEdgeKey(scope.edge);
@@ -850,12 +852,14 @@ async function readDrill(scope: DrillScope): Promise<InterfaceBinding[]> {
 			? codeInterfaceProviders({
 					kind: plan.providers.kind,
 					key: plan.providers.key,
+					in_repo: plan.providers.repo,
 				})
 			: Promise.resolve([]),
 		plan.consumers
 			? codeInterfaceConsumers({
 					kind: plan.consumers.kind,
 					key: plan.consumers.key,
+					in_repo: plan.consumers.repo,
 				})
 			: Promise.resolve([]),
 	]);
