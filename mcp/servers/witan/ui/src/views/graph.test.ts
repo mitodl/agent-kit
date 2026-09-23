@@ -66,6 +66,17 @@ describe("buildGraph", () => {
 		expect(graph.edges).toEqual([]);
 	});
 
+	it("truncates by code point, as Python slices, not by UTF-16 unit", () => {
+		// 34 letters then an emoji: code point 35 is the emoji, which `slice`
+		// would cut in half.
+		const title = `${"a".repeat(34)}🚀tail`;
+		const [node] = buildGraph(
+			[],
+			[task("tk-a", { title, priority: "p2" })],
+		).nodes;
+		expect(node?.label).toBe(`${"a".repeat(34)}🚀`);
+	});
+
 	it("marks p0 and p1 in the label, as the CLI does", () => {
 		const graph = buildGraph(
 			[],

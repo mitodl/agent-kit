@@ -109,7 +109,7 @@ export function buildGraph(
 		const status = project.status || "active";
 		nodes.push({
 			id: project.slug,
-			label: (project.title || project.slug).slice(0, 40),
+			label: truncate(project.title || project.slug, 40),
 			group: "project",
 			color: PROJECT_COLORS[status] ?? "#56b870",
 			status,
@@ -121,7 +121,7 @@ export function buildGraph(
 		taskSlugs.add(task.slug);
 		const status = task.status || "open";
 		const priority = task.priority || "p2";
-		const base = (task.title || task.slug).slice(0, 35);
+		const base = truncate(task.title || task.slug, 35);
 		nodes.push({
 			id: task.slug,
 			label:
@@ -163,6 +163,17 @@ export function buildGraph(
 	}
 
 	return { nodes, edges };
+}
+
+/**
+ * The first `length` code points of `text`, as Python's `text[:length]`.
+ *
+ * `String.slice` counts UTF-16 code units, so it cuts an emoji at the
+ * boundary in half and draws the orphaned surrogate as a replacement
+ * character, where the CLI keeps or drops the whole character.
+ */
+function truncate(text: string, length: number): string {
+	return Array.from(text).slice(0, length).join("");
 }
 
 /** What the canvas module hands back once vis-network is mounted. */
@@ -313,6 +324,11 @@ const LEGEND: { label: string; color: string; project: boolean }[] = [
 	{
 		label: "project (done)",
 		color: PROJECT_COLORS.completed ?? "",
+		project: true,
+	},
+	{
+		label: "project (abandoned)",
+		color: PROJECT_COLORS.abandoned ?? "",
 		project: true,
 	},
 	{ label: "open", color: TASK_COLORS.open ?? "", project: false },
