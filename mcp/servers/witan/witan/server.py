@@ -4106,8 +4106,10 @@ def _contradiction_in_scope(repo: str | None) -> Callable[[dict, dict], bool]:
     """
     The repo rule both ``memory_contradictions`` and ``recall`` report pairs by.
 
-    Shared so the two cannot drift: a pair ``recall`` flags is always one the
-    inbox lists for the same ``repo`` argument.
+    Shared so the two cannot drift: for an explicit or detected repo, a pair
+    ``recall`` flags is always one the inbox lists for the same ``repo``.
+    ``recall`` passes ``""`` when no repo is detected, because its ``query``
+    seed then spans every repo.
 
     :param repo: The caller's ``repo`` argument, resolved as every repo-scoped
         tool resolves it. ``""`` keeps every pair.
@@ -4133,7 +4135,10 @@ def memory_contradictions(
     only when both memories land in its result, and ``memory_neighbors`` needs a
     slug to start from; this needs neither. Both apply the same ``repo`` rule
     (below), so every pair ``recall`` reports is one this lists for the same
-    ``repo`` and ``include_superseded``.
+    ``repo`` and ``include_superseded``. The exception is no repo detected and
+    none passed: ``recall``'s ``query`` seed then spans every repo, so it
+    reports every pair among its result, while this keeps only pairs touching
+    an unscoped memory.
 
     Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
     carry ``slug, title, kind, repo, author, updated_at, content, confidence``;
@@ -8149,9 +8154,11 @@ def recall(
     other repos, but a pair with neither side in ``repo`` is left out, so every
     pair here is also in ``memory_contradictions`` for the same ``repo`` and
     ``include_superseded``. Pass ``repo=""`` to report every pair among the
-    returned memories. With no repo detected and none passed, the rule keeps
-    only pairs touching an unscoped memory, as ``memory_contradictions`` does,
-    even though the ``query`` seed then searches every repo.
+    returned memories. The one mode where the two disagree: with no repo
+    detected and none passed, the ``query`` seed searches every repo, so
+    recall reports every pair among the returned memories, as with
+    ``repo=""``, while ``memory_contradictions`` keeps only pairs touching an
+    unscoped memory.
 
     Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
     edge — today that means a Tagged edge promoted from a free-string tag,
@@ -8293,7 +8300,9 @@ def recall(
     # Only over the limited result set, so every pair references a memory the
     # caller actually receives.
     returned_by_slug = {n["slug"]: n for n in returned}
-    in_scope = _contradiction_in_scope(repo)
+    in_scope = _contradiction_in_scope(
+        repo if repo_module.detect(override=repo) else ""
+    )
     contradictions: list[dict] = []
     seen_pairs: set[tuple[str, str]] = set()
     for slug, node in returned_by_slug.items():

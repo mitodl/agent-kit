@@ -326,8 +326,10 @@ seeded read and an inbox is an unranked enumeration.
 It is read-only, returns one row per unordered pair (newest link wins when a
 pair is stored both ways, matching `memory_neighbors`), and scopes a pair in
 when either memory is in the requested repo. `recall` applies the same repo
-rule to the pairs it reports, so a pair `recall` flags is always in the inbox
-for the same `repo`. It sits in the same read allowlists as the other memory
-reads (the CLI's local dispatch and the remote proxy), so nothing about the
-UI's position as an ordinary MCP client changes.
+rule to the pairs it reports, so a pair `recall` flags is in the inbox for the
+same `repo` (with no repo detected and none passed, `recall` reports every pair
+in its result instead, because its query seed spans every repo; the UI always
+passes `repo`). It sits in the same read allowlists as the other memory reads
+(the CLI's local dispatch and the remote proxy), so nothing about the UI's
+position as an ordinary MCP client changes.
 Tracked as task `tk-add-a-read-only-memory-contradictions-tool-and-a-44e4a1`.

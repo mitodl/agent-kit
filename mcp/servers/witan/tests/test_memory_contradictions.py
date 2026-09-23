@@ -220,10 +220,10 @@ def test_agrees_with_recall_on_pairs_expansion_pulls_in_from_another_repo(server
 
 
 @requires_omnigraph
-def test_agrees_with_recall_with_no_repo_detected(server, monkeypatch):
-    """recall's query seed searches every repo when nothing is detected, but its
-    pairs follow the inbox's no-detection rule: only those touching an unscoped
-    memory."""
+def test_recall_with_no_repo_detected_reports_every_returned_pair(server, monkeypatch):
+    """With nothing detected, recall's query seed spans every repo, so it reports
+    every pair among its result, as with repo="". The inbox keeps only pairs
+    touching an unscoped memory: the one mode where the two disagree."""
     unscoped = _memory(server, "wombat unscoped", repo="")
     here = _memory(server, "wombat here")
     there = _memory(server, "wombat there", repo=ELSEWHERE)
@@ -234,5 +234,6 @@ def test_agrees_with_recall_with_no_repo_detected(server, monkeypatch):
 
     out = server.recall(query="wombat")
     assert {unscoped, here, there} <= {m["slug"] for m in out["memories"]}
-    recalled = [{c["a"], c["b"]} for c in out["contradictions"]]
-    assert recalled == _pairs(server.memory_contradictions()) == [{unscoped, here}]
+    recalled = sorted(({c["a"], c["b"]} for c in out["contradictions"]), key=sorted)
+    assert recalled == sorted([{unscoped, here}, {here, there}], key=sorted)
+    assert _pairs(server.memory_contradictions()) == [{unscoped, here}]
