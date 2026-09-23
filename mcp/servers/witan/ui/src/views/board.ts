@@ -195,6 +195,25 @@ export function board(
   `;
 }
 
+/**
+ * The Ready column alone, for the `task_ready` widget (spec §7.1).
+ *
+ * The widget is handed one `task_ready` result and nothing else, so it has no
+ * `live` set to resolve blockers or to fill the other columns from. Drawing
+ * the whole board from that would put "Nobody is holding a task" under In
+ * progress, which is a claim about the graph the widget never read.
+ */
+export function readyColumn(
+	tasks: TaskRow[],
+	route: Route,
+	now = Date.now(),
+): TemplateResult {
+	const card = (task: TaskRow) => boardCard(task, new Map(), route, now);
+	return html`<div class="board">
+    ${column("Ready", tasks, card, "Nothing is ready to pick up.")}
+  </div>`;
+}
+
 function column(
 	title: string,
 	tasks: TaskRow[],
@@ -285,6 +304,18 @@ export function boardCard(
 					/* The repo is noise when the scope already names one. */
 					!route.repo && !route.project && task.repo
 						? html`· <span title=${task.repo}>${repoLabel(task.repo)}</span>`
+						: nothing
+				}
+        ${
+					/*
+					 * Likewise the project. Spec §7.1 asks for it on the task_ready
+					 * widget, whose unscoped result spans projects, and the row carries
+					 * only the slug: a title would take a read the widget cannot make.
+					 */
+					!route.project && task.project_slug
+						? html`· <a href=${routeHref(route, { project: task.project_slug })}
+                  ><code>${task.project_slug}</code></a
+                >`
 						: nothing
 				}
         ${

@@ -50,7 +50,7 @@ from witan_core.omnigraph import (
 from witan_core.refusal import Refusal
 
 from . import config as cfg_module
-from . import ui_routes
+from . import ui_routes, ui_widgets
 from . import elicit, merge_report, readiness, scan, session_state
 from . import repo as repo_module
 from .graph import (
@@ -483,6 +483,9 @@ async def health(_request: Request) -> JSONResponse:
 # on a laptop. Returns False and registers nothing when no bundle was built,
 # which is every source install that skipped the frontend build.
 ui_routes.register(mcp)
+# The resources the four bound tools' `_meta.ui.resourceUri` name. Same rule:
+# nothing registers, and no tool is bound, when the widgets were not built.
+ui_widgets.register(mcp)
 
 
 async def _offload(fn, /, *args, **kwargs):
@@ -541,8 +544,13 @@ async def _offload(fn, /, *args, **kwargs):
         scan.notice.adopt(ctx)
 
 
-def _tool(fn):
+def _tool(fn=None, *, app=None):
     """Register an MCP tool, reporting any content its writes rewrote.
+
+    ``@_tool(app=...)`` binds the tool to an MCP Apps widget
+    (``ui_widgets.app_for``); plain ``@_tool`` is every other tool. ``app=None``
+    registers exactly what ``@_tool`` does, which is how a bound tool stays
+    unbound on an install with no widget built.
 
     ★ EVERY TOOL, AND AT THE OUTERMOST BOUNDARY — both halves are load-bearing,
     and the first attempt at this got both wrong by calling ``scan.annotate``
@@ -582,6 +590,9 @@ def _tool(fn):
     ``functools.wraps`` copies ``__wrapped__``, so ``inspect.signature`` — and
     therefore FastMCP's schema generation — still sees the real parameters.
     """
+    if fn is None:
+        return functools.partial(_tool, app=app)
+
     if inspect.iscoroutinefunction(fn):
 
         @functools.wraps(fn)
@@ -595,7 +606,7 @@ def _tool(fn):
             with _edge_property_errors(), _missing_endpoint_errors(fn.__name__):
                 return scan.annotate(fn(*args, **kwargs))
 
-    return mcp.tool(wrapper)
+    return mcp.tool(wrapper, app=app)
 
 
 # ── Helpers ───────────────────────────────────────────────────────
@@ -4648,7 +4659,7 @@ def _project_ready_row(task: dict) -> dict:
     return row
 
 
-@_tool
+@_tool(app=ui_widgets.app_for("workflow_project_status"))
 def workflow_project_status(slug: str) -> dict | None:
     """One-call "what should I do next" resume view for a workflow project.
 
@@ -6647,7 +6658,7 @@ def task_comment(slug: str, text: str) -> dict:
     }
 
 
-@_tool
+@_tool(app=ui_widgets.app_for("task_list"))
 def task_list(
     repo: str | None = None,
     status: TaskStatus | None = None,
@@ -7472,7 +7483,7 @@ def task_release(
     return {"slug": slug, "released": True, "status": status}
 
 
-@_tool
+@_tool(app=ui_widgets.app_for("task_ready"))
 def task_ready(
     repo: str | None = None,
     project_slug: str | None = None,
@@ -8089,7 +8100,7 @@ def _expand_from_seeds(candidates: dict[str, float], hops: int) -> None:
             break
 
 
-@_tool
+@_tool(app=ui_widgets.app_for("recall"))
 def recall(
     query: str | None = None,
     symbol_id: str | None = None,

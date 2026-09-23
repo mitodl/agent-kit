@@ -186,12 +186,26 @@ export interface ReadyTaskRow {
 	lease_expired?: boolean;
 }
 
+/**
+ * `workflow_project_status.last_session`: a condensed session
+ * (`_latest_session_summary`), not a `WorkflowSession`. No `started_at`, and
+ * `open` is derived from `ended_at` on the server.
+ */
+export interface LastSession {
+	slug: string;
+	phase: WorkflowPhase;
+	summary: string | null;
+	ended_at: string | null;
+	open: boolean;
+}
+
 export interface ProjectStatus {
 	project: WorkflowProject;
 	ready_tasks: ReadyTaskRow[];
 	/** True when `ready_tasks` was capped and `counts.ready` is larger. */
 	ready_truncated: boolean;
-	last_session: unknown;
+	/** `null` on a project with no sessions yet. */
+	last_session: LastSession | null;
 	blockers: string[];
 	counts: { ready: number; open_tasks: number };
 }
@@ -584,7 +598,15 @@ export function isProjectStatus(value: unknown): value is ProjectStatus {
 		project: isWorkflowProject,
 		ready_tasks: arrayOf(isReadyTaskRow),
 		ready_truncated: bool,
-		last_session: anything,
+		last_session: nullable((v) =>
+			matches(v, {
+				slug: str,
+				phase: workflowPhase,
+				summary: nullable(str),
+				ended_at: nullable(str),
+				open: bool,
+			}),
+		),
 		blockers: arrayOf(str),
 		counts: (v) => matches(v, { ready: num, open_tasks: num }),
 	});

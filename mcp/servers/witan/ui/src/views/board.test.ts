@@ -101,6 +101,18 @@ describe("the Ready column", () => {
 		expect(slugsIn("Ready")).toContain("tk-was-blocked");
 		expect(slugsIn("Blocked")).not.toContain("tk-was-blocked");
 	});
+
+	it("names each card's project unless the scope already is one", () => {
+		const projects = () =>
+			[...column("Ready").querySelectorAll(".card-meta code")].map(
+				(el) => el.textContent,
+			);
+		draw(fromFixtures());
+		expect(projects()).toEqual(ready.map((task) => task.project_slug));
+
+		draw(fromFixtures(), { ...DEFAULT_ROUTE, project: "wp-fixture-001" });
+		expect(projects()).toEqual([]);
+	});
 });
 
 describe("the In progress column", () => {

@@ -107,11 +107,19 @@ jobs:
           # `bash -e`, but the cost of getting it wrong here is a blocked
           # release.
           listing="$(unzip -l "$wheel")"
-          if ! grep -q 'witan/ui_dist/index.html' <<<"$listing"; then
-            echo "::error::$wheel has no witan/ui_dist/index.html: the UI build did not reach the wheel"
-            echo "$listing"
-            exit 1
-          fi
+          # The widgets too: a tool is bound to its widget only when the file
+          # is present, so a wheel without them serves the four tools unbound
+          # and nothing else would say so.
+          # Widget names come from the frontend's entries, which
+          # test_ui_widgets.py pins to ui_widgets.BOUND_TOOLS.
+          widgets="$(cd ui && ls widgets/*.html)"
+          for path in index.html $widgets; do
+            if ! grep -q "witan/ui_dist/$path" <<<"$listing"; then
+              echo "::error::$wheel has no witan/ui_dist/$path: the UI build did not reach the wheel"
+              echo "$listing"
+              exit 1
+            fi
+          done
 
       - name: Publish to PyPI
         if: steps.check.outputs.new == 'true'
