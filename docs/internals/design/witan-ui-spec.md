@@ -204,6 +204,17 @@ both directions exist, the newer edge's metadata wins, matching
 amendment rides the same PR as the tool. A new tool rather than a `recall` mode,
 because `recall` is a ranked, seeded read and this is an unranked enumeration.
 
+Both scope pairs by the same rule: a pair is in when at least one side is in
+`repo` (`""` keeps every pair). `recall`'s expansion crosses repos, so without
+that rule `recall(repo=X)` could flag a pair with both sides in another repo
+that the inbox for `X` omits. With it, every pair `recall` reports is in
+`memory_contradictions` for the same `repo`. One helper,
+`_contradiction_in_scope`, applies the rule in both tools. The exception is no
+repo detected and none passed: `recall`'s query seed then spans every repo, so
+it reports every pair among its result, while `memory_contradictions` keeps
+only pairs touching an unscoped memory. The UI always passes `repo`, so it
+never hits that mode.
+
 ### 3.6 The retrospective Gantt's data does not exist
 
 The scope plots "claimed_at/closed_at plus session spans". `claimed_at` cannot

@@ -180,3 +180,60 @@ def test_agrees_with_recall_on_a_superseded_pair(server):
 
     assert server.recall(query="shared words", repo="")["contradictions"] == []
     assert server.memory_contradictions(repo="") == []
+
+
+@requires_omnigraph
+def test_agrees_with_recall_on_pairs_expansion_pulls_in_from_another_repo(server):
+    """Topic-sibling expansion crosses repos, so recall(repo=HERE) returns both
+    ELSEWHERE memories. It reports their pair only under the inbox's rule: at
+    least one side in the repo."""
+    seed = server.memory_store(
+        kind="pattern", title="seed", content="quokka anchor", tags=["shared"]
+    )["slug"]
+    there, there_too = (
+        server.memory_store(
+            kind="pattern",
+            title=title,
+            content="nothing matching here",
+            repo=ELSEWHERE,
+            tags=["shared"],
+        )["slug"]
+        for title in ("there", "there too")
+    )
+    server.memory_link(there, there_too, "contradicts")
+    server.memory_link(seed, there, "contradicts")
+
+    def recalled(repo):
+        out = server.recall(query="quokka", repo=repo)
+        assert {seed, there, there_too} <= {m["slug"] for m in out["memories"]}
+        return sorted(({c["a"], c["b"]} for c in out["contradictions"]), key=sorted)
+
+    def inbox(repo):
+        return sorted(_pairs(server.memory_contradictions(repo=repo)), key=sorted)
+
+    assert recalled(HERE) == inbox(HERE) == [{seed, there}]
+    assert (
+        recalled("")
+        == inbox("")
+        == sorted([{seed, there}, {there, there_too}], key=sorted)
+    )
+
+
+@requires_omnigraph
+def test_recall_with_no_repo_detected_reports_every_returned_pair(server, monkeypatch):
+    """With nothing detected, recall's query seed spans every repo, so it reports
+    every pair among its result, as with repo="". The inbox keeps only pairs
+    touching an unscoped memory: the one mode where the two disagree."""
+    unscoped = _memory(server, "wombat unscoped", repo="")
+    here = _memory(server, "wombat here")
+    there = _memory(server, "wombat there", repo=ELSEWHERE)
+    server.memory_link(unscoped, here, "contradicts")
+    server.memory_link(here, there, "contradicts")
+
+    monkeypatch.setenv("WITAN_REPO", "")
+
+    out = server.recall(query="wombat")
+    assert {unscoped, here, there} <= {m["slug"] for m in out["memories"]}
+    recalled = sorted(({c["a"], c["b"]} for c in out["contradictions"]), key=sorted)
+    assert recalled == sorted([{unscoped, here}, {here, there}], key=sorted)
+    assert _pairs(server.memory_contradictions()) == [{unscoped, here}]

@@ -45,8 +45,11 @@ export type MemoryPage =
 			memories: Memory[];
 			/**
 			 * `recall`'s own pairs, which are only the ones with BOTH sides in its
-			 * result. Shown as recall reports them rather than joined against the
-			 * inbox, so this view and an agent calling `recall` see the same thing.
+			 * result and at least one side in the repo filter, the inbox's rule.
+			 * So every pair here is also in the inbox for the same repo, even
+			 * when expansion pulled both memories in from another repo. Shown as
+			 * recall reports them rather than joined against the inbox, so this
+			 * view and an agent calling `recall` see the same thing.
 			 */
 			pairs: Contradiction[];
 	  }
