@@ -8,11 +8,97 @@ both directories when discovering skills (its own docs/skills.md "Locations"
 section), so writing the same skill into both is pure duplication — Pi finds
 the name twice and logs a spurious "skill collision" warning on every
 startup. A single dest dir is correct and sufficient.
+
+Pi core has no MCP support of its own: the mcp.json files this adapter
+writes are read only by the third-party ``pi-mcp-adapter`` Pi package.
+``mcp_adapter_prerequisite`` is the read-only preflight ``plan.apply`` runs
+to say whether that package looks installed (see its docstring).
 """
 
 from __future__ import annotations
 
-from ..models import McpServer, RemoteServer, StdioServer
+import re
+from pathlib import Path
+
+from ..jsonio import load_json_object
+from ..models import McpServer, RemoteServer, Scope, StdioServer
+
+MCP_ADAPTER_PACKAGE = "pi-mcp-adapter"
+MCP_ADAPTER_INSTALL = "pi install npm:pi-mcp-adapter"
+
+# Matches every way Pi's docs/packages.md lets a source name the package:
+# "npm:pi-mcp-adapter", "npm:pi-mcp-adapter@2.37.0",
+# "git:github.com/<owner>/pi-mcp-adapter@v2", "https://.../pi-mcp-adapter.git",
+# or a local path ending in the package directory — but not a differently
+# named package that merely starts with the same text.
+_ADAPTER_SOURCE = re.compile(r"(?:^|[/:\\])pi-mcp-adapter(?:$|[@/#\\]|\.git\b)")
+
+
+def _names_adapter(source: object) -> bool:
+    return isinstance(source, str) and bool(_ADAPTER_SOURCE.search(source.strip()))
+
+
+def _settings_declare_adapter(path: Path) -> bool:
+    """Whether the Pi settings file at ``path`` loads pi-mcp-adapter.
+
+    Pi declares packages in settings.json's ``packages`` array, each either a
+    source string or ``{"source": ..., "extensions": [...], ...}``
+    (docs/packages.md); an object whose ``extensions`` filter is ``[]`` loads
+    none of the package's extensions, so it does not count. A bare
+    extension path in the ``extensions`` array also counts, minus ``!``/``-``
+    exclusions (docs/settings.md "Resources")."""
+    cfg = load_json_object(path) if path.is_file() else None
+    if not cfg:
+        return False
+    packages = cfg.get("packages")
+    for entry in packages if isinstance(packages, list) else []:
+        if isinstance(entry, dict):
+            if entry.get("extensions") == []:
+                continue
+            entry = entry.get("source")
+        if _names_adapter(entry):
+            return True
+    extensions = cfg.get("extensions")
+    for entry in extensions if isinstance(extensions, list) else []:
+        if (
+            isinstance(entry, str)
+            and not entry.startswith(("!", "-"))
+            and _names_adapter(entry.lstrip("+"))
+        ):
+            return True
+    return False
+
+
+def mcp_adapter_prerequisite(scope: Scope) -> tuple[bool, str]:
+    """Read-only check for pi-mcp-adapter: never runs ``pi``/``npm`` or
+    touches the network, only reads the settings files ``pi install`` writes.
+
+    ``pi install`` records a package in ``~/.pi/agent/settings.json`` (or,
+    with ``-l``, the project's ``.pi/settings.json``). A global MCP entry is
+    only honored everywhere when the adapter is installed globally, so global
+    scope checks just the global settings file; project scope also accepts a
+    project-local declaration. Best-effort: a package disabled through
+    ``pi config``, or a project package Pi has not yet been granted trust to
+    load, still reads as present."""
+    global_settings = Path.home() / ".pi" / "agent" / "settings.json"
+    candidates = [global_settings]
+    if scope == Scope.PROJECT:
+        candidates.append(Path(".pi") / "settings.json")
+    for path in candidates:
+        if _settings_declare_adapter(path):
+            return True, f"{MCP_ADAPTER_PACKAGE} is declared in {path}"
+    checked = " or ".join(str(p) for p in candidates)
+    local_hint = (
+        f" (or `{MCP_ADAPTER_INSTALL} -l` for this project only)"
+        if scope == Scope.PROJECT
+        else ""
+    )
+    return False, (
+        f"{MCP_ADAPTER_PACKAGE} was not found in {checked}; Pi will ignore "
+        f"these MCP servers until it is installed. Run `{MCP_ADAPTER_INSTALL}`"
+        f"{local_hint}, restart Pi, then confirm with `pi list` (and `/mcp` "
+        "inside Pi)."
+    )
 
 
 def serialize_mcp(server: McpServer) -> dict:

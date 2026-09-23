@@ -234,6 +234,13 @@ class AgentPlatform(BaseModel):
     mcp_conditional_on: str | None = (
         None  # e.g. Pi: "requires a third-party MCP plugin"
     )
+    # Best-effort, read-only preflight for ``mcp_conditional_on``: given the
+    # scope being written, returns ``(satisfied, detail)`` — whether the
+    # prerequisite looks present, plus a human-readable where-found or
+    # how-to-fix message. ``None`` means there is no reliable way to check,
+    # so ``plan.apply`` reports the requirement as unverified. Must never
+    # install anything or touch the network.
+    mcp_prerequisite_check: Callable[[Scope], tuple[bool, str]] | None = None
     mcp_serialize: Callable[[McpServer], dict] | None = (
         None  # adapter wire-format projection
     )

@@ -266,6 +266,12 @@ witan-code setup --dry-run          # preview without writing
 witan-code setup --author "Jane Doe"  # attribution (default: git config user.name)
 ```
 
+On Pi, the MCP server entry (`~/.pi/agent/mcp.json`) is read only by the
+third-party pi-mcp-adapter Pi package, since Pi core has no MCP support:
+install it with `pi install npm:pi-mcp-adapter`, restart Pi, and confirm it
+in `pi list`. `witan-code setup --agent pi` warns when it cannot find the
+package declared in Pi's settings.
+
 If `witan` is *also* installed and witan-code is importable in that same
 environment (e.g. via the `--with` in the `uv tool install`/MCP server's
 `uvx` invocation), `witan setup` folds this same bundle in automatically —

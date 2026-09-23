@@ -138,3 +138,38 @@ def test_setup_does_not_abort_on_a_refused_omnigraph_binary(tmp_path, monkeypatc
     cli.setup(agent="claude", author="tester")
 
     assert calls == [{"dry_run": False, "strict": False}]
+
+
+def _pi_setup_output(tmp_path, monkeypatch, capsys, *, dry_run: bool) -> str:
+    import witan_core
+
+    from witan_code import cli
+
+    monkeypatch.setattr(witan_core, "install_omnigraph", lambda dry_run, **kw: None)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    cli.setup(agent="pi", author="tester", dry_run=dry_run)
+
+    return " ".join(capsys.readouterr().out.split())
+
+
+def test_setup_pi_warns_when_pi_mcp_adapter_is_missing(tmp_path, monkeypatch, capsys):
+    """`witan-code setup --agent pi` inherits agent-config-kit's MCP
+    prerequisite preflight: Pi ignores ~/.pi/agent/mcp.json without the
+    pi-mcp-adapter package, so the report must say so on dry-run and apply."""
+    for dry_run in (True, False):
+        out = _pi_setup_output(tmp_path, monkeypatch, capsys, dry_run=dry_run)
+        assert "WARNING:" in out
+        assert "pi install npm:pi-mcp-adapter" in out
+
+
+def test_setup_pi_notes_when_pi_mcp_adapter_is_installed(tmp_path, monkeypatch, capsys):
+    settings = tmp_path / ".pi" / "agent" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"packages": ["npm:pi-mcp-adapter"]}))
+
+    out = _pi_setup_output(tmp_path, monkeypatch, capsys, dry_run=True)
+
+    assert "WARNING:" not in out
+    assert "note:" in out
+    assert "pi-mcp-adapter is declared in" in out

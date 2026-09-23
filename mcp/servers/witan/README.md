@@ -65,6 +65,14 @@ Claude Code and Pi running two witan installs from two different sources (the
 hooks on your PATH install, the MCP server on git `main`), which skew silently
 as those lineages diverge.
 
+**Pi needs the pi-mcp-adapter package for the MCP half.** Pi core has no MCP
+support; the entry `witan setup --agent pi` writes to `~/.pi/agent/mcp.json`
+is read only by the third-party [pi-mcp-adapter](https://pi.dev/packages/pi-mcp-adapter)
+Pi package. Install it once with `pi install npm:pi-mcp-adapter`, restart Pi,
+and check it appears in `pi list` (`/mcp` inside Pi then shows the witan
+server). `witan setup` warns when it cannot find the package declared in Pi's
+settings; the hooks/extension half works either way.
+
 **Without persistent CLI** — enough for the **MCP-only agents** (Copilot, OpenCode,
 Kilo), whose server runs via `uvx`, so no install is needed:
 

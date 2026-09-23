@@ -90,10 +90,15 @@ def _registry() -> dict[str, AgentPlatform]:
                     ),
                 }
             ),
+            # Pi core has no MCP support; ~/.pi/agent/mcp.json and
+            # .pi/mcp.json are pi-mcp-adapter's own files. plan.apply surfaces
+            # this (with the preflight's result) whenever it plans MCP entries.
             mcp_conditional_on=(
-                "requires a third-party MCP plugin (pi-mcp-extension or "
-                "pi-mcp-adapter); writing this file is a silent no-op without one"
+                "requires the third-party pi-mcp-adapter Pi package; Pi core "
+                "has no MCP support, so writing this file is a silent no-op "
+                "without it"
             ),
+            mcp_prerequisite_check=pi_adapter.mcp_adapter_prerequisite,
             mcp_serialize=pi_adapter.serialize_mcp,
             hooks=CapabilityScope(
                 **{

@@ -642,9 +642,27 @@ def _report(
             "\n".join(str(r) for r in result.removed) or "-",
         )
     console.print(table)
+    _print_prerequisites(results, dry_run=dry_run)
     if show_diff:
         _print_diffs(results)
     return had_skipped
+
+
+def _print_prerequisites(results: dict[str, InstallResult], *, dry_run: bool) -> None:
+    """Surface each platform's ``AgentPlatform.mcp_conditional_on`` for the
+    entries this run planned: a yellow warning when the preflight could not
+    find the prerequisite (or has no way to check), a dim note when it did.
+    Warnings only — they never change the exit code, since the write itself
+    succeeded and becomes live as soon as the prerequisite is installed.
+    ``markup=False`` on the text: it quotes commands and paths verbatim."""
+    for name, result in results.items():
+        for prereq in result.prerequisites:
+            text = f"{name}: {prereq.message(dry_run=dry_run)}"
+            if prereq.needs_attention:
+                console.print("⚠ ", style="bold yellow", end="")
+                console.print(text, style="yellow", markup=False, highlight=False)
+            else:
+                console.print(text, style="dim", markup=False, highlight=False)
 
 
 def _print_diffs(results: dict[str, InstallResult]) -> None:

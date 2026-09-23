@@ -15,6 +15,7 @@ from . import registry
 from .installers import _ensure_dest_dir, install_skills
 from .jsonio import json_diff, load_json_object, write_json
 from .models import (
+    AgentPlatform,
     CapabilityScope,
     DeclarativeHook,
     Hook,
@@ -26,6 +27,34 @@ from .models import (
     ScopeTarget,
     SkillSource,
 )
+
+
+@dataclass(frozen=True)
+class Prerequisite:
+    """Something a platform needs installed before the entries this run
+    planned for it take effect (``AgentPlatform.mcp_conditional_on``) — e.g.
+    Pi reads MCP servers only through the pi-mcp-adapter package.
+
+    ``satisfied`` is the platform's read-only preflight result: ``True``
+    when it looks installed, ``False`` when it looks missing, ``None`` when
+    the platform has no reliable check. ``detail`` is the preflight's
+    where-found or how-to-fix text (empty without a check)."""
+
+    capability: str  # e.g. "mcp"
+    requirement: str
+    satisfied: bool | None = None
+    detail: str = ""
+
+    @property
+    def needs_attention(self) -> bool:
+        return self.satisfied is not True
+
+    def message(self, *, dry_run: bool) -> str:
+        verb = "would be written" if dry_run else "were written"
+        head = f"{self.capability.upper()} entries {verb}; this platform {self.requirement}."
+        if self.satisfied is True:
+            return f"{head} Prerequisite found: {self.detail}."
+        return f"{head} {self.detail or 'Could not verify it is installed.'}"
 
 
 @dataclass
@@ -48,6 +77,11 @@ class InstallResult:
     # write. Only JSON-merge targets (MCP servers, declarative hooks) produce
     # one; skill/plugin-file copies are reported via `planned`/`written`
     # instead, since a copied file has no meaningful in-place diff.
+    prerequisites: list[Prerequisite] = field(default_factory=list)
+    # One entry per capability this run planned entries for whose platform
+    # declares a prerequisite (``AgentPlatform.mcp_conditional_on``),
+    # populated identically under ``dry_run`` — informational, never a
+    # reason to skip the write.
 
 
 @dataclass
@@ -109,6 +143,19 @@ def _default_serialize(server: McpServer) -> dict:
     )
 
 
+def _mcp_prerequisite(platform: AgentPlatform, scope: Scope) -> Prerequisite:
+    assert platform.mcp_conditional_on is not None
+    if platform.mcp_prerequisite_check is None:
+        return Prerequisite(capability="mcp", requirement=platform.mcp_conditional_on)
+    satisfied, detail = platform.mcp_prerequisite_check(scope)
+    return Prerequisite(
+        capability="mcp",
+        requirement=platform.mcp_conditional_on,
+        satisfied=satisfied,
+        detail=detail,
+    )
+
+
 def apply(
     platform_name: str,
     bundle: RegistrationBundle,
@@ -155,6 +202,8 @@ def apply(
                 write_json(target.path, cfg, dry_run)
                 if not dry_run:
                     result.written.append(target.path)
+                if platform.mcp_conditional_on is not None:
+                    result.prerequisites.append(_mcp_prerequisite(platform, scope))
 
     if platform.hooks is not None and bundle.hooks:
         declarative = [h for h in bundle.hooks if isinstance(h, DeclarativeHook)]

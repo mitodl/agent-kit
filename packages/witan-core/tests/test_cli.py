@@ -100,3 +100,44 @@ def test_make_app_sets_version(capsys):
         app(["--version"])
     # resolve_version returns *some* string for the installed distribution.
     assert capsys.readouterr().out.strip()
+
+
+def _prereq(*, satisfied):
+    return SimpleNamespace(
+        needs_attention=satisfied is not True,
+        message=lambda *, dry_run: f"needs pi-mcp-adapter (dry_run={dry_run})",
+    )
+
+
+def test_report_install_plain_prints_prerequisite_warning_and_note(capsys):
+    result = SimpleNamespace(
+        planned=["mcp.json"],
+        skipped=[],
+        prerequisites=[_prereq(satisfied=False), _prereq(satisfied=True)],
+    )
+
+    report_install("pi", result, dry_run=True)
+
+    out = capsys.readouterr().out
+    assert "WARNING: needs pi-mcp-adapter (dry_run=True)" in out
+    assert "note: needs pi-mcp-adapter (dry_run=True)" in out
+
+
+def test_report_install_rich_prints_prerequisite_warning():
+    calls: list[str] = []
+    console = SimpleNamespace(print=lambda s, **kw: calls.append(s))
+    result = SimpleNamespace(
+        planned=[], skipped=[], prerequisites=[_prereq(satisfied=False)]
+    )
+
+    report_install("pi", result, dry_run=False, console=console)
+
+    joined = "\n".join(calls)
+    assert "⚠ warning" in joined
+    assert "needs pi-mcp-adapter (dry_run=False)" in joined
+
+
+def test_report_install_tolerates_results_without_prerequisites(capsys):
+    # An older agent-config-kit's InstallResult has no `prerequisites` field.
+    report_install("pi", _result(planned=["x"], skipped=[]), dry_run=False)
+    assert "-> x" in capsys.readouterr().out

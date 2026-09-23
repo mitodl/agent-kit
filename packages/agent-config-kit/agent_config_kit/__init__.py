@@ -31,7 +31,7 @@ from .models import (
     SkillSource,
     StdioServer,
 )
-from .plan import InstallResult, RegistrationBundle, apply, apply_all
+from .plan import InstallResult, Prerequisite, RegistrationBundle, apply, apply_all
 from .prune import (
     PlatformState,
     apply_with_prune,
@@ -64,6 +64,7 @@ __all__ = [
     "MergeStrategy",
     "PlatformState",
     "PluginRegistration",
+    "Prerequisite",
     "RegistrationBundle",
     "RemoteServer",
     "Scope",

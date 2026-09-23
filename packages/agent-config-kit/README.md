@@ -273,6 +273,34 @@ the zero-arg "magic" stays legible.
 Exit codes: `0` success, `1` a platform's target couldn't be parsed as JSON,
 `2` the manifest failed to load.
 
+#### Platform prerequisites (Pi and pi-mcp-adapter)
+
+Some platforms only honor an entry once something else is installed
+(`AgentPlatform.mcp_conditional_on`). Today that is Pi: Pi core has no MCP
+support, and the files this library writes for Pi MCP servers are read by the
+third-party `pi-mcp-adapter` Pi package.
+
+| Scope | Pi MCP file written | Where `pi install` records the adapter |
+|-------|---------------------|----------------------------------------|
+| `global` | `~/.pi/agent/mcp.json` | `~/.pi/agent/settings.json` (`pi install npm:pi-mcp-adapter`) |
+| `project` | `.pi/mcp.json` | `.pi/settings.json` (`pi install npm:pi-mcp-adapter -l`), or the global one |
+
+Install it, restart Pi, then confirm with `pi list` (the package is listed)
+and `/mcp` inside Pi (the servers are listed). Project-local packages load only
+after Pi has been granted trust for that project.
+
+Whenever an `apply` (dry-run or not, with or without `--prune`) plans MCP
+entries for such a platform, the report prints the requirement after the
+results table. For Pi it runs a read-only preflight that looks for
+`pi-mcp-adapter` in the `packages` (or `extensions`) array of the settings
+files above. It never runs `pi` or `npm` and never touches the network. A
+missing adapter prints a yellow `⚠` warning with the install command; a found
+one prints a dim note. Neither changes the exit code, because the write
+succeeded and takes effect as soon as the adapter is installed. The check is
+best-effort: a package disabled via `pi config` still counts as present.
+Library callers get the same information as `InstallResult.prerequisites`
+(a list of `Prerequisite`).
+
 ### `agent-kit validate`
 
 Reports drift between a manifest and each platform's on-disk config, without

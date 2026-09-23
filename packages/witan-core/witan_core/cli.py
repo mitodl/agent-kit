@@ -97,6 +97,12 @@ def report_install(
     it.
     """
     label = AGENT_NAMES.get(name, name)
+    # ``prerequisites`` (agent-config-kit's ``Prerequisite`` list, added after
+    # 0.9.0 — e.g.
+    # Pi's "MCP needs pi-mcp-adapter" preflight) is read with getattr so an
+    # older agent-config-kit, whose InstallResult lacks the field, still
+    # prints the rest of the report instead of raising.
+    prerequisites = getattr(result, "prerequisites", None) or []
     if console is not None:
         console.print(f"\n[bold]{label}[/bold]")
         for path in result.planned:
@@ -104,6 +110,14 @@ def report_install(
             console.print(f"  [green]→[/green] {path}{tag}")
         for path, reason in result.skipped:
             console.print(f"  [yellow]skip[/yellow] {path} — {reason}")
+        for prereq in prerequisites:
+            text = prereq.message(dry_run=dry_run)
+            if prereq.needs_attention:
+                console.print("  [yellow]⚠ warning[/yellow] ", end="")
+                console.print(text, markup=False, highlight=False)
+            else:
+                console.print("  [dim]note[/dim] ", end="")
+                console.print(text, style="dim", markup=False, highlight=False)
     else:
         print(f"\n{label}")
         for path in result.planned:
@@ -111,3 +125,6 @@ def report_install(
             print(f"  -> {path}{tag}")
         for path, reason in result.skipped:
             print(f"  skip {path} — {reason}")
+        for prereq in prerequisites:
+            tag = "WARNING" if prereq.needs_attention else "note"
+            print(f"  {tag}: {prereq.message(dry_run=dry_run)}")

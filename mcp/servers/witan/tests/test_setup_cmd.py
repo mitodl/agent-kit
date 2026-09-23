@@ -225,3 +225,34 @@ def test_witan_code_mounted_false_when_subcommand_help_fails(monkeypatch):
         lambda *a, **k: subprocess.CompletedProcess(a[0], returncode=1),
     )
     assert setup_cmd._witan_code_mounted() is False
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_setup_pi_warns_when_pi_mcp_adapter_is_missing(
+    tmp_path, monkeypatch, _no_network, capsys, dry_run
+):
+    """`witan setup --agent pi` inherits agent-config-kit's MCP prerequisite
+    preflight via witan_core.cli.report_install: Pi ignores
+    ~/.pi/agent/mcp.json without the pi-mcp-adapter package."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    setup_cmd.setup(agent="pi", dry_run=dry_run)
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "⚠ warning" in out
+    assert "pi install npm:pi-mcp-adapter" in out
+
+
+def test_setup_pi_notes_when_pi_mcp_adapter_is_installed(
+    tmp_path, monkeypatch, _no_network, capsys
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    settings = tmp_path / ".pi" / "agent" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"packages": ["npm:pi-mcp-adapter@2.37.0"]}))
+
+    setup_cmd.setup(agent="pi", dry_run=True)
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "⚠ warning" not in out
+    assert "pi-mcp-adapter is declared in" in out
