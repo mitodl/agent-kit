@@ -111,7 +111,7 @@ function toolOf(path: string): string {
 }
 
 /** Fixtures that record something other than a tool result. */
-const NOT_TOOL_RESULTS = ["tools-list.json", "repo-keys.json"];
+const NOT_TOOL_RESULTS = ["tools-list.json", "repo-keys.json", "graph.json"];
 
 const TOOL_FIXTURES = Object.entries(FIXTURES).filter(
 	([path]) => !NOT_TOOL_RESULTS.some((name) => path.endsWith(name)),

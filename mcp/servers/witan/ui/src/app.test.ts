@@ -70,6 +70,25 @@ vi.mock("./mcp.js", () => ({
 	topicGet: vi.fn(),
 }));
 
+/**
+ * jsdom has no canvas, so the Graph tab's network is replaced by one that
+ * records what it is handed and lets a test click a node.
+ */
+const canvas = {
+	update: vi.fn(),
+	destroy: vi.fn(),
+	onSelect: (_id: string, _group: "project" | "task") => {},
+};
+vi.mock("./views/graph-canvas.js", () => ({
+	mountCanvas: (
+		_element: HTMLElement,
+		onSelect: (id: string, group: "project" | "task") => void,
+	) => {
+		canvas.onSelect = onSelect;
+		return canvas;
+	},
+}));
+
 const mcp = await import("./mcp.js");
 const { App, reposIn } = await import("./app.js");
 
@@ -384,26 +403,103 @@ describe("App", () => {
 		vi.mocked(mcp.taskReady).mockClear();
 
 		window.location.hash = "#graph";
-		await vi.waitFor(() => expect(text()).toContain("not built yet"));
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
 		window.dispatchEvent(new Event("focus"));
 
 		expect(mcp.taskReady).not.toHaveBeenCalled();
 	});
 
-	it("names an unbuilt view rather than rendering it empty", async () => {
-		await open("#graph");
-		expect(text()).toContain("not built yet");
-	});
-
-	it("does not read a rollup behind an unbuilt tab", async () => {
+	it("does not read a rollup behind another tab", async () => {
 		// A project filter carried onto another tab kept four tool calls going
-		// every 30s behind a body that says "not built yet", and showed a read
+		// every 30s behind a body that was not drawing them, and showed a read
 		// time for data nothing was rendering.
 		await open(`#graph?project=${projectDetail.slug}`);
-		await vi.waitFor(() => expect(text()).toContain("not built yet"));
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
 
 		expect(mcp.workflowProjectGet).not.toHaveBeenCalled();
+		expect(mcp.workflowProjectStatus).not.toHaveBeenCalled();
+	});
+
+	it("reads the graph `witan graph` reads, across the route's repo", async () => {
+		// A repo scope, so the graph's project read cannot be mistaken for the
+		// shell's own, which is always `{ repo: "" }`.
+		const repo = "https://github.com/mitodl/agent-kit";
+		await open(`#graph?repo=${encodeURIComponent(repo)}`);
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
+
+		// Active projects (the tool's default, and the CLI's: no `status`) and
+		// every task, lifted off the unscoped 50-row cap.
+		expect(mcp.workflowProjectList).toHaveBeenCalledWith({ repo });
+		expect(mcp.taskList).toHaveBeenCalledWith({ repo, limit: TASK_LIMIT });
+		expect(text()).toContain("4 tasks");
+	});
+
+	it("narrows the graph to one project of any status, uncapped", async () => {
+		await open(`#graph?project=${projectDetail.slug}`);
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
+
+		// A named project is drawn even once completed, which the
+		// active-only default would drop along with all of its tasks.
+		expect(mcp.workflowProjectList).toHaveBeenCalledWith({
+			repo: "",
+			status: null,
+		});
+		expect(mcp.taskList).toHaveBeenCalledWith({
+			repo: "",
+			project_slug: projectDetail.slug,
+		});
+	});
+
+	it("does not re-read the graph when the Closed filter changes", async () => {
+		// Closed is drawn or not in the browser, over tasks already read.
+		await open("#graph");
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
+		vi.mocked(mcp.taskList).mockClear();
+		canvas.update.mockClear();
+
+		// jsdom fires `hashchange` on a timer, so wait for the redraw it causes
+		// rather than for the fragment, which changes at once.
+		window.location.hash = "#graph?closed=1";
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
+
 		expect(mcp.taskList).not.toHaveBeenCalled();
+	});
+
+	it("opens a clicked task in the shared panel", async () => {
+		await open("#graph");
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
+
+		canvas.onSelect(task.slug, "task");
+
+		await vi.waitFor(() =>
+			expect(window.location.hash).toBe(`#graph?slug=${task.slug}`),
+		);
+		await vi.waitFor(() => expect(mcp.taskGet).toHaveBeenCalledWith(task.slug));
+		expect(canvas.update).toHaveBeenLastCalledWith(
+			expect.anything(),
+			task.slug,
+		);
+	});
+
+	it("opens a clicked project's rollup", async () => {
+		await open("#graph");
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
+
+		canvas.onSelect(projectDetail.slug, "project");
+
+		await vi.waitFor(() =>
+			expect(window.location.hash).toBe(
+				`#projects?project=${projectDetail.slug}`,
+			),
+		);
+	});
+
+	it("tears the network down when the tab is left", async () => {
+		await open("#graph");
+		await vi.waitFor(() => expect(canvas.update).toHaveBeenCalled());
+
+		window.location.hash = "#board";
+		await vi.waitFor(() => expect(canvas.destroy).toHaveBeenCalled());
 	});
 
 	it("reads the timeline's sessions from the window's start", async () => {

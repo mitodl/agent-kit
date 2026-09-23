@@ -1,0 +1,83 @@
+{
+  "edges": [
+    {
+      "dst": "wp-fixture-001",
+      "kind": "belongs_to",
+      "label": "",
+      "src": "tk-fixture-005"
+    },
+    {
+      "dst": "wp-fixture-001",
+      "kind": "belongs_to",
+      "label": "",
+      "src": "tk-fixture-004"
+    },
+    {
+      "dst": "tk-fixture-002",
+      "kind": "parent",
+      "label": "child of",
+      "src": "tk-fixture-004"
+    },
+    {
+      "dst": "tk-fixture-004",
+      "kind": "blocks",
+      "label": "blocks",
+      "src": "tk-fixture-000"
+    },
+    {
+      "dst": "wp-fixture-001",
+      "kind": "belongs_to",
+      "label": "",
+      "src": "tk-fixture-000"
+    },
+    {
+      "dst": "tk-fixture-002",
+      "kind": "parent",
+      "label": "child of",
+      "src": "tk-fixture-000"
+    },
+    {
+      "dst": "wp-fixture-001",
+      "kind": "belongs_to",
+      "label": "",
+      "src": "tk-fixture-002"
+    }
+  ],
+  "nodes": [
+    {
+      "color": "#56b870",
+      "group": "project",
+      "id": "wp-fixture-001",
+      "label": "Witan UI",
+      "status": "active"
+    },
+    {
+      "color": "#6fc8e8",
+      "group": "task",
+      "id": "tk-fixture-005",
+      "label": "[p1] Scaffold the frontend package",
+      "status": "in_progress"
+    },
+    {
+      "color": "#e85454",
+      "group": "task",
+      "id": "tk-fixture-004",
+      "label": "Board view driven by task_ready",
+      "status": "blocked"
+    },
+    {
+      "color": "#e8a33d",
+      "group": "task",
+      "id": "tk-fixture-000",
+      "label": "[p1] Close the read gaps",
+      "status": "open"
+    },
+    {
+      "color": "#e8a33d",
+      "group": "task",
+      "id": "tk-fixture-002",
+      "label": "Witan UI epic",
+      "status": "open"
+    }
+  ]
+}
