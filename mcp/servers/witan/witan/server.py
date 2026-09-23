@@ -8300,9 +8300,7 @@ def recall(
     # Only over the limited result set, so every pair references a memory the
     # caller actually receives.
     returned_by_slug = {n["slug"]: n for n in returned}
-    in_scope = _contradiction_in_scope(
-        repo if repo_module.detect(override=repo) else ""
-    )
+    in_scope = _contradiction_in_scope(repo_module.detect(override=repo) or "")
     contradictions: list[dict] = []
     seen_pairs: set[tuple[str, str]] = set()
     for slug, node in returned_by_slug.items():
