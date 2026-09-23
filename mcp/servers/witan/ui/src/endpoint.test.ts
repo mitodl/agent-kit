@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mcpEndpoint } from "./mcp.js";
+import { mcpEndpoint, mountBase } from "./mcp.js";
 
 /**
  * ★ THE ONE THING IN THIS LAYER THAT HAS BROKEN TWICE, BOTH TIMES SILENTLY.
@@ -65,5 +65,18 @@ describe("mcpEndpoint", () => {
 		expect(mcpEndpoint("https://h/ui/witan/ui/board/x", "/mcp").href).toBe(
 			"https://h/ui/witan/mcp",
 		);
+	});
+});
+
+describe("mountBase", () => {
+	it.each([
+		["http://127.0.0.1:8765/ui/", "/ui/"],
+		["https://witan.example.org/ui/#board?repo=x", "/ui/"],
+		["https://h/witan/ui/board/tk-x", "/witan/ui/"],
+		["http://localhost:5173/", "/"],
+	])("mounts %s at %s", (documentUrl, expected) => {
+		// Also the login's redirect URI, so Keycloak's valid_redirect_uris has
+		// to name exactly this path on the deployment.
+		expect(mountBase(documentUrl)).toBe(expected);
 	});
 });

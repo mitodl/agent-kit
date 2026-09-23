@@ -38,6 +38,7 @@ so its version is witan's.
 ui/
   src/
     mcp.ts        The read layer. The ONLY file that knows it speaks MCP.
+    auth.ts       The deployed page's login (oidc-spa). Unused locally.
     unwrap.ts     Takes a result out of its envelope, keyed on the wrap flag.
     types.ts      Hand-written result types, kept honest by the fixtures.
     app.ts        The wiring: route in, reads out, one render.
@@ -108,6 +109,16 @@ result with no `tools/list` to consult. `assertFlagsMatchServer` checks that
 recording against the live server once per page load, so a server whose return
 annotations have moved is a loud failure rather than a view that renders
 nothing.
+
+## Login
+
+Deployed, `/ui/config.json` names an issuer and a client id, and `auth.ts`
+logs in through [oidc-spa](https://docs.oidc-spa.dev/) before the first `/mcp`
+call, then hands the transport the access token per request. Tokens stay in
+memory, session restoration is a full page redirect (the page's CSP rules out
+oidc-spa's iframe), and a 401 restarts the login once before giving up with a
+message. Locally the config says `"auth": null` and none of this runs. Spec §8
+has the Keycloak client and the reasoning.
 
 ## Fixtures
 
