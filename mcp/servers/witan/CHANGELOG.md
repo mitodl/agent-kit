@@ -8,6 +8,496 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.37.0] - 2026-09-23
+
+### Added
+
+- **`witan ui` serves the UI, and the witan process serves it too.** One
+  process serves both the page and `/mcp`, so the page's tool calls are
+  same-origin: no CORS, no preflight per call, and the Host/Origin guard
+  admits it without an allowlist.
+
+  `GET /ui/{path}` serves the bundle, resolving inside the bundle directory
+  and refusing anything that resolves outside it, and falls back to
+  `index.html` so a client-side route survives a reload. `GET /ui/config.json`
+  tells the page which mode it is in, so one bundle serves both: `{"auth":
+  null}` locally, and the issuer, client id and audience when
+  `WITAN_OIDC_ISSUER` is set. Every `/ui/` response, including the error path
+  below, carries `Content-Security-Policy: default-src 'self'; connect-src
+  'self' <issuer origin>; frame-ancestors 'none'` and
+  `X-Content-Type-Options: nosniff`. `index.html` is sent `no-cache` and the
+  content-hashed assets `immutable`, so a client cannot keep an old index that
+  points at assets a deploy has replaced.
+
+  `WITAN_OIDC_ISSUER` is validated rather than interpolated: it goes into the
+  CSP, and a value carrying `; script-src *` would otherwise emit a second
+  directive that overrides `default-src 'self'` for scripts. A non-http(s)
+  scheme, userinfo, or anything but a hostname and port is refused at
+  startup.
+
+  With OIDC on and the new `WITAN_UI_OIDC_CLIENT_ID` unset, `/ui/` answers 503
+  naming the variable rather than serving a page that renders and then cannot
+  log in. The routes register only when a bundle was built, so a source
+  install that skipped the frontend build serves `/mcp` exactly as before.
+
+  `witan ui` runs that server on loopback and opens a browser. Against a
+  remote target it opens the deployment's own page and exits, keeping the
+  boundary `witan serve` already enforces: this server has no inbound
+  authentication, so binding a remote-backed one to a socket would make it a
+  credential-sharing proxy.
+- **A web UI ships inside the wheel.** `mcp/servers/witan/ui/` is a
+  TypeScript/Vite package built to `witan/ui_dist/`, which hatch carries into
+  the sdist and the wheel. This release adds the package, its build and its
+  packaging.
+
+- **`task_list` takes a `limit`.** 1 to 10,000, applied to every scope.
+  Omitted, nothing changes: 50 rows unscoped, uncapped when scoped by repo,
+  project or parent. Without it an unscoped read returned the 50 most recently
+  updated tasks and said nothing about the rest, so `task_list(repo="")` and
+  `witan graph --all-repos` were quietly partial on a graph of any size. The
+  in-repo callers pass it now: `witan tasks --limit` reaches past 50,
+  `witan graph` draws the whole graph, and the context hook's held-task block
+  no longer misses your own tasks because they fell outside the newest 50.
+- **Task list rows carry `created_at` and `closed_at`.** Only `task_get`
+  returned them, so anything plotting a task's lifetime needed one read per
+  task. (`closed_at` is an invariant of `status`; see the Changed section.)
+- **`task_get` returns its edges:** `blocks` (the tasks this one holds back,
+  the inverse of `blocked_by`), `children`, and `branches` (the `CodeBranch`es
+  working it). `DiscoveredFrom` is still not exposed — it has no read query.
+- **`in_progress` rows carry `lease_expired`,** on `task_list`, `task_ready`
+  and `task_get`. This is the server's own rule (`readiness.status_pickable`,
+  including the `updated_at` fallback), so a stale claim is visible without a
+  client copying `CLAIM_LEASE_SECONDS` and drifting from it. Rows in any other
+  status do not carry the key, since a lease is not a thing that exists there.
+  It is not inferable from `task_ready` membership: an `in_progress` task whose
+  lease lapsed while it still has an open blocker never appears in Ready.
+- **`workflow_session_list` takes a `since`.** Keeps sessions that ended at or
+  after it, plus every still-open one. An unscoped read otherwise returns every
+  session ever recorded, and grows forever. The comparison runs in Python, so
+  this bounds the response rather than the store read. A `since` that does not
+  parse raises rather than being ignored, since a tolerated one would silently
+  return every session.
+- **`workflow_project_status` reports `ready_truncated`.**
+
+- **`Task.first_claimed_at`: when the work actually started.** `claimed_at`
+  could never answer that. `task_claim` rewrites it on every lease renewal and
+  the lease is an hour, so any task worked for longer than that has already
+  lost its first claim; `task_release` nulls it outright. The new field is set
+  on the first arrival at `in_progress` — through `task_claim` or
+  `task_update(status="in_progress")` — and is then never cleared, by a
+  release, a close or a reopen. It is returned by `task_get` and every
+  `task_list`/`task_ready` projection.
+
+  **No backfill.** A task last claimed before this ships has no first-claim
+  time, and anything plotting it should say so rather than substituting
+  `claimed_at`, which means something else.
+
+  **Additive nullable property, so it carries the agent-kit#326 ordering
+  constraint:** omnigraph's schema apply has to land before the witan image
+  that writes it. Deployed, getting that backwards fails the migrations Job
+  and blocks the rollout rather than breaking the running service (see
+  `les-a-witan-schema-image-ordering-violation-fails-cl-a16abf`); recovery is
+  to deploy pulumi-omnigraph and re-trigger the witan deploy. A local store
+  needs nothing: `_ensure_graph` re-applies on `schema.pg`'s mtime.
+
+  Verified as an additive migration against a store built from the previous
+  `schema.pg` carrying a real `in_progress` Task row: `schema plan` reports
+  `supported: yes` with the single `add property` change, apply moves the
+  graph manifest to 3, the pre-existing row keeps its data with
+  `first_claimed_at` null, and all 113 read queries and 59 mutations lint
+  clean against the new schema.
+
+- **The UI reads the graph through a typed MCP client.**
+  `mcp/servers/witan/ui/src/mcp.ts` is the one file in the frontend that knows
+  it speaks MCP: one named function per tool in ADR 0011's bound read set, no
+  generic `call(name, args)`, and no writes. Results are taken out of their
+  envelope by each tool's recorded `x-fastmcp-wrap-result` flag rather than by
+  guessing from the value's shape, which matters because a wrapped list and an
+  unwrapped dict carrying a `result` key are indistinguishable at runtime, and
+  `task_get` of a slug that does not exist is a present `null` rather than an
+  error.
+
+  The result types are hand-written (the tools carry no output schema worth
+  generating from) and kept honest by `ui/fixtures/`, real results recorded
+  from real tool calls by `just ui-fixtures`. `just ui-fixtures-check` gates
+  them in CI on server changes as well as frontend ones, so a renamed field
+  fails the frontend suite in the PR that renamed it.
+
+- **The UI's Projects tab: the project list, one project's rollup, and the task
+  detail panel.** The rollup draws `workflow_project_get`,
+  `workflow_project_status`, `task_list` and `workflow_session_list` side by
+  side, so ready work, every task, the dependency edges and the session
+  summaries are one page. The detail panel shows every field `task_get`
+  returns — description, resolution, the full timestamp set, `symbol_refs`,
+  `external_uri` and the comment thread — with blockers, dependents, children,
+  the parent epic, the project and the CodeBranches carrying the work as links
+  rather than slugs.
+
+  The shell around them is what every later view mounts in. Filters, the
+  active tab and the open slug live in the URL fragment, so a link to a stale
+  claim can be pasted to whoever holds it, and the back button, the Escape key
+  and the panel's close link cannot disagree about what is open. Views poll
+  every 30 seconds and on window focus, and a failed read keeps the last good
+  data on screen marked stale rather than blanking it: a board that empties
+  itself because one poll hit a restarting server reads as "nothing is ready",
+  which is a lie a person acts on.
+
+  Two distinctions in there are load-bearing. `task_get` of a missing slug
+  returns `null` as its value, so "no result yet" and "the result was null"
+  are different states, and conflating them leaves every stale link reading
+  "Reading…" forever. And the graph stores most timestamps without an offset,
+  which `new Date()` reads as local time, so they are parsed as UTC
+  explicitly; left to the browser every stored instant renders shifted by the
+  viewer's offset, and a claim lease age with it.
+
+- **`memory_contradictions` lists every pair of memories that contradict each
+  other.** No read returned that before: `recall` reports a pair only when both
+  memories land in its ranked result, and `memory_neighbors` needs a slug to
+  start from. Each row carries both endpoints and the link's
+  `confidence`/`role`/`author`/`created_at`, one row per unordered pair (the
+  newer link wins when a pair is stored both ways), newest first. A pair is in
+  scope when either memory is in the requested repo. It joins ADR 0011's bound
+  UI read set, amended to say so, and the UI read layer exposes it as
+  `memoryContradictions` for the memory view's contradictions inbox.
+
+- **The UI's Board tab: Ready, In progress, Blocked and Closed columns, with
+  who holds each claim and for how long.** Ready is `task_ready`'s own result
+  for the current scope, in its order, so the column cannot disagree with what
+  an agent is told is ready. In progress cards show the holder and the lease
+  age, measured from `claimed_at` (or `updated_at` for a legacy claim, as the
+  server's lease rule does), and a card is marked "claim lapsed" exactly when
+  the server's `lease_expired` says so. That includes a lapsed claim whose task
+  also has an open blocker, which never appears in Ready. Blocked cards list
+  each open blocker as a link with its status, including blockers in another
+  repo, which is why the board reads the non-closed tasks across every repo
+  and narrows the columns in the browser by the tools' own scoping rule.
+  Closed shows the newest 50 by `closed_at` and appears only when the Closed
+  filter is ticked.
+
+  Every read passes `limit`, because the unscoped `task_list` reads are
+  otherwise capped at 50 rows without saying so, and because `task_ready`
+  sorts before it truncates, so a smaller limit would push ready tasks into
+  Blocked.
+
+- **The Witan UI's Memory tab.** It opens on a contradictions inbox: every
+  unresolved Contradicts pair in scope, both bodies side by side with their
+  authors, timestamps and the link's provenance, plus the two `memory_link`
+  calls that resolve the pair. Below it, memories can be browsed
+  (`memory_list`), recalled (`recall`, with recall's own contradiction pairs
+  marked) or plain-searched (`memory_search`), narrowed by kind, language,
+  category, severity, tag and author, and listed by topic (`topic_get`). A
+  memory opens in the panel with its topics and every neighbour grouped by
+  edge kind, each showing the link's confidence, role and author. Asserted and
+  inferred links are drawn differently, since recall weights them
+  differently. Superseded memories are hidden unless "Show superseded" is on.
+- **`memory_neighbors` reports `superseded_by`**, the inbound side of
+  `supersedes`: the memories that replaced this one. A reader who lands on a
+  superseded memory had no way to find what to read instead.
+
+- **The UI's Timeline tab: where the last two weeks went, per project.** Each
+  task is a lead-time bar from `created_at` to `closed_at` (or to the read, if
+  still open), with the stretch since `first_claimed_at` drawn solid inside it.
+  `claimed_at` is not used as a work start, because every lease renewal
+  rewrites it; it appears only as a "current lease since" mark on in-progress
+  tasks, orange when the server says the lease lapsed. Tasks claimed before
+  `first_claimed_at` existed are drawn hatched rather than given a guessed
+  start. Each project's sessions sit in lanes under its tasks, including
+  projects that have since completed, which the rest of the UI's
+  active-only project list would drop.
+
+  Two things are left out on purpose, and the page says how many. An open task
+  nobody ever claimed has no start but its filing date, so its bar would look
+  like work in flight; against a real graph that was most of the chart. And a
+  session that was never ended is drawn as a start mark only. The Stop hook
+  ends a session only when it finds its handle on local disk, so an agent that
+  died or ran without the hook leaves it open, and a bar to now would claim
+  weeks that may never have been worked. For the same reason a task that was
+  claimed and released gets a mark at its first claim rather than a work
+  segment running to now: when it was released is not recorded.
+
+  The window is 7, 14 (default), 30 or 90 days, in the URL. Sessions are read
+  with `workflow_session_list(since=...)`; the view re-reads on focus and on
+  Refresh rather than every 30 seconds, since it plots elapsed time. Bars are
+  SVG positioned in percentages, because the page's CSP blocks inline styles.
+
+- **The web UI logs in on a deployed witan.** When `/ui/config.json` names an
+  issuer, the page runs the authorization code flow with PKCE against it
+  through oidc-spa, using the client id from `WITAN_UI_OIDC_CLIENT_ID`, and
+  sends the access token as a bearer header on every `/mcp` call. Tokens are
+  held in memory only; a reload goes back through Keycloak's SSO session
+  without a prompt. A 401 restarts the login once (parallel 401s share it),
+  and a 401 right after a fresh login stops for the life of the page with a
+  message pointing at the Keycloak client's audience mapper, instead of
+  redirecting forever. `witan ui` against a local
+  store is unchanged: its config has no issuer, and the page sends no
+  credential. The Keycloak `witan-ui` client ships in ol-infrastructure.
+
+- **The UI's Waves tab: how many serialized rounds of work a project has
+  left.** One project's open tasks are laid out by depth in the `Blocks` graph
+  rather than by date, since tasks carry no estimate or due date: wave 0 has no
+  open blocker, and each later task sits one wave past its deepest one. The
+  longest chain is drawn heavier, each task shows how many tasks wait on it,
+  and the page names the wave-0 task that unblocks the most. Blockers from
+  other projects are read with `task_get` and drawn as dashed stubs; closed or
+  deleted ones hold nothing back, as in `task_ready`. A cycle in the `Blocks`
+  edges is drawn and named rather than failing the layout. `task_ready` is read
+  alongside and the page lists any task where it and wave 0 disagree, instead
+  of trusting its own copy of the readiness rule.
+
+- **`witan task <slug>` has a structured mode, and a `show` alias.** Under
+  `--output-format json|toml|yaml` it prints `task_get`'s record whole (every
+  field, comments, `blocks`, `children`, `branches`). It used to be
+  `console.print` end to end, so the flag had nothing to act on. TOML omits a
+  null field rather than blanking it, so an unset `closed_at` does not parse
+  as present.
+- `witan project tasks` and `witan session list` honour `--output-format`,
+  printing the tool's rows. `project tasks --detail` adds each row's
+  `dependents`.
+
+- **MCP Apps widgets for `task_ready`, `workflow_project_status`, `recall` and
+  `task_list`, so Claude Desktop and claude.ai draw those results inline.**
+  Each tool names a `ui://witan/<tool>.html` resource in `_meta.ui.resourceUri`;
+  a host that renders MCP Apps puts it in a sandboxed iframe and hands it the
+  tool's result. `task_ready` draws the Ready column with each claim's age,
+  `workflow_project_status` the rollup with its ready list and last session,
+  `recall` the ranked memories with any contradicting pair called out, and
+  `task_list` the rows grouped by status. The widgets reuse the web UI's own
+  renderers and call nothing back to the server.
+
+  The tool results are unchanged. Claude Code renders no widgets and shows the
+  text result, which stays byte-identical with and without the binding. A tool
+  is bound only when its widget was built, so a source install that skipped
+  the frontend build registers the four tools exactly as before.
+
+- **The UI's Graph tab: `witan graph`'s project and task graph, in the page.**
+  It reads what the CLI reads (active projects and every task in scope, lifted
+  off the unscoped 50-row cap) and draws the same nodes and edges, through a
+  TypeScript port of `visualize.py`'s transform that a recorded fixture holds
+  to the Python. Clicking a task opens the shared detail panel, and clicking a
+  project opens its rollup. vis-network is bundled and loaded only when the tab
+  is opened, rather than fetched from unpkg as the CLI's HTML file does, so the
+  page reaches nothing but its own origin. The Closed filter toggles closed
+  tasks without a re-read. Above 400 nodes each project is drawn as one node
+  that opens on click, so a graph-wide scope lays out in well under a second
+  instead of never settling, and a List view gives every node as a link for
+  keyboard and screen-reader use. `witan graph` keeps its terminal, HTML and
+  DOT output.
+
+- **The UI's Bridge tab: the cross-repo dependency graph, drillable to the
+  bindings behind each edge.** witan-code's `code_repo_dependencies` is drawn
+  as a repo graph with an edge table beside it; an edge lists the contracts
+  behind it, and a contract opens the `InterfaceBinding` rows in the edge's two
+  repos through `code_interface_providers` and `_consumers`. Filters for
+  contract kind, a confidence floor, stoplisted generic keys (DEBUG, PORT) and
+  Stage-2 precise edges. The tab appears only when the server has witan-code
+  mounted, and a server without it no longer fails the page's tool check. ADR
+  0011 is amended to bind the three tools as optional, and never the
+  `code_*` tools that elicit.
+
+### Changed
+
+- **`closed_at` is now an invariant of `status`.** It recorded "when this task
+  last closed", which is not the same thing and could not be plotted. Two
+  surfaces produced rows that contradicted their own status: `task_release`
+  accepts a `status` that may be `closed` but wrote only status, assignee and
+  `claimed_at`, leaving a closed task with no close time at all; and reopening
+  through `task_update` kept the old value, leaving an OPEN task carrying one.
+
+  Every transition to `closed` now stamps it and every transition out of
+  `closed` clears it, whichever surface makes the move — the rule is derived
+  from the merged status inside `_update_task`, which `task_claim`,
+  `task_update`, `task_close` and `task_release` all funnel through, rather
+  than being restated at each of them. A closed row keeps its original close
+  time across unrelated edits.
+
+  Rows already written wrong are not swept: they are corrected the next time
+  anything writes them, so a row untouched since then still carries the old
+  spelling.
+
+  This supersedes the caveat recorded with "Task list rows carry `created_at`
+  and `closed_at`", which said `closed_at` was not yet an invariant of status.
+
+- **`memory_search` and `recall` rank on omnigraph's real BM25 score instead of
+  rank position.** The engine could not project `bm25(...)` as a column before
+  0.11, so relevance was the candidate's POSITION in the result: top hit 1.0,
+  last hit 0.0, whatever the scores actually were. That is a function of the
+  row count alone, so twenty near-identical weak matches were spread across the
+  full range while a set with one excellent match was compressed into it, and
+  the composite score then weighed that against real recency and corroboration
+  numbers. The eight memory search queries now return `bm25(...) as score`.
+
+  Relevance is scaled over each run's own best rather than min-max scaled;
+  min-max would pin the worst row of every run at its floor, which is the
+  rank-position defect in better arithmetic.
+
+  **A title-only hit still never outranks a content hit on the relevance
+  term**, and that now takes saying out loud. The content and title runs score
+  different fields and their scores are not comparable: measured on 0.11.0, a
+  memory whose title matched and whose content said nothing relevant scored
+  0.902 on `title` against 0.675 for the best `content` match, because a short
+  field inflates under BM25 length normalisation. Concatenating the runs used
+  to make content precedence true by construction; normalising each run to
+  0-to-1 would have silently dropped it. So each run is scaled into a band
+  instead — content into the upper half of `[0, 1]`, title-only into the lower
+  — which keeps the old ordering as an explicit policy while the engine's score
+  does the spacing inside each band.
+
+  **If you have tuned `WITAN_RANK_W_BM25`, double it to hold station.** A band
+  is half as wide as the old range, so the relevance term now spans
+  `0.5 * w_bm25` where rank position spanned `1.0 * w_bm25`, and recency,
+  corroboration and confidence weigh twice as heavily against BM25 spacing as
+  before. Relatedly, a query that matches only titles now caps its hits at 0.5
+  where a lone title-only hit used to score 1.0; the title band does not widen
+  because the content run came back empty.
+
+  Result rows are unchanged: the score is used for ranking and stripped before
+  it reaches a caller. Task and project search are untouched, because they
+  return the engine's order directly and never re-rank.
+
+- **`memory_list` hides superseded memories by default**, as `memory_search`
+  and `recall` already did. `include_superseded=True` keeps them.
+- **`memory_contradictions` carries each side's `content` and `confidence`**,
+  so reviewing a pair no longer takes a `memory_get` per side.
+- **`memory_contradictions` drops a pair once either side is superseded**,
+  since superseding is how a contradiction is resolved, and `recall` never
+  reported such a pair anyway. `include_superseded=True` keeps them.
+
+- **Requires witan-core 0.39 or later.** Nothing new is imported, so an older
+  witan-core loads, but it runs without 0.39.0's fewer lost writes between
+  parallel agents (jittered conflict retries and `WriteContention`, and
+  in-process serialisation of `s3://` writes), and without the refusal text
+  that `log_safe_message` puts on the `mcp.tool_call` log line. The floor
+  makes an external install pick them up.
+
+### Fixed
+
+- **`task_ready` no longer re-reads blockers it has already fetched.** Its
+  repo-scoped branch scans every Task and then narrows to the candidates, but
+  resolved blocker statuses against the narrowed set — so every blocker living
+  in another repo was unknown and fetched again, one `get_task` per blocker.
+  Measured against a deployment that was ~3.0s of a 4.2s call, on identical
+  scans to a 1.2s `task_list`.
+
+- **The context hook issues its independent reads together.** `witan
+  inject-context` against a deployment made up to ten sequential tool calls, so
+  the cold path was their sum. It now runs in two waves (the second needs the
+  first's answers), which measured 11.3s -> 6.5s on the same graph, byte-identical
+  output. Each read keeps its own failure isolation, and a machine that cannot
+  start threads falls back to running them in line. The wave primes the proxy's
+  tool schema once first, so the fan-out does not have every worker discover it
+  (4 `tools/list` cold, against 1 for the sequential path it replaced); against
+  a `witan-core` predating `prime_tool_schema` this is skipped and the old
+  behaviour stands.
+
+- **The context hook's ready list respects cross-repo blockers.** It offers a
+  repo-scoped slice of an all-Task scan, and an unresolvable blocker counts as
+  closed — so a task blocked by an open task in another repo was advertised as
+  ready to work. `readiness.filter_ready` now takes the wider row set, which
+  the hook already had in hand.
+
+- **The prompt and stop hooks get timeouts above what they are timing.** Both
+  were 15s. `witan inject-context` was measured at 16-23s cold on a large graph,
+  so the hook was killed mid-read and the user paid the full wait for no block;
+  it is now 45s. `witan session-checkpoint` writes, and a write has been measured
+  at up to 51s, so it is now 60s — being killed there leaves a session open with
+  no handoff summary. The pi `workflow-context` extension was tighter still at
+  5s and now matches at 45s.
+
+- **`workflow_project_status` reported a wrong `counts.ready`.** It counted a
+  list already truncated at 100, so any project with more ready tasks than that
+  reported exactly 100. The count is now taken before the truncation and is
+  exact; `ready_tasks` is still capped at 100, and `ready_truncated` says when
+  the two disagree. Those rows also keep `lease_expired`, so a widget bound to
+  this tool can see a stale claim without a second call. The count is bounded
+  by the project's own task count rather than by a constant, since ready work
+  is a subset of it, so there is no second ceiling further out.
+- **`witan tasks QUERY --assignee` no longer drops older matches.** That path
+  intersects search hits with `task_list(assignee=...)`, and `assignee` is
+  applied after a read capped at 50 rows, so a genuine hit vanished whenever
+  it fell outside the 50 most recently updated tasks.
+
+- **A claim holder's session qualifier is a digest of the whole session id.**
+  It was the first 8 characters, which is the entire shared prefix and none of
+  the distinguishing part for Claude Code's session-URL form
+  (`session_01NFADvkst516nGYnrkHMHuD`) — an id an agent calling a deployed
+  witan directly has to pass itself. Every such caller claimed as
+  `<identity>#session_`, so `task_claim`'s `current_holder != holder` test went
+  False, the second session renewed the first's lease and was told
+  `claimed: True`, and the response said `qualified: true` throughout: the
+  silent double-claim the qualifier exists to prevent. A digest assumes nothing
+  about where an id's entropy sits. Nothing recorded under the old spelling
+  needs migrating, but a session holding a claim across the rollout computes a
+  different qualifier than the one on record, so it is refused its own renewal
+  (told the task is held by its former self) until the 60-minute lease lapses.
+
+- `recall(repo=X)` no longer reports a Contradicts pair with both sides in
+  another repo. Topic-sibling expansion crosses repos, so recall could flag a
+  pair that `memory_contradictions(repo=X)` and the memory view's inbox omit.
+  Recall now reports a pair only when both memories are in its result and at
+  least one is in `repo`, the same rule `memory_contradictions` scopes by, so
+  for an explicit or detected repo every pair recall flags is in the inbox for
+  the same `repo`. `repo=""` still reports every pair among the returned
+  memories. The two disagree in one mode: with no repo detected and none
+  passed, recall's query seed spans every repo, so recall reports every pair
+  among its result, while `memory_contradictions` keeps only pairs touching an
+  unscoped memory.
+
+- **`memory_list` no longer comes back short when superseded memories sit
+  inside its 100-row cap.** The listing read the 100 newest memories and then
+  dropped the superseded ones, so a repo with more than 100 memories, some
+  superseded, got fewer than 100 rows with no sign that more current memories
+  existed. The default read now excludes superseded memories in the query
+  (`list_current_memories*`), so fewer than 100 rows is the whole listing and
+  exactly 100 means there may be more. `language` filtered after the cap in
+  the same way; a language-filtered listing now reads every memory, filters,
+  and then takes the 100 newest. The Witan UI's Memory tab says when its
+  browse list is at the cap.
+
+- **An empty list under `--output-format` prints `rows: []`, not a
+  sentence.** `tasks`, `projects`, `memory`, `traces`, `scan test`, `scan
+  rules` and `target list` each returned early on an empty result with prose
+  like `No tasks.` on stdout and exit 0, before the format was consulted, so
+  every JSON consumer threw on an empty list. The empty message is now a
+  `render_table` argument, and the `txt` view is unchanged. The mounted
+  `witan code` tables have the same bug and are not covered here.
+- `witan project status` honours the global `--output-format`. Its own
+  `--json` flag used to win and the global flag had no effect; `--json` is
+  now shorthand for `--output-format json`, and a structured
+  `--output-format` wins over it. `txt` does not, since an explicit
+  `--output-format txt` cannot be told apart from an ambient
+  `WITAN_OUTPUT_FORMAT=txt`.
+- Under a structured format, stdout holds one document and nothing else. The
+  notices `scan test`, `scan rules` and `target list` print alongside their
+  table go to stderr there. stderr also carries log lines on success, so
+  consumers should branch on the exit code.
+- `witan task <slug>`, `witan project <slug>` and `witan project
+  status|tasks` on a missing slug exit 1 with the error on stderr. `task
+  <slug>` and `project <slug>` used to print it on stdout and exit 0. The
+  `target list` config-parse error also moves to stderr.
+
+### Security
+
+- **`witan serve` turns on fastmcp's Host/Origin guard on every HTTP
+  transport.** The local endpoint is unauthenticated, so once `witan ui`
+  serves a page from the same process, any other page the user has open can
+  POST tool calls to 127.0.0.1 and read the graph. `host_origin_protection`
+  ships off in fastmcp; passing `"auto"` turns it on. On a loopback bind it
+  rejects a foreign Host (421, closing DNS rebinding) and a foreign Origin
+  (403, closing the cross-site POST from a remote page). The CLI, curl and
+  agents send no Origin and are unaffected.
+
+  Two limits worth knowing. The guard still admits any other LOOPBACK origin,
+  such as a dev server on `localhost:3000`, so a page served by another
+  process on the same machine can still reach the endpoint. And the checks are
+  keyed on the bind address: `witan serve --host 0.0.0.0` on a workstation
+  gets neither. Both are accepted for now; code already running on your
+  machine does not need the browser to reach the store.
+
+  No allowlist is set, deliberately. `allowed_hosts` switches Origin
+  validation on unconditionally, and behind APISIX's TLS termination the
+  server computes the request origin as `http://<host>` while the page sends
+  `Origin: https://<host>`, so every POST from the deployed page would 403.
+
 ## [0.36.0] - 2026-09-18
 
 ### Added
