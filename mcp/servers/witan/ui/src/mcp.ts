@@ -2,6 +2,7 @@ import {
 	Client,
 	StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
+import { type AuthConfig, bearerAuth } from "./auth.js";
 import type {
 	Memory,
 	MemoryContradiction,
@@ -40,11 +41,7 @@ const MOUNT = "/ui/";
 
 /** What `/ui/config.json` carries. */
 export interface UiConfig {
-	auth: {
-		issuer: string;
-		client_id: string | null;
-		audience: string | null;
-	} | null;
+	auth: AuthConfig | null;
 	/** Where the protocol is served, which `--path` can move. */
 	mcp_path: string;
 }
@@ -84,12 +81,23 @@ export function mcpEndpoint(documentUrl: string, mcpPath: string): URL {
 	return new URL(`${prefix}${mcpPath.replace(/^\//, "")}`, here);
 }
 
+/**
+ * The path the bundle is mounted at, through the mount segment: `/ui/`, or
+ * `/witan/ui/` behind a proxy prefix. It is where `config.json` lives and the
+ * login's redirect URI. A document outside any mount (a dev server) gets `/`.
+ */
+export function mountBase(documentUrl: string): string {
+	const { pathname } = new URL(documentUrl);
+	const cut = pathname.lastIndexOf(MOUNT);
+	return cut === -1 ? "/" : pathname.slice(0, cut + MOUNT.length);
+}
+
 /** Fetch `/ui/config.json`, which the page reads before anything else. */
 async function uiConfig(): Promise<UiConfig> {
 	const here = new URL(document.baseURI);
-	const cut = here.pathname.lastIndexOf(MOUNT);
-	const prefix = cut === -1 ? "/" : here.pathname.slice(0, cut + MOUNT.length);
-	const response = await fetch(new URL(`${prefix}config.json`, here));
+	const response = await fetch(
+		new URL(`${mountBase(here.href)}config.json`, here),
+	);
 	if (!response.ok) {
 		throw new Error(
 			`/ui/config.json answered ${response.status}; the page cannot find the ` +
@@ -136,9 +144,16 @@ async function connect(): Promise<Client> {
 	);
 
 	const config = await uiConfig();
+	// Undefined locally, where the page sends no credential. Deployed, this is
+	// where the login happens, before the first request that would 401.
+	const authProvider = await bearerAuth(
+		config.auth,
+		mountBase(document.baseURI),
+	);
 	await mcp.connect(
 		new StreamableHTTPClientTransport(
 			mcpEndpoint(document.baseURI, config.mcp_path),
+			{ authProvider },
 		),
 	);
 

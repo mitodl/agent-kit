@@ -643,37 +643,83 @@ Changes:
 - ol-infrastructure, `substructure/keycloak/ol_platform_engineering.py`: a new
   `witan-ui` client in the `ol-platform-engineering` realm, `access_type="PUBLIC"`,
   `standard_flow_enabled=True`, `pkce_code_challenge_method="S256"`,
-  `valid_redirect_uris=["https://<witan domain>/ui/callback"]`,
-  `web_origins=["https://<witan domain>"]`, and an audience mapper for `witan`
-  matching `witan-desktop`'s (`ol_platform_engineering.py:519-562`). The
-  `web_origins` entry is what lets the browser read Keycloak's token response;
-  the repo has no public S256 SPA client yet, so this is the first. A separate
-  client rather than reusing `witan-desktop`, whose redirect URIs are Claude's
-  and ChatGPT's, so neither can be widened without the other.
+  `valid_redirect_uris=["https://<witan domain>/ui/"]` (and the same for
+  `valid_post_logout_redirect_uris`), `web_origins=["https://<witan domain>"]`,
+  and an audience mapper for `witan` matching `witan-desktop`'s
+  (`ol_platform_engineering.py:519-562`). The redirect URI is the mount, not a
+  `/ui/callback` path: oidc-spa always returns to its base URL and restores the
+  page's own location (route fragment included) from the state it stored
+  before leaving. The `web_origins` entry is what lets the browser read
+  Keycloak's token response; the repo has no public S256 SPA client yet, so
+  this is the first. A separate client rather than reusing `witan-desktop`,
+  whose redirect URIs are Claude's and ChatGPT's, so neither can be widened
+  without the other.
 - ol-infrastructure, `applications/witan/deployment.py`: set
   `WITAN_UI_OIDC_CLIENT_ID=witan-ui`, and no Host/Origin allowlist (§2 has
-  why). The witan domain is `witan.ol.mit.edu` in Production and
-  `witan.<env>.ol.mit.edu` elsewhere (`applications/witan/__main__.py:272-275`).
-  The APISIX route needs nothing: `/*` already reaches `/ui/`. Its comment about
-  narrowing to `/mcp` later (`ingress.py:65-74`) now has to keep `/ui/` too.
-- SPA: authorization code + PKCE against the issuer from `/ui/config.json`,
-  through the v2 client's `authProvider` hook: an `OAuthClientProvider` that
-  returns the static `witan-ui` client id, so there is no dynamic registration
-  and no client metadata document. Tokens are held in memory and
-  `sessionStorage` (not `localStorage`) and refreshed with the refresh token; a
-  401 from `/mcp` restarts the login. Unverified: whether the SDK's flow
-  completes against Keycloak 26.7.2, which does not implement RFC 8707 resource
-  indicators (the reason `witan-desktop` is a static client rather than a
-  client metadata document, `ol_platform_engineering.py:510-518`). The
-  deployed-mount task checks this in CI first; if the SDK insists on a
-  `resource` Keycloak rejects, the login moves to `oidc-client-ts` and hands the
-  token to the transport, with nothing else in the page changing.
+  why). The issuer the page logs in against is the `WITAN_OIDC_ISSUER` the
+  deployment already sets. The witan domain is `witan.ol.mit.edu` in Production
+  and `witan.<env>.ol.mit.edu` elsewhere
+  (`applications/witan/__main__.py:272-275`). The APISIX route needs nothing:
+  `/*` already reaches `/ui/`. Its comment about narrowing to `/mcp` later
+  (`ingress.py:65-74`) now has to keep `/ui/` too.
+- SPA (`ui/src/auth.ts`): authorization code + PKCE against the issuer and
+  client id from `/ui/config.json`, through
+  [oidc-spa](https://docs.oidc-spa.dev/) (`createOidc({ issuerUri, clientId,
+  autoLogin: true })`), not the MCP client's `OAuthClientProvider`. The
+  transport gets a plain `AuthProvider`: `token()` returns
+  `(await oidc.getTokens()).accessToken`, which oidc-spa refreshes with the
+  refresh token before it expires, so every request carries a live token with
+  no timer in the page. oidc-spa is a plain OIDC client, so it sends no RFC 8707
+  `resource`, which Keycloak 26.7.2 does not implement (the reason
+  `witan-desktop` is a static client rather than a client metadata document,
+  `ol_platform_engineering.py:510-518`); the `witan` audience comes from the
+  client's audience mapper.
+  - Session restoration is `"full page redirect"`, never the iframe. oidc-spa's
+    default picks an iframe when page and issuer share a parent domain
+    (`witan.ol.mit.edu` and `sso.ol.mit.edu` do), and §5.2's CSP blocks both
+    halves of that: `default-src 'self'` forbids framing Keycloak, and
+    `frame-ancestors 'none'` forbids the redirect back into the frame.
+  - Tokens are held in memory only, tighter than the `sessionStorage` this
+    section first specified. With one client and no iframe, oidc-spa keeps its
+    user store in memory (it falls back to `sessionStorage` only when a second
+    non-iframe client exists in the tab). What it does write to web storage is
+    the PKCE state for an in-flight login and a logged-in/logged-out flag, not
+    a token. A reload therefore re-runs the redirect, and Keycloak's SSO
+    session answers it without a prompt.
+  - A 401 from `/mcp` restarts the login (`goToAuthServer`). A second 401
+    within a minute of a restart stops and says why instead: a token Keycloak
+    just issued being rejected is a client misconfiguration (usually the
+    missing audience mapper), and restarting again would bounce between the
+    page and Keycloak forever.
+  - `/ui/config.json` with `"auth": null` (local `witan ui`) creates no OIDC
+    client and sends no credential.
 
-This departs from ADR 0011 §2 in one respect: the ADR expected the SPA to find
-its authorization server through RFC 9728 discovery, and the page takes the
-issuer and client id from `/ui/config.json` instead. Discovery would still have
-to be told a client id, and the static client is the only kind Keycloak 26.7.2
-supports here.
+  Verified 2026-09-22 against `quay.io/keycloak/keycloak:26.7.2` in dev mode,
+  with a realm, public S256 client, audience mapper and user provisioned
+  through the admin REST API to match the ol-infrastructure client, and witan
+  serving the built bundle with `WITAN_OIDC_*` pointing at it. Driven in
+  headless Chromium: the authorization request carried `code_challenge_method=S256`
+  and no `resource`; the token endpoint answered 200 with
+  `Access-Control-Allow-Origin` set to the page's origin; the access token's
+  `aud` was `["witan", "account"]` with `azp: witan-ui`; witan answered the
+  bearer `/mcp` calls with 200; the page returned to its original route
+  fragment; no web storage held the token; a reload came back logged in
+  without the login form. With the audience mapper removed, witan answered
+  401, the page restarted the login once and then showed the rejection
+  message. A local page with `"auth": null` made no request off its own origin
+  and read `/mcp` with no credential. This is a local run, not a CI check: a
+  CI job needs Keycloak started with `start-dev` (a service container cannot
+  pass it a command), a browser, and a witan server, and was left for later.
+
+This departs from ADR 0011 §2 in one respect: the ADR expected a
+discovery-capable browser MCP client to find its authorization server through
+RFC 9728, and the page instead takes the issuer and client id from
+`/ui/config.json` and logs in with oidc-spa, a plain OIDC client that knows
+nothing about MCP. Discovery would still have to be told a client id, the
+static client is the only kind Keycloak 26.7.2 supports here, and the MCP
+client's OAuth flow is built around the RFC 8707 `resource` parameter that
+Keycloak does not implement. The MCP client still carries the token: oidc-spa
+only supplies it, through the transport's `authProvider`.
 
 The `witan`-audience token authorizes every tool, writes included, not only the
 read set the page binds. So an XSS in the page is a write exposure, not a read
