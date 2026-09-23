@@ -187,3 +187,10 @@ def test_configs_pi_mirror_matches_the_package_extension():
     assert _CONFIG_EXT.read_bytes() == _PKG_EXT.read_bytes(), (
         f"{_CONFIG_EXT} drifted from {_PKG_EXT}; copy the package file over it"
     )
+
+
+def test_pi_extension_asks_for_pi_rendered_context():
+    """Without `--client pi` the block tells Pi to call a ToolSearch it lacks."""
+    source = _PKG_EXT.read_text()
+
+    assert 'spawnSync("witan-code", ["inject-context", "--client", "pi"]' in source

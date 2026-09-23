@@ -9,8 +9,11 @@
  *                        tool runs.
  *  - before_agent_start: report whether the code graph is indexed (file
  *                        count, last-updated) or still being built, plus
- *                        cross-repo coverage and the ToolSearch +
- *                        code_find_definition calls to make against it.
+ *                        cross-repo coverage and how to reach the code_*
+ *                        tools. Runs `inject-context --client pi`, so the
+ *                        block names pi-mcp-adapter's `mcp` proxy
+ *                        (search, then call) rather than Claude's
+ *                        ToolSearch, which Pi does not have.
  *  - session_shutdown  : opportunistically compact the current repo's store
  *                        and the shared cross-repo bridge store (throttled;
  *                        see witan_code.maintenance) — no session-id
@@ -117,7 +120,7 @@ export default function codegraphExtension(pi: ExtensionAPI): void {
 	// no context, never a thrown error.
 	pi.on("before_agent_start", async (event: any, ctx: any) => {
 		try {
-			const r = spawnSync("witan-code", ["inject-context"], {
+			const r = spawnSync("witan-code", ["inject-context", "--client", "pi"], {
 				encoding: "utf8",
 				timeout: INJECT_CONTEXT_TIMEOUT_MS,
 				cwd: ctx?.cwd,

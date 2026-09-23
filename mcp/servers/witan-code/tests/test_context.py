@@ -393,3 +393,49 @@ def test_inject_context_block_stays_small(tmp_path, monkeypatch):
     _stub_store_stats(monkeypatch)
 
     assert len(context.inject_context()) < 600
+
+
+def _indexed(tmp_path, monkeypatch):
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/cg")
+    code_dir = tmp_path / "code"
+    monkeypatch.setenv("WITAN_CODE_DIR", str(code_dir))
+    _lock(tmp_path, monkeypatch, tmp_path / "project")
+    (code_dir / "https_github.com_test_cg.omni").mkdir(parents=True)
+    _stub_store_stats(monkeypatch)
+
+
+def test_inject_context_default_and_explicit_claude_render_the_same(
+    tmp_path, monkeypatch
+):
+    _indexed(tmp_path, monkeypatch)
+
+    default = context.inject_context()
+
+    assert default == context.inject_context(client="claude")
+    assert "ToolSearch" in default
+    assert "mcp({" not in default
+    assert "`/witan-code`" in default
+
+
+def test_inject_context_for_pi_names_the_mcp_proxy_not_toolsearch(
+    tmp_path, monkeypatch
+):
+    """Pi has no ToolSearch; its MCP tools sit behind pi-mcp-adapter's `mcp`.
+
+    The adapter prefixes each tool with its server name, and that prefix
+    depends on the user's config, so the block must search first and then
+    call whatever exact name the search returned.
+    """
+    _indexed(tmp_path, monkeypatch)
+
+    text = context.inject_context(client="pi")
+
+    assert "ToolSearch" not in text
+    assert "select:" not in text
+    assert 'mcp({ search: "code_find_definition callers impact" })' in text
+    assert 'mcp({ tool: "<exact name the search returned>", args: {' in text
+    assert "/skill:witan-code" in text  # Pi's skill command form
+    # The status lines above the discovery line are client-neutral.
+    assert "https://github.com/test/cg" in text
+    assert "3 files" in text
+    assert "No other repo is indexed" in text
