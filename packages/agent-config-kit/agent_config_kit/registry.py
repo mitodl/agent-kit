@@ -74,13 +74,18 @@ def _registry() -> dict[str, AgentPlatform]:
                         path=Path.home() / ".pi" / "agent" / "mcp.json",
                         key_path=("mcpServers",),
                     ),
-                    # Pi's project-root config file, unverified beyond the
-                    # D-INV survey (pf-native-per-agent-skill-config-
-                    # directory-hierarch-40bff8 notes project MCP paths are
-                    # cwd-only but doesn't pin an exact filename) — confirm
-                    # against an installed Pi version before relying on this.
+                    # pi-mcp-adapter's Pi-specific project override. Verified
+                    # against the installed adapter (v2.37.0): config.ts's
+                    # getProjectPiConfigPath() resolves
+                    # <cwd>/<configDir>/mcp.json (configDir defaults to
+                    # ".pi"), and its README lists `.pi/mcp.json` as the
+                    # highest-precedence "Pi project override" layer. Pi
+                    # core's own `.pi/settings.json` is a different file
+                    # (packages, models, ...) that the adapter never reads
+                    # MCP servers from — writing mcpServers there was a
+                    # silent no-op.
                     "project": ScopeTarget(
-                        path=Path(".pi") / "settings.json",
+                        path=Path(".pi") / "mcp.json",
                         key_path=("mcpServers",),
                     ),
                 }

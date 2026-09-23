@@ -61,7 +61,7 @@ def test_pi_project_targets_are_relative_to_repo_root():
     platform = registry.get_platform("pi")
 
     assert platform.mcp.project == ScopeTarget(
-        path=Path(".pi") / "settings.json", key_path=("mcpServers",)
+        path=Path(".pi") / "mcp.json", key_path=("mcpServers",)
     )
     assert platform.hooks.project == ScopeTarget(path=Path(".pi") / "extensions")
     assert platform.skills.project == ScopeTarget(path=Path(".pi") / "skills")

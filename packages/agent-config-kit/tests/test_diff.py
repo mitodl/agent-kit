@@ -7,6 +7,7 @@ from agent_config_kit.models import (
     DeclarativeHook,
     HookEvent,
     PluginRegistration,
+    Scope,
     SkillSource,
     StdioServer,
 )
@@ -267,3 +268,25 @@ def test_diff_declarative_hook_is_never_reported_as_stale(tmp_path, monkeypatch)
     result = diff("claude", bundle, previous=previous)
 
     assert result.stale_keys == []
+
+
+def test_diff_project_scope_pi_reads_dot_pi_mcp_json(tmp_path, monkeypatch):
+    """Project-scoped Pi drift detection reads ``.pi/mcp.json`` — the same
+    file apply writes — not Pi core's ``.pi/settings.json``."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    bundle = _bundle()
+
+    assert diff("pi", bundle, scope=Scope.PROJECT).missing_keys == ["mcp_servers:witan"]
+
+    apply("pi", bundle, scope=Scope.PROJECT)
+    assert not diff("pi", bundle, scope=Scope.PROJECT).has_drift
+
+    mcp_json = tmp_path / ".pi" / "mcp.json"
+    cfg = json.loads(mcp_json.read_text())
+    cfg["mcpServers"]["witan"]["args"] = ["something-else"]
+    mcp_json.write_text(json.dumps(cfg))
+    assert diff("pi", bundle, scope=Scope.PROJECT).mismatched_keys == [
+        "mcp_servers:witan"
+    ]
+    assert not (tmp_path / ".pi" / "settings.json").exists()
