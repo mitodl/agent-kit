@@ -20,6 +20,13 @@ provenance siblings; prunes superseded memories (unless
 ``include_superseded``); flags Contradicts pairs; and re-ranks with the
 composite score minus a distance penalty so seeds outrank neighbours.
 
+A Contradicts pair is reported when both memories are in the returned
+result AND at least one of them is in ``repo``, the rule
+``memory_contradictions`` scopes by. Expansion can return memories from
+other repos, but a pair with neither side in ``repo`` is left out, so every
+pair here is also in ``memory_contradictions`` for the same ``repo``. Pass
+``repo=""`` to report every pair among the returned memories.
+
 Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
 edge — today that means a Tagged edge promoted from a free-string tag,
 rather than a link someone named — costs ``w_inferred_edge`` extra
@@ -43,7 +50,7 @@ Returns ``{"memories": [...ranked...], "contradictions": [...], "seeds": {...}}`
 | `symbol_id` | str? | `null` | A code-graph symbol id (``repo#path::Name``) to seed from — the memories<br>and tasks whose ``symbol_refs`` include it. Use this before editing a<br>symbol: "what do we already know about this function?" |
 | `task` | str? | `null` | A ``tk-`` slug to seed from — the memories it ``Addresses`` plus those<br>sharing its ``symbol_refs``. The one-call way to load context for a task<br>you are about to start. |
 | `topic` | str? | `null` | A Topic slug (``tp-...``) or a ``name:kind`` spec (e.g. ``uv:topic``,<br>``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join<br>surface, so this seed in particular can pull in other repositories. |
-| `repo` | str? | `null` | Repo scoping — see instructions. Applies to the ``query`` seed only;<br>symbol, task, and topic seeds resolve wherever they live. |
+| `repo` | str? | `null` | Repo scoping — see instructions. Applies to the ``query`` seed and to<br>which contradiction pairs are reported (see above); symbol, task, and<br>topic seeds resolve wherever they live, and expansion crosses repos. |
 | `kind` | `pattern` \| `project_fact` \| `lesson` \| `agent_context`? | `null` | Restrict the ``query`` seed to one memory kind: ``pattern``,<br>``project_fact``, ``lesson``, or ``agent_context``. |
 | `hops` | int | `1` | How far to expand from the seeds along ``AppliesTo`` / ``RelatedTo``<br>edges, topic siblings, and provenance siblings. Clamped to 0–2. ``0``<br>disables expansion and returns the seeds alone; ``1`` (the default) is<br>almost always right, since each extra hop widens results faster than it<br>deepens them. Counts HOPS, not the fractional distance the inferred-edge<br>surcharge produces — the surcharge only reranks, it never truncates the<br>walk. |
 | `limit` | int | `20` | Maximum memories to return after re-ranking. |
@@ -237,7 +244,9 @@ List every pair of memories that contradict each other, newest link first.
 An unranked enumeration of the ``contradicts`` edges, for reviewing
 conflicts rather than loading context. ``recall`` reports a contradiction
 only when both memories land in its result, and ``memory_neighbors`` needs a
-slug to start from; this needs neither.
+slug to start from; this needs neither. Both apply the same ``repo`` rule
+(below), so every pair ``recall`` reports is one this lists for the same
+``repo``.
 
 Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
 carry ``slug, title, kind, repo, author, updated_at, content, confidence``;

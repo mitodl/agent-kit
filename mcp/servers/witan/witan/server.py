@@ -4102,6 +4102,25 @@ _CONTRADICTION_ENDPOINT_FIELDS = (
 )
 
 
+def _contradiction_in_scope(repo: str | None) -> Callable[[dict, dict], bool]:
+    """
+    The repo rule both ``memory_contradictions`` and ``recall`` report pairs by.
+
+    Shared so the two cannot drift: a pair ``recall`` flags is always one the
+    inbox lists for the same ``repo`` argument.
+
+    :param repo: The caller's ``repo`` argument, resolved as every repo-scoped
+        tool resolves it. ``""`` keeps every pair.
+    :returns: A predicate over the pair's two sides that is true when either
+        side's ``repo`` is the resolved one.
+    :rtype: Callable[[dict, dict], bool]
+    """
+    if repo == "":
+        return lambda a, b: True
+    detected = repo_module.detect(override=repo)
+    return lambda a, b: detected in (a["repo"], b["repo"])
+
+
 @_tool
 def memory_contradictions(
     repo: str | None = None, include_superseded: bool = False
@@ -4112,7 +4131,9 @@ def memory_contradictions(
     An unranked enumeration of the ``contradicts`` edges, for reviewing
     conflicts rather than loading context. ``recall`` reports a contradiction
     only when both memories land in its result, and ``memory_neighbors`` needs a
-    slug to start from; this needs neither.
+    slug to start from; this needs neither. Both apply the same ``repo`` rule
+    (below), so every pair ``recall`` reports is one this lists for the same
+    ``repo``.
 
     Each row is ``{"a": {...}, "b": {...}, "edge": {...}}``. ``a`` and ``b``
     carry ``slug, title, kind, repo, author, updated_at, content, confidence``;
@@ -4139,15 +4160,14 @@ def memory_contradictions(
         When ``True``, keep pairs where either memory has been superseded, i.e.
         the resolved ones.
     """
-    detected = repo_module.detect(override=repo)
-    everything = repo == ""
+    in_scope = _contradiction_in_scope(repo)
     superseded = set() if include_superseded else _superseded_slugs()
 
     pairs: dict[frozenset[str], dict] = {}
     for row in client.read("read.gq", "contradicts_pairs", {}):
         a = {f: row[f"a_{f}"] for f in _CONTRADICTION_ENDPOINT_FIELDS}
         b = {f: row[f"b_{f}"] for f in _CONTRADICTION_ENDPOINT_FIELDS}
-        if not everything and detected not in (a["repo"], b["repo"]):
+        if not in_scope(a, b):
             continue
         if a["slug"] in superseded or b["slug"] in superseded:
             continue
@@ -8123,6 +8143,13 @@ def recall(
     ``include_superseded``); flags Contradicts pairs; and re-ranks with the
     composite score minus a distance penalty so seeds outrank neighbours.
 
+    A Contradicts pair is reported when both memories are in the returned
+    result AND at least one of them is in ``repo``, the rule
+    ``memory_contradictions`` scopes by. Expansion can return memories from
+    other repos, but a pair with neither side in ``repo`` is left out, so every
+    pair here is also in ``memory_contradictions`` for the same ``repo``. Pass
+    ``repo=""`` to report every pair among the returned memories.
+
     Expansion is CONFIDENCE-WEIGHTED: a neighbour reached over an ``inferred``
     edge — today that means a Tagged edge promoted from a free-string tag,
     rather than a link someone named — costs ``w_inferred_edge`` extra
@@ -8157,8 +8184,9 @@ def recall(
         ``DATABASE_URL:contract``) to seed from. Topics are a cross-repo join
         surface, so this seed in particular can pull in other repositories.
     repo:
-        Repo scoping — see instructions. Applies to the ``query`` seed only;
-        symbol, task, and topic seeds resolve wherever they live.
+        Repo scoping — see instructions. Applies to the ``query`` seed and to
+        which contradiction pairs are reported (see above); symbol, task, and
+        topic seeds resolve wherever they live, and expansion crosses repos.
     kind:
         Restrict the ``query`` seed to one memory kind: ``pattern``,
         ``project_fact``, ``lesson``, or ``agent_context``.
@@ -8261,12 +8289,15 @@ def recall(
     # ── Contradictions among the RETURNED memories ────────────────
     # Only over the limited result set, so every pair references a memory the
     # caller actually receives.
-    returned_slugs = {n["slug"] for n in returned}
+    returned_by_slug = {n["slug"]: n for n in returned}
+    in_scope = _contradiction_in_scope(repo)
     contradictions: list[dict] = []
     seen_pairs: set[tuple[str, str]] = set()
-    for slug in returned_slugs:
+    for slug, node in returned_by_slug.items():
         for other in client.read("read.gq", "contradicts_out", {"slug": slug}):
-            if other["slug"] not in returned_slugs:
+            if other["slug"] not in returned_by_slug:
+                continue
+            if not in_scope(node, returned_by_slug[other["slug"]]):
                 continue
             pair = tuple(sorted((slug, other["slug"])))
             if pair not in seen_pairs:
