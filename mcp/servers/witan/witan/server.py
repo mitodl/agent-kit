@@ -3359,6 +3359,12 @@ def memory_list(
     ``memory_list(kind="project_fact")`` at session start, or
     ``memory_list(kind="pattern", language="python")`` before writing code).
 
+    Returns at most the 100 most recent memories in scope. Superseded memories
+    are excluded before that cap, not after, so fewer than 100 rows is the
+    whole listing and exactly 100 means there may be more. ``language``
+    filters after the cap, so a language-filtered listing can be short while
+    older matches exist; the slim unscoped listing is not capped.
+
     Parameters
     ----------
     kind:
@@ -3376,13 +3382,11 @@ def memory_list(
         ``False`` drops them, as ``memory_search`` and ``recall`` do.
     """
     detected = repo_module.detect(override=repo)
-    superseded = set() if include_superseded else _superseded_slugs()
-
-    def _current(rows: list[dict]) -> list[dict]:
-        return [r for r in rows if r["slug"] not in superseded]
+    # The capped reads exclude superseded rows in the query, so 100 rows means
+    # the cap was hit rather than that pruning ate into it.
+    prefix = "list_memories" if include_superseded else "list_current_memories"
 
     def _by_language(rows: list[dict]) -> list[dict]:
-        rows = _current(rows)
         if not language:
             return rows
         return [
@@ -3393,21 +3397,21 @@ def memory_list(
         return _by_language(
             client.read(
                 "read.gq",
-                "list_memories_by_repo_kind",
+                f"{prefix}_by_repo_kind",
                 {"repo": detected, "kind": kind},
             )
         )
     if detected:
         return _by_language(
-            client.read("read.gq", "list_memories_by_repo", {"repo": detected})
+            client.read("read.gq", f"{prefix}_by_repo", {"repo": detected})
         )
     if repo == "":
         # Explicit all-repos opt-in — return full content.
         if kind:
             return _by_language(
-                client.read("read.gq", "list_memories_by_kind", {"kind": kind})
+                client.read("read.gq", f"{prefix}_by_kind", {"kind": kind})
             )
-        return _by_language(client.read("read.gq", "list_memories", {}))
+        return _by_language(client.read("read.gq", prefix, {}))
     # No repo detected and no explicit override: return slim records for
     # unscoped memories (repo=null) only. Caller can memory_get any slug it needs.
     # Use unbounded queries so repo-scoped memories don't push unscoped ones out
@@ -3418,7 +3422,10 @@ def memory_list(
         )
     else:
         all_rows = client.read("read.gq", "list_memories_unbounded", {})
-    unscoped = [r for r in _current(all_rows) if not r.get("repo")]
+    superseded = set() if include_superseded else _superseded_slugs()
+    unscoped = [
+        r for r in all_rows if not r.get("repo") and r["slug"] not in superseded
+    ]
     return [_slim_memory(r) for r in unscoped]
 
 

@@ -195,6 +195,67 @@ query list_memories_by_repo_kind($repo: String, $kind: String) {
     limit 100
 }
 
+// The same four listings without the memories a newer one `Supersedes`.
+// memory_list's default read. Pruning after the `limit 100` instead would
+// hand back fewer than 100 rows while more current memories exist past the
+// cap, and a short list is how a caller knows it has everything.
+
+query list_current_memories() {
+    match {
+        $m: Memory
+        not { $_ supersedes $m }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+query list_current_memories_by_repo($repo: String) {
+    match {
+        $m: Memory { repo: $repo }
+        not { $_ supersedes $m }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+query list_current_memories_by_kind($kind: String) {
+    match {
+        $m: Memory { kind: $kind }
+        not { $_ supersedes $m }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
+query list_current_memories_by_repo_kind($repo: String, $kind: String) {
+    match {
+        $m: Memory { repo: $repo, kind: $kind }
+        not { $_ supersedes $m }
+    }
+    return {
+        $m.slug, $m.kind, $m.title, $m.content,
+        $m.repo, $m.language, $m.category, $m.severity,
+        $m.author, $m.tags, $m.created_at, $m.updated_at, $m.confidence
+    }
+    order { $m.created_at desc }
+    limit 100
+}
+
 // High-limit variants for the unscoped fallback path: the normal list_memories
 // cap (100) is applied before Python filtering by repo=null, so unscoped
 // memories can be pushed out when many repo-scoped ones are newer.
