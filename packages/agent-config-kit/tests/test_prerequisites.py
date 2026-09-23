@@ -88,6 +88,33 @@ def test_preflight_absent_when_pi_settings_missing_or_unparseable(home):
     assert mcp_adapter_prerequisite(Scope.GLOBAL)[0] is False
 
 
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_unreadable_pi_settings_do_not_abort_apply(home, dry_run):
+    """The preflight runs after mcp.json is written; a settings file it cannot
+    decode (e.g. left by another tool, or root-owned after ``sudo pi
+    install``) must read as "adapter not found", not raise out of apply
+    before hooks and skills are installed."""
+    settings = _global_settings(home)
+    settings.parent.mkdir(parents=True)
+    settings.write_bytes(b'{"packages": ["npm:pi-mcp-adapter\xe9"]}')
+
+    assert mcp_adapter_prerequisite(Scope.GLOBAL)[0] is False
+    [prereq] = apply("pi", _bundle(), dry_run=dry_run).prerequisites
+    assert prereq.satisfied is False
+
+
+def test_permission_denied_pi_settings_read_as_absent(home, monkeypatch):
+    settings = _global_settings(home)
+    _write_settings(settings, ["npm:pi-mcp-adapter"])
+
+    def deny(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "read_text", deny)
+
+    assert mcp_adapter_prerequisite(Scope.GLOBAL)[0] is False
+
+
 def test_preflight_accepts_extension_path_setting(home):
     path = _global_settings(home)
     path.parent.mkdir(parents=True)

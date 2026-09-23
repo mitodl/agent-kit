@@ -46,8 +46,15 @@ def _settings_declare_adapter(path: Path) -> bool:
     (docs/packages.md); an object whose ``extensions`` filter is ``[]`` loads
     none of the package's extensions, so it does not count. A bare
     extension path in the ``extensions`` array also counts, minus ``!``/``-``
-    exclusions (docs/settings.md "Resources")."""
-    cfg = load_json_object(path) if path.is_file() else None
+    exclusions (docs/settings.md "Resources").
+
+    A file that cannot be read (permissions, not UTF-8) reads as not
+    declaring the adapter: this check is informational and runs after
+    mcp.json is written, so it must never abort the rest of ``apply``."""
+    try:
+        cfg = load_json_object(path) if path.is_file() else None
+    except (OSError, UnicodeDecodeError):
+        return False
     if not cfg:
         return False
     packages = cfg.get("packages")
