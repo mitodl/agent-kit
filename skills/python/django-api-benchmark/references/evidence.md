@@ -21,6 +21,40 @@ response they would not think to offer.
 Offer the fallback explicitly: with no trace, you can still A/B, but you cannot
 attribute the change to a query or calibrate the seed against a real timing.
 
+## Then collect it — the answer is not the artifact
+
+"Yes, I have sample responses" is an inventory, not a delivery. Whatever they
+said yes to, ask for the content in a follow-up turn, one concrete request per
+artifact:
+
+> You said you have a trace and two sample responses. Send them over and I'll
+> derive the seed shape from them:
+>
+> - the **trace** — an OTLP JSON export, as a file path I can read or pasted
+>   inline;
+> - the **responses** — file paths, one per tenant/filter, so I can compare
+>   them against each other;
+> - drop them anywhere I can read, e.g. a scratch directory outside the repo,
+>   so nothing production-shaped risks getting committed.
+
+Do not guess a filename and do not proceed on the strength of the promise. When
+each arrives, read it and say what you got — `spans=412, db spans=37`,
+`rows=100, nested per row min=1 max=57` — so they can correct a wrong export
+before it becomes a seed.
+
+If an artifact never materialises, that is a fine outcome, but it changes the
+labelling: every knob it would have justified is a `# GUESS:`. Say that out
+loud rather than quietly carrying on.
+
+Two things make this worth insisting on:
+
+- A **sanitised or truncated** export is common. Reading it immediately catches
+  a response with `results` stripped, or a trace exported without
+  `db.statement`, while there is still time to re-capture.
+- Guesses labelled OBSERVED are the one error this skill cannot recover from —
+  the report's whole claim to being defensible is that the distinction is
+  accurate.
+
 ## Reading an OTel trace export
 
 Exports vary (`batches[].instrumentationLibrarySpans[].spans[]` for OTLP JSON,

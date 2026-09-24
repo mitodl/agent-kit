@@ -78,6 +78,30 @@ volunteer:
 If they have no trace, the benchmark can still run, but say plainly that you
 lose per-query attribution and the calibration target.
 
+### Step 1b — Collect what they said they have
+
+The answer to Step 1 tells you which artifacts **exist**. It does not hand you
+any of them. Every artifact they said yes to has to arrive before Step 2, and
+asking for it is a separate turn:
+
+- For **each** trace or sample response they claimed, ask for it by name — a
+  file path you can read, or pasted content. Anywhere you can read it is fine —
+  offer a scratch path outside the repo so production data is never at risk of
+  being committed.
+- **Do not infer a path.** A trace you guessed at is worse than no trace,
+  because the resulting knobs get labelled OBSERVED.
+- For **replica access**, hand them the exact read-only SQL from
+  [references/evidence.md](references/evidence.md) rather than asking them to
+  invent queries.
+- Confirm each one landed: read the file and state what you got from it (rows
+  per page, span count) before moving on.
+
+**You may not enter Step 2 with a promised artifact still outstanding.** Either
+it is in hand, or they explicitly dropped it — and if they dropped it, every
+knob it would have justified is a `# GUESS:`, not an `# OBSERVED:`. Offering to
+"proceed with estimates and swap them in later" re-labels guesses as facts the
+moment the report is written; ask again instead.
+
 ## Step 2 — Derive the target shape from the artifacts
 
 Each artifact answers different questions. Be explicit about which, because
@@ -237,7 +261,7 @@ These are judgment, which is why they are the skill's job:
 
 | Read this | For |
 | --- | --- |
-| [evidence.md](references/evidence.md) | The batched question, reading an OTel JSON export, extracting shape from sample responses, what no artifact can tell you |
+| [evidence.md](references/evidence.md) | The batched question, collecting the artifacts they said they have, reading an OTel JSON export, extracting shape from sample responses, what no artifact can tell you |
 | [configuring.md](references/configuring.md) | The three config layers, seed step kinds, the `$token` vocabulary, targets, auth, query classifiers |
 | [calibration.md](references/calibration.md) | The observables table, structural vs sizing realism, a worked falsification, auditing factory defaults |
 | [results.md](references/results.md) | Every output file, the verdicts, SQL versus gap, what a classifier collision means |
