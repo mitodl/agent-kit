@@ -172,10 +172,50 @@ Everything above turns into three things in `benchmarks/<name>.toml`:
 | --- | --- |
 | Rows per page, nested sizes, payload sizes | `[knobs]`, with `# OBSERVED (sample response):` above each |
 | Anything no artifact showed | `[knobs]`, with `# GUESS:` above each |
-| `IN`-list placeholder counts | `[calibration.floors]`, keyed by seed step name — the seed warns when it falls short |
-| Unchanged queries' production timings | `[[calibration.observable]]`, so the report carries them next to the numbers |
-| The queries in your trace budget | `[[trace.classify]]`, most specific first, with the targeted ones marked `**` |
+| The queries in your trace budget | `[[trace.classify]]`, most specific first, with `targeted = true` on the one the change aims at |
+| Per-query timings, `IN`-list floors, and the trace ids | Nothing by hand — `ol-benchmark baseline` derives all three into `<name>.baseline.json` |
+| Observables a trace cannot give you (rows per page, body size) | `[[calibration.observable]]`, so the report carries them next to the numbers |
+
+The middle row used to be transcription work. It is not any more: point the
+`baseline` command at the exports and it computes the medians and the floors
+itself, keyed by the same classifiers the local run uses. Transcribing a
+timing by hand now means two numbers that were computed differently sitting in
+one table.
 
 A floor recorded here keeps working after you are gone: a colleague re-running
 at a smaller shape gets a warning rather than a quietly unrepresentative
 number.
+
+## Handling the exports themselves
+
+**The raw traces never enter the repository.** They carry statement literals,
+query strings, and user and tenant identifiers. Keep them somewhere outside
+it — a scratch directory, `/tmp` — and if a project has adopted the package,
+`traces/` and `*.trace.json` are already gitignored as a backstop.
+
+What *is* committable is what `ol-benchmark baseline` distils out of them: per
+query, a median and a row floor, keyed by a label you wrote yourself. The
+guarantee is structural rather than a scrubbing pass — the only free-text
+field in the artifact is drawn from a closed set that is already committed
+alongside it. A query matching no classifier is labelled `"unclassified"`,
+never by its statement.
+
+Two requirements when asking someone to export, because neither is fixable
+afterwards:
+
+- **The server/root span has to be in there.** A gap is measured to the next
+  query, or for the last query to the end of the request. With nothing
+  enclosing the queries, the request "ends" at its own last query and that
+  final gap becomes zero — a wrong number rather than a missing one, and it is
+  the gap where serialization lives. The command warns when it spots this.
+- **One endpoint per set.** A glob that sweeps in traces for other routes
+  averages their queries together. The command warns on that too.
+
+More traces is strictly better: the baseline is a median per query position,
+so it sharpens with the sample exactly as `trace_repeats` does locally. Ask
+for several slow requests, ideally across tenants.
+
+The jq above is still worth running on one trace — not to transcribe numbers,
+but to see which queries exist so you can write `[[trace.classify]]` patterns
+for them. Those labels are what the baseline is keyed by, so they have to come
+first.

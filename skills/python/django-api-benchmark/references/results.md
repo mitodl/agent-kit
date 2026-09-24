@@ -12,6 +12,10 @@ Everything lands in `.bench/out/<benchmark>/`.
 | `trace-base.json`, `trace-branch.json` | Every span: duration **and the gap to the next one** |
 | `agg-base.json`, `agg-branch.json` | Median per logical query across the traced repeats |
 
+One file lives outside that directory and **is** committed:
+`benchmarks/<name>.baseline.json`, the production medians. It is checked in
+because a colleague needs it to re-run the drift check from a fresh clone.
+
 ## The verdict
 
 `comparison.json` never reports a bare number. It reports one of three states,
@@ -47,14 +51,21 @@ Read the sign.
 
 ## Per-query attribution
 
-Each row of `per_query` has SQL time and gap time, separately, for both arms:
+Each row of `per_query` has SQL time and gap time, separately, for both arms —
+and, where a production baseline is configured, what the same query costs in
+production:
 
 ```
-query                    base sql  base gap  base tot  br sql  br gap  br tot  delta
-** topics prefetch          3.69     36.35     40.04    3.48    6.60   10.08  -29.96
-books prefetch              1.46      4.36      5.81    1.41    4.35    5.76   -0.05
-COUNT(*) paginator          1.21      0.83      2.04    1.10    0.53    1.63   -0.41
+query               prod tot  base sql  base gap  base tot  br sql  br gap  br tot  delta
+topics prefetch       168.90      3.69     36.35     40.04    3.48    6.60   10.08  -29.96
+books prefetch         12.40      1.46      4.36      5.81    1.41    4.35    5.76   -0.05
+COUNT(*) paginator      4.10      1.21      0.83      2.04    1.10    0.53    1.63   -0.41
 ```
+
+`production_total_ms` is `null`, not zero, for a query the baseline never saw:
+unknown is not free. Local being several times faster than production is
+normal and expected — there is no network round-trip, the cache is warm and
+nothing else is contending.
 
 **The gap is usually where the time is.** A database span wraps
 `cursor.execute` and nothing else, so row fetch, model instantiation and
@@ -81,6 +92,51 @@ re-running anything.
 
 A whole number greater than one is fine: a prefetch that genuinely runs twice
 per request has `per_req = 2.0`.
+
+## Seed drift from production
+
+`calibration_drift` is the check that your seed resembles reality. It lists
+every query **not** marked `targeted = true` whose local cost is more than
+`[calibration].drift_factor` away from the production baseline:
+
+```json
+{
+  "query": "books prefetch",
+  "production_total_ms": 4.4,
+  "local_total_ms": 176.9,
+  "ratio": 39.9,
+  "local_slower": true,
+  "note": "the seed makes an unchanged query slower than production"
+}
+```
+
+Read the direction. `local_slower: true` on a query the change does not touch
+is the falsification signal from [calibration.md](calibration.md): the seed is
+the wrong shape, and the right response is to fix it and re-run rather than to
+explain it away. `local_slower: false` is the expected direction, and shows up
+only when the gap is wide enough to suggest the seed understates production's
+fan-out.
+
+**Drift never changes the verdict**, deliberately. The verdict is about
+whether the two arms are comparable *to each other*; drift is about whether
+either resembles production. Letting a calibration problem void a sound A/B
+would conflate two different questions — which also means an `ok` verdict on a
+badly shaped seed is possible, so read this section rather than stopping at
+the verdict.
+
+Targeted queries are absent from this list by design. They are supposed to
+differ; that is the change.
+
+## Production baseline
+
+The `production` block, and the matching section of `report.md`, carry the
+trace ids the medians came from, so a reviewer can open the exact production
+requests behind the numbers — assuming they have access to the tracing
+backend, which is the only place those ids resolve.
+
+If `requests` is `null`, no baseline is configured and every production column
+will be empty. That is a valid way to run the tool; it just means nothing is
+checking the seed against reality.
 
 ## Conditions
 

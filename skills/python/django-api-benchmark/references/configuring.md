@@ -185,9 +185,39 @@ label = "books page query"
 pattern = "FROM \"book\""
 ```
 
-Mark the queries the change targets, so they are obvious in the output. The
-`per_req` column is the check on your ordering: a non-integer value means one
-label is catching two different queries and mixing their medians.
+Mark the queries the change targets with `targeted = true`. It does two
+things: makes them obvious in the output, and excludes them from the drift
+check against production, which only makes sense for queries the change is
+*not* supposed to move.
+
+```toml
+[[trace.classify]]
+label = "topics prefetch"
+pattern = "book_topics"
+targeted = true
+```
+
+The `per_req` column is the check on your ordering: a non-integer value means
+one label is catching two different queries and mixing their medians.
+
+## Comparing against production
+
+```toml
+[calibration]
+baseline = "<name>.baseline.json"   # relative to this file
+drift_factor = 5
+```
+
+`baseline` points at a committed artifact distilled from production traces by
+`ol-benchmark baseline` — per-query medians keyed by the labels above, with no
+statement text in it. The raw traces are never committed; see
+[evidence.md](evidence.md).
+
+`drift_factor` is how far an **untargeted** query may sit from production
+before the report calls the seed into question. Five is a reasonable default:
+order-of-magnitude agreement is the bar, and chasing exactness tips into
+fitting. Local is expected to be faster — no round-trip, warm cache, no
+contention — so the direction that matters is local being *slower*.
 
 ## Measurement
 

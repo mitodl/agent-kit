@@ -70,13 +70,22 @@ volunteer:
 | --- | --- |
 | The **endpoint and exact query string**, including filter params | Filters drive join fan-out; the wrong params benchmark a different code path |
 | The **two git refs** to compare (usually the branch and its merge base) | The A/B arms |
-| A **production OTel trace** of a real slow request (JSON export) | The only source of per-query timings and the row-count floor |
+| **Production OTel traces** of real slow requests (JSON exports) | The only source of per-query timings and row-count floors. Ask for *several* — the baseline is a median, so it improves with the sample |
 | **Sample production API responses** for that endpoint (2-3, different tenants/filters) | The only ground truth for the *output* shape |
 | Whether they can run **read-only queries against a production replica** | Collapses the biggest guesses into facts |
 | Anything they already know is slow | Their intuition is usually a good prior |
 
 If they have no trace, the benchmark can still run, but say plainly that you
 lose per-query attribution and the calibration target.
+
+Two things to say when you ask for the traces, because both are easy to get
+wrong at export time and neither is recoverable afterwards:
+
+- **Include the server/root span**, not just database spans. A trace filtered
+  to queries makes the last query's gap read as zero — and that gap is where
+  serialization lives, usually the largest single cost.
+- **One endpoint per set.** Traces for different routes get averaged into
+  nonsense.
 
 ### Step 1b — Collect what they said they have
 
@@ -149,6 +158,45 @@ Then check it loads before running anything destructive:
 ol-benchmark validate benchmarks/<name>.toml
 ```
 
+## Step 3b — Distil the traces into a committed baseline
+
+**Never commit a raw trace, and never paste its SQL into the config or a PR.**
+It carries statement literals, query strings and user identifiers. Keep the
+exports outside the repository; `traces/` and `*.trace.json` are gitignored in
+projects that have adopted the package.
+
+Write the `[[trace.classify]]` rules first — they are what the baseline is
+keyed by — then:
+
+```bash
+ol-benchmark baseline benchmarks/<name>.toml traces/*.json
+```
+
+Pass every trace you have; a glob is the expected way. That writes
+`benchmarks/<name>.baseline.json` containing per-query medians, row-count
+floors, and the sampled trace ids. Nothing else — no SQL, no attribute values,
+no absolute timestamps. A query matching no rule is labelled `"unclassified"`
+rather than by its statement, and the command warns so you can add a rule.
+
+**Read the file before committing it.** It is a few lines, and reading it is
+the review gate. `--stdout` prints without writing if you want to look first.
+
+Then tell the drift check which query the change is meant to move:
+
+```toml
+[[trace.classify]]
+label = "topics prefetch"
+pattern = "book_topics"
+targeted = true            # expected to differ; excluded from drift
+
+[calibration]
+baseline = "<name>.baseline.json"
+drift_factor = 5
+```
+
+This step is optional — the A/B works without it — but skipping it means
+nothing checks whether your seed resembles production at all.
+
 ## Step 4 — Calibrate, and be willing to falsify
 
 Tune the seed until the **independent observables** match production.
@@ -169,10 +217,14 @@ children = 388          # from the trace's IN-list placeholder count
 ```
 
 **A seed parameter that makes an *unchanged* query wildly slower than
-production is falsified — discard it, however good the story was.** Structural
-realism matters more than sizing: how rows fan out across joins dominates how
-wide they are. See [references/calibration.md](references/calibration.md) for
-the worked example and the common structural mistakes.
+production is falsified — discard it, however good the story was.** With a
+baseline configured this is no longer only your judgement: the report computes
+it, as `calibration_drift`. Without one it stays yours to check by eye.
+
+Structural realism matters more than sizing: how rows fan out across joins
+dominates how wide they are. See
+[references/calibration.md](references/calibration.md) for the worked example
+and the common structural mistakes.
 
 ## Step 5 — Run it, and check the benchmark before the result
 
@@ -194,10 +246,17 @@ Read `.bench/out/<name>/comparison.json`. Before quoting any delta:
    `[[trace.classify]]` label is mixing two different queries, so its median is
    meaningless. Tighten the pattern.
 4. **`per_query` shows the saving where the change aims**, and nothing else
-   regressed to pay for it.
-5. **`refs.base` and `refs.branch` differ.** Identical refs means the switch
+   regressed to pay for it. With a baseline, read the `production_total_ms`
+   column beside it — a local number is hard to interpret alone.
+5. **`calibration_drift` is empty.** An entry means a query the change does
+   *not* touch does not look like production, which puts the seed shape in
+   question rather than the result. Local slower than production there is the
+   falsification signal: fix the seed and re-run rather than explaining it
+   away. Drift never changes the verdict, so a sound A/B on a bad seed still
+   reads `ok` — you have to look.
+6. **`refs.base` and `refs.branch` differ.** Identical refs means the switch
    never reached the code being measured.
-6. **Re-run at a second shape** (`--knob rows=200`). A delta stable across
+7. **Re-run at a second shape** (`--knob rows=200`). A delta stable across
    shapes is the single strongest evidence you can produce locally.
 
 [references/results.md](references/results.md) is the field-by-field guide,
@@ -256,15 +315,17 @@ These are judgment, which is why they are the skill's job:
 | Quoting a traced total as the result | Instrumentation is not free. The trace is for attribution; the uninstrumented pass is for the number |
 | Extrapolating local ms to production ms | Different hardware, cache state and network. Report a floor |
 | Quoting a delta from one seed shape | A result that does not hold at a second shape is a result about your seed |
+| Committing a raw OTel export, or pasting its SQL into a PR | It carries statement literals, query strings and user identifiers. Only the distilled baseline is committable |
+| Explaining away a drift warning | An unchanged query that does not look like production means the seed is wrong, not that the check is |
 
 ## References
 
 | Read this | For |
 | --- | --- |
-| [evidence.md](references/evidence.md) | The batched question, collecting the artifacts they said they have, reading an OTel JSON export, extracting shape from sample responses, what no artifact can tell you |
-| [configuring.md](references/configuring.md) | The three config layers, seed step kinds, the `$token` vocabulary, targets, auth, query classifiers |
-| [calibration.md](references/calibration.md) | The observables table, structural vs sizing realism, a worked falsification, auditing factory defaults |
-| [results.md](references/results.md) | Every output file, the verdicts, SQL versus gap, what a classifier collision means |
+| [evidence.md](references/evidence.md) | The batched question, collecting the artifacts they said they have, reading an OTel JSON export, what a usable export needs, handling traces safely, what no artifact can tell you |
+| [configuring.md](references/configuring.md) | The three config layers, seed step kinds, the `$token` vocabulary, targets, auth, query classifiers, the production baseline keys |
+| [calibration.md](references/calibration.md) | What the harness now falsifies for you and what it cannot, the observables table, structural vs sizing realism, a worked falsification |
+| [results.md](references/results.md) | Every output file, the verdicts, SQL versus gap, the production column, seed drift, what a classifier collision means |
 | [environments.md](references/environments.md) | Choosing a backend, the local-dev cluster's namespaces and DSN, fidelity differences to disclose |
 
 ## Resources
