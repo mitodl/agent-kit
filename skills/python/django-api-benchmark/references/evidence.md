@@ -114,8 +114,10 @@ identical across both arms they move the **baseline**, not the **delta**:
 - Rows loaded by a prefetch and then filtered out in Python.
 - How rows distribute across tenants, which drives filter fan-out.
 
-Each of these is one read-only production query away from being a fact. If the
-user has replica access, ask — it is worth more than any amount of inference:
+Each of these becomes a knob in `[knobs]` with a `# GUESS:` comment naming
+what it stands in for. Each is also one read-only production query away from
+being a fact. If the user has replica access, ask — it is worth more than any
+amount of inference:
 
 ```sql
 -- payload size of a column you suspect dominates a prefetch
@@ -127,3 +129,19 @@ SELECT count(*)::float / count(DISTINCT left_id) FROM through_table;
 -- rows behind one page
 SELECT count(*) FROM child WHERE parent_id IN (<the page's ids>);
 ```
+
+## Landing it in the benchmark file
+
+Everything above turns into three things in `benchmarks/<name>.toml`:
+
+| What you extracted | Where it goes |
+| --- | --- |
+| Rows per page, nested sizes, payload sizes | `[knobs]`, with `# OBSERVED (sample response):` above each |
+| Anything no artifact showed | `[knobs]`, with `# GUESS:` above each |
+| `IN`-list placeholder counts | `[calibration.floors]`, keyed by seed step name — the seed warns when it falls short |
+| Unchanged queries' production timings | `[[calibration.observable]]`, so the report carries them next to the numbers |
+| The queries in your trace budget | `[[trace.classify]]`, most specific first, with the targeted ones marked `**` |
+
+A floor recorded here keeps working after you are gone: a colleague re-running
+at a smaller shape gets a warning rather than a quietly unrepresentative
+number.

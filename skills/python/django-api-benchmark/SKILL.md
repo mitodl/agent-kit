@@ -7,7 +7,8 @@ description: >
   answer "is this actually faster", size a speedup before merging, or turn a
   production OTel trace into a reproducible local experiment. Covers eliciting
   production evidence (traces, sample API responses), calibrating a seed to the
-  real data shape, generating the harness, and reporting a defensible number.
+  real data shape, writing the benchmark's config file, and reporting a
+  defensible number using the mitol-django-benchmark package.
 license: BSD-3-Clause
 metadata:
   category: python
@@ -20,22 +21,50 @@ it into a measurement: seed a **production-shaped** throwaway database, run the
 same request on both git refs against **identical rows**, and attribute the
 difference query by query.
 
-Two failure modes make a benchmark worse than none, and most of this skill
-exists to avoid them:
+The mechanics are handled by
+[`mitol-django-benchmark`](https://github.com/mitodl/ol-django/tree/main/src/benchmark).
+**You do not write a harness.** You write one TOML file describing the shape and
+the target, run one command, and read the JSON it produces. Everything the
+package enforces — refusing to measure under a profiler, seeding once across
+both arms, verifying each arm ran the ref you think — is covered by its own
+tests, so it is not your job to re-derive.
 
-1. **Measuring the harness.** Instrumentation that scales with the thing you
-   changed will manufacture a result. See [Pitfalls](#pitfalls).
-2. **Measuring the wrong shape.** Factory defaults are nothing like production.
-   A seed that is off structurally produces a number with no bearing on the
+What is left is the part no package can do for you, and it is the part that
+decides whether the number means anything:
+
+1. **Getting the shape right.** Factory defaults are nothing like production. A
+   seed that is off structurally produces a number with no bearing on the
    endpoint you care about.
+2. **Not fitting the seed to the answer you want.** Calibrating against the
+   query you changed is circular, and it will manufacture a confident,
+   large, wrong result.
 
 Related: [`drf-api-performance`](../drf-api-performance/SKILL.md) is about
 *writing* fast endpoints. This is about *proving* one got faster.
 
+## Step 0 — Install it
+
+```bash
+uv add --dev "mitol-django-benchmark[drf,factories,django,postgres]"
+```
+
+Use the `postgres2` extra instead of `postgres` on a project still using
+psycopg2. Without a psycopg instrumentation extra the run still works, but the
+trace pass reports that it captured no database spans and you lose per-query
+attribution.
+
+If the project has no `benchmarks/` directory yet:
+
+```bash
+ol-benchmark init --project     # benchmarks/benchmark.toml, committed
+ol-benchmark init --local       # benchmarks/benchmark.local.toml, gitignored
+```
+
 ## Step 1 — Ask for the evidence
 
-Do not start seeding. Ask for all of it in **one batched question**, and say
-what each artifact is for — people usually have more than they volunteer:
+Do not start writing the seed. Ask for all of it in **one batched question**,
+and say what each artifact is for — people usually have more than they
+volunteer:
 
 | Ask for | Why you need it |
 | --- | --- |
@@ -68,97 +97,102 @@ anything neither can answer is a **guess you must label as one**.
 See [references/evidence.md](references/evidence.md) for the jq to turn a trace
 export into a gap-annotated timeline, and what to extract from responses.
 
-## Step 3 — Build the harness
+## Step 3 — Write the benchmark file
 
-An untracked `.bench/` directory (add it to `.git/info/exclude`).
+```bash
+ol-benchmark init --benchmark <name>     # benchmarks/<name>.toml
+```
 
-First **install an execution backend**. The harness has to run `manage.py`, reach
-Postgres, and make a `git switch` take effect in whatever is actually executing
-the app — the only three things that differ between dev environments. They live
-behind `.bench/backend.sh`; copy
-[`backends/compose.sh`](references/backends/compose.sh) (a per-repo
-`docker compose` stack) or [`backends/k8s-tilt.sh`](references/backends/k8s-tilt.sh)
-(ol-infrastructure's k3d + Tilt `local-dev`) there. Both may be present on one
-machine — **ask rather than guess**. See
-[references/environments.md](references/environments.md).
+**This is the only file you edit.** `benchmark.toml` is a project-wide decision
+and `benchmark.local.toml` belongs to whoever owns the machine; if either needs
+changing, say so and ask.
 
-Then adapt the templates:
+What goes in it, and the full token vocabulary, is in
+[references/configuring.md](references/configuring.md). The three things that
+decide whether the result is worth anything:
 
-| Template | Role |
-| --- | --- |
-| [`templates/seed.py`](references/templates/seed.py) | Build the dataset; every shape knob an env var; print the shape |
-| [`templates/bench.py`](references/templates/bench.py) | Wall-clock A/B; asserts its own preconditions |
-| [`templates/trace.py`](references/templates/trace.py) | In-process OTel capture for per-query attribution |
-| [`templates/agg.jq`](references/templates/agg.jq) | Median-per-query aggregation of the traced repeats |
-| [`templates/run.sh`](references/templates/run.sh) | Recreate DB → migrate → seed → arm A → switch ref → arm B |
-| [`backends/`](references/backends/) | The one file that knows what your dev environment is |
+- **Every shape dimension is a knob**, so the same benchmark re-runs at another
+  shape with `--knob` and no edit, and the report can state the exact shape.
+- **Each knob is annotated OBSERVED or GUESS**, in a comment naming the
+  artifact that justifies it. This distinction has to survive into the report.
+- **Structure before sizing.** Many tenants, children spread across parents,
+  noise rows the page does not return, and whatever membership the permission
+  check needs. Getting this wrong is not recoverable by tuning payload sizes.
 
-Non-negotiables, each of which exists because skipping it produces a wrong
-number — details in [references/harness.md](references/harness.md):
+Then check it loads before running anything destructive:
 
-- **Run through `manage.py shell`, not pytest.** Test settings commonly enable
-  profilers and coverage that scale with the work under test.
-- **Point `DATABASE_URL` at a dedicated throwaway database.** Never the dev one,
-  and never a name that does not start with `bench` — this step drops it.
-- **Seed once; switch git refs around the seeded database.** Reseeding per arm
-  reintroduces data variance and destroys comparability.
-- **Verify each arm ran the ref you think, rather than assuming `git switch`
-  took effect.** It is immediate under a bind mount and asynchronous under a
-  push-based sync.
-- **Assert your preconditions and exit if they fail** — profiler off, `DEBUG`
-  off. A benchmark that silently measures the wrong thing is the whole risk.
-- **Separate the wall-clock pass from the query-capture pass.** Capturing
-  queries forces a debug cursor whose cost grows with statement size.
-- **Warm up, discard, then report min and median** over 10-15 iterations.
+```bash
+ol-benchmark validate benchmarks/<name>.toml
+```
 
 ## Step 4 — Calibrate, and be willing to falsify
 
-Tune the seed until the **independent observables** match production. Independent
-means "not affected by the change under test" — those are legitimate calibration
-targets precisely because they are identical in both arms.
+Tune the seed until the **independent observables** match production.
+Independent means "not affected by the change under test" — those are
+legitimate calibration targets precisely because they are identical in both
+arms.
 
-Build a table and keep it in the final report:
+Record them in the file, so the report cites them automatically:
 
-| observable | source | production | seed |
-| --- | --- | --- | --- |
-| rows per page | response | | |
-| nested collection sizes | response | | |
-| response body size | response | | |
-| row-count floors | trace `IN` lists | | |
-| cost of an *unchanged* query | trace | | |
+```toml
+[[calibration.observable]]
+name = "rows per page"
+source = "sample response"
+production = 100
 
-**A seed parameter that makes an unchanged query wildly slower than production
-is falsified — discard it, however good the story was.** Structural realism
-matters more than sizing: how rows fan out across joins dominates how wide they
-are. See [references/calibration.md](references/calibration.md) for the worked
-example and the common structural mistakes.
+[calibration.floors]
+children = 388          # from the trace's IN-list placeholder count
+```
+
+**A seed parameter that makes an *unchanged* query wildly slower than
+production is falsified — discard it, however good the story was.** Structural
+realism matters more than sizing: how rows fan out across joins dominates how
+wide they are. See [references/calibration.md](references/calibration.md) for
+the worked example and the common structural mistakes.
 
 ## Step 5 — Run it, and check the benchmark before the result
 
-Before quoting any delta:
+```bash
+ol-benchmark run benchmarks/<name>.toml --base-ref <merge-base>
+```
 
-1. **Both arms returned the same response** — byte length and item counts. If
-   not, the comparison is void; find out why.
-2. **Query counts differ only as expected**, confirming each arm ran the code
-   you think it did.
-3. **The delta exceeds the run-to-run spread.** If min and median overlap
-   between arms, report *inconclusive* rather than a number.
-4. **Re-run at a second seed shape.** A delta stable across shapes is the
-   single strongest evidence you can produce locally.
-5. **Each arm reports the ref it actually ran**, and the two differ.
+The working tree must be clean — the runner refuses otherwise, because
+otherwise the two arms are not the two refs you think.
+
+Read `.bench/out/<name>/comparison.json`. Before quoting any delta:
+
+1. **`verdict` is not `void`.** Void means the arms returned different
+   responses; `equivalence_mismatches` says which fields. They did not do the
+   same work. Find out why before anything else.
+2. **`verdict` is not `inconclusive`.** That is a real answer — report it as
+   one. Do not re-run until you get a number you like.
+3. **`classifier_collisions` is empty.** A non-empty entry means a
+   `[[trace.classify]]` label is mixing two different queries, so its median is
+   meaningless. Tighten the pattern.
+4. **`per_query` shows the saving where the change aims**, and nothing else
+   regressed to pay for it.
+5. **`refs.base` and `refs.branch` differ.** Identical refs means the switch
+   never reached the code being measured.
+6. **Re-run at a second shape** (`--knob rows=200`). A delta stable across
+   shapes is the single strongest evidence you can produce locally.
+
+[references/results.md](references/results.md) is the field-by-field guide,
+including how to read the SQL-versus-gap split.
 
 ## Step 6 — Report a floor, not an estimate
 
 Local Postgres has no network round-trip, a warm cache and no contention.
 Production has all three, and they penalise larger result sets
-disproportionately. Say so, every time.
+disproportionately. Say so, every time — `comparison.json` carries the sentence
+in `caveat`; do not drop it.
 
 State in the write-up:
+
 - The seed shape, next to the numbers.
-- The execution environment, and anything it contributes to the spread —
-  a benchmark sharing a pod with a live server is noisier than one in an
-  isolated container, and a shared database has contention a dedicated one
-  does not.
+- The execution environment, and anything it contributes to the spread — a
+  benchmark sharing a pod with a live server is noisier than one in an isolated
+  container, and a shared database has contention a dedicated one does not.
+  See [references/environments.md](references/environments.md).
 - Which inputs were **guesses**, and that they are identical across arms (so
   they move the baseline, not the delta).
 - Any production signal the harness **failed** to reproduce, and what you ruled
@@ -168,36 +202,49 @@ State in the write-up:
 
 Do not quote a single headline number without the shape it was measured on.
 
-## Pitfalls
+## What the package already refuses
+
+You do not need to guard against these; it will not run. Knowing *why* still
+matters, because the reasons shape how you read a result:
+
+| Refused | Why it would ruin the number |
+| --- | --- |
+| N+1 profiler middleware (`zeal`, `nplusone`, `silk`, debug toolbar) | Hooks every ORM fetch, so the cost scales with objects hydrated — the exact variable a prefetch change moves. Inflates whichever arm loads more rows and **overstates the win** |
+| A trace function installed (coverage, a profiler, a debugger) | Line tracing dwarfs the effect |
+| Running under pytest | Test settings commonly enable both of the above |
+| A dirty working tree | The arms would not be two refs |
+| A scratch database not named `bench*` | The step drops it, and a shared cluster has real databases next to it |
+| A `benchmark.local.toml` that is tracked by git | It holds one developer's cluster and credentials |
+
+It also forces `DEBUG = False` (and records that it did), seeds once across both
+arms, keeps the query-capture pass separate from the timed loop, and verifies
+each arm is running the ref you think before measuring it.
+
+## Pitfalls it cannot catch
+
+These are judgment, which is why they are the skill's job:
 
 | Pitfall | Why it ruins the result |
 | --- | --- |
-| Benchmarking under pytest | N+1 profilers (e.g. django-zeal) hook every ORM fetch; that cost scales with objects hydrated, inflating whichever arm loads more and **overstating the win** |
-| Coverage left on | Line/branch tracing dwarfs the effect |
-| `DEBUG=True` | Django records every query; cost grows with statement size |
-| Reseeding between arms | Different rows, so it is not an A/B |
-| One traced request | Per-query gaps are far too noisy; take a median of 5-7 |
-| Quoting traced totals as the result | Instrumentation is not free; the trace is for attribution, the uninstrumented run is for the number |
-| Factory defaults as "realistic" | Blank rich-text fields, one related row where production has dozens |
 | Tuning the seed against the query you changed | Circular. Calibrate only on unchanged observables |
+| Factory defaults as "realistic" | Blank rich-text fields, one related row where production has dozens |
+| Every row under one tenant | Makes the filter match everything and turns an unchanged query pathological |
+| Quoting a traced total as the result | Instrumentation is not free. The trace is for attribution; the uninstrumented pass is for the number |
 | Extrapolating local ms to production ms | Different hardware, cache state and network. Report a floor |
-| Measuring inside a pod running an auto-reloader | The reloader watches the source tree, so switching refs — or writing harness output there — re-imports the app while you are timing it |
-| Letting the destructive step inherit the ambient cluster context | A developer's current `kubectl` context is routinely a deployed environment; this harness runs `DROP DATABASE` |
+| Quoting a delta from one seed shape | A result that does not hold at a second shape is a result about your seed |
 
 ## References
 
 | Read this | For |
 | --- | --- |
-| [evidence.md](references/evidence.md) | The batched question to ask, reading an OTel JSON export, extracting shape from sample responses, what no artifact can tell you |
-| [harness.md](references/harness.md) | Why `manage.py shell` over pytest, the throwaway-DB and ref-switching mechanics, measurement method, the env-var contract |
-| [environments.md](references/environments.md) | The backend contract, `docker compose` vs local-dev k8s, why a ref switch needs waiting for, fidelity differences to disclose, the `DROP DATABASE` guards |
+| [evidence.md](references/evidence.md) | The batched question, reading an OTel JSON export, extracting shape from sample responses, what no artifact can tell you |
+| [configuring.md](references/configuring.md) | The three config layers, seed step kinds, the `$token` vocabulary, targets, auth, query classifiers |
 | [calibration.md](references/calibration.md) | The observables table, structural vs sizing realism, a worked falsification, auditing factory defaults |
-| [templates/](references/templates/) | `seed.py`, `bench.py`, `trace.py`, `run.sh` |
-| [backends/](references/backends/) | `compose.sh`, `k8s-tilt.sh` |
+| [results.md](references/results.md) | Every output file, the verdicts, SQL versus gap, what a classifier collision means |
+| [environments.md](references/environments.md) | Choosing a backend, the local-dev cluster's namespaces and DSN, fidelity differences to disclose |
 
 ## Resources
 
+- [`mitol-django-benchmark`](https://github.com/mitodl/ol-django/tree/main/src/benchmark) — the package, its README and its own `AGENTS.md`
 - [Write Performant APIs](https://engineering.ol.mit.edu/handbook/how-to/write-performant-apis/)
 - [OpenTelemetry Python: in-memory span exporter](https://opentelemetry-python.readthedocs.io/en/latest/sdk/trace.export.html)
-- [Django: `CaptureQueriesContext`](https://docs.djangoproject.com/en/stable/topics/testing/tools/#django.test.utils.CaptureQueriesContext)
-- [Django: `DATABASES`](https://docs.djangoproject.com/en/stable/ref/settings/#databases)

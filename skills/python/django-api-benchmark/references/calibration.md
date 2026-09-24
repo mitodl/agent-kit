@@ -23,16 +23,30 @@ Those are legitimate calibration targets because they are identical in both
 arms. Tuning the seed until the query you *changed* matches production is
 circular and will manufacture whatever result you want.
 
-Build this table and keep it in the final report:
+Declare them in the benchmark file rather than keeping the table by hand —
+the report then carries them next to the numbers automatically:
 
-| observable | source | production | seed |
-| --- | --- | --- | --- |
-| rows per page | response | | |
-| nested collection sizes per row | response | | |
-| response body size | response | | |
-| row-count floor behind the page | trace `IN` lists | | |
-| cost of an unchanged query | trace | | |
-| per-row counts (enrolments, products, …) | response | | |
+```toml
+[[calibration.observable]]
+name = "rows per page"
+source = "sample response"
+production = 100
+
+[[calibration.observable]]
+name = "children behind one page"
+source = "trace IN-list"
+production = 388
+seed_step = "children"        # fills the seed column from the actual row count
+
+[[calibration.observable]]
+name = "cost of the unchanged tenant lookup"
+source = "production trace"
+production = "65 ms"
+```
+
+Cover, at minimum: rows per page, nested collection sizes per row, response
+body size, the row-count floor behind the page, and the cost of at least one
+query the change does not touch.
 
 Same order of magnitude on every row is the bar. Exact matches are not
 required and chasing them tips into fitting.
@@ -86,8 +100,18 @@ Sweep the dimensions you had to guess. Two outcomes, both useful:
   production (with real payloads and real latency) sees *more* than local.
 - **The delta is flat** → the cost is per-object, and local is a fair estimate.
 
-Run the final A/B on at least two different seed shapes. A delta that holds
-across shapes is the strongest evidence a local benchmark can produce:
+Every shape dimension is a knob, so a sweep needs no edit:
+
+```bash
+ol-benchmark run benchmarks/<name>.toml --base-ref main
+ol-benchmark run benchmarks/<name>.toml --base-ref main --knob blob_bytes=8192
+ol-benchmark run benchmarks/<name>.toml --base-ref main --knob rows=200 --knob nested_per_row=25
+```
+
+Each run echoes its shape into every output file, so the runs cannot be
+confused afterwards. Run the final A/B on at least two different seed shapes.
+A delta that holds across shapes is the strongest evidence a local benchmark
+can produce:
 
 | seed | ref A | ref B | delta |
 | --- | --- | --- | --- |
@@ -96,6 +120,15 @@ across shapes is the strongest evidence a local benchmark can produce:
 | production-calibrated | 478 ms | 352 ms | −26.4% |
 
 Stability like that is worth more than any single number's precision.
+
+## Falsification is cheap here
+
+An unchanged query that the seed makes pathological shows up directly in
+`comparison.json`'s `per_query` table, in both arms, at roughly the same
+value. Compare that number against the trace's timing for the same query
+before you trust anything else in the run. It is the fastest available check
+that the seed is the right shape, and it costs nothing — you already have both
+numbers.
 
 ## When to stop
 
