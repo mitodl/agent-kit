@@ -121,6 +121,32 @@ can produce:
 
 Stability like that is worth more than any single number's precision.
 
+## Let the harness do the falsifying
+
+Everything below this line was hand-work before the package could read a
+production trace. It still describes the reasoning, and you still need it when
+there is no trace to be had — but with a baseline configured the central check
+is mechanical:
+
+```bash
+ol-benchmark baseline benchmarks/<name>.toml traces/*.json
+```
+
+Mark the query the change targets with `targeted = true`, and every *other*
+query is compared against production automatically on each run. A seed
+parameter that makes an unchanged query wildly slower than production then
+shows up in `calibration_drift` with its ratio, rather than depending on you
+noticing.
+
+Two things do not become mechanical:
+
+- **Choosing what to calibrate on.** The harness cannot know which queries
+  your change is supposed to move; `targeted` is your assertion, and marking
+  the wrong one silences exactly the check that would have caught you.
+- **Deciding the seed is wrong.** A drift warning is evidence, not a verdict.
+  Acting on it — reverting the parameter, restructuring the fan-out — is the
+  judgement the worked example below is about.
+
 ## Falsification is cheap here
 
 An unchanged query that the seed makes pathological shows up directly in
