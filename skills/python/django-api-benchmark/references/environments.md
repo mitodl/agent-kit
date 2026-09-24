@@ -82,6 +82,14 @@ admin_url = "postgres://app:localdev@local-pg-rw.local-infra.svc.cluster.local:5
 commands carry no `--context` of their own, and this harness runs `DROP
 DATABASE`. There is no inherit-the-ambient-context path.
 
+A context whose name contains `ci`, `qa`, `prod` or `applications` is
+**refused outright**, before any `kubectl` command runs — being required to
+name the cluster does not help if the name you type is `applications-qa`. Set
+`context_denylist` to override the markers if one of them is a false positive
+on a cluster you really do benchmark against; that is a deliberate act in your
+own uncommitted file, and the benchmark layer an agent edits cannot declare
+`[backend]` at all.
+
 Postgres is one shared CloudNativePG cluster in `local-infra` serving every
 app, and it is **not published to the host** — no port mapping, no standing
 port-forward. That is why `admin_url` is a cluster-internal DSN and why
@@ -146,8 +154,10 @@ database:
   landing on `mitlearn`.
 - **`admin_url` may not point at the scratch database itself**, which is
   checked at load time.
-- **The `k8s` backend never inherits the ambient kubectl context.** It is
-  required configuration and is passed explicitly on every command.
+- **The `k8s` backend never inherits the ambient kubectl context**, and
+  refuses one whose name marks it as a deployed cluster. The context is
+  required configuration, is passed explicitly on every command, and is
+  checked before the first `kubectl` call.
 
 `config.resolved.json` records the backend and the redacted DSNs alongside the
 numbers, so what was measured against is on the record.
