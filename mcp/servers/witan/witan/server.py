@@ -5013,11 +5013,17 @@ async def workflow_project_advance(
         current = before[0] if before else {"slug": slug, "phase": prev_phase}
         return {**current, "advisory": advisory, "advanced": False}
 
+    current_github_pr = before[0].get("github_pr") if before else None
     await _offload(
         client.change,
         "mutations.gq",
         "update_workflow_project_phase",
-        {"slug": slug, "phase": phase, "github_pr": github_pr, "updated_at": now},
+        {
+            "slug": slug,
+            "phase": phase,
+            "github_pr": github_pr if github_pr is not None else current_github_pr,
+            "updated_at": now,
+        },
     )
     rows = await _offload(
         client.read, "read.gq", "get_workflow_project", {"slug": slug}
@@ -5074,6 +5080,12 @@ async def workflow_project_complete(
             title="Outcome narrative",
         )
 
+    project_rows = await _offload(
+        client.read, "read.gq", "get_workflow_project", {"slug": slug}
+    )
+    project = project_rows[0] if project_rows else {}
+    current_github_pr = project.get("github_pr")
+
     await _offload(
         client.change,
         "mutations.gq",
@@ -5081,16 +5093,11 @@ async def workflow_project_complete(
         {
             "slug": slug,
             "status": "completed",
-            "github_pr": github_pr,
+            "github_pr": github_pr if github_pr is not None else current_github_pr,
             "completed_at": now,
             "updated_at": now,
         },
     )
-
-    project_rows = await _offload(
-        client.read, "read.gq", "get_workflow_project", {"slug": slug}
-    )
-    project = project_rows[0] if project_rows else {}
 
     sessions = await _offload(_project_sessions, slug)
 
