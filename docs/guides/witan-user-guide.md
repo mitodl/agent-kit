@@ -44,6 +44,10 @@ taken); the import path, console command, and every tool/CLI name are still
 - **Code-branch tracking** — links a git branch to the task/project it
   carries, wired in automatically by `task_claim` and
   `workflow_session_start`. See [Code branch tracking](#code-branch-tracking).
+- **Web UI** — `witan ui` (or `/ui/` on a deployment) shows the board,
+  project rollups, dependency waves, a retrospective timeline and the
+  contradictions inbox for a person to read. See
+  [The witan web UI](witan-ui.md).
 - **Write-path secret/PII scanning** — every memory/task/project/session
   write is scanned for secrets and PII before it's persisted, with
   block/redact/warn enforcement and a plugin mechanism. See
@@ -251,7 +255,7 @@ Note that pointing `WITAN_MEMORY_URI` straight at an omnigraph-server is a
 *different*, lower-level mode: it addresses the data tier directly with a
 shared bearer token and no per-user identity. That is how a self-hosted or
 in-cluster maintenance process connects, not how a person does. See
-[`docs/internals/agent-memory.md` § Operating Modes](https://github.com/mitodl/agent-kit/blob/main/docs/internals/agent-memory.md#6-operating-modes)
+[`docs/internals/agent-memory.md` § Operating Modes](../internals/agent-memory.md#6-operating-modes)
 for the graph schema and server-deployment mechanics.
 
 `config.toml` can also define named `[targets.*]` sections that route

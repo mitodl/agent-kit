@@ -50,6 +50,7 @@ nav = [
   { "Guides" = [
     { "Overview" = "guides/index.md" },
     { "witan user guide" = "guides/witan-user-guide.md" },
+    { "The witan web UI" = "guides/witan-ui.md" },
     { "witan-code user guide" = "guides/witan-code-user-guide.md" },
     { "Branch indexing" = "guides/branch-indexing.md" },
     { "Write-path scanning" = "guides/write-path-scanning.md" },
