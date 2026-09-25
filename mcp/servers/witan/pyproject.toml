@@ -27,7 +27,11 @@ dependencies = [
   # resolves agent-config-kit by path, so no test run here can catch it — but
   # note there is NO `check-core-floor` equivalent for this dependency, so this
   # line is the only thing standing in for one.
-  "agent-config-kit>=0.7,<1",
+  # >=0.10: `witan setup`'s install report promises a warning when Pi lacks
+  # pi-mcp-adapter, which comes from `InstallResult.prerequisites`, added in
+  # 0.10.0. witan_core's `report_install` reads it with getattr, so an older
+  # resolution does not fail — it just silently drops the warning.
+  "agent-config-kit>=0.10,<1",
   # >=0.13: witan/graph.py imports witan_core.omnigraph.StoreUnavailable at
   # module scope, which 0.12 does not export. A looser floor lets an external
   # install resolve a witan-core the server cannot even import — the failure

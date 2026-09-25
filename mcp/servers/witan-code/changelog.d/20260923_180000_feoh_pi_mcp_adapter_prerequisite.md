@@ -6,3 +6,8 @@
   it. The warning comes from agent-config-kit's preflight via
   `witan_core.cli.report_install`. The README and the `setup` help document
   the prerequisite (`pi install npm:pi-mcp-adapter`).
+
+- The `agent-config-kit` floor is raised from `>=0.7` to `>=0.10`, the first
+  release whose `InstallResult` carries the `prerequisites` that warning is
+  built from; on an older agent-config-kit the warning silently never
+  appeared.
