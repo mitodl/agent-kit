@@ -24,6 +24,7 @@ TaskStatus = Literal["open", "in_progress", "blocked", "closed"]
 TaskPriority = Literal["p0", "p1", "p2", "p3"]
 TaskLinkKind = Literal["blocks", "parent", "discovered_from", "addresses"]
 WorkflowPhase = Literal["discovery", "spec", "implementation", "delivery"]
+ProjectStatusFilter = Literal["active", "completed", "abandoned", "all"]
 
 app = make_app(
     name="witan",
@@ -249,6 +250,10 @@ def render_table(
     return because an early return there runs before the format is ever
     consulted, which is how ``--output-format json`` printed a prose sentence
     on an empty list and broke every consumer parsing it.
+
+    ``title`` is plain text, not markup: it is escaped here, in ``txt`` mode
+    only, so structured output carries it as written. A caller that escaped it
+    itself put the backslashes into every JSON/TOML/YAML title.
     """
     rows = [{k: ("" if v is None else v) for k, v in r.items()} for r in rows]
 
@@ -265,7 +270,7 @@ def render_table(
     dim_if_present = dim_if_present or set()
     placeholders = placeholders or {}
 
-    table = Table(title=title, header_style="bold")
+    table = Table(title=esc(title), header_style="bold")
     for col in columns:
         if col in no_wrap:
             table.add_column(col, no_wrap=True)
