@@ -121,9 +121,19 @@ def _render_table(
     title: str,
     columns: list[str],
     rows: list[dict[str, object]],
+    empty: str,
     no_wrap: set[str] | None = None,
 ) -> None:
-    """Render ``rows`` as a rich table, or dump them per ``--output-format``."""
+    """Render ``rows`` as a rich table, or dump them per ``--output-format``.
+
+    ``empty`` is the Rich markup ``txt`` mode prints instead of a table when
+    there are no rows. It is a parameter rather than each caller's early
+    return because an early return runs before the format is consulted, so
+    ``--output-format json`` printed a prose sentence on an empty result.
+
+    ``title`` and the cell values are plain text, escaped here for Rich in
+    ``txt`` mode only, so structured output carries them as written.
+    """
     rows = [{k: ("" if v is None else v) for k, v in r.items()} for r in rows]
 
     fmt = get_output_format()
@@ -132,9 +142,14 @@ def _render_table(
         return
 
     from rich.console import Console
+    from rich.markup import escape
     from rich.table import Table
 
-    table = Table(title=title, header_style="bold")
+    if not rows:
+        Console().print(empty)
+        return
+
+    table = Table(title=escape(title), header_style="bold")
     no_wrap = no_wrap or set()
     for col in columns:
         if col in no_wrap:
@@ -142,7 +157,7 @@ def _render_table(
         else:
             table.add_column(col, overflow="fold", no_wrap=False)
     for row in rows:
-        table.add_row(*(str(row.get(col, "")) for col in columns))
+        table.add_row(*(escape(str(row.get(col, ""))) for col in columns))
     Console().print(table)
 
 
@@ -460,6 +475,7 @@ def symbols(
         Filter to one symbol scheme (http/env/pkg/svc).
     """
     from rich.console import Console
+    from rich.markup import escape
 
     from . import repo as repo_module
     from . import store as store_module
@@ -479,10 +495,6 @@ def symbols(
         return
 
     rows = _fn(_srv().code_repo_symbols)(repo=repo, role=role, scheme=scheme)
-    if not rows:
-        console.print(f"[dim]No symbol table rows for {repo}.[/dim]")
-        return
-
     table_rows: list[dict[str, object]] = []
     for r in rows:
         conf = r.get("confidence")
@@ -505,6 +517,7 @@ def symbols(
         title=f"Symbol table — {repo}",
         columns=["role", "symbol", "kind", "refs", "conf", "where"],
         rows=table_rows,
+        empty=f"[dim]No symbol table rows for {escape(repo)}.[/dim]",
     )
 
 
@@ -525,15 +538,8 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
         gaps in indexing coverage (a provider isn't indexed yet, or none
         exists in this SOA).
     """
-    from rich.console import Console
-
-    console = Console()
-
     if unresolved:
         unresolved_rows = _fn(_srv().code_unresolved_symbols)(repo=repo)
-        if not unresolved_rows:
-            console.print("[dim]No unresolved external symbols.[/dim]")
-            return
         table_rows: list[dict[str, object]] = [
             {
                 "repo": r["repo"] or "",
@@ -549,13 +555,11 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
             title="Unresolved external symbols",
             columns=["repo", "symbol", "kind", "refs"],
             rows=table_rows,
+            empty="[dim]No unresolved external symbols.[/dim]",
         )
         return
 
     edges = _fn(_srv().code_precise_edges)(repo=repo)
-    if not edges:
-        console.print("[dim]No precise cross-repo edges.[/dim]")
-        return
     table_rows = [
         {
             "consumer": e["consumer_repo"] or "",
@@ -578,6 +582,7 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
         title="Precise cross-repo edges (Stage 2)",
         columns=["consumer", "provider", "kind", "matches", "preferred", "ambiguous"],
         rows=table_rows,
+        empty="[dim]No precise cross-repo edges.[/dim]",
     )
 
 
@@ -1068,8 +1073,30 @@ def branches(*, branch: str | None = None, prune: bool = False) -> None:
         raise SystemExit(1)
 
     rows = _fn(_srv().code_indexed_branches)(branch=branch)
+    fmt = get_output_format()
+    if fmt != "txt":
+        dump_structured(
+            [
+                {
+                    "repo": row["repo"],
+                    "views": ""
+                    if row["views"] is None
+                    else ",".join(["main", *(v["view"] for v in row["views"])]),
+                    "error": "store could not be listed"
+                    if row["views"] is None
+                    else "",
+                }
+                for row in rows
+            ],
+            "Indexed branches",
+            fmt,
+        )
+    # Under a structured format stdout holds the document above; prune's
+    # progress lines go to stderr.
+    out = sys.stdout if fmt == "txt" else sys.stderr
     if not rows:
-        print("No indexed repositories.")
+        if fmt == "txt":
+            print("No indexed repositories.")
         return
 
     current_slug = repo_module.detect()
@@ -1078,10 +1105,12 @@ def branches(*, branch: str | None = None, prune: bool = False) -> None:
     for row in rows:
         repo_uri, found = row["repo"], row["views"]
         if found is None:
-            print(f"{repo_uri}: <error: store could not be listed>")
+            if fmt == "txt":
+                print(f"{repo_uri}: <error: store could not be listed>")
             continue
         names = [v["view"] for v in found]
-        print(f"{repo_uri}: main" + ("," + ",".join(names) if names else ""))
+        if fmt == "txt":
+            print(f"{repo_uri}: main" + ("," + ",".join(names) if names else ""))
 
         if not (prune and repo_uri == current_slug and git_branches is not None):
             continue
@@ -1096,7 +1125,8 @@ def branches(*, branch: str | None = None, prune: bool = False) -> None:
         if client.is_remote:
             print(
                 f"{repo_uri}: refusing to prune a shared graph — its branches "
-                "belong to every user of it, not to this checkout's git refs."
+                "belong to every user of it, not to this checkout's git refs.",
+                file=out,
             )
             continue
         # Match on the branch component, not the view name: a view carries its
@@ -1105,7 +1135,7 @@ def branches(*, branch: str | None = None, prune: bool = False) -> None:
             gone = view["branch"] not in git_branches
             if view["branch"] == repo_module.DETACHED_BRANCH or gone:
                 client.delete_branch(view["view"])
-                print(f"  pruned {view['view']}")
+                print(f"  pruned {view['view']}", file=out)
 
 
 def _branch_client(repo_uri: str):
@@ -1126,10 +1156,6 @@ def repos() -> None:
     from rich.console import Console
 
     rows = _fn(_srv().code_indexed_repos)()
-    if not rows:
-        Console().print("[dim]No indexed repositories.[/dim]")
-        return
-
     table_rows: list[dict[str, object]] = [
         {
             "repo": r["repo"],
@@ -1153,10 +1179,12 @@ def repos() -> None:
         title="Indexed repositories",
         columns=["repo", "files", "size", "last indexed"],
         rows=table_rows,
+        empty="[dim]No indexed repositories.[/dim]",
         no_wrap={"files", "size", "last indexed"},
     )
     if any(r.get("unreadable") for r in rows):
-        Console().print(
+        # stderr under a structured format: stdout holds one parseable document.
+        Console(stderr=get_output_format() != "txt").print(
             "[red]Some stores could not be read — `witan-code doctor` for "
             "why.[/red] Their `code_*` tools do not return empty, they fail."
         )

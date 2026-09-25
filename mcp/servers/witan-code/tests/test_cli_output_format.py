@@ -27,6 +27,7 @@ def test_render_table_json_dumps_normalized_rows(capsys):
         title="Indexed repositories",
         columns=["repo", "files"],
         rows=[{"repo": "https://github.com/test/repo", "files": None}],
+        empty="",
     )
 
     payload = json.loads(capsys.readouterr().out)
@@ -45,6 +46,7 @@ def test_render_table_toml_dumps_normalized_rows(capsys):
         title="Symbol table — https://github.com/test/repo",
         columns=["role", "refs"],
         rows=[{"role": "exported", "refs": 2}],
+        empty="",
     )
 
     payload = tomllib.loads(capsys.readouterr().out)
@@ -83,6 +85,74 @@ def test_repos_honors_structured_output(monkeypatch, capsys):
             }
         ],
     }
+
+
+# Each listing had its own early return that printed prose before the format
+# was consulted, so each gets its own case rather than one standing in for all.
+EMPTY_LISTINGS = {
+    "symbols": (
+        "code_repo_symbols",
+        lambda: cli_module.symbols(repo="https://github.com/test/repo"),
+    ),
+    "stitch": ("code_precise_edges", lambda: cli_module.stitch()),
+    "stitch-unresolved": (
+        "code_unresolved_symbols",
+        lambda: cli_module.stitch(unresolved=True),
+    ),
+    "repos": ("code_indexed_repos", lambda: cli_module.repos()),
+    "branches": ("code_indexed_branches", lambda: cli_module.branches()),
+}
+
+
+@pytest.mark.parametrize(
+    ("tool", "call"), EMPTY_LISTINGS.values(), ids=EMPTY_LISTINGS.keys()
+)
+@pytest.mark.parametrize("fmt", ["json", "yaml", "toml"])
+def test_an_empty_listing_is_empty_rows_not_prose(monkeypatch, capsys, tool, call, fmt):
+    import tomllib
+
+    import yaml
+
+    monkeypatch.setattr(
+        cli_module, "_srv", lambda: SimpleNamespace(**{tool: lambda **_: []})
+    )
+    output_module.set_output_format(fmt)
+
+    call()
+
+    out = capsys.readouterr().out
+    payload = {
+        "json": json.loads,
+        "yaml": yaml.safe_load,
+        "toml": tomllib.loads,
+    }[fmt](out)
+    assert payload["rows"] == []
+
+
+@pytest.mark.parametrize(
+    ("tool", "call"), EMPTY_LISTINGS.values(), ids=EMPTY_LISTINGS.keys()
+)
+def test_an_empty_listing_still_says_so_in_txt(monkeypatch, capsys, tool, call):
+    monkeypatch.setattr(
+        cli_module, "_srv", lambda: SimpleNamespace(**{tool: lambda **_: []})
+    )
+
+    call()
+
+    assert "No " in capsys.readouterr().out
+
+
+def test_a_bracketed_title_is_not_escaped_in_structured_output(capsys):
+    output_module.set_output_format("json")
+
+    cli_module._render_table(
+        title="Symbol table — [local]",
+        columns=["symbol"],
+        rows=[{"symbol": "env:DATABASE_URL"}],
+        empty="",
+    )
+
+    assert json.loads(capsys.readouterr().out)["title"] == "Symbol table — [local]"
 
 
 def test_launcher_sets_output_format_and_forwards_tokens(monkeypatch):
