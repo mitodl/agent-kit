@@ -1,6 +1,6 @@
 [project]
 name = "witan-council"
-version = "0.37.0"
+version = "0.38.0"
 description = "witan — agent memory, planning, and collaboration graph (work-coordination layer + umbrella CLI)"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -203,7 +203,12 @@ dependencies = [
   # parallel agents lose to each other. And `MissingReference` and
   # `WriteBlocked` set `log_safe_message`, which only 0.39 reads: on 0.38 their
   # text never reaches the `mcp.tool_call` log line.
-  "witan-core[cli,remote,observability,sentry]>=0.39,<1",
+  #
+  # ★ >=0.40 IS A BEHAVIOUR FLOOR too: `witan setup --agent pi` promises a
+  # warning when Pi lacks pi-mcp-adapter, and `witan_core.cli.report_install`
+  # only prints `InstallResult.prerequisites` from 0.40.0. It reads the field
+  # with getattr, so 0.39 imports and runs — and silently drops the warning.
+  "witan-core[cli,remote,observability,sentry]>=0.40,<1",
   "pyyaml>=6,<7",
   "tomli-w>=1,<2",
   # Direct import in witan/remote/oidc.py for the CLI's OIDC device-code
@@ -270,7 +275,7 @@ packages = ["witan"]
 "schema" = "schema"
 
 [tool.bumpversion]
-current_version = "0.37.0"
+current_version = "0.38.0"
 allow_dirty = true
 
 [[tool.bumpversion.files]]

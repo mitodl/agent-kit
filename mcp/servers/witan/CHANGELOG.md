@@ -8,6 +8,90 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.38.0] - 2026-09-25
+
+### Added
+
+- **A guide to the web UI**, `docs/web-ui.md` (mirrored to the docs site as
+  "The witan web UI"), with screenshots of each tab taken from the Witan UI
+  project's own tasks, sessions and memories.
+
+### Changed
+
+- **The Pi workflow extension's context timeout is a named constant pinned to
+  the Claude hook's.** `workflow-context.ts` already waited 45s, like the
+  `witan inject-context` hook `witan setup` installs; both now read one named
+  value (`INJECT_CONTEXT_TIMEOUT_SECONDS` in `witan.setup`,
+  `INJECT_CONTEXT_TIMEOUT_MS` in the extension), and a test fails if they, or
+  the `configs/pi/extensions` mirror, drift.
+
+- `witan setup --agent pi` (and `--agent all` when Pi is detected) now warns
+  when the pi-mcp-adapter Pi package is not declared in Pi's settings, since
+  Pi ignores the witan MCP entry in `~/.pi/agent/mcp.json` without it. The
+  warning comes from agent-config-kit's preflight via
+  `witan_core.cli.report_install`. The README and the `setup` help document
+  the prerequisite (`pi install npm:pi-mcp-adapter`).
+
+- The `agent-config-kit` floor is raised from `>=0.7` to `>=0.10`, the first
+  release whose `InstallResult` carries the `prerequisites` that warning is
+  built from; on an older agent-config-kit the warning silently never
+  appeared.
+
+- The `witan-core` floor is raised from `>=0.39` to `>=0.40`, the first
+  release whose `report_install` prints those `prerequisites`; on 0.39 the
+  server still runs but the warning is silently dropped.
+
+- **The web UI has a typographic and colour system.** Alegreya Sans for the
+  interface and Alegreya for the names of things (projects, tasks, memories),
+  self-hosted because the page's CSP is `default-src 'self'`, with tabular
+  figures wherever times and counts line up. Three state colours: blue for held
+  work, yellow for a lapsed lease, red for a contradiction or cycle, each also
+  carried by something other than hue. Board cards are edged by status, the
+  detail panel's read state sits under its title rather than squeezed beside
+  it, dense label columns drop their underlines until hovered, the Graph and
+  Bridge canvases draw labels in the page's face, and the top bar no longer
+  pushes the page sideways on a phone. The MCP Apps widgets share the
+  stylesheet but not the fonts, which would have added about 190 KB of base64
+  to each single-file widget, so they fall back to the system face.
+
+### Fixed
+
+- **Pi sessions now auto-close their WorkflowSession on shutdown.** The Pi
+  workflow extension's `session_shutdown` handler ran `witan
+  session-checkpoint`, but the checkpoint looked the parked session handle up
+  by `$CLAUDE_SESSION_ID` alone, and the `witan-workflow` skill told Pi to
+  invent a random session id, so under Pi the close never found anything. A
+  new `session_state.current_session_id()` resolves the agent session id as an
+  explicit value, else `$CLAUDE_SESSION_ID`, else `$PI_SESSION_ID`; the
+  checkpoint, `witan session start`, the local-stdio provenance and task-claim
+  holder fallbacks, and the remote proxy's injected `session_id`/`session_slug`
+  all use it. Pi exposes `PI_SESSION_ID` only to its bash tool's commands, so
+  the extension now sets it on the checkpoint child from
+  `ctx.sessionManager.getSessionId()`, dropping any inherited
+  `CLAUDE_SESSION_ID`/`PI_SESSION_ID` from that child only (also when Pi's id
+  is unavailable, so the close no-ops rather than closing an enclosing
+  session's handle), and the `witan-workflow`, `witan-project-tracker` and
+  `witan-task` skills tell Pi agents to pass `$PI_SESSION_ID` as the
+  `session_id`, reading only their own platform's variable rather than a
+  `${CLAUDE_SESSION_ID:-$PI_SESSION_ID}` fallback that would pick an
+  inherited Claude id. Claude Code behaviour is unchanged:
+  `$CLAUDE_SESSION_ID` still wins whenever it is set.
+
+- **`witan-workflow` and `witan-task` no longer require Claude's
+  `AskUserQuestion`.** Both skills told the agent to build an
+  `AskUserQuestion` call and to use its "Other" option for free text, which Pi
+  (and any agent without that tool) cannot do. Each skill now has an "Asking
+  the user" section: use a structured question tool when one is actually
+  available, otherwise ask the same question in a normal message and wait for
+  the reply. Every choice, limit and confirmation gate is kept, and the skills
+  now state outright that nothing is claimed, created or started before the
+  user answers. A test keeps `AskUserQuestion` out of the bundled skills except
+  inside that capability-scoped section.
+
+- `workflow_project_advance` and `workflow_project_complete` no longer blank
+  a project's `github_pr` when called without one — both now fall back to
+  the value already on the project instead of overwriting it with null.
+
 ## [0.37.0] - 2026-09-23
 
 ### Added
