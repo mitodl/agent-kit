@@ -7,6 +7,7 @@
   takes the empty message and prints it in `txt` mode only. `branches` never
   consulted the format at all and now dumps `{repo, views, error}` rows, with
   `--prune`'s progress lines on stderr under a structured format; the `repos`
-  unreadable-store warning moves to stderr there too.
+  unreadable-store warning and `doctor`'s summary and error lines move to
+  stderr there too.
 - **Table titles and cells are escaped for Rich.** A symbol, path or title
   containing `[...]` was read as markup and lost from the rendered table.

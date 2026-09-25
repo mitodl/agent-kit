@@ -328,7 +328,8 @@ def doctor() -> None:
     # cluster's health and then advise a rebuild of stores that are fine.
     from . import server as server_module
 
-    console = Console()
+    # stderr under a structured format: stdout holds the table's document.
+    console = Console(stderr=get_output_format() != "txt")
     report = _fn(server_module.code_store_health)()
     rows = [
         {
@@ -353,6 +354,7 @@ def doctor() -> None:
         title="Code graph health",
         columns=["store", "kind", "status", "files"],
         rows=rows,
+        empty="[dim]No code graphs.[/dim]",
         no_wrap={"kind", "status", "files"},
     )
     if report["ok"]:

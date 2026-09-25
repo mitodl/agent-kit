@@ -142,6 +142,51 @@ def test_an_empty_listing_still_says_so_in_txt(monkeypatch, capsys, tool, call):
     assert "No " in capsys.readouterr().out
 
 
+def _stub_health(monkeypatch, *, ok: bool) -> None:
+    from witan_code import server as server_module
+
+    store = {
+        "store": "/tmp/code/repo.omni",
+        "label": "repo.omni",
+        "kind": "repo",
+        "ok": ok,
+        "files": 3 if ok else None,
+        "error": None if ok else "cannot open [repo.omni]",
+        "stale_schema": False,
+    }
+    report = {"stores": [store], "ok": ok, "stale_schema": []}
+    monkeypatch.setattr(server_module, "code_store_health", lambda: report)
+
+
+def test_doctor_renders_in_txt(monkeypatch, capsys):
+    # doctor reads through the local server module, not _srv(), so it had no
+    # coverage from the listing stubs above, and a missing `empty=` crashed it.
+    _stub_health(monkeypatch, ok=True)
+
+    cli_module.doctor()
+
+    out = capsys.readouterr().out
+    assert "repo.omni" in out
+    assert "Every code graph reads" in out
+
+
+@pytest.mark.parametrize("ok", [True, False])
+def test_doctor_structured_stdout_is_one_document(monkeypatch, capsys, ok):
+    _stub_health(monkeypatch, ok=ok)
+    output_module.set_output_format("json")
+
+    if ok:
+        cli_module.doctor()
+    else:
+        with pytest.raises(SystemExit):
+            cli_module.doctor()
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["rows"][0]["store"] == "repo.omni"
+    if not ok:
+        assert "cannot be read" in captured.err
+
+
 def test_a_bracketed_title_is_not_escaped_in_structured_output(capsys):
     output_module.set_output_format("json")
 
