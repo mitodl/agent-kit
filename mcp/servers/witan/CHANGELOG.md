@@ -37,6 +37,10 @@ a MINOR bump may include breaking changes).
   built from; on an older agent-config-kit the warning silently never
   appeared.
 
+- The `witan-core` floor is raised from `>=0.39` to `>=0.40`, the first
+  release whose `report_install` prints those `prerequisites`; on 0.39 the
+  server still runs but the warning is silently dropped.
+
 - **The web UI has a typographic and colour system.** Alegreya Sans for the
   interface and Alegreya for the names of things (projects, tasks, memories),
   self-hosted because the page's CSP is `default-src 'self'`, with tabular

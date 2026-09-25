@@ -42,6 +42,10 @@ a MINOR bump may include breaking changes).
   built from; on an older agent-config-kit the warning silently never
   appeared.
 
+- The `witan-core` floor is raised from `>=0.39` to `>=0.40`, the first
+  release whose `report_install` prints those `prerequisites`; on 0.39 the
+  server still runs but the warning is silently dropped.
+
 ### Fixed
 
 - **The Pi extension now waits as long for the code-graph status block as

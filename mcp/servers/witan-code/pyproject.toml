@@ -155,7 +155,13 @@ dependencies = [
     # code-graph writes parallel agents lose to each other. And
     # `ClusterGraphMissing` sets `log_safe_message`, which only 0.39 reads: on
     # 0.38 its text never reaches the `mcp.tool_call` log line.
-    "witan-core[cli,remote,observability,sentry]>=0.39,<1",
+    #
+    # ★ >=0.40 IS A BEHAVIOUR FLOOR too: `witan-code setup --agent pi` promises
+    # a warning when Pi lacks pi-mcp-adapter, and
+    # `witan_core.cli.report_install` only prints `InstallResult.prerequisites`
+    # from 0.40.0. It reads the field with getattr, so 0.39 imports and runs —
+    # and silently drops the warning.
+    "witan-core[cli,remote,observability,sentry]>=0.40,<1",
     "fastmcp>=4,<5",
     "cyclopts>=4,<5",
     # [targets.<name>] override models (config.py) — also transitively pulled
