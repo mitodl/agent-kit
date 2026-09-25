@@ -52,8 +52,9 @@ So:
   without a reason you can state.
 - **Pass `session_id`, not `assignee`.** `task_claim(slug=..., session_id=...)`
   — your `$CLAUDE_SESSION_ID` on Claude Code, `$PI_SESSION_ID` on Pi (read
-  either with `echo "${CLAUDE_SESSION_ID:-$PI_SESSION_ID}"`), any stable
-  per-run id elsewhere.
+  your own platform's variable with `echo`, not a fallback chain: an agent
+  launched from the other one can inherit its id), any stable per-run id
+  elsewhere.
   It qualifies the holder as `<you>#<session>` so your own parallel sessions
   are told apart; without it they all claim under one name, the contention
   check cannot separate them, and the second session silently renews the

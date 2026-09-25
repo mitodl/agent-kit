@@ -101,9 +101,12 @@ workflow_session_start(
 )
 ```
 
-For the session id, run `echo "${CLAUDE_SESSION_ID:-$PI_SESSION_ID}"` in your
-shell tool: Claude Code sets `$CLAUDE_SESSION_ID`, Pi sets `$PI_SESSION_ID` for
-commands its `bash` tool runs. Use that value, not a made-up one — it is what
+For the session id, read your own platform's variable in your shell tool:
+`echo $CLAUDE_SESSION_ID` on Claude Code, `echo $PI_SESSION_ID` on Pi (which
+sets it for commands its `bash` tool runs). Don't use a fallback chain like
+`${CLAUDE_SESSION_ID:-$PI_SESSION_ID}` — an agent launched from the other one
+can inherit its id, and the chain would pick that. Use that value, not a
+made-up one — it is what
 the Stop hook (Claude Code) or the workflow extension's shutdown handler (Pi)
 looks the session up by to auto-close it. Only if both are empty (another
 agent), use any stable string unique to this session, and close the session

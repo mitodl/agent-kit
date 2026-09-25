@@ -39,9 +39,12 @@ workflow_session_start(
 )
 ```
 
-Read the id with `echo "${CLAUDE_SESSION_ID:-$PI_SESSION_ID}"` in your shell
-tool rather than inventing one: the Claude Code Stop hook and the Pi workflow
-extension's shutdown handler find the session to auto-close by that same id.
+Read the id in your shell tool rather than inventing one — `echo
+$CLAUDE_SESSION_ID` on Claude Code, `echo $PI_SESSION_ID` on Pi — since the
+Claude Code Stop hook and the Pi workflow extension's shutdown handler find the
+session to auto-close by that same id. Read only your own platform's variable:
+an agent launched from the other one can inherit its id, and a fallback chain
+would pick that instead.
 Only on an agent that sets neither, use any stable per-session string and close
 the session explicitly.
 
