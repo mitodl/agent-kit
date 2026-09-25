@@ -22,7 +22,12 @@ def load_json_object(path: Path) -> dict | None:
     """
     if not path.exists():
         return {}
-    text = path.read_text()
+    return parse_json_object(path.read_text())
+
+
+def parse_json_object(text: str) -> dict | None:
+    """``load_json_object``'s parse step, for callers that read the text
+    themselves (e.g. with a different decoding policy)."""
     try:
         data = json.loads(text)
     except json.JSONDecodeError:

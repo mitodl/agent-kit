@@ -547,3 +547,33 @@ def test_write_applied_state_leaves_no_tmp_file_behind_after_success(tmp_path):
 
     assert path.exists()
     assert not path.with_name(path.name + ".tmp").exists()
+
+
+def test_apply_with_prune_project_scope_pi_removes_from_dot_pi_mcp_json(
+    tmp_path, monkeypatch
+):
+    """Project-scoped Pi reconciliation must read and prune the same file
+    apply writes (``.pi/mcp.json``), leaving unmanaged entries alone."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    apply("pi", _bundle(), scope=Scope.PROJECT)
+    mcp_json = tmp_path / ".pi" / "mcp.json"
+    cfg = json.loads(mcp_json.read_text())
+    cfg["mcpServers"]["untouched"] = {"command": "foo"}
+    mcp_json.write_text(json.dumps(cfg))
+
+    result, current_state = apply_with_prune(
+        "pi",
+        _bundle(mcp_servers={}),
+        PlatformState(mcp_servers=["witan"]),
+        scope=Scope.PROJECT,
+    )
+
+    cfg = json.loads(mcp_json.read_text())
+    assert cfg["mcpServers"] == {"untouched": {"command": "foo"}}
+    assert result.removed == ["witan"]
+    [(path, diff)] = result.diffs
+    assert path == Path(".pi") / "mcp.json"
+    assert '-    "witan"' in diff
+    assert current_state.mcp_servers == []
+    assert not (tmp_path / ".pi" / "settings.json").exists()

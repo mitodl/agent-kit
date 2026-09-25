@@ -5,6 +5,7 @@ Schemas per spec D6. Catches adapter/schema drift.
 """
 
 import pytest
+from pydantic import ValidationError
 
 from agent_config_kit.adapters import claude, copilot, opencode, pi
 from agent_config_kit.adapters._wire.claude_settings import HookMatcher
@@ -194,3 +195,64 @@ def test_claude_serialized_remote_entry_with_oauth_is_passthrough():
         "url": "https://example.com/mcp",
         "oauth": {"clientId": "example-cli", "callbackPort": 8080},
     }
+
+
+def test_pi_serialized_stdio_entry_with_cwd_is_schema_valid():
+    server = StdioServer(command="uvx", args=["witan", "serve"], cwd="~/src/witan")
+    entry = pi.serialize_mcp(server)
+
+    PiMcpServer.model_validate(entry)
+    assert entry == {
+        "command": "uvx",
+        "args": ["witan", "serve"],
+        "cwd": "~/src/witan",
+    }
+
+
+def test_pi_serialized_remote_entry_with_headers_is_schema_valid():
+    headers = {"Authorization": "Bearer ${API_TOKEN}", "X-Team": "mitodl"}
+    remote = RemoteServer(url="https://example.com/mcp", headers=headers)
+    entry = pi.serialize_mcp(remote)
+
+    PiMcpServer.model_validate(entry)
+    assert entry == {"url": "https://example.com/mcp", "headers": headers}
+
+
+def test_pi_serialized_entries_omit_empty_and_default_fields():
+    # Defaults (cwd=None, env={}, args=[], headers={}) must not surface as
+    # null/empty keys: pi-mcp-adapter treats configured headers as a signal
+    # to skip its OAuth auto-detection, so an empty object is not harmless.
+    stdio = pi.serialize_mcp(StdioServer(command="uvx"))
+    remote = pi.serialize_mcp(RemoteServer(url="https://example.com/mcp"))
+
+    assert stdio == {"command": "uvx"}
+    assert remote == {"url": "https://example.com/mcp"}
+
+
+def test_pi_serialized_remote_entry_with_headers_and_oauth():
+    remote = RemoteServer(
+        url="https://example.com/mcp",
+        headers={"X-Api-Key": "k"},
+        oauth={"clientId": "example-cli", "callbackPort": 8080},
+    )
+    entry = pi.serialize_mcp(remote)
+
+    PiMcpServer.model_validate(entry)
+    assert entry == {
+        "url": "https://example.com/mcp",
+        "headers": {"X-Api-Key": "k"},
+        "auth": "oauth",
+        "oauth": {
+            "clientId": "example-cli",
+            "redirectUri": "http://localhost:8080/callback",
+        },
+    }
+
+
+def test_pi_wire_model_rejects_wrongly_typed_cwd_and_headers():
+    with pytest.raises(ValidationError):
+        PiMcpServer.model_validate({"command": "uvx", "cwd": ["not", "a", "str"]})
+    with pytest.raises(ValidationError):
+        PiMcpServer.model_validate({"url": "u", "headers": {"X": 1}})
+    with pytest.raises(ValidationError):
+        PiMcpServer.model_validate({"url": "u", "headers": ["X: 1"]})

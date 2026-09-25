@@ -202,6 +202,12 @@ check-omnigraph-format *args:
 # releases behind the real version, so `bump-my-version` searched for a string
 # that no longer existed and silently did nothing.
 
+# Fail if a shipped skill names a Claude-only tool (Agent tool, AskUserQuestion,
+# built-in /review, subagents, ...) without a fallback in the same passage.
+# Also runs as the `skill-portability` prek hook.
+check-skills:
+    ./bin/check_skill_portability.py
+
 # Fail if any package's version, bumpversion config, and CHANGELOG disagree.
 check-versions *args:
     uv run --package witan-core --extra cli python bin/check_versions.py {{ args }}

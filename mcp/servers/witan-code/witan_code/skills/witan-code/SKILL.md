@@ -19,9 +19,11 @@ A per-repo, tree-sitter-derived graph of symbols (functions, methods, classes,
 modules) and their relationships (`Calls`, `References`, `Imports`,
 `Inherits`), plus a cross-repo bridge linking services through shared
 contracts (env vars, HTTP endpoints, packages, deployments). Indexing is
-automatic — a `SessionStart` hook seeds/refreshes the whole repo in the
-background, and a `PostToolUse` hook incrementally reindexes each file you
-edit — so you rarely need to invoke the CLI yourself.
+automatic — a session-start hook seeds/refreshes the whole repo in the
+background, and a post-edit hook incrementally reindexes each file you edit
+(Claude Code's `SessionStart`/`PostToolUse` hooks; under Pi, the witan-code
+extension's `session_start`/`tool_result` handlers) — so you rarely need to
+invoke the CLI yourself.
 
 ## When to use this vs. grep / the `Explore` agent
 
@@ -57,9 +59,32 @@ results as a high-recall starting point, not a verified answer. `Defines` and
 Before relying on results, confirm the current repo has a graph: call
 `code_symbols_in_file` on a file you know exists, or `code_search_symbol` with
 a term you expect to match. An empty result on a file/symbol you know exists
-usually means indexing hasn't finished yet (the `SessionStart` hook runs
+usually means indexing hasn't finished yet (the session-start index runs
 detached in the background on a fresh repo) — wait a few seconds and retry
 before concluding the graph is broken.
+
+## Calling the tools
+
+The tables below give each tool's bare name and arguments. How you reach one
+depends on the agent:
+
+- **Claude Code** — the `code_*` tools often arrive deferred (listed, no
+  schema). Load them with
+  `ToolSearch(query="+code_ find_definition callers impact")`, then call them
+  directly: `code_find_definition(name="X")`. Their full names carry an
+  `mcp__<server>__` prefix that depends on your MCP config, which is why the
+  `+code_` query form is used rather than `select:`.
+- **Pi** — Pi has no `ToolSearch`. pi-mcp-adapter puts every MCP tool behind
+  its `mcp` proxy tool, under a server-prefixed name (for example
+  `witan-code_code_find_definition`, or `witan_code_find_definition` when
+  witan serves the code tools). Search for the exact name, then call it with
+  `args`:
+  `mcp({ search: "code_find_definition callers impact" })`, then
+  `mcp({ tool: "<exact name the search returned>", args: { name: "X" } })`.
+  Search reads only cached tool metadata, so if it finds nothing, run
+  `mcp({ connect: "witan-code" })` (or `"witan"`) and search again.
+  `mcp({ describe: "<name>" })` shows a tool's parameters. Invoke this skill
+  as `/skill:witan-code`.
 
 ## Tool reference
 

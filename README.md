@@ -88,6 +88,25 @@ Run `agent-kit apply agent-config.toml --scope project` instead of the default
 `global` scope to register servers/skills in the current project only
 rather than user-wide.
 
+#### Pi: install pi-mcp-adapter first
+
+Pi core has no built-in MCP support. The MCP servers `agent-kit` (and
+`witan setup --agent pi` / `witan-code setup --agent pi`) register for Pi are
+read by the third-party `pi-mcp-adapter` Pi package, so install it once:
+
+```bash
+pi install npm:pi-mcp-adapter      # user-wide, recorded in ~/.pi/agent/settings.json
+pi install npm:pi-mcp-adapter -l   # or: this project only, in .pi/settings.json
+```
+
+Restart Pi, then confirm it is loaded: `pi list` shows it among the configured
+packages, and `/mcp` inside Pi lists the registered servers. The files
+`agent-kit` writes for Pi are `~/.pi/agent/mcp.json` (global scope) and
+`.pi/mcp.json` (project scope). Skills and extensions do not need the adapter.
+`agent-kit apply` checks Pi's settings files for the package on every run that
+writes Pi MCP entries, including `--dry-run`, and prints a warning when it
+cannot find it.
+
 This registers the skill catalog plus the [`toolhive-swe`](./mcp/servers/toolhive-swe/README.md)
 remote MCP server (one entry per environment tier). It does **not** register
 [`witan`](./mcp/servers/witan/README.md) or [`witan-code`](./mcp/servers/witan-code/README.md) —

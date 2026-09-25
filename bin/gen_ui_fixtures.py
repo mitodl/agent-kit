@@ -597,6 +597,7 @@ def _generate() -> dict[str, str]:
         os.environ["WITAN_CONFIG"] = str(home / ".config" / "witan" / "config.toml")
         for stale in (
             "CLAUDE_SESSION_ID",
+            "PI_SESSION_ID",
             "WITAN_REMOTE_URL",
             "WITAN_TARGET",
             "WITAN_CODE_SERVER",

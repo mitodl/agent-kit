@@ -10,6 +10,7 @@ from agent_config_kit.models import (
     SkillSource,
     StdioServer,
 )
+from agent_config_kit.manifest import load_manifest
 from agent_config_kit.paths import vscode_user_dir
 from agent_config_kit.plan import (
     RegistrationBundle,
@@ -411,8 +412,52 @@ def test_apply_project_scope_pi_writes_dot_pi_not_dot_pi_agent(tmp_path, monkeyp
 
     apply("pi", _bundle(), scope=Scope.PROJECT)
 
-    assert (tmp_path / ".pi" / "settings.json").is_file()
+    assert (tmp_path / ".pi" / "mcp.json").is_file()
     assert not (tmp_path / ".pi" / "agent").exists()
+
+
+def test_apply_project_scope_pi_writes_mcp_to_dot_pi_mcp_json(tmp_path, monkeypatch):
+    """Regression: pi-mcp-adapter reads its Pi project override from
+    ``.pi/mcp.json`` (config.ts getProjectPiConfigPath). ``.pi/settings.json``
+    is Pi core's own settings file, which the adapter never reads MCP servers
+    from — a project-scoped apply must not create it."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+
+    result = apply("pi", _bundle(), scope=Scope.PROJECT)
+
+    mcp_json = Path(".pi") / "mcp.json"
+    assert result.written == [mcp_json]
+    assert json.loads((tmp_path / mcp_json).read_text()) == {
+        "mcpServers": {
+            "witan": {
+                "command": "uvx",
+                "args": ["witan", "serve"],
+                "env": {"WITAN_AUTHOR": "tester"},
+            }
+        }
+    }
+    assert not (tmp_path / ".pi" / "settings.json").exists()
+    assert not (tmp_path / "home" / ".pi" / "agent" / "mcp.json").exists()
+
+
+def test_apply_project_scope_pi_preserves_existing_pi_mcp_json_entries(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pi").mkdir()
+    (tmp_path / ".pi" / "mcp.json").write_text(
+        json.dumps(
+            {"settings": {"toolPrefix": "short"}, "mcpServers": {"x": {"url": "u"}}}
+        )
+    )
+
+    apply("pi", _bundle(), scope=Scope.PROJECT)
+
+    cfg = json.loads((tmp_path / ".pi" / "mcp.json").read_text())
+    assert cfg["settings"] == {"toolPrefix": "short"}
+    assert set(cfg["mcpServers"]) == {"x", "witan"}
 
 
 def test_apply_project_scope_copilot_installs_skills_under_dot_github(
@@ -495,3 +540,67 @@ def test_merge_into_deep_merge_merges_into_existing_dict():
     _merge_into(container, "witan", {"b": 2}, MergeStrategy.DEEP_MERGE)
 
     assert container["witan"] == {"a": 1, "b": 2}
+
+
+_CWD_HEADERS_MANIFEST = """
+[mcp_servers.local]
+kind = "stdio"
+command = "uv"
+args = ["run", "server"]
+cwd = "/srv/local-server"
+
+[mcp_servers.hosted]
+kind = "remote"
+url = "https://example.com/mcp"
+headers = { Authorization = "Bearer super-secret-token" }
+"""
+
+
+def test_manifest_server_cwd_and_headers_project_to_both_claude_and_pi(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = tmp_path / "agent-config.toml"
+    manifest.write_text(_CWD_HEADERS_MANIFEST)
+    bundle = load_manifest(manifest).bundle
+
+    apply("claude", bundle)
+    apply("pi", bundle)
+
+    claude = json.loads((tmp_path / ".claude.json").read_text())["mcpServers"]
+    pi = json.loads((tmp_path / ".pi" / "agent" / "mcp.json").read_text())["mcpServers"]
+    assert claude["local"]["cwd"] == pi["local"]["cwd"] == "/srv/local-server"
+    assert (
+        claude["hosted"]["headers"]
+        == pi["hosted"]["headers"]
+        == {"Authorization": "Bearer super-secret-token"}
+    )
+    assert pi == {
+        "local": {
+            "command": "uv",
+            "args": ["run", "server"],
+            "cwd": "/srv/local-server",
+        },
+        "hosted": {
+            "url": "https://example.com/mcp",
+            "headers": {"Authorization": "Bearer super-secret-token"},
+        },
+    }
+
+
+def test_apply_pi_diff_redacts_header_values(tmp_path, monkeypatch):
+    """Pi-specific redaction regression: headers only reach a Pi diff now that
+    the Pi adapter emits them, so the diff printed by ``apply --diff`` must
+    still blank their values (dry-run and real apply alike)."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    manifest = tmp_path / "agent-config.toml"
+    manifest.write_text(_CWD_HEADERS_MANIFEST)
+    bundle = load_manifest(manifest).bundle
+
+    for dry_run in (True, False):
+        [(path, diff)] = apply("pi", bundle, dry_run=dry_run).diffs
+        assert path == tmp_path / ".pi" / "agent" / "mcp.json"
+        assert '"headers"' in diff
+        assert '"Authorization": "<redacted>"' in diff
+        assert "super-secret-token" not in diff
+        assert "/srv/local-server" in diff  # cwd is not a secret

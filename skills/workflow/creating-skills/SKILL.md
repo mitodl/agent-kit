@@ -87,6 +87,20 @@ In `SKILL.md`, reference the file by relative path:
 See [detailed reference](references/REFERENCE.md) for full option listings.
 ```
 
+## 4b. Stay portable across agent platforms
+
+Skills install on every platform `agent-kit apply` detects (Claude Code, Pi,
+Copilot, OpenCode), so don't make a Claude Code tool a hard requirement.
+When a step benefits from delegation, a structured question tool, or a
+built-in command, write it as a condition with a fallback in the same
+paragraph: "if a subagent facility is available, run one per batch in
+parallel; otherwise run the batches sequentially", "otherwise ask in
+chat". The fallback must do the same work, not a reduced version. Stock Pi
+has none of these tools; see
+[Platform capabilities](../../README.md#platform-capabilities-and-optional-pi-extensions)
+for the optional Pi extensions that add them. `just check-skills` flags a
+Claude-only mention with no fallback beside it.
+
 ## 5. Update the indexes
 
 After creating the skill, update two places:

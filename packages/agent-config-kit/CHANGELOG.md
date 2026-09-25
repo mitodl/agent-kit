@@ -8,6 +8,48 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.10.0] - 2026-09-25
+
+### Added
+
+- `apply` now surfaces a platform's MCP prerequisite
+  (`AgentPlatform.mcp_conditional_on`) whenever it plans MCP entries for that
+  platform, on dry-run and real runs alike, as `InstallResult.prerequisites`
+  (a list of the new `Prerequisite`). `agent-kit apply` prints it after the
+  results table. For Pi, a read-only preflight
+  (`AgentPlatform.mcp_prerequisite_check`) looks for `pi-mcp-adapter` in
+  `~/.pi/agent/settings.json` (plus `.pi/settings.json` at project scope):
+  when it is missing, the CLI prints a yellow warning with
+  `pi install npm:pi-mcp-adapter`; when it is found, a dim note. The preflight
+  never runs `pi`/`npm` or touches the network, and neither outcome changes
+  the exit code. It decodes settings files the way Pi does (invalid bytes
+  replaced, BOM stripped), and a file it cannot open is reported as
+  unreadable instead of aborting `apply` or claiming the adapter is missing.
+
+### Changed
+
+- Pi's `mcp_conditional_on` text now names pi-mcp-adapter as the one package
+  that reads the files agent-config-kit writes.
+
+### Fixed
+
+- Project-scoped Pi MCP registration (`apply --scope project`) now writes to
+  `.pi/mcp.json`, the Pi project override pi-mcp-adapter actually reads,
+  instead of `.pi/settings.json` (Pi core's own settings file, which the
+  adapter never reads MCP servers from, so project-scoped Pi MCP entries were
+  a silent no-op). `validate` and `apply --prune` read and prune the same
+  file. The global target (`~/.pi/agent/mcp.json`) and the project
+  extensions/skills targets (`.pi/extensions`, `.pi/skills`) are unchanged.
+  Entries previously written to `.pi/settings.json` are not migrated; remove
+  its `mcpServers` key by hand.
+
+- The Pi adapter now emits a stdio server's `cwd` and a remote server's
+  `headers` (both `ServerEntry` fields in pi-mcp-adapter's `types.ts`)
+  instead of silently dropping them, matching the Claude adapter. Unset
+  `cwd` and empty `headers` are still omitted, and headers coexist with the
+  existing OAuth `callbackPort` to `redirectUri` translation. Header values
+  stay redacted in `apply --diff` output.
+
 ## [0.9.0] - 2026-09-18
 
 ### Added

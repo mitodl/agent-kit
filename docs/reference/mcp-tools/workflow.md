@@ -254,8 +254,10 @@ Link the current agent session to a workflow project.
 Call this at the start of any session that is contributing to a tracked
 project. The context injected by the context-injection hook (Claude Code) or
 extension (Pi) provides the ``project_slug``; ``session_id`` should be the
-session id — ``$CLAUDE_SESSION_ID`` on Claude Code, or any stable unique
-string for the session otherwise.
+session id — ``$CLAUDE_SESSION_ID`` on Claude Code, ``$PI_SESSION_ID`` on
+Pi (read it with ``echo $PI_SESSION_ID`` in the bash tool; it is what the Pi
+workflow extension's shutdown auto-close looks the handle up by), or any
+stable unique string for the session otherwise.
 
 Returns an explicit session handle (``session_slug``, ``project_slug``,
 ``phase``, ``session_id``, ``started_at``). Hold on to it and pass

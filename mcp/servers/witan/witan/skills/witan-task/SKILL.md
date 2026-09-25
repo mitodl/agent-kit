@@ -51,7 +51,10 @@ So:
   someone is on it. Pick another task — do not `force` past a live lease
   without a reason you can state.
 - **Pass `session_id`, not `assignee`.** `task_claim(slug=..., session_id=...)`
-  — your `$CLAUDE_SESSION_ID` on Claude Code, any stable per-run id elsewhere.
+  — your `$CLAUDE_SESSION_ID` on Claude Code, `$PI_SESSION_ID` on Pi (read
+  your own platform's variable with `echo`, not a fallback chain: an agent
+  launched from the other one can inherit its id), any stable per-run id
+  elsewhere.
   It qualifies the holder as `<you>#<session>` so your own parallel sessions
   are told apart; without it they all claim under one name, the contention
   check cannot separate them, and the second session silently renews the
@@ -113,6 +116,25 @@ epic's sub-issues. For the step-by-step checklist of the task you're doing *righ
 now*, use your built-in todo list; don't mirror those ephemeral steps into the
 graph.
 
+## Asking the user
+
+Several steps below ask the user to choose or type something. Ask the same way
+on every agent:
+
+- **If a structured question tool is actually available to you** (e.g. Claude
+  Code's `AskUserQuestion`, or a question tool a Pi extension registers), use
+  it with the header, question and options given. Where a step also needs free
+  text, use whatever free-text entry that tool offers; if it offers none, ask
+  for the text in a plain message.
+- **Otherwise**, ask the same question in a normal message — number the
+  options, say what free-text answer is accepted — and **end your turn and
+  wait** for the reply. Do not guess an answer or pick a default on the user's
+  behalf.
+
+Never add an option the step does not list just to get a free-text box.
+Either way, nothing that changes the graph (claiming a task, creating or
+starting a project or session) happens until the user has answered.
+
 ## On invocation
 
 **Step 1 — Check args.**
@@ -128,14 +150,16 @@ Call `task_ready()` (defaults to the current repo, ordered by priority). If the
 MCP call fails, tell the user the witan server is not connected and stop.
 
 - If there are no ready tasks, say so and offer **Create a task**.
-- Otherwise present the ready tasks in an `AskUserQuestion`:
+- Otherwise present the ready tasks as one question (see **Asking the user**):
   - Header: "Claim task"
   - Question: "Which task do you want to work on?"
   - Options: each ready task (label = title, description = "`[priority]` slug: `{slug}`"),
     plus "Create a task" and "None".
+- Wait for the answer. Do not claim anything until the user has picked a
+  task; "None" means claim nothing and stop.
 - On a chosen task: claim it (that is what picking it means — see **Claim
   before you work it**). Call
-  `task_claim(slug="<slug>", session_id="<$CLAUDE_SESSION_ID>")`.
+  `task_claim(slug="<slug>", session_id="<$CLAUDE_SESSION_ID or $PI_SESSION_ID>")`.
   `task_claim` sets `in_progress` with a lease and **refuses if someone else
   holds it** (`{"claimed": false, "held_by": ...}`) — surface that and offer
   another task instead of overwriting. On success confirm: "Claimed **{title}**
@@ -145,11 +169,13 @@ MCP call fails, tell the user the witan server is not connected and stop.
 
 ## Create a task
 
-Ask in one `AskUserQuestion` call (use "Other" for free text):
+Ask these together (see **Asking the user**):
 
-1. "Task title?"
+1. "Task title?" (free text)
 2. "Type?" — options: `task`, `bug`, `feature`, `chore`, `epic`.
 3. "Priority?" — options: `p2` (default), `p0`, `p1`, `p3`.
+
+Wait for the answers before calling `task_create`.
 
 Then gather, if relevant: a one-line description, a parent epic slug
 (`parent`), blocker slugs (`blocked_by`), a GitHub issue/PR URL

@@ -658,7 +658,8 @@ Link a session to a workflow project.
 
 * `PROJECT-SLUG, --project-slug`: **[required]**
 * `--phase`: **[required]** *[choices: discovery, spec, implementation, delivery]*
-* `--session-id`: generated uuid). The Stop hook keys its state file on this.
+* `--session-id`: Defaults to ``$CLAUDE_SESSION_ID``, else ``$PI_SESSION_ID``, else a
+    generated uuid. The Stop hook keys its state file on this.
 * `--repo`:
 * `--tags, --empty-tags`:
 
@@ -739,6 +740,11 @@ the same install pass — no separate MCP entry, since ``witan serve``
 already mounts witan-code's tools in-process. A single ``witan setup``
 then covers both packages; otherwise install witan-code separately with
 ``witan-code setup`` (or the mounted ``witan code setup``).
+
+Pi has no built-in MCP support: the witan entry written to
+``~/.pi/agent/mcp.json`` is read only by the pi-mcp-adapter Pi package
+(``pi install npm:pi-mcp-adapter``). The install report warns when that
+package is not declared in Pi's settings.
 
 Re-run after every upgrade to refresh installed files.
 
@@ -1583,7 +1589,7 @@ exported symbols by canonical symbol string — distinct from the coarser
 ### witan code inject-context
 
 ```console
-witan code inject-context
+witan code inject-context [OPTIONS]
 ```
 
 Print a short code-graph status block for the UserPromptSubmit hook.
@@ -1591,6 +1597,13 @@ Print a short code-graph status block for the UserPromptSubmit hook.
 Registered as the bare ``UserPromptSubmit`` hook command; always exits 0
 and prints nothing when there's no store or in-flight index for the
 current repo.
+
+**Parameters**:
+
+* `--client`: Which agent the block's tool-discovery instructions are written for:
+    ``claude`` (``ToolSearch``, the default) or ``pi`` (pi-mcp-adapter's
+    ``mcp`` proxy). The Pi extension passes ``--client pi``; nothing is
+    inferred from the environment. *[choices: claude, pi]* *[default: claude]*
 
 ### witan code serve
 
@@ -1738,6 +1751,11 @@ hooks (bare CLI commands — no wrapper scripts to copy), and merges the
 witan-code MCP server entry into the agent's config file. Independent of
 `witan setup` — running both is fine (each only touches its own entries);
 running just this one is enough for a witan-code-only install.
+
+Pi has no built-in MCP support: the witan-code entry written to
+``~/.pi/agent/mcp.json`` is read only by the pi-mcp-adapter Pi package
+(``pi install npm:pi-mcp-adapter``). The install report warns when that
+package is not declared in Pi's settings.
 
 Re-run after every upgrade to refresh installed files.
 

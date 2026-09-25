@@ -582,19 +582,27 @@ def stitch(repo: str | None = None, *, unresolved: bool = False) -> None:
 
 
 @app.command(name="inject-context")
-def inject_context_cmd() -> None:
+def inject_context_cmd(*, client: Literal["claude", "pi"] = "claude") -> None:
     """Print a short code-graph status block for the UserPromptSubmit hook.
 
     Registered as the bare ``UserPromptSubmit`` hook command; always exits 0
     and prints nothing when there's no store or in-flight index for the
     current repo.
+
+    Parameters
+    ----------
+    client
+        Which agent the block's tool-discovery instructions are written for:
+        ``claude`` (``ToolSearch``, the default) or ``pi`` (pi-mcp-adapter's
+        ``mcp`` proxy). The Pi extension passes ``--client pi``; nothing is
+        inferred from the environment.
     """
     import sys
 
     from . import context as context_module
 
     try:
-        text = context_module.inject_context()
+        text = context_module.inject_context(client=client)
     except Exception:  # noqa: BLE001 — must never fail the hook
         return
     if text:
@@ -945,6 +953,11 @@ def setup(
     witan-code MCP server entry into the agent's config file. Independent of
     `witan setup` — running both is fine (each only touches its own entries);
     running just this one is enough for a witan-code-only install.
+
+    Pi has no built-in MCP support: the witan-code entry written to
+    ``~/.pi/agent/mcp.json`` is read only by the pi-mcp-adapter Pi package
+    (``pi install npm:pi-mcp-adapter``). The install report warns when that
+    package is not declared in Pi's settings.
 
     Re-run after every upgrade to refresh installed files.
 

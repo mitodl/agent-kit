@@ -266,6 +266,12 @@ witan-code setup --dry-run          # preview without writing
 witan-code setup --author "Jane Doe"  # attribution (default: git config user.name)
 ```
 
+On Pi, the MCP server entry (`~/.pi/agent/mcp.json`) is read only by the
+third-party pi-mcp-adapter Pi package, since Pi core has no MCP support:
+install it with `pi install npm:pi-mcp-adapter`, restart Pi, and confirm it
+in `pi list`. `witan-code setup --agent pi` warns when it cannot find the
+package declared in Pi's settings.
+
 If `witan` is *also* installed and witan-code is importable in that same
 environment (e.g. via the `--with` in the `uv tool install`/MCP server's
 `uvx` invocation), `witan setup` folds this same bundle in automatically —
@@ -682,7 +688,10 @@ A Pi equivalent of all four lives in one extension,
   can tell "no cross-repo consumers" from "no cross-repo data"), and the
   `ToolSearch` call that makes the `code_*` tools callable when the harness
   delivers them deferred — followed by a `code_find_definition` →
-  `code_callers`/`code_impact` call template.
+  `code_callers`/`code_impact` call template. `--client pi` (what the Pi
+  extension passes) swaps the `ToolSearch` step for pi-mcp-adapter's `mcp`
+  proxy: `mcp({ search: ... })` for the exact server-prefixed name, then
+  `mcp({ tool: ..., args: {...} })`. The default stays Claude's.
   Independent of `witan`'s own `inject-context` hook (no cross-package
   coupling) — register it alone for a witan-code-only install. Prints
   nothing when the repo has neither a store nor an index in flight.

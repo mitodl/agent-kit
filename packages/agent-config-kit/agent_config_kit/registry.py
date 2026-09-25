@@ -74,21 +74,31 @@ def _registry() -> dict[str, AgentPlatform]:
                         path=Path.home() / ".pi" / "agent" / "mcp.json",
                         key_path=("mcpServers",),
                     ),
-                    # Pi's project-root config file, unverified beyond the
-                    # D-INV survey (pf-native-per-agent-skill-config-
-                    # directory-hierarch-40bff8 notes project MCP paths are
-                    # cwd-only but doesn't pin an exact filename) — confirm
-                    # against an installed Pi version before relying on this.
+                    # pi-mcp-adapter's Pi-specific project override. Verified
+                    # against the installed adapter (v2.37.0): config.ts's
+                    # getProjectPiConfigPath() resolves
+                    # <cwd>/<configDir>/mcp.json (configDir defaults to
+                    # ".pi"), and its README lists `.pi/mcp.json` as the
+                    # highest-precedence "Pi project override" layer. Pi
+                    # core's own `.pi/settings.json` is a different file
+                    # (packages, models, ...) that the adapter never reads
+                    # MCP servers from — writing mcpServers there was a
+                    # silent no-op.
                     "project": ScopeTarget(
-                        path=Path(".pi") / "settings.json",
+                        path=Path(".pi") / "mcp.json",
                         key_path=("mcpServers",),
                     ),
                 }
             ),
+            # Pi core has no MCP support; ~/.pi/agent/mcp.json and
+            # .pi/mcp.json are pi-mcp-adapter's own files. plan.apply surfaces
+            # this (with the preflight's result) whenever it plans MCP entries.
             mcp_conditional_on=(
-                "requires a third-party MCP plugin (pi-mcp-extension or "
-                "pi-mcp-adapter); writing this file is a silent no-op without one"
+                "requires the third-party pi-mcp-adapter Pi package; Pi core "
+                "has no MCP support, so writing this file is a silent no-op "
+                "without it"
             ),
+            mcp_prerequisite_check=pi_adapter.mcp_adapter_prerequisite,
             mcp_serialize=pi_adapter.serialize_mcp,
             hooks=CapabilityScope(
                 **{

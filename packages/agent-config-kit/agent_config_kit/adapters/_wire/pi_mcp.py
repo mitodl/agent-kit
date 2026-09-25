@@ -9,6 +9,14 @@
 # directly against pi.dev/packages/pi-mcp-adapter's live docs (fetched
 # 2026-08-31). If a real pi-mcp.schema.json is ever vendored, reconcile
 # against it rather than trusting this by-hand addition indefinitely.
+#
+# HAND-PATCHED 2026-09-23: added PiMcpServer.cwd and PiMcpServer.headers,
+# reconciled against the ServerEntry interface in the installed
+# pi-mcp-adapter's types.ts (v2.37.0: `cwd?: string`,
+# `headers?: Record<string, string>`). Only the fields agent-config-kit
+# writes are modeled; ServerEntry has many more (timeouts, approvals,
+# socket, ...) that ``extra="forbid"`` intentionally rejects, so an adapter
+# that starts emitting one has to be reconciled here first.
 
 from __future__ import annotations
 
@@ -40,7 +48,9 @@ class PiMcpServer(BaseModel):
     )
     command: str | None = None
     args: list[str] | None = None
+    cwd: str | None = None
     url: str | None = None
+    headers: dict[str, str] | None = None
     lifecycle: str | None = None
     idleTimeout: int | None = None
     directTools: list[str] | None = None

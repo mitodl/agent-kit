@@ -8,11 +8,124 @@ both directories when discovering skills (its own docs/skills.md "Locations"
 section), so writing the same skill into both is pure duplication — Pi finds
 the name twice and logs a spurious "skill collision" warning on every
 startup. A single dest dir is correct and sufficient.
+
+Pi core has no MCP support of its own: the mcp.json files this adapter
+writes are read only by the third-party ``pi-mcp-adapter`` Pi package.
+``mcp_adapter_prerequisite`` is the read-only preflight ``plan.apply`` runs
+to say whether that package looks installed (see its docstring).
 """
 
 from __future__ import annotations
 
-from ..models import McpServer, RemoteServer, StdioServer
+import re
+from pathlib import Path
+
+from ..jsonio import parse_json_object
+from ..models import McpServer, RemoteServer, Scope, StdioServer
+
+MCP_ADAPTER_PACKAGE = "pi-mcp-adapter"
+MCP_ADAPTER_INSTALL = "pi install npm:pi-mcp-adapter"
+
+# Matches every way Pi's docs/packages.md lets a source name the package:
+# "npm:pi-mcp-adapter", "npm:pi-mcp-adapter@2.37.0",
+# "git:github.com/<owner>/pi-mcp-adapter@v2", "https://.../pi-mcp-adapter.git",
+# or a local path ending in the package directory — but not a differently
+# named package that merely starts with the same text.
+_ADAPTER_SOURCE = re.compile(r"(?:^|[/:\\])pi-mcp-adapter(?:$|[@/#\\]|\.git\b)")
+
+
+def _names_adapter(source: object) -> bool:
+    return isinstance(source, str) and bool(_ADAPTER_SOURCE.search(source.strip()))
+
+
+def _settings_declare_adapter(path: Path) -> bool | None:
+    """Whether the Pi settings file at ``path`` loads pi-mcp-adapter, or
+    ``None`` when the file exists but cannot be opened.
+
+    Pi declares packages in settings.json's ``packages`` array, each either a
+    source string or ``{"source": ..., "extensions": [...], ...}``
+    (docs/packages.md); an object whose ``extensions`` filter is ``[]`` loads
+    none of the package's extensions, so it does not count. A bare
+    extension path in the ``extensions`` array also counts, minus ``!``/``-``
+    exclusions (docs/settings.md "Resources").
+
+    The file is decoded the way Pi's settings-manager reads it
+    (``readFileSync(path, "utf-8")``, which replaces invalid bytes, then a
+    stripped BOM), so a stray non-UTF-8 byte elsewhere in the file does not
+    hide a declaration Pi itself honors. A file that cannot be opened at all
+    (e.g. permissions) returns ``None`` rather than raising: this check is
+    informational and runs after mcp.json is written, so it must never abort
+    the rest of ``apply``."""
+    if not path.is_file():
+        return False
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    cfg = parse_json_object(text.removeprefix("\ufeff"))
+    if not cfg:
+        return False
+    packages = cfg.get("packages")
+    for entry in packages if isinstance(packages, list) else []:
+        if isinstance(entry, dict):
+            if entry.get("extensions") == []:
+                continue
+            entry = entry.get("source")
+        if _names_adapter(entry):
+            return True
+    extensions = cfg.get("extensions")
+    for entry in extensions if isinstance(extensions, list) else []:
+        if (
+            isinstance(entry, str)
+            and not entry.startswith(("!", "-"))
+            and _names_adapter(entry.lstrip("+"))
+        ):
+            return True
+    return False
+
+
+def mcp_adapter_prerequisite(scope: Scope) -> tuple[bool, str]:
+    """Read-only check for pi-mcp-adapter: never runs ``pi``/``npm`` or
+    touches the network, only reads the settings files ``pi install`` writes.
+
+    ``pi install`` records a package in ``~/.pi/agent/settings.json`` (or,
+    with ``-l``, the project's ``.pi/settings.json``). A global MCP entry is
+    only honored everywhere when the adapter is installed globally, so global
+    scope checks just the global settings file; project scope also accepts a
+    project-local declaration. Best-effort: a package disabled through
+    ``pi config``, or a project package Pi has not yet been granted trust to
+    load, still reads as present."""
+    global_settings = Path.home() / ".pi" / "agent" / "settings.json"
+    candidates = [global_settings]
+    if scope == Scope.PROJECT:
+        candidates.append(Path(".pi") / "settings.json")
+    unreadable = []
+    for path in candidates:
+        declared = _settings_declare_adapter(path)
+        if declared:
+            return True, f"{MCP_ADAPTER_PACKAGE} is declared in {path}"
+        if declared is None:
+            unreadable.append(path)
+    if unreadable:
+        names = " or ".join(str(p) for p in unreadable)
+        return False, (
+            f"could not read {names}, so whether {MCP_ADAPTER_PACKAGE} is "
+            "installed is unknown; Pi ignores these MCP servers without it. "
+            "Fix the file's permissions, then confirm with `pi list` (and "
+            f"`/mcp` inside Pi); if it is missing, run `{MCP_ADAPTER_INSTALL}`."
+        )
+    checked = " or ".join(str(p) for p in candidates)
+    local_hint = (
+        f" (or `{MCP_ADAPTER_INSTALL} -l` for this project only)"
+        if scope == Scope.PROJECT
+        else ""
+    )
+    return False, (
+        f"{MCP_ADAPTER_PACKAGE} was not found in {checked}; Pi will ignore "
+        f"these MCP servers until it is installed. Run `{MCP_ADAPTER_INSTALL}`"
+        f"{local_hint}, restart Pi, then confirm with `pi list` (and `/mcp` "
+        "inside Pi)."
+    )
 
 
 def serialize_mcp(server: McpServer) -> dict:
@@ -20,12 +133,21 @@ def serialize_mcp(server: McpServer) -> dict:
         data: dict = {"command": server.command}
         if server.args:
             data["args"] = server.args
+        # cwd and headers are ServerEntry fields in pi-mcp-adapter's own
+        # types.ts (verified against the installed adapter, v2.37.0), so they
+        # pass through verbatim, the same way the Claude adapter emits them.
+        # The adapter expands ${VAR}/~ in cwd and ${VAR}/!command in header
+        # values itself, so no rewriting happens here.
+        if server.cwd is not None:
+            data["cwd"] = server.cwd
         if server.env:
             data["env"] = server.env
         return data
 
     assert isinstance(server, RemoteServer)
     data = {"url": server.url}
+    if server.headers:
+        data["headers"] = server.headers
     # The manifest's canonical oauth shape is {clientId, callbackPort},
     # matching Claude Code's own documented shape (see claude.py) — but Pi's
     # real shape differs in two ways: a top-level "auth": "oauth"

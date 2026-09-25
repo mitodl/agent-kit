@@ -261,7 +261,9 @@ agent. So:
 
 Populate each platform's `project` `ScopeTarget` in the registry (relative to
 a repo root): `claude` → `.claude/skills`, `.mcp.json`, `.claude/settings.json`;
-`pi` → `.pi/skills`, `.pi/extensions`, `.pi/settings.json`; `opencode` →
+`pi` → `.pi/skills`, `.pi/extensions`, `.pi/mcp.json` (originally specified
+as `.pi/settings.json`; corrected after verifying pi-mcp-adapter reads its Pi
+project override from `.pi/mcp.json`); `opencode` →
 `.opencode/...`; `copilot` → `.github/skills`, `.vscode/mcp.json`. Enables
 `agent-kit apply --scope project` and S2 materialization. Verify each path per
 D-INV notes.

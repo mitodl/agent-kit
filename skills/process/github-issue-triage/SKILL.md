@@ -2,8 +2,9 @@
 name: github-issue-triage
 description: >
   Audit open GitHub issues to identify which are outdated, already completed, or
-  superseded by newer issues — using parallel subagents to cross-reference issue
-  descriptions against the current codebase and git history. Use this skill when
+  superseded by newer issues — cross-referencing issue descriptions against the
+  current codebase and git history, in parallel subagent batches where the
+  platform provides subagents and in deterministic sequential batches otherwise. Use this skill when
   asked to triage issues, find stale issues, clean up the backlog, identify what
   can be closed, or audit a GitHub repository's open issue list.
 license: BSD-3-Clause
@@ -52,8 +53,10 @@ The core pattern is **enumerate → resolve → batch → fan out → synthesize
    issue with the correct codebase path to search.
 3. Group issues into 4–6 thematic batches, keeping same-product issues together
    so each agent searches one codebase.
-4. Dispatch one subagent per batch in parallel; each uses `explore-issue.sh`
-   and targeted `rg` / `git log` searches to gather evidence.
+4. Investigate every batch: with a subagent facility, one subagent per batch in
+   parallel; otherwise the same batches one at a time, in order (see Phase 3).
+   Either way each batch uses `explore-issue.sh` and targeted `rg` / `git log`
+   searches to gather evidence.
 5. Synthesize per-batch verdicts into a tiered report.
 6. Optionally act on the report with `close-issues.sh`.
 
@@ -161,9 +164,38 @@ jq '[.[] | select(.number | IN(101, 102, 103))] |
 
 ---
 
-## Phase 3 — Dispatch parallel agents
+## Phase 3 — Investigate each batch
 
-Spawn one agent per batch simultaneously. Each agent brief must include:
+How the batches run depends on what the platform provides. Decide once, before
+the first batch, and say which mode you're using:
+
+- **Parallel mode — a subagent facility is available and authorized.** Claude
+  Code's `Agent` tool, or on Pi an installed subagent extension such as
+  [`pi-subagents`](https://www.npmjs.com/package/pi-subagents) (its `subagent`
+  tool). Pi core ships no subagent tool, so don't assume one on Pi without
+  seeing it in the tool list. Spawn one subagent per batch, all at once, with
+  the brief below. Keep it bounded: at most one subagent per batch and no more
+  than 6 at a time; if Phase 2 produced more batches, run them in waves of 6.
+- **Sequential mode (the fallback) — no subagent facility, or the user hasn't allowed
+  delegation.** Work through the Phase 2 batches yourself, one at a time, in a
+  fixed order: number the batches by `resolved_path`, then by each batch's
+  lowest issue number, and take issues within a batch in ascending number
+  order. For each batch, run the same brief against yourself: explore every issue in it,
+  write that batch's verdicts to `/tmp/triage_batch_<N>.md` in the same
+  per-issue shape a subagent would return (number, verdict, 1–2 sentences of
+  reasoning, evidence), then move to the next batch. Writing each batch out
+  before starting the next keeps earlier evidence from crowding out later
+  batches, and Phase 4 reads those files exactly as it would subagent output.
+
+Sequential mode is slower, not smaller. **Never skip, sample, or
+down-scope issues because delegation is unavailable** — every issue in every
+batch still gets a verdict with evidence, and the report schema in Phase 4 is
+identical in both modes. If the backlog is too large to finish in one session,
+stop between batches, report which batch numbers are done, and resume from the
+next one rather than silently truncating.
+
+Each batch brief (for a subagent in parallel mode, or for yourself in the
+sequential fallback) must include:
 
 - The issue data (number, title, body excerpt, creation date, resolved_path)
 - The verdict rubric (see below)
@@ -190,7 +222,10 @@ looks up the first matching path, and runs all searches there instead of in the
 tracker repo. If no label matches, it falls back to the provided `repo-path` and
 prints a warning.
 
-### Agent prompt template
+### Batch brief template
+
+Use it verbatim as the subagent prompt in parallel mode, or as your own
+checklist for the batch in the sequential fallback.
 
 ```
 You are auditing open GitHub issues for <tracker-or-direct-repo>.
@@ -240,7 +275,11 @@ git -C <resolved_path> branch -r | grep -i "<keyword>" | head
 
 ## Phase 4 — Synthesize the report
 
-Collect all agent outputs and build the final report in tiers:
+Collect every batch's verdicts — subagent outputs in parallel mode, the
+`/tmp/triage_batch_<N>.md` files in the sequential fallback — and build the final
+report in tiers. Before tiering, check that every issue from Phase 1 (minus
+deliberately skipped bot issues) has exactly one verdict; a missing issue means
+a batch was dropped, not that the issue was fine.
 
 ### Tier 1: Close — work clearly done or superseded
 Direct evidence: the artifact exists in code, a named commit landed the fix, or
@@ -262,7 +301,8 @@ missing lifecycle policy, a version pin upgrade).
 A feature branch or recent commits indicate work is underway but not merged.
 
 ### Tier 6: Keep — genuine open gap
-Agent confirmed the work has not been done and the need remains valid.
+The batch investigation confirmed the work has not been done and the need
+remains valid.
 
 ---
 

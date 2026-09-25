@@ -38,13 +38,35 @@ GitHub Action installed and configured to react to PR comments (e.g.
 `anthropics/claude-code-action` on the `issue_comment` event). **As of this
 writing, no mitodl repo has that workflow installed** (checked via
 `gh search code "claude-code-action" --owner mitodl`) — so in this org, Claude
-mode currently posts a comment nobody/nothing responds to. Prefer the
-in-session alternative instead: invoke this session's built-in `/review
-<pr-url>` (not `/code-review`, which reviews your *working* diff) to have
-Claude leave its own first-pass review directly, with no dependency on repo
-configuration. Re-check for an installed Claude Action before relying on
-comment-trigger mode — if the user's org adds one later, this script needs no
-changes.
+mode currently posts a comment nobody/nothing responds to. Prefer an
+in-session first pass instead, which has no dependency on repo configuration.
+Re-check for an installed Claude Action before relying on comment-trigger
+mode — if the user's org adds one later, this script needs no changes.
+
+### In-session first pass
+
+Pick the first of these the platform supports:
+
+1. **Portable (any platform, including stock Pi):** the
+   [`code-review`](../../code-review/SKILL.md) skill, pointed at the PR.
+   Its scope input takes a **PR number**, not a URL, and resolves the diff
+   with `gh pr diff <number>` from the current repo — so run it from a local
+   checkout of the PR's repo (`cd` there first; for a PR in another repo with
+   no checkout, clone it or use option 2). Ask for e.g. "code-review PR #90";
+   it also pulls the PR body with `gh pr view <number> --json body` as the
+   stated goals. It is report-only by default.
+2. **Direct, no skill or checkout:** read the PR yourself with
+   `gh pr view <number> -R <repo> --json title,body,files` and
+   `gh pr diff <number> -R <repo>`, and review the diff against the PR body.
+3. **Claude-specific, only where it exists:** Claude Code's built-in
+   `/review <pr-url>` command. It is not part of agent-kit and not available
+   on Pi or other platforms. (Don't confuse it with a `/code-review` command
+   that reviews your *working* diff rather than the PR.)
+
+All three produce a report in the session. Posting findings to the PR —
+`gh pr review <number> -R <repo> --comment --body-file <file>` — is a visible
+action: show the user the text and get confirmation first, same as every other
+action in this playbook.
 
 Ask which bot(s) the user wants if unclear (they said "usually copilot, but
 maybe claude"); default to `all` when they haven't expressed a preference.
@@ -93,21 +115,50 @@ This is the bucket that needs real judgment, not just a script call:
 2. Read what's actually being asked. Bot reviews (Copilot, Gemini, etc.) often
    bundle several findings in one comment body — treat each as a separate
    item, not a single ask.
-3. If a code fix is needed, work in the actual local checkout for that repo
-   (not the tracker/triage context) — check out the PR's branch
-   (`gh pr checkout <number> -R <repo>`), fix, run the repo's own tests/lint,
-   commit, push.
+3. If a code fix is needed, work from the actual local checkout for that repo
+   (not the tracker/triage context), in a separate git worktree on the PR's
+   branch (commands below) rather than switching branches or stashing in the
+   checkout itself — fix, run the repo's own tests/lint, commit, push.
 4. After pushing, comment summarizing what changed (mirrors the pattern
    already used on PR threads in this org — see e.g. how prior "Addressed in
    `<sha>`: ..." comments are written) and consider re-requesting review from
    whoever left the original feedback.
 
-**Multiple PRs across different repos need fixes in parallel** — this is
-exactly the shape the `Agent` tool suits: one subagent per repo/PR pair, each
-briefed with that PR's specific review comments, its repo's local checkout
-path, and the instruction to fix, test, and push (not to merge or close
-anything). Don't fan out subagents for a single PR or a single repo — that's
-just sequential work wearing a parallel costume.
+**Multiple PRs across different repos need fixes** — the shape that suits
+parallel delegation, when the platform has it:
+
+- **With a subagent facility** (Claude Code's `Agent` tool, or on Pi an
+  installed extension such as `pi-subagents`; Pi core has none): one subagent
+  per repo/PR pair, each briefed with that PR's specific review comments, the
+  path of a **dedicated git worktree** for that PR's branch, and the
+  instruction to fix, test, and push (not to merge or close anything).
+- **Otherwise, sequentially:** handle the same repo/PR pairs one at a time
+  yourself, with the same brief per PR, finishing (fix, test, push, comment)
+  each before starting the next.
+
+Either way, give each PR its own worktree rather than switching branches or
+stashing in a shared checkout:
+
+```bash
+branch=$(gh pr view <number> -R <repo> --json headRefName --jq .headRefName)
+git -C <repo-checkout> fetch origin "$branch"
+git -C <repo-checkout> worktree add "../<repo>-pr-<number>" "$branch"
+```
+
+`worktree add` with a branch name that exists only as `origin/<branch>` creates
+a local tracking branch for it; if a local branch of that name already
+existed, it is used as-is, so run `git pull --ff-only` inside the new worktree
+before editing. If it refuses because the branch is already
+checked out in another worktree, work in that worktree instead of forcing it.
+This assumes the PR's branch lives in the base repo, as `@me` PRs in mitodl do;
+for a fork PR, fetch from the fork's remote instead.
+
+Parallel subagents sharing one checkout would trample each other's branch, and
+even sequentially a `git stash` / branch switch in the user's checkout risks
+mixing their uncommitted work into a fix. Remove each worktree
+(`git worktree remove`) once its push lands. Even where a subagent facility
+is available, don't fan out subagents for a single PR or a single repo —
+that's just sequential work wearing a parallel costume.
 
 **Don't auto-trust `feedback_likely_addressed: true`** as a reason to skip a
 PR entirely in the report — still list it, just flag it as lower priority to
