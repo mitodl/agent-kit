@@ -156,6 +156,9 @@ export function mountCanvas(
 			const style = getComputedStyle(element);
 			fg = style.getPropertyValue("--fg").trim();
 			const muted = style.getPropertyValue("--muted").trim();
+			// The canvas draws its own text, so it takes the page's face by name;
+			// vis-network's default is Arial whatever the stylesheet says.
+			const face = style.getPropertyValue("--font-ui").trim();
 
 			groups.clear();
 			clusterOf.clear();
@@ -170,7 +173,7 @@ export function mountCanvas(
 				shape: node.group === "project" ? "diamond" : "dot",
 				size: node.group === "project" ? 14 : 10,
 				color: { background: node.color, border: node.color },
-				font: { color: fg, size: node.group === "project" ? 14 : 13 },
+				font: { color: fg, face, size: node.group === "project" ? 15 : 14 },
 				clusterKey: node.cluster,
 			}));
 			const nextEdges: VisEdge[] = graph.edges.map((edge) => ({
@@ -179,7 +182,7 @@ export function mountCanvas(
 				to: edge.dst,
 				label: edge.label,
 				color: { color: EDGE_COLORS[edge.kind] ?? muted },
-				font: { color: muted },
+				font: { color: muted, face },
 				dashes: edge.kind === "belongs_to",
 			}));
 
