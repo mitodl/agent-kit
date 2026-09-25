@@ -145,6 +145,33 @@ def test_advance_advisory_on_unusual_transitions(server):
 
 
 @requires_omnigraph
+def test_advance_without_github_pr_keeps_existing(server):
+    """A caller that omits github_pr must not blank out a previously set one."""
+    p = server.workflow_project_create(title="pr keeper", description="d", phase="spec")
+    pr_url = "https://github.com/test/repo/pull/1"
+
+    with_pr = server.workflow_project_advance(
+        p["slug"], phase="implementation", github_pr=pr_url
+    )
+    assert with_pr["github_pr"] == pr_url
+
+    without_pr = server.workflow_project_advance(p["slug"], phase="delivery")
+    assert without_pr["github_pr"] == pr_url
+    assert server.workflow_project_get(p["slug"])["github_pr"] == pr_url
+
+
+@requires_omnigraph
+def test_complete_without_github_pr_keeps_existing(server):
+    """workflow_project_complete has the same optional-field overwrite bug as advance."""
+    p = server.workflow_project_create(title="pr keeper 2", description="d")
+    pr_url = "https://github.com/test/repo/pull/2"
+    server.workflow_project_advance(p["slug"], phase="delivery", github_pr=pr_url)
+
+    server.workflow_project_complete(p["slug"], outcome="shipped it")
+    assert server.workflow_project_get(p["slug"])["github_pr"] == pr_url
+
+
+@requires_omnigraph
 def test_memory_store_flags_missing_session(server):
     r = server.memory_store(kind="lesson", title="t", content="c")
     assert r["session_linked"] is False
