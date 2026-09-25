@@ -300,3 +300,30 @@ def test_a_structured_title_carries_the_query_unescaped(cli, capsys):
     title = json.loads(capsys.readouterr().out)["title"]
     assert "'[wip] grafana'" in title
     assert "\\" not in title
+
+
+def test_projects_status_all_lists_every_status(cli, capsys):
+    from witan.cli.projects import projects
+
+    active = _project(cli, "still going")
+    abandoned = _project(cli, "given up")
+    _fn(cli.workflow_project_update)(slug=abandoned, status="abandoned")
+    _as("json")
+
+    projects(all_repos=True, status="all")
+
+    slugs = {r["slug"] for r in json.loads(capsys.readouterr().out)["rows"]}
+    assert {active, abandoned} <= slugs
+
+
+def test_projects_default_status_still_hides_abandoned(cli, capsys):
+    from witan.cli.projects import projects
+
+    abandoned = _project(cli, "given up")
+    _fn(cli.workflow_project_update)(slug=abandoned, status="abandoned")
+    _as("json")
+
+    projects(all_repos=True)
+
+    slugs = {r["slug"] for r in json.loads(capsys.readouterr().out)["rows"]}
+    assert abandoned not in slugs

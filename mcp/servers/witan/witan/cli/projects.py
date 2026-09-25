@@ -23,6 +23,7 @@ from ._common import (
     esc,
     print_error,
     render_table,
+    ProjectStatusFilter,
     WorkflowPhase,
 )
 from .output import dump_record, get_output_format
@@ -42,7 +43,7 @@ def projects(
     /,
     *,
     repo: str | None = None,
-    status: str | None = "active",
+    status: ProjectStatusFilter = "active",
     all_repos: bool = False,
     limit: int = 50,
 ) -> None:
@@ -56,7 +57,7 @@ def projects(
     repo:
         Scope to a specific repo URI (default: the current git repo).
     status:
-        Filter by active | completed | abandoned.
+        Filter by active | completed | abandoned, or all for every status.
     all_repos:
         Span every repo in the graph.
     limit:
@@ -64,10 +65,15 @@ def projects(
     """
     s = _srv()
     repo_arg = _repo_arg(repo, all_repos)
+    # The server reads status=None as every status; "all" is the CLI's
+    # spelling of it, since an empty --status reaches the server as "".
+    status_arg = None if status == "all" else status
     if query is None:
-        rows = _fn(s.workflow_project_list)(repo=repo_arg, status=status)
+        rows = _fn(s.workflow_project_list)(repo=repo_arg, status=status_arg)
     else:
-        rows = _fn(s.workflow_project_search)(query=query, repo=repo_arg, status=status)
+        rows = _fn(s.workflow_project_search)(
+            query=query, repo=repo_arg, status=status_arg
+        )
     rows = rows[:limit]
     matching = "" if query is None else f" matching '{query}'"
     detected_repo = (

@@ -1,3 +1,10 @@
+### Added
+
+- **`witan projects --status all` lists every status.** The server already read
+  `status=None` as every status, but the CLI had no way to send it: `--status ''`
+  reached the server as an empty string and failed its `Literal` validation.
+  `--status` now takes `all` and maps it to `None`.
+
 ### Fixed
 
 - **Structured output no longer carries Rich-escaped titles.** `witan tasks` and
