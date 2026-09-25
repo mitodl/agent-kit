@@ -8,6 +8,52 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.22.0] - 2026-09-25
+
+### Added
+
+- **`witan-code inject-context --client pi`.** The status block told every
+  agent to run Claude's `ToolSearch` and then call `code_*` tools directly,
+  including under Pi, which has no `ToolSearch` and reaches MCP tools only
+  through pi-mcp-adapter's `mcp` proxy under a server-prefixed name. With
+  `--client pi` the block instead says to find the exact name with
+  `mcp({ search: "code_find_definition callers impact" })` and call it with
+  `mcp({ tool: "<name>", args: {...} })`, and points at `/skill:witan-code`.
+  The default (`--client claude`, what the Claude hook runs) is unchanged.
+
+### Changed
+
+- **The Pi extension passes `--client pi`**, so a Pi install needs a
+  `witan-code` CLI from this release or later: an older one rejects the flag
+  and the extension, as with any failure, injects no block.
+- **The `witan-code` skill's tool reference is client-neutral**, with short
+  notes on reaching the tools from Claude Code (`ToolSearch`) and Pi (the
+  `mcp` proxy).
+
+- `witan-code setup --agent pi` (and `--agent all` when Pi is detected) now
+  warns when the pi-mcp-adapter Pi package is not declared in Pi's settings,
+  since Pi ignores the witan-code MCP entry in `~/.pi/agent/mcp.json` without
+  it. The warning comes from agent-config-kit's preflight via
+  `witan_core.cli.report_install`. The README and the `setup` help document
+  the prerequisite (`pi install npm:pi-mcp-adapter`).
+
+- The `agent-config-kit` floor is raised from `>=0.7` to `>=0.10`, the first
+  release whose `InstallResult` carries the `prerequisites` that warning is
+  built from; on an older agent-config-kit the warning silently never
+  appeared.
+
+### Fixed
+
+- **The Pi extension now waits as long for the code-graph status block as
+  Claude does.** `codegraph.ts`'s `before_agent_start` gave `witan-code
+  inject-context` 5s, against the 15s the Claude `UserPromptSubmit` hook gets,
+  so a cold store read that ran past 5s was killed before it could fill the
+  cache, and that prompt, and the next cold one, got no block. Both
+  now read one value (`INJECT_CONTEXT_TIMEOUT_SECONDS` in `witan_code.setup`,
+  `INJECT_CONTEXT_TIMEOUT_MS` in the extension), and a test fails if they, or
+  the `configs/pi/extensions` mirror, drift. Every other Pi handler stays
+  detached, and a timeout still degrades to no context.
+
 ## [0.21.0] - 2026-09-23
 
 ### Added
