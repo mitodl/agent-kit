@@ -1,13 +1,34 @@
+/*
+ * The three state colours are the three dyes a witan's own cloth was coloured
+ * with: woad (held, active, the accent), weld (a lapsed lease, anything that
+ * has gone stale) and madder (a contradiction, a cycle, a failure). Each state
+ * is also carried by something other than hue (a dashed edge, a badge's text),
+ * so none of them rests on colour alone.
+ */
 :root {
-	--fg: #1a1a1a;
-	--bg: #ffffff;
-	--panel-bg: #fbfbfb;
-	--muted: #6a6a6a;
-	--rule: #d8d8d8;
-	--accent: #1f5f9e;
-	--warn: #9a5b00;
-	--bad: #a32020;
-	font-family: system-ui, sans-serif;
+	--fg: #1c2330;
+	--bg: #f5f7f9;
+	--panel-bg: #ffffff;
+	--sunk: #eaeef2;
+	--muted: #5b6573;
+	--rule: #d3d9e0;
+	--accent: #2c4a94;
+	--accent-soft: #dfe6f5;
+	--warn: #8a5f00;
+	--warn-soft: #f6ecd2;
+	--bad: #a2302a;
+	--bad-soft: #f6dedb;
+	--font-ui: "Alegreya Sans", "Segoe UI", system-ui, sans-serif;
+	--font-title: "Alegreya", Georgia, "Times New Roman", serif;
+	/* A 1.2 modular scale from a 15px body: small, body, h3, h2, h1. */
+	--step--1: 0.8125rem;
+	--step-0: 0.9375rem;
+	--step-1: 1.125rem;
+	--step-2: 1.375rem;
+	--step-3: 1.75rem;
+	font-family: var(--font-ui);
+	font-size: var(--step-0);
+	line-height: 1.45;
 	color: var(--fg);
 	background: var(--bg);
 }
@@ -19,26 +40,34 @@
  */
 @media (prefers-color-scheme: dark) {
 	:root:not([data-theme="light"]) {
-		--fg: #e8e8e8;
-		--bg: #161616;
-		--panel-bg: #1e1e1e;
-		--muted: #9a9a9a;
-		--rule: #333333;
-		--accent: #6aa9e0;
-		--warn: #e0a95b;
-		--bad: #e08080;
+		--fg: #e2e7ee;
+		--bg: #13171d;
+		--panel-bg: #1a1f27;
+		--sunk: #0f1217;
+		--muted: #97a1ae;
+		--rule: #2e3540;
+		--accent: #93aef0;
+		--accent-soft: #1f2a44;
+		--warn: #e4b64c;
+		--warn-soft: #3a2f14;
+		--bad: #f08e82;
+		--bad-soft: #3d1f1c;
 	}
 }
 
 :root[data-theme="dark"] {
-	--fg: #e8e8e8;
-	--bg: #161616;
-	--panel-bg: #1e1e1e;
-	--muted: #9a9a9a;
-	--rule: #333333;
-	--accent: #6aa9e0;
-	--warn: #e0a95b;
-	--bad: #e08080;
+	--fg: #e2e7ee;
+	--bg: #13171d;
+	--panel-bg: #1a1f27;
+	--sunk: #0f1217;
+	--muted: #97a1ae;
+	--rule: #2e3540;
+	--accent: #93aef0;
+	--accent-soft: #1f2a44;
+	--warn: #e4b64c;
+	--warn-soft: #3a2f14;
+	--bad: #f08e82;
+	--bad-soft: #3d1f1c;
 }
 
 /*
@@ -62,10 +91,85 @@ body {
 
 a {
 	color: var(--accent);
+	text-underline-offset: 0.15em;
+	text-decoration-thickness: 1px;
+}
+
+a:hover {
+	text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+	border-radius: 2px;
 }
 
 code {
-	font-size: 0.9em;
+	font-size: 0.88em;
+	background: var(--sunk);
+	border-radius: 3px;
+	padding: 0.05em 0.3em;
+}
+
+/* Titles are set in the serif: a project, a task, a memory is a named thing,
+   and the serif is what separates its name from the interface around it. */
+h1,
+h2,
+.rollup > header h2,
+.detail-panel > header h2 {
+	font-family: var(--font-title);
+	font-weight: 500;
+	letter-spacing: -0.005em;
+	line-height: 1.2;
+}
+
+/* Section heads inside a view stay in the sans: they label a region rather
+   than name a thing. */
+h3 {
+	font-size: var(--step-0);
+	font-weight: 700;
+	line-height: 1.3;
+}
+
+/* Every table, count, lease age and axis label lines its figures up. Alegreya's
+   default figures are old-style, which suit prose and misalign in a column. */
+table,
+.count,
+.claim,
+.card-meta,
+.read-status,
+.session-head,
+.comment-head,
+dl.facts,
+svg text {
+	font-variant-numeric: lining-nums tabular-nums;
+}
+
+input,
+select,
+button {
+	font: inherit;
+	font-size: var(--step--1);
+	color: var(--fg);
+	background: var(--panel-bg);
+	border: 1px solid var(--rule);
+	border-radius: 4px;
+	padding: 0.2rem 0.4rem;
+}
+
+input[type="checkbox"] {
+	accent-color: var(--accent);
+	padding: 0;
+}
+
+button {
+	cursor: pointer;
+}
+
+button:hover {
+	border-color: var(--accent);
+	color: var(--accent);
 }
 
 /* ── Shell ──────────────────────────────────────────────────────── */
@@ -73,43 +177,85 @@ code {
 .shell-header {
 	display: flex;
 	flex-wrap: wrap;
-	align-items: baseline;
-	gap: 1rem 1.5rem;
-	padding: 0.75rem 1rem;
+	align-items: center;
+	gap: 0.5rem 2rem;
+	padding: 0 1.25rem;
+	background: var(--panel-bg);
 	border-bottom: 1px solid var(--rule);
 }
 
 .shell-header h1 {
 	margin: 0;
-	font-size: 1.1rem;
-	font-weight: 600;
+	padding: 0.55rem 0;
+	font-size: var(--step-2);
+	font-weight: 700;
+	color: var(--accent);
 }
 
 .shell-header nav {
 	display: flex;
-	gap: 1rem;
+	align-self: stretch;
+	gap: 1.25rem;
 }
 
+/* The tab row sits on the header's bottom rule, and the current tab replaces
+   its stretch of that rule with woad. */
 .shell-header nav a {
+	display: flex;
+	align-items: center;
 	color: var(--muted);
 	text-decoration: none;
+	border-bottom: 2px solid transparent;
+	margin-bottom: -1px;
+	padding-top: 2px;
+}
+
+.shell-header nav a:hover {
+	color: var(--fg);
 }
 
 .shell-header nav a[aria-current="page"] {
-	color: var(--accent);
-	font-weight: 600;
+	color: var(--fg);
+	font-weight: 700;
+	border-bottom-color: var(--accent);
 }
 
 .filters {
 	display: flex;
-	align-items: baseline;
+	align-items: center;
 	gap: 1rem;
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	color: var(--muted);
+}
+
+.filters label {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
 }
 
 .filters select {
 	max-width: 16rem;
+}
+
+/* On a phone the tab row scrolls rather than pushing the page sideways, and
+   the filters wrap under it. */
+@media (max-width: 55rem) {
+	.shell-header nav {
+		width: 100%;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+
+	.shell-header nav a {
+		flex: none;
+		padding-bottom: 0.4rem;
+	}
+
+	.filters {
+		flex-wrap: wrap;
+		gap: 0.5rem 1rem;
+	}
 }
 
 /* Pushed to the end of the bar, so the read time sits away from the controls
@@ -117,15 +263,15 @@ code {
 .read-status {
 	margin-left: auto;
 	display: flex;
-	align-items: baseline;
+	align-items: center;
 	gap: 0.75rem;
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	color: var(--muted);
 }
 
 .read-status .stale {
 	color: var(--warn);
-	font-weight: 600;
+	font-weight: 700;
 }
 
 .workspace {
@@ -134,11 +280,21 @@ code {
 }
 
 main {
-	padding: 1rem;
+	padding: 1.25rem;
 	/* `min-width: 0` or the tables refuse to shrink and push the panel off the
 	   right edge: a flex item's default minimum is its content width. */
 	flex: 1;
 	min-width: 0;
+}
+
+main > :first-child > h2:first-child,
+main > :first-child > header:first-child > h2 {
+	margin-top: 0;
+}
+
+main h2 {
+	font-size: var(--step-3);
+	margin: 0.25rem 0 0.75rem;
 }
 
 /* ── States ─────────────────────────────────────────────────────── */
@@ -166,32 +322,57 @@ main {
 table.rows {
 	border-collapse: collapse;
 	width: 100%;
-	font-size: 0.9rem;
+	font-size: var(--step-0);
+	background: var(--panel-bg);
+	border: 1px solid var(--rule);
+	border-radius: 4px;
 }
 
 table.rows th {
 	text-align: left;
-	font-weight: 600;
+	font-size: var(--step--1);
+	font-weight: 700;
+	color: var(--muted);
+	background: var(--sunk);
 	border-bottom: 1px solid var(--rule);
-	padding: 0.35rem 0.5rem;
+	padding: 0.4rem 0.65rem;
 }
 
 table.rows td {
 	border-bottom: 1px solid var(--rule);
-	padding: 0.35rem 0.5rem;
+	padding: 0.45rem 0.65rem;
 	vertical-align: top;
+}
+
+table.rows tr:last-child td {
+	border-bottom: none;
+}
+
+table.rows tbody tr:hover {
+	background: var(--sunk);
 }
 
 table.rows tr.closed {
 	color: var(--muted);
 }
 
+table.rows td a {
+	text-decoration: none;
+}
+
+table.rows td a:hover {
+	text-decoration: underline;
+}
+
+/* A badge is a fact about the row, so it is quiet by default and takes a dye
+   only when the fact is one somebody should act on. */
 .badge {
 	display: inline-block;
-	font-size: 0.72rem;
+	font-size: 0.75rem;
+	line-height: 1.5;
 	border: 1px solid var(--rule);
-	border-radius: 0.6rem;
-	padding: 0 0.4rem;
+	border-radius: 3px;
+	padding: 0 0.35rem;
 	color: var(--muted);
 	white-space: nowrap;
 }
@@ -199,17 +380,34 @@ table.rows tr.closed {
 .badge.blocked,
 .badge.stale-claim {
 	color: var(--warn);
-	border-color: var(--warn);
+	background: var(--warn-soft);
+	border-color: transparent;
+	font-weight: 700;
+}
+
+.badge.status-in_progress,
+.badge.open {
+	color: var(--accent);
+	background: var(--accent-soft);
+	border-color: transparent;
 }
 
 .badge.status-closed {
 	color: var(--muted);
 }
 
+/* Priority sits in front of every title, so it is the quietest badge. */
+.badge.priority {
+	border-color: transparent;
+	background: var(--sunk);
+	font-variant-numeric: lining-nums;
+}
+
 .count {
+	font-family: var(--font-ui);
 	font-weight: 400;
 	color: var(--muted);
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 }
 
 ul.ready,
@@ -233,22 +431,28 @@ ul.symbols li {
 ul.sessions li,
 ul.comments li {
 	border-top: 1px solid var(--rule);
-	padding: 0.5rem 0;
+	padding: 0.6rem 0;
+}
+
+ul.sessions li:first-child,
+ul.comments li:first-child {
+	border-top: none;
 }
 
 .session-head,
 .comment-head {
 	display: flex;
-	gap: 0.75rem;
+	flex-wrap: wrap;
+	gap: 0.3rem 0.75rem;
 	align-items: baseline;
 	margin: 0 0 0.25rem;
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	color: var(--muted);
 }
 
 .assignee {
 	color: var(--muted);
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 }
 
 /* ── Facts and prose ────────────────────────────────────────────── */
@@ -256,13 +460,17 @@ ul.comments li {
 dl.facts {
 	display: grid;
 	grid-template-columns: max-content 1fr;
-	gap: 0.15rem 0.75rem;
-	margin: 0.5rem 0;
-	font-size: 0.9rem;
+	gap: 0.25rem 1rem;
+	margin: 0.75rem 0;
+	font-size: var(--step--1);
 }
 
 dl.facts dt {
 	color: var(--muted);
+}
+
+dl.facts dd {
+	overflow-wrap: anywhere;
 }
 
 dl.facts dd {
@@ -278,14 +486,16 @@ dl.facts dd {
 p.prose,
 .summary {
 	white-space: pre-wrap;
-	margin: 0.25rem 0;
-	max-width: 60rem;
+	margin: 0.25rem 0 0.6rem;
+	/* About 75 characters of Alegreya Sans at the body size. */
+	max-width: 42rem;
+	line-height: 1.55;
 }
 
 .crumbs {
 	margin: 0 0 0.25rem;
 	color: var(--muted);
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	display: flex;
 	gap: 0.4rem;
 	align-items: baseline;
@@ -293,19 +503,25 @@ p.prose,
 }
 
 .rollup > header h2 {
-	margin: 0.25rem 0;
+	margin: 0.25rem 0 0.5rem;
+	font-size: var(--step-3);
 }
 
 .rollup section,
 .task-detail section {
-	margin-top: 1.25rem;
+	margin-top: 1.75rem;
 }
 
 .rollup h3,
-.task-detail h3 {
-	font-size: 0.95rem;
+.task-detail h3,
+.memory-detail h3,
+.board .column h3,
+.tl-group h3 {
+	font-size: var(--step-0);
+	font-weight: 700;
 	border-bottom: 1px solid var(--rule);
-	padding-bottom: 0.2rem;
+	padding-bottom: 0.3rem;
+	margin: 0 0 0.6rem;
 }
 
 /* ── Board ──────────────────────────────────────────────────────── */
@@ -320,13 +536,6 @@ p.prose,
 	align-items: start;
 }
 
-.board .column h3 {
-	font-size: 0.95rem;
-	border-bottom: 1px solid var(--rule);
-	padding-bottom: 0.2rem;
-	margin: 0 0 0.5rem;
-}
-
 ul.cards,
 ul.blockers {
 	list-style: none;
@@ -335,27 +544,55 @@ ul.blockers {
 }
 
 ul.cards > li.card {
+	background: var(--panel-bg);
 	border: 1px solid var(--rule);
-	border-radius: 0.3rem;
-	padding: 0.4rem 0.5rem;
+	border-left-width: 3px;
+	border-radius: 4px;
+	padding: 0.5rem 0.65rem;
 	margin-bottom: 0.5rem;
+}
+
+/* A held card is edged in woad, so the In progress column reads as claimed
+   work at a glance; a closed one steps back so the live columns lead. */
+ul.cards > li.card.status-in_progress {
+	border-left-color: var(--accent);
+}
+
+ul.cards > li.card.status-closed {
+	background: transparent;
+}
+
+ul.cards > li.card.status-closed .card-head a {
+	color: var(--muted);
 }
 
 /* A lapsed claim is the failure the board exists to show, so its card is
    marked at the edge as well as by the badge: visible while scanning a
    column, not only once the badge is read. */
 ul.cards > li.card.stale {
-	border-left: 3px solid var(--warn);
+	border-left-color: var(--warn);
+	background: linear-gradient(to right, var(--warn-soft), var(--panel-bg) 40%);
 }
 
 .card p {
 	margin: 0.15rem 0;
 }
 
+.card-head a {
+	color: var(--fg);
+	text-decoration: none;
+	font-weight: 500;
+}
+
+.card-head a:hover {
+	color: var(--accent);
+	text-decoration: underline;
+}
+
 .card-meta,
 .claim,
 ul.blockers {
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	color: var(--muted);
 }
 
@@ -397,7 +634,7 @@ ul.tl-legend {
 	flex-wrap: wrap;
 	gap: 0.25rem 1.25rem;
 	padding: 0;
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	color: var(--muted);
 }
 
@@ -412,10 +649,7 @@ ul.tl-legend {
 }
 
 .tl-group h3 {
-	font-size: 0.95rem;
-	border-bottom: 1px solid var(--rule);
-	padding-bottom: 0.2rem;
-	margin: 1rem 0 0.25rem;
+	margin-top: 1.25rem;
 }
 
 /* The label column is capped rather than sized to the longest title, so the
@@ -427,8 +661,24 @@ ul.tl-legend {
 	align-items: center;
 }
 
+/* Dense label columns: a link per row, so underlines only on hover or they
+   read as a wall of rules. */
+a.tl-label,
+ol.wv-labels a,
+.gr-list a {
+	color: var(--fg);
+	text-decoration: none;
+}
+
+a.tl-label:hover,
+ol.wv-labels a:hover,
+.gr-list a:hover {
+	color: var(--accent);
+	text-decoration: underline;
+}
+
 .tl-label {
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -465,6 +715,7 @@ ul.tl-legend {
 
 rect.lead {
 	fill: var(--rule);
+	rx: 2px;
 }
 
 rect.lead.hatched {
@@ -478,6 +729,7 @@ line.hatch {
 
 rect.work {
 	fill: var(--accent);
+	rx: 2px;
 }
 
 line.first-claim {
@@ -498,7 +750,8 @@ line.lease.stale {
 
 rect.session {
 	fill: var(--accent);
-	fill-opacity: 0.45;
+	fill-opacity: 0.4;
+	rx: 2px;
 }
 
 /* Never ended, so only its start is known: a dashed tick, not a bar. */
@@ -537,7 +790,7 @@ ol.wv-labels {
 ol.wv-labels li {
 	height: 22px;
 	line-height: 22px;
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -634,7 +887,8 @@ path.wv-head {
 	overflow-y: auto;
 	background: var(--panel-bg);
 	border-left: 1px solid var(--rule);
-	padding: 1rem;
+	padding: 1.25rem 1.5rem;
+	box-sizing: border-box;
 }
 
 /* Below the width where a split reads as two cramped columns, the panel takes
@@ -652,22 +906,46 @@ path.wv-head {
 	}
 }
 
+/* Title and close on the first row, the panel's own read state under the
+   title: beside it, the status squeezed into a word per line. */
 .detail-panel > header {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: 1rem;
+	display: grid;
+	grid-template-columns: 1fr auto;
+	grid-template-areas: "title close" "status status";
+	align-items: start;
+	gap: 0.35rem 1rem;
+}
+
+.detail-panel > header h2 {
+	grid-area: title;
+}
+
+.detail-panel > header .read-status {
+	grid-area: status;
+	margin-left: 0;
+}
+
+/* Focus moves to the panel when it opens so a keyboard lands in it; the
+   panel is a region, not a control, so it takes no ring. */
+.detail-panel:focus {
+	outline: none;
 }
 
 .detail-panel > header h2 {
 	margin: 0;
-	font-size: 1rem;
+	font-size: var(--step-2);
 }
 
 .detail-panel .close {
+	grid-area: close;
 	text-decoration: none;
-	font-size: 1.4rem;
+	color: var(--muted);
+	font-size: 1.6rem;
 	line-height: 1;
+}
+
+.detail-panel .close:hover {
+	color: var(--fg);
 }
 
 /* ── Memory ─────────────────────────────────────────────────────── */
@@ -675,9 +953,9 @@ path.wv-head {
 .memory-toolbar {
 	display: flex;
 	flex-wrap: wrap;
-	align-items: baseline;
+	align-items: center;
 	gap: 0.5rem 1rem;
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	color: var(--muted);
 	margin-bottom: 1rem;
 }
@@ -688,8 +966,8 @@ path.wv-head {
 
 .memory-view > section > h2,
 .memory-view > header > h2 {
-	font-size: 1rem;
-	margin: 1.25rem 0 0.5rem;
+	font-size: var(--step-2);
+	margin: 1.5rem 0 0.5rem;
 }
 
 ul.pairs,
@@ -706,7 +984,8 @@ li.pair {
 
 .pair-head {
 	margin: 0 0 0.5rem;
-	font-size: 0.85rem;
+	font-size: var(--step--1);
+	color: var(--muted);
 }
 
 /* Side by side: the point of the inbox is reading the two claims against each
@@ -724,18 +1003,22 @@ li.pair {
 }
 
 .side {
-	border-left: 3px solid var(--warn);
-	padding-left: 0.75rem;
+	border-left: 3px solid var(--bad);
+	background: var(--panel-bg);
+	border-radius: 0 4px 4px 0;
+	padding: 0.5rem 0.9rem;
 	min-width: 0;
 }
 
 .side h3 {
-	font-size: 0.95rem;
+	font-family: var(--font-title);
+	font-weight: 500;
+	font-size: var(--step-1);
 	margin: 0.25rem 0;
 }
 
 .side .muted {
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	display: flex;
 	gap: 0.75rem;
 	margin: 0 0 0.25rem;
@@ -743,7 +1026,7 @@ li.pair {
 
 .resolve {
 	margin-top: 0.5rem;
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 }
 
 .resolve pre {
@@ -751,16 +1034,19 @@ li.pair {
 	overflow-wrap: anywhere;
 }
 
-.badge.contradicted,
 .badge.superseded,
 .badge.severity-warning {
 	color: var(--warn);
-	border-color: var(--warn);
+	background: var(--warn-soft);
+	border-color: transparent;
 }
 
+.badge.contradicted,
 .badge.severity-critical {
 	color: var(--bad);
-	border-color: var(--bad);
+	background: var(--bad-soft);
+	border-color: transparent;
+	font-weight: 700;
 }
 
 .superseded-note {
@@ -769,13 +1055,7 @@ li.pair {
 }
 
 .memory-detail section {
-	margin-top: 1.25rem;
-}
-
-.memory-detail h3 {
-	font-size: 0.95rem;
-	border-bottom: 1px solid var(--rule);
-	padding-bottom: 0.2rem;
+	margin-top: 1.75rem;
 }
 
 ul.neighbors li {
@@ -804,7 +1084,7 @@ ul.neighbors li.edge-inferred {
 	display: inline-flex;
 	gap: 0.4rem;
 	align-items: baseline;
-	font-size: 0.8rem;
+	font-size: var(--step--1);
 }
 
 .badge.confidence-asserted {
@@ -829,7 +1109,7 @@ ul.gr-legend {
 	margin: 0.5rem 0;
 	padding: 0;
 	list-style: none;
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 	color: var(--muted);
 }
 
@@ -849,6 +1129,7 @@ ul.gr-legend {
 	min-height: 24rem;
 	border: 1px solid var(--rule);
 	border-radius: 4px;
+	background: var(--panel-bg);
 }
 
 /*
@@ -896,7 +1177,7 @@ div.vis-tooltip {
 }
 
 .bridge-edge-heading {
-	font-size: 1rem;
+	font-size: var(--step-1);
 	margin: 1rem 0 0.5rem;
 }
 
@@ -917,7 +1198,7 @@ ul.bridge-contracts li {
 .bridge-kind {
 	min-width: 5rem;
 	color: var(--muted);
-	font-size: 0.85rem;
+	font-size: var(--step--1);
 }
 
 /* The drill's own read status sits above its table, not in the top bar. */

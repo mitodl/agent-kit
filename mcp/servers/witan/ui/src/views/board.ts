@@ -293,7 +293,7 @@ export function boardCard(
 ): TemplateResult {
 	const blockers = task.status === "closed" ? [] : openBlockers(task, live);
 	return html`
-    <li class=${task.lease_expired ? "card stale" : "card"}>
+    <li class="card status-${task.status}${task.lease_expired ? " stale" : ""}">
       <p class="card-head">
         <span class="badge priority">${task.priority}</span>
         <a href=${routeHref(route, { slug: task.slug })}>${task.title}</a>

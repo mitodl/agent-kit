@@ -85,6 +85,7 @@ export function mountBridgeCanvas(
 			const fg = style.getPropertyValue("--fg").trim();
 			const muted = style.getPropertyValue("--muted").trim();
 			const accent = style.getPropertyValue("--accent").trim();
+			const face = style.getPropertyValue("--font-ui").trim();
 
 			const nextNodes: VisNode[] = graph.repos.map((repo) => ({
 				id: repo,
@@ -92,7 +93,7 @@ export function mountBridgeCanvas(
 				title: repo,
 				shape: "box",
 				color: { background: "transparent", border: accent },
-				font: { color: fg, size: 14 },
+				font: { color: fg, face, size: 15 },
 			}));
 			const nextEdges: VisEdge[] = graph.edges.map((edge) => ({
 				id: edgeKey(edge),
@@ -102,7 +103,7 @@ export function mountBridgeCanvas(
 				title: `${repoLabel(edge.consumer)} depends on ${repoLabel(edge.provider)}\n${edge.weight} ${edge.weight === 1 ? "contract" : "contracts"}. Click for them.`,
 				width: 1 + Math.log2(edge.weight),
 				color: { color: edgeColor(edge.kinds, muted) },
-				font: { color: muted },
+				font: { color: muted, face },
 			}));
 
 			const placed = new Set(nodes.getIds().map(String));

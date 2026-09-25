@@ -827,6 +827,7 @@ def gen_env() -> None:
 # CLI references that disagree the moment a flag changes.
 MIRRORED: list[tuple[str, str]] = [
     ("mcp/servers/witan/docs/USER_GUIDE.md", "guides/witan-user-guide.md"),
+    ("mcp/servers/witan/docs/web-ui.md", "guides/witan-ui.md"),
     ("mcp/servers/witan/docs/write-path-scanning.md", "guides/write-path-scanning.md"),
     ("mcp/servers/witan/docs/migration-runbook.md", "guides/migration-runbook.md"),
     (
@@ -908,6 +909,10 @@ def rewrite_links(text: str, source_rel: str, dest_rel: str, mirror_map: dict) -
         if resolved in mirror_map:
             # Both ends are on the site: emit a site-relative path.
             new = os.path.relpath(mirror_map[resolved], str(dest_dir))
+        elif resolved.startswith("docs/") and (REPO_ROOT / resolved).exists():
+            # Already in the site tree, e.g. a screenshot under docs/assets/.
+            # A GitHub blob URL would render an image link as a broken image.
+            new = os.path.relpath(resolved.removeprefix("docs/"), str(dest_dir))
         elif (REPO_ROOT / resolved).exists():
             new = GITHUB_BLOB + resolved
         else:

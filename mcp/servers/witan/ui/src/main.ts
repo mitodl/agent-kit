@@ -1,6 +1,17 @@
 import { App } from "./app.js";
 import { earlyInit } from "./auth.js";
 import { mountBase } from "./mcp.js";
+// The page's typefaces, self-hosted because the CSP is `default-src 'self'`.
+// Imported here rather than from style.css so the MCP Apps widgets, which
+// share the stylesheet but are built single-file, do not each inline about
+// 190 KB of base64 fonts (145 KB as woff2). They fall back to the system stack
+// named after Alegreya in `--font-*`.
+import "@fontsource/alegreya-sans/latin-400.css";
+import "@fontsource/alegreya-sans/latin-400-italic.css";
+import "@fontsource/alegreya-sans/latin-500.css";
+import "@fontsource/alegreya-sans/latin-700.css";
+import "@fontsource/alegreya/latin-500.css";
+import "@fontsource/alegreya/latin-700.css";
 import "./style.css";
 
 // Before anything else touches the URL: a login redirect lands here with the
