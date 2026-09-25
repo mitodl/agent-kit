@@ -58,6 +58,7 @@ export function mountCanvas(
 	 */
 	const opened = new Set<string>();
 	let fg = "";
+	let face = "";
 	const network = new Network(
 		element,
 		{ nodes, edges },
@@ -101,7 +102,7 @@ export function mountCanvas(
 			shape: cluster.project ? "diamond" : "square",
 			size: 22,
 			color: { background: cluster.color, border: cluster.color },
-			font: { color: fg, size: 15 },
+			font: { color: fg, face, size: 15 },
 		};
 		network.cluster({
 			joinCondition: (options: VisNode) => options.clusterKey === cluster.key,
@@ -158,7 +159,7 @@ export function mountCanvas(
 			const muted = style.getPropertyValue("--muted").trim();
 			// The canvas draws its own text, so it takes the page's face by name;
 			// vis-network's default is Arial whatever the stylesheet says.
-			const face = style.getPropertyValue("--font-ui").trim();
+			face = style.getPropertyValue("--font-ui").trim();
 
 			groups.clear();
 			clusterOf.clear();
