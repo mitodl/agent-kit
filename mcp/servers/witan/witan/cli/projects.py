@@ -69,7 +69,7 @@ def projects(
     else:
         rows = _fn(s.workflow_project_search)(query=query, repo=repo_arg, status=status)
     rows = rows[:limit]
-    matching = "" if query is None else f" matching '{esc(query)}'"
+    matching = "" if query is None else f" matching '{query}'"
     detected_repo = (
         _detect_repo_for_display() if not all_repos and repo is None else repo
     )
@@ -93,7 +93,7 @@ def projects(
         title=f"Workflow projects{matching} — {scope}",
         columns=["status", "phase", "slug", "title", "repos"],
         rows=rows_data,
-        empty=f"[dim]No projects{matching}.[/dim]",
+        empty=f"[dim]No projects{esc(matching)}.[/dim]",
         no_wrap={"status", "phase"},
         styles={"status": _STATUS_STYLE},
     )

@@ -286,3 +286,17 @@ def test_project_show_of_a_missing_project_exits_nonzero_with_nothing_on_stdout(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "wp-does-not-exist" in captured.err
+
+
+def test_a_structured_title_carries_the_query_unescaped(cli, capsys):
+    # The txt path escapes the title for Rich; structured output is parsed,
+    # not rendered, so a `\[` there is a corrupted title.
+    from witan.cli.tasks import tasks
+
+    _as("json")
+
+    tasks("[wip] grafana", all_repos=True)
+
+    title = json.loads(capsys.readouterr().out)["title"]
+    assert "'[wip] grafana'" in title
+    assert "\\" not in title
