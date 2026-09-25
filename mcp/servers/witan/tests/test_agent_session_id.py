@@ -247,11 +247,17 @@ def test_pi_extension_forwards_the_session_id_to_the_checkpoint():
     """Pi puts ``PI_SESSION_ID`` only in its bash tool's command env, not in
     its own process env, so the shutdown handler must set it on the checkpoint
     child explicitly — and drop an inherited ``CLAUDE_SESSION_ID``, which the
-    helper would otherwise prefer. Detached, so shutdown never waits on it."""
+    helper would otherwise prefer. Detached, so shutdown never waits on it.
+
+    Both inherited ids are dropped even when Pi's own id is unavailable: an
+    early return that let the child inherit the env unchanged would checkpoint
+    the enclosing session's handle instead of no-oping."""
     src = _PACKAGE_EXT.read_text()
     assert "sessionManager?.getSessionId" in src
-    assert "PI_SESSION_ID: sessionId" in src
     assert "delete env.CLAUDE_SESSION_ID" in src
+    assert "delete env.PI_SESSION_ID" in src
+    assert "if (sessionId) env.PI_SESSION_ID = sessionId" in src
+    assert "return undefined" not in src.split("function checkpointEnv", 1)[1]
     assert (
         'runInBackground(["session-checkpoint"], ctx?.cwd, checkpointEnv(ctx))' in src
     )
