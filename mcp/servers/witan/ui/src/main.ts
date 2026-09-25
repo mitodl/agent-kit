@@ -3,9 +3,9 @@ import { earlyInit } from "./auth.js";
 import { mountBase } from "./mcp.js";
 // The page's typefaces, self-hosted because the CSP is `default-src 'self'`.
 // Imported here rather than from style.css so the MCP Apps widgets, which
-// share the stylesheet but are built single-file, do not inline ~130 KB of
-// base64 fonts a host's CSP may refuse anyway. They fall back to the system
-// stack named after Alegreya in `--font-*`.
+// share the stylesheet but are built single-file, do not each inline about
+// 190 KB of base64 fonts (145 KB as woff2). They fall back to the system stack
+// named after Alegreya in `--font-*`.
 import "@fontsource/alegreya-sans/latin-400.css";
 import "@fontsource/alegreya-sans/latin-400-italic.css";
 import "@fontsource/alegreya-sans/latin-500.css";

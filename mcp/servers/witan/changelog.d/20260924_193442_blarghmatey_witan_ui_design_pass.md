@@ -10,8 +10,8 @@
   it, dense label columns drop their underlines until hovered, the Graph and
   Bridge canvases draw labels in the page's face, and the top bar no longer
   pushes the page sideways on a phone. The MCP Apps widgets share the
-  stylesheet but not the fonts, which would have added ~130 KB of base64 to
-  each single-file widget, so they fall back to the system face.
+  stylesheet but not the fonts, which would have added about 190 KB of base64
+  to each single-file widget, so they fall back to the system face.
 
 ### Added
 
