@@ -141,7 +141,7 @@ priority = 30
 # files nobody edited.
 [[repos]]
 repo = "https://github.com/biomejs/pre-commit"
-rev = "v2.4.16"
+rev = "v2.5.13"
 hooks = [
   { id = "biome-check", priority = 20, exclude = "^mcp/servers/witan/ui/fixtures/" },
 ]
