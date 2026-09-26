@@ -72,6 +72,22 @@ def test_a_table_cell_keeps_its_brackets(render):
     assert "[targets.production]" in out
 
 
+def test_a_table_title_keeps_its_brackets(render):
+    # Callers pass the title plain; render_table escapes it for Rich itself.
+    from witan.cli._common import render_table
+
+    out = render(
+        render_table,
+        title="Tasks matching '[wip] grafana'",
+        columns=["slug", "title"],
+        # Rich wraps a title to the table's width, so give it room.
+        rows=[{"slug": "tk-x", "title": "a title long enough to widen the table"}],
+        empty="",
+    )
+
+    assert "'[wip] grafana'" in out
+
+
 def test_styling_a_column_still_works_after_escaping(render):
     # The escape must not swallow the styles the renderer itself applies —
     # those are markup we wrote, not data we were handed.

@@ -286,3 +286,44 @@ def test_project_show_of_a_missing_project_exits_nonzero_with_nothing_on_stdout(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "wp-does-not-exist" in captured.err
+
+
+def test_a_structured_title_carries_the_query_unescaped(cli, capsys):
+    # The txt path escapes the title for Rich; structured output is parsed,
+    # not rendered, so a `\[` there is a corrupted title.
+    from witan.cli.tasks import tasks
+
+    _as("json")
+
+    tasks("[wip] grafana", all_repos=True)
+
+    title = json.loads(capsys.readouterr().out)["title"]
+    assert "'[wip] grafana'" in title
+    assert "\\" not in title
+
+
+def test_projects_status_all_lists_every_status(cli, capsys):
+    from witan.cli.projects import projects
+
+    active = _project(cli, "still going")
+    abandoned = _project(cli, "given up")
+    _fn(cli.workflow_project_update)(slug=abandoned, status="abandoned")
+    _as("json")
+
+    projects(all_repos=True, status="all")
+
+    slugs = {r["slug"] for r in json.loads(capsys.readouterr().out)["rows"]}
+    assert {active, abandoned} <= slugs
+
+
+def test_projects_default_status_still_hides_abandoned(cli, capsys):
+    from witan.cli.projects import projects
+
+    abandoned = _project(cli, "given up")
+    _fn(cli.workflow_project_update)(slug=abandoned, status="abandoned")
+    _as("json")
+
+    projects(all_repos=True)
+
+    slugs = {r["slug"] for r in json.loads(capsys.readouterr().out)["rows"]}
+    assert abandoned not in slugs

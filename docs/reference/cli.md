@@ -383,7 +383,7 @@ List workflow projects (default: active in the current repo).
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
 * `--repo`: Scope to a specific repo URI (default: the current git repo).
-* `--status`: Filter by active | completed | abandoned. *[default: active]*
+* `--status`: Filter by active | completed | abandoned, or all for every status. *[choices: active, completed, abandoned, all]* *[default: active]*
 * `--all-repos, --no-all-repos`: Span every repo in the graph. *[default: False]*
 * `--limit`: Max rows. *[default: 50]*
 

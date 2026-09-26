@@ -199,7 +199,7 @@ def tasks(
         scope = "all repos (no git context)"
     base_title = "Ready tasks" if ready else "Tasks"
     if query is not None:
-        base_title += f" matching '{esc(query)}'"
+        base_title += f" matching '{query}'"
     rows_data = [
         {
             "priority": r.get("priority", ""),
