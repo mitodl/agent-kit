@@ -475,31 +475,47 @@ _SKIP_DIRS = {
 }
 
 
-def extract_repo_bindings(base: Path, repo: str) -> list[ParsedBinding]:
+def extract_repo_bindings(
+    base: Path, repo: str
+) -> tuple[list[ParsedBinding], set[str]]:
     """Tier B — provider bindings from a repo's well-known files.
 
     Each sub-extractor is best-effort; a malformed file yields nothing rather
     than aborting. ``repo`` is the canonical HTTPS slug (used to self-join
     service deploy targets).
+
+    Also returns every config file scanned, whether or not it produced a
+    binding, for the caller to purge. None of them is a Tier A source file, so
+    the indexer never reports one as touched, and a file that stops producing
+    bindings (a `pyproject.toml` whose `mitol/<pkg>/` was deleted, an OpenAPI
+    spec with its paths removed) would otherwise keep its old rows forever.
+    ``__main__.py`` is left out: Tier A parses it too, so purging it on a run
+    that skipped it as unchanged would drop its consumer bindings.
     """
     out: list[ParsedBinding] = []
+    sources: set[str] = set()
     for path in _walk(base):
         rel = _rel(path, base)
         name = path.name
         try:
-            if name.startswith("Pulumi.") and path.suffix in (".yaml", ".yml"):
-                out.extend(_pulumi_env_vars(path, rel))
-            elif name == "__main__.py":
+            if name == "__main__.py":
                 out.extend(_service_anchors(path, rel))
+                continue
+            if name.startswith("Pulumi.") and path.suffix in (".yaml", ".yml"):
+                extract = _pulumi_env_vars
             elif name == "package.json":
-                out.extend(_package_provider(path, rel))
+                extract = _package_provider
             elif name == "pyproject.toml":
-                out.extend(_python_package_providers(path, rel))
+                extract = _python_package_providers
             elif _looks_like_openapi(path):
-                out.extend(_openapi_endpoints(path, rel))
+                extract = _openapi_endpoints
+            else:
+                continue
+            sources.add(rel)
+            out.extend(extract(path, rel))
         except Exception:  # noqa: BLE001, S112 — one bad file must not abort the repo
             continue
-    return out
+    return out, sources
 
 
 def _walk(base: Path):

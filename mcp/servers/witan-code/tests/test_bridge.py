@@ -344,8 +344,8 @@ def test_extracted_endpoint_and_package_bindings_form_edges(tmp_path):
             ),
             consumer,
         )
-        + _rows(extract_repo_bindings(backend, provider), provider)
-        + _rows(extract_repo_bindings(ol_django, lib), lib)
+        + _rows(extract_repo_bindings(backend, provider)[0], provider)
+        + _rows(extract_repo_bindings(ol_django, lib)[0], lib)
     )
     graph = visualize.build_graph(rows)
 
@@ -359,13 +359,16 @@ def test_python_package_provider_only_for_namespace_children(tmp_path):
     (app / "courses").mkdir(parents=True)
     (app / "courses" / "__init__.py").write_text("")
     (app / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    assert extract_repo_bindings(app, "https://github.com/test/app") == []
+    assert extract_repo_bindings(app, "https://github.com/test/app") == (
+        [],
+        {"pyproject.toml"},
+    )
 
     # A regular (non-namespace) `mitol` package is the app's own, not shared.
     (app / "mitol" / "thing").mkdir(parents=True)
     (app / "mitol" / "__init__.py").write_text("")
     (app / "mitol" / "thing" / "__init__.py").write_text("")
-    assert extract_repo_bindings(app, "https://github.com/test/app") == []
+    assert extract_repo_bindings(app, "https://github.com/test/app")[0] == []
 
 
 # Repo A (mit-learn-like): a Django settings consumer + a NextJS endpoint/env
@@ -569,6 +572,52 @@ def test_known_provider_package_boost_sourced_from_stage1_symbol_table(
     ]
     assert len(rows) == 1
     assert rows[0]["confidence"] == pytest.approx(0.8)
+
+
+@requires_stack
+def test_tier_b_source_that_stops_emitting_loses_its_rows(tmp_path, monkeypatch):
+    """A pyproject.toml whose mitol/<pkg>/ was deleted must not keep providing it.
+
+    The toml is unchanged and still on disk. On a run that cannot purge by the
+    collected file list (here: no repository root), nothing put it in the
+    purge set until Tier B started reporting the sources it scanned.
+    """
+    import shutil
+
+    from witan_code import config as cfg_mod
+    from witan_code import indexer
+    from witan_code import server as srv
+    from witan_code.graph import OmnigraphClient
+
+    monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))
+    monkeypatch.setenv("WITAN_REPO", "https://github.com/test/ol-django")
+    cfg = cfg_mod.load()
+    monkeypatch.setattr(srv, "cfg", cfg)
+    srv._clients.clear()
+
+    repo = tmp_path / "ol-django"
+    pkg = repo / "mitol" / "common"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (repo / "pyproject.toml").write_text('[project]\nname = "mitol-django-common"\n')
+
+    client = OmnigraphClient(
+        str(cfg_mod.bridge_store_path(cfg.code_dir)), cfg.queries_dir
+    )
+
+    def providers():
+        return [
+            r["key_norm"]
+            for r in client.read("bridge.gq", "all_bindings", {})
+            if r["kind"] == "package" and r["role"] == "provider"
+        ]
+
+    _index(srv, indexer, repo)
+    assert providers() == ["mitol.common"]
+
+    shutil.rmtree(pkg)
+    _index(srv, indexer, repo)
+    assert providers() == []
 
 
 @requires_stack

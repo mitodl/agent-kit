@@ -587,7 +587,11 @@ def index_path(
     # entirely: the shared main view still never sees in-flight bindings, but
     # they're no longer dropped on the floor either.
     if full_repo:
-        bindings.extend(bridge_extractors.extract_repo_bindings(base, slug))
+        repo_bindings, repo_sources = bridge_extractors.extract_repo_bindings(
+            base, slug
+        )
+        bindings.extend(repo_bindings)
+        touched_files.extend(sorted(repo_sources))
     try:
         stats.bindings = bridge_module.write_bindings(
             bindings,
