@@ -103,7 +103,7 @@ edges):
 |---|---|---|---|
 | `env_var` | Pulumi `<app>:env_vars` keys in `Pulumi.*.yaml` | `get_string("NAME",…)` / `os.environ` / `process.env.X` / `env("NAME")` | the `UPPER_SNAKE` name |
 | `endpoint` | drf-spectacular OpenAPI spec (`paths.<path>.<method>`) | `/api/…` path literals in TS (generated client / fetch) | normalized path (params → `{}`) |
-| `package` | a repo whose `package.json` name is `@mitodl/*` | `from mitol.*` / `include("mitol.*")` / `@mitodl/*` imports | the package name |
+| `package` | a repo whose `package.json` name is `@mitodl/*`, or a `pyproject.toml` next to a `mitol/<pkg>/__init__.py` namespace child (provides `mitol.<pkg>`) | `from mitol.*` / `include("mitol.*")` / `@mitodl/*` imports | the package name |
 | `service` | `applications/<svc>/__main__.py` (repo / image / service name) | the deployed repo itself (key_norm = its canonical URI) | `repo:<uri>` / `image:…` / `name:…` |
 
 Generic env names (`DEBUG`, `PORT`, `SECRET_KEY`, …) are flagged `generic` and
@@ -113,7 +113,7 @@ every repo.
 The bridge is written in a **separate phase after the per-repo store write**, so
 the two stores' advisory write locks never nest (no deadlock) and a bridge
 failure never corrupts a per-repo store. A full-repo index runs the repo-level
-provider extractors (OpenAPI / Pulumi / service / `package.json`) and clears
+provider extractors (OpenAPI / Pulumi / service / `package.json` / `pyproject.toml`) and clears
 bindings for files deleted from disk; all purging is per-file, so unchanged
 (skipped) files — and, for a narrow target like the reindex hook, sibling
 files — keep their bindings.
