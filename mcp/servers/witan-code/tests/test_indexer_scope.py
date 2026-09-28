@@ -249,7 +249,7 @@ def test_unreadable_directory_suppresses_the_purge(tmp_path, monkeypatch):
 
     def _walk(top, *args, onerror=None, **kwargs):
         for entry in real_walk(top, *args, **kwargs):
-            root, dirs, files = entry
+            root, dirs, _files = entry
             if Path(root) == src:
                 dirs[:] = [d for d in dirs if d != "sub"]
                 if onerror is not None:

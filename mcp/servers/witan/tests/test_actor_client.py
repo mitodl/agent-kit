@@ -138,7 +138,7 @@ def test_deployed_mode_caches_client_across_calls(deployed_mode, monkeypatch):
 def test_deployed_mode_gives_different_actors_different_clients(
     deployed_mode, monkeypatch
 ):
-    resolver, built = deployed_mode
+    _resolver, built = deployed_mode
     tokens = iter([_FakeToken({"sub": "alice"}), _FakeToken({"sub": "bob"})])
     monkeypatch.setattr(srv, "get_access_token", lambda: next(tokens))
 

@@ -102,7 +102,7 @@ def normalize_endpoint(path: str) -> str:
 def normalize_key(kind: str, key: str) -> str:
     if kind == "endpoint":
         # key may be "METHOD /path"; normalize only the path part.
-        method, _, rest = key.partition(" ")
+        _method, _, rest = key.partition(" ")
         if rest:
             return normalize_endpoint(rest)
         return normalize_endpoint(key)
@@ -501,7 +501,7 @@ def extract_repo_bindings(base: Path, repo: str) -> list[ParsedBinding]:
                 out.extend(_package_provider(path, rel))
             elif _looks_like_openapi(path):
                 out.extend(_openapi_endpoints(path, rel))
-        except Exception:  # noqa: BLE001 — one bad file must not abort the repo
+        except Exception:  # noqa: BLE001, S112 — one bad file must not abort the repo
             continue
     return out
 

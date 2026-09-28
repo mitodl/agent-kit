@@ -448,9 +448,8 @@ def test_missing_edge_properties_name_the_fix(server):
     engine_error = RuntimeError(
         "type error: T6: edge `RelatedTo` has no property `confidence`"
     )
-    with pytest.raises(RuntimeError) as excinfo:
-        with server._module._edge_property_errors():
-            raise engine_error
+    with pytest.raises(RuntimeError) as excinfo, server._module._edge_property_errors():
+        raise engine_error
     assert "witan migrate schema" in str(excinfo.value)
     assert excinfo.value.__cause__ is engine_error
 
@@ -458,9 +457,11 @@ def test_missing_edge_properties_name_the_fix(server):
 @requires_omnigraph
 def test_unrelated_errors_pass_through_untouched(server):
     boom = RuntimeError("connection refused")
-    with pytest.raises(RuntimeError, match="connection refused") as excinfo:
-        with server._module._edge_property_errors():
-            raise boom
+    with (
+        pytest.raises(RuntimeError, match="connection refused") as excinfo,
+        server._module._edge_property_errors(),
+    ):
+        raise boom
     assert excinfo.value is boom
 
 
@@ -470,7 +471,6 @@ def test_a_write_refusal_keeps_its_type(server):
     write path. Rewriting a refusal into a plain RuntimeError would lose the
     type every caller distinguishes a policy block by."""
     refusal = WriteBlocked("link_related_to", [])
-    with pytest.raises(WriteBlocked) as excinfo:
-        with server._module._edge_property_errors():
-            raise refusal
+    with pytest.raises(WriteBlocked) as excinfo, server._module._edge_property_errors():
+        raise refusal
     assert excinfo.value is refusal

@@ -17,7 +17,7 @@ import uuid
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -29,8 +29,8 @@ from fastmcp.server.dependencies import get_access_token
 from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from witan_core import caching, chunking, normalise, now_iso
-from witan_core import omnigraph_install
+
+from witan_core import caching, chunking, normalise, now_iso, omnigraph_install
 from witan_core.export_rows import (
     edge_key,
     edge_rank,
@@ -50,8 +50,15 @@ from witan_core.omnigraph import (
 from witan_core.refusal import Refusal
 
 from . import config as cfg_module
-from . import ui_routes, ui_widgets
-from . import elicit, merge_report, readiness, scan, session_state
+from . import (
+    elicit,
+    merge_report,
+    readiness,
+    scan,
+    session_state,
+    ui_routes,
+    ui_widgets,
+)
 from . import repo as repo_module
 from .graph import (
     OmnigraphClient,
@@ -963,7 +970,7 @@ def _lease_expiry(lease_started_at: str | None) -> str | None:
     except (ValueError, TypeError):
         return None
     if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
+        started = started.replace(tzinfo=UTC)
     return (started + timedelta(seconds=readiness.CLAIM_LEASE_SECONDS)).isoformat()
 
 
@@ -1617,7 +1624,10 @@ def _snapshot(binary: str, store: str) -> tuple[bool, str]:
     guaranteed to land on stderr alone.
     """
     result = subprocess.run(
-        [binary, "snapshot", "--store", store], capture_output=True, text=True
+        [binary, "snapshot", "--store", store],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode == 0:
         return True, result.stdout
@@ -1700,6 +1710,7 @@ def _run_omnigraph(cmd: list[str], *, label: str, stdout=None) -> str:
         stdout=stdout if stdout is not None else subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        check=False,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -2038,7 +2049,7 @@ def _classify_rows(
         # path gets it too — the MCP schema says `list[dict]`, but that is the
         # deployment's guarantee, not this function's.
         if not isinstance(row, dict):
-            raise RuntimeError(f"{source}: export row is not a JSON object: {row!r}")
+            raise RuntimeError(f"{source}: export row is not a JSON object: {row!r}")  # noqa: TRY004 - bad export data, not a caller error
         if is_edge(row):
             edges[edge_key(row)] = row
             continue
@@ -2496,11 +2507,9 @@ def merge_store(
     # always a plain path and only http(s)/s3 count as "remote". `omnigraph`
     # itself accepts an explicit `file://` for `--store`, so callers may
     # reasonably pass one; strip it before it reaches any local Path logic.
-    if source.startswith("file://"):
-        source = source[len("file://") :]
+    source = source.removeprefix("file://")
     target = target or client.graph_uri
-    if target.startswith("file://"):
-        target = target[len("file://") :]
+    target = target.removeprefix("file://")
     from_export = _is_export_file(source)
     if from_export:
         _check_export_source(source)
@@ -2529,104 +2538,106 @@ def merge_store(
     # is the same bargain a local target has always made, and it is the point:
     # a writer landing mid-reconcile is what makes the decisions stale. A served
     # target still takes no lock, because its other writers are on other hosts.
-    with target_client.hold_write_lock():
-        with tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp:
-            tmp_path = Path(tmp)
-            target_file = tmp_path / "target.jsonl"
+    with (
+        target_client.hold_write_lock(),
+        tempfile.TemporaryDirectory(prefix="witan-merge-") as tmp,
+    ):
+        tmp_path = Path(tmp)
+        target_file = tmp_path / "target.jsonl"
 
-            if from_export:
-                source_file = Path(source)
-            else:
-                source_file = tmp_path / "source.jsonl"
-                _store_client(source, source_s3).export_to(
-                    source_file, label="export (source)"
+        if from_export:
+            source_file = Path(source)
+        else:
+            source_file = tmp_path / "source.jsonl"
+            _store_client(source, source_s3).export_to(
+                source_file, label="export (source)"
+            )
+        target_client.export_to(target_file, label="export (target)")
+
+        source_nodes, source_edges, source_passthrough, source_dupes = _parse_export(
+            source_file
+        )
+        target_nodes, target_edges, _, _ = _parse_export(target_file)
+
+        decisions, winners = _reconcile_nodes(source_nodes, target_nodes, since)
+        edge_decisions, edge_winners = _reconcile_edges(source_edges, target_edges)
+        watermark = _next_watermark(None, source_nodes, target_nodes, winners)
+        decisions += edge_decisions
+        counts = _decision_counts(decisions)
+        accounting = _merge_accounting(
+            source_nodes, source_edges, source_passthrough, source_dupes
+        )
+
+        if dry_run:
+            return {
+                "dry_run": True,
+                "target": target,
+                "decisions": decisions,
+                "watermark": watermark,
+                **accounting,
+                **counts,
+            }
+
+        to_load = winners + edge_winners + source_passthrough
+        if not to_load:
+            return {
+                "merged": True,
+                "target": target,
+                "decisions": decisions,
+                "rows_loaded": 0,
+                "watermark": watermark,
+                **accounting,
+                **counts,
+            }
+
+        # CHUNKED, even though the target may be local. Until omnigraph
+        # 0.9 the only ceiling on a load was the served request body, so a
+        # local merge could safely go in one call — which is why this used
+        # a bare `load_batch`. 0.9 added a per-table row cap enforced by
+        # the engine itself, on local stores too, so a merge with more
+        # than `LOAD_MAX_ROWS` winning rows of one type is now refused
+        # here exactly as it would be over HTTP.
+        #
+        # `chunk_records` also emits every node before any edge, which
+        # matters more here than the row bound does: an edge winner whose
+        # endpoint lost reconciliation resolves against the copy already in
+        # the target.
+        #
+        # ATOMICITY IS TRADED AWAY. Batches commit independently, so a
+        # failure part-way leaves the earlier ones applied. That is
+        # recoverable by re-running rather than by cleanup: reconciliation
+        # makes a re-sent row lose to its own already-applied copy, which
+        # is the same "repeatable by construction" property this function's
+        # docstring already promises.
+        outputs = []
+        loaded = 0
+        batches = list(chunking.chunk_records(to_load))
+        for index, batch in enumerate(batches):
+            try:
+                outputs.append(target_client.load_batch(batch, "merge"))
+            except BaseException as exc:
+                # The batches before this one ARE applied — the comment
+                # above says so — and that is precisely what a caller
+                # cannot see from an exception. Attaching how far the merge
+                # got is what lets the CLI report an incomplete merge as
+                # incomplete instead of only as failed.
+                merge_report.attach_partial(
+                    exc,
+                    {
+                        "target": target,
+                        "batches": len(batches),
+                        "batches_applied": index,
+                        # See the remote path's copy: an interrupt is the
+                        # one failure here with no message of its own.
+                        "interrupted": isinstance(exc, KeyboardInterrupt),
+                        "rows_loaded": loaded,
+                        **accounting,
+                        **counts,
+                    },
                 )
-            target_client.export_to(target_file, label="export (target)")
-
-            source_nodes, source_edges, source_passthrough, source_dupes = (
-                _parse_export(source_file)
-            )
-            target_nodes, target_edges, _, _ = _parse_export(target_file)
-
-            decisions, winners = _reconcile_nodes(source_nodes, target_nodes, since)
-            edge_decisions, edge_winners = _reconcile_edges(source_edges, target_edges)
-            watermark = _next_watermark(None, source_nodes, target_nodes, winners)
-            decisions += edge_decisions
-            counts = _decision_counts(decisions)
-            accounting = _merge_accounting(
-                source_nodes, source_edges, source_passthrough, source_dupes
-            )
-
-            if dry_run:
-                return {
-                    "dry_run": True,
-                    "target": target,
-                    "decisions": decisions,
-                    "watermark": watermark,
-                    **accounting,
-                    **counts,
-                }
-
-            to_load = winners + edge_winners + source_passthrough
-            if not to_load:
-                return {
-                    "merged": True,
-                    "target": target,
-                    "decisions": decisions,
-                    "rows_loaded": 0,
-                    "watermark": watermark,
-                    **accounting,
-                    **counts,
-                }
-
-            # CHUNKED, even though the target may be local. Until omnigraph
-            # 0.9 the only ceiling on a load was the served request body, so a
-            # local merge could safely go in one call — which is why this used
-            # a bare `load_batch`. 0.9 added a per-table row cap enforced by
-            # the engine itself, on local stores too, so a merge with more
-            # than `LOAD_MAX_ROWS` winning rows of one type is now refused
-            # here exactly as it would be over HTTP.
-            #
-            # `chunk_records` also emits every node before any edge, which
-            # matters more here than the row bound does: an edge winner whose
-            # endpoint lost reconciliation resolves against the copy already in
-            # the target.
-            #
-            # ATOMICITY IS TRADED AWAY. Batches commit independently, so a
-            # failure part-way leaves the earlier ones applied. That is
-            # recoverable by re-running rather than by cleanup: reconciliation
-            # makes a re-sent row lose to its own already-applied copy, which
-            # is the same "repeatable by construction" property this function's
-            # docstring already promises.
-            outputs = []
-            loaded = 0
-            batches = list(chunking.chunk_records(to_load))
-            for index, batch in enumerate(batches):
-                try:
-                    outputs.append(target_client.load_batch(batch, "merge"))
-                except BaseException as exc:
-                    # The batches before this one ARE applied — the comment
-                    # above says so — and that is precisely what a caller
-                    # cannot see from an exception. Attaching how far the merge
-                    # got is what lets the CLI report an incomplete merge as
-                    # incomplete instead of only as failed.
-                    merge_report.attach_partial(
-                        exc,
-                        {
-                            "target": target,
-                            "batches": len(batches),
-                            "batches_applied": index,
-                            # See the remote path's copy: an interrupt is the
-                            # one failure here with no message of its own.
-                            "interrupted": isinstance(exc, KeyboardInterrupt),
-                            "rows_loaded": loaded,
-                            **accounting,
-                            **counts,
-                        },
-                    )
-                    raise
-                loaded += len(batch)
-            load_out = "\n".join(out.strip() for out in outputs if out.strip())
+                raise
+            loaded += len(batch)
+        load_out = "\n".join(out.strip() for out in outputs if out.strip())
 
     return {
         "merged": True,
@@ -3211,7 +3222,7 @@ def _age_days(ts: str | None, now: datetime) -> float:
     except (ValueError, TypeError):
         return 0.0
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return max(0.0, (now - dt).total_seconds() / 86400.0)
 
 
@@ -3340,7 +3351,7 @@ def memory_search(
     # Cap here, after pruning — see _SEARCH_LIMIT.
     return _rerank(
         rows,
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
         rank_cfg=rank_cfg,
         edge_index=edge_index,
     )[:_SEARCH_LIMIT]
@@ -4393,7 +4404,7 @@ def _code_branch_steps(
             steps.append(step)
         if project_slug and (step := _for_project_step(branch_slug, project_slug)):
             steps.append(step)
-    except Exception as exc:  # noqa: BLE001 — coordination metadata, never fatal
+    except Exception as exc:  # coordination metadata, never fatal
         logger.warning(
             "witan.code_branch.tracking_failed",
             repo=repo,
@@ -4431,7 +4442,7 @@ def _track_code_branch(
         return
     try:
         client.change_many(steps)
-    except Exception as exc:  # noqa: BLE001 — coordination metadata, never fatal
+    except Exception as exc:  # coordination metadata, never fatal
         logger.warning(
             "witan.code_branch.tracking_failed",
             repo=repo,
@@ -6005,7 +6016,7 @@ def _ended_at_or_after(ended_at: str | None, since: datetime) -> bool:
 
 def _as_utc(moment: datetime) -> datetime:
     """Read a naive timestamp as UTC, so two of them are always comparable."""
-    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _parse_since(since: str) -> datetime:
@@ -7936,10 +7947,10 @@ def _code_server():
     """
     if not hasattr(_code_server, "_cached"):
         try:
-            from witan_code import server as code_server  # noqa: PLC0415
+            from witan_code import server as code_server
 
             _code_server._cached = code_server
-        except Exception:  # noqa: BLE001 — optional dependency; degrade to None
+        except Exception:  # optional dependency; degrade to None
             # Info, not warning: witan-code genuinely is optional, so absence is
             # a supported configuration. But it is cached forever after this, so
             # if it failed for a *broken* install rather than an absent one,
@@ -7993,7 +8004,7 @@ def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict
                 "providers": code.code_interface_providers(kind, key_norm),
                 "consumers": code.code_interface_consumers(kind, key_norm),
             }
-        except Exception:  # noqa: BLE001 — cross-store lookup is best-effort
+        except Exception:  # cross-store lookup is best-effort
             # Info: the contract answer is still returned, just without its
             # code bindings — a quietly thinner result that otherwise looks
             # like "this contract has no providers or consumers".
@@ -8044,7 +8055,7 @@ def memory_symbols(slug: str) -> dict:
                 defs = code.code_find_definition(name, repo)
                 if defs:
                     entry["definition"] = defs
-            except Exception:  # noqa: BLE001 — best-effort enrichment
+            except Exception:  # best-effort enrichment
                 # Debug: one symbol failing to resolve a definition is common
                 # (a renamed or removed symbol still referenced by a memory),
                 # and this runs per symbol, so anything louder would be noisy.
@@ -8239,7 +8250,7 @@ def recall(
         knowledge rather than its history.
     """
     hops = max(0, min(hops, 2))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # ── Seed ──────────────────────────────────────────────────────
     # slug → the query seed's relevance (`_with_relevance`). Was the seed's

@@ -25,7 +25,7 @@ batches has to collapse first or a pair split across two batches survives.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 #: omnigraph 0.9 and 0.10 export a ``DateTime`` as integer milliseconds since
 #: the Unix epoch, UTC. NOT microseconds — ``commit list --json`` uses
@@ -41,7 +41,7 @@ EXPORT_TS_PER_SECOND = 1_000
 _CONFIDENCE_RANK = {"asserted": 2, "inferred": 1}
 
 
-def parse_export_ts(value: str | int | float | None) -> datetime | None:
+def parse_export_ts(value: str | float | None) -> datetime | None:
     """Parse an exported timestamp for comparison, or ``None`` if absent/unusable.
 
     THREE REPRESENTATIONS, because a merge routinely spans omnigraph versions.
@@ -69,9 +69,9 @@ def parse_export_ts(value: str | int | float | None) -> datetime | None:
         return None
     if isinstance(value, (int, float)):
         try:
-            return datetime.fromtimestamp(
-                value / EXPORT_TS_PER_SECOND, timezone.utc
-            ).replace(tzinfo=None)
+            return datetime.fromtimestamp(value / EXPORT_TS_PER_SECOND, UTC).replace(
+                tzinfo=None
+            )
         except (OverflowError, OSError, ValueError):
             return None
     try:
@@ -79,7 +79,7 @@ def parse_export_ts(value: str | int | float | None) -> datetime | None:
     except (ValueError, TypeError):
         return None
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
     return parsed
 
 
@@ -109,7 +109,7 @@ def edge_rank(row: dict) -> tuple[int, datetime]:
     data = row.get("data") or {}
     return (
         _CONFIDENCE_RANK.get(data.get("confidence"), 0),
-        parse_export_ts(data.get("created_at")) or datetime.min,
+        parse_export_ts(data.get("created_at")) or datetime.min,  # noqa: DTZ901 - export timestamps are naive UTC
     )
 
 

@@ -356,7 +356,11 @@ def inject_context(client: Client = "claude") -> str:
     if mtime is None:
         freshness = ""
     else:
-        stamp = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        stamp = (
+            datetime.datetime.fromtimestamp(mtime, tz=datetime.UTC)
+            .astimezone()
+            .strftime("%Y-%m-%d %H:%M")
+        )
         freshness = f", last updated {stamp}"
     lines = [
         "## Code Graph",

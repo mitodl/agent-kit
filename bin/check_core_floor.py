@@ -136,12 +136,14 @@ EXPECTED_IMPORT_FAILURES = [
         "witan.server",
         "RuntimeError",
         "omnigraph binary not found",
-        "witan.server bootstraps the local store at module scope "
-        "(`_ensure_graph`), which needs the omnigraph binary; `witan setup` "
-        "installs it. Deliberate: the CLI's local-dispatch guard holds this "
-        "import unevaluated precisely BECAUSE importing is what touches the "
-        "store, and that ordering is the agent-kit#261 fix. See "
-        "witan/server.py::_ensure_graph.",
+        (
+            "witan.server bootstraps the local store at module scope "
+            "(`_ensure_graph`), which needs the omnigraph binary; `witan setup` "
+            "installs it. Deliberate: the CLI's local-dispatch guard holds this "
+            "import unevaluated precisely BECAUSE importing is what touches the "
+            "store, and that ordering is the agent-kit#261 fix. See "
+            "witan/server.py::_ensure_graph."
+        ),
     ),
 ]
 

@@ -122,7 +122,7 @@ def write_bindings(
 
     try:
         all_rows = client.read("bridge.gq", "all_bindings", {})
-    except Exception:  # noqa: BLE001 — store may be empty or query unavailable
+    except Exception:  # store may be empty or query unavailable
         # Info: an empty bridge on a fresh store is normal, but this read also
         # silently disables dedup against existing bindings, so it is worth a
         # line when a populated bridge starts answering nothing.
@@ -348,7 +348,7 @@ def _read_repo_symbols(client: OmnigraphClient) -> list[dict]:
     """
     try:
         return client.read("bridge.gq", "all_repo_symbols", {})
-    except Exception:  # noqa: BLE001 — store may predate RepoSymbol
+    except Exception:  # store may predate RepoSymbol
         # Debug: a store written before RepoSymbol existed legitimately has no
         # such node, and the caller only loses confidence adjustment.
         logger.debug("witan.code.bridge.repo_symbols_unavailable", exc_info=True)
@@ -361,7 +361,7 @@ def _declared_provider_packages(
     """Package names declared by other repos' package maps in the bridge store."""
     try:
         rows = client.read("bridge.gq", "all_package_maps", {})
-    except Exception:  # noqa: BLE001 — store may predate the PackageMap node
+    except Exception:  # store may predate the PackageMap node
         # Debug, for the same reason as RepoSymbol above.
         logger.debug("witan.code.bridge.package_maps_unavailable", exc_info=True)
         return frozenset()
@@ -413,9 +413,13 @@ def _file_imports_known_provider(
 ) -> bool:
     """Return True if any package consumer binding in ``file`` matches a known provider package."""
     for b in bindings:
-        if b.file == file and b.kind == "package" and b.role == "consumer":
-            if b.key_norm in provider_pkg_slugs:
-                return True
+        if (
+            b.file == file
+            and b.kind == "package"
+            and b.role == "consumer"
+            and b.key_norm in provider_pkg_slugs
+        ):
+            return True
     return False
 
 

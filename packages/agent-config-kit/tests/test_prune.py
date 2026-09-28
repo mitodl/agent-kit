@@ -27,9 +27,9 @@ from agent_config_kit.prune import (
 
 
 def _bundle(**overrides) -> RegistrationBundle:
-    defaults = dict(
-        mcp_servers={"witan": StdioServer(command="uvx", args=["witan", "serve"])},
-    )
+    defaults = {
+        "mcp_servers": {"witan": StdioServer(command="uvx", args=["witan", "serve"])},
+    }
     defaults.update(overrides)
     return RegistrationBundle(**defaults)
 

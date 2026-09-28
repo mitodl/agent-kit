@@ -122,8 +122,10 @@ def _run_prompt(t: dict, *, claimed: bool) -> str:
         t.get("description") or "(none)",
         "",
         held,
-        f'When complete, close it: task_close(slug="{t["slug"]}", resolution="<what you did>"). '
-        f'File any follow-up work with task_create(discovered_from=["{t["slug"]}"], ...).',
+        (
+            f'When complete, close it: task_close(slug="{t["slug"]}", resolution="<what you did>"). '
+            f'File any follow-up work with task_create(discovered_from=["{t["slug"]}"], ...).'
+        ),
     ]
     return "\n".join(lines)
 
@@ -219,15 +221,19 @@ def _project_run_prompt(p: dict, tasks: list[dict]) -> str:
         # left the whole list unclaimed — two sessions picked the same task off
         # it on the same day and wrote the same fix twice, each unaware of the
         # other, because an unclaimed task looks identical to nobody-is-on-it.
-        "Claim each task BEFORE you start it, not after: "
-        'task_claim(slug="tk-..."). It refuses if another session already '
-        "holds it, which is the signal to pick a different one — that refusal "
-        "is the only thing standing between you and duplicating someone "
-        "else's work.",
-        f"A claim is a lease, not a lock: it lapses after "
-        f"{CLAIM_LEASE_SECONDS // 60} minutes and nothing renews it for you, "
-        f"so call task_claim again on anything you are still working past "
-        f"that.",
+        (
+            "Claim each task BEFORE you start it, not after: "
+            'task_claim(slug="tk-..."). It refuses if another session already '
+            "holds it, which is the signal to pick a different one — that refusal "
+            "is the only thing standing between you and duplicating someone "
+            "else's work."
+        ),
+        (
+            f"A claim is a lease, not a lock: it lapses after "
+            f"{CLAIM_LEASE_SECONDS // 60} minutes and nothing renews it for you, "
+            f"so call task_claim again on anything you are still working past "
+            f"that."
+        ),
         'When a task is done: task_close(slug="tk-...", resolution="<what you did>").',
         'If you claim a task and then decide not to work it: task_release(slug="tk-...").',
         f'When the project phase is complete: workflow_project_advance(slug="{p["slug"]}", summary="<what was accomplished>").',

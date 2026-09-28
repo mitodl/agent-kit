@@ -331,7 +331,7 @@ def repo_owner_name(repo: str, *, api_url: str = GITHUB_API_URL) -> tuple[str, s
     path = split.path.removesuffix(".git")
     parts = [component for component in path.split("/") if component]
     expected_host = api_repo_host(api_url)
-    if split.scheme != "https" or len(parts) != 2:  # noqa: PLR2004 — owner and name
+    if split.scheme != "https" or len(parts) != 2:  # owner and name
         raise GitHubAppError(
             f"Cannot read an owner and repository name out of {repo!r}; "
             f"expected a canonical URI like https://{expected_host}/owner/name."
@@ -458,7 +458,7 @@ def main(argv: list[str] | None = None) -> int:
         # Loki alongside the indexer's other events. The `usage:` line above
         # stays a bare print on purpose — argument feedback to a human at a
         # terminal is presentation, not a service diagnostic.
-        logger.error("witan.code.github_app.failed", error=str(exc), exc_info=True)
+        logger.exception("witan.code.github_app.failed", error=str(exc))
         return EXIT_ERROR
     return EXIT_OK
 

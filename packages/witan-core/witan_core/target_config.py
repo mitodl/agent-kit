@@ -62,10 +62,10 @@ def parse_target_tables(raw: dict) -> dict[str, dict]:
     """
     targets = raw.get("targets", {})
     if not isinstance(targets, dict):
-        raise ValueError("The 'targets' section in config must be a table.")
+        raise ValueError("The 'targets' section in config must be a table.")  # noqa: TRY004 - config errors are ValueError
     for name, cfg in targets.items():
         if not isinstance(cfg, dict):
-            raise ValueError(f"Target {name!r} in config must be a table.")
+            raise ValueError(f"Target {name!r} in config must be a table.")  # noqa: TRY004 - config errors are ValueError
     return targets
 
 

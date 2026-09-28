@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from agent_config_kit.manifest import load_manifest
 from agent_config_kit.models import (
     DeclarativeHook,
     HookEvent,
@@ -10,7 +11,6 @@ from agent_config_kit.models import (
     SkillSource,
     StdioServer,
 )
-from agent_config_kit.manifest import load_manifest
 from agent_config_kit.paths import vscode_user_dir
 from agent_config_kit.plan import (
     RegistrationBundle,
@@ -22,13 +22,13 @@ from agent_config_kit.plan import (
 
 
 def _bundle(**overrides) -> RegistrationBundle:
-    defaults = dict(
-        mcp_servers={
+    defaults = {
+        "mcp_servers": {
             "witan": StdioServer(
                 command="uvx", args=["witan", "serve"], env={"WITAN_AUTHOR": "tester"}
             )
         },
-    )
+    }
     defaults.update(overrides)
     return RegistrationBundle(**defaults)
 

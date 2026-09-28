@@ -5,19 +5,15 @@ from pathlib import Path
 from typing import Literal
 
 from fastmcp import Context, FastMCP
+
 from witan_core import caching
 from witan_core.observability.middleware import ObservabilityMiddleware
 
-from . import bridge_extractors
+from . import bridge_extractors, elicit, indexer, ingest, stitch, views
 from . import config as cfg_module
-from . import elicit
 from . import identity as identity_module
-from . import indexer
-from . import ingest
 from . import repo as repo_module
-from . import stitch
 from . import store as store_module
-from . import views
 from .graph import OmnigraphClient
 
 # ── Startup ───────────────────────────────────────────────────────
@@ -369,7 +365,7 @@ def _fan_out(clients: list[OmnigraphClient], fn) -> list[dict]:
         for f in as_completed(futures):
             try:
                 out.extend(f.result())
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - re-raised if every client failed
                 errors.append(exc)
     if errors and not out:
         raise errors[0]
@@ -539,9 +535,11 @@ async def code_impact(
     max_nodes:
         Cap on total symbols returned (default 200).
     """
-    if _client_for_symbol(symbol_id) is None:
-        if await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0]) is None:
-            return {"root": symbol_id, "impacted": [], "truncated": False}
+    if (
+        _client_for_symbol(symbol_id) is None
+        and await _confirm_and_reindex(ctx, symbol_id.split("#", 1)[0]) is None
+    ):
+        return {"root": symbol_id, "impacted": [], "truncated": False}
 
     visited: dict[str, dict] = {}
     frontier = [symbol_id]

@@ -15,6 +15,7 @@ cluster rather than to a client of it.
 from __future__ import annotations
 
 import subprocess
+from typing import ClassVar
 
 import pytest
 from fastmcp import Client
@@ -23,9 +24,9 @@ from witan_code import config as cfg_module
 from witan_code import store as store_module
 from witan_code.remote.store import (
     RemotePayloadTooLarge,
-    RemoteWriteIndeterminate,
     RemoteStoreClient,
     RemoteStoreUnsupported,
+    RemoteWriteIndeterminate,
     StoreSession,
 )
 
@@ -152,7 +153,7 @@ def test_the_default_view_is_not_writable_through_the_tier(in_memory_tier):
 def test_listing_graphs_answers_in_repo_uris(in_memory_tier, tmp_path):
     from witan_code import indexer
 
-    _session, server_cfg = in_memory_tier
+    _session, _server_cfg = in_memory_tier
     base = _git_repo(tmp_path / "r")
     (base / "svc.py").write_text(SAMPLE)
     _git(base, "checkout", "-q", "-b", "feature/x")
@@ -317,7 +318,7 @@ class _FakeClient:
         self._log.append((name, arguments))
 
         class _Result:
-            data = ["main"]
+            data: ClassVar[list[str]] = ["main"]
 
         return _Result()
 
@@ -497,6 +498,7 @@ def test_a_dropped_socket_is_still_retried_after_the_size_guard():
 def test_an_ordinary_tool_failure_is_not_read_as_a_size_refusal():
     """A tool error relays the server's text, which can quote the caller's data."""
     from fastmcp.exceptions import ToolError
+
     from witan_code.remote.store import RemoteToolFailed
 
     log: list = []
@@ -519,6 +521,7 @@ def test_a_refused_store_call_reads_as_a_sentence_not_a_traceback():
     is not a `RuntimeError` and so slips past `cli()`'s guard tuple.
     """
     from fastmcp.exceptions import ToolError
+
     from witan_code.remote.store import RemoteToolFailed
 
     refusal = ToolError("cedar: read denied on graph 'code'")
@@ -539,6 +542,7 @@ def test_a_refusal_on_the_post_reconnect_retry_is_classified_too():
     it landed after a dead connection rather than before one.
     """
     from fastmcp.exceptions import ToolError
+
     from witan_code.remote.store import RemoteToolFailed
 
     log: list = []

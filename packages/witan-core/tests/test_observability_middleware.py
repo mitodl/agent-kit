@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+import fastmcp.exceptions
 import pytest
 import structlog
 
@@ -208,7 +209,6 @@ def test_tool_is_bound_for_nested_log_lines(capsys):
 
     async def call_next(_ctx):
         get_logger("deep.inside").info("nested")
-        return None
 
     _run(ObservabilityMiddleware(), _Context("recall"), call_next)
     lines = [
@@ -353,7 +353,6 @@ def test_identity_is_bound_for_nested_log_lines(capsys, monkeypatch):
 
     async def call_next(_ctx):
         get_logger("deep.inside").info("nested")
-        return None
 
     _run(ObservabilityMiddleware(), _Context("store_merge"), call_next)
     lines = [
@@ -497,7 +496,7 @@ def test_a_bad_argument_never_puts_the_caller_s_value_in_the_log(capsys):
     async def drive():
         return await mcp.call_tool("takes_a_string", {"content": {"text": sensitive}})
 
-    with pytest.raises(Exception):
+    with pytest.raises(fastmcp.exceptions.ValidationError):
         asyncio.run(drive())
     written = capsys.readouterr().err
     assert sensitive not in written
@@ -519,7 +518,7 @@ def test_a_withheld_validation_error_still_says_what_kind(capsys):
     # so it lands beside our JSON as unparsed text rather than in a field a
     # query can reach. We compute it ourselves for that reason.
     mcp = _server_with_tools()
-    with pytest.raises(Exception):
+    with pytest.raises(fastmcp.exceptions.ValidationError):
         _call(mcp, "takes_a_string", {"content": {"text": "whatever"}})
     payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
     assert payload["error_withheld"] is True
@@ -608,7 +607,7 @@ def test_a_custom_validation_code_is_not_logged_verbatim(capsys):
     async def drive():
         return await mcp.call_tool("checked", {"value": "SECRET-TOKEN"})
 
-    with pytest.raises(Exception):
+    with pytest.raises(fastmcp.exceptions.ValidationError):
         asyncio.run(drive())
     written = capsys.readouterr().err
     assert "SECRET-TOKEN" not in written
@@ -624,7 +623,7 @@ def test_a_builtin_validation_code_survives_the_allowlist(capsys):
     # The allowlist must not flatten everything to custom_error, or the summary
     # stops being a diagnosis.
     mcp = _server_with_tools()
-    with pytest.raises(Exception):
+    with pytest.raises(fastmcp.exceptions.ValidationError):
         _call(mcp, "takes_a_string", {"content": {"text": "whatever"}})
     payload = next(p for p in _stderr_payloads(capsys) if p["event"] == "mcp.tool_call")
     assert payload["error_types"] == ["string_type"]

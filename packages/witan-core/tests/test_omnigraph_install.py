@@ -10,8 +10,10 @@ import io
 import subprocess
 import tarfile
 from pathlib import Path
+from typing import Self
 
 import pytest
+
 from witan_core import omnigraph_install as oi
 
 
@@ -32,7 +34,7 @@ class _FakeResponse:
     def __init__(self, data: bytes) -> None:
         self._data = data
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> bool:

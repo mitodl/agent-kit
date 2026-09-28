@@ -1,5 +1,7 @@
 """Unit tests for the cross-repo dependency visualizer (no graph store needed)."""
 
+import os
+
 import pytest
 
 from witan_code import visualize
@@ -112,7 +114,8 @@ def test_render_rich_smoke():
     from rich.console import Console
 
     g = visualize.build_graph(ROWS)
-    visualize.render_rich(g, console=Console(file=open("/dev/null", "w")))
+    with open(os.devnull, "w") as devnull:
+        visualize.render_rich(g, console=Console(file=devnull))
 
 
 def test_render_rich_wraps_long_repos_at_narrow_width():

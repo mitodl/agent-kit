@@ -139,8 +139,10 @@ def test_no_async_tool_blocks_the_event_loop():
     offenders = _offenders()
     assert not offenders, "\n".join(
         [
-            "These run ON the event loop and block it for the length of an "
-            "omnigraph subprocess — route them through `await _offload(...)`:",
+            (
+                "These run ON the event loop and block it for the length of an "
+                "omnigraph subprocess — route them through `await _offload(...)`:"
+            ),
             *(
                 f"  server.py:{line}  async def {fn}  ->  {call}()"
                 for fn, line, call in offenders

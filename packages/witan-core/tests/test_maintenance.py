@@ -35,7 +35,7 @@ def test_is_due_branches(tmp_path):
     store = tmp_path / "graph.omni"
     store.mkdir()
     stamp = tmp_path / "stamp.json"
-    kw = dict(store=str(store), stamp_file=stamp, now=10_000.0)
+    kw = {"store": str(store), "stamp_file": stamp, "now": 10_000.0}
 
     # disabled
     assert maintenance.is_due(interval=0, require_exists=False, **kw) is False

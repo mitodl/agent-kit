@@ -10,12 +10,12 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
-from witan_core import omnigraph_http as http_module
-
 from witan_code import store as store_module
+from witan_core import omnigraph_http as http_module
 
 from .conftest import requires_stack
 
@@ -401,7 +401,7 @@ class _FakeClient:
     server-scoped one.
     """
 
-    calls: list[tuple[str, str | None, bool]] = []
+    calls: ClassVar[list[tuple[str, str | None, bool]]] = []
 
     def __init__(
         self,
@@ -412,7 +412,7 @@ class _FakeClient:
         branch=None,
         graph_id=None,
         connect_retry=True,
-    ):  # noqa: PLR0913
+    ):
         self.uri, self.graph_id, self.connect_retry = uri, graph_id, connect_retry
         self.served: frozenset[str] = frozenset()
         self.error: Exception | None = None

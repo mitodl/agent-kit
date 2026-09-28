@@ -21,7 +21,6 @@ from witan_core import omnigraph_http as _http
 from witan_core.omnigraph import OmnigraphClient, OmnigraphConflict
 from witan_core.refusal import Refusal
 
-
 # ── store addressing: local --store vs remote --server/--graph ─────
 
 
@@ -2055,9 +2054,8 @@ def test_a_non_finite_queue_wait_does_not_break_the_gate(monkeypatch):
     monkeypatch.setenv(og.REMOTE_WRITE_QUEUE_WAIT_ENV_VAR, "nan")
     monkeypatch.setenv(og.REMOTE_WRITE_MAX_INFLIGHT_ENV_VAR, "0")
     gate = og._WriteGate()
-    with pytest.raises(og.WriteQueueFull):
-        with gate.admit("graph", "mutate"):
-            pass  # pragma: no cover — admission must not succeed at limit 0
+    with pytest.raises(og.WriteQueueFull), gate.admit("graph", "mutate"):
+        pass  # pragma: no cover — admission must not succeed at limit 0
 
 
 def test_zero_disables_admission_rather_than_reading_as_unset(monkeypatch):
@@ -2233,9 +2231,11 @@ def test_a_write_that_cannot_finish_in_the_budget_is_refused_before_sending():
     budget used to be admitted — and a write admitted here is one the caller is
     later told failed while it committed anyway."""
     gate = _gate_with(40.0)
-    with pytest.raises(og.WriteQueueFull) as caught:
-        with gate.admit("g", "mutate", call_deadline=time.monotonic() + 10):
-            pass  # pragma: no cover — admission must not succeed
+    with (
+        pytest.raises(og.WriteQueueFull) as caught,
+        gate.admit("g", "mutate", call_deadline=time.monotonic() + 10),
+    ):
+        pass  # pragma: no cover — admission must not succeed
     message = str(caught.value)
     assert "cannot complete in time" in message
     assert "NOTHING WAS WRITTEN" in message
@@ -2270,9 +2270,11 @@ def test_queue_time_is_charged_against_the_budget():
     the estimate is checked against — no separate accounting needed."""
     gate = _gate_with(5.0)
     already_spent = time.monotonic() - 26  # 26s of a 30s budget gone
-    with pytest.raises(og.WriteQueueFull):
-        with gate.admit("g", "mutate", call_deadline=already_spent + 30):
-            pass  # pragma: no cover
+    with (
+        pytest.raises(og.WriteQueueFull),
+        gate.admit("g", "mutate", call_deadline=already_spent + 30),
+    ):
+        pass  # pragma: no cover
 
 
 def test_no_deadline_means_no_predictive_refusal():
@@ -2377,9 +2379,11 @@ def test_a_doomed_write_is_refused_immediately_not_after_the_queue_timeout(
     gate._in_flight["g"] = 1  # and the gate is full, so it would queue
 
     started = time.monotonic()
-    with pytest.raises(og.WriteQueueFull):
-        with gate.admit("g", "mutate", call_deadline=time.monotonic() + 10):
-            pass  # pragma: no cover
+    with (
+        pytest.raises(og.WriteQueueFull),
+        gate.admit("g", "mutate", call_deadline=time.monotonic() + 10),
+    ):
+        pass  # pragma: no cover
     elapsed = time.monotonic() - started
     assert elapsed < 1.0, (
         f"refused after {elapsed:.1f}s — it waited on a queue it could never "
@@ -2399,9 +2403,11 @@ def test_the_wait_is_capped_at_the_last_viable_moment(monkeypatch):
 
     # 1.5s of budget against a 1.0s write: viable for ~0.5s, then hopeless.
     started = time.monotonic()
-    with pytest.raises(og.WriteQueueFull):
-        with gate.admit("g", "mutate", call_deadline=time.monotonic() + 1.5):
-            pass  # pragma: no cover
+    with (
+        pytest.raises(og.WriteQueueFull),
+        gate.admit("g", "mutate", call_deadline=time.monotonic() + 1.5),
+    ):
+        pass  # pragma: no cover
     elapsed = time.monotonic() - started
     assert elapsed < 2.0, "should give up near the viable boundary, not at 30s"
     assert elapsed > 0.2, "should have waited while admission was still viable"

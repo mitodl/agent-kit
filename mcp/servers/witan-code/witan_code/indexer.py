@@ -218,7 +218,7 @@ _GRAMMAR_MODULES: dict[str, tuple[str, str]] = {
 }
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _ts_language(grammar: str):
     """Build (and cache) a ``tree_sitter.Language`` from its standalone wheel."""
     from tree_sitter import Language
@@ -500,7 +500,7 @@ def index_path(
         stats.scanned += 1
         try:
             result = _parse_for_index(path, base, slug, existing, force=force)
-        except Exception as exc:  # noqa: BLE001 — one bad file must not abort
+        except Exception as exc:  # one bad file must not abort
             stats.errors += 1
             logger.warning(
                 "witan.code.index.file_failed",
@@ -601,7 +601,7 @@ def index_path(
             actor=actor,
             indexed_files=frozenset(indexed_rel) if can_purge else None,
         )
-    except Exception as exc:  # noqa: BLE001 — bridge is best-effort, never fatal
+    except Exception as exc:  # bridge is best-effort, never fatal
         # ERROR, not warning, and the level is the whole mechanism. Sentry's
         # LoggingIntegration is installed with `event_level=ERROR` precisely so
         # a site like this needs no `capture_exception` call — but that also
@@ -619,9 +619,7 @@ def index_path(
         # this only ever meant the first.
         stats.errors += 1
         stats.bridge_failed = True
-        logger.error(
-            "witan.code.index.bridge_failed", repo=slug, error=str(exc), exc_info=True
-        )
+        logger.exception("witan.code.index.bridge_failed", repo=slug, error=str(exc))
 
     return stats
 
@@ -1034,11 +1032,11 @@ def _symbol_at_line(parsed: ParsedFile, line: int | None) -> str | None:
     for sym in parsed.symbols:
         if sym.qualified_name == "<module>":
             continue
-        if sym.start_line <= line <= sym.end_line:
-            if best is None or (sym.end_line - sym.start_line) < (
-                best.end_line - best.start_line
-            ):
-                best = sym
+        if sym.start_line <= line <= sym.end_line and (
+            best is None
+            or (sym.end_line - sym.start_line) < (best.end_line - best.start_line)
+        ):
+            best = sym
     if best is not None:
         return best.id
     return parsed.symbols[0].id if parsed.symbols else None

@@ -63,7 +63,7 @@ def test_repos_honors_structured_output(monkeypatch, capsys):
                 "repo": "https://github.com/test/repo",
                 "files": 7,
                 "bytes": 1024,
-                "last_indexed": datetime.datetime(2026, 7, 13, 9, 41).timestamp(),
+                "last_indexed": datetime.datetime(2026, 7, 13, 9, 41).timestamp(),  # noqa: DTZ001 - rendered as local time
             }
         ]
     )

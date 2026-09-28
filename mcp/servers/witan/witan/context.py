@@ -128,7 +128,7 @@ def _read_seen(cache_key: str) -> dict[str, list[str]]:
     """
     try:
         data = json.loads(_seen_file(cache_key).read_text())
-    except Exception:  # noqa: BLE001 — missing/corrupt record → show everything
+    except Exception:  # missing/corrupt record → show everything
         logger.debug("witan.context.seen_read_failed", exc_info=True)
         return {}
     if not isinstance(data, dict):
@@ -154,7 +154,7 @@ def _read_output_cache(
         data = json.loads(_output_cache_file(graph_uri, repo, branch).read_text())
         if time.time() - data["stamp"] < ttl:
             return data["output"]
-    except Exception:  # noqa: BLE001 — missing/corrupt/stale cache → recompute
+    except Exception:  # missing/corrupt/stale cache → recompute
         # Debug, deliberately: a *missing* cache is the normal first-prompt
         # case, so this path is expected rather than degraded.
         logger.debug("witan.context.output_cache_miss", exc_info=True)
@@ -311,7 +311,7 @@ def _gather(calls: dict[str, Callable[[], object]]) -> dict[str, object]:
                     out[key] = future.result()
                 except Exception as exc:  # noqa: BLE001 — see docstring
                     out[key] = exc
-    except Exception:  # noqa: BLE001 — pool/thread failure, not a read failure
+    except Exception:  # pool/thread failure, not a read failure
         logger.debug("witan.context.gather_fell_back_to_serial", exc_info=True)
         # Keep whatever already came back; only re-run what never answered.
         pending = {k: fn for k, fn in calls.items() if k not in out}
@@ -586,9 +586,11 @@ def _render_context_block(
         lines += [
             "## ⚠ New Comments on Work You Hold",
             "",
-            "Another agent or teammate has commented on a task you have "
-            "claimed. Read this before continuing — a comment is how someone "
-            "says the task's own description is wrong without overwriting it:",
+            (
+                "Another agent or teammate has commented on a task you have "
+                "claimed. Read this before continuing — a comment is how someone "
+                "says the task's own description is wrong without overwriting it:"
+            ),
             "",
         ]
         for task, unread in commented:
@@ -609,8 +611,10 @@ def _render_context_block(
                 )
         lines += [
             "",
-            "Full threads (and any older comments elided here) are in "
-            "`task_get(slug=...)`. Reply with `task_comment(slug=..., text=...)`.",
+            (
+                "Full threads (and any older comments elided here) are in "
+                "`task_get(slug=...)`. Reply with `task_comment(slug=..., text=...)`."
+            ),
             "",
         ]
 
@@ -676,10 +680,12 @@ def _render_context_block(
             )
         lines += [
             "",
-            "Claim one with `task_claim(slug=...)` BEFORE working it — an "
-            "unclaimed task in progress is indistinguishable from an idle one, "
-            "and a second session will start the same work. Then `task_close` "
-            "it when done (or `/witan-task`).",
+            (
+                "Claim one with `task_claim(slug=...)` BEFORE working it — an "
+                "unclaimed task in progress is indistinguishable from an idle one, "
+                "and a second session will start the same work. Then `task_close` "
+                "it when done (or `/witan-task`)."
+            ),
             "",
         ]
 
@@ -687,11 +693,13 @@ def _render_context_block(
         lines += [
             "## ⚠ Unmigrated Repo Keys",
             "",
-            "This store has task/project records for this repo under a "
-            "different letter case — a data-fragmentation bug (issue #142) "
-            "whose fix needs a one-time backfill. Run `witan migrate "
-            "repo-keys` once; until then, reads scoped to this repo "
-            "(`task_ready`, `memory_list`, ...) may be missing results.",
+            (
+                "This store has task/project records for this repo under a "
+                "different letter case — a data-fragmentation bug (issue #142) "
+                "whose fix needs a one-time backfill. Run `witan migrate "
+                "repo-keys` once; until then, reads scoped to this repo "
+                "(`task_ready`, `memory_list`, ...) may be missing results."
+            ),
             "",
         ]
 
@@ -1002,7 +1010,7 @@ def _cached_repo_and_branch() -> tuple[str | None, str | None]:
         data = json.loads(cache_file.read_text())
         if time.time() - data["stamp"] < _REPO_CACHE_TTL:
             return data.get("repo"), data.get("branch")
-    except Exception:  # noqa: BLE001
+    except Exception:
         # Same as the output cache: absent on the first prompt in a window, so
         # debug rather than warning.
         logger.debug("witan.context.repo_cache_miss", exc_info=True)
@@ -1030,7 +1038,7 @@ def _cwd_or_dot() -> str:
 def _current_branch() -> str | None:
     try:
         return repo_module.current_branch()
-    except Exception:  # noqa: BLE001
+    except Exception:
         # Debug: running outside a git checkout is a supported situation, not a
         # malfunction — the branch only joins CodeBranch rows.
         logger.debug("witan.context.branch_detect_failed", exc_info=True)
@@ -1056,7 +1064,7 @@ def _detect_repo() -> str | None:
     project_dir = _cwd_or_dot()
     try:
         raw = repo_module.git_remote_url(Path(project_dir))
-    except Exception:  # noqa: BLE001 — the prompt hook must never crash
+    except Exception:  # the prompt hook must never crash
         # Debug for the same reason as the branch probe: no remote, or no repo
         # at all, is a normal place to run an agent from.
         logger.debug("witan.context.repo_detect_failed", exc_info=True)
