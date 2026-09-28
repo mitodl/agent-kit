@@ -161,11 +161,12 @@ describe("canonicalRepo", () => {
 	// ★ Recorded from `witan_core.repo_key.normalise` itself by
 	// `just ui-fixtures`, so a change to the server's rule fails here (and
 	// `ui-fixtures-check` fails in CI) until this copy follows.
-	it.each(
-		Object.entries(repoKeys as Record<string, string>),
-	)("canonicalizes %j as the server does", (url, expected) => {
-		expect(canonicalRepo(url)).toBe(expected);
-	});
+	it.each(Object.entries(repoKeys as Record<string, string>))(
+		"canonicalizes %j as the server does",
+		(url, expected) => {
+			expect(canonicalRepo(url)).toBe(expected);
+		},
+	);
 
 	it("leaves the all-repos value alone", () => {
 		expect(canonicalRepo("")).toBe("");
