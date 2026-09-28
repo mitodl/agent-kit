@@ -364,11 +364,12 @@ Three things are worth reading even when the verdict is benign:
   class lifetime will not appear in any cache audit, and the walk is what
   finds it.
 
-Two limits, so a quiet result is not over-read. Only GC-tracked containers
-are visible, so an object held solely in a dict of untracked values has no
-discoverable referrers; and retention is computed from `id()` sets, so a
-reused address under-reports. Both fail toward saying nothing rather than
-toward a false alarm.
+One limit, so a quiet result is not over-read: only GC-tracked containers are
+visible, so an object held solely in a dict of untracked values has no
+discoverable referrers. It fails toward saying nothing rather than toward a
+false alarm. The retained set itself is exact — the baseline heap is frozen
+into the permanent generation before the requests run, so what the collector
+can still enumerate afterwards is what the run added.
 
 ## What the package already refuses
 
@@ -417,7 +418,7 @@ These are judgment, which is why they are the skill's job:
 | [calibration.md](references/calibration.md) | What the harness now falsifies for you and what it cannot, the observables table, structural vs sizing realism, a worked falsification |
 | [results.md](references/results.md) | Every output file, the verdicts, SQL versus gap, the production column, seed drift, what a classifier collision means |
 | [environments.md](references/environments.md) | Choosing a backend, the local-dev cluster's namespaces and DSN, fidelity differences to disclose |
-| [retention.md](references/retention.md) | The retention pass: why RSS alone cannot answer it, the three verdicts and their thresholds, reading a holder chain, the two limits, and how an over-fetch becomes a leak's multiplier |
+| [retention.md](references/retention.md) | The retention pass: why RSS alone cannot answer it, the three verdicts and their thresholds, reading a holder chain, how the retained set is delimited and the one limit on it, and how an over-fetch becomes a leak's multiplier |
 
 ## Resources
 

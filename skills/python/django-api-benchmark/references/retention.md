@@ -5,12 +5,15 @@ stops being what a request costs and becomes what it leaves behind.
 
 ```bash
 ol-benchmark memory benchmarks/<name>.toml
-ol-benchmark memory benchmarks/<name>.toml --requests 100
 ```
 
 Single-arm: retention belongs to one commit, so there is nothing to check out
 and nothing to compare. That also means it runs on a dirty working tree, which
 the A/B refuses.
+
+There is no per-run flag for the request count: it is `[memory] requests` in
+the benchmark file, so the number a verdict was reached at is recorded beside
+the verdict rather than living in someone's shell history.
 
 ## Why this is not three numbers you could gather yourself
 
@@ -45,12 +48,15 @@ leak:
 
 ```toml
 [memory]
-requests = 50
+requests = 50                  # validated >= 1; warmup >= 0
 retained_objects_per_request = 5.0
 holders = 3                    # types to trace back to a named owner
 scan_budget = 400              # gc.get_referrers calls, total
 attribute = false              # growth only, no heap scans
 ```
+
+Put a team-wide default in `[defaults.memory]` in the project layer; a
+benchmark's own `[memory]` overrides it.
 
 A `retaining` verdict is a prompt to look, not proof of a defect. A cache
 legitimately warming over the first requests looks the same at small request
@@ -81,20 +87,24 @@ entries keyed by stringified `id()`, one per instance ever seen.
 and a hand-rolled cache keyed by `id(obj)` in a class-level dict will never
 appear in a cache audit however carefully you do one.
 
-## Two limits, and which way they fail
+## How the retained set is delimited, and the one limit
 
-**Only GC-tracked containers are visible.** CPython untracks a tuple or dict
-whose contents are all themselves untracked, so an object held only in such a
-container has no discoverable referrers and the walk truthfully reports
-nothing. A leak worth finding holds model instances, querysets or closures,
-which keep their containers tracked — but a synthetic reproduction that plants
-`object()` in a dict will find nothing and look like a broken tool.
+The baseline heap is frozen into the permanent generation (`gc.freeze()`)
+before the requests run, so everything the collector can still enumerate
+afterwards is, by construction, what the run added. Nothing is compared by
+address, which is what makes the count exact rather than an estimate — and
+it is why the per-request object figure is cheap enough to take on every
+request without the measurement disturbing the RSS series beside it.
 
-**Identity is reused.** Retention is computed by comparing `id()` sets, so an
-address freed during the run and handed to a new object reads as though it
-were there all along. That under-reports.
+**The limit is that only GC-tracked containers are visible.** CPython untracks
+a tuple or dict whose contents are all themselves untracked, so an object held
+only in such a container has no discoverable referrers and the walk truthfully
+reports nothing. A leak worth finding holds model instances, querysets or
+closures, which keep their containers tracked — but a synthetic reproduction
+that plants `object()` in a dict will find nothing and look like a broken
+tool.
 
-Both fail toward silence rather than toward a false alarm, so a `stable`
+It fails toward silence rather than toward a false alarm, so a `stable`
 verdict is weaker evidence than a `retaining` one.
 
 ## What retention tells you that latency did not
