@@ -40,7 +40,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=5,<6" },
+    { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=4,<6" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "rich", marker = "extra == 'cli'", specifier = ">=13" },
 ]
@@ -48,7 +48,7 @@ provides-extras = ["cli"]
 
 [package.metadata.requires-dev]
 test = [
-    { name = "cyclopts", specifier = ">=5,<6" },
+    { name = "cyclopts", specifier = ">=4,<6" },
     { name = "pytest", specifier = ">=8" },
     { name = "rich", specifier = ">=13" },
 ]
@@ -2252,7 +2252,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "agent-config-kit", editable = "packages/agent-config-kit" },
-    { name = "cyclopts", specifier = ">=5,<6" },
+    { name = "cyclopts", specifier = ">=4,<6" },
     { name = "fastmcp", specifier = ">=4,<5" },
     { name = "fastmcp-tasks", marker = "extra == 'tasks'", specifier = ">=4,<5" },
     { name = "joserfc", specifier = ">=1.0,<2" },
@@ -2325,7 +2325,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "agent-config-kit", marker = "extra == 'cli'", editable = "packages/agent-config-kit" },
-    { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=5,<6" },
+    { name = "cyclopts", marker = "extra == 'cli'", specifier = ">=4,<6" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=4,<5" },
     { name = "fastmcp", marker = "extra == 'remote'", specifier = ">=4,<5" },
     { name = "httpx2", marker = "extra == 'remote'", specifier = ">=2.5" },
@@ -2341,7 +2341,7 @@ provides-extras = ["cli", "mcp", "remote", "observability", "sentry"]
 [package.metadata.requires-dev]
 test = [
     { name = "agent-config-kit", editable = "packages/agent-config-kit" },
-    { name = "cyclopts", specifier = ">=5,<6" },
+    { name = "cyclopts", specifier = ">=4,<6" },
     { name = "fastmcp", specifier = ">=4,<5" },
     { name = "httpx2", specifier = ">=2.5" },
     { name = "opentelemetry-api", specifier = ">=1.31" },
@@ -2377,7 +2377,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "agent-config-kit", editable = "packages/agent-config-kit" },
-    { name = "cyclopts", specifier = ">=5,<6" },
+    { name = "cyclopts", specifier = ">=4,<6" },
     { name = "fastmcp", specifier = ">=4,<5" },
     { name = "httpx2", specifier = ">=2.5" },
     { name = "pydantic", specifier = ">=2,<3" },

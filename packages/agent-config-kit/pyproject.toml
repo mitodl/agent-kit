@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cli = ["cyclopts>=5,<6", "rich>=13"]
+cli = ["cyclopts>=4,<6", "rich>=13"]
 
 [project.scripts]
 agent-kit = "agent_config_kit.cli:main"
@@ -42,7 +42,7 @@ md_html_anchors = false
 entry_title_template = "[{{ version }}] - {{ date.strftime('%Y-%m-%d') }}"
 
 [dependency-groups]
-test = ["pytest>=8", "cyclopts>=5,<6", "rich>=13"]
+test = ["pytest>=8", "cyclopts>=4,<6", "rich>=13"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
