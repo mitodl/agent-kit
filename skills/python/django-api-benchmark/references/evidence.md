@@ -190,8 +190,10 @@ number.
 
 **The raw traces never enter the repository.** They carry statement literals,
 query strings, and user and tenant identifiers. Keep them somewhere outside
-it — a scratch directory, `/tmp` — and if a project has adopted the package,
-`traces/` and `*.trace.json` are already gitignored as a backstop.
+it — a scratch directory, `/tmp` — with `traces/` and `*.trace.json` ignored
+as a backstop. `ol-benchmark init --project` adds both to the project's
+`.gitignore`, so in a project that has adopted the package the backstop is
+already there; in one that has not, run it before asking anyone to export.
 
 What *is* committable is what `ol-benchmark baseline` distils out of them: per
 query, a median and a row floor, keyed by a label you wrote yourself. The

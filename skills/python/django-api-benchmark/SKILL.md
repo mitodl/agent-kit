@@ -60,6 +60,11 @@ ol-benchmark init --project     # benchmarks/benchmark.toml, committed
 ol-benchmark init --local       # benchmarks/benchmark.local.toml, gitignored
 ```
 
+`init --project` also adds this package's artifacts to the project's
+`.gitignore`: `.bench/`, the local layer, and `traces/` plus `*.trace.json`.
+Run it before Step 1 in a project that has not adopted the package, so the
+entries are in place before you ask anyone for a production trace.
+
 ## Step 1 — Ask for the evidence
 
 Do not start writing the seed. Ask for all of it in **one batched question**,
@@ -162,8 +167,9 @@ ol-benchmark validate benchmarks/<name>.toml
 
 **Never commit a raw trace, and never paste its SQL into the config or a PR.**
 It carries statement literals, query strings and user identifiers. Keep the
-exports outside the repository; `traces/` and `*.trace.json` are gitignored in
-projects that have adopted the package.
+exports outside the repository; `traces/` and `*.trace.json` are gitignored as
+a backstop in any project where `init --project` has been run — check that it
+has, rather than assuming, if you did not run it yourself.
 
 Write the `[[trace.classify]]` rules first — they are what the baseline is
 keyed by — then:

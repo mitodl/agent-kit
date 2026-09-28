@@ -95,9 +95,7 @@ Resolved anywhere in `kwargs`, `m2m`, `count`, target params and auth:
 | `$ref:STEP`, `$ref:STEP[2]` | one object from an earlier step |
 | `$cycle:STEP` | that step's objects, cycled by `$index` |
 | `$sample:STEP:5` | 5 of them, from the seeded RNG |
-| `$all:STEP` | all of them |
 | `$ids:KEY` | a scalar from `[seed.export]` — how the *request* reaches seeded rows |
-| `$env:VAR` | an environment variable |
 | `$$` | a literal `$` |
 
 Plain strings also go through `str.format` with `index` and every knob, so
