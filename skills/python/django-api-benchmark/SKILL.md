@@ -216,6 +216,25 @@ production = 100
 children = 388          # from the trace's IN-list placeholder count
 ```
 
+**Give the observables you can a `response` key.** Without one, an observable
+is compared against the seed's row counts, which prove what was *created* and
+not what the endpoint *returned*. With one, the report reads the value back out
+of the response and flags it when it misses:
+
+```toml
+[[calibration.observable]]
+name = "response bytes"
+source = "sample response"
+production = 96794
+response = "response_bytes"   # or count, results, nested.<key>
+tolerance = 0.25              # the default
+```
+
+This is the check that catches the seed that looks right and is not. A seed
+whose counts all matched production once produced a 66 KB response against
+production's 97 KB — two missing pieces of shape, invisible in every row count,
+and only the payload size said so.
+
 **A seed parameter that makes an *unchanged* query wildly slower than
 production is falsified — discard it, however good the story was.** With a
 baseline configured this is no longer only your judgement: the report computes
@@ -254,9 +273,13 @@ Read `.bench/out/<name>/comparison.json`. Before quoting any delta:
    falsification signal: fix the seed and re-run rather than explaining it
    away. Drift never changes the verdict, so a sound A/B on a bad seed still
    reads `ok` — you have to look.
-6. **`refs.base` and `refs.branch` differ.** Identical refs means the switch
+6. **`calibration_mismatches` is empty.** An entry means the *response* is a
+   different size from the production sample, whatever the row counts say. Like
+   drift it never changes the verdict, and like drift it means the per-query
+   numbers describe a shape that is not production's.
+7. **`refs.base` and `refs.branch` differ.** Identical refs means the switch
    never reached the code being measured.
-7. **Re-run at a second shape** (`--knob rows=200`). A delta stable across
+8. **Re-run at a second shape** (`--knob rows=200`). A delta stable across
    shapes is the single strongest evidence you can produce locally.
 
 [references/results.md](references/results.md) is the field-by-field guide,
@@ -298,6 +321,9 @@ matters, because the reasons shape how you read a result:
 | A dirty working tree | The arms would not be two refs |
 | A scratch database not named `bench*` | The step drops it, and a shared cluster has real databases next to it |
 | A `benchmark.local.toml` that is tracked by git | It holds one developer's cluster and credentials |
+| **A response with no rows in it** | Both arms agree perfectly on nothing, so equivalence passes and the timings are real — the one wrong answer no downstream check can catch. Usually authorization failing open, which renders as a **200 carrying an empty page, not a 403**, so `expect_status` is satisfied. Refused before the timed loop |
+| **A declared `nested_keys` collection that is empty in every row** | The same failure one level down: the rows are there, the thing being measured is not |
+| **A remote default file storage** | A seed creating image or attachment rows uploads to whatever bucket the environment points at, and a developer environment usually holds working credentials for a real one. This is a safety refusal — the write happens during seeding, before anything is measured |
 
 It also forces `DEBUG = False` (and records that it did), seeds once across both
 arms, keeps the query-capture pass separate from the timed loop, and verifies
@@ -317,6 +343,8 @@ These are judgment, which is why they are the skill's job:
 | Quoting a delta from one seed shape | A result that does not hold at a second shape is a result about your seed |
 | Committing a raw OTel export, or pasting its SQL into a PR | It carries statement literals, query strings and user identifiers. Only the distilled baseline is committable |
 | Explaining away a drift warning | An unchanged query that does not look like production means the seed is wrong, not that the check is |
+| Measuring anything in a script of your own instead of through the harness | Every refusal above is lost at once. A retention measurement written by hand and run under pytest reported 70% more growth than the truth, because `ENVIRONMENT == "pytest"` force-enabled an ORM profiler that `ol-benchmark` would have refused. If you need a measurement the harness does not offer, add it to the harness |
+| Reading seed row counts as proof the seed is right | They show what was created, not what the endpoint returned. A seed can build every row correctly while a filter, a missing membership or an unattached nested collection leaves the response a fraction of production's size — with every count still agreeing |
 
 ## References
 

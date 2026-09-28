@@ -165,6 +165,24 @@ speed-up's clothes. The comparison is declared void when they differ.
 Use `reverse` over `path` where the endpoint has a URL name — it fails loudly
 at validation instead of returning a 404 mid-run.
 
+### Authorization fails open, not loudly
+
+`[auth]` names the user the request is made as, and getting it wrong does not
+produce the error you would expect. An endpoint that filters by membership —
+an organization, a contract, a tenant — answers a caller without it by
+filtering *everything* out, which is a **200 carrying an empty page**, not a
+403. `expect_status` is satisfied, the arms agree, the timings are real, and
+the benchmark measures serializing nothing.
+
+The harness refuses an empty collection for exactly this reason, so the
+failure now surfaces as a refusal naming `[auth]` rather than as a fast
+number. When you see it, check both that the seed created the membership rows
+and that `[auth]` names the user holding them — some filtersets require
+several, and lacking any one of them produces the same empty page.
+
+`[target].allow_empty = true` exists for the case where an empty response is
+genuinely the measurement. It should be rare enough to be worth a comment.
+
 ## Query classifiers
 
 These turn raw SQL into the labels in the attribution table. They are tried in
@@ -232,3 +250,16 @@ iterations = 25          # this endpoint is noisy; more samples
 `middleware_exclude` strips profiler middleware by substring, and the removal
 is recorded in every result. There is no silent strip: without it, the run
 refuses rather than quietly measuring something a profiler is inflating.
+
+`allow_remote_storage` overrides the refusal to seed through a remote file
+storage backend. Seeding a Wagtail page, an avatar or any other file-bearing
+model writes through the default storage, and a developer environment
+frequently carries working credentials for the production bucket — so the
+default is to refuse, and the write would otherwise land before anything is
+measured. The better fix is usually to point storage at a local path for the
+run:
+
+```toml
+[django]
+env = { DJANGO_STORAGE_BACKEND = "local", MEDIA_ROOT = "/tmp/bench-media/" }
+```

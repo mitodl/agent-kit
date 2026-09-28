@@ -127,6 +127,33 @@ the verdict.
 Targeted queries are absent from this list by design. They are supposed to
 differ; that is the change.
 
+## The response does not look like production
+
+`calibration_mismatches` is the same idea applied to the payload rather than
+to query cost. It lists every observable that declared a `response` key and
+came back further than its `tolerance` from the production value:
+
+```json
+{
+  "observable": "response bytes",
+  "production": 96794,
+  "measured": 66_000,
+  "off_by": 0.318,
+  "tolerance": 0.25
+}
+```
+
+Drift asks whether an unchanged query *costs* what production's does; this
+asks whether the endpoint *returned* what production's returned. They fail
+independently. A seed can produce query timings that look entirely reasonable
+while serving two thirds of the payload, because the missing part never
+reached a query at all — an unattached nested collection, or a filter the seed
+does not satisfy.
+
+Like drift, it never changes the verdict and for the same reason. Unlike
+drift, it does not need a production baseline of traces: the sample responses
+from [evidence.md](evidence.md) are enough.
+
 ## Production baseline
 
 The `production` block, and the matching section of `report.md`, carry the

@@ -51,6 +51,47 @@ query the change does not touch.
 Same order of magnitude on every row is the bar. Exact matches are not
 required and chasing them tips into fitting.
 
+### Check the response, not only the seed
+
+`seed_step` fills the seed column from a row count, which answers "did the
+seed build this?" — not "did the endpoint return it?". Those come apart more
+often than they sound like they would. A filter the seed does not satisfy, a
+membership row missing from the request user, a nested collection built but
+never attached: each leaves every row count correct and the response a
+fraction of production's size.
+
+Add `response` and the report reads the value back out of what the endpoint
+actually returned, comparing it against `production` within `tolerance`:
+
+```toml
+[[calibration.observable]]
+name = "response bytes"
+source = "sample response"
+production = 96794
+response = "response_bytes"
+tolerance = 0.25              # the default
+
+[[calibration.observable]]
+name = "runs per course"
+source = "sample response"
+production = 1
+response = "nested.courseruns"
+```
+
+Valid keys are `response_bytes`, `count`, `results`, and `nested.<key>` for
+anything named in `[target].nested_keys`. Non-numeric observables — "one run
+per course", a note about tenancy — are left unscored rather than treated as
+failures, so there is no cost to declaring them.
+
+A miss appears as `calibration_mismatches` and gets its own section in the
+report, ahead of the per-query table. Like drift it questions the seed and
+never the verdict: the arms remain comparable to each other whether or not
+either resembles production.
+
+This is the check worth having. A seed whose counts all matched production
+once produced a 66 KB response against production's 97 KB — two pieces of
+shape missing, invisible in every count, and only the payload said so.
+
 ## Structural realism beats sizing realism
 
 **How rows fan out across joins dominates how wide they are.** A filter across
