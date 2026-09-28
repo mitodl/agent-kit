@@ -23,4 +23,4 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # The import is the point: `testsupport.hermetic` redirects the environment at
 # module scope. The hook re-export is what lets this conftest report a leak.
-from testsupport.hermetic import pytest_sessionfinish  # noqa: E402,F401
+from testsupport.hermetic import pytest_sessionfinish  # noqa: F401

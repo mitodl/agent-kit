@@ -55,10 +55,15 @@ way a written edge could.
 
 ```python
 PreciseEdge(
-    consumer_repo, consumer_symbol,
-    provider_repo, provider_symbol,
-    kind, scheme,
-    match_count, preferred, ambiguous_version,
+    consumer_repo,
+    consumer_symbol,
+    provider_repo,
+    provider_symbol,
+    kind,
+    scheme,
+    match_count,
+    preferred,
+    ambiguous_version,
 )
 ```
 

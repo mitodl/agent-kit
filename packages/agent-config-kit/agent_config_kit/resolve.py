@@ -68,8 +68,13 @@ def find_repo_root(start: Path) -> Path | None:
 
 def _run_git(args: list[str], cwd: Path) -> str | None:
     try:
-        result = subprocess.run(  # noqa: S603
-            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5
+        result = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

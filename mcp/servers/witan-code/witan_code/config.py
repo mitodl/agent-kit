@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 from witan_core.config_file import load_toml as _load_toml_shared
 from witan_core.remote.config import RemoteConfig, resolve_remote_config
 from witan_core.target_config import (

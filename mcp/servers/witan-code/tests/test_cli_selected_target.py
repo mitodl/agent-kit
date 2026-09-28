@@ -34,7 +34,6 @@ def test_dispatch_reads_the_forwarded_target(monkeypatch):
 
     def _record(target=None):
         seen["target"] = target
-        return None  # in-process branch; a stub RemoteConfig is not the point
 
     monkeypatch.setattr(code_cli, "_server", None)
     monkeypatch.setattr(code_cfg, "load_remote_config", _record)
@@ -53,7 +52,6 @@ def test_no_forwarded_target_leaves_resolution_where_it_was(monkeypatch):
 
     def _record(target=None):
         seen["target"] = target
-        return None
 
     monkeypatch.setattr(code_cli, "_server", None)
     monkeypatch.setattr(code_cfg, "load_remote_config", _record)
@@ -70,7 +68,6 @@ def test_the_auth_path_reads_it_too(monkeypatch):
 
     def _record(target=None):
         seen["target"] = target
-        return None
 
     monkeypatch.setattr(code_cfg, "load_remote_config", _record)
     set_selected_target("ci")

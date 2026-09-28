@@ -3,7 +3,6 @@
 import logging
 
 import pytest
-from witan_core.refusal import Refusal
 
 from witan.config import ScanConfig
 from witan.graph import OmnigraphClient
@@ -15,6 +14,7 @@ from witan.scan import (
     masked_preview,
     write_guard_from_config,
 )
+from witan_core.refusal import Refusal
 
 
 class MatchScanner:

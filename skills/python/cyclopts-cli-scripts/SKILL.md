@@ -22,10 +22,12 @@ import cyclopts
 
 app = cyclopts.App()
 
+
 @app.command
 def my_command(arg1: str, flag: bool = False) -> None:
     """Brief description shown in --help."""
     ...
+
 
 if __name__ == "__main__":
     app()

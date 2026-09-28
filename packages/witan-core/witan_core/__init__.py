@@ -28,8 +28,8 @@ from .target_config import (
 from .timeutil import now_iso
 
 __all__ = [
-    "find_git_config",
     "OmnigraphInstallFailed",
+    "find_git_config",
     "install_omnigraph",
     "load_toml",
     "local_project_path",

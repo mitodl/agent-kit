@@ -11,7 +11,6 @@ from witan.config import ScanConfig
 from witan.scan import Finding, Scanner, ScannerError, ScannerRegistry, masked_preview
 from witan.scan import registry as registry_mod
 
-
 # ── Module-level fakes (also used as plugin-path / entry-point targets) ─────────
 
 

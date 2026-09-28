@@ -219,8 +219,9 @@ guess pulls its neighbour into everyone else's results:
 
 ```python
 memory_link(a, b, kind="related_to", role="both configure the Vault sidecar")
-memory_link(a, c, kind="related_to", role="might share a root cause",
-            confidence="inferred")
+memory_link(
+    a, c, kind="related_to", role="might share a root cause", confidence="inferred"
+)
 ```
 
 ## Updating an Existing Memory

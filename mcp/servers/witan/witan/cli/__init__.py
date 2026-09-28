@@ -36,10 +36,10 @@ from . import (
 )
 from ._common import app, console, print_error, stderr_console
 from .code_routing import warn_if_code_graph_is_local
-from .selected_target import selected_target, set_selected_target
 from .migrate import migrate_app
 from .output import OutputFormat, set_output_format
 from .run_helpers import _run_task_slug
+from .selected_target import selected_target, set_selected_target
 
 # ── How long a shutting-down server waits for work already in flight ─────────
 #

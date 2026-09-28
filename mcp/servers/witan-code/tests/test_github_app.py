@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from joserfc import jwt
 from joserfc.jwk import RSAKey
+
 from witan_code.github_app import (
     API_URL_ENV_VAR,
     APP_ID_ENV_VAR,
@@ -26,9 +27,9 @@ from witan_code.github_app import (
     KEY_FILE_ENV_VAR,
     AppCredentials,
     GitHubAppError,
+    api_repo_host,
     app_jwt,
     from_env,
-    api_repo_host,
     installation_token,
     main,
     repo_is_private,

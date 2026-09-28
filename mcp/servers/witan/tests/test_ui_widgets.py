@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from fastmcp import Client, FastMCP
+
 from witan import server as srv
 from witan import ui_widgets
 

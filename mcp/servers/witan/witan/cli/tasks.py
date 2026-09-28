@@ -9,6 +9,10 @@ from .. import config as cfg_module
 from ._common import (
     _PRIORITY_STYLE,
     _STATUS_STYLE,
+    TaskLinkKind,
+    TaskPriority,
+    TaskStatus,
+    TaskType,
     _detect_repo_for_display,
     _fn,
     _repo_arg,
@@ -16,10 +20,6 @@ from ._common import (
     _split_csv,
     _srv,
     _styled,
-    TaskLinkKind,
-    TaskPriority,
-    TaskStatus,
-    TaskType,
     app,
     console,
     esc,
@@ -27,7 +27,6 @@ from ._common import (
     render_table,
 )
 from .output import dump_record, get_output_format
-from .selected_target import selected_target
 from .run_helpers import (
     _launch_agent,
     _merge_prompts,
@@ -35,7 +34,7 @@ from .run_helpers import (
     _run_prompt,
     _run_task_slug,
 )
-
+from .selected_target import selected_target
 
 # task_ready truncates server-side. Anything filtered client-side afterwards (a
 # search intersection, --status) needs every ready task, so the cap goes out of

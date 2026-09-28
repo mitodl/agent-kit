@@ -350,9 +350,8 @@ def test_store_refusals_are_warning_level_refusals():
     error. Both stay RuntimeErrors for the callers that catch them as one."""
     import logging
 
-    from witan_core.refusal import Refusal
-
     from witan_code import store as store_module
+    from witan_core.refusal import Refusal
 
     for cls in (ingest.IngestRefused, store_module.ClusterGraphMissing):
         exc = cls("refused")

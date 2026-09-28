@@ -26,8 +26,9 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     import cyclopts
-    from agent_config_kit import InstallResult
     from rich.console import Console
+
+    from agent_config_kit import InstallResult
 
 # The coding agents witan supports installing into. Both servers' `setup`
 # commands mirror this literal for their `--agent` argument; "all" fans out
@@ -51,6 +52,7 @@ def make_app(*, name: str, help_text: str, version_dist: str) -> cyclopts.App:
     ``--version`` reports (e.g. ``"witan-council"`` or ``"witan-code"``).
     """
     import cyclopts
+
     from agent_config_kit.version import resolve_version
 
     return cyclopts.App(

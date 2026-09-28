@@ -67,6 +67,7 @@ def fresh_srv(monkeypatch):
 
 def _stderr(monkeypatch):
     from rich.console import Console
+
     from witan.cli import _common
 
     recorder = Console(record=True, width=200, stderr=True)

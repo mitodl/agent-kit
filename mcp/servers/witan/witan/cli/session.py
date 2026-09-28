@@ -12,11 +12,13 @@ inspect a project's session history.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import cyclopts
 
 from .. import session_state
 from ._common import (
+    WorkflowPhase,
     _fn,
     _split_csv,
     _srv,
@@ -24,7 +26,6 @@ from ._common import (
     console,
     esc,
     print_error,
-    WorkflowPhase,
 )
 from .output import dump_record, get_output_format
 
@@ -162,7 +163,7 @@ def session_sweep(
     project: Restrict to one project's sessions (``wp-`` slug).
     yes: Actually close them. Without this, nothing is written.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     try:
         max_age = timedelta(seconds=_parse_duration(older_than))
@@ -172,7 +173,7 @@ def session_sweep(
 
     s = _srv()
     sessions = _fn(s.workflow_session_list)(project_slug=project, open_only=True)
-    cutoff = datetime.now(timezone.utc) - max_age
+    cutoff = datetime.now(UTC) - max_age
 
     stale, running = [], 0
     for sess in sessions:
@@ -188,7 +189,7 @@ def session_sweep(
             running += 1
             continue
         if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
+            when = when.replace(tzinfo=UTC)
         if when < cutoff:
             stale.append(sess)
         else:

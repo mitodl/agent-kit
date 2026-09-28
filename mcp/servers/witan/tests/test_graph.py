@@ -13,9 +13,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from witan_core import omnigraph as og
 
 from witan.graph import OmnigraphClient
+from witan_core import omnigraph as og
 
 
 def test_find_binary_message_names_witan_setup(tmp_path, monkeypatch):

@@ -11,9 +11,9 @@ import asyncio
 
 import pytest
 from fastmcp import Client
-from witan_core.remote.config import RemoteConfig
 
 from witan_code.remote.proxy import RemoteServerProxy, RemoteToolUnavailable
+from witan_core.remote.config import RemoteConfig
 
 from .conftest import requires_stack
 

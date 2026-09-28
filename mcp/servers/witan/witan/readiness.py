@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # A holder is ``"<identity>#<session>"`` — see ``server._claim_holder``. Matched
 # conservatively (the charset of a session id, anchored at the end) so an
@@ -92,10 +92,10 @@ def lease_expired(claimed_at: str | None, *, now: datetime | None = None) -> boo
     except (ValueError, TypeError):
         return True
     if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
-    now = now or datetime.now(timezone.utc)
+        started = started.replace(tzinfo=UTC)
+    now = now or datetime.now(UTC)
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=UTC)
     return (now - started).total_seconds() > CLAIM_LEASE_SECONDS
 
 

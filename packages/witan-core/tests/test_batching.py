@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
 from witan_core import omnigraph as og
 from witan_core.omnigraph import OmnigraphClient
 

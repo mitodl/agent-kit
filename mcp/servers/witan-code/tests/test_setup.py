@@ -14,7 +14,6 @@ import re
 from pathlib import Path
 
 from agent_config_kit import apply
-
 from witan_code import setup
 
 
@@ -125,7 +124,6 @@ def test_setup_does_not_abort_on_a_refused_omnigraph_binary(tmp_path, monkeypatc
     in cli.
     """
     import witan_core
-
     from witan_code import cli
 
     calls: list[dict] = []
@@ -143,7 +141,6 @@ def test_setup_does_not_abort_on_a_refused_omnigraph_binary(tmp_path, monkeypatc
 
 def _pi_setup_output(tmp_path, monkeypatch, capsys, *, dry_run: bool) -> str:
     import witan_core
-
     from witan_code import cli
 
     monkeypatch.setattr(witan_core, "install_omnigraph", lambda dry_run, **kw: None)

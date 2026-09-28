@@ -3,7 +3,6 @@
 import logging
 
 import pytest
-from witan_core.observability import configure_logging, reset_logging
 
 from witan.config import ScanConfig
 from witan.scan import (
@@ -14,6 +13,7 @@ from witan.scan import (
     masked_preview,
 )
 from witan.scan.audit import AuditEvent
+from witan_core.observability import configure_logging, reset_logging
 
 
 @pytest.fixture(autouse=True)

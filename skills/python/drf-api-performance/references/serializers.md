@@ -26,6 +26,7 @@ class CourseSerializer(serializers.ModelSerializer):
 # views.py
 queryset = Course.objects.annotate(topic_count=Count("topics"))
 
+
 # serializers.py
 class CourseSerializer(serializers.ModelSerializer):
     topic_count = serializers.IntegerField(read_only=True)
@@ -72,9 +73,7 @@ from mitol.common.serializers import BaseSerializer
 
 
 class EnrollmentSerializer(BaseSerializer):
-    required_prefetches: list[str] = [
-        "program_titles"
-    ]
+    required_prefetches: list[str] = ["program_titles"]
 ```
 
 A "prefetch" in this situation is anything that should be `prefetch()`,

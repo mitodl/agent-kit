@@ -444,7 +444,7 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
     """
     procs = []
     for mode, index, payload in specs:
-        proc = subprocess.Popen(  # noqa: S603 - argv is ours, payload is on stdin
+        proc = subprocess.Popen(  # argv is ours, payload is on stdin
             [
                 sys.executable,
                 os.path.abspath(__file__),

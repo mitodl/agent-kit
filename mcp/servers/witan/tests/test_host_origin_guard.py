@@ -163,7 +163,7 @@ def test_a_non_loopback_bind_resolves_to_no_allowlist():
         configured_allowed_hosts=None,
     )
 
-    assert resolve(host="0.0.0.0") is None  # noqa: S104 — the deployment's bind
+    assert resolve(host="0.0.0.0") is None  # the deployment's bind
     assert resolve(host="127.0.0.1") == ["127.0.0.1"]
 
 

@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 DEFAULT_PATH = Path.home() / ".config" / "witan" / "merge-watermarks.json"
@@ -156,7 +156,7 @@ def write(source: str, target: str, watermark: dict) -> bool:
         "target": target,
         "source_ts": watermark.get("source_ts"),
         "target_ts": watermark.get("target_ts"),
-        "merged_at": datetime.now(timezone.utc).isoformat(),
+        "merged_at": datetime.now(UTC).isoformat(),
     }
     pairs = [
         p

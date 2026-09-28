@@ -18,7 +18,6 @@ from witan_code.bridge_extractors import (
 
 from .conftest import requires_stack
 
-
 # ── Confidence scoring unit tests ─────────────────────────────────
 # All tests operate on _compute_file_confidence directly; no omnigraph needed.
 

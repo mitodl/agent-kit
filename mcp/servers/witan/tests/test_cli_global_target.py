@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from witan.cli import _warn_about_routing, _launcher
+from witan.cli import _launcher, _warn_about_routing
 from witan.cli.selected_target import selected_target, set_selected_target
 
 
@@ -187,7 +187,6 @@ def test_serve_resolves_the_named_target_too(monkeypatch):
 
     def _record(target=None):
         seen["target"] = target
-        return None  # local branch; which server comes back is not the point
 
     monkeypatch.setattr(cfg_module, "load_remote_config", _record)
     set_selected_target("qa")

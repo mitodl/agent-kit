@@ -110,29 +110,30 @@ class ProgramTitlesPrefetcher(Prefetcher):
         if not ids:
             return Program.objects.none()
         # one query to fetch everything
-        return Program.objects.filter(
-            course__id__in=ids
-        ).annotate(
-            # postgres-specific aggregation
-            course_ids=ArrayAgg("course__id")
-        ).only("title")  # only the fields we will use
+        return (
+            Program.objects.filter(course__id__in=ids)
+            .annotate(
+                # postgres-specific aggregation
+                course_ids=ArrayAgg("course__id")
+            )
+            .only("title")
+        )  # only the fields we will use
 
     def reverse_mapper(self, program):
         return program.course_ids
 
     def decorator(self, enrollment, programs=None):
-        enrollment.program_titles = [program.title for program in programs] if programs else []
+        enrollment.program_titles = (
+            [program.title for program in programs] if programs else []
+        )
 
 
 # NOTE: this is named mixin, but it's actually a subclass of models.Manager
 class EnrollmentManager(PrefetchManagerMixin):
-    prefetch_definitions = {
-        "program_titles": ProgramTitlesPrefetcher
-    }
+    prefetch_definitions = {"program_titles": ProgramTitlesPrefetcher}
 
 
 class Enrollment(models.Model):
-
     objects = EnrollmentManager()
 
 
@@ -217,8 +218,7 @@ methods then raise `AttributeError` at the call site. You have to name the
 queryset a second time:
 
 ```python
-class EnrollmentQuerySet(TimestampedModelQuerySet, PrefetchQuerySet):
-    ...
+class EnrollmentQuerySet(TimestampedModelQuerySet, PrefetchQuerySet): ...
 
 
 class EnrollmentManager(
@@ -315,7 +315,9 @@ class Enrollment(models.Model):
     def program_titles(self) -> list[str]:
         # Fallback: runs only when prefetch("program_titles") didn't fill __dict__.
         return list(
-            Program.objects.for_course_ids([self.course_id]).values_list("title", flat=True)
+            Program.objects.for_course_ids([self.course_id]).values_list(
+                "title", flat=True
+            )
         )
 ```
 
@@ -334,6 +336,7 @@ Prefetch(
     queryset=ContractProgramItem.objects.order_by("sort_order"),
     to_attr="_contract_program_ids",
 )
+
 
 # b2b/models.py
 @cached_property

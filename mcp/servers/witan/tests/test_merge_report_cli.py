@@ -34,7 +34,7 @@ class _StubProvider:
 
     remote_url = None
 
-    class client:  # noqa: N801 - matches the attribute the CLI reads
+    class client:  # matches the attribute the CLI reads
         graph_uri = "/tmp/target.omni"
 
     def __init__(self, result=None, error=None):

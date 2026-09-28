@@ -31,6 +31,7 @@ import sys
 from pathlib import Path
 
 import cyclopts
+
 from witan_core.omnigraph_install import (
     _OMNIGRAPH_INTERNAL_SCHEMA,
     _OMNIGRAPH_VERSION,

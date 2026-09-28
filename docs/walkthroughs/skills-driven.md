@@ -25,7 +25,10 @@ Which task do you want to work on?
 You pick the first one. The skill claims it on your behalf:
 
 ```python
-task_claim(slug="tk-retry-logic-drops-the-last-attempt-s-e-4f9c21", assignee="<your session id>")
+task_claim(
+    slug="tk-retry-logic-drops-the-last-attempt-s-e-4f9c21",
+    assignee="<your session id>",
+)
 ```
 
 and confirms: *"Claimed **Retry logic drops the last attempt's error**
@@ -47,7 +50,8 @@ behavior, skill or not:
 task_create(
     title="Retry loop swallows CancelledError",
     description="The same retry loop discards CancelledError on the final attempt, same root cause as the reported bug.",
-    type="bug", priority="p2",
+    type="bug",
+    priority="p2",
     discovered_from=["tk-retry-logic-drops-the-last-attempt-s-e-4f9c21"],
 )
 ```

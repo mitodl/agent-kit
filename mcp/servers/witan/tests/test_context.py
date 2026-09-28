@@ -9,6 +9,7 @@ import sys
 import textwrap
 
 import pytest
+
 from witan_core.observability import configure_logging, reset_logging
 
 from .conftest import SCHEMA, requires_omnigraph

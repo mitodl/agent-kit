@@ -42,6 +42,7 @@ from contextvars import Context, ContextVar
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+
 from witan_core.observability import get_logger
 
 from .models import Category, Finding

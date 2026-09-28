@@ -15,7 +15,6 @@ import pytest
 import witan_core.identity as identity_module
 from witan.identity import ActorTokenResolver, derive_actor_id
 
-
 # ── derive_actor_id ───────────────────────────────────────────────────────────
 
 

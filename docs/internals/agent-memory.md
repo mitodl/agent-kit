@@ -712,9 +712,12 @@ class OmnigraphClient:
         """Run a named read query. Returns a list of result rows."""
         result = self._run(
             "read",
-            "--query", str(self.queries_dir / query_file),
-            "--name", query_name,
-            "--params", json.dumps(params),
+            "--query",
+            str(self.queries_dir / query_file),
+            "--name",
+            query_name,
+            "--params",
+            json.dumps(params),
         )
         if not result.strip():
             return []
@@ -732,9 +735,12 @@ class OmnigraphClient:
         """Run a named mutation query."""
         self._run(
             "change",
-            "--query", str(self.queries_dir / query_file),
-            "--name", query_name,
-            "--params", json.dumps(params),
+            "--query",
+            str(self.queries_dir / query_file),
+            "--name",
+            query_name,
+            "--params",
+            json.dumps(params),
         )
 
     # ── Internals ─────────────────────────────────────────────────
@@ -1006,7 +1012,9 @@ def memory_list_patterns(
         rows = client.read("read.gq", "patterns_all", {})
 
     if language:
-        rows = [r for r in rows if (r.get("language") or "").lower() == language.lower()]
+        rows = [
+            r for r in rows if (r.get("language") or "").lower() == language.lower()
+        ]
 
     return rows
 ```

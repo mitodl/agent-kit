@@ -26,12 +26,15 @@ from __future__ import annotations
 import asyncio
 import atexit
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from fastmcp import Client
 from fastmcp.client.auth import BearerAuth
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+
+from witan_core import chunking
 from witan_core.observability import get_logger
 from witan_core.remote.proxy import (
     RemotePayloadTooLarge,
@@ -40,8 +43,6 @@ from witan_core.remote.proxy import (
     gateway_failure,
     payload_too_large,
 )
-
-from witan_core import chunking
 
 __all__ = [
     "RemotePayloadTooLarge",
@@ -237,7 +238,7 @@ class StoreSession:
                 # query, a store error. Reconnecting would only run it again.
                 _refuse_if_too_large(exc, tool, self.url)
                 raise RemoteToolFailed(str(exc)) from exc
-            except Exception as exc:  # noqa: BLE001 — transport-shaped; retry once
+            except Exception as exc:  # transport-shaped; retry once
                 _refuse_if_too_large(exc, tool, self.url)
                 # BEFORE the reconnect, and that order is the whole point: a
                 # gateway cut-off on a write must not be re-invoked, because the
@@ -259,7 +260,7 @@ class StoreSession:
                     # arm exists to prevent.
                     _refuse_if_too_large(refused, tool, self.url)
                     raise RemoteToolFailed(str(refused)) from refused
-                except Exception as retried:  # noqa: BLE001 — same two rules
+                except Exception as retried:  # same two rules
                     # The reconnect landed and the SECOND call was cut off. The
                     # write is just as indeterminate as it would have been the
                     # first time, so it gets the same sentence rather than
@@ -291,7 +292,7 @@ class StoreSession:
             if self._tools is None:
                 try:
                     self._tools = frozenset(t.name for t in self._list_tools())
-                except Exception:  # noqa: BLE001 — fall back, don't fail
+                except Exception:  # fall back, don't fail
                     # Warning: an empty tool set makes every `has_tool` answer
                     # False, so the client silently takes its degraded path for
                     # a deployment that actually serves the tool.
@@ -322,7 +323,7 @@ class StoreSession:
             return
         try:
             self._loop.run(client.__aexit__(None, None, None))
-        except Exception:  # noqa: BLE001 — already broken; nothing to salvage
+        except Exception:  # already broken; nothing to salvage
             # Debug only, and genuinely nothing to act on: this is teardown of a
             # connection already known to be dead, so a failure here changes
             # nothing a caller could respond to.

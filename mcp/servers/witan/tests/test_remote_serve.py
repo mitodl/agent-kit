@@ -20,6 +20,7 @@ import httpx2
 import pytest
 from fastmcp import Client, FastMCP
 from fastmcp.tools import FunctionTool
+
 from witan.config import RemoteConfig
 from witan.remote.proxy import (
     RemoteCredentialRejected,
@@ -206,6 +207,7 @@ def test_the_code_graph_warning_survives_a_bracketed_target_name():
     # tag. Unescaped, the name is swallowed on render (or raises on a name Rich
     # cannot parse), so the warning names no target at all.
     from rich.console import Console
+
     from witan.cli.code_routing import _local_code_graph_warning
 
     markup = _local_code_graph_warning("direct", "production")

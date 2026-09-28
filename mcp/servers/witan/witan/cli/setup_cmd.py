@@ -41,6 +41,7 @@ def _witan_code_mounted() -> bool:
             capture_output=True,
             text=True,
             timeout=10,
+            check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

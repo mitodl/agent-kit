@@ -45,12 +45,14 @@ up twice at two different trust levels.
 
 ```python
 TypedEdge(
-    precision,           # "precise" | "heuristic" | "fuzzy"
-    consumer_repo, provider_repo,
-    kind, key_norm,
-    canonical_symbol,     # consumer's symbol string; precise tier only, else None
-    confidence,           # 1.0 for precise; the heuristic tier's score otherwise
-    evidence,             # tuple[dict] of {repo, file, line} — see below
+    precision,  # "precise" | "heuristic" | "fuzzy"
+    consumer_repo,
+    provider_repo,
+    kind,
+    key_norm,
+    canonical_symbol,  # consumer's symbol string; precise tier only, else None
+    confidence,  # 1.0 for precise; the heuristic tier's score otherwise
+    evidence,  # tuple[dict] of {repo, file, line} — see below
 )
 ```
 

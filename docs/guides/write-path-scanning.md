@@ -259,11 +259,12 @@ anything with:
 
 ```python
 class MyScanner:
-    name: str = "acme_employee_id"       # stable, unique detector id
+    name: str = "acme_employee_id"  # stable, unique detector id
     category: Literal["secret", "pii"] = "pii"
 
-    def scan(self, text: str, field: str, node_type: str) -> list[Finding]:
-        ...  # return zero or more Finding objects; never echo the match
+    def scan(
+        self, text: str, field: str, node_type: str
+    ) -> list[Finding]: ...  # return zero or more Finding objects; never echo the match
 ```
 
 `witan.scan.Scanner` is a `runtime_checkable` `Protocol` (structural typing —

@@ -1,12 +1,12 @@
 """Unit tests for the shared task-readiness predicate (no omnigraph needed)."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from witan import readiness
 
 
 def _iso(delta_seconds: int) -> str:
-    return (datetime.now(timezone.utc) + timedelta(seconds=delta_seconds)).isoformat()
+    return (datetime.now(UTC) + timedelta(seconds=delta_seconds)).isoformat()
 
 
 def test_open_and_blocked_are_pickable():
@@ -33,7 +33,7 @@ def test_lease_expired_tolerates_naive_timestamp():
     # Subtracting it from tz-aware now must not raise TypeError; a naive value is
     # read as UTC. (Build the strings from UTC wall-clock, stripped of tzinfo, so
     # the assertion is independent of the test machine's local timezone.)
-    utc_now = datetime.now(timezone.utc)
+    utc_now = datetime.now(UTC)
     naive_recent = utc_now.replace(tzinfo=None).isoformat()
     assert readiness.lease_expired(naive_recent) is False
     naive_old = (

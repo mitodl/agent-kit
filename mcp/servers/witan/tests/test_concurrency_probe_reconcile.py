@@ -15,6 +15,7 @@ being reported as saturation.
 from __future__ import annotations
 
 import pytest
+
 from witan.scripts import concurrency_probe as cp
 from witan.scripts.concurrency_probe import (
     _is_auth_failure,

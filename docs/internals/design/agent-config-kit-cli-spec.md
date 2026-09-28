@@ -230,15 +230,19 @@ New core function, not CLI-only logic (so it's usable from Python too):
 ```python
 # agent_config_kit/diff.py
 
+
 @dataclass
 class Drift:
     platform: str
     path: Path
-    missing_keys: list[str]     # in manifest, absent on disk (JSON capabilities)
+    missing_keys: list[str]  # in manifest, absent on disk (JSON capabilities)
     mismatched_keys: list[str]  # in manifest, present on disk, different value
-    missing_paths: list[Path]   # in manifest, absent on disk (filesystem capabilities)
+    missing_paths: list[Path]  # in manifest, absent on disk (filesystem capabilities)
 
-def diff(platform_name: str, bundle: RegistrationBundle, *, scope: Scope = Scope.GLOBAL) -> Drift: ...
+
+def diff(
+    platform_name: str, bundle: RegistrationBundle, *, scope: Scope = Scope.GLOBAL
+) -> Drift: ...
 ```
 
 `agent-config-kit`'s two capability shapes need two different comparison

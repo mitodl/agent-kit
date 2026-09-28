@@ -138,7 +138,7 @@ def _registry() -> dict[str, AgentPlatform]:
             # discovery is workspace-scoped only (.github/skills et al.),
             # with no equivalent per-user global directory surveyed.
             skills=CapabilityScope(
-                **{"project": ScopeTarget(path=Path(".github") / "skills")}
+                project=ScopeTarget(path=Path(".github") / "skills")
             ),
         ),
         "opencode": AgentPlatform(
@@ -165,7 +165,7 @@ def _registry() -> dict[str, AgentPlatform]:
             # notes both ".opencode/skill" and ".opencode/skills" as seen) —
             # write to both rather than guess wrong (skill_dest_dirs).
             skills=CapabilityScope(
-                **{"project": ScopeTarget(path=Path(".opencode") / "skill")}
+                project=ScopeTarget(path=Path(".opencode") / "skill")
             ),
             skill_dest_dirs=opencode_adapter.skill_dest_dirs,
         ),

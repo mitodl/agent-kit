@@ -28,10 +28,10 @@ def proxy(server, monkeypatch):
     verify one half against an assumption about the other.
     """
     from fastmcp import Client
-    from witan.config import RemoteConfig
-    from witan.remote.proxy import RemoteServerProxy
 
     import witan.server as srv
+    from witan.config import RemoteConfig
+    from witan.remote.proxy import RemoteServerProxy
 
     cfg = RemoteConfig(url="http://unused/mcp", oidc_issuer="https://sso/realms/ol")
     p = RemoteServerProxy(cfg, lambda: "tok")
