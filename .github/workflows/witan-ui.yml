@@ -106,6 +106,46 @@ jobs:
             fi
           done
 
+      - name: Assert no chunk was emitted empty
+        # A package that declares `"sideEffects": false` over a module that is
+        # all side effect (a polyfill) gets that module's chunk emitted as 0
+        # bytes by Rolldown. The import still resolves, so nothing fails until
+        # the code that needed the polyfill runs in a browser.
+        run: |
+          empty=$(find ../witan/ui_dist/assets -name '*.js' -size 0)
+          if [ -n "$empty" ]; then
+            echo "::error::empty chunk(s) in the bundle: $empty"
+            exit 1
+          fi
+
+      - name: Assert the webcrypto shim still installs crypto.subtle
+        # oidc-spa lazy-loads this shim when the page is not a secure context
+        # (plain http on a non-localhost host), and its package-wide
+        # `"sideEffects": false` is what emptied it under vite 8. vite.config.ts
+        # keeps it; this checks the built chunk does what login needs. It fails
+        # when the chunk is missing too, so a rename in oidc-spa is noticed
+        # rather than skipped.
+        run: |
+          shim=$(find ../witan/ui_dist/assets -name 'webcrypto-liner-shim-*.js')
+          if [ -z "$shim" ]; then
+            echo "::error::no webcrypto-liner-shim chunk in the bundle"
+            exit 1
+          fi
+          SHIM="$shim" node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            Object.defineProperty(globalThis, "crypto", {
+              value: { getRandomValues: (a) => a }, configurable: true, writable: true,
+            });
+            globalThis.self = globalThis;
+            globalThis.window = globalThis;
+            const src = readFileSync(process.env.SHIM, "utf8");
+            await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+            if (typeof globalThis.crypto.subtle?.digest !== "function") {
+              console.log("::error::the shim loaded but did not install crypto.subtle.digest");
+              process.exit(1);
+            }
+          '
+
   packaging:
     name: witan UI (bundle reaches the wheel)
     runs-on: ubuntu-latest
