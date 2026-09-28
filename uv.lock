@@ -19,7 +19,7 @@ members = [
 
 [[package]]
 name = "agent-config-kit"
-version = "0.10.0"
+version = "0.11.0"
 source = { editable = "packages/agent-config-kit" }
 dependencies = [
     { name = "pydantic" },
@@ -2093,7 +2093,7 @@ wheels = [
 
 [[package]]
 name = "witan-code"
-version = "0.22.0"
+version = "0.23.0"
 source = { editable = "mcp/servers/witan-code" }
 dependencies = [
     { name = "agent-config-kit" },
@@ -2159,7 +2159,7 @@ test = [
 
 [[package]]
 name = "witan-core"
-version = "0.40.0"
+version = "0.40.1"
 source = { editable = "packages/witan-core" }
 
 [package.optional-dependencies]
@@ -2233,7 +2233,7 @@ test = [
 
 [[package]]
 name = "witan-council"
-version = "0.38.0"
+version = "0.39.0"
 source = { editable = "mcp/servers/witan" }
 dependencies = [
     { name = "agent-config-kit" },

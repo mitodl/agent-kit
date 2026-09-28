@@ -8,6 +8,30 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.39.0] - 2026-09-28
+
+### Added
+
+- **`witan projects --status all` lists every status.** The server already read
+  `status=None` as every status, but the CLI had no way to send it: `--status ''`
+  reached the server as an empty string and failed its `Literal` validation.
+  `--status` now takes `all` and maps it to `None`.
+
+### Changed
+
+- Allow cyclopts 5 (`cyclopts>=4,<6`). Under cyclopts 5, `--help` shows a
+  value placeholder after each option (e.g. `--target STR`), and a usage error
+  such as an unknown option exits with code 2 instead of 1.
+
+### Fixed
+
+- **Structured output no longer carries Rich-escaped titles.** `witan tasks` and
+  `witan projects` escaped the query in their table title before handing it to
+  `render_table`, so `witan --output-format json tasks '[wip] grafana'` printed a
+  title containing `\[wip]`. `render_table` now takes a plain title and escapes
+  it itself, in `txt` mode only. That also fixes `witan memory QUERY`, whose
+  title was never escaped and lost any bracketed text in `txt` mode.
+
 ## [0.38.0] - 2026-09-25
 
 ### Added
