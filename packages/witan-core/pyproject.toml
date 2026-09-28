@@ -19,7 +19,7 @@ dependencies = []
 # styled output. agent-config-kit supplies resolve_version (--version wiring)
 # and the InstallResult type report_install prints; it is a sibling leaf package
 # both servers already depend on, so this stays a valid leaf→leaf edge.
-cli = ["cyclopts>=4,<5", "rich>=13", "agent-config-kit>=0.4,<1"]
+cli = ["cyclopts>=4,<6", "rich>=13", "agent-config-kit>=0.4,<1"]
 # elicit.py (fastmcp.server.elicitation.AcceptedElicitation).
 mcp = ["fastmcp>=4,<5"]
 # remote/ — the OIDC device-auth + token cache (httpx2) and the MCP-client proxy
@@ -94,7 +94,7 @@ test = [
     "pytest>=8",
     "rich>=13",
     "fastmcp>=4,<5",
-    "cyclopts>=4,<5",
+    "cyclopts>=4,<6",
     "agent-config-kit>=0.4,<1",
     "httpx2>=2.5",
     "structlog>=25",
