@@ -154,44 +154,45 @@ describe("every recorded fixture", () => {
 		expect(validator?.(value), `${tool} no longer matches its type`).toBe(true);
 	});
 
-	it.each(
-		TOOL_FIXTURES,
-	)("notices the loss of every required field in %s", (path, payload) => {
-		const tool = toolOf(path);
-		const validate = VALIDATORS[tool];
-		const value = unwrap(tool, payload);
-		// `task_get.missing.json` is `null` and `task_list.empty.json` is `[]`:
-		// real results, with no record to take a field away from.
-		const first = Array.isArray(value) ? value[0] : value;
-		if (first === null || typeof first !== "object") {
-			return;
-		}
+	it.each(TOOL_FIXTURES)(
+		"notices the loss of every required field in %s",
+		(path, payload) => {
+			const tool = toolOf(path);
+			const validate = VALIDATORS[tool];
+			const value = unwrap(tool, payload);
+			// `task_get.missing.json` is `null` and `task_list.empty.json` is `[]`:
+			// real results, with no record to take a field away from.
+			const first = Array.isArray(value) ? value[0] : value;
+			if (first === null || typeof first !== "object") {
+				return;
+			}
 
-		const optional = OPTIONAL_FIELDS[tool] ?? [];
-		const unnoticed = Object.keys(first).filter((key) => {
-			const mutated = structuredClone(value);
-			const target = (Array.isArray(mutated) ? mutated[0] : mutated) as Record<
-				string,
-				unknown
-			>;
-			delete target[key];
-			return validate?.(mutated) === true;
-		});
+			const optional = OPTIONAL_FIELDS[tool] ?? [];
+			const unnoticed = Object.keys(first).filter((key) => {
+				const mutated = structuredClone(value);
+				const target = (
+					Array.isArray(mutated) ? mutated[0] : mutated
+				) as Record<string, unknown>;
+				delete target[key];
+				return validate?.(mutated) === true;
+			});
 
-		// Subset, not equality: a fixture carries an optional field only when
-		// the recorded row happened to have one, so `lease_expired` is absent
-		// from every fixture with no `in_progress` row.
-		expect(unnoticed.filter((key) => !optional.includes(key))).toEqual([]);
-	});
+			// Subset, not equality: a fixture carries an optional field only when
+			// the recorded row happened to have one, so `lease_expired` is absent
+			// from every fixture with no `in_progress` row.
+			expect(unnoticed.filter((key) => !optional.includes(key))).toEqual([]);
+		},
+	);
 
-	it.each(
-		TOOL_FIXTURES,
-	)("records %s as JSON the page can hold", (_path, payload) => {
-		// Nothing that survived `default=str` as a repr: a value like
-		// "datetime.datetime(...)" means the generator coerced past its own
-		// normalizer, which would make the gate flake.
-		const text = JSON.stringify(payload);
-		expect(text).not.toContain("datetime.datetime");
-		expect(text).not.toContain("<");
-	});
+	it.each(TOOL_FIXTURES)(
+		"records %s as JSON the page can hold",
+		(_path, payload) => {
+			// Nothing that survived `default=str` as a repr: a value like
+			// "datetime.datetime(...)" means the generator coerced past its own
+			// normalizer, which would make the gate flake.
+			const text = JSON.stringify(payload);
+			expect(text).not.toContain("datetime.datetime");
+			expect(text).not.toContain("<");
+		},
+	);
 });
