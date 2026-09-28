@@ -13,10 +13,10 @@ import time
 import unicodedata
 from pathlib import Path
 
+from witan_core import chunking
 from witan_core.omnigraph import OmnigraphClient as _BaseOmnigraphClient
 from witan_core.omnigraph import OmnigraphConflict, _is_storage_version_mismatch
 
-from witan_core import chunking
 from . import config as cfg_module
 from . import identity as identity_module
 from . import views
@@ -443,7 +443,7 @@ class OmnigraphClient(_BaseOmnigraphClient):
             ) from exc
         commits = parsed.get("commits") if isinstance(parsed, dict) else parsed
         if not isinstance(commits, list):
-            raise RuntimeError(
+            raise RuntimeError(  # noqa: TRY004 - bad omnigraph output, not a caller error
                 f"omnigraph commit list returned no commit array for branch "
                 f"{name!r}: {parsed!r}"
             )

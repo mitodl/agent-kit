@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
 from witan_core.observability import get_logger
 
 from ..config import ScanAction

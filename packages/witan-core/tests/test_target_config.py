@@ -17,7 +17,6 @@ from witan_core.target_config import (
     to_list,
 )
 
-
 # ── to_list ──────────────────────────────────────────────────────────────────
 
 

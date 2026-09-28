@@ -164,9 +164,8 @@ def test_add_rejects_remote_url_without_issuer(config_file, monkeypatch):
 
 def test_add_reports_a_bad_issuer_and_writes_nothing(config_file, monkeypatch):
     """The typo class this command exists to kill: caught at add time."""
-    from witan_core.remote.oidc import RemoteAuthError
-
     from witan.cli.targets import add
+    from witan_core.remote.oidc import RemoteAuthError
 
     def _boom(issuer, **kwargs):
         raise RemoteAuthError("no such realm")

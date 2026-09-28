@@ -710,7 +710,6 @@ def test_serve_defaults_to_stdio(monkeypatch):
 
 def test_serve_streamable_http_passes_transport_kwargs(monkeypatch):
     from witan.cli import serve
-
     from witan_core.observability.asgi import TraceContextASGIMiddleware
 
     fake = _patch_mcp(monkeypatch)
@@ -762,7 +761,7 @@ def test_serve_overrides_fastmcps_two_second_shutdown_grace(monkeypatch):
     assert call["uvicorn_config"]["timeout_graceful_shutdown"] == (
         DEFAULT_SHUTDOWN_GRACE_SECONDS
     )
-    assert DEFAULT_SHUTDOWN_GRACE_SECONDS > 2, (  # noqa: PLR2004
+    assert DEFAULT_SHUTDOWN_GRACE_SECONDS > 2, (
         "the whole point is exceeding fastmcp's 2s default"
     )
 
@@ -773,7 +772,7 @@ def test_serve_shutdown_grace_is_tunable(monkeypatch):
 
     fake = _patch_mcp(monkeypatch)
     serve(transport="streamable-http", shutdown_grace_seconds=45.0)
-    assert fake.run_calls[0]["uvicorn_config"]["timeout_graceful_shutdown"] == 45.0  # noqa: PLR2004
+    assert fake.run_calls[0]["uvicorn_config"]["timeout_graceful_shutdown"] == 45.0
 
 
 def test_stdio_serve_passes_no_uvicorn_config(monkeypatch):

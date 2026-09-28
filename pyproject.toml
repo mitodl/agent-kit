@@ -18,8 +18,18 @@
 # target version from the closest pyproject.toml that *contains* a [tool.ruff]
 # table — and none did, so it fell back to its py39 default and flagged 3.11
 # builtins (`ExceptionGroup`, `BaseExceptionGroup`) as undefined names. This
-# table is that anchor; it changes no rule selection.
+# table is that anchor. Rule selection is ruff's default set.
 target-version = "py311"
+# The members' import roots. Without them ruff resolves first-party from the
+# repo root, finds none of the packages there, and isort (I001) folds
+# `witan_core` and friends into the third-party block.
+src = [
+    "packages/agent-config-kit",
+    "packages/agent-kit",
+    "packages/witan-core",
+    "mcp/servers/witan",
+    "mcp/servers/witan-code",
+]
 
 [tool.uv.workspace]
 members = [

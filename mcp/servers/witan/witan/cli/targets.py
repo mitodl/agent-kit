@@ -855,7 +855,7 @@ def set_(
         console.print(f"[dim]→ {path}[/dim]\n")
         lines = new_text.splitlines(keepends=True)
         span = find_target_block(lines, name)
-        assert span is not None  # noqa: S101 — just parsed and located above
+        assert span is not None  # just parsed and located above
         # markup=False: a `[targets.x]` header is valid Rich markup and would
         # otherwise be parsed as a style tag and vanish from the output.
         console.print("".join(lines[span[0] : span[1]]).rstrip(), markup=False)

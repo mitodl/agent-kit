@@ -172,7 +172,7 @@ def configure_logging(
     umbrella ``witan serve`` and ``witan-code serve`` call this, and mounting one
     server into the other means both can run in a single process.
     """
-    global _configured  # noqa: PLW0603 - module-level once-only guard
+    global _configured  # module-level once-only guard
     if _configured and not force:
         return
 
@@ -255,7 +255,7 @@ def configure_logging(
 
 def reset_logging() -> None:
     """Clear the once-only guard. For tests."""
-    global _configured  # noqa: PLW0603 - module-level once-only guard
+    global _configured  # module-level once-only guard
     _configured = False
     structlog.reset_defaults()
     # reset_defaults() restores structlog's stdout-writing factory, so the

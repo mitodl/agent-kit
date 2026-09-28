@@ -12,7 +12,6 @@ import pytest
 
 from witan_code.config import _parse_targets, load, load_remote_config
 
-
 # ── _parse_targets ────────────────────────────────────────────────────────────
 
 

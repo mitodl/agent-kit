@@ -468,11 +468,10 @@ def test_remote_merge_chunks_against_the_mcp_budget_not_omnigraph_s(
     Pinning the budget the call site passes, rather than the resulting batch
     count, keeps this from regressing to "whatever the default is".
     """
-    from witan_core.chunking import MCP_LOAD_MAX_BYTES
-
     from witan import config as cfg_mod
     from witan import graph as graph_mod
     from witan.remote import proxy as proxy_mod
+    from witan_core.chunking import MCP_LOAD_MAX_BYTES
 
     from .test_migrate import _init_store, _insert_memory
 
@@ -550,9 +549,8 @@ def test_a_refusal_mid_merge_reports_how_many_batches_landed():
 def test_merge_store_wraps_a_batch_refusal_with_that_context(proxy, monkeypatch):
     """The wiring, not just the wording: a 413 from `store_merge` must come out
     of `merge_store` carrying the batch context."""
-    from witan_core.remote.proxy import RemotePayloadTooLarge
-
     from witan.remote import proxy as proxy_mod
+    from witan_core.remote.proxy import RemotePayloadTooLarge
 
     monkeypatch.setattr(
         proxy_mod, "_source_export", lambda _s, _s3=None: _fake_export(["a", "b"])
@@ -586,11 +584,10 @@ def test_the_source_export_subprocess_gets_the_source_s_s3_profile(monkeypatch):
     where the shim used to supply them."""
     import subprocess
 
-    from witan_core import omnigraph as og
-
     from witan.config import S3Credentials
     from witan.graph import OmnigraphClient
     from witan.remote import proxy as proxy_mod
+    from witan_core import omnigraph as og
 
     monkeypatch.setattr(
         OmnigraphClient, "_find_binary", staticmethod(lambda: "omnigraph")
@@ -727,9 +724,8 @@ def test_every_repo_tool_is_classified(server):
     stored field alone.
     """
     import witan.server as srv
-    from witan_core.remote.proxy import _tool_input_schema
-
     from witan.remote.proxy import _REPO_TOOLS
+    from witan_core.remote.proxy import _tool_input_schema
 
     async def _declaring_repo() -> set[str]:
         async with Client(srv.mcp) as client:
@@ -804,9 +800,8 @@ def test_an_indeterminate_dry_run_batch_cannot_have_changed_anything():
 
 
 def test_merge_store_wraps_an_indeterminate_batch_with_that_context(proxy, monkeypatch):
-    from witan_core.remote.proxy import RemoteWriteIndeterminate
-
     from witan.remote import proxy as proxy_mod
+    from witan_core.remote.proxy import RemoteWriteIndeterminate
 
     monkeypatch.setattr(
         proxy_mod, "_source_export", lambda _s, _s3=None: _fake_export(["a", "b"])
@@ -1037,9 +1032,8 @@ def test_every_branch_tool_is_classified(server):
     no error behind, so this test is the guard against a second one.
     """
     import witan.server as srv
-    from witan_core.remote.proxy import _tool_input_schema
-
     from witan.remote.proxy import _BRANCH_IS_CHECKOUT, _BRANCH_IS_EXPLICIT
+    from witan_core.remote.proxy import _tool_input_schema
 
     async def _declaring_branch() -> set[str]:
         async with Client(srv.mcp) as client:

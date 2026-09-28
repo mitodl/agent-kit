@@ -492,7 +492,7 @@ class PooledTransport:
 
     def get(self, path: str, token: str | None) -> Outcome:
         """GET ``path``. A read, so always safe to repeat."""
-        return self._send("GET", path, None, token, True)  # noqa: FBT003
+        return self._send("GET", path, None, token, True)
 
     def _send(
         self,
@@ -500,7 +500,7 @@ class PooledTransport:
         path: str,
         body: str | None,
         token: str | None,
-        idempotent: bool,  # noqa: FBT001 — positional from two private callers
+        idempotent: bool,  # positional from two private callers
         *,
         if_graph_commit: str | None = None,
     ) -> Outcome:

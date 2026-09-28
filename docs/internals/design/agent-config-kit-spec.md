@@ -128,12 +128,17 @@ from pydantic import BaseModel, Field
 
 # Capability 1: MCP servers — discriminated union, covers 12/13 surveyed platforms.
 
+
 class ApprovalMode(str, Enum):
-    ALWAYS_ALLOW = "always_allow"; ASK = "ask"; NEVER = "never"
+    ALWAYS_ALLOW = "always_allow"
+    ASK = "ask"
+    NEVER = "never"
+
 
 class ApprovalPolicy(BaseModel):
     mode: ApprovalMode = ApprovalMode.ASK
     allowed_tools: list[str] | None = None
+
 
 class StdioServer(BaseModel):
     kind: Literal["stdio"] = "stdio"
@@ -144,6 +149,7 @@ class StdioServer(BaseModel):
     timeout_seconds: float | None = None
     approval: ApprovalPolicy = Field(default_factory=ApprovalPolicy)
 
+
 class RemoteServer(BaseModel):
     kind: Literal["remote"] = "remote"
     url: str
@@ -153,41 +159,64 @@ class RemoteServer(BaseModel):
     timeout_seconds: float | None = None
     approval: ApprovalPolicy = Field(default_factory=ApprovalPolicy)
 
+
 McpServer = Annotated[Union[StdioServer, RemoteServer], Field(discriminator="kind")]
+
 
 # Capability 2a: plain-file instructions (AGENTS.md-style)
 class SearchStrategy(str, Enum):
-    UPWARD_WALK = "upward_walk"; FIRST_MATCH = "first_match"; FIXED_DIRS = "fixed_dirs"
+    UPWARD_WALK = "upward_walk"
+    FIRST_MATCH = "first_match"
+    FIXED_DIRS = "fixed_dirs"
+
 
 class InstructionsConfig(BaseModel):
     candidate_filenames: list[str]
     search_strategy: SearchStrategy
     read_by_default: bool = True  # False for Gemini CLI (opt-in only)
 
+
 # Capability 2b: frontmatter-scoped rules (Continue/Cline-style)
 class FrontmatterRule(BaseModel):
-    name: str; rule: str; description: str | None = None
-    globs: list[str] | None = None; regex: list[str] | None = None
+    name: str
+    rule: str
+    description: str | None = None
+    globs: list[str] | None = None
+    regex: list[str] | None = None
     always_apply: bool = False
+
 
 # Capability 3: hooks
 class HookEvent(str, Enum):
-    PRE_TOOL_USE = "pre_tool_use"; POST_TOOL_USE = "post_tool_use"
-    SESSION_START = "session_start"; SESSION_END = "session_end"
-    USER_PROMPT_SUBMIT = "user_prompt_submit"; STOP = "stop"
+    PRE_TOOL_USE = "pre_tool_use"
+    POST_TOOL_USE = "post_tool_use"
+    SESSION_START = "session_start"
+    SESSION_END = "session_end"
+    USER_PROMPT_SUBMIT = "user_prompt_submit"
+    STOP = "stop"
+
 
 class DeclarativeHook(BaseModel):
     """Claude Code, Continue, Codex CLI, Gemini CLI, adapted Goose/Cline."""
+
     kind: Literal["declarative"] = "declarative"
-    event: HookEvent; matcher: str | None = None; command: str
+    event: HookEvent
+    matcher: str | None = None
+    command: str
     timeout_seconds: float | None = None
+
 
 class PluginRegistration(BaseModel):
     """OpenCode, Kilo Code, Pi — imperative callback files, not JSON."""
+
     kind: Literal["plugin"] = "plugin"
     entry_path: Path
 
-Hook = Annotated[Union[DeclarativeHook, PluginRegistration], Field(discriminator="kind")]
+
+Hook = Annotated[
+    Union[DeclarativeHook, PluginRegistration], Field(discriminator="kind")
+]
+
 
 # Capability 4: LSP (v1 scope: modeled, no populated entry/caller yet — see D7)
 class LspServer(BaseModel):
@@ -199,22 +228,29 @@ class LspServer(BaseModel):
     settings: dict[str, Any] | None = None
     fetch: dict[str, Any] | None = None
 
+
 # Capability 5: skills (matches witan's existing SKILL.md convention)
 class SkillSource(BaseModel):
-    name: str; skill_md_path: Path
+    name: str
+    skill_md_path: Path
+
 
 # Cross-cutting: scope (global vs project), D8
 class Scope(str, Enum):
-    GLOBAL = "global"; PROJECT = "project"
+    GLOBAL = "global"
+    PROJECT = "project"
+
 
 class MergeStrategy(str, Enum):
     OVERRIDE_BY_KEY = "override_by_key"
     CONCATENATE = "concatenate"
-    DEEP_MERGE = "deep_merge"           # e.g. Pi's settings.json
+    DEEP_MERGE = "deep_merge"  # e.g. Pi's settings.json
+
 
 class ScopeTarget(BaseModel):
     path: Path
-    key_path: tuple[str, ...] = ()      # e.g. ("mcpServers",) or ("hooks","PreToolUse")
+    key_path: tuple[str, ...] = ()  # e.g. ("mcpServers",) or ("hooks","PreToolUse")
+
 
 class CapabilityScope(BaseModel):
     global_: ScopeTarget | None = Field(default=None, alias="global")
@@ -222,11 +258,14 @@ class CapabilityScope(BaseModel):
     merge_strategy: MergeStrategy = MergeStrategy.OVERRIDE_BY_KEY
     model_config = {"populate_by_name": True}
 
+
 class AgentPlatform(BaseModel):
     name: str
-    detect: Callable[[], bool] | None = None   # None => assumed always installed
+    detect: Callable[[], bool] | None = None  # None => assumed always installed
     mcp: CapabilityScope | None = None
-    mcp_conditional_on: str | None = None      # e.g. Pi: "requires a third-party MCP plugin"
+    mcp_conditional_on: str | None = (
+        None  # e.g. Pi: "requires a third-party MCP plugin"
+    )
     hooks: CapabilityScope | None = None
     instructions: InstructionsConfig | None = None
     skills: CapabilityScope | None = None
@@ -256,26 +295,41 @@ and generalizes it rather than reinventing it:
 @dataclass
 class InstallResult:
     platform: str
-    written: list[Path]              # files actually written (empty when dry_run)
-    planned: list[Path]              # files that would be written (always populated)
+    written: list[Path]  # files actually written (empty when dry_run)
+    planned: list[Path]  # files that would be written (always populated)
     skipped: list[tuple[Path, str]]  # (path, reason) — e.g. unparsable JSON
+
 
 @dataclass
 class RegistrationBundle:
     """What a consumer (e.g. witan) wants installed, in canonical-model terms."""
+
     mcp_servers: dict[str, McpServer] = field(default_factory=dict)
     hooks: list[Hook] = field(default_factory=list)
     skills: list[SkillSource] = field(default_factory=list)
-    lsp_servers: dict[str, LspServer] = field(default_factory=dict)   # unpopulated in v1 callers
-    instructions: str | None = None                                   # unpopulated in v1 callers
+    lsp_servers: dict[str, LspServer] = field(
+        default_factory=dict
+    )  # unpopulated in v1 callers
+    instructions: str | None = None  # unpopulated in v1 callers
 
-def known_platforms() -> list[str]: ...             # v1: claude, pi, copilot, opencode, kilo
-def detect_installed_platforms() -> list[str]: ...   # AgentPlatform.detect() over the registry
 
-def apply(platform: str, bundle: RegistrationBundle, *, scope: Scope = Scope.GLOBAL,
-          dry_run: bool = False) -> InstallResult: ...
-def apply_all(bundle: RegistrationBundle, *, scope: Scope = Scope.GLOBAL,
-              dry_run: bool = False) -> dict[str, InstallResult]: ...
+def known_platforms() -> list[str]: ...  # v1: claude, pi, copilot, opencode, kilo
+def detect_installed_platforms() -> list[
+    str
+]: ...  # AgentPlatform.detect() over the registry
+
+
+def apply(
+    platform: str,
+    bundle: RegistrationBundle,
+    *,
+    scope: Scope = Scope.GLOBAL,
+    dry_run: bool = False,
+) -> InstallResult: ...
+def apply_all(
+    bundle: RegistrationBundle, *, scope: Scope = Scope.GLOBAL, dry_run: bool = False
+) -> dict[str, InstallResult]: ...
+
 
 # Exported JSON helpers — bespoke callers can reuse these directly.
 def load_json_object(path: Path) -> dict | None: ...
@@ -364,14 +418,24 @@ packages/agent-config-kit/
 ```python
 def _witan_bundle(pkg_dir: Path, author: str) -> RegistrationBundle:
     return RegistrationBundle(
-        mcp_servers={"witan": StdioServer(command="uvx", args=_WITAN_ARGS, env={"WITAN_AUTHOR": author})},
-        skills=[SkillSource(name=d.name, skill_md_path=d / "SKILL.md") for d in sorted((pkg_dir / "skills").iterdir())],
+        mcp_servers={
+            "witan": StdioServer(
+                command="uvx", args=_WITAN_ARGS, env={"WITAN_AUTHOR": author}
+            )
+        },
+        skills=[
+            SkillSource(name=d.name, skill_md_path=d / "SKILL.md")
+            for d in sorted((pkg_dir / "skills").iterdir())
+        ],
         hooks=[
-            DeclarativeHook(event=HookEvent.USER_PROMPT_SUBMIT, command="witan inject-context"),
+            DeclarativeHook(
+                event=HookEvent.USER_PROMPT_SUBMIT, command="witan inject-context"
+            ),
             DeclarativeHook(event=HookEvent.STOP, command="witan session-checkpoint"),
             PluginRegistration(entry_path=pkg_dir / "extensions" / "pi" / "witan.ts"),
         ],
     )
+
 
 def setup(agent: str, author: str, *, dry_run: bool = False) -> None:
     bundle = _witan_bundle(pkg_dir, author)

@@ -16,7 +16,10 @@ guidance, which the agent has read even without you invoking it) say a task
 gets claimed before the first edit, it calls:
 
 ```python
-task_claim(slug="tk-retry-logic-drops-the-last-attempt-s-e-4f9c21", assignee="claude-session-8f21")
+task_claim(
+    slug="tk-retry-logic-drops-the-last-attempt-s-e-4f9c21",
+    assignee="claude-session-8f21",
+)
 # → {"claimed": true, "status": "in_progress"}
 ```
 
@@ -30,7 +33,10 @@ Before writing a fix, a well-behaved agent checks whether this has come up
 before:
 
 ```python
-recall(query="retry loop exception handling", task="tk-retry-logic-drops-the-last-attempt-s-e-4f9c21")
+recall(
+    query="retry loop exception handling",
+    task="tk-retry-logic-drops-the-last-attempt-s-e-4f9c21",
+)
 ```
 
 `recall` seeds from both the query and the task, expands a hop across

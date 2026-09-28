@@ -16,10 +16,12 @@ unconditionally.
 import asyncio
 import inspect
 import sys
+from datetime import UTC
 from pathlib import Path
 from typing import Annotated, Literal
 
 import cyclopts
+
 from witan_core.cli import (
     AGENT_NAMES,
     AgentName,
@@ -891,7 +893,7 @@ def checkpoint() -> None:
     for ref in refs:
         try:
             maintenance_module.spawn_background_optimize(ref.uri)
-        except Exception:  # noqa: BLE001 — maintenance must never fail the hook
+        except Exception:  # noqa: BLE001, S110 — maintenance must never fail the hook
             pass
 
 
@@ -909,7 +911,7 @@ def session_init_cmd() -> None:
 
     try:
         hooks_module.session_init()
-    except Exception:  # noqa: BLE001 — must never fail the hook
+    except Exception:  # noqa: BLE001, S110 — must never fail the hook
         pass
 
 
@@ -941,7 +943,7 @@ def reindex_hook_cmd() -> None:
 
     try:
         hooks_module.reindex_hook(sys.stdin.read())
-    except Exception:  # noqa: BLE001 — must never fail the hook
+    except Exception:  # noqa: BLE001, S110 — must never fail the hook
         pass
 
 
@@ -980,7 +982,6 @@ def setup(
         detect_installed_platforms,
         known_platforms,
     )
-
     from witan_core import install_omnigraph
 
     from .setup import witan_code_bundle
@@ -1274,7 +1275,7 @@ def logout() -> None:
 @app.command
 def whoami() -> None:
     """Show the identity the CLI presents to the deployed witan service."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from rich.console import Console
 
@@ -1297,7 +1298,7 @@ def whoami() -> None:
     console.print(f"[bold]sub[/bold]       {claims.get('sub', '')}")
     exp = claims.get("exp")
     if exp:
-        when = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()
+        when = datetime.fromtimestamp(exp, tz=UTC).isoformat()
         console.print(f"[bold]Expires[/bold]   {when}")
 
 
@@ -1306,7 +1307,11 @@ def _human_time(epoch: float | None) -> str:
 
     if epoch is None:
         return "?"
-    return datetime.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
+    return (
+        datetime.datetime.fromtimestamp(epoch, tz=datetime.UTC)
+        .astimezone()
+        .strftime("%Y-%m-%d %H:%M")
+    )
 
 
 def _human_size(n: int | None) -> str:

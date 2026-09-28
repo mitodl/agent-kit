@@ -10,6 +10,7 @@ fail against the deployment with `413 Request body too large`.
 import json
 
 from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
+
 from witan_core.chunking import (
     LOAD_MAX_BYTES,
     LOAD_MAX_ROWS,

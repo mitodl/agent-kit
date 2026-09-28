@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 from rich.markup import escape
+
 from witan_core import maintenance as _throttle
 
 from .. import config as cfg_module
@@ -112,7 +113,7 @@ def code_graph_destination(target: str | None = None) -> str | None:
 def _stamp_file(target_name: str | None) -> Path:
     # Keyed on the target so switching to one that is misrouted warns straight
     # away, rather than inheriting the silence of the one just left.
-    digest = hashlib.sha1((target_name or "").encode()).hexdigest()[:16]  # noqa: S324
+    digest = hashlib.sha1((target_name or "").encode()).hexdigest()[:16]
     return session_state.session_state_dir() / f"witan-code-local-{digest}.json"
 
 

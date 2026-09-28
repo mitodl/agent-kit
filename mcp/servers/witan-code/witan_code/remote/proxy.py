@@ -11,7 +11,7 @@ changes; the deployed server does the JWT→actor mapping.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from witan_core.remote.config import RemoteConfig
 from witan_core.remote.proxy import (

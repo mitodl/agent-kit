@@ -24,6 +24,7 @@ import os
 import shutil
 import socket
 import threading
+from typing import ClassVar
 
 import pytest
 
@@ -79,10 +80,10 @@ class FakeConnection:
     connect failure.
     """
 
-    created: list[FakeConnection] = []
+    created: ClassVar[list[FakeConnection]] = []
 
     connect_error: BaseException | None = None
-    script: list = []
+    script: ClassVar[list] = []
 
     def __init__(self, host, port=None, timeout=None, context=None):
         self.host = host
@@ -156,9 +157,11 @@ def err(status: int, message: str, code: str | None = None) -> FakeResponse:
         # (it has, twice) without silently making a losable race fatal again.
         (
             409,
-            "write authority 'graph_head:main' changed during preparation "
-            "(expected 01M08E24Y2WWC3QVE9MD3K6CWN, current 01M08E27K5J56HF8QZ7GX61X3F)"
-            " — reprepare from the current branch state",
+            (
+                "write authority 'graph_head:main' changed during preparation "
+                "(expected 01M08E24Y2WWC3QVE9MD3K6CWN, current 01M08E27K5J56HF8QZ7GX61X3F)"
+                " — reprepare from the current branch state"
+            ),
             ogh.RETRYABLE,
         ),
         # Prose the classifier has never seen, on a status that speaks for
@@ -188,8 +191,10 @@ def err(status: int, message: str, code: str | None = None) -> FakeResponse:
         # would re-apply a partly-present write.
         (
             503,
-            "recovery required for operation 01KZY…: pending Load recovery "
-            "operation blocks writes on branch 'main'",
+            (
+                "recovery required for operation 01KZY…: pending Load recovery "
+                "operation blocks writes on branch 'main'"
+            ),
             ogh.RECOVERY_REQUIRED,
         ),
         (503, "recovery_required", ogh.RECOVERY_REQUIRED),

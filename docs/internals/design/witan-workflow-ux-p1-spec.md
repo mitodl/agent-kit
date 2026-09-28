@@ -44,13 +44,16 @@ from pathlib import Path
 
 _STATE_FILE_PREFIX = "workflow-session-"
 
+
 def session_state_dir() -> Path:
     """Temp dir for session-state files. Honors TMPDIR/TEMP/TMP with the
     stdlib fallback+writability chain, matching tempfile everywhere."""
     return Path(tempfile.gettempdir())
 
+
 def session_state_path(session_id: str) -> Path:
     return session_state_dir() / f"{_STATE_FILE_PREFIX}{session_id}.json"
+
 
 def iter_session_state_files() -> list[Path]:
     return sorted(session_state_dir().glob(f"{_STATE_FILE_PREFIX}*.json"))
@@ -77,19 +80,24 @@ from datetime import datetime, timezone
 CLAIM_LEASE_SECONDS = 3600
 _PRIORITY = {"p0": 0, "p1": 1, "p2": 2, "p3": 3}
 
+
 def lease_expired(claimed_at: str | None, *, now: datetime | None = None) -> bool: ...
+
 
 def is_ready(task: dict, status_by_slug: dict[str, str], *, now=None) -> bool:
     """Ready == blockers all closed AND the task is claimable:
-      - status in {open, blocked}; OR
-      - status == in_progress with an expired lease (reclaimable)."""
-    if any(status_by_slug.get(b, "closed") != "closed"
-           for b in (task.get("blocked_by") or [])):
+    - status in {open, blocked}; OR
+    - status == in_progress with an expired lease (reclaimable)."""
+    if any(
+        status_by_slug.get(b, "closed") != "closed"
+        for b in (task.get("blocked_by") or [])
+    ):
         return False
     status = task.get("status")
     if status in ("open", "blocked"):
         return True
     return status == "in_progress" and lease_expired(task.get("claimed_at"), now=now)
+
 
 def filter_ready(tasks: list[dict], *, now=None) -> list[dict]:
     status_by_slug = {t["slug"]: t.get("status") for t in tasks}

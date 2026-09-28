@@ -102,7 +102,7 @@ def configure_tracing() -> Any | None:
     default no-op tracer then makes every span in the codebase free, so
     instrumentation can be written unconditionally at the call sites.
     """
-    global _tracer_provider  # noqa: PLW0603 - module-level singleton
+    global _tracer_provider  # module-level singleton
     if _tracer_provider is not None:
         return _tracer_provider
     if not _endpoint():
@@ -140,7 +140,7 @@ def configure_tracing() -> Any | None:
         # No endpoint argument: the exporter reads OTEL_EXPORTER_OTLP_* itself.
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
         trace.set_tracer_provider(provider)
-    except Exception:  # noqa: BLE001 - telemetry must never be fatal
+    except Exception:  # telemetry must never be fatal
         log.warning("otel.tracing_setup_failed", exc_info=True)
         return None
     _tracer_provider = provider
@@ -157,7 +157,7 @@ def configure_metrics() -> Any | None:
     once, the Cedar denial rate — are all counters, and reconstructing counters
     by scraping log lines is exactly the fragility this module exists to remove.
     """
-    global _meter_provider  # noqa: PLW0603 - module-level singleton
+    global _meter_provider  # module-level singleton
     if _meter_provider is not None:
         return _meter_provider
     if not _endpoint():
@@ -179,7 +179,7 @@ def configure_metrics() -> Any | None:
         reader = PeriodicExportingMetricReader(OTLPMetricExporter())
         provider = MeterProvider(resource=_resource(), metric_readers=[reader])
         metrics.set_meter_provider(provider)
-    except Exception:  # noqa: BLE001 - telemetry must never be fatal
+    except Exception:  # telemetry must never be fatal
         log.warning("otel.metrics_setup_failed", exc_info=True)
         return None
     _meter_provider = provider
@@ -233,7 +233,7 @@ def configure_sentry() -> Any | None:
     The OTLP exporters' dropped-batch message is the one exception: see
     ``_drop_otlp_dropped_batch``.
     """
-    global _sentry_client  # noqa: PLW0603 - module-level singleton
+    global _sentry_client  # module-level singleton
     if _sentry_client is not None:
         return _sentry_client
     dsn = os.environ.get("SENTRY_DSN")
@@ -265,7 +265,7 @@ def configure_sentry() -> Any | None:
             # in the except below.
             log.warning("sentry.setup_produced_inactive_client")
             return None
-    except Exception:  # noqa: BLE001 - telemetry must never be fatal
+    except Exception:  # telemetry must never be fatal
         log.warning("sentry.setup_failed", exc_info=True)
         return None
     _sentry_client = client
@@ -280,7 +280,7 @@ def auto_instrument() -> None:
     client spans, with no code change here. ``OTEL_PYTHON_DISABLED_INSTRUMENTATIONS``
     is the standard escape hatch for one that misbehaves.
     """
-    global _instrumented  # noqa: PLW0603 - module-level once-only guard
+    global _instrumented  # module-level once-only guard
     if _instrumented:
         return
     skip = {
@@ -297,7 +297,7 @@ def auto_instrument() -> None:
             continue
         try:
             entry_point.load()().instrument()
-        except Exception:  # noqa: BLE001 - one bad instrumentor must not stop the rest
+        except Exception:  # one bad instrumentor must not stop the rest
             log.warning(
                 "otel.instrumentor_failed", instrumentor=entry_point.name, exc_info=True
             )
@@ -321,7 +321,7 @@ def reset_telemetry() -> None:
     ``get_global_scope().set_client(None)`` rather than a private attribute,
     since the SDK exposes one.
     """
-    global _tracer_provider, _meter_provider, _instrumented, _sentry_client  # noqa: PLW0603
+    global _tracer_provider, _meter_provider, _instrumented, _sentry_client
     _tracer_provider = None
     _meter_provider = None
     _instrumented = False
@@ -337,7 +337,7 @@ def reset_telemetry() -> None:
         from opentelemetry.util import _once
     except ImportError:  # pragma: no cover - requires the `observability` extra
         return
-    trace._TRACER_PROVIDER = None  # noqa: SLF001
-    trace._TRACER_PROVIDER_SET_ONCE = _once.Once()  # noqa: SLF001
-    metrics._internal._METER_PROVIDER = None  # noqa: SLF001
-    metrics._internal._METER_PROVIDER_SET_ONCE = _once.Once()  # noqa: SLF001
+    trace._TRACER_PROVIDER = None
+    trace._TRACER_PROVIDER_SET_ONCE = _once.Once()
+    metrics._internal._METER_PROVIDER = None
+    metrics._internal._METER_PROVIDER_SET_ONCE = _once.Once()

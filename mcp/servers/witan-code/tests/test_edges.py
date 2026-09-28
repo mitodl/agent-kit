@@ -255,8 +255,7 @@ def _fn(tool):
 @requires_stack
 def test_build_graph_min_precision_precise_matches_edges_module(tmp_path, monkeypatch):
     from witan_code import config as cfg_mod
-    from witan_code import indexer
-    from witan_code import visualize
+    from witan_code import indexer, visualize
     from witan_code.graph import OmnigraphClient
 
     monkeypatch.setenv("WITAN_CODE_DIR", str(tmp_path / "code"))

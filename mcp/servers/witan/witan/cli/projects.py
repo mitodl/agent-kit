@@ -11,6 +11,8 @@ from rich.prompt import Prompt
 from .. import config as cfg_module
 from ._common import (
     _STATUS_STYLE,
+    ProjectStatusFilter,
+    WorkflowPhase,
     _detect_repo_for_display,
     _fn,
     _repo_arg,
@@ -23,11 +25,8 @@ from ._common import (
     esc,
     print_error,
     render_table,
-    ProjectStatusFilter,
-    WorkflowPhase,
 )
 from .output import dump_record, get_output_format
-from .selected_target import selected_target
 from .run_helpers import (
     _launch_agent,
     _merge_prompts,
@@ -35,6 +34,7 @@ from .run_helpers import (
     _project_run_prompt,
     _run_project_slug,
 )
+from .selected_target import selected_target
 
 
 @app.command

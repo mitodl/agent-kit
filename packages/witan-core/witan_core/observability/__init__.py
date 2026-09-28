@@ -47,9 +47,9 @@ __all__ = [
     "configure_sentry",
     "configure_tracing",
     "get_logger",
-    "trace_context_middleware",
     "reset_logging",
     "reset_telemetry",
+    "trace_context_middleware",
 ]
 
 

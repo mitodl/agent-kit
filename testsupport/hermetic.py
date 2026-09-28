@@ -393,7 +393,7 @@ def _snapshot() -> dict[str, str]:
 _BEFORE = _snapshot()
 
 
-def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001 — pytest hook
+def pytest_sessionfinish(session, exitstatus):  # pytest hook
     """Report anything the suite added to, or changed in, the real home."""
     now = _snapshot()
     added = sorted(k for k in now if k not in _BEFORE)

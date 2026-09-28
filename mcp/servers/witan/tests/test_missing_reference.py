@@ -75,15 +75,19 @@ def test_refusal_is_a_tool_error():
     ("message", "node_type", "slug"),
     [
         (
-            "omnigraph mutate failed: src 'tk-x' not found in Task "
-            "(HTTP 400, bad_request)",
+            (
+                "omnigraph mutate failed: src 'tk-x' not found in Task "
+                "(HTTP 400, bad_request)"
+            ),
             "Task",
             "tk-x",
         ),
         (
-            "omnigraph mutate failed (exit 1):\nError: \n"
-            "   0: \x1b[91m__dst 'wp-x' not found in WorkflowProject\x1b[0m\n\n"
-            "Location:\n   crates/omnigraph-cli/src/client.rs:867",
+            (
+                "omnigraph mutate failed (exit 1):\nError: \n"
+                "   0: \x1b[91m__dst 'wp-x' not found in WorkflowProject\x1b[0m\n\n"
+                "Location:\n   crates/omnigraph-cli/src/client.rs:867"
+            ),
             "WorkflowProject",
             "wp-x",
         ),
@@ -91,9 +95,11 @@ def test_refusal_is_a_tool_error():
     ids=["http", "local-cli"],
 )
 def test_engine_message_is_translated(message, node_type, slug):
-    with pytest.raises(srv.MissingReference) as excinfo:
-        with srv._missing_endpoint_errors("task_create"):
-            raise RuntimeError(message)
+    with (
+        pytest.raises(srv.MissingReference) as excinfo,
+        srv._missing_endpoint_errors("task_create"),
+    ):
+        raise RuntimeError(message)
 
     assert (excinfo.value.node_type, excinfo.value.slug) == (node_type, slug)
 
@@ -101,33 +107,38 @@ def test_engine_message_is_translated(message, node_type, slug):
 def test_a_chunked_batch_failure_is_translated_through_its_cause():
     engine = RuntimeError("omnigraph mutate failed: dst 'tk-x' not found in Task")
 
-    with pytest.raises(srv.MissingReference, match="tk-x"):
-        with srv._missing_endpoint_errors("task_create"):
-            raise RuntimeError("chunk 2/3 of a 9-statement batch failed") from engine
+    with (
+        pytest.raises(srv.MissingReference, match="tk-x"),
+        srv._missing_endpoint_errors("task_create"),
+    ):
+        raise RuntimeError("chunk 2/3 of a 9-statement batch failed") from engine
 
 
 def test_other_failures_pass_through():
-    with pytest.raises(RuntimeError, match="^omnigraph mutate failed: boom$"):
-        with srv._missing_endpoint_errors("task_create"):
-            raise RuntimeError("omnigraph mutate failed: boom")
+    with (
+        pytest.raises(RuntimeError, match="^omnigraph mutate failed: boom$"),
+        srv._missing_endpoint_errors("task_create"),
+    ):
+        raise RuntimeError("omnigraph mutate failed: boom")
 
 
 def test_caller_input_quoted_in_an_error_is_not_matched():
     # store_merge quotes a malformed row; the row's content is not the engine.
     message = "export.jsonl: export row is not a JSON object: \"dst 'tk-x' not found in Task\""
 
-    with pytest.raises(RuntimeError, match="export row"):
-        with srv._missing_endpoint_errors("store_merge"):
-            raise RuntimeError(message)
+    with (
+        pytest.raises(RuntimeError, match="export row"),
+        srv._missing_endpoint_errors("store_merge"),
+    ):
+        raise RuntimeError(message)
 
 
 def test_a_write_blocked_refusal_is_not_rewritten():
     exc = WriteBlocked("insert_task", [])
     exc.args = ("dst 'tk-x' not found in Task",)
 
-    with pytest.raises(WriteBlocked):
-        with srv._missing_endpoint_errors("task_create"):
-            raise exc
+    with pytest.raises(WriteBlocked), srv._missing_endpoint_errors("task_create"):
+        raise exc
 
 
 def test_local_cli_prints_the_refusal_instead_of_a_traceback(monkeypatch):

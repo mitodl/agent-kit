@@ -181,6 +181,7 @@ _MEMORY_LINK_MUTATIONS = {
     "related_to": "link_related_to",
 }
 
+
 @mcp.tool
 def memory_link(from_slug: str, to_slug: str, kind: MemoryLinkKind) -> dict:
     """
@@ -277,6 +278,7 @@ New tool:
 ```python
 ContractKind = Literal["env_var", "endpoint", "package", "service"]
 
+
 @mcp.tool
 def memory_for_contract(key_norm: str, kind: ContractKind | None = None) -> dict:
     """
@@ -368,10 +370,11 @@ The active session is discoverable from the session-state file written by
 `client.change` (`server.py:315`):
 
 ```python
-active = _active_session_slug()   # None if absent
+active = _active_session_slug()  # None if absent
 if active:
     client.change(
-        "mutations.gq", "link_session_produced",
+        "mutations.gq",
+        "link_session_produced",
         {"from": active, "to": slug},
     )
 ```

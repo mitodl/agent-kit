@@ -7,7 +7,7 @@ in-process and these commands have nothing to talk to, so they say so.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .. import config as cfg_module
 from ..identity import derive_actor_id
@@ -105,13 +105,11 @@ def _login_validity(life: oidc.SessionLife) -> str:
         return "does not expire (offline token)"
     if life.refresh_state == "unknown":
         return "unknown — the IdP did not report a refresh lifetime"
-    remaining = life.refresh_expires_at - datetime.now(tz=timezone.utc).timestamp()
+    remaining = life.refresh_expires_at - datetime.now(tz=UTC).timestamp()
     # Whole seconds, matching the `exp` claim on the line above — the refresh
     # expiry is computed locally and would otherwise print six decimal places
     # of spurious precision next to a timestamp that has none.
-    when = datetime.fromtimestamp(
-        int(life.refresh_expires_at), tz=timezone.utc
-    ).isoformat()
+    when = datetime.fromtimestamp(int(life.refresh_expires_at), tz=UTC).isoformat()
     if remaining <= 0:
         return f"EXPIRED at {when} — run `witan login`"
     hours, minutes = divmod(int(remaining) // 60, 60)
@@ -173,7 +171,7 @@ def whoami() -> None:
     life = oidc.session_life(remote)
     exp = claims.get("exp")
     if exp:
-        when = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()
+        when = datetime.fromtimestamp(exp, tz=UTC).isoformat()
         # "renews automatically" is conditional on there being something to
         # renew with. A token response may carry no refresh_token at all — the
         # cache accepts that — and promising renewal there is a claim the next

@@ -57,9 +57,9 @@ import asyncio
 import math
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any, Callable
+from typing import Any
 
 import httpx2
 from fastmcp import Client
@@ -764,7 +764,7 @@ class RemoteMCPProxy:
             RemoteCredentialRejected,
         ):
             raise
-        except Exception as exc:  # noqa: BLE001 — re-raised unless classified
+        except Exception as exc:  # re-raised unless classified
             # Every raise below chains from the LOCATED exception, not from
             # `exc` — see "THE CHAINING RULE" above.
             oversized = payload_too_large(exc)
@@ -855,7 +855,7 @@ class RemoteMCPProxy:
         ):
             try:
                 client = await stack.enter_async_context(self._new_client(token))
-            except Exception as exc:  # noqa: BLE001 — see _invoke_once
+            except Exception as exc:  # see _invoke_once
                 rejected = auth_failure(exc)
                 if rejected is not None:
                     raise RemoteCredentialRejected(
@@ -1000,7 +1000,7 @@ class RemoteMCPProxy:
         ):
             try:
                 client = await stack.enter_async_context(self._new_client(token))
-            except Exception as exc:  # noqa: BLE001 — see docstring
+            except Exception as exc:  # see docstring
                 # A rejected credential is knowable here when the status
                 # survives, and must not be swallowed by the blanket
                 # transport reading — otherwise the refresh above never fires

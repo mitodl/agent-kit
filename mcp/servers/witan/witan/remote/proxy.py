@@ -15,10 +15,9 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
 
 from witan_core.chunking import MCP_LOAD_MAX_BYTES, chunk_records, describe_budget
 from witan_core.export_rows import normalize_export
@@ -33,9 +32,8 @@ from witan_core.remote.proxy import (
     RemoteWriteIndeterminate,
 )
 
-from .. import merge_report
+from .. import merge_report, session_state
 from .. import repo as repo_module
-from .. import session_state
 from ..config import RemoteConfig, S3Credentials
 
 __all__ = [
@@ -73,8 +71,7 @@ def _source_export(source: str, s3: S3Credentials | None = None) -> Iterator[Pat
     end takes one — the destination is the deployment, which holds its own
     credentials.
     """
-    if source.startswith("file://"):
-        source = source[len("file://") :]
+    source = source.removeprefix("file://")
 
     if source.endswith(".jsonl"):
         if source.startswith(("http://", "https://", "s3://")):
@@ -109,6 +106,7 @@ def _source_export(source: str, s3: S3Credentials | None = None) -> Iterator[Pat
                     s3_profile=s3.profile if s3 else None,
                     s3_region=s3.region if s3 else None,
                 ),
+                check=False,
             )
         if result.returncode != 0:
             raise RemoteToolUnavailable(

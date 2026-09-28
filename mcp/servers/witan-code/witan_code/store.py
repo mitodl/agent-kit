@@ -183,7 +183,7 @@ class StoreRef:
             # No connect_retry counterpart: the MCP tier's own session handles
             # transport, and a tool call has no omnigraph-CLI retry budget to
             # opt out of.
-            from .remote.store import RemoteStoreClient  # noqa: PLC0415
+            from .remote.store import RemoteStoreClient
 
             return RemoteStoreClient(self.via_mcp, mcp_session(cfg), branch=branch)
         return OmnigraphClient(
@@ -215,7 +215,7 @@ class StoreRef:
             return Path(self.uri).exists()
         try:
             self.client(config, connect_retry=False).list_branches()
-        except Exception:  # noqa: BLE001 — a read path degrades to "no"
+        except Exception:  # a read path degrades to "no"
             # Debug: "does this store exist" is asked speculatively, and a
             # not-yet-provisioned graph answering "no" is the expected case.
             logger.debug(
@@ -378,8 +378,8 @@ def mcp_session(config: cfg_module.Config | None = None):
     """
     cfg = config or cfg_module.load()
     remote = _endpoint(cfg)
-    from .remote.oidc import default_token_provider  # noqa: PLC0415
-    from .remote.store import session_for  # noqa: PLC0415
+    from .remote.oidc import default_token_provider
+    from .remote.store import session_for
 
     return session_for(remote.url, default_token_provider(remote))
 
@@ -604,7 +604,7 @@ def probe_cluster_graph(ref: StoreRef, what: str, cfg: cfg_module.Config) -> Sto
     """
     try:
         ref.client(cfg).list_branches()
-    except Exception as exc:  # noqa: BLE001 — re-raised as one of two kinds
+    except Exception as exc:  # re-raised as one of two kinds
         if not _NOT_FOUND_RE.search(str(exc)):
             raise ClusterUnreachable(
                 f"{what} at {ref} could not be read: {exc}"
@@ -655,7 +655,7 @@ def per_repo_stores(config: cfg_module.Config | None = None) -> list[StoreRef]:
         # resolved — no `repo_for_store` query per graph from here.
         try:
             repos = mcp_session(cfg).call("code_store_graphs")
-        except Exception:  # noqa: BLE001 — a listing degrades, same as above
+        except Exception:  # a listing degrades, same as above
             # Warning: an empty listing here is indistinguishable from "this
             # deployment indexes nothing", which is exactly how a broken
             # deployment looks healthy.
@@ -742,7 +742,7 @@ def repo_for_store(ref: StoreRef, config: cfg_module.Config | None = None) -> st
     if ref.is_remote:
         try:
             rows = ref.client(config).read("code_read.gq", "indexed_repo", {})
-        except Exception:  # noqa: BLE001 — a listing must not fail on one graph
+        except Exception:  # a listing must not fail on one graph
             # Info: one graph failing to name itself degrades to showing its id
             # instead, which is cosmetic — but it is also the first symptom of a
             # graph that exists in the catalog and is not really readable.

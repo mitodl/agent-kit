@@ -26,9 +26,10 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator, NamedTuple, Protocol
+from typing import NamedTuple, Protocol
 
 import httpx2
 

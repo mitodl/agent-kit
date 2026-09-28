@@ -543,7 +543,11 @@ def _installed_version(dest: Path) -> str | None:
         return None
     try:
         result = subprocess.run(
-            [str(dest), "--version"], capture_output=True, text=True, timeout=10
+            [str(dest), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -572,7 +576,11 @@ def reported_internal_schema(binary: str | Path = "omnigraph") -> int:
     """
     try:
         result = subprocess.run(
-            [str(binary), "version"], capture_output=True, text=True, timeout=30
+            [str(binary), "version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeError(f"could not run `{binary} version`: {exc}") from exc

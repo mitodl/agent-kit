@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
 from witan_core.config_file import load_toml as _load_toml_shared
 from witan_core.config_file import resolve_config_path as _resolve_config_path
 from witan_core.remote.config import RemoteConfig, resolve_remote_config
@@ -153,7 +154,7 @@ def load_rank_config() -> RankConfig:
     """
     file_rank = _load_toml().get("rank", {})
     if not isinstance(file_rank, dict):
-        raise ValueError("The 'rank' section in config must be a table.")
+        raise ValueError("The 'rank' section in config must be a table.")  # noqa: TRY004 - config errors are ValueError
 
     raw: dict[str, object] = {}
     sources: dict[str, str] = {}
@@ -483,7 +484,7 @@ def _validate_overlay(base: dict[str, object], overlay: dict[str, object]) -> No
     known = set(ScanConfig.model_fields) - {"overlay"}
     for repo, overrides in overlay.items():
         if not isinstance(overrides, dict):
-            raise ValueError(f"[scan.overlay.{repo!r}] must be a table.")
+            raise ValueError(f"[scan.overlay.{repo!r}] must be a table.")  # noqa: TRY004 - config errors are ValueError
         bad = set(overrides) - known
         if bad:
             raise ValueError(
@@ -506,10 +507,10 @@ def load_scan_config() -> ScanConfig:
     """
     file_scan = _load_toml().get("scan", {})
     if not isinstance(file_scan, dict):
-        raise ValueError("The 'scan' section in config must be a table.")
+        raise ValueError("The 'scan' section in config must be a table.")  # noqa: TRY004 - config errors are ValueError
     overlay = file_scan.get("overlay", {})
     if not isinstance(overlay, dict):
-        raise ValueError("[scan.overlay] must be a table of repo -> settings.")
+        raise ValueError("[scan.overlay] must be a table of repo -> settings.")  # noqa: TRY004 - config errors are ValueError
 
     raw: dict[str, object] = {}
     sources: dict[str, str] = {}

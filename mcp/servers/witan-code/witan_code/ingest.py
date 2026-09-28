@@ -77,8 +77,8 @@ from .graph import OmnigraphClient, SharedGraphWriteRefused, check_writable
 
 __all__ = [
     "BRIDGE",
-    "IngestRefused",
     "STORE_TOOLS_ENV_VAR",
+    "IngestRefused",
     "graphs",
     "load_records",
     "mutate",
@@ -174,7 +174,7 @@ def request_actor() -> str | None:
         return identity_module.actor_id()
     # Imported at call time: fastmcp's request-context machinery is only
     # meaningful inside a request, and this module is imported by the CLI too.
-    from fastmcp.server.dependencies import get_access_token  # noqa: PLC0415
+    from fastmcp.server.dependencies import get_access_token
 
     token = get_access_token()
     if token is None:

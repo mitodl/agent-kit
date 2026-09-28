@@ -30,7 +30,7 @@ class _EtagHandler(http.server.BaseHTTPRequestHandler):
     etag = '"v1"'
     requests = 0
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         type(self).requests += 1
         if self.headers.get("If-None-Match") == self.etag:
             self.send_response(304)
@@ -42,7 +42,7 @@ class _EtagHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(self.body)
 
-    def log_message(self, *args):  # noqa: D102
+    def log_message(self, *args):
         pass
 
 
@@ -87,7 +87,7 @@ def test_fetch_http_file_missing_url_raises_fetch_error(tmp_path, http_server):
     uri = f"http://127.0.0.1:{server.server_port}/does-not-exist.md"
 
     class NotFoundHandler(_EtagHandler):
-        def do_GET(self):  # noqa: N802
+        def do_GET(self):
             self.send_response(404)
             self.end_headers()
 

@@ -52,7 +52,7 @@ def derive_actor_id(sub: str) -> str:
     such claim.
     """
     if not isinstance(sub, str):
-        raise ValueError(f"sub must be a string, got {type(sub).__name__}")
+        raise ValueError(f"sub must be a string, got {type(sub).__name__}")  # noqa: TRY004 - callers catch ValueError
     slug = _SANITIZE_RE.sub("-", sub.strip().lower()).strip("-")
     if not slug:
         raise ValueError(f"Cannot derive an actor id from sub={sub!r}")

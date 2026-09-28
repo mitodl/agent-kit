@@ -17,15 +17,15 @@ _DEFAULT = RankConfig()
 
 
 def _score(server, **overrides):
-    base = dict(
-        norm_bm25=0.5,
-        age_days=0.0,
-        corroboration=0,
-        confidence=None,
-        is_superseded=False,
-        is_contradicted=False,
-        rank_cfg=_DEFAULT,
-    )
+    base = {
+        "norm_bm25": 0.5,
+        "age_days": 0.0,
+        "corroboration": 0,
+        "confidence": None,
+        "is_superseded": False,
+        "is_contradicted": False,
+        "rank_cfg": _DEFAULT,
+    }
     base.update(overrides)
     return server._score(**base)
 

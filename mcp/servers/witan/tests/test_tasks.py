@@ -1551,9 +1551,8 @@ def test_verify_log_distinguishes_a_checked_catch_up_from_a_skipped_one(
     """
     import logging
 
-    from witan_core.observability import configure_logging, reset_logging
-
     from witan import server as srv
+    from witan_core.observability import configure_logging, reset_logging
 
     real_change = srv.client.change
 

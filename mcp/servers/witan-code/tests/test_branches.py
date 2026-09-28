@@ -6,9 +6,8 @@ import subprocess
 
 import pytest
 
-from witan_core.omnigraph import OmnigraphConflict
-
 from witan_code import repo as repo_module
+from witan_core.omnigraph import OmnigraphConflict
 
 from .conftest import SAMPLE, requires_stack
 

@@ -301,10 +301,12 @@ def test_a_killed_holder_does_not_leave_the_checkout_locked(_repo):
         [
             sys.executable,
             "-c",
-            "import fcntl, os, sys, time; "
-            "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT); "
-            "fcntl.flock(fd, fcntl.LOCK_EX); print('held', flush=True); "
-            "time.sleep(60)",
+            (
+                "import fcntl, os, sys, time; "
+                "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT); "
+                "fcntl.flock(fd, fcntl.LOCK_EX); print('held', flush=True); "
+                "time.sleep(60)"
+            ),
             str(context._lock_path(_repo)),
         ],
         stdout=subprocess.PIPE,

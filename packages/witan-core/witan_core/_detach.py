@@ -22,4 +22,4 @@ def popen_detached(args: list[str], **kwargs: object) -> subprocess.Popen:
         )
     else:
         kwargs["start_new_session"] = True
-    return subprocess.Popen(args, **kwargs)  # noqa: S603 — caller controls argv
+    return subprocess.Popen(args, **kwargs)  # caller controls argv

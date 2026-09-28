@@ -10,6 +10,7 @@ from typing import Literal
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+
 from witan_core.cli import make_app
 from witan_core.elicit import with_console_ctx
 

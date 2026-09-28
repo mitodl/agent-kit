@@ -85,9 +85,9 @@ def _fetch_http_file(uri: str, dest: Path) -> Path:
         if last_modified := prior_meta.get("last_modified"):
             headers["If-Modified-Since"] = last_modified
 
-    request = urllib.request.Request(uri, headers=headers)  # noqa: S310
+    request = urllib.request.Request(uri, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=15) as response:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(response.read())
             meta_path.write_text(
@@ -110,8 +110,8 @@ def _fetch_http_file(uri: str, dest: Path) -> Path:
 
 
 def _run_git(args: list[str], *, cwd: Path | None = None) -> None:
-    result = subprocess.run(  # noqa: S603
-        ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=60
+    result = subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=60, check=False
     )
     if result.returncode != 0:
         raise FetchError(f"git {' '.join(args)} failed: {result.stderr.strip()}")

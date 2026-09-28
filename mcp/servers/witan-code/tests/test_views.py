@@ -10,7 +10,6 @@ import pytest
 
 from witan_code import views
 
-
 # ── Composition ──────────────────────────────────────────────────────────────
 
 

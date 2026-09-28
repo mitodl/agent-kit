@@ -137,7 +137,7 @@ def test_pi_serialized_remote_entry_with_oauth_preserves_shared_fields():
         oauth={
             "clientId": "example-cli",
             "callbackPort": 8080,
-            "clientSecret": "shh",  # noqa: S106
+            "clientSecret": "shh",
             "scope": "openid offline_access",
             "authServerMetadataUrl": "https://example.com/.well-known/oauth-authorization-server",
         },
@@ -148,7 +148,7 @@ def test_pi_serialized_remote_entry_with_oauth_preserves_shared_fields():
     assert entry["oauth"] == {
         "clientId": "example-cli",
         "redirectUri": "http://localhost:8080/callback",
-        "clientSecret": "shh",  # noqa: S106
+        "clientSecret": "shh",
         "scope": "openid offline_access",
         "authServerMetadataUrl": "https://example.com/.well-known/oauth-authorization-server",
     }

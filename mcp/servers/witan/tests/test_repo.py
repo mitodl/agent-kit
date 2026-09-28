@@ -7,7 +7,6 @@ import pytest
 
 from witan import repo
 
-
 # The repo-key canonicalizer (normalise) lives in witan_core.repo_key; its
 # golden contract table is packages/witan-core/tests/test_repo_key.py.
 

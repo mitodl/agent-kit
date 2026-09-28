@@ -44,7 +44,7 @@ def inject_context(*, debug: bool = False) -> None:
     # `session-checkpoint`.
     try:
         remote = cfg_module.load_remote_config(target=selected_target())
-    except (Exception, SystemExit) as exc:  # noqa: BLE001 — never fail the hook
+    except (Exception, SystemExit) as exc:  # never fail the hook
         if debug:
             logger.debug("witan.hook.config_load_failed", error=str(exc), exc_info=True)
         return
@@ -133,7 +133,7 @@ def session_checkpoint() -> None:
             )
         # SystemExit is not an Exception: _srv() raises it for a half-configured
         # remote, and letting it escape would break the "never blocks" contract.
-        except (Exception, SystemExit):  # noqa: BLE001 — never fail the agent
+        except (Exception, SystemExit):  # noqa: BLE001, S110 — never fail the agent
             # Keep the handle. The close now goes over the network (token fetch
             # + MCP round-trip), so a failure here is usually transient — offline,
             # or an expired token needing `witan login`. Dropping the handle would
@@ -153,7 +153,7 @@ def session_checkpoint() -> None:
     # config must not turn into a failing Stop hook.
     try:
         maintenance.spawn_background_optimize(cfg_module.load().graph_uri)
-    except Exception:  # noqa: BLE001 — maintenance must never fail the Stop hook
+    except Exception:  # noqa: BLE001, S110 — maintenance must never fail the Stop hook
         pass
 
 

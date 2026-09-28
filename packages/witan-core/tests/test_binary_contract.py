@@ -49,6 +49,7 @@ import shutil
 import subprocess
 
 import pytest
+
 from witan_core.omnigraph_install import _OMNIGRAPH_INTERNAL_SCHEMA
 
 _BINARY = shutil.which("omnigraph")

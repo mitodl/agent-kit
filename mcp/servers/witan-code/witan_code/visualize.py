@@ -125,9 +125,12 @@ def cross_repo_edges(
             continue
         raw_conf = row.get("confidence")
         conf = float(raw_conf if raw_conf is not None else 1.0)
-        if row.get("role") == "consumer" and row.get("kind") == "endpoint":
-            if conf < min_confidence:
-                continue
+        if (
+            row.get("role") == "consumer"
+            and row.get("kind") == "endpoint"
+            and conf < min_confidence
+        ):
+            continue
         out.append(row)
     return out
 

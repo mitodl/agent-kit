@@ -225,9 +225,9 @@ def test_write_explicit_repo_never_prompts(server, monkeypatch, tmp_path):
 # ── elicit helper contract (no omnigraph needed) ─────────────────────────────
 
 
-import asyncio  # noqa: E402
+import asyncio
 
-from witan import elicit  # noqa: E402
+from witan import elicit
 
 
 class _RaiseCtx:

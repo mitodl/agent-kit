@@ -28,20 +28,24 @@ def _stats(**kwargs) -> indexer.IndexStats:
 def test_a_write_failure_keeps_the_partial_stats():
     stats = _stats(scanned=657, indexed=165, skipped=492, symbols=4102)
 
-    with pytest.raises(indexer.IndexFailed) as raised:
-        with indexer._write_phase("delete of stale rows", stats, statements=330):
-            raise RuntimeError("timed out")
+    with (
+        pytest.raises(indexer.IndexFailed) as raised,
+        indexer._write_phase("delete of stale rows", stats, statements=330),
+    ):
+        raise RuntimeError("timed out")
 
     assert raised.value.stats is stats
     assert raised.value.stats.scanned == 657
 
 
 def test_the_message_names_the_phase_and_what_it_was_working_with():
-    with pytest.raises(indexer.IndexFailed) as raised:
-        with indexer._write_phase(
+    with (
+        pytest.raises(indexer.IndexFailed) as raised,
+        indexer._write_phase(
             "delete of stale rows", _stats(), statements=330, chunk_size=128
-        ):
-            raise RuntimeError("mutate failed: timed out")
+        ),
+    ):
+        raise RuntimeError("mutate failed: timed out")
 
     message = str(raised.value)
     assert message.startswith("delete of stale rows failed after ")
@@ -54,9 +58,11 @@ def test_the_real_error_stays_reachable():
     """The wrapper adds sizes; it must not cost anyone the original."""
     cause = RuntimeError("timed out")
 
-    with pytest.raises(indexer.IndexFailed) as raised:
-        with indexer._write_phase("load of nodes and edges", _stats(), records=9000):
-            raise cause
+    with (
+        pytest.raises(indexer.IndexFailed) as raised,
+        indexer._write_phase("load of nodes and edges", _stats(), records=9000),
+    ):
+        raise cause
 
     assert raised.value.__cause__ is cause
 
@@ -68,10 +74,12 @@ def test_elapsed_is_measured_not_guessed(monkeypatch):
     clock = {"t": 10.0}
     monkeypatch.setattr(indexer.time, "monotonic", lambda: clock["t"])
 
-    with pytest.raises(indexer.IndexFailed) as raised:
-        with indexer._write_phase("delete of stale rows", _stats()):
-            clock["t"] += 181.3
-            raise RuntimeError("timed out")
+    with (
+        pytest.raises(indexer.IndexFailed) as raised,
+        indexer._write_phase("delete of stale rows", _stats()),
+    ):
+        clock["t"] += 181.3
+        raise RuntimeError("timed out")
 
     assert raised.value.elapsed == pytest.approx(181.3)
     assert "failed after 181.3s" in str(raised.value)

@@ -975,6 +975,7 @@ def schema_apply(binary: str, schema_file: Path, store: Path) -> bool:
             [binary, "schema", "apply", "--schema", str(schema_file), str(store)],
             capture_output=True,
             text=True,
+            check=False,
         )
     except OSError:
         return False
@@ -1125,7 +1126,7 @@ def _aws_profile_env(profile: str) -> dict[str, str]:
             f"AWS CLI returned invalid credentials for S3 profile {profile!r}."
         ) from exc
     if not isinstance(access_key, str) or not isinstance(secret_key, str):
-        raise RuntimeError(
+        raise RuntimeError(  # noqa: TRY004 - bad AWS CLI output, not a caller error
             f"AWS CLI returned invalid credentials for S3 profile {profile!r}."
         )
 
@@ -2227,7 +2228,12 @@ class OmnigraphClient:
             try:
                 with open(out, "w", encoding="utf-8") as fh:
                     result = subprocess.run(
-                        cmd, stdout=fh, stderr=subprocess.PIPE, text=True, env=env
+                        cmd,
+                        stdout=fh,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        env=env,
+                        check=False,
                     )
             except OSError as exc:
                 raise RuntimeError(f"omnigraph {label} could not run: {exc}") from exc
@@ -2319,7 +2325,9 @@ class OmnigraphClient:
 
         def attempt() -> _AttemptResult:
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, env=env, check=False
+                )
             except OSError as exc:
                 raise RuntimeError(f"omnigraph {label} could not run: {exc}") from exc
             if result.returncode == 0:
@@ -2702,6 +2710,7 @@ class OmnigraphClient:
             capture_output=True,
             text=True,
             env=env,
+            check=False,
         )
 
     @classmethod

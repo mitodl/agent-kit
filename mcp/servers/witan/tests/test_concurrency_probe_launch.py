@@ -26,6 +26,7 @@ guarded only against `BrokenPipeError`.
 """
 
 import json
+from typing import ClassVar
 
 import pytest
 
@@ -58,7 +59,7 @@ class _ClosableStdin:
 class _FakePopen:
     """Enough of `Popen` to reproduce the 3.11/3.12 failure faithfully."""
 
-    instances: list["_FakePopen"] = []
+    instances: ClassVar[list["_FakePopen"]] = []
 
     def __init__(self, argv, **kwargs):
         self.argv = argv

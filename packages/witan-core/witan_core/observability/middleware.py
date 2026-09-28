@@ -410,7 +410,7 @@ class ObservabilityMiddleware(Middleware):  # type: ignore[misc,valid-type]
         self._tracer = _tracer()
         self._counter, self._histogram = _instruments()
 
-    async def on_call_tool(self, context, call_next):  # noqa: ANN001, ANN201
+    async def on_call_tool(self, context, call_next):
         name = getattr(getattr(context, "message", None), "name", None) or "unknown"
         # Bound here rather than passed down, so every log line emitted anywhere
         # beneath this call — including inside a dependency's stdlib logger —
@@ -466,7 +466,7 @@ class ObservabilityMiddleware(Middleware):  # type: ignore[misc,valid-type]
             structlog.contextvars.unbind_contextvars("tool", *identity)
 
 
-class _null_context:  # noqa: N801 - context-manager sentinel, not a public class
+class _null_context:  # context-manager sentinel, not a public class
     """Stand-in span context for when no tracer is available."""
 
     def __enter__(self) -> None:

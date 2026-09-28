@@ -16,12 +16,30 @@ from playwright.sync_api import sync_playwright
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("login_url", help="Full /login URL behind APISIX, e.g. http://api.open.odl.local:8065/login")
-    parser.add_argument("output", help="Path to write the auth context JSON, e.g. /tmp/auth.json")
-    parser.add_argument("--username", default="admin@odl.local", help="Keycloak username (default: admin@odl.local)")
-    parser.add_argument("--password", default="admin", help="Keycloak password (default: admin)")
-    parser.add_argument("--timeout", type=int, default=20000, help="Timeout per step in ms (default: 20000)")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "login_url",
+        help="Full /login URL behind APISIX, e.g. http://api.open.odl.local:8065/login",
+    )
+    parser.add_argument(
+        "output", help="Path to write the auth context JSON, e.g. /tmp/auth.json"
+    )
+    parser.add_argument(
+        "--username",
+        default="admin@odl.local",
+        help="Keycloak username (default: admin@odl.local)",
+    )
+    parser.add_argument(
+        "--password", default="admin", help="Keycloak password (default: admin)"
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=20000,
+        help="Timeout per step in ms (default: 20000)",
+    )
     args = parser.parse_args()
 
     with sync_playwright() as p:
@@ -47,7 +65,9 @@ def main() -> None:
             final_url = page.url
             if "kc." in final_url or "/login" in final_url:
                 # Probably landed on an error page
-                raise RuntimeError(f"Still on login page after submit — check credentials. Current URL: {final_url}")
+                raise RuntimeError(
+                    f"Still on login page after submit — check credentials. Current URL: {final_url}"
+                )
 
             context.storage_state(path=args.output)
             print(f"Auth context saved → {args.output}", file=sys.stderr)
@@ -55,7 +75,7 @@ def main() -> None:
         except PlaywrightTimeoutError as exc:
             print(f"Timed out during login: {exc}", file=sys.stderr)
             sys.exit(1)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - any login failure exits 1
             print(f"Login failed: {exc}", file=sys.stderr)
             sys.exit(1)
         finally:

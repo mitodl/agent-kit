@@ -214,10 +214,10 @@ def test_edge_rank_orders_confidence_before_recency():
 
 
 def test_parse_export_ts_reads_every_export_spelling_as_the_same_instant():
-    assert parse_export_ts(_JAN_1_MS) == datetime(2026, 1, 1)
-    assert parse_export_ts("2026-01-01T00:00:00") == datetime(2026, 1, 1)
-    assert parse_export_ts("2026-01-01T00:00:00Z") == datetime(2026, 1, 1)
-    assert parse_export_ts("2026-08-10T12:30:45.123") == datetime(
+    assert parse_export_ts(_JAN_1_MS) == datetime(2026, 1, 1)  # noqa: DTZ001 - parser returns naive UTC
+    assert parse_export_ts("2026-01-01T00:00:00") == datetime(2026, 1, 1)  # noqa: DTZ001 - parser returns naive UTC
+    assert parse_export_ts("2026-01-01T00:00:00Z") == datetime(2026, 1, 1)  # noqa: DTZ001 - parser returns naive UTC
+    assert parse_export_ts("2026-08-10T12:30:45.123") == datetime(  # noqa: DTZ001 - parser returns naive UTC
         2026, 8, 10, 12, 30, 45, 123000
     )
 

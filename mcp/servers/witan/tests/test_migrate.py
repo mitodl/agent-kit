@@ -3,7 +3,7 @@
 import json
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -878,7 +878,7 @@ def test_parse_ts_orders_mixed_offset_formats_correctly():
     later_with_offset = srv._parse_ts("2026-01-01T23:30:00-05:00")
     earlier_utc = srv._parse_ts("2026-01-02T00:00:00Z")
 
-    assert "2026-01-01T23:30:00-05:00" < "2026-01-02T00:00:00Z"  # wrong as strings
+    assert "2026-01-01T23:30:00-05:00" < "2026-01-02T00:00:00Z"  # noqa: PLR0133 - wrong as strings
     assert later_with_offset > earlier_utc  # correct once parsed
 
 
@@ -897,8 +897,8 @@ def test_parse_ts_reads_the_epoch_millis_that_omnigraph_0_9_exports():
     every `store_merge` on the 0.9.0 bump."""
     from witan import server as srv
 
-    assert srv._parse_ts(_EXPORT_MS_2026_01_01) == datetime(2026, 1, 1, 0, 0, 0)
-    assert srv._parse_ts(_EXPORT_MS_2026_08_10) == datetime(
+    assert srv._parse_ts(_EXPORT_MS_2026_01_01) == datetime(2026, 1, 1, 0, 0, 0)  # noqa: DTZ001 - parser returns naive UTC
+    assert srv._parse_ts(_EXPORT_MS_2026_08_10) == datetime(  # noqa: DTZ001 - parser returns naive UTC
         2026, 8, 10, 12, 30, 45, 123000
     )
 
@@ -914,8 +914,7 @@ def test_parse_ts_treats_export_integers_as_millis_not_micros():
 
     assert parsed.year == 2026
     assert (
-        datetime.fromtimestamp(_EXPORT_MS_2026_01_01 / 1_000_000, timezone.utc).year
-        == 1970
+        datetime.fromtimestamp(_EXPORT_MS_2026_01_01 / 1_000_000, UTC).year == 1970
     )  # what the microsecond reading would have given
 
 

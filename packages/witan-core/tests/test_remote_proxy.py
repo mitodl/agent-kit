@@ -307,7 +307,7 @@ def test_non_admin_attr_returns_callable():
 def test_dunder_attributes_are_not_intercepted():
     p = _Proxy()
     with pytest.raises(AttributeError):
-        p.__wrapped__
+        _ = p.__wrapped__
 
 
 # ── an unreachable deployment ─────────────────────────────────────────────
@@ -545,9 +545,11 @@ def _http_413() -> httpx2.HTTPStatusError:
 # The exact text the vMCP relayed in the live failure, and the two other hops
 # on this path that can refuse a body for its size.
 _RELAYED = (
-    'backend unavailable: tool call failed on backend witan: calling "tools/call": '
-    'sending "tools/call": Request Entity Too Large: request failed with status '
-    "413: Request body too large",
+    (
+        'backend unavailable: tool call failed on backend witan: calling "tools/call": '
+        'sending "tools/call": Request Entity Too Large: request failed with status '
+        "413: Request body too large"
+    ),
     "413 Payload Too Large: Failed to buffer the request body",
 )
 

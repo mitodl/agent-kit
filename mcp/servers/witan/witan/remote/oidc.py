@@ -15,9 +15,10 @@ Keycloak's JWKS (ADR-0004). :func:`decode_claims` is display-only.
 from __future__ import annotations
 
 import time
-from typing import Callable
+from collections.abc import Callable
 
 import httpx2
+
 from witan_core.remote.oidc import (
     DeviceAuth,
     NeedsLogin,

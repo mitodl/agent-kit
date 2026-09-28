@@ -66,7 +66,7 @@ _UNSUPPORTED = "unsupported"
 _UNANSWERABLE = object()
 
 
-class InputRequired(FastMCPError):  # noqa: N818 — a control-flow signal, not an error
+class InputRequired(FastMCPError):  # a control-flow signal, not an error
     """A guard helper needs client input; the middleware below answers it.
 
     Raised (never returned) so the helpers keep their ``await confirm(...)``
@@ -413,7 +413,7 @@ class MRTRElicitationMiddleware(Middleware):
     :class:`InputRequired`.
     """
 
-    async def on_call_tool(self, context, call_next):  # noqa: ANN001, ANN201
+    async def on_call_tool(self, context, call_next):
         try:
             return await call_next(context)
         except Exception as exc:

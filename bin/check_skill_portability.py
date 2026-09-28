@@ -65,7 +65,7 @@ CLAUDE_ONLY: dict[str, re.Pattern[str]] = {
 
 # Wording that makes a passage capability-conditional.
 FALLBACK_MARKERS = re.compile(
-    r"|".join(
+    r"|".join(  # noqa: FLY002 - one alternative per line
         [
             r"\bif\b[^.;]*\b(available|installed|exists|supports?|provides?)\b",
             r"\b(where|when|with)\b[^.;]*\b(available|installed|exists|supports?|provides?)\b",

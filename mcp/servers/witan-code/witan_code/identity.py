@@ -80,7 +80,7 @@ def _resolve(target: str | None) -> str | None:
     if remote is None:
         return None
 
-    from witan_core.remote import oidc  # noqa: PLC0415 — httpx2 import isn't free
+    from witan_core.remote import oidc  # httpx2 import isn't free
 
     sub = oidc.device_auth(remote, login_hint="witan login").cached_claims().get("sub")
     return derive_actor_id(sub) if isinstance(sub, str) and sub.strip() else None

@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import re
 import warnings
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Callable, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -71,7 +72,7 @@ class RemoteServer(BaseModel):
         return value
 
 
-McpServer = Annotated[Union[StdioServer, RemoteServer], Field(discriminator="kind")]
+McpServer = Annotated[StdioServer | RemoteServer, Field(discriminator="kind")]
 
 # ── Capability 2a: plain-file instructions (AGENTS.md-style) ────────────────
 
@@ -129,9 +130,7 @@ class PluginRegistration(BaseModel):
     entry_path: Path
 
 
-Hook = Annotated[
-    Union[DeclarativeHook, PluginRegistration], Field(discriminator="kind")
-]
+Hook = Annotated[DeclarativeHook | PluginRegistration, Field(discriminator="kind")]
 
 # ── Capability 4: LSP (modeled, no v1 populated entry/caller — spec D7) ─────
 

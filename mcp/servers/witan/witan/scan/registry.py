@@ -86,7 +86,7 @@ class ScannerRegistry:
         for scanner in self._scanners:
             try:
                 findings.extend(scanner.scan(text, field, node_type))
-            except Exception as exc:  # noqa: BLE001 — policy boundary for third-party scanners
+            except Exception as exc:  # policy boundary for third-party scanners
                 raise ScannerError(_name(scanner), exc) from exc
         return findings
 
@@ -115,7 +115,7 @@ def _load_entry_point_scanners() -> list[tuple[Scanner, str]]:
     for ep in metadata.entry_points(group=ENTRY_POINT_GROUP):
         try:
             factory = ep.load()
-        except Exception as exc:  # noqa: BLE001 — surface a clear plugin-load error
+        except Exception as exc:  # surface a clear plugin-load error
             raise RuntimeError(
                 f"Failed to load scanner plugin {ep.name!r} ({ep.value}): {exc}"
             ) from exc

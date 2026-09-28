@@ -17,9 +17,10 @@ because a passing assertion elsewhere never revealed them:
     or a crashed agent's from last week.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
+
 from witan import readiness
 
 from .conftest import requires_omnigraph
@@ -31,7 +32,7 @@ ALL_REPOS = ""
 
 
 def _iso(seconds_ago: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
+    return (datetime.now(UTC) - timedelta(seconds=seconds_ago)).isoformat()
 
 
 # ── §3.1 `task_list` truncated unscoped reads at 50 rows ───────────
@@ -438,7 +439,7 @@ def test_a_naive_since_is_read_as_utc(server):
     live = server.workflow_session_start(project["slug"], "sid-naive", "implementation")
     server.workflow_session_end(live["session_slug"], summary="done")
 
-    naive = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
+    naive = (datetime.now(UTC) - timedelta(hours=1)).replace(tzinfo=None)
 
     rows = server.workflow_session_list(since=naive.isoformat())
 

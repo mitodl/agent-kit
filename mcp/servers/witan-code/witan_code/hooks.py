@@ -92,7 +92,7 @@ def reindex_hook(payload: str) -> None:
     if root is None:
         try:
             indexer.index_path(path, force=False)
-        except Exception:  # noqa: BLE001 — a parse failure must not fail the hook
+        except Exception:  # noqa: BLE001, S110 — a parse failure must not fail the hook
             pass
         return
     _submit(root, path)

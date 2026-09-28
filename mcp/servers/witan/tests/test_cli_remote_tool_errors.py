@@ -20,6 +20,7 @@ import pytest
 def _refusing_proxy(message: str):
     """A `RemoteServerProxy` whose every tool call is refused server-side."""
     from fastmcp.exceptions import ToolError
+
     from witan.config import RemoteConfig
     from witan.remote.proxy import RemoteServerProxy
 
