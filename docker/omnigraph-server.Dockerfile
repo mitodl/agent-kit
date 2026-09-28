@@ -62,7 +62,7 @@ ARG OMNIGRAPH_SHA256_ARM64=af6be5f1069d7591985285871450bc0d68d4dc363bf7c2c0a7cca
 ARG OMNIGRAPH_INTERNAL_SCHEMA=9
 
 # ── Fetch + checksum-verify the release, extract both binaries ────────────────
-FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS fetch
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS fetch
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_SHA256_X86_64
@@ -106,7 +106,7 @@ RUN set -eux; \
     /out/omnigraph --version
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS runtime
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
 ARG OMNIGRAPH_VERSION
 ARG OMNIGRAPH_RELEASE_TAG
 ARG OMNIGRAPH_INTERNAL_SCHEMA
