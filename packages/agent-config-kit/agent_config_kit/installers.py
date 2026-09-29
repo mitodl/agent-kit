@@ -149,7 +149,8 @@ def install_skills(
             for rel in rel_files:
                 dest = skill_dest_dir / rel
                 if not dry_run:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    _ensure_dest_dir(dest.parent, force=force)
+                    _clear_symlink(dest, force=force)
                     shutil.copy2(src_dir / rel, dest)
                 dests.append(dest)
     return dests

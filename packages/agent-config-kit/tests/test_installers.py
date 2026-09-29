@@ -83,6 +83,31 @@ def test_install_skills_copies_scripts_and_references_alongside_skill_md(tmp_pat
     }
 
 
+def _install_skill_over_symlinked_files(tmp_path, **kwargs):
+    skill = _skill_with_supporting_files(tmp_path / "src")
+    skill_dest = tmp_path / "dest" / "my-skill"
+    (skill_dest / "scripts").mkdir(parents=True)
+    (skill_dest / "SKILL.md").symlink_to(tmp_path / "gone" / "SKILL.md")
+    (skill_dest / "references").symlink_to(tmp_path / "gone" / "references")
+    install_skills([skill], [tmp_path / "dest"], dry_run=False, **kwargs)
+    return skill_dest
+
+
+def test_install_skills_refuses_symlinked_files_without_force(tmp_path):
+    with pytest.raises(ConflictingPathError, match="--force"):
+        _install_skill_over_symlinked_files(tmp_path)
+
+
+def test_install_skills_force_replaces_symlinked_files_and_subdirs(tmp_path):
+    skill_dest = _install_skill_over_symlinked_files(tmp_path, force=True)
+
+    assert not (skill_dest / "SKILL.md").is_symlink()
+    assert (skill_dest / "SKILL.md").is_file()
+    assert (skill_dest / "references").is_dir()
+    assert not (skill_dest / "references").is_symlink()
+    assert (skill_dest / "references" / "notes.md").read_text() == "# notes\n"
+
+
 def test_install_skills_preserves_executable_permission_on_scripts(tmp_path):
     skill = _skill_with_supporting_files(tmp_path / "src")
     dest_dir = tmp_path / "dest"
