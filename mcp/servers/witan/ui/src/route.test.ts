@@ -100,6 +100,7 @@ describe("formatRoute", () => {
 			project: "wp-x",
 			slug: "tk-y",
 			closed: true,
+			find: "ui search",
 			days: 30,
 			q: "wrap flag",
 			kind: "pattern",
@@ -138,6 +139,14 @@ describe("formatRoute", () => {
 		expect(parseRoute("#timeline?days=100000").days).toBe(DEFAULT_ROUTE.days);
 		expect(parseRoute("#timeline?days=abc").days).toBe(DEFAULT_ROUTE.days);
 		expect(parseRoute("#timeline?days=7").days).toBe(7);
+	});
+
+	it("opens the search view, which no tab links to", () => {
+		expect(parseRoute("#search?find=ui+search")).toEqual({
+			...DEFAULT_ROUTE,
+			view: "search",
+			find: "ui search",
+		});
 	});
 
 	it("round-trips a repo URI that needs escaping", () => {

@@ -238,6 +238,16 @@ button:hover {
 	max-width: 16rem;
 }
 
+.search-box {
+	display: flex;
+	gap: 0.35rem;
+}
+
+.search-box input[type="search"] {
+	width: 16rem;
+	max-width: 100%;
+}
+
 /* On a phone the tab row scrolls rather than pushing the page sideways, and
    the filters wrap under it. */
 @media (max-width: 55rem) {
@@ -512,8 +522,14 @@ p.prose,
 	margin-top: 1.75rem;
 }
 
+.search-view {
+	display: grid;
+	gap: 1.75rem;
+}
+
 .rollup h3,
 .task-detail h3,
+.search-view h3,
 .memory-detail h3,
 .board .column h3,
 .tl-group h3 {

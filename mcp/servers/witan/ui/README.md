@@ -39,6 +39,14 @@ check tolerates their absence. The kind and precision filters are tool
 arguments; the confidence floor and the generic-key toggle filter in the
 browser, so at their defaults the graph is `code_repo_dependencies` unchanged.
 
+Search is reached from the box in the filter bar rather than a tab, and finds
+projects and tasks within the repo and project already chosen. Projects are
+matched in the browser against the list the shell already holds. Tasks come
+from `task_search` (BM25, capped at 20), except inside one project, where the
+whole project is read with `task_list` and matched in the browser: `task_search`
+takes no project, so narrowing its capped rows to one would miss that
+project's lower-ranked matches.
+
 ## Layout
 
 It sits here rather than under `packages/` because it is not independently

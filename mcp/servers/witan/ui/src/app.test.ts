@@ -26,6 +26,9 @@ import taskListFixture from "../fixtures/task_list.json" with { type: "json" };
 import taskReadyFixture from "../fixtures/task_ready.json" with {
 	type: "json",
 };
+import taskSearchFixture from "../fixtures/task_search.json" with {
+	type: "json",
+};
 import topicGetFixture from "../fixtures/topic_get.json" with { type: "json" };
 import projectGetFixture from "../fixtures/workflow_project_get.json" with {
 	type: "json",
@@ -49,6 +52,7 @@ import type {
 	RepoDependencies,
 	TaskDetail,
 	TaskRow,
+	TaskSearchRow,
 	TopicResult,
 	WorkflowProjectDetail,
 	WorkflowProjectSummary,
@@ -72,6 +76,7 @@ vi.mock("./mcp.js", () => ({
 	taskList: vi.fn(),
 	taskReady: vi.fn(),
 	taskGet: vi.fn(),
+	taskSearch: vi.fn(),
 	memoryContradictions: vi.fn(),
 	memoryGet: vi.fn(),
 	memoryList: vi.fn(),
@@ -142,6 +147,7 @@ const sessions = unwrap<WorkflowSession[]>(
 );
 const task = unwrap<TaskDetail>("task_get", taskGetFixture);
 const ready = unwrap<TaskRow[]>("task_ready", taskReadyFixture);
+const hits = unwrap<TaskSearchRow[]>("task_search", taskSearchFixture);
 const { TASK_LIMIT } = await import("./views/board.js");
 const memory = unwrap<Memory>("memory_get", memoryGetFixture);
 
@@ -175,6 +181,7 @@ beforeEach(() => {
 	);
 	vi.mocked(mcp.taskReady).mockResolvedValue(ready);
 	vi.mocked(mcp.taskGet).mockResolvedValue(task);
+	vi.mocked(mcp.taskSearch).mockResolvedValue(hits);
 	vi.mocked(mcp.memoryContradictions).mockResolvedValue(
 		unwrap<MemoryContradiction[]>(
 			"memory_contradictions",
@@ -455,6 +462,54 @@ describe("App", () => {
 		window.dispatchEvent(new Event("focus"));
 
 		expect(mcp.taskReady).not.toHaveBeenCalled();
+	});
+
+	it("searches tasks through task_search, within the route's repo", async () => {
+		const repo = "https://github.com/mitodl/agent-kit";
+		await open(`#search?repo=${encodeURIComponent(repo)}&find=read+gaps`);
+		await vi.waitFor(() => expect(text()).toContain(hits[0]?.title));
+
+		expect(mcp.taskSearch).toHaveBeenCalledWith({ query: "read gaps", repo });
+		expect(mcp.taskList).not.toHaveBeenCalled();
+	});
+
+	it("searches a whole project's tasks when one is chosen", async () => {
+		// task_search takes no project and returns its 20 best, so narrowing its
+		// rows to one project would miss that project's lower-ranked matches.
+		const row = tasks[0];
+		if (!row) {
+			throw new Error("task_list fixture is empty");
+		}
+		await open(
+			`#search?project=${projectDetail.slug}&find=${encodeURIComponent(row.title)}`,
+		);
+		await vi.waitFor(() => expect(text()).toContain(row.title));
+
+		expect(mcp.taskList).toHaveBeenCalledWith({
+			repo: "",
+			project_slug: projectDetail.slug,
+		});
+		expect(mcp.taskSearch).not.toHaveBeenCalled();
+	});
+
+	it("reads nothing for an empty search", async () => {
+		await open("#search");
+		await vi.waitFor(() => expect(text()).toContain("Type in the search box"));
+
+		expect(mcp.taskSearch).not.toHaveBeenCalled();
+	});
+
+	it("does not re-search when the Closed filter changes", async () => {
+		await open("#search?find=read");
+		await vi.waitFor(() => expect(mcp.taskSearch).toHaveBeenCalledTimes(1));
+
+		window.location.hash = "#search?find=read&closed=1";
+		await vi.waitFor(() =>
+			expect(
+				root.querySelector<HTMLInputElement>(".closed-toggle input")?.checked,
+			).toBe(true),
+		);
+		expect(mcp.taskSearch).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not read a rollup behind another tab", async () => {
