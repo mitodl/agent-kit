@@ -184,13 +184,18 @@ def setup(
         # JSON-config hook entries registered above. witan-code has no
         # equivalent: its hooks are all bare CLI commands (witan_code/hooks.py),
         # with nothing to copy.
-        install_files(
-            pkg_dir / "hooks",
-            Path.home() / ".claude" / "hooks",
-            suffix=".sh",
-            dry_run=dry_run,
-            executable=True,
-        )
+        try:
+            install_files(
+                pkg_dir / "hooks",
+                Path.home() / ".claude" / "hooks",
+                suffix=".sh",
+                dry_run=dry_run,
+                executable=True,
+                force=force,
+            )
+        except ConflictingPathError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise SystemExit(2) from exc
 
         # Heal config drift: an older docs flow registered the workflow hooks as
         # `bash ~/.claude/hooks/workflow-*.sh` wrappers, which now coexist with

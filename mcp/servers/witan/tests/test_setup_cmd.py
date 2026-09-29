@@ -291,3 +291,23 @@ def test_setup_force_replaces_a_symlinked_pi_extension(
 
     assert dest.is_file()
     assert not dest.is_symlink()
+
+
+def test_setup_force_reaches_the_claude_hook_script_copy(
+    tmp_path, monkeypatch, _no_network
+):
+    """The claude agent copies hook scripts outside apply(); a symlink there
+    must be recoverable with the same --force."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hooks = tmp_path / ".claude" / "hooks"
+    hooks.mkdir(parents=True)
+    script = next((Path(setup_cmd.__file__).parent.parent / "hooks").glob("*.sh"))
+    (hooks / script.name).symlink_to(tmp_path / "gone" / script.name)
+
+    with pytest.raises(SystemExit) as exc:
+        setup_cmd.setup(agent="claude", author="tester")
+    assert exc.value.code == 2
+
+    setup_cmd.setup(agent="claude", author="tester", force=True)
+    assert (hooks / script.name).is_file()
+    assert not (hooks / script.name).is_symlink()

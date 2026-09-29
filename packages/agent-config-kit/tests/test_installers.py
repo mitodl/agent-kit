@@ -27,6 +27,31 @@ def test_install_files_skips_directories_matching_the_suffix(tmp_path):
     assert not (dest_dir / "not-a-file.sh").exists()
 
 
+def _install_files_over_symlink(tmp_path, **kwargs):
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "hook.sh").write_text("#!/bin/sh\n")
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    (dest_dir / "hook.sh").symlink_to(tmp_path / "gone" / "hook.sh")
+    install_files(src_dir, dest_dir, suffix=".sh", dry_run=False, **kwargs)
+    return dest_dir / "hook.sh"
+
+
+def test_install_files_refuses_a_symlinked_destination_without_force(tmp_path):
+    with pytest.raises(ConflictingPathError, match="--force"):
+        _install_files_over_symlink(tmp_path)
+
+    assert (tmp_path / "dest" / "hook.sh").is_symlink()
+
+
+def test_install_files_force_replaces_a_symlinked_destination(tmp_path):
+    dest = _install_files_over_symlink(tmp_path, force=True)
+
+    assert dest.is_file()
+    assert not dest.is_symlink()
+
+
 def _skill_with_supporting_files(src_dir) -> SkillSource:
     src_dir.mkdir(parents=True)
     (src_dir / "SKILL.md").write_text("# my-skill\n\nSee scripts/run.sh.\n")
