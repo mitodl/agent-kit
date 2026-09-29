@@ -36,6 +36,23 @@ def _ensure_dest_dir(path: Path, *, force: bool) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def _clear_symlink(dest: Path, *, force: bool) -> None:
+    """Remove a symlink at ``dest`` before a file copy onto it.
+
+    ``shutil.copy2`` opens the destination for writing and so follows a
+    symlink: a dangling one raises ``FileNotFoundError``, a live one has its
+    target overwritten. Refuses unless ``force`` is set, like
+    ``_ensure_dest_dir``.
+    """
+    if not dest.is_symlink():
+        return
+    if not force:
+        raise ConflictingPathError(
+            f"{dest} is a symlink (rerun with --force to replace it)"
+        )
+    dest.unlink()
+
+
 def skill_files(skill: SkillSource) -> list[Path]:
     """Every file belonging to a skill, relative to the skill's own
     directory — the full Agent Skills payload (``SKILL.md`` plus whatever
@@ -132,7 +149,12 @@ def install_skills(
             for rel in rel_files:
                 dest = skill_dest_dir / rel
                 if not dry_run:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    # Outermost first: a dangling link at `references` is
+                    # invisible from `references/api`, where recursive mkdir
+                    # would raise FileExistsError instead.
+                    for parent in reversed(rel.parents[:-1]):
+                        _ensure_dest_dir(skill_dest_dir / parent, force=force)
+                    _clear_symlink(dest, force=force)
                     shutil.copy2(src_dir / rel, dest)
                 dests.append(dest)
     return dests
@@ -157,6 +179,7 @@ def install_files(
         dest = dest_dir / src_file.name
         if not dry_run:
             _ensure_dest_dir(dest_dir, force=force)
+            _clear_symlink(dest, force=force)
             shutil.copy2(src_file, dest)
             if executable:
                 dest.chmod(0o755)

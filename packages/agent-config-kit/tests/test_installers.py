@@ -27,6 +27,31 @@ def test_install_files_skips_directories_matching_the_suffix(tmp_path):
     assert not (dest_dir / "not-a-file.sh").exists()
 
 
+def _install_files_over_symlink(tmp_path, **kwargs):
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "hook.sh").write_text("#!/bin/sh\n")
+    dest_dir = tmp_path / "dest"
+    dest_dir.mkdir()
+    (dest_dir / "hook.sh").symlink_to(tmp_path / "gone" / "hook.sh")
+    install_files(src_dir, dest_dir, suffix=".sh", dry_run=False, **kwargs)
+    return dest_dir / "hook.sh"
+
+
+def test_install_files_refuses_a_symlinked_destination_without_force(tmp_path):
+    with pytest.raises(ConflictingPathError, match="--force"):
+        _install_files_over_symlink(tmp_path)
+
+    assert (tmp_path / "dest" / "hook.sh").is_symlink()
+
+
+def test_install_files_force_replaces_a_symlinked_destination(tmp_path):
+    dest = _install_files_over_symlink(tmp_path, force=True)
+
+    assert dest.is_file()
+    assert not dest.is_symlink()
+
+
 def _skill_with_supporting_files(src_dir) -> SkillSource:
     src_dir.mkdir(parents=True)
     (src_dir / "SKILL.md").write_text("# my-skill\n\nSee scripts/run.sh.\n")
@@ -56,6 +81,55 @@ def test_install_skills_copies_scripts_and_references_alongside_skill_md(tmp_pat
         skill_dest / "scripts" / "run.sh",
         skill_dest / "references" / "notes.md",
     }
+
+
+def _install_skill_over_symlinked_files(tmp_path, **kwargs):
+    skill = _skill_with_supporting_files(tmp_path / "src")
+    skill_dest = tmp_path / "dest" / "my-skill"
+    (skill_dest / "scripts").mkdir(parents=True)
+    (skill_dest / "SKILL.md").symlink_to(tmp_path / "gone" / "SKILL.md")
+    (skill_dest / "references").symlink_to(tmp_path / "gone" / "references")
+    install_skills([skill], [tmp_path / "dest"], dry_run=False, **kwargs)
+    return skill_dest
+
+
+def test_install_skills_refuses_symlinked_files_without_force(tmp_path):
+    with pytest.raises(ConflictingPathError, match="--force"):
+        _install_skill_over_symlinked_files(tmp_path)
+
+
+def test_install_skills_force_replaces_symlinked_files_and_subdirs(tmp_path):
+    skill_dest = _install_skill_over_symlinked_files(tmp_path, force=True)
+
+    assert not (skill_dest / "SKILL.md").is_symlink()
+    assert (skill_dest / "SKILL.md").is_file()
+    assert (skill_dest / "references").is_dir()
+    assert not (skill_dest / "references").is_symlink()
+    assert (skill_dest / "references" / "notes.md").read_text() == "# notes\n"
+
+
+def _nested_skill(src_dir) -> SkillSource:
+    (src_dir / "references" / "api").mkdir(parents=True)
+    (src_dir / "SKILL.md").write_text("# nested\n")
+    (src_dir / "references" / "api" / "spec.md").write_text("# spec\n")
+    return SkillSource(name="nested", skill_md_path=src_dir / "SKILL.md")
+
+
+def test_install_skills_checks_every_parent_of_a_nested_file(tmp_path):
+    """`references/api/spec.md` with a dangling `references` link: only the
+    leaf parent was checked, so recursive mkdir raised FileExistsError."""
+    skill = _nested_skill(tmp_path / "src")
+    skill_dest = tmp_path / "dest" / "nested"
+    skill_dest.mkdir(parents=True)
+    (skill_dest / "references").symlink_to(tmp_path / "gone")
+
+    with pytest.raises(ConflictingPathError, match="--force"):
+        install_skills([skill], [tmp_path / "dest"], dry_run=False)
+
+    install_skills([skill], [tmp_path / "dest"], dry_run=False, force=True)
+
+    assert not (skill_dest / "references").is_symlink()
+    assert (skill_dest / "references" / "api" / "spec.md").read_text() == "# spec\n"
 
 
 def test_install_skills_preserves_executable_permission_on_scripts(tmp_path):

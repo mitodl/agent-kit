@@ -8,6 +8,12 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.11.1] - 2026-09-29
+
+### Fixed
+
+- Applying a plugin hook file, a skill file, or `install_files` output over a symlink no longer crashes with `FileNotFoundError` when the symlink is dangling, or writes through a live one into its target. It now raises a `ConflictingPathError` naming `--force`, and with `--force` replaces the symlink with the copied file.
+
 ## [0.11.0] - 2026-09-28
 
 ### Changed

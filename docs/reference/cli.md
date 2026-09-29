@@ -760,6 +760,7 @@ Re-run after every upgrade to refresh installed files.
 * `--agent CHOICE`: pending a config-path verification fix — tracked separately.) *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
 * `--author STR`:
 * `--dry-run, --no-dry-run`: *[default: False]*
+* `--force, --no-force`: *[default: False]*
 
 ## witan target
 
@@ -1764,6 +1765,7 @@ Re-run after every upgrade to refresh installed files.
 * `--agent CHOICE`: *[choices: claude, pi, copilot, opencode, all]* *[default: claude]*
 * `--author STR`:
 * `--dry-run, --no-dry-run`: *[default: False]*
+* `--force, --no-force`: *[default: False]*
 
 ### witan code branches
 

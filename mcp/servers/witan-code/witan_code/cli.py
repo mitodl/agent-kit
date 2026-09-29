@@ -953,6 +953,7 @@ def setup(
     agent: AgentName = "claude",
     author: str | None = None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> None:
     """Install witan-code for one or all supported coding agents.
 
@@ -975,6 +976,7 @@ def setup(
     agent: Target agent — claude | pi | copilot | opencode | all.
     author: Name written to graph nodes (default: git config user.name or $USER).
     dry_run: Print what would happen without writing anything.
+    force: Replace a symlink or non-directory occupying a destination path.
     """
     from agent_config_kit import (
         apply,
@@ -982,6 +984,7 @@ def setup(
         detect_installed_platforms,
         known_platforms,
     )
+    from agent_config_kit.installers import ConflictingPathError
     from witan_core import install_omnigraph
 
     from .setup import witan_code_bundle
@@ -998,13 +1001,23 @@ def setup(
 
     bundle = witan_code_bundle(pkg_dir, author)
 
-    if agent == "all":
-        for name, result in apply_all(bundle, dry_run=dry_run).items():
-            report_install(name, result, dry_run=dry_run)
-        for name in sorted(set(known_platforms()) - set(detect_installed_platforms())):
-            print(f"\n{AGENT_NAMES.get(name, name)} — not detected, skipping")
-    else:
-        report_install(agent, apply(agent, bundle, dry_run=dry_run), dry_run=dry_run)
+    try:
+        if agent == "all":
+            for name, result in apply_all(bundle, dry_run=dry_run, force=force).items():
+                report_install(name, result, dry_run=dry_run)
+            for name in sorted(
+                set(known_platforms()) - set(detect_installed_platforms())
+            ):
+                print(f"\n{AGENT_NAMES.get(name, name)} — not detected, skipping")
+        else:
+            report_install(
+                agent,
+                apply(agent, bundle, dry_run=dry_run, force=force),
+                dry_run=dry_run,
+            )
+    except ConflictingPathError as exc:
+        print(exc)
+        raise SystemExit(2) from exc
 
     if dry_run:
         print("\n(dry-run — no files written)")

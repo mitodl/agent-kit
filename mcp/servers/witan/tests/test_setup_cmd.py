@@ -256,3 +256,58 @@ def test_setup_pi_notes_when_pi_mcp_adapter_is_installed(
     out = " ".join(capsys.readouterr().out.split())
     assert "⚠ warning" not in out
     assert "pi-mcp-adapter is declared in" in out
+
+
+def _dangling_pi_extension(tmp_path) -> Path:
+    dest = tmp_path / ".pi" / "agent" / "extensions" / "workflow-context.ts"
+    dest.parent.mkdir(parents=True)
+    dest.symlink_to(tmp_path / "gone" / "workflow-context.ts")
+    return dest
+
+
+def test_setup_exits_with_force_hint_on_a_symlinked_pi_extension(
+    tmp_path, monkeypatch, _no_network, capsys
+):
+    """A dangling symlink at the extension path used to escape as a bare
+    FileNotFoundError traceback from shutil.copy2."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    dest = _dangling_pi_extension(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        setup_cmd.setup(agent="pi", author="tester")
+
+    assert exc.value.code == 2
+    assert "--force" in capsys.readouterr().out
+    assert dest.is_symlink()
+
+
+def test_setup_force_replaces_a_symlinked_pi_extension(
+    tmp_path, monkeypatch, _no_network
+):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    dest = _dangling_pi_extension(tmp_path)
+
+    setup_cmd.setup(agent="pi", author="tester", force=True)
+
+    assert dest.is_file()
+    assert not dest.is_symlink()
+
+
+def test_setup_force_reaches_the_claude_hook_script_copy(
+    tmp_path, monkeypatch, _no_network
+):
+    """The claude agent copies hook scripts outside apply(); a symlink there
+    must be recoverable with the same --force."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    hooks = tmp_path / ".claude" / "hooks"
+    hooks.mkdir(parents=True)
+    script = next((Path(setup_cmd.__file__).parent.parent / "hooks").glob("*.sh"))
+    (hooks / script.name).symlink_to(tmp_path / "gone" / script.name)
+
+    with pytest.raises(SystemExit) as exc:
+        setup_cmd.setup(agent="claude", author="tester")
+    assert exc.value.code == 2
+
+    setup_cmd.setup(agent="claude", author="tester", force=True)
+    assert (hooks / script.name).is_file()
+    assert not (hooks / script.name).is_symlink()
