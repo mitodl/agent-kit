@@ -338,18 +338,20 @@ difference between two.
 ol-benchmark memory benchmarks/<name>.toml
 ```
 
-Same seed, same auth, same refusals. **Do not write your own script for this.**
-Every wrong answer this section exists because of came from one: a hand-rolled
-measurement run under pytest, where an ORM profiler the harness refuses
-inflated retention by 70%; and another against an endpoint quietly serving an
-empty page, where the heap looked admirably flat.
+Same seed, same auth, same refusals — including the empty-response refusal,
+which fires before the requests run. The one it drops deliberately is the
+dirty-tree check: single-arm, nothing to check out. **Do not write your own
+script for this.** Every wrong answer this section exists because of came from
+one: a hand-rolled measurement run under pytest, where an ORM profiler the
+harness refuses inflated retention by 70%; and another against an endpoint
+quietly serving an empty page, where the heap looked admirably flat.
 
 Read the verdict first:
 
 | Verdict | What it means | What to do |
 | --- | --- | --- |
-| `stable` | The process returns to where it started | The growth is elsewhere. Measure another endpoint, or look outside the request path |
-| `high-water` | RSS grew; live objects did not | The allocator holding freed arenas, not retention. **There is no holder to find** — the fix is to allocate less per request, and an over-fetch is the usual cause |
+| `stable` | Neither configured rate was crossed | The growth is elsewhere. Measure another endpoint, or look outside the request path. Read it as "nothing crossed the thresholds", not as "nothing is held" |
+| `high-water` | RSS grew; live objects did not | Consistent with the allocator holding freed arenas rather than retention, so **there is no holder to find** — the fix is to allocate less per request, and an over-fetch is the usual cause. Check the RSS series plateaus; retention the collector cannot enumerate reads the same way |
 | `retaining` | Objects survive a forced collection | Something holds them across requests. `retained_by_type` usually names it; `holders` gives the chain up to the module or class |
 
 Three things are worth reading even when the verdict is benign:
@@ -358,8 +360,10 @@ Three things are worth reading even when the verdict is benign:
   objects than the endpoint serializes means an over-fetch is being *held*,
   not merely loaded. The same rows that cost latency, made permanent.
 - **`lru_caches_grown` being empty.** That is informative, not a null result:
-  it rules out every `functools` cache in the process and says the holder is
-  hand-rolled.
+  no `functools` cache in the process gained entries, which points at a
+  hand-rolled holder. It does not clear the category — the comparison is on
+  `cache_info().currsize`, so a cache whose existing values accumulate
+  references looks flat.
 - **The chain's last named step.** A cache keyed by `id(obj)` in a dict with
   class lifetime will not appear in any cache audit, and the walk is what
   finds it.
@@ -370,6 +374,17 @@ discoverable referrers. It fails toward saying nothing rather than toward a
 false alarm. The retained set itself is exact — the baseline heap is frozen
 into the permanent generation before the requests run, so what the collector
 can still enumerate afterwards is what the run added.
+
+The figures are the endpoint's own rather than the process's, which is not
+free: Django's test client re-connects three signals per request and
+`Signal.connect` leaves a `weakref.finalize` against the owner of each
+receiver, two of which have process lifetime. Twelve objects a request, enough
+on its own for a view returning a fixed string to read `retaining`. The pass
+detaches each as it appears and reports the count in
+`harness_finalizers_detached`; when that field is `null` it could not identify
+them on the Django in use, and the figures then include the instrument. This
+is also why not to hand-roll the measurement — a script that serves an
+endpoint in a loop and counts objects is measuring its own client.
 
 ## What the package already refuses
 
