@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 
+import pytest
+
+from agent_config_kit.installers import ConflictingPathError
 from agent_config_kit.models import (
     DeclarativeHook,
     HookEvent,
@@ -245,6 +248,51 @@ def test_apply_with_prune_removes_dropped_plugin_hook_file(tmp_path, monkeypatch
     assert not dest.exists()
     assert hook_identity(hook) in result.removed
     assert current_state.hooks == []
+
+
+def _symlinked_plugin_dest(tmp_path, monkeypatch, link_target):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    plugin_src = tmp_path / "ext" / "witan.ts"
+    plugin_src.parent.mkdir(parents=True)
+    plugin_src.write_text("// stub")
+    dest = tmp_path / ".pi" / "agent" / "extensions" / "witan.ts"
+    dest.parent.mkdir(parents=True)
+    dest.symlink_to(link_target)
+    return _bundle(
+        mcp_servers={}, hooks=[PluginRegistration(entry_path=plugin_src)]
+    ), dest
+
+
+def test_apply_refuses_symlink_at_plugin_hook_dest_without_force(tmp_path, monkeypatch):
+    bundle, dest = _symlinked_plugin_dest(tmp_path, monkeypatch, tmp_path / "gone")
+
+    with pytest.raises(ConflictingPathError, match="--force"):
+        apply("pi", bundle)
+
+    assert dest.is_symlink()
+
+
+def test_apply_force_replaces_dangling_symlink_at_plugin_hook_dest(
+    tmp_path, monkeypatch
+):
+    bundle, dest = _symlinked_plugin_dest(tmp_path, monkeypatch, tmp_path / "gone")
+
+    apply("pi", bundle, force=True)
+
+    assert not dest.is_symlink()
+    assert dest.read_text() == "// stub"
+
+
+def test_apply_force_does_not_write_through_live_symlink(tmp_path, monkeypatch):
+    live = tmp_path / "live.ts"
+    live.write_text("// original")
+    bundle, dest = _symlinked_plugin_dest(tmp_path, monkeypatch, live)
+
+    apply("pi", bundle, force=True)
+
+    assert not dest.is_symlink()
+    assert dest.read_text() == "// stub"
+    assert live.read_text() == "// original"
 
 
 def test_apply_with_prune_removes_dropped_skill_dirs(tmp_path, monkeypatch):

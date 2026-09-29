@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import registry
-from .installers import _ensure_dest_dir, install_skills
+from .installers import ConflictingPathError, _ensure_dest_dir, install_skills
 from .jsonio import json_diff, load_json_object, write_json
 from .models import (
     AgentPlatform,
@@ -241,6 +241,15 @@ def apply(
                     result.planned.append(dest)
                     if not dry_run:
                         _ensure_dest_dir(target.path, force=force)
+                        # copy2 writes through a symlink: dangling raises
+                        # FileNotFoundError, live overwrites the link target.
+                        if dest.is_symlink():
+                            if not force:
+                                raise ConflictingPathError(
+                                    f"{dest} is a symlink "
+                                    "(rerun with --force to replace it)"
+                                )
+                            dest.unlink()
                         shutil.copy2(plugin.entry_path, dest)
                         result.written.append(dest)
 
