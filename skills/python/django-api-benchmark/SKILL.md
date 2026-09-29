@@ -339,8 +339,13 @@ ol-benchmark memory benchmarks/<name>.toml
 ```
 
 Same seed, same auth, same refusals — including the empty-response refusal,
-which fires before the requests run. The one it drops deliberately is the
-dirty-tree check: single-arm, nothing to check out. **Do not write your own
+which fires before the requests run, and the refusal of a committed
+`benchmark.local.toml`, which is one developer's connection strings in the
+repository whatever is being measured. The one it drops deliberately is the
+dirty-tree check: single-arm, nothing to check out. The result says whether the
+tree was dirty — `ref` comes back `git describe --dirty` style — and a number
+measured against uncommitted changes belongs to the tree, not to the commit, so
+say so when you quote it. **Do not write your own
 script for this.** Every wrong answer this section exists because of came from
 one: a hand-rolled measurement run under pytest, where an ORM profiler the
 harness refuses inflated retention by 70%; and another against an endpoint

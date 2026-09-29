@@ -9,7 +9,11 @@ ol-benchmark memory benchmarks/<name>.toml
 
 Single-arm: retention belongs to one commit, so there is nothing to check out
 and nothing to compare. That also means it runs on a dirty working tree, which
-the A/B refuses.
+the A/B refuses — and that the commit it reports is where the measurement
+started rather than necessarily what it ran. `ref` comes back
+`git describe --dirty` style with `dirty_tree` beside it, so a result measured
+against uncommitted changes cannot be quoted against a bare hash by accident.
+The A/B never has to say this, because it will not start on a dirty tree.
 
 There is no per-run flag for the request count: it is `[memory] requests` in
 the benchmark file, so the number a verdict was reached at is recorded beside
@@ -179,11 +183,14 @@ carries environment fields and nothing else:
   exactly this reason, because the test environment force-enabled one.
 - `under_pytest` is false. Test settings routinely enable the above.
 
-The third is not a field but a refusal: an empty response raises before the
-requests run, because an endpoint serving nothing has a beautifully flat heap.
-`[target].allow_empty` opts back in, and a run that sets it is reporting on a
-request that returns no rows — which is worth saying out loud in the write-up.
+The third and fourth are not fields but refusals, and they raise before
+anything is measured. An empty response, because an endpoint serving nothing
+has a beautifully flat heap: `[target].allow_empty` opts back in, and a run
+that sets it is reporting on a request that returns no rows, which is worth
+saying out loud in the write-up. And a committed `benchmark.local.toml`,
+because that is one developer's cluster and connection strings sitting in the
+repository — single-arm excuses the dirty-tree check and nothing else.
 
-The fourth is reported rather than refused. `harness_finalizers_detached`
+One thing is reported rather than refused. `harness_finalizers_detached`
 being `null` means the test client's own retention is still inside the
 figures — see "Why the number is not simply what the process kept" above.
