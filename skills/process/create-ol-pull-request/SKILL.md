@@ -94,6 +94,7 @@ confirm before creating the PR.
 </details>
 
 ### Screenshots (if appropriate):
+<!-- delete this whole section, checkboxes included, unless the PR touches UI code -->
 - [ ] Desktop screenshots
 - [ ] Mobile width screenshots
 
@@ -191,9 +192,15 @@ not from memory of the implementation.
 **Size the review to the diff.** An adversarial reviewer with no stopping
 point will keep following threads (cloning upstream repos, reading live
 clusters, querying metrics) long after the diff's own risk is covered, so
-tell it the size and a budget. Count changed lines from `git diff
---shortstat origin/<base>...HEAD`, leaving out lockfiles and generated
-files:
+tell it the size and a budget. Count changed lines without lockfiles,
+adding exclusions for any other generated paths the repo has (`top`
+anchors each pattern at the repo root; without it they resolve against
+the current directory and silently match nothing):
+
+```bash
+git diff --shortstat origin/<base>...HEAD -- ':/' \
+  ':(top,exclude)*.lock' ':(top,exclude)*-lock.*'
+```
 
 | Diff | Tool-call budget |
 |------|------------------|
@@ -205,9 +212,9 @@ Pass the budget along with these rules. Search for findings within the
 diff and one hop out (callers of changed functions, the config or schema
 it reads). Go further only to verify or drop a specific candidate
 finding, and only as far as that finding needs. Don't query live systems
-(kubectl, Grafana/Prometheus, cloud APIs); a finding that turns on live
-state comes back as a question naming what to check, and you check it
-here the way 4a checks claims. When the budget runs out, stop looking for
+(kubectl, Grafana/Prometheus, cloud APIs); a candidate that turns on live
+state goes in the report's open questions, naming what to check, and you
+check it here the way 4a checks claims. When the budget runs out, stop looking for
 new candidates, finish verifying the ones in hand, and list what went
 unchecked. The budget is a stopping point, not a quota: a clean small diff
 can finish in five calls.
@@ -217,9 +224,10 @@ Act on the report:
 - **Confirmed correctness, goal-alignment, or security finding** — fix and
   commit, run 4a over the fix commits and any text they add, then re-run
   the review once, so claim fixes are also reviewed. Scope the re-run to
-  the fix commits and the findings they address: continue the same
-  reviewer (`SendMessage` in Claude Code) with the new commit range rather
-  than starting a full review over. It still hasn't seen the authoring
+  the fix commits: whether they resolve the findings, and whether they
+  break any goal. Continue the same reviewer (`SendMessage` in Claude
+  Code) with the new commit range and a fresh budget of ~10 calls rather
+  than starting a full review over; it still hasn't seen the authoring
   session's reasoning. If the second run
   still reports findings, stop: show them to the user and wait for their
   decision (fix, defer to the PR description, or abandon) before 4c. If a finding's goal
