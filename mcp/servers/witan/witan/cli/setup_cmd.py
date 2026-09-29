@@ -14,7 +14,7 @@ from agent_config_kit import (
     load_json_object,
     write_json,
 )
-from agent_config_kit.installers import install_files
+from agent_config_kit.installers import ConflictingPathError, install_files
 from witan_core import install_omnigraph
 from witan_core.cli import AGENT_NAMES, AgentName, report_install, resolve_author
 
@@ -54,6 +54,7 @@ def setup(
     agent: AgentName = "claude",
     author: str | None = None,
     dry_run: bool = False,
+    force: bool = False,
 ) -> None:
     """Install witan for one or all supported coding agents.
 
@@ -82,6 +83,7 @@ def setup(
         pending a config-path verification fix — tracked separately.)
     author: Name written to graph nodes (default: git config user.name or $USER).
     dry_run: Print what would happen without writing anything.
+    force: Replace a symlink or non-directory occupying a destination path.
     """
     from .. import setup as su
 
@@ -156,20 +158,26 @@ def setup(
                 "#subdirectory=mcp/servers/witan[/bold]"
             )
 
-    if agent == "all":
-        for name, result in apply_all(bundle, dry_run=dry_run).items():
-            report_install(name, result, dry_run=dry_run, console=console)
-        for name in sorted(set(known_platforms()) - set(detect_installed_platforms())):
-            console.print(
-                f"\n[dim]{AGENT_NAMES.get(name, name)} — not detected, skipping[/dim]"
+    try:
+        if agent == "all":
+            for name, result in apply_all(bundle, dry_run=dry_run, force=force).items():
+                report_install(name, result, dry_run=dry_run, console=console)
+            for name in sorted(
+                set(known_platforms()) - set(detect_installed_platforms())
+            ):
+                console.print(
+                    f"\n[dim]{AGENT_NAMES.get(name, name)} — not detected, skipping[/dim]"
+                )
+        else:
+            report_install(
+                agent,
+                apply(agent, bundle, dry_run=dry_run, force=force),
+                dry_run=dry_run,
+                console=console,
             )
-    else:
-        report_install(
-            agent,
-            apply(agent, bundle, dry_run=dry_run),
-            dry_run=dry_run,
-            console=console,
-        )
+    except ConflictingPathError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(2) from exc
 
     if agent in ("claude", "all"):
         # Witan's own hook shell scripts — a generic file-copy, not part of the

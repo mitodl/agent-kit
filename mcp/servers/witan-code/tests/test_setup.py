@@ -13,6 +13,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from agent_config_kit import apply
 from witan_code import setup
 
@@ -171,6 +173,45 @@ def test_setup_pi_notes_when_pi_mcp_adapter_is_installed(tmp_path, monkeypatch, 
     assert "WARNING:" not in out
     assert "note:" in out
     assert "pi-mcp-adapter is declared in" in out
+
+
+def _dangling_pi_extension(tmp_path) -> Path:
+    dest = tmp_path / ".pi" / "agent" / "extensions" / "codegraph.ts"
+    dest.parent.mkdir(parents=True)
+    dest.symlink_to(tmp_path / "gone" / "codegraph.ts")
+    return dest
+
+
+def test_setup_exits_with_force_hint_on_a_symlinked_pi_extension(
+    tmp_path, monkeypatch, capsys
+):
+    import witan_core
+    from witan_code import cli
+
+    monkeypatch.setattr(witan_core, "install_omnigraph", lambda dry_run, **kw: None)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    dest = _dangling_pi_extension(tmp_path)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.setup(agent="pi", author="tester")
+
+    assert exc.value.code == 2
+    assert "--force" in capsys.readouterr().out
+    assert dest.is_symlink()
+
+
+def test_setup_force_replaces_a_symlinked_pi_extension(tmp_path, monkeypatch):
+    import witan_core
+    from witan_code import cli
+
+    monkeypatch.setattr(witan_core, "install_omnigraph", lambda dry_run, **kw: None)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    dest = _dangling_pi_extension(tmp_path)
+
+    cli.setup(agent="pi", author="tester", force=True)
+
+    assert dest.is_file()
+    assert not dest.is_symlink()
 
 
 # --- Pi extension source contract ------------------------------------------
