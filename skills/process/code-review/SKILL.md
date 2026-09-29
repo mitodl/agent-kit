@@ -126,6 +126,13 @@ unconfirmed and why (see the lower-confidence row in
 [references/findings-format.md](references/findings-format.md#worked-example)).
 The drop-if-unreproduced rule is a default-depth rule, not a universal one.
 
+Effort follows the diff, not the reviewer's curiosity. Look for findings in
+the diff and one hop out from it; reach further (another repo, upstream
+source, docs) only to verify or drop a specific candidate. When the
+request sets a budget or scope limit, it bounds the search for new
+candidates: at the limit, finish verifying what's in hand, drop what can't
+be verified, and say in the report what went unchecked.
+
 ## Dimensions
 
 Six dimensions, most severe first when findings are reported:
