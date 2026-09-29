@@ -45,7 +45,9 @@ matched in the browser against the list the shell already holds. Tasks come
 from `task_search` (BM25, capped at 20), except inside one project, where the
 whole project is read with `task_list` and matched in the browser: `task_search`
 takes no project, so narrowing its capped rows to one would miss that
-project's lower-ranked matches.
+project's lower-ranked matches. With Closed off, `task_search` runs once per
+live status and the rankings are interleaved, because it caps before any
+browser-side filter could drop closed rows.
 
 ## Layout
 

@@ -96,6 +96,15 @@ describe("taskDetail", () => {
 		expect(hrefs()).toContain(`#projects?project=${task.project_slug}`);
 	});
 
+	it("drops the search text when opened from a search", () => {
+		// The rollup does not filter on it, so keeping it would leave the query
+		// in the header box over an unfiltered view.
+		const route = { ...DEFAULT_ROUTE, view: "search" as const, find: "read" };
+		render(taskDetail(task, route), root);
+
+		expect(hrefs()).toContain(`#projects?project=${task.project_slug}`);
+	});
+
 	it("renders no empty scaffolding for a bare task", () => {
 		// The task's acceptance criterion: a task with no comments, no blockers
 		// and no project renders cleanly rather than showing empty sections.

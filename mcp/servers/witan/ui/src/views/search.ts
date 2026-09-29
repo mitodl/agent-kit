@@ -80,12 +80,13 @@ export function searchView(
 	route: Route,
 	now = Date.now(),
 ): TemplateResult {
-	const matched = projects.filter((project) =>
-		projectMatches(project, route.find),
+	const matched = projects.filter(
+		(project) =>
+			(!route.project || project.slug === route.project) &&
+			projectMatches(project, route.find),
 	);
-	// `task_search` has no status list to pass, so closed tasks are dropped
-	// here, which keeps the Closed toggle a browser-side filter that re-reads
-	// nothing.
+	// Inside a project the read has every status, so the Closed toggle filters
+	// here without a re-read. Outside one the read already left them out.
 	const tasks = results.tasks.filter(
 		(task) => route.closed || task.status !== "closed",
 	);

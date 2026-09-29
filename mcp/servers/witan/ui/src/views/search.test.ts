@@ -92,6 +92,20 @@ describe("searchView", () => {
 		);
 	});
 
+	it("lists only the chosen project when one is chosen", () => {
+		const other = { ...project, slug: "wp-other" };
+		render(
+			searchView(
+				{ tasks: [], capped: false },
+				[project, other],
+				search(project.title, { project: "wp-other" }),
+			),
+			root,
+		);
+		expect(root.querySelector('a[href*="project=wp-other"]')).not.toBeNull();
+		expect(root.querySelector(`a[href*="project=${project.slug}"]`)).toBeNull();
+	});
+
 	it("leaves out projects that do not match", () => {
 		render(
 			searchView(

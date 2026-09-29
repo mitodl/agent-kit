@@ -326,11 +326,17 @@ export class App {
 			readGraph(graphScope as GraphScope),
 		);
 
-		// `closed` is not in the key: it filters in the browser (see
-		// `searchView`), since `task_search` cannot take "every status but one".
-		const searchScope =
+		// `closed` is in the key only outside a project, where it changes which
+		// `task_search` calls run. Inside one it filters in the browser, over a
+		// project read that already has every status.
+		const searchScope: SearchScope | null =
 			route.view === "search" && route.find
-				? { find: route.find, repo: route.repo, project: route.project }
+				? {
+						find: route.find,
+						repo: route.repo,
+						project: route.project,
+						closed: !route.project && route.closed,
+					}
 				: null;
 		this.search.sync(searchScope && JSON.stringify(searchScope), () =>
 			readSearch(searchScope as SearchScope),
@@ -816,7 +822,9 @@ async function readWaves(slug: string): Promise<Waves> {
 }
 
 /** The route fields that are arguments to the search's read. */
-type SearchScope = Pick<Route, "find" | "repo" | "project">;
+type SearchScope = Pick<Route, "find" | "repo" | "project" | "closed">;
+
+const LIVE_STATUSES = ["open", "in_progress", "blocked"] as const;
 
 /**
  * The tasks behind the Search view.
@@ -828,6 +836,12 @@ type SearchScope = Pick<Route, "find" | "repo" | "project">;
  * whenever that project's matches ranked below the cap. Inside a project the
  * whole project is read instead (uncapped, see `readRollup`) and matched in
  * the browser, so "every task in this project matching X" is exact.
+ *
+ * Without closed tasks, one call per live status rather than one unfiltered
+ * call: the server caps before any filter here could run, so twenty closed
+ * matches outranking the open ones would leave nothing to show. The three
+ * rankings are interleaved by rank, since the scores are not returned and
+ * cannot be merged exactly.
  */
 async function readSearch(scope: SearchScope): Promise<SearchResults> {
 	if (scope.project) {
@@ -837,8 +851,22 @@ async function readSearch(scope: SearchScope): Promise<SearchResults> {
 			capped: false,
 		};
 	}
-	const tasks = await taskSearch({ query: scope.find, repo: scope.repo });
-	return { tasks, capped: tasks.length >= SEARCH_LIMIT };
+	const query = { query: scope.find, repo: scope.repo };
+	if (scope.closed) {
+		const tasks = await taskSearch(query);
+		return { tasks, capped: tasks.length >= SEARCH_LIMIT };
+	}
+	const lists = await Promise.all(
+		LIVE_STATUSES.map((status) => taskSearch({ ...query, status })),
+	);
+	const longest = Math.max(...lists.map((rows) => rows.length));
+	const tasks = Array.from({ length: longest }, (_, rank) =>
+		lists.flatMap((rows) => rows[rank] ?? []),
+	).flat();
+	return {
+		tasks,
+		capped: lists.some((rows) => rows.length >= SEARCH_LIMIT),
+	};
 }
 
 /** The route fields that are arguments to the graph's reads. */

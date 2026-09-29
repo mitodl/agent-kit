@@ -181,7 +181,9 @@ beforeEach(() => {
 	);
 	vi.mocked(mcp.taskReady).mockResolvedValue(ready);
 	vi.mocked(mcp.taskGet).mockResolvedValue(task);
-	vi.mocked(mcp.taskSearch).mockResolvedValue(hits);
+	vi.mocked(mcp.taskSearch).mockImplementation(async (args) =>
+		args.status ? hits.filter((row) => row.status === args.status) : hits,
+	);
 	vi.mocked(mcp.memoryContradictions).mockResolvedValue(
 		unwrap<MemoryContradiction[]>(
 			"memory_contradictions",
@@ -464,13 +466,57 @@ describe("App", () => {
 		expect(mcp.taskReady).not.toHaveBeenCalled();
 	});
 
-	it("searches tasks through task_search, within the route's repo", async () => {
+	it("searches each live status through task_search, within the route's repo", async () => {
+		// One unfiltered call is capped before closed rows could be dropped, so
+		// twenty closed matches would hide every open one.
 		const repo = "https://github.com/mitodl/agent-kit";
 		await open(`#search?repo=${encodeURIComponent(repo)}&find=read+gaps`);
 		await vi.waitFor(() => expect(text()).toContain(hits[0]?.title));
 
-		expect(mcp.taskSearch).toHaveBeenCalledWith({ query: "read gaps", repo });
+		for (const status of ["open", "in_progress", "blocked"]) {
+			expect(mcp.taskSearch).toHaveBeenCalledWith({
+				query: "read gaps",
+				repo,
+				status,
+			});
+		}
+		expect(mcp.taskSearch).toHaveBeenCalledTimes(3);
 		expect(mcp.taskList).not.toHaveBeenCalled();
+	});
+
+	it("searches every status in one call when Closed is ticked", async () => {
+		await open("#search?find=read&closed=1");
+		await vi.waitFor(() => expect(text()).toContain(hits[0]?.title));
+
+		expect(mcp.taskSearch).toHaveBeenCalledTimes(1);
+		expect(mcp.taskSearch).toHaveBeenCalledWith({ query: "read", repo: "" });
+	});
+
+	it("interleaves the status rankings by rank", async () => {
+		const [first] = hits;
+		if (!first) {
+			throw new Error("task_search fixture is empty");
+		}
+		const row = (slug: string, status: TaskSearchRow["status"]) => ({
+			...first,
+			slug,
+			title: slug,
+			status,
+		});
+		vi.mocked(mcp.taskSearch).mockImplementation(async (args) =>
+			args.status === "open"
+				? [row("tk-open-1", "open"), row("tk-open-2", "open")]
+				: args.status === "blocked"
+					? [row("tk-blocked-1", "blocked")]
+					: [],
+		);
+		await open("#search?find=read");
+		await vi.waitFor(() => expect(text()).toContain("tk-open-2"));
+
+		const titles = [...root.querySelectorAll("tbody a[href*='slug=']")].map(
+			(a) => a.textContent?.trim(),
+		);
+		expect(titles).toEqual(["tk-open-1", "tk-blocked-1", "tk-open-2"]);
 	});
 
 	it("searches a whole project's tasks when one is chosen", async () => {
@@ -499,17 +545,19 @@ describe("App", () => {
 		expect(mcp.taskSearch).not.toHaveBeenCalled();
 	});
 
-	it("does not re-search when the Closed filter changes", async () => {
-		await open("#search?find=read");
-		await vi.waitFor(() => expect(mcp.taskSearch).toHaveBeenCalledTimes(1));
+	it("does not re-read a project's tasks when the Closed filter changes", async () => {
+		// The project read already has every status; Closed filters in the browser.
+		const base = `#search?project=${projectDetail.slug}&find=read`;
+		await open(base);
+		await vi.waitFor(() => expect(mcp.taskList).toHaveBeenCalledTimes(1));
 
-		window.location.hash = "#search?find=read&closed=1";
+		window.location.hash = `${base}&closed=1`;
 		await vi.waitFor(() =>
 			expect(
 				root.querySelector<HTMLInputElement>(".closed-toggle input")?.checked,
 			).toBe(true),
 		);
-		expect(mcp.taskSearch).toHaveBeenCalledTimes(1);
+		expect(mcp.taskList).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not read a rollup behind another tab", async () => {
