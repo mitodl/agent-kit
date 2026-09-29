@@ -149,7 +149,11 @@ def install_skills(
             for rel in rel_files:
                 dest = skill_dest_dir / rel
                 if not dry_run:
-                    _ensure_dest_dir(dest.parent, force=force)
+                    # Outermost first: a dangling link at `references` is
+                    # invisible from `references/api`, where recursive mkdir
+                    # would raise FileExistsError instead.
+                    for parent in reversed(rel.parents[:-1]):
+                        _ensure_dest_dir(skill_dest_dir / parent, force=force)
                     _clear_symlink(dest, force=force)
                     shutil.copy2(src_dir / rel, dest)
                 dests.append(dest)
