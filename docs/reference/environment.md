@@ -98,6 +98,7 @@ from the memory/task graph.
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `WITAN_CODE_CLEANUP_INTERVAL` | `604800` | Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the code stores. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled. |
 | `WITAN_CODE_DIR` | — | Directory holding the per-repo code-graph stores. |
 | `WITAN_CODE_GRAPH` | — | Graph id to address on `WITAN_CODE_SERVER`. |
 | `WITAN_CODE_INDEX_ROLE` | — | Declares what the indexing process is entitled to write **on a shared graph**. There, only `ci` may write a repo's default (`main`) view and run the stale-file purge that goes with it, so no developer's reindex can clobber the view all readers fall back to. A local store has a single user, who is its writer — this setting does not restrict it, and a local default-branch reindex works with no role declared. |
@@ -174,6 +175,7 @@ weight to `0` to reproduce the raw BM25 order.
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `WITAN_CLEANUP_INTERVAL` | `604800` | Minimum seconds between the background optimize runs that also `cleanup` versions older than 30 days on the memory store. On omnigraph 0.11 cleanup is the only thing that reclaims deleted branches' storage. `0` disables; it never runs when optimize is disabled. |
 | `WITAN_CONTEXT_TTL` | `30.0` | How long the rendered session-context block is cached on disk, in seconds. Only the first prompt in the window pays to build it; the rest read one small file. `0` disables the cache. The content is advisory, so a few seconds of staleness is fine. |
 | `WITAN_LOCAL_CODE_GRAPH_WARN_INTERVAL` | `86400` | Minimum seconds between repeats of the warning that a target's memory graph is deployed while its code graphs are still local. `0` disables it. Per target, so switching to a misrouted one warns straight away. Only a terminal ever sees it: hooks, CI and pipes are skipped so they cannot spend the window on nobody. |
 | `WITAN_LOG_FORMAT` | — | Log rendering: `console` or `json`. Defaults to `console` when stderr is a TTY and `json` when it is not — a deployed pod gets structured logs and a developer gets colours, neither having to pass a flag. |

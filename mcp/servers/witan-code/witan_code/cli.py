@@ -691,7 +691,12 @@ def _maintenance_client(ref):
 
 
 @app.command
-def optimize(*, store: str | None = None, bridge: bool = False) -> None:
+def optimize(
+    *,
+    store: str | None = None,
+    bridge: bool = False,
+    cleanup_older_than: str | None = None,
+) -> None:
     """Compact a code-graph store's Lance fragments (non-destructive).
 
     Collapses the many tiny fragments that accrue from every index/reindex so
@@ -702,13 +707,22 @@ def optimize(*, store: str | None = None, bridge: bool = False) -> None:
     ----------
     store: Store path to optimize (default: the current repo's store).
     bridge: Optimize the shared cross-repo bridge store instead.
+    cleanup_older_than: Then run ``cleanup`` removing versions older than this
+        Go-style duration (e.g. 30d). Destructive; the Stop hook passes it on a
+        slower cadence than optimize itself.
     """
     ref = _resolve_store(store, bridge=bridge)
     if ref is None:
         return
     print(f"Optimizing {ref} …")
-    _maintenance_client(ref).optimize()
-    print("Optimized. (run `witan-code cleanup` to reclaim disk)")
+    client = _maintenance_client(ref)
+    client.optimize()
+    if cleanup_older_than is None:
+        print("Optimized. (run `witan-code cleanup` to reclaim disk)")
+        return
+    print(f"Cleaning up versions older than {cleanup_older_than} …")
+    client.cleanup(older_than=cleanup_older_than)
+    print("Optimized and cleaned up.")
 
 
 @app.command
@@ -724,7 +738,9 @@ def cleanup(
 
     ``optimize`` compacts fragments but leaves old versions behind; this GCs
     them, keeping the most recent ``keep`` versions per table (and/or those
-    newer than ``older_than``). Irreversible, so it requires ``--yes``.
+    newer than ``older_than``). From omnigraph 0.11 it is also the only thing
+    that reclaims the storage of deleted branches (``branches --prune``,
+    ``reap-views --apply``). Irreversible, so it requires ``--yes``.
 
     Parameters
     ----------
@@ -871,7 +887,8 @@ def checkpoint() -> None:
 
     Spawns a throttled, detached ``witan-code optimize`` for the current
     repo's store and the shared bridge store, each at most once per
-    ``WITAN_CODE_OPTIMIZE_INTERVAL``, if either exists and is due. Best-effort
+    ``WITAN_CODE_OPTIMIZE_INTERVAL``, if either exists and is due; every
+    ``WITAN_CODE_CLEANUP_INTERVAL`` that run also cleans up. Best-effort
     and non-blocking: always exits 0 and never raises, so a maintenance
     failure can't fail the Stop hook. Registered as the bare ``Stop`` hook
     command; not usually run by hand.

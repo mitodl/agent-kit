@@ -310,6 +310,8 @@ the store stays cheap. Safe to run repeatedly; takes the store write lock.
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
 * `--store STR`:
+* `--cleanup-older-than STR`: Go-style duration (e.g. 30d). Destructive; the Stop hook passes it on a
+    slower cadence than optimize itself.
 
 ## witan cleanup
 
@@ -321,7 +323,9 @@ Remove old Lance versions to reclaim disk (**destructive**).
 
 ``optimize`` compacts fragments but leaves old versions behind; this GCs
 them, keeping the most recent ``keep`` versions per table (and/or those
-newer than ``older_than``). Irreversible, so it requires ``--yes``.
+newer than ``older_than``). From omnigraph 0.11 it is also the only thing
+that reclaims the storage of deleted branches. Irreversible, so it requires
+``--yes``.
 
 **Parameters**:
 
@@ -1634,6 +1638,8 @@ write lock.
 
 * `--store STR`:
 * `--bridge, --no-bridge`: *[default: False]*
+* `--cleanup-older-than STR`: Go-style duration (e.g. 30d). Destructive; the Stop hook passes it on a
+    slower cadence than optimize itself.
 
 ### witan code cleanup
 
@@ -1645,7 +1651,9 @@ Remove old Lance versions from a code-graph store (**destructive**).
 
 ``optimize`` compacts fragments but leaves old versions behind; this GCs
 them, keeping the most recent ``keep`` versions per table (and/or those
-newer than ``older_than``). Irreversible, so it requires ``--yes``.
+newer than ``older_than``). From omnigraph 0.11 it is also the only thing
+that reclaims the storage of deleted branches (``branches --prune``,
+``reap-views --apply``). Irreversible, so it requires ``--yes``.
 
 **Parameters**:
 
@@ -1697,7 +1705,8 @@ Opportunistically compact the current repo's store(s) (Stop hook).
 
 Spawns a throttled, detached ``witan-code optimize`` for the current
 repo's store and the shared bridge store, each at most once per
-``WITAN_CODE_OPTIMIZE_INTERVAL``, if either exists and is due. Best-effort
+``WITAN_CODE_OPTIMIZE_INTERVAL``, if either exists and is due; every
+``WITAN_CODE_CLEANUP_INTERVAL`` that run also cleans up. Best-effort
 and non-blocking: always exits 0 and never raises, so a maintenance
 failure can't fail the Stop hook. Registered as the bare ``Stop`` hook
 command; not usually run by hand.
