@@ -5,10 +5,13 @@ description: >
   by A/B-ing two git refs against one production-shaped local database. Use this
   skill when asked to benchmark an endpoint, measure or verify a performance fix,
   answer "is this actually faster", size a speedup before merging, or turn a
-  production OTel trace into a reproducible local experiment. Covers eliciting
-  production evidence (traces, sample API responses), calibrating a seed to the
-  real data shape, writing the benchmark's config file, and reporting a
-  defensible number using the mitol-django-benchmark package.
+  production OTel trace into a reproducible local experiment. Also use it when a
+  local benchmark comes back clean but production is still slow, or to ask
+  whether an endpoint leaks memory, retains objects, or grows a worker's heap
+  per request. Covers eliciting production evidence (traces, sample API
+  responses), calibrating a seed to the real data shape, writing the
+  benchmark's config file, reporting a defensible number, and escalating from
+  latency to retention using the mitol-django-benchmark package.
 license: BSD-3-Clause
 metadata:
   category: python
@@ -38,6 +41,9 @@ decides whether the number means anything:
 2. **Not fitting the seed to the answer you want.** Calibrating against the
    query you changed is circular, and it will manufacture a confident,
    large, wrong result.
+3. **Knowing what to do when the benchmark says the code is fine.** A clean
+   local result against a production stall is a finding, not a dead end, and
+   Step 7 is where it leads.
 
 Related: [`drf-api-performance`](../drf-api-performance/SKILL.md) is about
 *writing* fast endpoints. This is about *proving* one got faster.
@@ -314,6 +320,77 @@ State in the write-up:
 
 Do not quote a single headline number without the shape it was measured on.
 
+## Step 7 — When the benchmark exonerates the endpoint
+
+A clean local result against a calibrated seed is a **finding**, not a failed
+run. It says the time is not being spent in the request. Say that plainly, and
+then keep going, because the next question is one no A/B can answer: not what
+the request costs, but what it **leaves behind**.
+
+A worker that grows a little every request ends up spending its life near
+whatever ceiling bounds it — a container limit, or a process manager's
+`max-rss` recycle. That is where stop-the-world collections are longest and
+where a worker can be replaced mid-request. None of it is visible in a
+latency comparison, because it is a property of one commit rather than a
+difference between two.
+
+```bash
+ol-benchmark memory benchmarks/<name>.toml
+```
+
+Same seed, same auth, same refusals — including the empty-response refusal,
+which fires before the requests run, and the refusal of a committed
+`benchmark.local.toml`, which is one developer's connection strings in the
+repository whatever is being measured. The one it drops deliberately is the
+dirty-tree check: single-arm, nothing to check out. The result says whether the
+tree was dirty — `ref` comes back `git describe --dirty` style — and a number
+measured against uncommitted changes belongs to the tree, not to the commit, so
+say so when you quote it. **Do not write your own
+script for this.** Every wrong answer this section exists because of came from
+one: a hand-rolled measurement run under pytest, where an ORM profiler the
+harness refuses inflated retention by 70%; and another against an endpoint
+quietly serving an empty page, where the heap looked admirably flat.
+
+Read the verdict first:
+
+| Verdict | What it means | What to do |
+| --- | --- | --- |
+| `stable` | Neither configured rate was crossed | The growth is elsewhere. Measure another endpoint, or look outside the request path. Read it as "nothing crossed the thresholds", not as "nothing is held" |
+| `high-water` | RSS grew; live objects did not | Consistent with the allocator holding freed arenas rather than retention, so **there is no holder to find** — the fix is to allocate less per request, and an over-fetch is the usual cause. Check the RSS series plateaus; retention the collector cannot enumerate reads the same way |
+| `retaining` | Objects survive a forced collection | Something holds them across requests. `retained_by_type` usually names it; `holders` gives the chain up to the module or class |
+
+Three things are worth reading even when the verdict is benign:
+
+- **Retained types against what the response contains.** Retaining far more
+  objects than the endpoint serializes means an over-fetch is being *held*,
+  not merely loaded. The same rows that cost latency, made permanent.
+- **`lru_caches_grown` being empty.** That is informative, not a null result:
+  no `functools` cache in the process gained entries, which points at a
+  hand-rolled holder. It does not clear the category — the comparison is on
+  `cache_info().currsize`, so a cache whose existing values accumulate
+  references looks flat.
+- **The chain's last named step.** A cache keyed by `id(obj)` in a dict with
+  class lifetime will not appear in any cache audit, and the walk is what
+  finds it.
+
+One limit, so a quiet result is not over-read: only GC-tracked containers are
+visible, so an object held solely in a dict of untracked values has no
+discoverable referrers. It fails toward saying nothing rather than toward a
+false alarm. The retained set itself is exact — the baseline heap is frozen
+into the permanent generation before the requests run, so what the collector
+can still enumerate afterwards is what the run added.
+
+The figures are the endpoint's own rather than the process's, which is not
+free: Django's test client re-connects three signals per request and
+`Signal.connect` leaves a `weakref.finalize` against the owner of each
+receiver, two of which have process lifetime. Twelve objects a request, enough
+on its own for a view returning a fixed string to read `retaining`. The pass
+detaches each as it appears and reports the count in
+`harness_finalizers_detached`; when that field is `null` it could not identify
+them on the Django in use, and the figures then include the instrument. This
+is also why not to hand-roll the measurement — a script that serves an
+endpoint in a loop and counts objects is measuring its own client.
+
 ## What the package already refuses
 
 You do not need to guard against these; it will not run. Knowing *why* still
@@ -361,6 +438,7 @@ These are judgment, which is why they are the skill's job:
 | [calibration.md](references/calibration.md) | What the harness now falsifies for you and what it cannot, the observables table, structural vs sizing realism, a worked falsification |
 | [results.md](references/results.md) | Every output file, the verdicts, SQL versus gap, the production column, seed drift, what a classifier collision means |
 | [environments.md](references/environments.md) | Choosing a backend, the local-dev cluster's namespaces and DSN, fidelity differences to disclose |
+| [retention.md](references/retention.md) | The retention pass: why RSS alone cannot answer it, the three verdicts and their thresholds, reading a holder chain, how the retained set is delimited and the one limit on it, and how an over-fetch becomes a leak's multiplier |
 
 ## Resources
 
