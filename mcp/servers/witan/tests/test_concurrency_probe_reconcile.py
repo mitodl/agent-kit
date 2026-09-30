@@ -271,3 +271,98 @@ def test_the_fire_event_never_overwrites_a_real_result(monkeypatch, capsys):
     result, fire = cp._parse_worker_output(capsys.readouterr().out)
     assert fire["fired_at"] == result["fired_at"]
     assert result["done_at"] >= result["fired_at"]
+
+
+def test_a_worker_outlasts_the_servers_mutate_timeout():
+    """★ A worker killed before the server gives up cannot be reconciled.
+
+    This was a fixed 90s against witan's 120s mutate timeout. On 2026-09-29 QA
+    committed queued writes between 90s and 124s after the probe had killed
+    their workers, filed them as clean refusals, and left 19 rows behind.
+    """
+    assert cp.WORKER_TIMEOUT_S > cp.OMNIGRAPH_MUTATE_TIMEOUT_S
+
+
+class _Graph:
+    """A store whose rows can change between listings, recording deletes."""
+
+    def __init__(self, listings, boom=False):
+        self._listings = list(listings)
+        self._boom = boom
+        self.deleted = []
+
+    def memory_list(self, **_):
+        if self._boom:
+            raise RuntimeError("store unavailable")
+        titles = self._listings.pop(0) if len(self._listings) > 1 else self._listings[0]
+        return [{"title": t, "slug": s} for t, s in titles.items()]
+
+    def memory_get(self, slug):
+        return {"slug": slug}
+
+    def memory_delete(self, slug, confirm):
+        assert confirm is True
+        self.deleted.append(slug)
+        return {"deleted": True}
+
+
+def _probe_b(monkeypatch, write_rows, graph):
+    sleeps = []
+    monkeypatch.setattr(cp.time, "sleep", sleeps.append)
+    monkeypatch.setattr(cp, "_launch", lambda specs, start_at, **kw: write_rows)
+    b, _ = cp.probe_writes_and_reads(
+        graph,
+        target="qa",
+        n_writers=len(write_rows),
+        n_readers=1,
+        lead=0.0,
+        run_id="probe-abc123",
+        scratch_slug="tk-scratch",
+        repo="r",
+        token="pinned",
+        spread_tol=500.0,
+        slug_sink=[],
+    )
+    return b, sleeps
+
+
+def test_reconciliation_waits_for_late_commits_only_when_a_write_failed(monkeypatch):
+    """witan giving up on a mutate does not stop the data tier applying it, so a
+    listing taken the moment the workers return misfiles a late commit as a
+    clean refusal. A phase in which every write succeeded has nothing to wait
+    for, and must not pay the settle."""
+    ok = _row(0, 1.0, 2.0, mode="store", ok=True, result={"slug": "ctx-0"})
+    failed = _row(1, 1.0, 127.0, mode="store", ok=False, error_type="ToolError")
+    graph = _Graph([{f"{LABEL} writer 0": "ctx-0", f"{LABEL} writer 1": "ctx-1"}])
+
+    b, sleeps = _probe_b(monkeypatch, [ok, failed], graph)
+    assert sleeps == [cp._LATE_COMMIT_SETTLE_S]
+    assert "1 INDETERMINATE" in b.detail
+
+    _, sleeps = _probe_b(monkeypatch, [ok], _Graph([{f"{LABEL} writer 0": "ctx-0"}]))
+    assert sleeps == []
+
+
+def test_cleanup_sweeps_rows_committed_after_reconciliation(capsys):
+    """★ Deleting only what reconciliation saw is how 25 probe rows stayed in
+    QA's shared graph. A row that lands after it is found by its run label."""
+    graph = _Graph([{f"{LABEL} writer 3": "ctx-late"}])
+
+    cp._cleanup(graph, None, ["ctx-0", "ctx-1"], "probe-abc123", repo="r")
+    out = capsys.readouterr().out
+
+    assert graph.deleted == ["ctx-0", "ctx-1", "ctx-late"]
+    assert "1 row(s) committed AFTER reconciliation" in out
+    assert "INDETERMINATE is undercounted by 1" in out
+    assert "3/3 probe memories" in out
+
+
+def test_cleanup_says_so_when_it_cannot_sweep(capsys):
+    """A failed listing proves nothing is left, so it must not read as clean."""
+    graph = _Graph([{}], boom=True)
+
+    cp._cleanup(graph, None, ["ctx-0"], "probe-abc123", repo="r")
+    out = capsys.readouterr().out
+
+    assert graph.deleted == ["ctx-0"]
+    assert "may remain; they are tagged probe-abc123" in out

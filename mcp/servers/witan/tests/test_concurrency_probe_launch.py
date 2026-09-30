@@ -68,10 +68,12 @@ class _FakePopen:
         # drops `self.stdin` -- which is the whole point of the fix.
         self.original_stdin = self.stdin
         self._stdin_at_communicate = "not-called"
+        self.timeout = None
         self.killed = False
         _FakePopen.instances.append(self)
 
     def communicate(self, timeout=None):
+        self.timeout = timeout
         self._stdin_at_communicate = self.stdin
         # Verbatim shape of CPython's `_communicate` preamble.
         if self.stdin:
@@ -132,3 +134,11 @@ def test_launch_delivers_the_payload_before_dropping_the_handle(fake_popen):
 
 def _launch_one():
     return concurrency_probe._launch([("claim", 0, {"token": "pinned"})], start_at=0.0)
+
+
+def test_launch_deadline_follows_the_worker_timeout_argument(fake_popen):
+    """A deployment with a longer write-queue wait needs a longer deadline."""
+    concurrency_probe._launch([("claim", 0, {})], start_at=0.0, worker_timeout=500.0)
+    [proc] = fake_popen.instances
+
+    assert proc.timeout == 500.0

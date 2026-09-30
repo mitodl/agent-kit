@@ -193,6 +193,10 @@ from typing import Any
 
 import cyclopts
 
+from witan_core.omnigraph_http import (
+    DEFAULT_TIMEOUT_SECONDS as OMNIGRAPH_MUTATE_TIMEOUT_S,
+)
+
 app = cyclopts.App(
     name="concurrency-probe",
     help="Observe a deployed witan under concurrent clients.",
@@ -204,31 +208,54 @@ app = cyclopts.App(
 #: "concurrent" calls arrive staggered and the probe proves nothing.
 DEFAULT_LEAD_SECONDS = 20.0
 
-#: How long one worker may take before the parent kills it. A worker does ONE
-#: tool call after the epoch, so this is a hang guard, not a work budget --
-#: which is why it is far below the ~5 minute Keycloak access token it has to
-#: fit inside. See _pinned_token: the token must cover a whole phase
-#: (lead + this + margin), and a 300s guard made that impossible to satisfy.
-WORKER_TIMEOUT_S = 90.0
+#: How long past the server's own give-up point a write handler can still run:
+#: witan's write-gate queue wait (WITAN_REMOTE_WRITE_QUEUE_SECONDS, 10s by
+#: default) plus handler work either side of the mutate. It is a default sized
+#: for that queue wait, not a bound: a deployment that raises the wait needs
+#: `--worker-timeout`. Measured 2026-09-29 on
+#: QA: handlers that hit the mutate timeout returned at up to 127.3s.
+_HANDLER_OVERHEAD_S = 30.0
+
+#: How long one worker may take before the parent kills it, measured from the
+#: epoch. It has to OUTLAST the server, not merely guard against a hang.
+#:
+#: ★ This was a fixed 90s, below the 120s witan waits on one mutate. On
+#: 2026-09-29 against QA (both write caps at 50) queued writes kept committing
+#: between 90s and 124s: the probe had already killed their workers, so it
+#: filed them as "errored and absent (a clean refusal)", and cleanup, working
+#: from that list, left 19 rows in the shared graph. The server logged 77
+#: `memory_store` ok while the probe found 59. Deriving the timeout from the
+#: server's bound means every handler has answered before the probe decides
+#: anything about it.
+WORKER_TIMEOUT_S = OMNIGRAPH_MUTATE_TIMEOUT_S + _HANDLER_OVERHEAD_S
 
 #: Slack between what a phase is predicted to need and what its token must have.
 #:
-#: ★ SIZED FROM A NEAR-MISS, not from taste. This was 30s, and on 2026-08-13 a
-#: B/C phase pinned a cached token with barely more life than the 195s budget,
-#: passed the check, and then had 8 of 24 writers refused with `401
-#: Unauthorized` — reported as errored writes and degraded reads, so the run
-#: read as saturation when it was an expired credential.
+#: The phase itself cannot overrun: `_launch` kills every worker, readers
+#: included, at one absolute deadline (epoch + WORKER_TIMEOUT_S), so no request
+#: is issued after it. What the margin covers is the gap between pinning the
+#: token and fixing the epoch, and skew between Keycloak's clock (which set
+#: `exp`) and ours (which reads it).
 #:
-#: Two things make the prediction optimistic rather than exact, and the margin
-#: has to cover both. WORKER_TIMEOUT_S is a per-worker HANG guard measured from
-#: spawn, not a phase length; and it is written for a worker that makes ONE tool
-#: call, while probe C's readers make `n_reads` sequential ones, each of which
-#: can be as slow as a write under the storm the writers are creating.
-#:
-#: The margin is deliberately large relative to the phase. Being refused a
-#: token costs a whole run and, worse, produces a plausible-looking FAIL; being
-#: refreshed slightly too eagerly costs one extra token request.
-_PHASE_MARGIN_S = 120.0
+#: ★ HISTORY, because the number has moved twice. It was 30s when, on
+#: 2026-08-13, a B/C phase passed the check and then had 8 of 24 writers refused
+#: with `401 Unauthorized`, which read as saturation. The cause was that the
+#: phase ran past its prediction: `_launch` waited on workers one at a time with
+#: a fresh timeout each. The same change (#229) made the deadline absolute AND
+#: raised this to 120s. Once the worker timeout had to outlast the server's
+#: 120s, 120s here no longer fit a ~300s token at any useful --lead. 60s keeps
+#: double the original margin over what is now a bounded phase.
+_PHASE_MARGIN_S = 60.0
+
+#: How long to wait, once any write has failed, before listing what the run
+#: actually left in the graph. witan giving up on a mutate does not stop the
+#: data tier applying it: on 2026-09-29 some writes the server logged as
+#: `WriteIndeterminate` were in the graph afterwards. Reconciling before those
+#: land misfiles them as clean refusals, and cleanup then misses them. Sized
+#: from the slowest commit gap measured on 0.11 (~20s at 32 writes in flight),
+#: not from an observed commit-after-abandon delay, which nothing records; the
+#: final sweep in `_cleanup` is the backstop for anything later.
+_LATE_COMMIT_SETTLE_S = 30.0
 
 #: A "concurrent" call that lands 2 seconds after its peers measured a queue,
 #: not a race. Every probe therefore gates its own PASS on the workers having
@@ -436,7 +463,12 @@ class Outcome:
     rows: list[dict] = field(default_factory=list)
 
 
-def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
+def _launch(
+    specs: list[tuple[str, int, dict]],
+    start_at: float,
+    *,
+    worker_timeout: float = WORKER_TIMEOUT_S,
+) -> list[dict]:
     """Start every worker at once and collect one JSON row each, in order.
 
     One launcher for all three probes. The writers and readers of B/C used to
@@ -508,7 +540,7 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
     # is how a phase outlived its pinned token and reported the resulting 401s
     # as saturation. Every remaining wait now shares one budget measured from
     # the epoch, so the phase cannot outrun what the token was checked against.
-    phase_deadline = start_at + WORKER_TIMEOUT_S
+    phase_deadline = start_at + worker_timeout
     rows = []
     for mode, index, proc in procs:
         remaining = max(0.0, phase_deadline - time.time())
@@ -528,7 +560,7 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
                         "ok": False,
                         "error_type": "TimeoutExpired",
                         "error": (
-                            f"phase deadline reached ({WORKER_TIMEOUT_S:.0f}s after "
+                            f"phase deadline reached ({worker_timeout:.0f}s after "
                             "the epoch); killed"
                         ),
                     },
@@ -686,9 +718,19 @@ def _in_window(row: dict, window: tuple[float, float] | None) -> bool:
 # ── probe A: mutual exclusion ────────────────────────────────────────────────
 
 
-def probe_mutual_exclusion(srv, target, n, lead, run_id, token, spread_tol):
+def probe_mutual_exclusion(
+    srv,
+    target,
+    n,
+    lead,
+    run_id,
+    token,
+    spread_tol,
+    *,
+    worker_timeout=WORKER_TIMEOUT_S,
+):
     task = srv.task_create(
-        title=f"[concurrency-probe {run_id}] scratch claim target",
+        title=f"{_run_label(run_id)} scratch claim target",
         description=(
             "Scratch task created by the concurrency probe to race task_claim "
             "against. Safe to close or delete."
@@ -706,7 +748,11 @@ def probe_mutual_exclusion(srv, target, n, lead, run_id, token, spread_tol):
         "token": token,
     }
     start_at = time.time() + lead
-    rows = _launch([("claim", i, payload) for i in range(n)], start_at)
+    rows = _launch(
+        [("claim", i, payload) for i in range(n)],
+        start_at,
+        worker_timeout=worker_timeout,
+    )
     timing = _timing(rows, start_at)
 
     winners, losers, malformed = [], [], []
@@ -751,6 +797,11 @@ def probe_mutual_exclusion(srv, target, n, lead, run_id, token, spread_tol):
 
 
 # ── probes B + C: lost writes, and reads under that write load ───────────────
+
+
+def _run_label(run_id: str) -> str:
+    """The title prefix every row of run ``run_id`` carries."""
+    return f"[concurrency-probe {run_id}]"
 
 
 def _writer_title(label: str, index: int) -> str:
@@ -831,13 +882,15 @@ def probe_writes_and_reads(
     token,
     spread_tol,
     slug_sink,
+    *,
+    worker_timeout=WORKER_TIMEOUT_S,
 ):
     start_at = time.time() + lead
     payload_w = {
         "target": target,
         "warmup_slug": scratch_slug,
         "run_id": run_id,
-        "label": f"[concurrency-probe {run_id}]",
+        "label": _run_label(run_id),
         "repo": repo,
         "token": token,
     }
@@ -854,7 +907,7 @@ def probe_writes_and_reads(
     # batch rather than by two sequential _spawn calls.
     specs = [("store", i, payload_w) for i in range(n_writers)]
     specs += [("read", i, payload_r) for i in range(n_readers)]
-    rows = _launch(specs, start_at)
+    rows = _launch(specs, start_at, worker_timeout=worker_timeout)
     write_rows = [r for r in rows if r.get("mode") == "store"]
     read_rows = [r for r in rows if r.get("mode") == "read"]
     write_timing = _timing(write_rows, start_at)
@@ -918,6 +971,13 @@ def probe_writes_and_reads(
     attempted = {
         r["index"]: _writer_title(payload_w["label"], r["index"]) for r in write_rows
     }
+    if write_errors:
+        # See _LATE_COMMIT_SETTLE_S: a write witan gave up on can still land.
+        print(
+            f"  reconcile: {len(write_errors)} write(s) failed; waiting "
+            f"{_LATE_COMMIT_SETTLE_S:.0f}s for late commits before listing"
+        )
+        time.sleep(_LATE_COMMIT_SETTLE_S)
     found = _rows_for_run(srv, payload_w["label"], repo)
     # Cleanup works off this list, so it has to cover the rows the probe did
     # NOT get a slug back for — those are exactly the orphans that accumulated
@@ -1101,7 +1161,9 @@ def worker(*, mode: str, index: int, start_at: float) -> None:
     _worker(mode, index, start_at, json.loads(sys.stdin.read()))
 
 
-def _cleanup(srv, task_slug: str | None, mem_slugs: list[str], run_id: str) -> None:
+def _cleanup(
+    srv, task_slug: str | None, mem_slugs: list[str], run_id: str, repo: str
+) -> None:
     """Best-effort removal of everything the run created. Never raises."""
     print("-" * 72)
     if task_slug:
@@ -1111,8 +1173,40 @@ def _cleanup(srv, task_slug: str | None, mem_slugs: list[str], run_id: str) -> N
             )
         except BaseException as exc:  # noqa: BLE001
             print(f"  cleanup: task {task_slug} left open ({type(exc).__name__})")
+    cleaned, refused = _delete_rows(srv, mem_slugs)
+    total = len(mem_slugs)
+
+    # ★ THEN SWEEP BY LABEL, because `mem_slugs` is only what reconciliation
+    # saw. A write that lands after it (see _LATE_COMMIT_SETTLE_S) is in no
+    # list, and deleting from lists alone is how 19 rows from one 2026-09-29
+    # sweep, and 6 from 2026-08-31, stayed in QA's shared graph.
+    late = _rows_for_run(srv, _run_label(run_id), repo)
+    if late is None:
+        print(
+            f"  cleanup: could not list the graph, so rows committed after "
+            f"reconciliation may remain; they are tagged {run_id}"
+        )
+    else:
+        extra = sorted(set(late.values()) - set(mem_slugs))
+        if extra:
+            print(
+                f"  cleanup: {len(extra)} row(s) committed AFTER reconciliation. "
+                "Their writes are reported above as failed, not as INDETERMINATE, "
+                f"so INDETERMINATE is undercounted by {len(extra)}."
+            )
+            more_cleaned, more_refused = _delete_rows(srv, extra)
+            cleaned += more_cleaned
+            refused += more_refused
+            total += len(extra)
+    for slug, reason in refused:
+        print(f"  cleanup: {slug} NOT deleted ({reason})")
+    print(f"cleaned up scratch task + {cleaned}/{total} probe memories")
+
+
+def _delete_rows(srv, slugs: list[str]) -> tuple[int, list[tuple[str, str]]]:
+    """Delete ``slugs``; return how many went and which were refused, and why."""
     cleaned, refused = 0, []
-    for slug in mem_slugs:
+    for slug in slugs:
         try:
             result = srv.memory_delete(slug=slug, confirm=True)
         except BaseException as exc:  # noqa: BLE001
@@ -1126,9 +1220,7 @@ def _cleanup(srv, task_slug: str | None, mem_slugs: list[str], run_id: str) -> N
             cleaned += 1
         else:
             refused.append((slug, (result or {}).get("reason", "?")))
-    for slug, reason in refused:
-        print(f"  cleanup: {slug} NOT deleted ({reason})")
-    print(f"cleaned up scratch task + {cleaned}/{len(mem_slugs)} probe memories")
+    return cleaned, refused
 
 
 @app.default
@@ -1142,6 +1234,7 @@ def run(
     repo: str = "https://github.com/mitodl/agent-kit",
     keep: bool = False,
     spread_tolerance_ms: float = DEFAULT_SPREAD_TOLERANCE_MS,
+    worker_timeout: float = WORKER_TIMEOUT_S,
 ) -> None:
     """Run all three probes against a deployed target and report counts.
 
@@ -1157,6 +1250,10 @@ def run(
     spread_tolerance_ms: how far apart the workers may fire and still count as
         concurrent. See DEFAULT_SPREAD_TOLERANCE_MS -- the default is a
         starting point to calibrate, not a measured constant.
+    worker_timeout: seconds from the epoch before a worker is killed. Must
+        exceed the target's longest write handler, which includes its
+        WITAN_REMOTE_WRITE_QUEUE_SECONDS wait; raise it for a deployment that
+        sets that above the default.
     """
     # Reject counts that cannot demonstrate anything, rather than reporting a
     # confident PASS over them: one racer never contends, zero writers never
@@ -1172,6 +1269,8 @@ def run(
         raise SystemExit("--lead must be > 0; workers need time to connect first")
     if spread_tolerance_ms <= 0:
         raise SystemExit("--spread-tolerance-ms must be > 0")
+    if worker_timeout <= 0:
+        raise SystemExit("--worker-timeout must be > 0")
 
     run_id = f"probe-{uuid.uuid4().hex[:8]}"
     os.environ["WITAN_TARGET"] = target
@@ -1190,13 +1289,20 @@ def run(
         # each phase is allowed its full worker timeout, and a phase that fires
         # with an expired token measures 401s rather than the store. Re-pinning
         # keeps the requirement to a single phase, which is satisfiable.
-        phase_s = lead + WORKER_TIMEOUT_S + _PHASE_MARGIN_S
+        phase_s = lead + worker_timeout + _PHASE_MARGIN_S
         token, remaining = _pinned_token(target, needed_s=phase_s)
         print(
             f"probe A: token pinned, {remaining:.0f}s of life for a {phase_s:.0f}s phase"
         )
         a, scratch_slug = probe_mutual_exclusion(
-            srv, target, racers, lead, run_id, token, spread_tolerance_ms
+            srv,
+            target,
+            racers,
+            lead,
+            run_id,
+            token,
+            spread_tolerance_ms,
+            worker_timeout=worker_timeout,
         )
 
         token, remaining = _pinned_token(target, needed_s=phase_s)
@@ -1215,6 +1321,7 @@ def run(
             token,
             spread_tolerance_ms,
             mem_slugs,
+            worker_timeout=worker_timeout,
         )
 
         for outcome in (a, b, c):
@@ -1243,7 +1350,7 @@ def run(
         # verification, or a ^C used to skip cleanup entirely and leave probe
         # rows behind for everyone else to trip over.
         if not keep:
-            _cleanup(srv, scratch_slug, mem_slugs, run_id)
+            _cleanup(srv, scratch_slug, mem_slugs, run_id, repo)
 
     raise SystemExit(1 if failed else 0)
 
