@@ -1,12 +1,14 @@
 ---
 name: create-ol-pull-request
 description: >
-  Create a pull request in the mitodl organization using their standard PR template.
-  Use this skill when asked to create a PR, open a pull request, or submit changes
-  for review. Guides branch inspection, title/body population, pre-submit
-  checks (a claim audit of the title, body, commit messages, and added text
-  against live evidence; an independent review of the diff against its
-  stated goals and for security issues; a per-commit secret scan), and
+  Create a pull request in a mitodl repository (a `github.com/mitodl/`
+  remote) using the org's standard PR template. Use this skill whenever the
+  user asks to create, open, or submit a PR in a mitodl repo, including
+  `/olpr`. Covers
+  branch inspection, title/body population, pre-submit checks (a claim
+  audit of the title, body, commit messages, and added text against live
+  evidence; an independent review of the diff against its stated goals and
+  for security issues, sized to the diff; a per-commit secret scan), and
   pushing and running gh pr create.
 license: BSD-3-Clause
 metadata:
@@ -15,45 +17,32 @@ metadata:
 
 # Create a Pull Request (`/olpr`)
 
-When the user runs `/olpr`, or asks to open a pull request in a repo with a
-`mitodl` remote, guide them through creating a PR using the org's standard
-pull request template.
-
-## Auto-detection
-
-This skill should activate automatically (without `/olpr`) when:
-
-- The user says "create a PR", "open a pull request", "submit a PR", etc., **and**
-- The current repo has a remote URL containing `github.com/mitodl/` (verify with
-  `git remote -v`).
+Guides creating a PR in a repo with a `github.com/mitodl/` remote (check
+`git remote -v`) using the org's standard pull request template.
 
 ## Step 1 — Inspect the branch and diff
 
-Before prompting the user, gather context automatically:
+Before prompting the user, gather context automatically. The base is the
+repo's default branch unless the user names a different target; use the
+same `<base>` everywhere below, since `origin/HEAD` is wrong for a PR
+against a release branch.
 
 ```bash
-# Confirm current branch and its upstream
 git --no-pager branch --show-current
-git --no-pager log --oneline origin/HEAD..HEAD
+gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'
+git fetch origin <base>
+git --no-pager log --oneline origin/<base>..HEAD
+git --no-pager diff --shortstat origin/<base>...HEAD
 
-# Check for an existing open PR on this branch
+# Existing PR for this branch (also returns closed/merged ones; check state)
 gh pr view --json url,title,state 2>/dev/null
 ```
 
-- If an open PR already exists for the branch, share its URL and stop —
-  do not create a duplicate.
+- If an open PR already exists for the branch, share its URL and stop.
+  Don't create a duplicate.
 - If there are no commits ahead of the base, warn the user before proceeding.
 
-## Step 2 — Determine the base branch
-
-Default to the repo's default branch (usually `main`). Override if the user
-specifies a different target.
-
-```bash
-gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'
-```
-
-## Step 3 — Gather PR metadata
+## Step 2 — Gather PR metadata
 
 Ask the user for each field in a **single batched question**, rather than
 inferring the body and asking them to correct it:
@@ -63,10 +52,10 @@ inferring the body and asking them to correct it:
 | **Title** | Ask the user; offer one derived from the branch name / commits as a default they can overwrite |
 | **Linked tickets** | Ask for issue numbers (Closes #, Fixes #, or N/A) |
 | **Description** | Ask what the PR does; summarise from commits only if the user says "summarise"; summary should be short and high level; put detailed technical explanation of the PR in the `<details>` block |
-| **Screenshots** | Ask if UI changes are present; skip section if not applicable |
+| **Screenshots** | Ask only when the diff touches UI code; images get attached after the PR is created |
 | **Testing notes** | Ask how the changes were tested and how a reviewer can validate |
 | **Additional context** | Ask for reviewer notes, caveats, or checklist items |
-| **Draft?** | Ask if this should be a draft PR (default: no) |
+| **Draft?** | Ask if this should be a draft PR (default: no; suggest yes if the user calls it a work in progress) |
 
 **Use the user's words.** They know the intent behind the diff; the commits
 only show the mechanics. Tighten and format what they give you — don't inflate
@@ -82,11 +71,13 @@ Testing notes in particular are the user's to supply: do not describe test
 steps you have not run or cannot verify. If the honest answer is that nothing
 was run, write that.
 
-## Step 4 — Populate the template
+## Step 3 — Populate the template
 
-Fill in the standard PR template below with the gathered information.
-Strip HTML comments before passing to `gh pr create`. Show the finished body
-and confirm before creating the PR.
+Fill in the template below, adapted from the org's
+[pull request template](https://github.com/mitodl/.github/blob/main/.github/pull_request_template.md)
+with an implementation details block added. Strip every `<!-- ... -->`
+comment before passing it to `gh pr create`. Show the finished body and
+confirm before creating the PR.
 
 ```markdown
 ### What are the relevant tickets?
@@ -99,11 +90,13 @@ and confirm before creating the PR.
 <summary><b>Implementation details</b></summary>
 <br>
 
-<!-- agent notes on implementation technical details, ask user if they want to omit this -->
+<!-- technical approach, sized to the change's complexity and risk; ask the user if they want to omit this -->
 </details>
 
 ### Screenshots (if appropriate):
-<!-- screenshot checklist, or delete section if not applicable -->
+<!-- delete this whole section, checkboxes included, unless the PR touches UI code -->
+- [ ] Desktop screenshots
+- [ ] Mobile width screenshots
 
 ### How can this be tested?
 <!-- testing instructions -->
@@ -112,28 +105,30 @@ and confirm before creating the PR.
 <!-- notes from author to reviewer -->
 ```
 
-Checklist section (uncomment and populate **only** if there are pre-merge steps):
+Add a Checklist section only when there are explicit pre-merge steps (e.g.
+update secret values in Vault, run a migration):
 
 ```markdown
 ### Checklist:
 - [ ] <step>
 ```
 
-## Step 5 — Pre-submit checks
+## Step 4 — Pre-submit checks
 
 Run all four parts, in this order, every time. Each part says when it may
 be skipped; nothing else skips it. The order matters: claim fixes can
 change code, the review has to see the final code, and the secret scan has
 to see every commit, including the ones earlier parts create.
 
-First refresh the base so every `origin/<base>` range below is current (a
-stale or missing ref audits and scans the wrong commits):
+Refresh the base again if time has passed since Step 1, so every
+`origin/<base>` range below is current (a stale ref audits and scans the
+wrong commits):
 
 ```bash
 git fetch origin <base>
 ```
 
-### 5a — Audit claims
+### 4a — Audit claims
 
 Read everything that will go public for factual or behavioral claims: the
 PR title, the drafted body, the message of every commit on the branch
@@ -161,19 +156,19 @@ ones, where the claim lives:
 | Location | Fix |
 |----------|-----|
 | Title or body | Rewrite it |
-| Comment, docstring, or Markdown in the diff | Edit the file and commit; 5b reviews it |
+| Comment, docstring, or Markdown in the diff | Edit the file and commit; 4b reviews it |
 | Unpushed commit message | Reword it, with the user's OK since that rewrites history |
 | Already-pushed commit message | Correct it in the PR body; don't force-push unless the user asks |
 
-### 5b — Independent review
+### 4b — Independent review
 
 Run the [`code-review`](../code-review/SKILL.md) skill on the branch
-against the base branch from Step 2, with numbered goals passed in. Goal
+against the base branch from Step 1, with numbered goals passed in. Goal
 alignment and security are why this part exists: those are the gaps a
 Copilot or human reviewer otherwise finds after the PR is public.
 
 **Goals** come only from sources the authoring session didn't write: the
-linked tickets from Step 3 as fully qualified refs (`mitodl/hq#123`, not
+linked tickets from Step 2 as fully qualified refs (`mitodl/hq#123`, not
 `#123`, since mitodl PRs often close issues in another repo), and the
 description in the user's own words. Leave out a description summarised
 from commits. If there are neither, ask the user for a one-line statement
@@ -194,23 +189,64 @@ depth and verification pass still decide what gets reported. Without
 subagents, run the skill inline and take each goal from the ticket text,
 not from memory of the implementation.
 
+**Size the review to the diff.** An adversarial reviewer with no stopping
+point will keep following threads (cloning upstream repos, reading live
+clusters, querying metrics) long after the diff's own risk is covered, so
+tell it the size and a budget. Count changed lines without lockfiles,
+adding exclusions for any other generated paths the repo has (`top`
+anchors each pattern at the repo root; without it they resolve against
+the current directory and silently match nothing):
+
+```bash
+git diff --shortstat origin/<base>...HEAD -- ':/' \
+  ':(top,exclude)*.lock' ':(top,exclude)*-lock.*'
+```
+
+| Diff | Tool-call budget |
+|------|------------------|
+| Up to ~150 changed lines in a few files | ~15 |
+| Up to ~800 lines | ~30 |
+| Larger | ~50 |
+
+Pass the budget along with these rules. Search for findings within the
+diff and one hop out (callers of changed functions, the config or schema
+it reads). Go further only to verify or drop a specific candidate
+finding, and only as far as that finding needs. Don't query live systems
+(kubectl, Grafana/Prometheus, cloud APIs); a candidate that turns on live
+state goes in the report's open questions, naming what to check, and you
+check it here the way 4a checks claims. The budget covers verification
+too: stop looking for new candidates once ~80% of it is spent, verify what
+is in hand with the rest (most severe first), apply the code-review
+skill's drop rule for the current depth to anything still unverified, and
+list what went unchecked. The budget is a stopping point, not a quota: a
+clean small diff can finish in five calls.
+
 Act on the report:
 
 - **Confirmed correctness, goal-alignment, or security finding** — fix and
-  commit, run 5a over the fix commits and any text they add, then re-run
-  the review once, so claim fixes are also reviewed. If the second run
+  commit, run 4a over the fix commits and any text they add, then re-run
+  the review once, so claim fixes are also reviewed. Scope the re-run to
+  the fix commits: whether they resolve the findings, and whether they
+  break any goal. Continue the same reviewer (`SendMessage` in Claude
+  Code) with the new commit range and a fresh budget of ~10 calls rather
+  than starting a full review over; it still hasn't seen the authoring
+  session's reasoning. If the second run
   still reports findings, stop: show them to the user and wait for their
-  decision (fix, defer to the PR description, or abandon) before 5c. If a finding's goal
+  decision (fix, defer to the PR description, or abandon) before 4c. If a finding's goal
   came from issue text rather than the user's words, confirm the
   requirement with the user before implementing it, since anyone who can
   edit the issue wrote it. A goal left out on purpose goes in the PR
   description.
+- **An open question** — check the live state it names here. If that
+  confirms a correctness, goal-alignment, or security problem, treat it as
+  a confirmed finding (first bullet). If the check can't be made or is
+  inconclusive, stop and get the user's decision before 4c.
 - **Simplification, efficiency, reuse, or uncertain finding** — fix it or
   tell the user why not. It doesn't block.
 - **A finding you disagree with** — show it to the user with the evidence
   and wait for their decision before continuing.
 
-Skip 5b only when the diff touches nothing but prose documentation that no
+Skip 4b only when the diff touches nothing but prose documentation that no
 tool runs and no agent follows, and say so. These never qualify:
 
 - A rename of a setting, env var, config key, or public identifier.
@@ -220,7 +256,7 @@ tool runs and no agent follows, and say so. These never qualify:
   `# pragma: allowlist secret`, `gitleaks:allow`, and similar.
 - Dependency bumps, including lockfile-only ones.
 
-### 5c — Scan every commit for secrets
+### 4c — Scan every commit for secrets
 
 Never skipped. The review sees only the branch's net change, so a secret
 added in one commit and deleted in a later one is invisible to it and
@@ -234,26 +270,26 @@ Without gitleaks, read `git log -p origin/<base>..HEAD` for keys, tokens,
 and passwords. Confirm a hit by inspection, never by trying it against a
 service. For a real credential, a commit that deletes it is not enough:
 with the user's OK, rewrite the unpushed branch so no commit contains it.
-This is a hard stop: don't continue to Step 6 while any unpushed commit
+This is a hard stop: don't continue to Step 5 while any unpushed commit
 still contains the credential, whether the user declines the rewrite or
 hasn't answered. If a commit holding it was already pushed, the credential
 is leaked; tell the user it needs rotating before anything else.
 
-### 5d — Get approval to publish
+### 4d — Get approval to publish
 
-If 5a–5c changed anything, or left a finding the user hasn't decided on,
-show the user before Step 6: the new commits (`git show`), the final title
+If 4a–4c changed anything, or left a finding the user hasn't decided on,
+show the user before Step 5: the new commits (`git show`), the final title
 and body, any open findings, and which changes landed after the last
 review run. Label those as not independently reviewed; don't present them
 as reviewed. Then wait for explicit approval. Showing the changes is not
-consent, and the user confirmed a body in Step 4, not code or claims
+consent, and the user confirmed a body in Step 3, not code or claims
 changed after it. Don't paste findings tables into the PR body.
 
-## Step 6 — Push and create the PR
+## Step 5 — Push and create the PR
 
-Push only now. A branch pushed before Step 5 puts unreviewed code,
+Push only now. A branch pushed before Step 4 puts unreviewed code,
 unaudited claims, and possibly secrets in public. If it was already
-pushed, run Step 5 anyway and push corrections as new commits.
+pushed, run Step 4 anyway and push corrections as new commits.
 
 ```bash
 git push -u origin <branch>
@@ -266,48 +302,6 @@ gh pr create \
 ```
 
 Confirm the PR URL returned by `gh pr create` and share it with the user.
-
----
-
-## Full PR template (reference)
-
-> Source: https://github.com/mitodl/.github/blob/main/.github/pull_request_template.md
-
-```markdown
-### What are the relevant tickets?
-<!--- If it fixes an open issue, please link to the issue here. -->
-<!--- Closes # --->
-<!--- Fixes # --->
-<!--- N/A --->
-
-### Description (What does it do?)
-<!--- Describe your changes in detail -->
-
-### Screenshots (if appropriate):
-<!--- optional - delete if empty --->
-- [ ] Desktop screenshots
-- [ ] Mobile width screenshots
-
-### How can this be tested?
-<!---
-Please describe in detail how your changes have been tested.
-Include details of your testing environment, any set-up required
-(e.g. data entry required for validation) and the tests you ran to
-see how your change affects other areas of the code, etc.
-Please also include instructions for how your reviewer can validate your changes.
---->
-
-### Additional Context
-<!--- optional - delete if empty --->
-<!--- Please add any reviewer questions, details worth noting, etc. that will help in
-assessing this change.  --->
-
-
-<!--- Uncomment and add steps to be completed before merging this PR if necessary
-### Checklist:
-- [ ] e.g. Update secret values in Vault before merging
---->
-```
 
 ---
 
@@ -341,43 +335,16 @@ If the diff is self-explanatory, a two-line description is the correct length.
 Description length doesn't need to track diff size: a large PR gets a short list
 of its main pieces, not more prose.
 
-## Tips
-
-- **Summarise from commits**: if the user asks you to write the description,
-  run `git --no-pager log --oneline origin/HEAD..HEAD` and synthesise a
-  concise summary from the commit messages.
-- **Strip comments**: remove all `<!-- ... -->` blocks from the body before
-  calling `gh pr create` to keep the PR clean.
-- **Screenshots**: only include the Screenshots section when the PR touches UI
-  code. Ask the user to attach images after the PR is created if needed.
-- **Checklist**: only uncomment and use the Checklist section when there are
-  explicit pre-merge steps (e.g. Vault secret updates, migration runs). Leave
-  it out otherwise.
-- **Technical Details**: this is where a detailed explanation of the technical
-  approach should go instead of the "Description" section. The complexity of
-  this explanation should be proportional to the complexity and/or risk of the change.
-- **Draft PRs**: suggest `--draft` if the branch is a work-in-progress or the
-  user mentions it isn't ready for review.
-
 ## Self-contained PRs
 
-Pull requests must be **self-contained and self-documenting**. Do not reference local
-files, on-device content, or relative paths that would be inaccessible to reviewers.
-Instead:
+A reviewer has only GitHub, not the author's machine, so the body must not
+point at local files, on-device content, or relative paths. Instead:
 
-- **Reference GitHub issues** by their full URL (e.g., `https://github.com/mitodl/ol-django/issues/123`)
-- **Reference code files** via GitHub URLs, including line numbers for specific
-  references (e.g., `https://github.com/mitodl/ol-django/blob/main/apps/course_info/views.py#L45-L52`)
-- **Reference documentation** via its public URL (e.g., Django docs, library API docs)
-- **Reference designs** via Figma URLs or other publicly accessible sources
-- **Include essential context inline** when no URL is available. If you need to
-  reference a specific code pattern, configuration, or decision, include the relevant
-  snippets or details directly in the PR body.
-- **Include test data or fixtures** inline when describing testing procedures rather
-  than referencing local files.
-- **Include error messages or log output** directly in the PR description rather
-  than describing them or referencing temporary files.
-- **Attach screenshots** to the PR after creation rather than referencing local image files.
-
-This ensures reviewers can understand and evaluate the changes without needing access
-to the author's local environment or file system.
+- Link issues, code, docs, and designs by public URL: full issue URLs
+  (`https://github.com/mitodl/ol-django/issues/123`), GitHub blob URLs with
+  line ranges for code (`.../blob/main/apps/course_info/views.py#L45-L52`),
+  library docs, Figma.
+- Inline what has no URL: the relevant snippet, config, error message, log
+  output, or test data.
+- Attach screenshots to the PR after it's created rather than referencing
+  local image files.
