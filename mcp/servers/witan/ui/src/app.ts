@@ -16,6 +16,7 @@ import {
 	taskGet,
 	taskList,
 	taskReady,
+	taskSearch,
 	topicGet,
 	workflowProjectGet,
 	workflowProjectList,
@@ -57,6 +58,12 @@ import {
 	memoryView,
 } from "./views/memory.js";
 import { projectList, projectRollup, type Rollup } from "./views/projects.js";
+import {
+	SEARCH_LIMIT,
+	type SearchResults,
+	searchView,
+	taskMatches,
+} from "./views/search.js";
 import { taskDetail, taskMissing } from "./views/task-detail.js";
 import { type Timeline, timeline } from "./views/timeline.js";
 import { type Waves, waves, wavesPicker } from "./views/waves.js";
@@ -98,6 +105,7 @@ export class App {
 	private readonly waves = new KeyedRead<Waves>(() => this.draw());
 	private readonly memoryPage = new KeyedRead<MemoryPage>(() => this.draw());
 	private readonly graph = new KeyedRead<GraphData>(() => this.draw());
+	private readonly search = new KeyedRead<SearchResults>(() => this.draw());
 	/**
 	 * No interval, as the timeline has none: the code graph changes when a
 	 * repo is reindexed, not every 30 seconds, and this read walks every
@@ -216,6 +224,7 @@ export class App {
 		this.waves.stop();
 		this.memoryPage.stop();
 		this.graph.stop();
+		this.search.stop();
 		this.canvas.release();
 		this.bridge.stop();
 		this.drill.stop();
@@ -317,6 +326,22 @@ export class App {
 			readGraph(graphScope as GraphScope),
 		);
 
+		// `closed` is in the key only outside a project, where it changes which
+		// `task_search` calls run. Inside one it filters in the browser, over a
+		// project read that already has every status.
+		const searchScope: SearchScope | null =
+			route.view === "search" && route.find
+				? {
+						find: route.find,
+						repo: route.repo,
+						project: route.project,
+						closed: !route.project && route.closed,
+					}
+				: null;
+		this.search.sync(searchScope && JSON.stringify(searchScope), () =>
+			readSearch(searchScope as SearchScope),
+		);
+
 		// Only the tool arguments. The confidence floor and the generic toggle
 		// filter in the browser, so changing them does not re-read.
 		const bridgeOn = route.view === "bridge" && this.codeGraph === true;
@@ -352,6 +377,7 @@ export class App {
 			this.timeline,
 			this.waves,
 			this.graph,
+			this.search,
 			this.bridge,
 			this.rollup,
 			this.memoryPage,
@@ -475,6 +501,25 @@ export class App {
 				drill: this.drillSection(),
 				onNavigate: (patch) => this.navigate(patch),
 			});
+		}
+
+		if (this.route.view === "search") {
+			if (!this.route.find) {
+				return emptyBox("Type in the search box to find projects and tasks.");
+			}
+			const snapshot = this.search.snapshot;
+			if (!snapshot) {
+				return emptyBox("Searching…");
+			}
+			// Both halves or neither: a project list still reading would show
+			// "No active projects matched" over tasks that did match.
+			const waiting =
+				placeholderFor(snapshot, "matching tasks") ??
+				placeholderFor(this.projectsSnapshot, "projects");
+			if (waiting) {
+				return waiting;
+			}
+			return searchView(snapshot.data as SearchResults, inScope, this.route);
 		}
 
 		if (this.route.view === "graph") {
@@ -774,6 +819,54 @@ async function readWaves(slug: string): Promise<Waves> {
 		(task): task is TaskDetail => task !== null && task.status !== "closed",
 	);
 	return { tasks, ready, outside };
+}
+
+/** The route fields that are arguments to the search's read. */
+type SearchScope = Pick<Route, "find" | "repo" | "project" | "closed">;
+
+const LIVE_STATUSES = ["open", "in_progress", "blocked"] as const;
+
+/**
+ * The tasks behind the Search view.
+ *
+ * Across the repo, `task_search`: BM25 over title and description, the same
+ * ranking an agent gets, and repo-scoped the way the board is (the repo's
+ * tasks plus unscoped ones). It returns at most `SEARCH_LIMIT` rows and takes
+ * no project, so filtering its rows to one project would come back empty
+ * whenever that project's matches ranked below the cap. Inside a project the
+ * whole project is read instead (uncapped, see `readRollup`) and matched in
+ * the browser, so "every task in this project matching X" is exact.
+ *
+ * Without closed tasks, one call per live status rather than one unfiltered
+ * call: the server caps before any filter here could run, so twenty closed
+ * matches outranking the open ones would leave nothing to show. The three
+ * rankings are interleaved by rank, since the scores are not returned and
+ * cannot be merged exactly.
+ */
+async function readSearch(scope: SearchScope): Promise<SearchResults> {
+	if (scope.project) {
+		const tasks = await taskList({ repo: "", project_slug: scope.project });
+		return {
+			tasks: tasks.filter((task) => taskMatches(task, scope.find)),
+			capped: false,
+		};
+	}
+	const query = { query: scope.find, repo: scope.repo };
+	if (scope.closed) {
+		const tasks = await taskSearch(query);
+		return { tasks, capped: tasks.length >= SEARCH_LIMIT };
+	}
+	const lists = await Promise.all(
+		LIVE_STATUSES.map((status) => taskSearch({ ...query, status })),
+	);
+	const longest = Math.max(...lists.map((rows) => rows.length));
+	const tasks = Array.from({ length: longest }, (_, rank) =>
+		lists.flatMap((rows) => rows[rank] ?? []),
+	).flat();
+	return {
+		tasks,
+		capped: lists.some((rows) => rows.length >= SEARCH_LIMIT),
+	};
 }
 
 /** The route fields that are arguments to the graph's reads. */

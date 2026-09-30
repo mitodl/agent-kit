@@ -25,13 +25,61 @@ function frame(overrides: Partial<ShellProps> = {}): ShellProps {
 }
 
 describe("shell", () => {
-	it("renders a link per view", () => {
+	it("renders a link per view except Search", () => {
 		render(shell(frame()), root);
 
 		const labels = [...root.querySelectorAll("nav a")].map((a) =>
 			a.textContent?.trim(),
 		);
-		expect(labels).toEqual(VIEWS.map((view) => view.label));
+		expect(labels).toEqual(
+			VIEWS.filter((view) => view.id !== "search").map((view) => view.label),
+		);
+	});
+
+	it("opens a search from the search box, closing any open panel", () => {
+		const onNavigate = vi.fn();
+		const route: Route = { ...DEFAULT_ROUTE, view: "board", slug: "tk-y" };
+		render(shell(frame({ route, onNavigate })), root);
+
+		const form = root.querySelector<HTMLFormElement>(".search-box");
+		const input = form?.querySelector<HTMLInputElement>('input[name="find"]');
+		if (!form || !input) {
+			throw new Error("the search box is missing");
+		}
+		input.value = "  ui search ";
+		form.dispatchEvent(new Event("submit", { cancelable: true }));
+
+		expect(onNavigate).toHaveBeenCalledWith({
+			view: "search",
+			find: "ui search",
+			slug: null,
+		});
+	});
+
+	it("shows the route's search text in the box", () => {
+		render(
+			shell(frame({ route: { ...DEFAULT_ROUTE, view: "search", find: "x" } })),
+			root,
+		);
+		expect(
+			root.querySelector<HTMLInputElement>('.search-box input[name="find"]')
+				?.value,
+		).toBe("x");
+	});
+
+	it("clears the search text from every tab link", () => {
+		// The other views do not filter on it, so a box still holding the query
+		// over an unfiltered board would read as a filtered one.
+		const route: Route = {
+			...DEFAULT_ROUTE,
+			view: "search",
+			find: "x",
+			project: "wp-x",
+		};
+		render(shell(frame({ route })), root);
+
+		const board = root.querySelector<HTMLAnchorElement>('nav a[href*="board"]');
+		expect(board?.getAttribute("href")).toBe("#board?project=wp-x");
 	});
 
 	it("leaves the Bridge tab out when the server has no code graph", () => {

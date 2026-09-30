@@ -151,6 +151,7 @@ function neighbours(
 									view: "projects",
 									project: task.project_slug,
 									slug: null,
+									find: "",
 								})}
                 ><code>${task.project_slug}</code></a
               >

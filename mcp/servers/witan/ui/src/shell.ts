@@ -23,6 +23,8 @@ export const VIEWS = [
 	{ id: "graph", label: "Graph" },
 	// Shown only when the server has the code graph (see `ShellProps`).
 	{ id: "bridge", label: "Bridge" },
+	// Not a tab: the header's search box is its way in (see `searchBox`).
+	{ id: "search", label: "Search" },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];
@@ -71,10 +73,13 @@ export function shell(props: ShellProps): TemplateResult {
     <header class="shell-header">
       <h1>Witan</h1>
       <nav aria-label="Views">
-        ${VIEWS.filter((view) => view.id !== "bridge" || props.codeGraph).map(
+        ${VIEWS.filter(
+					(view) =>
+						view.id !== "search" && (view.id !== "bridge" || props.codeGraph),
+				).map(
 					(view) => html`
             <a
-              href=${routeHref(route, { view: view.id })}
+              href=${routeHref(route, { view: view.id, find: "" })}
               aria-current=${view.id === route.view ? "page" : "false"}
               >${view.label}</a
             >
@@ -82,6 +87,7 @@ export function shell(props: ShellProps): TemplateResult {
 				)}
       </nav>
       <div class="filters">
+        ${searchBox(route, onNavigate)}
         <label>
           Repo
           <!--
@@ -151,6 +157,51 @@ export function shell(props: ShellProps): TemplateResult {
       <main>${props.body}</main>
       ${props.panel}
     </div>
+  `;
+}
+
+/**
+ * The search box over projects and tasks.
+ *
+ * In the filter bar rather than on the Search view, so it is reachable from
+ * every tab and searches within the repo and project already chosen beside
+ * it. A tab link clears the text (see the nav above): the other views do not
+ * filter on it, and a box still holding a query over an unfiltered board
+ * reads as a board that was filtered.
+ *
+ * On submit rather than per keystroke, as the memory search is: the task half
+ * is a tool call, and a navigation per character would put one history entry
+ * per character behind the back button.
+ */
+function searchBox(
+	route: Route,
+	onNavigate: (patch: Partial<Route>) => void,
+): TemplateResult {
+	return html`
+    <form
+      class="search-box"
+      role="search"
+      @submit=${(event: SubmitEvent) => {
+				event.preventDefault();
+				const find = new FormData(event.currentTarget as HTMLFormElement).get(
+					"find",
+				);
+				onNavigate({
+					view: "search",
+					find: typeof find === "string" ? find.trim() : "",
+					slug: null,
+				});
+			}}
+    >
+      <input
+        type="search"
+        name="find"
+        aria-label="Search projects and tasks"
+        placeholder="Search projects and tasks"
+        .value=${route.find}
+      />
+      <button type="submit">Search</button>
+    </form>
   `;
 }
 

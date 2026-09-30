@@ -51,6 +51,14 @@ export interface Route {
 	slug: string | null;
 	/** Whether closed tasks are listed. Off by default, as the CLI has it. */
 	closed: boolean;
+	/**
+	 * The header search's text, over projects and tasks. Empty is no search.
+	 *
+	 * Its own field rather than `q`: `q` is the memory view's query and picks
+	 * which memory tool reads, so sharing it would make a task search on the
+	 * Search view re-run `recall` the moment someone opened Memory.
+	 */
+	find: string;
 	/** The timeline's window, in days back from the read. One of `WINDOW_DAYS`. */
 	days: number;
 	/** The memory view's search text. Empty is the browse state. */
@@ -114,6 +122,7 @@ export const DEFAULT_ROUTE: Route = {
 	project: null,
 	slug: null,
 	closed: false,
+	find: "",
 	// Spec §6.6: "where the last two weeks went".
 	days: 14,
 	q: "",
@@ -163,6 +172,7 @@ export function parseRoute(hash: string): Route {
 		project: params.get("project") || null,
 		slug: params.get("slug") || null,
 		closed: params.get("closed") === "1",
+		find: params.get("find") ?? DEFAULT_ROUTE.find,
 		days: parseDays(params.get("days")),
 		q: params.get("q") ?? DEFAULT_ROUTE.q,
 		kind: kind ?? null,
@@ -219,6 +229,9 @@ export function formatRoute(route: Route): string {
 	}
 	if (route.closed) {
 		params.set("closed", "1");
+	}
+	if (route.find) {
+		params.set("find", route.find);
 	}
 	if (route.days !== DEFAULT_ROUTE.days) {
 		params.set("days", String(route.days));
