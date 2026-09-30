@@ -309,7 +309,7 @@ class _Graph:
 def _probe_b(monkeypatch, write_rows, graph):
     sleeps = []
     monkeypatch.setattr(cp.time, "sleep", sleeps.append)
-    monkeypatch.setattr(cp, "_launch", lambda specs, start_at: write_rows)
+    monkeypatch.setattr(cp, "_launch", lambda specs, start_at, **kw: write_rows)
     b, _ = cp.probe_writes_and_reads(
         graph,
         target="qa",

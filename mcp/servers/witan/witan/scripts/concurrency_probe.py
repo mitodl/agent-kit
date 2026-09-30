@@ -210,7 +210,9 @@ DEFAULT_LEAD_SECONDS = 20.0
 
 #: How long past the server's own give-up point a write handler can still run:
 #: witan's write-gate queue wait (WITAN_REMOTE_WRITE_QUEUE_SECONDS, 10s by
-#: default) plus handler work either side of the mutate. Measured 2026-09-29 on
+#: default) plus handler work either side of the mutate. It is a default sized
+#: for that queue wait, not a bound: a deployment that raises the wait needs
+#: `--worker-timeout`. Measured 2026-09-29 on
 #: QA: handlers that hit the mutate timeout returned at up to 127.3s.
 _HANDLER_OVERHEAD_S = 30.0
 
@@ -461,7 +463,12 @@ class Outcome:
     rows: list[dict] = field(default_factory=list)
 
 
-def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
+def _launch(
+    specs: list[tuple[str, int, dict]],
+    start_at: float,
+    *,
+    worker_timeout: float = WORKER_TIMEOUT_S,
+) -> list[dict]:
     """Start every worker at once and collect one JSON row each, in order.
 
     One launcher for all three probes. The writers and readers of B/C used to
@@ -533,7 +540,7 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
     # is how a phase outlived its pinned token and reported the resulting 401s
     # as saturation. Every remaining wait now shares one budget measured from
     # the epoch, so the phase cannot outrun what the token was checked against.
-    phase_deadline = start_at + WORKER_TIMEOUT_S
+    phase_deadline = start_at + worker_timeout
     rows = []
     for mode, index, proc in procs:
         remaining = max(0.0, phase_deadline - time.time())
@@ -553,7 +560,7 @@ def _launch(specs: list[tuple[str, int, dict]], start_at: float) -> list[dict]:
                         "ok": False,
                         "error_type": "TimeoutExpired",
                         "error": (
-                            f"phase deadline reached ({WORKER_TIMEOUT_S:.0f}s after "
+                            f"phase deadline reached ({worker_timeout:.0f}s after "
                             "the epoch); killed"
                         ),
                     },
@@ -711,7 +718,17 @@ def _in_window(row: dict, window: tuple[float, float] | None) -> bool:
 # ── probe A: mutual exclusion ────────────────────────────────────────────────
 
 
-def probe_mutual_exclusion(srv, target, n, lead, run_id, token, spread_tol):
+def probe_mutual_exclusion(
+    srv,
+    target,
+    n,
+    lead,
+    run_id,
+    token,
+    spread_tol,
+    *,
+    worker_timeout=WORKER_TIMEOUT_S,
+):
     task = srv.task_create(
         title=f"{_run_label(run_id)} scratch claim target",
         description=(
@@ -731,7 +748,11 @@ def probe_mutual_exclusion(srv, target, n, lead, run_id, token, spread_tol):
         "token": token,
     }
     start_at = time.time() + lead
-    rows = _launch([("claim", i, payload) for i in range(n)], start_at)
+    rows = _launch(
+        [("claim", i, payload) for i in range(n)],
+        start_at,
+        worker_timeout=worker_timeout,
+    )
     timing = _timing(rows, start_at)
 
     winners, losers, malformed = [], [], []
@@ -861,6 +882,8 @@ def probe_writes_and_reads(
     token,
     spread_tol,
     slug_sink,
+    *,
+    worker_timeout=WORKER_TIMEOUT_S,
 ):
     start_at = time.time() + lead
     payload_w = {
@@ -884,7 +907,7 @@ def probe_writes_and_reads(
     # batch rather than by two sequential _spawn calls.
     specs = [("store", i, payload_w) for i in range(n_writers)]
     specs += [("read", i, payload_r) for i in range(n_readers)]
-    rows = _launch(specs, start_at)
+    rows = _launch(specs, start_at, worker_timeout=worker_timeout)
     write_rows = [r for r in rows if r.get("mode") == "store"]
     read_rows = [r for r in rows if r.get("mode") == "read"]
     write_timing = _timing(write_rows, start_at)
@@ -1211,6 +1234,7 @@ def run(
     repo: str = "https://github.com/mitodl/agent-kit",
     keep: bool = False,
     spread_tolerance_ms: float = DEFAULT_SPREAD_TOLERANCE_MS,
+    worker_timeout: float = WORKER_TIMEOUT_S,
 ) -> None:
     """Run all three probes against a deployed target and report counts.
 
@@ -1226,6 +1250,10 @@ def run(
     spread_tolerance_ms: how far apart the workers may fire and still count as
         concurrent. See DEFAULT_SPREAD_TOLERANCE_MS -- the default is a
         starting point to calibrate, not a measured constant.
+    worker_timeout: seconds from the epoch before a worker is killed. Must
+        exceed the target's longest write handler, which includes its
+        WITAN_REMOTE_WRITE_QUEUE_SECONDS wait; raise it for a deployment that
+        sets that above the default.
     """
     # Reject counts that cannot demonstrate anything, rather than reporting a
     # confident PASS over them: one racer never contends, zero writers never
@@ -1241,6 +1269,8 @@ def run(
         raise SystemExit("--lead must be > 0; workers need time to connect first")
     if spread_tolerance_ms <= 0:
         raise SystemExit("--spread-tolerance-ms must be > 0")
+    if worker_timeout <= 0:
+        raise SystemExit("--worker-timeout must be > 0")
 
     run_id = f"probe-{uuid.uuid4().hex[:8]}"
     os.environ["WITAN_TARGET"] = target
@@ -1259,13 +1289,20 @@ def run(
         # each phase is allowed its full worker timeout, and a phase that fires
         # with an expired token measures 401s rather than the store. Re-pinning
         # keeps the requirement to a single phase, which is satisfiable.
-        phase_s = lead + WORKER_TIMEOUT_S + _PHASE_MARGIN_S
+        phase_s = lead + worker_timeout + _PHASE_MARGIN_S
         token, remaining = _pinned_token(target, needed_s=phase_s)
         print(
             f"probe A: token pinned, {remaining:.0f}s of life for a {phase_s:.0f}s phase"
         )
         a, scratch_slug = probe_mutual_exclusion(
-            srv, target, racers, lead, run_id, token, spread_tolerance_ms
+            srv,
+            target,
+            racers,
+            lead,
+            run_id,
+            token,
+            spread_tolerance_ms,
+            worker_timeout=worker_timeout,
         )
 
         token, remaining = _pinned_token(target, needed_s=phase_s)
@@ -1284,6 +1321,7 @@ def run(
             token,
             spread_tolerance_ms,
             mem_slugs,
+            worker_timeout=worker_timeout,
         )
 
         for outcome in (a, b, c):
