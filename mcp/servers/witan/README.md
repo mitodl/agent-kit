@@ -346,7 +346,7 @@ and `project tasks` exit 1 on a missing slug.
 | `scan test <text>` | Dry-run active detectors against an ad-hoc string; prints findings (never the matched text) |
 | `scan rules` | List active write-path scan detectors, their category, source, and enforcement mode |
 | `inject-context [--debug]` | The UserPromptSubmit hook body; `--debug` prints detection/read diagnostics to stderr (repo, branch, graph reads, counts, swallowed-failure reasons) to explain a blank block |
-| `optimize [--store URI]` | Compact the store's Lance fragments (non-destructive) so query latency doesn't bloat; safe to run on a cron/systemd-timer |
+| `optimize [--store URI] [--cleanup-older-than DURATION]` | Compact the store's Lance fragments so query latency doesn't bloat; safe to run on a cron/systemd-timer. Non-destructive unless `--cleanup-older-than` is given, which then runs a destructive `cleanup` of versions older than DURATION with no `--yes` prompt (the Stop hook passes it weekly) |
 | `cleanup [--keep N] [--older-than 7d] --yes` | Reclaim disk by GC-ing old Lance versions (destructive; requires `--yes`) |
 | `serve` | Start the MCP server (memory + code tools when witan-code is installed) |
 
