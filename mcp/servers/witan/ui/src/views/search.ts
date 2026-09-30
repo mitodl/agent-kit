@@ -105,8 +105,9 @@ export function searchView(
         ${
 					results.capped
 						? html`<p class="note">
-              Task search returns its ${SEARCH_LIMIT} best matches, so there may
-              be more. Choose a project to search all of its tasks.
+              Task search returns at most ${SEARCH_LIMIT} matches per read, and
+              at least one read hit that limit, so there may be more. Choose a
+              project to search all of its tasks.
             </p>`
 						: nothing
 				}
@@ -131,6 +132,17 @@ export function searchView(
   `;
 }
 
+/**
+ * A project's rollup, leaving the search.
+ *
+ * Clears the open task as other project links do (`views/task-detail.ts`),
+ * or a task opened from the results would stay open beside the rollup. Clears
+ * the search text because the rollup does not filter on it.
+ */
+function openProject(slug: string): Partial<Route> {
+	return { view: "projects", project: slug, slug: null, find: "" };
+}
+
 function projectRows(
 	projects: WorkflowProjectSummary[],
 	route: Route,
@@ -151,11 +163,7 @@ function projectRows(
             <tr>
               <td>
                 <a
-                  href=${routeHref(route, {
-										view: "projects",
-										project: project.slug,
-										find: "",
-									})}
+                  href=${routeHref(route, openProject(project.slug))}
                   >${project.title}</a
                 >
               </td>
@@ -207,11 +215,7 @@ function taskRows(
                 ${
 									task.project_slug
 										? html`<a
-                        href=${routeHref(route, {
-													view: "projects",
-													project: task.project_slug,
-													find: "",
-												})}
+                        href=${routeHref(route, openProject(task.project_slug))}
                         >${
 													titles.get(task.project_slug) ??
 													html`<code>${task.project_slug}</code>`

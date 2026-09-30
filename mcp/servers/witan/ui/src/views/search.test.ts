@@ -181,6 +181,32 @@ describe("searchView", () => {
 			searchView({ tasks: hits, capped: true }, projects, search("read")),
 			root,
 		);
-		expect(root.textContent).toContain(`${SEARCH_LIMIT} best matches`);
+		// Per read, not overall: with Closed off there are three reads, so the
+		// list itself can be longer than the cap.
+		expect(root.textContent).toContain(
+			`at most ${SEARCH_LIMIT} matches per read`,
+		);
+	});
+
+	it("closes an open task when a project is opened from the results", () => {
+		render(
+			searchView(
+				{ tasks: hits, capped: false },
+				projects,
+				search(project.title, { slug: hit.slug }),
+			),
+			root,
+		);
+
+		const hrefs = [
+			...root.querySelectorAll<HTMLAnchorElement>(
+				`a[href*="project=${project.slug}"]`,
+			),
+		].map((a) => a.getAttribute("href"));
+		// The project row and the task row's Project cell both link there.
+		expect(hrefs).toEqual([
+			`#projects?project=${project.slug}`,
+			`#projects?project=${project.slug}`,
+		]);
 	});
 });
