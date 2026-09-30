@@ -697,17 +697,26 @@ def optimize(
     bridge: bool = False,
     cleanup_older_than: str | None = None,
 ) -> None:
-    """Compact a code-graph store's Lance fragments (non-destructive).
+    """Compact a code-graph store's Lance fragments, optionally then cleaning up.
 
     Collapses the many tiny fragments that accrue from every index/reindex so
     opening the store stays cheap. Safe to run repeatedly; takes the store's
     write lock.
 
+    Non-destructive on its own. ``--cleanup-older-than`` adds a destructive
+    ``cleanup`` with no ``--yes`` prompt, because the Stop hook is what passes
+    it. The cleanup only runs if the optimize succeeded, and the hook has
+    already stamped both throttles, so a failing optimize also defers the
+    cleanup to the next cleanup window.
+
     Parameters
     ----------
-    store: Store path to optimize (default: the current repo's store).
-    bridge: Optimize the shared cross-repo bridge store instead.
-    cleanup_older_than: Then run ``cleanup`` removing versions older than this
+    store
+        Store path to optimize (default: the current repo's store).
+    bridge
+        Optimize the shared cross-repo bridge store instead.
+    cleanup_older_than
+        Then run ``cleanup`` removing versions older than this
         Go-style duration (e.g. 30d). Destructive; the Stop hook passes it on a
         slower cadence than optimize itself.
     """
@@ -744,11 +753,16 @@ def cleanup(
 
     Parameters
     ----------
-    store: Store path to clean (default: the current repo's store).
-    bridge: Clean the shared cross-repo bridge store instead.
-    keep: Number of recent versions to keep per table.
-    older_than: Also keep versions newer than this Go-style duration (e.g. 7d).
-    yes: Confirm the destructive operation (required to actually run).
+    store
+        Store path to clean (default: the current repo's store).
+    bridge
+        Clean the shared cross-repo bridge store instead.
+    keep
+        Number of recent versions to keep per table.
+    older_than
+        Also keep versions newer than this Go-style duration (e.g. 7d).
+    yes
+        Confirm the destructive operation (required to actually run).
     """
     ref = _resolve_store(store, bridge=bridge)
     if ref is None:

@@ -106,7 +106,7 @@ witan — agent memory, planning, and collaboration graph.
 * [`logout`](#witan-logout): Forget the cached token for the configured deployment.
 * [`memory`](#witan-memory): Search memory (BM25), or with no query list memories (filtered by --kind).
 * [`migrate`](#witan-migrate): One-shot, idempotent schema and data migrations.
-* [`optimize`](#witan-optimize): Compact the graph store's Lance fragments (non-destructive).
+* [`optimize`](#witan-optimize): Compact the graph store's Lance fragments, optionally then cleaning up.
 * [`project`](#witan-project): Manage workflow projects.
 * [`projects`](#witan-projects): List workflow projects (default: active in the current repo).
 * [`run`](#witan-run): Claim a task and launch an agent to execute it.
@@ -295,10 +295,16 @@ sessions open forever.
 witan optimize [OPTIONS]
 ```
 
-Compact the graph store's Lance fragments (non-destructive).
+Compact the graph store's Lance fragments, optionally then cleaning up.
 
 Collapses the many tiny fragments that accrue from every write so opening
 the store stays cheap. Safe to run repeatedly; takes the store write lock.
+
+Non-destructive on its own. ``--cleanup-older-than`` adds a destructive
+``cleanup`` with no ``--yes`` prompt, because the Stop hook is what passes
+it. The cleanup only runs if the optimize succeeded, and the hook has
+already stamped both throttles, so a failing optimize also defers the
+cleanup to the next cleanup window.
 
 **Parameters**:
 
@@ -309,8 +315,9 @@ the store stays cheap. Safe to run repeatedly; takes the store write lock.
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--store STR`:
-* `--cleanup-older-than STR`: Go-style duration (e.g. 30d). Destructive; the Stop hook passes it on a
+* `--store STR`: Store URI to optimize (default: the configured graph store).
+* `--cleanup-older-than STR`: Then run ``cleanup`` removing versions older than this
+    Go-style duration (e.g. 30d). Destructive; the Stop hook passes it on a
     slower cadence than optimize itself.
 
 ## witan cleanup
@@ -336,10 +343,10 @@ that reclaims the storage of deleted branches. Irreversible, so it requires
     tasks`, `witan memory` and `witan code index` included, none of which
     could be pointed at one before. Overrides auto-detection by checkout
     path and repo org. Env: WITAN_TARGET. *[env: WITAN_TARGET]*
-* `--store STR`:
-* `--keep INT`: *[default: 10]*
-* `--older-than STR`:
-* `--yes, --no-yes`: *[default: False]*
+* `--store STR`: Store URI to clean (default: the configured graph store).
+* `--keep INT`: Number of recent versions to keep per table. *[default: 10]*
+* `--older-than STR`: Also keep versions newer than this Go-style duration (e.g. 7d).
+* `--yes, --no-yes`: Confirm the destructive operation (required to actually run). *[default: False]*
 
 ## witan memory
 
@@ -1628,17 +1635,24 @@ the standalone path gets it too without double-configuring the combined one.
 witan code optimize [OPTIONS]
 ```
 
-Compact a code-graph store's Lance fragments (non-destructive).
+Compact a code-graph store's Lance fragments, optionally then cleaning up.
 
 Collapses the many tiny fragments that accrue from every index/reindex so
 opening the store stays cheap. Safe to run repeatedly; takes the store's
 write lock.
 
+Non-destructive on its own. ``--cleanup-older-than`` adds a destructive
+``cleanup`` with no ``--yes`` prompt, because the Stop hook is what passes
+it. The cleanup only runs if the optimize succeeded, and the hook has
+already stamped both throttles, so a failing optimize also defers the
+cleanup to the next cleanup window.
+
 **Parameters**:
 
-* `--store STR`:
-* `--bridge, --no-bridge`: *[default: False]*
-* `--cleanup-older-than STR`: Go-style duration (e.g. 30d). Destructive; the Stop hook passes it on a
+* `--store STR`: Store path to optimize (default: the current repo's store).
+* `--bridge, --no-bridge`: Optimize the shared cross-repo bridge store instead. *[default: False]*
+* `--cleanup-older-than STR`: Then run ``cleanup`` removing versions older than this
+    Go-style duration (e.g. 30d). Destructive; the Stop hook passes it on a
     slower cadence than optimize itself.
 
 ### witan code cleanup
@@ -1657,11 +1671,11 @@ that reclaims the storage of deleted branches (``branches --prune``,
 
 **Parameters**:
 
-* `--store STR`:
-* `--bridge, --no-bridge`: *[default: False]*
-* `--keep INT`: *[default: 10]*
-* `--older-than STR`:
-* `--yes, --no-yes`: *[default: False]*
+* `--store STR`: Store path to clean (default: the current repo's store).
+* `--bridge, --no-bridge`: Clean the shared cross-repo bridge store instead. *[default: False]*
+* `--keep INT`: Number of recent versions to keep per table. *[default: 10]*
+* `--older-than STR`: Also keep versions newer than this Go-style duration (e.g. 7d).
+* `--yes, --no-yes`: Confirm the destructive operation (required to actually run). *[default: False]*
 
 ### witan code reap-views
 

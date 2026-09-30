@@ -171,9 +171,10 @@ This spawns a throttled, detached `witan-code optimize` (at most once per
 repo's store and the shared cross-repo bridge store, if either exists and is
 due. At most once per `WITAN_CODE_CLEANUP_INTERVAL` (default weekly) that run
 also cleans up versions older than 30 days, which on omnigraph 0.11 is the
-only thing that reclaims the storage of deleted branches. Best-effort and non-blocking — always exits 0 and prints nothing, so a
-missing binary or a bloated store taking tens of seconds to compact never
-delays the Stop hook itself (the compaction runs detached).
+only thing that reclaims the storage of deleted branches. Best-effort and
+non-blocking — always exits 0 and prints nothing, so a missing binary or a
+bloated store taking tens of seconds to compact never delays the Stop hook
+itself (the compaction runs detached).
 
 ## Environment Variables
 
