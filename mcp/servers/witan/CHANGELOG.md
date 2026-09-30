@@ -8,6 +8,24 @@ a MINOR bump may include breaking changes).
 
 <!-- scriv-insert-here -->
 
+## [0.40.0] - 2026-09-30
+
+### Added
+
+- `witan setup --force` replaces a symlink or non-directory occupying an install destination (e.g. a stale symlink under `~/.pi/agent/extensions` or `~/.claude/hooks`). Without it, `witan setup` now exits 2 with the conflicting path instead of a `FileNotFoundError` traceback.
+
+- The web UI has a search box in its filter bar that finds projects and tasks by text. Tasks come from `task_search` within the chosen repo, or from every task in the chosen project when one is selected; projects are matched on title, slug, phase and tags. Results link to the project rollup or open the task in the detail panel, and the search is part of the URL, so it can be shared.
+
+- `concurrency-probe --worker-timeout` sets the worker deadline for a
+  deployment whose `WITAN_REMOTE_WRITE_QUEUE_SECONDS` exceeds the default.
+
+### Fixed
+
+- `concurrency-probe` no longer kills its workers before the server's mutate
+  timeout expires, which had left committed rows in the shared graph that
+  cleanup never saw. The worker timeout now defaults to the mutate timeout
+  plus 30s, and a 30s settle runs before reconciling when any write failed.
+
 ## [0.39.0] - 2026-09-28
 
 ### Added
