@@ -130,9 +130,10 @@ Effort follows the diff, not the reviewer's curiosity. Look for findings in
 the diff and one hop out from it; reach further (another repo, upstream
 source, docs) only to verify or drop a specific candidate. When the
 request sets a budget or scope limit, it bounds the search for new
-candidates: at the limit, finish verifying what's in hand, apply the drop
-rule for the current depth to what can't be verified, and say in the
-report what went unchecked. A candidate whose verification needs
+candidates and verification alike: stop looking for new candidates once
+~80% of a tool-call budget is spent, verify what's in hand with the rest
+(most severe first), apply the drop rule for the current depth to
+whatever is still unverified, and say in the report what went unchecked. A candidate whose verification needs
 something the request puts off limits (a live system, say) isn't dropped
 or reported as a finding: list it under "Open questions" after the table,
 naming what the caller needs to check.

@@ -3,8 +3,8 @@ name: create-ol-pull-request
 description: >
   Create a pull request in a mitodl repository (a `github.com/mitodl/`
   remote) using the org's standard PR template. Use this skill whenever the
-  user asks to create, open, or submit a PR, push a branch up for review,
-  or draft a PR description in a mitodl repo, including `/olpr`. Covers
+  user asks to create, open, or submit a PR in a mitodl repo, including
+  `/olpr`. Covers
   branch inspection, title/body population, pre-submit checks (a claim
   audit of the title, body, commit messages, and added text against live
   evidence; an independent review of the diff against its stated goals and
@@ -214,10 +214,12 @@ it reads). Go further only to verify or drop a specific candidate
 finding, and only as far as that finding needs. Don't query live systems
 (kubectl, Grafana/Prometheus, cloud APIs); a candidate that turns on live
 state goes in the report's open questions, naming what to check, and you
-check it here the way 4a checks claims. When the budget runs out, stop looking for
-new candidates, finish verifying the ones in hand, and list what went
-unchecked. The budget is a stopping point, not a quota: a clean small diff
-can finish in five calls.
+check it here the way 4a checks claims. The budget covers verification
+too: stop looking for new candidates once ~80% of it is spent, verify what
+is in hand with the rest (most severe first), apply the code-review
+skill's drop rule for the current depth to anything still unverified, and
+list what went unchecked. The budget is a stopping point, not a quota: a
+clean small diff can finish in five calls.
 
 Act on the report:
 
@@ -235,6 +237,10 @@ Act on the report:
   requirement with the user before implementing it, since anyone who can
   edit the issue wrote it. A goal left out on purpose goes in the PR
   description.
+- **An open question** — check the live state it names here. If that
+  confirms a correctness, goal-alignment, or security problem, treat it as
+  a confirmed finding (first bullet). If the check can't be made or is
+  inconclusive, stop and get the user's decision before 4c.
 - **Simplification, efficiency, reuse, or uncertain finding** — fix it or
   tell the user why not. It doesn't block.
 - **A finding you disagree with** — show it to the user with the evidence
